@@ -75,6 +75,19 @@ git commit -m "chore: 更新 Dalamud 插件仓库 0.1.1"
 git push
 ```
 
+Before uploading a release, always collect and validate the zip:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\collect-release.ps1 -ExpectedAssemblyVersion 0.1.1.0 -ExpectedDalamudApiLevel 15
+```
+
+If the script reports `AssemblyVersion` or `DalamudApiLevel` mismatch, run a clean rebuild before publishing:
+
+```powershell
+dotnet clean DalamudActCompat.slnx -c Release
+dotnet build DalamudActCompat.slnx -c Release -p:DalamudLibPath="C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\Dev\"
+```
+
 ## Add to Dalamud
 
 In-game:
