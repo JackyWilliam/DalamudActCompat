@@ -13,6 +13,142 @@
         "requested": "[1.2.39, )",
         "resolved": "1.2.39",
         "contentHash": "fcFN01tDTIQqDuTwr1jUQK/geofiwjG5DycJQOnC72i1SsLAk1ELe+apBOuZ11UMQG8YKFZG1FgvjZPbqHyatg=="
+      },
+      "Microsoft.Extensions.ObjectPool": {
+        "type": "Transitive",
+        "resolved": "10.0.1",
+        "contentHash": "HqAEbtoAhgvH53c54IV5e4vQ60PYvl7Z/WIHsbet+UGGE7n+7dwVNXw1mb9LZlWbsxnupCevvtgIne5P//ZKpQ=="
+      },
+      "NAudio": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "c0DzwiyyklM0TP39Y7RObwO3QkWecgM6H60ikiEnsV/aEAJPbj5MFCLaD8BSfKuZe0HGuh9GRGWWlJmSxDc9MA==",
+        "dependencies": {
+          "NAudio.Asio": "2.2.1",
+          "NAudio.Core": "2.2.1",
+          "NAudio.Midi": "2.2.1",
+          "NAudio.Wasapi": "2.2.1",
+          "NAudio.WinForms": "2.2.1",
+          "NAudio.WinMM": "2.2.1"
+        }
+      },
+      "NAudio.Asio": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "hQglyOT5iT3XuGpBP8ZG0+aoqwRfidHjTNehpoWwX0g6KJEgtH2VaqM2nuJ2mheKZa/IBqB4YQTZVvrIapzfOA==",
+        "dependencies": {
+          "NAudio.Core": "2.2.1"
+        }
+      },
+      "NAudio.Core": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "GgkdP6K/7FqXFo7uHvoqGZTJvW4z8g2IffhOO4JHaLzKCdDOUEzVKtveoZkCuUX8eV2HAINqi7VFqlFndrnz/g=="
+      },
+      "NAudio.Midi": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "6r23ylGo5aeP02WFXsPquz0T0hFJWyh+7t++tz19tc3Kr38NHm+Z9j+FiAv+xkH8tZqXJqus9Q8p6u7bidIgbw==",
+        "dependencies": {
+          "NAudio.Core": "2.2.1"
+        }
+      },
+      "NAudio.Wasapi": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "lFfXoqacZZe0WqNChJgGYI+XV/n/61LzPHT3C1CJp4khoxeo2sziyX5wzNYWeCMNbsWxFvT3b3iXeY1UYjBhZw==",
+        "dependencies": {
+          "NAudio.Core": "2.2.1"
+        }
+      },
+      "NAudio.WinForms": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "DlDkewY1myY0A+3NrYRJD+MZhZV0yy1mNF6dckB27IQ9XCs/My5Ip8BZcoSHOsaPSe2GAjvoaDnk6N9w8xTv7w==",
+        "dependencies": {
+          "NAudio.WinMM": "2.2.1"
+        }
+      },
+      "NAudio.WinMM": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "xFHRFwH4x6aq3IxRbewvO33ugJRvZFEOfO62i7uQJRUNW2cnu6BeBTHUS0JD5KBucZbHZaYqxQG8dwZ47ezQuQ==",
+        "dependencies": {
+          "NAudio.Core": "2.2.1"
+        }
+      },
+      "NetCoreServer": {
+        "type": "Transitive",
+        "resolved": "8.0.7",
+        "contentHash": "BhNiJ6EVxKS1eKqlHINy7BruLDc+xCH59oZxu7d2Hve8CzFki69PumVlf6vyAQvIVfxbZiHw/FI3UHNnMajuVg=="
+      },
+      "System.Data.DataSetExtensions": {
+        "type": "Transitive",
+        "resolved": "4.5.0",
+        "contentHash": "221clPs1445HkTBZPL+K9sDBdJRB8UN8rgjO3ztB0CQ26z//fmJXtlsr6whGatscsKGBrhJl5bwJuKSA8mwFOw=="
+      },
+      "System.Speech": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "nHlCdjoeReiSx4kzgPEwPRlbOAyuVFwndXTZZT+CLnHb8UIfB+YMgpQjQ7faYvs3xU8wyvpb6dt+U+HwdlbG7w=="
+      },
+      "Unscrambler.XIV": {
+        "type": "Transitive",
+        "resolved": "7.51.1",
+        "contentHash": "hsVrIO3grJ8CvuyNAt8gE4v1Lhqm/XtEZY9ODyp8xqfAeLMDuBKlcs+LXqVWfVlg0K4xyNlxXAANdmbMfrxtgQ=="
+      },
+      "Advanced Combat Tracker": {
+        "type": "Project"
+      },
+      "dalamudactcompat.actruntime": {
+        "type": "Project",
+        "dependencies": {
+          "IINACT": "[2.10.3.2, )"
+        }
+      },
+      "fetchdependencies": {
+        "type": "Project"
+      },
+      "iinact": {
+        "type": "Project",
+        "dependencies": {
+          "Advanced Combat Tracker": "[6.9.0, )",
+          "DalamudPackager": "[15.0.0, )",
+          "FetchDependencies": "[1.0.0, )",
+          "Machina": "[2.3.1.3, )",
+          "Machina.FFXIV": "[2.4.5.5, )",
+          "NAudio": "[2.2.1, )",
+          "OverlayPlugin.Core": "[0.19.100, )",
+          "System.Speech": "[10.0.0, )",
+          "Unscrambler.XIV": "[7.51.1, )"
+        }
+      },
+      "machina": {
+        "type": "Project"
+      },
+      "machina.ffxiv": {
+        "type": "Project",
+        "dependencies": {
+          "Machina": "[2.3.1.3, )"
+        }
+      },
+      "overlayplugin.common": {
+        "type": "Project",
+        "dependencies": {
+          "Advanced Combat Tracker": "[6.9.0, )",
+          "System.Data.DataSetExtensions": "[4.5.0, )"
+        }
+      },
+      "overlayplugin.core": {
+        "type": "Project",
+        "dependencies": {
+          "Machina": "[2.3.1.3, )",
+          "Machina.FFXIV": "[2.4.5.5, )",
+          "Microsoft.Extensions.ObjectPool": "[10.0.1, )",
+          "NetCoreServer": "[8.0.7, )",
+          "OverlayPlugin.Common": "[1.0.0, )",
+          "System.Data.DataSetExtensions": "[4.5.0, )"
+        }
       }
     }
   }

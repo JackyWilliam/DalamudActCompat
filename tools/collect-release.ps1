@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.1.6.0",
+    [string] $ExpectedAssemblyVersion = "0.1.7.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -89,6 +89,33 @@ if ($RequireCompatibilityHost) {
 
     Write-Host "Validated embedded Compatibility Host resources: $($requiredHostResources.Count)"
 }
+
+$requiredRuntimeFiles = @(
+    "Advanced Combat Tracker.dll",
+    "DalamudActCompat.ActRuntime.dll",
+    "FFXIV_ACT_Plugin.dll",
+    "FFXIV_ACT_Plugin.Common.dll",
+    "FFXIV_ACT_Plugin.Config.dll",
+    "FFXIV_ACT_Plugin.Logfile.dll",
+    "FFXIV_ACT_Plugin.Memory.dll",
+    "FFXIV_ACT_Plugin.Network.dll",
+    "FFXIV_ACT_Plugin.Parse.dll",
+    "FFXIV_ACT_Plugin.Resource.dll",
+    "OverlayPlugin.Common.dll",
+    "OverlayPlugin.Core.dll",
+    "LICENSE.md",
+    "LICENSES/IINACT-GPL-3.0.txt",
+    "LICENSES/OverlayPlugin.Core-LICENSE.txt",
+    "THIRD_PARTY_NOTICES.md"
+)
+$missingRuntimeFiles = @($requiredRuntimeFiles | Where-Object {
+    -not (Test-Path (Join-Path $validationDir $_))
+})
+if ($missingRuntimeFiles.Count -gt 0) {
+    throw "Plugin ZIP is missing self-hosted ACT runtime files: $($missingRuntimeFiles -join ', ')"
+}
+
+Write-Host "Validated self-hosted ACT runtime files: $($requiredRuntimeFiles.Count)"
 
 Write-Host "Collected plugin ZIP: $destination"
 Write-Host "Validated AssemblyVersion: $($manifest.AssemblyVersion)"

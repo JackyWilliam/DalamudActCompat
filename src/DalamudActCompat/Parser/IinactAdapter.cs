@@ -1,39 +1,35 @@
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Core.Interfaces;
-using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
-using DalamudActCompat.Infrastructure.Processes;
 
 namespace DalamudActCompat.Parser;
 
 public sealed class IinactAdapter : IParserEngine
 {
-    private readonly HostIpcClient ipcClient;
-    private readonly IinactIpcClient iinactIpcClient;
-    private readonly CompatibilityHostProcess hostProcess;
-    private readonly CompatibilityHostAssets hostAssets;
+    private readonly SelfHostedActRuntime actRuntime;
     private readonly PluginLogger logger;
-    private readonly string pluginDirectory;
-    private readonly string extractedHostDirectory;
+    private readonly string logDirectory;
+    private readonly Func<bool> parserEnabled;
+    private readonly Func<bool> overlayEnabled;
+    private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
     private readonly object syncRoot = new();
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
 
     public IinactAdapter(
-        HostIpcClient ipcClient,
-        IinactIpcClient iinactIpcClient,
-        CompatibilityHostProcess hostProcess,
-        CompatibilityHostAssets hostAssets,
+        SelfHostedActRuntime actRuntime,
         PluginLogger logger,
-        string pluginDirectory,
-        string extractedHostDirectory)
+        string logDirectory,
+        Func<bool> parserEnabled,
+        Func<bool> overlayEnabled,
+        Func<IReadOnlyList<RuntimePluginSpec>> customPlugins)
     {
-        this.ipcClient = ipcClient;
-        this.iinactIpcClient = iinactIpcClient;
-        this.hostProcess = hostProcess;
-        this.hostAssets = hostAssets;
+        this.actRuntime = actRuntime;
         this.logger = logger;
-        this.pluginDirectory = pluginDirectory;
-        this.extractedHostDirectory = extractedHostDirectory;
+        this.logDirectory = logDirectory;
+        this.parserEnabled = parserEnabled;
+        this.overlayEnabled = overlayEnabled;
+        this.customPlugins = customPlugins;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -55,30 +51,29 @@ public sealed class IinactAdapter : IParserEngine
 
         try
         {
+            if (!parserEnabled())
+            {
+                SetStatus(ParserState.Disabled, "FFXIV_ACT_Plugin is disabled in the embedded plugin manager.");
+                return;
+            }
+
             await StopAsync(CancellationToken.None).ConfigureAwait(false);
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            if (iinactIpcClient.TryStart(out _))
+            actRuntime.StartParser(logDirectory);
+            if (overlayEnabled())
             {
-                SetStatus(ParserState.Running, "FFXIV_ACT_Plugin is running through IINACT.");
-                return;
+                actRuntime.StartOverlay();
             }
 
-            var pipeName = $"DalamudActCompat-{Guid.NewGuid():N}";
-            hostAssets.EnsureExtracted();
-            var host = ResolveHostLaunchSpec();
-
-            if (host is null)
+            foreach (var failure in actRuntime.LoadCustomPlugins(customPlugins()))
             {
-                SetStatus(
-                    ParserState.MissingDependency,
-                    "Compatibility host executable was not found.",
-                    $"Expected embedded host assets or host files under {extractedHostDirectory}.");
-                return;
+                logger.Error(failure.Error, $"ACT plugin '{failure.Id}' failed to load.");
             }
-
-            await hostProcess.StartAsync(host, ["--pipe", pipeName, "--sample"], activeRun.Token).ConfigureAwait(false);
-            await ipcClient.ConnectAsync(pipeName, activeRun.Token).ConfigureAwait(false);
-            SetStatus(ParserState.Running, "Compatibility host IPC bridge is running with sample snapshots.");
+            SetStatus(
+                ParserState.Running,
+                actRuntime.IsOverlayRunning
+                    ? "FFXIV_ACT_Plugin and OverlayPlugin are running in DalamudActCompat."
+                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.");
         }
         catch (OperationCanceledException)
         {
@@ -96,9 +91,7 @@ public sealed class IinactAdapter : IParserEngine
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
-        iinactIpcClient.Stop();
-        await ipcClient.StopAsync(cancellationToken).ConfigureAwait(false);
-        await hostProcess.StopAsync(cancellationToken).ConfigureAwait(false);
+        actRuntime.StopParser();
         SetStatus(ParserState.Stopped, "Parser stopped.");
     }
 
@@ -111,42 +104,8 @@ public sealed class IinactAdapter : IParserEngine
     public async ValueTask DisposeAsync()
     {
         SetStatus(ParserState.Stopped, "Parser disposed.");
-        iinactIpcClient.Dispose();
-        await ipcClient.DisposeAsync().ConfigureAwait(false);
-        await hostProcess.DisposeAsync().ConfigureAwait(false);
-    }
-
-    private HostLaunchSpec? ResolveHostLaunchSpec()
-    {
-        var directories = new[]
-        {
-            extractedHostDirectory,
-            Path.Combine(pluginDirectory, "host"),
-            pluginDirectory,
-        };
-
-        foreach (var directory in directories.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            var exePath = Path.Combine(directory, "DalamudActCompat.Host.exe");
-            if (File.Exists(exePath))
-            {
-                return HostLaunchSpec.ForExecutable(exePath);
-            }
-
-            var platformExePath = Path.Combine(directory, "DalamudActCompat.Host");
-            if (File.Exists(platformExePath))
-            {
-                return HostLaunchSpec.ForExecutable(platformExePath);
-            }
-
-            var dllPath = Path.Combine(directory, "DalamudActCompat.Host.dll");
-            if (File.Exists(dllPath))
-            {
-                return HostLaunchSpec.ForDotnet(dllPath);
-            }
-        }
-
-        return null;
+        actRuntime.Dispose();
+        await Task.CompletedTask;
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)

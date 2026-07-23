@@ -10,13 +10,19 @@ internal sealed class PluginServices
         ICommandManager commandManager,
         IPluginLog log,
         IClientState clientState,
-        IDataManager dataManager)
+        IDataManager dataManager,
+        IChatGui chatGui,
+        IFramework framework,
+        ICondition condition)
     {
         PluginInterface = pluginInterface;
         CommandManager = commandManager;
         Log = log;
         ClientState = clientState;
         DataManager = dataManager;
+        ChatGui = chatGui;
+        Framework = framework;
+        Condition = condition;
     }
 
     public IDalamudPluginInterface PluginInterface { get; }
@@ -28,4 +34,10 @@ internal sealed class PluginServices
     public IClientState ClientState { get; }
 
     public IDataManager DataManager { get; }
+
+    public IChatGui ChatGui { get; }
+
+    public IFramework Framework { get; }
+
+    public ICondition Condition { get; }
 }
