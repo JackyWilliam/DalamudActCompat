@@ -137,14 +137,11 @@ public sealed class MeterWindow : Window
 
     private readonly struct FontScaleScope : IDisposable
     {
-        private readonly float previousScale;
-
         public FontScaleScope(float scale)
         {
-            previousScale = ImGui.GetWindowFontScale();
             ImGui.SetWindowFontScale(Math.Clamp(scale, 0.75f, 1.8f));
         }
 
-        public void Dispose() => ImGui.SetWindowFontScale(previousScale);
+        public void Dispose() => ImGui.SetWindowFontScale(1.0f);
     }
 }
