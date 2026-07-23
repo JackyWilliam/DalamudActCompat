@@ -8,6 +8,7 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Infrastructure.Processes;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
@@ -55,7 +56,9 @@ public sealed class Plugin : IDalamudPlugin
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger);
         var ipcClient = new HostIpcClient(stateStore, logger);
-        parserEngine = new ParserEngine(new IinactAdapter(ipcClient, logger));
+        var hostProcess = new CompatibilityHostProcess(logger);
+        var pluginDirectory = Path.GetDirectoryName(typeof(Plugin).Assembly.Location) ?? pluginInterface.ConfigDirectory.FullName;
+        parserEngine = new ParserEngine(new IinactAdapter(ipcClient, hostProcess, logger, pluginDirectory));
         var meterService = new MeterService(stateStore, configuration.Meter);
 
         _ = new OverlayManager(new OverlayEventBus());
@@ -74,7 +77,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Dalamud ACT compatibility platform windows. Args: meter, history, status, settings.",
+            HelpMessage = "Open ACT Compat UI. Args: meter, history, status, settings, sample, clear, host, stop.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -122,6 +125,35 @@ public sealed class Plugin : IDalamudPlugin
             case "sample":
                 LoadSampleEncounter();
                 meterWindow.IsOpen = true;
+                break;
+            case "host":
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                        await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error(ex, "Host bridge command failed.");
+                    }
+                });
+                statusWindow.IsOpen = true;
+                break;
+            case "stop":
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error(ex, "Host bridge stop command failed.");
+                    }
+                });
                 break;
             case "clear":
                 stateStore.ResetCurrent();

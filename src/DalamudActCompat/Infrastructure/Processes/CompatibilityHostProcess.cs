@@ -33,10 +33,12 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
             CreateNoWindow = true,
             RedirectStandardError = true,
             RedirectStandardOutput = true,
+            WorkingDirectory = Path.GetDirectoryName(executablePath) ?? Environment.CurrentDirectory,
         };
 
         process = Process.Start(startInfo) ?? throw new InvalidOperationException("Compatibility host process did not start.");
         _ = DrainOutputAsync(process, cancellationToken);
+        _ = DrainErrorAsync(process, cancellationToken);
         logger.Information("Compatibility host process started.");
         return Task.CompletedTask;
     }
@@ -82,6 +84,25 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or InvalidOperationException)
         {
             logger.Warning($"Host output drain stopped: {ex.Message}");
+        }
+    }
+
+    private async Task DrainErrorAsync(Process target, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!target.HasExited && !cancellationToken.IsCancellationRequested)
+            {
+                var line = await target.StandardError.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    logger.Warning($"host error: {line}");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            logger.Warning($"Host error drain stopped: {ex.Message}");
         }
     }
 }

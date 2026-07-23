@@ -1,20 +1,30 @@
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Infrastructure.Processes;
 
 namespace DalamudActCompat.Parser;
 
 public sealed class IinactAdapter : IParserEngine
 {
     private readonly HostIpcClient ipcClient;
+    private readonly CompatibilityHostProcess hostProcess;
     private readonly PluginLogger logger;
+    private readonly string pluginDirectory;
     private readonly object syncRoot = new();
+    private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
 
-    public IinactAdapter(HostIpcClient ipcClient, PluginLogger logger)
+    public IinactAdapter(
+        HostIpcClient ipcClient,
+        CompatibilityHostProcess hostProcess,
+        PluginLogger logger,
+        string pluginDirectory)
     {
         this.ipcClient = ipcClient;
+        this.hostProcess = hostProcess;
         this.logger = logger;
+        this.pluginDirectory = pluginDirectory;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -36,11 +46,23 @@ public sealed class IinactAdapter : IParserEngine
 
         try
         {
-            await ipcClient.ConnectAsync(cancellationToken).ConfigureAwait(false);
-            SetStatus(
-                ParserState.MissingDependency,
-                "IINACT/FFXIV_ACT_Plugin runtime is not installed yet.",
-                "This build provides the safe adapter boundary and UI/storage layers. The actual parser host must be integrated next.");
+            await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var pipeName = $"DalamudActCompat-{Guid.NewGuid():N}";
+            var hostPath = ResolveHostExecutable();
+
+            if (hostPath is null)
+            {
+                SetStatus(
+                    ParserState.MissingDependency,
+                    "Compatibility host executable was not found.",
+                    $"Expected DalamudActCompat.Host.exe under {Path.Combine(pluginDirectory, "host")}.");
+                return;
+            }
+
+            await hostProcess.StartAsync(hostPath, $"--pipe {pipeName} --sample", activeRun.Token).ConfigureAwait(false);
+            await ipcClient.ConnectAsync(pipeName, activeRun.Token).ConfigureAwait(false);
+            SetStatus(ParserState.Running, "Compatibility host IPC bridge is running with sample snapshots.");
         }
         catch (OperationCanceledException)
         {
@@ -53,10 +75,14 @@ public sealed class IinactAdapter : IParserEngine
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
+        activeRun?.Cancel();
+        activeRun?.Dispose();
+        activeRun = null;
+        await ipcClient.StopAsync(cancellationToken).ConfigureAwait(false);
+        await hostProcess.StopAsync(cancellationToken).ConfigureAwait(false);
         SetStatus(ParserState.Stopped, "Parser stopped.");
-        return Task.CompletedTask;
     }
 
     public async Task RestartAsync(CancellationToken cancellationToken)
@@ -69,6 +95,25 @@ public sealed class IinactAdapter : IParserEngine
     {
         SetStatus(ParserState.Stopped, "Parser disposed.");
         await ipcClient.DisposeAsync().ConfigureAwait(false);
+        await hostProcess.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private string? ResolveHostExecutable()
+    {
+        var hostDirectory = Path.Combine(pluginDirectory, "host");
+        var exePath = Path.Combine(hostDirectory, "DalamudActCompat.Host.exe");
+        if (File.Exists(exePath))
+        {
+            return exePath;
+        }
+
+        var platformExePath = Path.Combine(hostDirectory, "DalamudActCompat.Host");
+        if (File.Exists(platformExePath))
+        {
+            return platformExePath;
+        }
+
+        return null;
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)

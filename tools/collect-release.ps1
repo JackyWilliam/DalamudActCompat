@@ -6,10 +6,13 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.1.2.0",
+    [string] $ExpectedAssemblyVersion = "0.1.3.0",
 
     [Parameter(Mandatory = $false)]
-    [int] $ExpectedDalamudApiLevel = 15
+    [int] $ExpectedDalamudApiLevel = 15,
+
+    [Parameter(Mandatory = $false)]
+    [bool] $RequireCompatibilityHost = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +61,15 @@ if ($manifest.AssemblyVersion -ne $ExpectedAssemblyVersion) {
 
 if ([int]$manifest.DalamudApiLevel -ne $ExpectedDalamudApiLevel) {
     throw "Plugin ZIP DalamudApiLevel mismatch. Expected $ExpectedDalamudApiLevel, got $($manifest.DalamudApiLevel). Rebuild the plugin before publishing."
+}
+
+if ($RequireCompatibilityHost) {
+    $hostExePath = Join-Path $validationDir "host/DalamudActCompat.Host.exe"
+    if (-not (Test-Path $hostExePath)) {
+        throw "Plugin ZIP does not contain host/DalamudActCompat.Host.exe. Rebuild after confirming the Compatibility Host project built successfully."
+    }
+
+    Write-Host "Validated Compatibility Host: host/DalamudActCompat.Host.exe"
 }
 
 Write-Host "Collected plugin ZIP: $destination"

@@ -5,12 +5,12 @@ Dalamud ACT Compat is the first-stage foundation for an in-game ACT-compatible p
 ## Architecture Audit
 
 1. Current project type: no existing C# repository was present at `/Users/raynording`; this directory creates a new Dalamud plugin project plus an out-of-process compatibility host.
-2. Dalamud reference: the plugin uses `Dalamud.NET.Sdk/14.0.1`, matching the current Dalamud v14 guidance for .NET 10.
+2. Dalamud reference: the plugin uses `Dalamud.NET.Sdk/15.0.0`, matching the current Dalamud API Level 15 release framework.
 3. IINACT/NotACT/OverlayPlugin code: none existed locally. This implementation provides adapter boundaries and protocol placeholders only.
-4. .NET/API version: `net10.0-windows`, Dalamud API v14 minimum. Windows is the correct validation target for this project because the ACT compatibility host, WinForms shims, FFXIV_ACT_Plugin, and XIVLauncher/Dalamud development files are Windows-first.
+4. .NET/API version: `net10.0-windows`, Dalamud API Level 15 minimum. Windows is the correct validation target for this project because the ACT compatibility host, WinForms shims, FFXIV_ACT_Plugin, and XIVLauncher/Dalamud development files are Windows-first.
 5. Code to keep: the new immutable combat data model, parser abstraction, state store, history repository, Meter UI, settings/status windows, Overlay event bus, and host boundary.
-6. Code to refactor later: `IinactAdapter` must be replaced with a real IINACT/NotACT-backed host bridge; the host process currently only boots and waits.
-7. Missing modules: real FFXIV_ACT_Plugin loading, ACT compatibility object model, named-pipe protocol, log-line ingestion, FFLogs-quality log writer, OverlayPlugin renderer/runtime, Cactbot bridge, TTS, plugin dependency resolver.
+6. Code to refactor later: `IinactAdapter` must be replaced with a real IINACT/NotACT-backed host bridge; the host process currently sends sample snapshots over named pipe IPC.
+7. Missing modules: real FFXIV_ACT_Plugin loading, ACT compatibility object model, real parser event protocol, log-line ingestion, FFLogs-quality log writer, OverlayPlugin renderer/runtime, Cactbot bridge, TTS, plugin dependency resolver.
 8. IINACT reuse candidates: NotACT ACT API shims, FFXIV_ACT_Plugin boot sequence, parser status handling, overlay event mapping, and any existing Dalamud network integration. Preserve upstream license notices before copying code.
 9. License notes: cactbot is Apache-2.0; Dalamud is AGPL-3.0; DalamudPackager is EUPL-1.2; FFXIV_ACT_Plugin releases are distributed as binaries with public SDK assemblies but source is not public; OverlayPlugin and IINACT licenses must be checked from their repositories before code reuse.
 10. Realistic MVP: a stable Dalamud plugin shell with lifecycle cleanup, parser state reporting, game-internal Meter/history/settings UI, persistent history/config/log directories, and a clearly isolated compatibility host integration point.
@@ -22,13 +22,13 @@ Dalamud ACT Compat is the first-stage foundation for an in-game ACT-compatible p
 - Encounter history window backed by plugin config storage.
 - Settings window for parser enablement, autostart, Meter settings, history limit, debug flag, parser status, parser restart, and log directory.
 - Parser status model: disabled, initializing, running, stopped, missing dependency, incompatible, faulted.
-- IINACT adapter boundary and IPC client placeholder.
+- IINACT adapter boundary and named pipe IPC sample bridge.
 - OverlayPlugin-compatible event bus placeholder for `CombatData`, `LogLine`, `ChangeZone`, `ChangePrimaryPlayer`, `PartyChanged`, and `BroadcastMessage`.
 - Out-of-process compatibility host project with exact `IActPluginV1` signature reserved for future ACT plugin loading.
 
 ## Build
 
-Use a Windows machine with .NET 10 SDK and XIVLauncher/Dalamud v14 development files, then run:
+Use a Windows machine with .NET 10 SDK and XIVLauncher/Dalamud API 15 development files, then run:
 
 ```bash
 dotnet build DalamudActCompat.slnx
@@ -39,7 +39,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `v0.1.1` targets Dalamud API Level 15. `v0.1.0` targeted API Level 14 and is too old for the current Release framework.
+- `v0.1.3` targets Dalamud API Level 15 and adds the out-of-process Host IPC sample bridge.
 - The Dalamud plugin project cannot build on this machine yet because `Dalamud.NET.Sdk` cannot find a local Dalamud installation at `~/Library/Application Support/XIV on Mac/dalamud/Hooks/dev/`.
 
 The current macOS workspace is useful for source editing and host-level checks, but full plugin validation should happen on Windows. See `docs/WINDOWS_HANDOFF.md`.
@@ -61,9 +61,13 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat status
 /actcompat sample
 /actcompat clear
+/actcompat host
+/actcompat stop
 ```
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
+
+`/actcompat host` starts the out-of-process compatibility host and reads sample snapshots over a named pipe. This validates the cross-process bridge before IINACT/FFXIV_ACT_Plugin is integrated. `/actcompat stop` stops that bridge.
 
 ## Custom Repository
 
