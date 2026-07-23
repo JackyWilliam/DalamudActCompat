@@ -3,19 +3,19 @@
     "Author": "raynording",
     "Name": "Dalamud ACT Compat",
     "InternalName": "DalamudActCompat",
-    "AssemblyVersion": "0.1.5.0",
+    "AssemblyVersion": "0.1.6.0",
     "TestingAssemblyVersion": null,
-    "Description": "Dalamud-side UI, storage, parser abstraction, and compatibility-host bridge for an ACT-compatible FFXIV parsing platform. This early build does not yet load FFXIV_ACT_Plugin.",
+    "Description": "Dalamud-side Meter, history, and parser bridge consuming real FFXIV_ACT_Plugin combat data through IINACT's supported IPC.",
     "Punchline": "In-game ACT-compatible parsing platform foundation.",
     "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.5/DalamudActCompat.zip",
+    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.6/DalamudActCompat.zip",
     "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.5/DalamudActCompat.zip",
-    "LastUpdate": "1784795988",
-    "Changelog": "Extract the embedded Compatibility Host into the plugin config directory and add executable and dotnet DLL launch fallbacks."
+    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.6/DalamudActCompat.zip",
+    "LastUpdate": "1784798490",
+    "Changelog": "Use IINACT as the supported FFXIV_ACT_Plugin host and consume real CombatData over Dalamud IPC."
   }
 ]

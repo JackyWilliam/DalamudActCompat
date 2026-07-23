@@ -8,6 +8,7 @@ namespace DalamudActCompat.Parser;
 public sealed class IinactAdapter : IParserEngine
 {
     private readonly HostIpcClient ipcClient;
+    private readonly IinactIpcClient iinactIpcClient;
     private readonly CompatibilityHostProcess hostProcess;
     private readonly CompatibilityHostAssets hostAssets;
     private readonly PluginLogger logger;
@@ -19,6 +20,7 @@ public sealed class IinactAdapter : IParserEngine
 
     public IinactAdapter(
         HostIpcClient ipcClient,
+        IinactIpcClient iinactIpcClient,
         CompatibilityHostProcess hostProcess,
         CompatibilityHostAssets hostAssets,
         PluginLogger logger,
@@ -26,6 +28,7 @@ public sealed class IinactAdapter : IParserEngine
         string extractedHostDirectory)
     {
         this.ipcClient = ipcClient;
+        this.iinactIpcClient = iinactIpcClient;
         this.hostProcess = hostProcess;
         this.hostAssets = hostAssets;
         this.logger = logger;
@@ -54,6 +57,12 @@ public sealed class IinactAdapter : IParserEngine
         {
             await StopAsync(CancellationToken.None).ConfigureAwait(false);
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (iinactIpcClient.TryStart(out _))
+            {
+                SetStatus(ParserState.Running, "FFXIV_ACT_Plugin is running through IINACT.");
+                return;
+            }
+
             var pipeName = $"DalamudActCompat-{Guid.NewGuid():N}";
             hostAssets.EnsureExtracted();
             var host = ResolveHostLaunchSpec();
@@ -87,6 +96,7 @@ public sealed class IinactAdapter : IParserEngine
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
+        iinactIpcClient.Stop();
         await ipcClient.StopAsync(cancellationToken).ConfigureAwait(false);
         await hostProcess.StopAsync(cancellationToken).ConfigureAwait(false);
         SetStatus(ParserState.Stopped, "Parser stopped.");
@@ -101,6 +111,7 @@ public sealed class IinactAdapter : IParserEngine
     public async ValueTask DisposeAsync()
     {
         SetStatus(ParserState.Stopped, "Parser disposed.");
+        iinactIpcClient.Dispose();
         await ipcClient.DisposeAsync().ConfigureAwait(false);
         await hostProcess.DisposeAsync().ConfigureAwait(false);
     }
