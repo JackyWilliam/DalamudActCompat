@@ -3,7 +3,7 @@
 Add this URL in Dalamud's custom plugin repositories:
 
 ```text
-https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json
 ```
 
 This directory contains the `pluginmaster.json` file that should be copied or mirrored into the public distribution repository `JackyWilliam/DalamudActCompatRepo`.

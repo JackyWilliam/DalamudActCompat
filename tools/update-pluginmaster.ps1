@@ -32,4 +32,4 @@ $entry.Changelog = $Changelog
 
 Write-Host "Updated $PluginMasterPath"
 Write-Host "Custom repository raw URL:"
-Write-Host "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json"
+Write-Host "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json"

@@ -74,7 +74,7 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 The planned custom repository raw URL is:
 
 ```text
-https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json
 ```
 
 The template store entry lives at `repo/pluginmaster.json`. Users add the raw JSON URL to Dalamud; the JSON points to the plugin ZIP in GitHub Releases. See `docs/CUSTOM_REPOSITORY.md` for the release flow.
