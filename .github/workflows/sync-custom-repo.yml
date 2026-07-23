@@ -1,0 +1,45 @@
+name: Sync Custom Repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix, for example 0.1.0"
+        required: true
+      changelog:
+        description: "Plugin installer changelog"
+        required: true
+        default: "Development build update."
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_REPO: raynording/DalamudActCompatRepo
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v6
+
+      - name: Update local PluginMaster
+        shell: pwsh
+        run: ./tools/update-pluginmaster.ps1 -Version "${{ inputs.version }}" -Changelog "${{ inputs.changelog }}"
+
+      - name: Checkout custom repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          token: ${{ secrets.DALAMUD_REPO_TOKEN }}
+          path: custom-repo
+
+      - name: Copy PluginMaster
+        run: cp repo/pluginmaster.json custom-repo/pluginmaster.json
+
+      - name: Commit and push PluginMaster
+        working-directory: custom-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pluginmaster.json
+          git commit -m "chore: 更新 Dalamud 插件仓库 ${{ inputs.version }}" || exit 0
+          git push
