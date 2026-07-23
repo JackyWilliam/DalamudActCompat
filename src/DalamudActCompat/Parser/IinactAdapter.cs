@@ -113,6 +113,18 @@ public sealed class IinactAdapter : IParserEngine
             return platformExePath;
         }
 
+        var rootExePath = Path.Combine(pluginDirectory, "DalamudActCompat.Host.exe");
+        if (File.Exists(rootExePath))
+        {
+            return rootExePath;
+        }
+
+        var rootPlatformExePath = Path.Combine(pluginDirectory, "DalamudActCompat.Host");
+        if (File.Exists(rootPlatformExePath))
+        {
+            return rootPlatformExePath;
+        }
+
         return null;
     }
 

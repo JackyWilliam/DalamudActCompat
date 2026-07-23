@@ -39,7 +39,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `v0.1.3` targets Dalamud API Level 15 and adds the out-of-process Host IPC sample bridge.
+- `v0.1.4` targets Dalamud API Level 15 and fixes Compatibility Host lookup after custom repository installation.
 - The Dalamud plugin project cannot build on this machine yet because `Dalamud.NET.Sdk` cannot find a local Dalamud installation at `~/Library/Application Support/XIV on Mac/dalamud/Hooks/dev/`.
 
 The current macOS workspace is useful for source editing and host-level checks, but full plugin validation should happen on Windows. See `docs/WINDOWS_HANDOFF.md`.
