@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Infrastructure.Storage;
@@ -39,7 +41,9 @@ try
     {
     }
 
-    Console.WriteLine("Package smoke tests passed.");
+    ValidateFfxivModuleInitializer();
+
+    Console.WriteLine("Package and FFXIV_ACT_Plugin smoke tests passed.");
     return 0;
 }
 finally
@@ -48,6 +52,62 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateFfxivModuleInitializer()
+{
+    var projectRoot = FindProjectRoot();
+    var assemblyPath = Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release",
+        "FFXIV_ACT_Plugin.dll");
+    Assert(File.Exists(assemblyPath), $"FFXIV_ACT_Plugin.dll was not found at {assemblyPath}.");
+
+    using var stream = File.OpenRead(assemblyPath);
+    using var peReader = new PEReader(stream);
+    var metadata = peReader.GetMetadataReader();
+    foreach (var typeHandle in metadata.TypeDefinitions)
+    {
+        var type = metadata.GetTypeDefinition(typeHandle);
+        if (metadata.GetString(type.Name) != "<Module>")
+        {
+            continue;
+        }
+
+        foreach (var methodHandle in type.GetMethods())
+        {
+            var method = metadata.GetMethodDefinition(methodHandle);
+            if (metadata.GetString(method.Name) != ".cctor")
+            {
+                continue;
+            }
+
+            var il = peReader.GetMethodBody(method.RelativeVirtualAddress).GetILBytes();
+            Assert(il is [0x2a], "FFXIV_ACT_Plugin module initializer is not a single ret instruction.");
+            return;
+        }
+    }
+
+    throw new InvalidOperationException("FFXIV_ACT_Plugin module initializer was not found.");
+}
+
+static string FindProjectRoot()
+{
+    var directory = new DirectoryInfo(AppContext.BaseDirectory);
+    while (directory is not null)
+    {
+        if (File.Exists(Path.Combine(directory.FullName, "DalamudActCompat.slnx")))
+        {
+            return directory.FullName;
+        }
+
+        directory = directory.Parent;
+    }
+
+    throw new DirectoryNotFoundException("Could not find the DalamudActCompat project root.");
 }
 
 static async Task CreatePackageAsync(string packagePath, string id, string version)
