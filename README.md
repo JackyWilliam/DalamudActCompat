@@ -39,6 +39,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
+- `v0.1.1` targets Dalamud API Level 15. `v0.1.0` targeted API Level 14 and is too old for the current Release framework.
 - The Dalamud plugin project cannot build on this machine yet because `Dalamud.NET.Sdk` cannot find a local Dalamud installation at `~/Library/Application Support/XIV on Mac/dalamud/Hooks/dev/`.
 
 The current macOS workspace is useful for source editing and host-level checks, but full plugin validation should happen on Windows. See `docs/WINDOWS_HANDOFF.md`.

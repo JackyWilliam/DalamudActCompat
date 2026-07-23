@@ -1,16 +1,16 @@
-<Project Sdk="Dalamud.NET.Sdk/14.0.1">
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Version>0.1.1</Version>
+    <AssemblyVersion>0.1.1.0</AssemblyVersion>
     <Name>Dalamud ACT Compat</Name>
     <Author>raynording</Author>
     <Punchline>In-game ACT-compatible parsing platform foundation.</Punchline>
     <Description>Dalamud-side UI, storage, parser abstraction, and compatibility-host bridge for an ACT-compatible FFXIV parsing platform.</Description>
     <RepoUrl>https://github.com/JackyWilliam/DalamudActCompat</RepoUrl>
-    <MinimumDalamudVersion>14.0.0</MinimumDalamudVersion>
+    <MinimumDalamudVersion>15.0.0</MinimumDalamudVersion>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
   </PropertyGroup>
 </Project>
