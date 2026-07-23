@@ -1,6 +1,6 @@
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.State;
-using ImGuiNET;
+using Dalamud.Bindings.ImGui;
 
 namespace DalamudActCompat.Encounters;
 

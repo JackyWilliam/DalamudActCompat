@@ -1,7 +1,7 @@
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Plugin;
-using ImGuiNET;
+using Dalamud.Bindings.ImGui;
 
 namespace DalamudActCompat.Meter;
 

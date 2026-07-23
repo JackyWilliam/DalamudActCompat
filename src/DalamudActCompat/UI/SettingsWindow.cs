@@ -5,7 +5,7 @@ using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
-using ImGuiNET;
+using Dalamud.Bindings.ImGui;
 
 namespace DalamudActCompat.UI;
 

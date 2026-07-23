@@ -1,7 +1,7 @@
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Parser;
-using ImGuiNET;
+using Dalamud.Bindings.ImGui;
 
 namespace DalamudActCompat.UI;
 
