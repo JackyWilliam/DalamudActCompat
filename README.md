@@ -1,6 +1,6 @@
 # Dalamud ACT Compat
 
-Dalamud ACT Compat is the first-stage foundation for an in-game ACT-compatible platform. It is not an external ACT WebSocket meter and it does not currently claim full FFXIV_ACT_Plugin runtime support.
+Dalamud ACT Compat is an in-game ACT-compatible meter shell. IINACT remains responsible for hosting the official FFXIV_ACT_Plugin runtime; this plugin consumes its supported CombatData IPC.
 
 ## Architecture Audit
 
@@ -10,8 +10,8 @@ Dalamud ACT Compat is the first-stage foundation for an in-game ACT-compatible p
 4. .NET/API version: `net10.0-windows`, Dalamud API Level 15 minimum. Windows is the correct validation target for this project because the ACT compatibility host, WinForms shims, FFXIV_ACT_Plugin, and XIVLauncher/Dalamud development files are Windows-first.
 5. Code to keep: the new immutable combat data model, parser abstraction, state store, history repository, Meter UI, settings/status windows, Overlay event bus, and host boundary.
 6. Code to refactor later: `IinactAdapter` must be replaced with a real IINACT/NotACT-backed host bridge; the host process currently sends sample snapshots over named pipe IPC.
-7. Missing modules: real FFXIV_ACT_Plugin loading, ACT compatibility object model, real parser event protocol, log-line ingestion, FFLogs-quality log writer, OverlayPlugin renderer/runtime, Cactbot bridge, TTS, plugin dependency resolver.
-8. IINACT reuse candidates: NotACT ACT API shims, FFXIV_ACT_Plugin boot sequence, parser status handling, overlay event mapping, and any existing Dalamud network integration. Preserve upstream license notices before copying code.
+7. Missing modules: raw log-line ingestion, FFLogs-quality log writer, OverlayPlugin renderer/runtime, Cactbot bridge, TTS, and broader ACT plugin compatibility.
+8. IINACT integration: IINACT owns the NotACT shim and FFXIV_ACT_Plugin boot sequence; this plugin deliberately uses its public IPC instead of duplicating that runtime.
 9. License notes: cactbot is Apache-2.0; Dalamud is AGPL-3.0; DalamudPackager is EUPL-1.2; FFXIV_ACT_Plugin releases are distributed as binaries with public SDK assemblies but source is not public; OverlayPlugin and IINACT licenses must be checked from their repositories before code reuse.
 10. Realistic MVP: a stable Dalamud plugin shell with lifecycle cleanup, parser state reporting, game-internal Meter/history/settings UI, persistent history/config/log directories, and a clearly isolated compatibility host integration point.
 
@@ -22,7 +22,7 @@ Dalamud ACT Compat is the first-stage foundation for an in-game ACT-compatible p
 - Encounter history window backed by plugin config storage.
 - Settings window for parser enablement, autostart, Meter settings, history limit, debug flag, parser status, parser restart, and log directory.
 - Parser status model: disabled, initializing, running, stopped, missing dependency, incompatible, faulted.
-- IINACT adapter boundary and named pipe IPC sample bridge.
+- Real FFXIV_ACT_Plugin/NotACT combat data through IINACT IPC, with the named-pipe sample host retained as a fallback.
 - OverlayPlugin-compatible event bus placeholder for `CombatData`, `LogLine`, `ChangeZone`, `ChangePrimaryPlayer`, `PartyChanged`, and `BroadcastMessage`.
 - Out-of-process compatibility host project with exact `IActPluginV1` signature reserved for future ACT plugin loading.
 
@@ -39,7 +39,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `v0.1.5` targets Dalamud API Level 15 and embeds the Compatibility Host files in the plugin assembly.
+- `v0.1.6` targets Dalamud API Level 15 and consumes real IINACT CombatData while retaining the embedded sample Host fallback.
 - Windows Release build succeeds with XIVLauncherCN/Dalamud development files at `C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\Dev\`.
 - The release collector verifies the plugin manifest, packaged Host executable, and all four embedded Host resources.
 
@@ -66,7 +66,7 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
 
-`/actcompat host` extracts the embedded Compatibility Host into the plugin config directory, starts it, and reads sample snapshots over a named pipe. This validates the cross-process bridge before IINACT/FFXIV_ACT_Plugin is integrated. `/actcompat stop` stops that bridge.
+`/actcompat host` uses IINACT's supported IPC when IINACT is installed, allowing IINACT to host `FFXIV_ACT_Plugin.dll` while this plugin consumes real `CombatData`. If IINACT is unavailable, the embedded sample Compatibility Host remains available as a diagnostic fallback. `/actcompat stop` stops either bridge.
 
 ## Custom Repository
 
@@ -82,7 +82,7 @@ For Windows-side testing from a custom repository, follow `docs/WINDOWS_CUSTOM_R
 
 ## Current Limits
 
-- FFXIV_ACT_Plugin is not loaded yet.
+- FFXIV_ACT_Plugin is hosted by IINACT; install and enable IINACT before starting the real parser bridge.
 - No live combat parsing has been verified in game.
 - FFLogs-compatible combat log output is directory-separated but not implemented.
 - HTML Overlay, WebSocket Overlay, Cactbot, TTS, and arbitrary ACT plugins are not supported yet.

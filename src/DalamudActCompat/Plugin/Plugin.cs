@@ -56,10 +56,11 @@ public sealed class Plugin : IDalamudPlugin
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger);
         var ipcClient = new HostIpcClient(stateStore, logger);
+        var iinactIpcClient = new IinactIpcClient(pluginInterface, stateStore, logger);
         var hostProcess = new CompatibilityHostProcess(logger);
         var pluginDirectory = Path.GetDirectoryName(typeof(Plugin).Assembly.Location) ?? pluginInterface.ConfigDirectory.FullName;
         var hostAssets = new CompatibilityHostAssets(paths.HostDirectory, logger);
-        parserEngine = new ParserEngine(new IinactAdapter(ipcClient, hostProcess, hostAssets, logger, pluginDirectory, paths.HostDirectory));
+        parserEngine = new ParserEngine(new IinactAdapter(ipcClient, iinactIpcClient, hostProcess, hostAssets, logger, pluginDirectory, paths.HostDirectory));
         var meterService = new MeterService(stateStore, configuration.Meter);
 
         _ = new OverlayManager(new OverlayEventBus());
