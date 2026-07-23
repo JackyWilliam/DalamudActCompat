@@ -17,7 +17,12 @@ public sealed class EncounterRepository
     public async Task<IReadOnlyList<Encounter>> LoadRecentAsync(CancellationToken cancellationToken)
     {
         var encounters = await jsonStore.ReadAsync<List<Encounter>>(paths.HistoryFile, cancellationToken).ConfigureAwait(false);
-        return encounters ?? Array.Empty<Encounter>();
+        if (encounters is null)
+        {
+            return Array.Empty<Encounter>();
+        }
+
+        return encounters;
     }
 
     public async Task SaveRecentAsync(IReadOnlyList<Encounter> encounters, CancellationToken cancellationToken)
