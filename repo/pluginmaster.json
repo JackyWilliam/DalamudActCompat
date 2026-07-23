@@ -3,7 +3,7 @@
     "Author": "raynording",
     "Name": "Dalamud ACT Compat",
     "InternalName": "DalamudActCompat",
-    "AssemblyVersion": "0.1.7.0",
+    "AssemblyVersion": "0.1.8.0",
     "TestingAssemblyVersion": null,
     "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline": "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel": 15,
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.7/DalamudActCompat.zip",
+    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.8/DalamudActCompat.zip",
     "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.7/DalamudActCompat.zip",
-    "LastUpdate": "1784800017",
-    "Changelog": "Host FFXIV_ACT_Plugin and OverlayPlugin directly, add managed optional ACT plugin packages, and add recoverable factory reset."
+    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.8/DalamudActCompat.zip",
+    "LastUpdate": "1784800980",
+    "Changelog": "Fix the patched FFXIV_ACT_Plugin module initializer crashing parser startup."
   }
 ]

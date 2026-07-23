@@ -40,7 +40,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `0.1.7` WIP targets Dalamud API Level 15 and packages the parser, OverlayPlugin, compatibility assembly, SDK modules, and runtime dependencies in one ZIP.
+- `0.1.8` targets Dalamud API Level 15 and packages the parser, OverlayPlugin, compatibility assembly, SDK modules, and runtime dependencies in one ZIP.
 - Windows Release build succeeds with XIVLauncherCN/Dalamud development files at `C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\Dev\`.
 - The release collector verifies the plugin manifest, packaged Host executable, and all four embedded Host resources.
 
