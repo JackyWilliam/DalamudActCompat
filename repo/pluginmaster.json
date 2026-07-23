@@ -15,7 +15,7 @@
     "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.3/DalamudActCompat.zip",
     "DownloadLinkTesting": null,
     "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.3/DalamudActCompat.zip",
-    "LastUpdate": "1784775146",
+    "LastUpdate": "1784792657",
     "Changelog": "Add compatibility host process packaging and named-pipe sample snapshot bridge."
   }
 ]
