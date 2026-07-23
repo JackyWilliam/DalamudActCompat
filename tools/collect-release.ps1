@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.1.4.0",
+    [string] $ExpectedAssemblyVersion = "0.1.5.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -70,6 +70,24 @@ if ($RequireCompatibilityHost) {
     }
 
     Write-Host "Validated Compatibility Host: host/DalamudActCompat.Host.exe"
+
+    $pluginAssemblyPath = Join-Path $validationDir "DalamudActCompat.dll"
+    $pluginAssembly = [System.Reflection.Assembly]::LoadFile($pluginAssemblyPath)
+    $hostResources = @($pluginAssembly.GetManifestResourceNames() | Where-Object {
+        $_.StartsWith("DalamudActCompat.HostAssets.", [System.StringComparison]::Ordinal)
+    })
+    $requiredHostResources = @(
+        "DalamudActCompat.HostAssets.DalamudActCompat.Host.exe",
+        "DalamudActCompat.HostAssets.DalamudActCompat.Host.dll",
+        "DalamudActCompat.HostAssets.DalamudActCompat.Host.deps.json",
+        "DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json"
+    )
+    $missingHostResources = @($requiredHostResources | Where-Object { $_ -notin $hostResources })
+    if ($missingHostResources.Count -gt 0) {
+        throw "Plugin assembly is missing embedded Compatibility Host resources: $($missingHostResources -join ', ')"
+    }
+
+    Write-Host "Validated embedded Compatibility Host resources: $($requiredHostResources.Count)"
 }
 
 Write-Host "Collected plugin ZIP: $destination"

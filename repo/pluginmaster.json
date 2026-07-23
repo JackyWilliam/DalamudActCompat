@@ -3,7 +3,7 @@
     "Author": "raynording",
     "Name": "Dalamud ACT Compat",
     "InternalName": "DalamudActCompat",
-    "AssemblyVersion": "0.1.4.0",
+    "AssemblyVersion": "0.1.5.0",
     "TestingAssemblyVersion": null,
     "Description": "Dalamud-side UI, storage, parser abstraction, and compatibility-host bridge for an ACT-compatible FFXIV parsing platform. This early build does not yet load FFXIV_ACT_Plugin.",
     "Punchline": "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel": 15,
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.4/DalamudActCompat.zip",
+    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.5/DalamudActCompat.zip",
     "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.4/DalamudActCompat.zip",
-    "LastUpdate": "1784793632",
-    "Changelog": "Fix compatibility host lookup after custom repository installation."
+    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.5/DalamudActCompat.zip",
+    "LastUpdate": "1784795988",
+    "Changelog": "Extract the embedded Compatibility Host into the plugin config directory and add executable and dotnet DLL launch fallbacks."
   }
 ]

@@ -39,10 +39,9 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `v0.1.4` targets Dalamud API Level 15 and fixes Compatibility Host lookup after custom repository installation.
-- The Dalamud plugin project cannot build on this machine yet because `Dalamud.NET.Sdk` cannot find a local Dalamud installation at `~/Library/Application Support/XIV on Mac/dalamud/Hooks/dev/`.
-
-The current macOS workspace is useful for source editing and host-level checks, but full plugin validation should happen on Windows. See `docs/WINDOWS_HANDOFF.md`.
+- `v0.1.5` targets Dalamud API Level 15 and embeds the Compatibility Host files in the plugin assembly.
+- Windows Release build succeeds with XIVLauncherCN/Dalamud development files at `C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\Dev\`.
+- The release collector verifies the plugin manifest, packaged Host executable, and all four embedded Host resources.
 
 GitHub Actions are included for Windows-based CI:
 
@@ -67,7 +66,7 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
 
-`/actcompat host` starts the out-of-process compatibility host and reads sample snapshots over a named pipe. This validates the cross-process bridge before IINACT/FFXIV_ACT_Plugin is integrated. `/actcompat stop` stops that bridge.
+`/actcompat host` extracts the embedded Compatibility Host into the plugin config directory, starts it, and reads sample snapshots over a named pipe. This validates the cross-process bridge before IINACT/FFXIV_ACT_Plugin is integrated. `/actcompat stop` stops that bridge.
 
 ## Custom Repository
 
