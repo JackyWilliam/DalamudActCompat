@@ -48,14 +48,15 @@ dotnet restore DalamudActCompat.slnx
 dotnet build DalamudActCompat.slnx -c Release
 ```
 
-After the build succeeds, create a release ZIP through the included workflow by pushing a tag:
+After the build succeeds, create a release tag and upload the ZIP from Windows:
 
 ```powershell
 git tag v0.1.0
 git push origin v0.1.0
+gh release create v0.1.0 .\path\to\DalamudActCompat.zip --title v0.1.0 --notes "Initial Windows test build."
 ```
 
-The release workflow should upload `DalamudActCompat.zip`. If CI fails because the ZIP collection path differs, inspect the workflow artifact output and update `tools/collect-release.ps1`.
+GitHub-hosted runners do not have local XIVLauncher/Dalamud dev files, so the default CI does not produce this ZIP. Use a Windows machine with Dalamud installed, or configure a Windows self-hosted runner and run `.github/workflows/release.yml`.
 
 ## Update PluginMaster
 

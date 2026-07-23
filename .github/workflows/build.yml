@@ -23,15 +23,16 @@ jobs:
       - name: Restore
         run: dotnet restore DalamudActCompat.slnx
 
-      - name: Build
-        run: dotnet build DalamudActCompat.slnx --configuration Release --no-restore
+      - name: Build compatibility host
+        run: dotnet build src/DalamudActCompat.Host/DalamudActCompat.Host.csproj --configuration Release --no-restore
 
-      - name: Collect plugin artifact
+      - name: Validate custom repository JSON
         shell: pwsh
-        run: ./tools/collect-release.ps1 -Configuration Release -OutputDirectory artifacts/release
+        run: |
+          Get-Content repo/pluginmaster.json -Raw | ConvertFrom-Json | Out-Null
+          Write-Host "Plugin metadata is valid JSON."
 
-      - name: Upload plugin artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: DalamudActCompat
-          path: artifacts/release/DalamudActCompat.zip
+      - name: Explain plugin build requirement
+        run: |
+          echo "The Dalamud plugin project is not built on GitHub-hosted runners because Dalamud.NET.Sdk requires local XIVLauncher/Dalamud dev files."
+          echo "Build the full solution on a Windows machine with XIVLauncher/Dalamud installed."

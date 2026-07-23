@@ -45,8 +45,8 @@ The current macOS workspace is useful for source editing and host-level checks, 
 
 GitHub Actions are included for Windows-based CI:
 
-- `.github/workflows/build.yml` builds branches and pull requests and uploads `DalamudActCompat.zip`.
-- `.github/workflows/release.yml` builds and publishes a GitHub Release when a `vX.Y.Z` tag is pushed.
+- `.github/workflows/build.yml` validates metadata and builds the out-of-process host on GitHub-hosted runners. It intentionally does not build the Dalamud plugin project because `Dalamud.NET.Sdk` requires local XIVLauncher/Dalamud dev files.
+- `.github/workflows/release.yml` is reserved for a Windows self-hosted runner with XIVLauncher/Dalamud installed.
 - `.github/workflows/sync-custom-repo.yml` updates the separate custom repository file. It requires a `DALAMUD_REPO_TOKEN` secret with write access to `JackyWilliam/DalamudActCompatRepo`.
 
 ## Run
