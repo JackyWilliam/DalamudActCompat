@@ -28,7 +28,7 @@ Planned remote URLs:
 ```text
 https://github.com/JackyWilliam/DalamudActCompat
 https://github.com/JackyWilliam/DalamudActCompatRepo
-https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 ## Windows Setup

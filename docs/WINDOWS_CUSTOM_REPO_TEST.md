@@ -13,7 +13,7 @@ https://github.com/JackyWilliam/DalamudActCompat
 Custom repository raw URL:
 
 ```text
-https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 Release ZIP expected by `pluginmaster.json`:
@@ -95,7 +95,7 @@ In-game:
 3. Add the raw custom repository URL:
 
 ```text
-https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 4. Save, open `/xlplugins`, and search for `Dalamud ACT Compat`.

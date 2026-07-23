@@ -5,7 +5,7 @@ Dalamud custom repositories are HTTP-accessible JSON files. Users add the raw JS
 ## User-Facing URL
 
 ```text
-https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 ## Repository Layout
@@ -43,7 +43,7 @@ After pushing the source repository to GitHub:
 2. Add a repository secret named `DALAMUD_REPO_TOKEN` to the source repository. The token needs write access to `JackyWilliam/DalamudActCompatRepo`.
 3. Push a tag such as `v0.1.0` to create the release ZIP from `.github/workflows/release.yml`.
 4. Run `.github/workflows/sync-custom-repo.yml` manually with `version = 0.1.0` and a changelog.
-5. Verify `https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/refs/heads/main/pluginmaster.json`.
+5. Verify `https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json`.
 
 ## Current Safety Note
 
