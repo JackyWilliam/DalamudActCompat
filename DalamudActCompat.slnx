@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="src/DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
   <Project Path="src/DalamudActCompat/DalamudActCompat.csproj" />
   <Project Path="src/DalamudActCompat.Host/DalamudActCompat.Host.csproj" />
+  <Project Path="tests/DalamudActCompat.PackageSmokeTests/DalamudActCompat.PackageSmokeTests.csproj" />
 </Solution>

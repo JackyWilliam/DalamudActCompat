@@ -3,6 +3,8 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
+using DalamudActCompat.ActRuntime;
+using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
@@ -34,15 +36,28 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EncounterWindow encounterWindow;
     private readonly SettingsWindow settingsWindow;
     private readonly StatusWindow statusWindow;
+    private readonly FactoryResetService factoryResetService;
+    private readonly ActPluginPackageInstaller packageInstaller;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
         IPluginLog log,
         IClientState clientState,
-        IDataManager dataManager)
+        IDataManager dataManager,
+        IChatGui chatGui,
+        IFramework framework,
+        ICondition condition)
     {
-        services = new PluginServices(pluginInterface, commandManager, log, clientState, dataManager);
+        services = new PluginServices(
+            pluginInterface,
+            commandManager,
+            log,
+            clientState,
+            dataManager,
+            chatGui,
+            framework,
+            condition);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface);
@@ -55,19 +70,41 @@ public sealed class Plugin : IDalamudPlugin
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger);
-        var ipcClient = new HostIpcClient(stateStore, logger);
-        var iinactIpcClient = new IinactIpcClient(pluginInterface, stateStore, logger);
-        var hostProcess = new CompatibilityHostProcess(logger);
-        var pluginDirectory = Path.GetDirectoryName(typeof(Plugin).Assembly.Location) ?? pluginInterface.ConfigDirectory.FullName;
-        var hostAssets = new CompatibilityHostAssets(paths.HostDirectory, logger);
-        parserEngine = new ParserEngine(new IinactAdapter(ipcClient, iinactIpcClient, hostProcess, hostAssets, logger, pluginDirectory, paths.HostDirectory));
+        var actRuntime = new SelfHostedActRuntime(
+            pluginInterface,
+            log,
+            dataManager,
+            chatGui,
+            framework,
+            condition);
+        parserEngine = new ParserEngine(new IinactAdapter(
+            actRuntime,
+            logger,
+            paths.CombatLogDirectory,
+            () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
+            () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
+            DiscoverRuntimePlugins));
         var meterService = new MeterService(stateStore, configuration.Meter);
 
         _ = new OverlayManager(new OverlayEventBus());
 
         meterWindow = new MeterWindow(meterService, stateStore, configuration);
         encounterWindow = new EncounterWindow(stateStore);
-        settingsWindow = new SettingsWindow(configuration, parserEngine, paths, logger, SaveConfiguration);
+        factoryResetService = new FactoryResetService(
+            parserEngine,
+            paths,
+            configuration,
+            logger,
+            SaveConfiguration);
+        packageInstaller = new ActPluginPackageInstaller(paths);
+        settingsWindow = new SettingsWindow(
+            configuration,
+            parserEngine,
+            paths,
+            logger,
+            SaveConfiguration,
+            FactoryResetAsync,
+            () => packageInstaller.Discover(configuration.DisabledActPluginIds));
         statusWindow = new StatusWindow(parserEngine);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
@@ -79,7 +116,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open ACT Compat UI. Args: meter, history, status, settings, sample, clear, host, stop.",
+            HelpMessage = "Open ACT Compat UI. Args: meter, history, status, settings, sample, clear, host, stop, install <zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -113,7 +150,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string arguments)
     {
-        switch (arguments.Trim().ToLowerInvariant())
+        var trimmedArguments = arguments.Trim();
+        var separator = trimmedArguments.IndexOf(' ');
+        var verb = (separator < 0 ? trimmedArguments : trimmedArguments[..separator]).ToLowerInvariant();
+        var remainder = separator < 0 ? string.Empty : trimmedArguments[(separator + 1)..].Trim();
+        switch (verb)
         {
             case "history":
                 encounterWindow.IsOpen = true;
@@ -160,6 +201,12 @@ public sealed class Plugin : IDalamudPlugin
             case "clear":
                 stateStore.ResetCurrent();
                 break;
+            case "factory-reset":
+                settingsWindow.IsOpen = true;
+                break;
+            case "install":
+                InstallActPlugin(remainder);
+                break;
             case "meter":
             case "":
                 meterWindow.IsOpen = true;
@@ -188,4 +235,49 @@ public sealed class Plugin : IDalamudPlugin
             logger.Error(ex, "Failed to save plugin configuration.");
         }
     }
+
+    private async Task<string> FactoryResetAsync()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        return await factoryResetService.ResetAsync(timeout.Token).ConfigureAwait(false);
+    }
+
+    private void InstallActPlugin(string packagePath)
+    {
+        if (string.IsNullOrWhiteSpace(packagePath))
+        {
+            logger.Warning("Usage: /actcompat install <path-to-plugin.zip>");
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                var installed = await packageInstaller.InstallAsync(
+                    packagePath.Trim('"'),
+                    timeout.Token).ConfigureAwait(false);
+                configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
+                SaveConfiguration();
+                logger.Information(
+                    $"Installed ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}. Restart the ACT host to load it.");
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "ACT plugin package installation failed.");
+            }
+        });
+    }
+
+    private IReadOnlyList<RuntimePluginSpec> DiscoverRuntimePlugins()
+        => packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin => plugin.Enabled)
+            .Select(plugin => new RuntimePluginSpec(
+                plugin.Manifest.Id,
+                plugin.InstallDirectory,
+                plugin.Manifest.EntryAssembly,
+                plugin.Manifest.EntryType))
+            .ToArray();
 }

@@ -1,18 +1,18 @@
 # Dalamud ACT Compat
 
-Dalamud ACT Compat is an in-game ACT-compatible meter shell. IINACT remains responsible for hosting the official FFXIV_ACT_Plugin runtime; this plugin consumes its supported CombatData IPC.
+Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users install one Dalamud plugin; it directly hosts the official `FFXIV_ACT_Plugin`, embeds `OverlayPlugin`, and can install optional ACT-compatible plugin packages inside its own managed directory.
 
 ## Architecture Audit
 
 1. Current project type: no existing C# repository was present at `/Users/raynording`; this directory creates a new Dalamud plugin project plus an out-of-process compatibility host.
 2. Dalamud reference: the plugin uses `Dalamud.NET.Sdk/15.0.0`, matching the current Dalamud API Level 15 release framework.
-3. IINACT/NotACT/OverlayPlugin code: none existed locally. This implementation provides adapter boundaries and protocol placeholders only.
+3. ACT compatibility runtime: the project vendors a pinned IINACT fork for its proven NotACT shim, FFXIV_ACT_Plugin boot kernel, and OverlayPlugin runtime. The IINACT Dalamud entrypoint, UI, IPC facade, and branding are not started.
 4. .NET/API version: `net10.0-windows`, Dalamud API Level 15 minimum. Windows is the correct validation target for this project because the ACT compatibility host, WinForms shims, FFXIV_ACT_Plugin, and XIVLauncher/Dalamud development files are Windows-first.
 5. Code to keep: the new immutable combat data model, parser abstraction, state store, history repository, Meter UI, settings/status windows, Overlay event bus, and host boundary.
-6. Code to refactor later: `IinactAdapter` must be replaced with a real IINACT/NotACT-backed host bridge; the host process currently sends sample snapshots over named pipe IPC.
-7. Missing modules: raw log-line ingestion, FFLogs-quality log writer, OverlayPlugin renderer/runtime, Cactbot bridge, TTS, and broader ACT plugin compatibility.
-8. IINACT integration: IINACT owns the NotACT shim and FFXIV_ACT_Plugin boot sequence; this plugin deliberately uses its public IPC instead of duplicating that runtime.
-9. License notes: cactbot is Apache-2.0; Dalamud is AGPL-3.0; DalamudPackager is EUPL-1.2; FFXIV_ACT_Plugin releases are distributed as binaries with public SDK assemblies but source is not public; OverlayPlugin and IINACT licenses must be checked from their repositories before code reuse.
+6. Compatibility boundary: optional packages must explicitly target the DalamudActCompat host ABI. Legacy .NET Framework ACT plugins are not claimed compatible until tested.
+7. Missing modules: translating official parser events into the native Meter model, FFLogs-quality log output, Cactbot integration, and a graphical package picker.
+8. System plugins: `FFXIV_ACT_Plugin` and `OverlayPlugin` are independently visible in settings. Factory reset restores both to their default enabled state.
+9. License notes: the IINACT/NotACT integration is GPL-3.0; applicable upstream licenses and notices are included in release archives.
 10. Realistic MVP: a stable Dalamud plugin shell with lifecycle cleanup, parser state reporting, game-internal Meter/history/settings UI, persistent history/config/log directories, and a clearly isolated compatibility host integration point.
 
 ## Current Features
@@ -22,9 +22,10 @@ Dalamud ACT Compat is an in-game ACT-compatible meter shell. IINACT remains resp
 - Encounter history window backed by plugin config storage.
 - Settings window for parser enablement, autostart, Meter settings, history limit, debug flag, parser status, parser restart, and log directory.
 - Parser status model: disabled, initializing, running, stopped, missing dependency, incompatible, faulted.
-- Real FFXIV_ACT_Plugin/NotACT combat data through IINACT IPC, with the named-pipe sample host retained as a fallback.
-- OverlayPlugin-compatible event bus placeholder for `CombatData`, `LogLine`, `ChangeZone`, `ChangePrimaryPlayer`, `PartyChanged`, and `BroadcastMessage`.
-- Out-of-process compatibility host project with exact `IActPluginV1` signature reserved for future ACT plugin loading.
+- In-process official FFXIV_ACT_Plugin runtime using the NotACT compatibility assembly.
+- Embedded OverlayPlugin runtime initialized against the same ACT host.
+- Optional ACT plugin packages with manifest validation, safe ZIP extraction, atomic installation, upgrade backup, enable/disable composition, and isolated load contexts.
+- Recoverable factory reset: mutable state is moved to a timestamped backup before default system plugins and settings are restored.
 
 ## Build
 
@@ -39,7 +40,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `v0.1.6` targets Dalamud API Level 15 and consumes real IINACT CombatData while retaining the embedded sample Host fallback.
+- `0.1.7` WIP targets Dalamud API Level 15 and packages the parser, OverlayPlugin, compatibility assembly, SDK modules, and runtime dependencies in one ZIP.
 - Windows Release build succeeds with XIVLauncherCN/Dalamud development files at `C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\Dev\`.
 - The release collector verifies the plugin manifest, packaged Host executable, and all four embedded Host resources.
 
@@ -62,11 +63,28 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat clear
 /actcompat host
 /actcompat stop
+/actcompat install "C:\path\plugin.zip"
+/actcompat factory-reset
 ```
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
 
-`/actcompat host` uses IINACT's supported IPC when IINACT is installed, allowing IINACT to host `FFXIV_ACT_Plugin.dll` while this plugin consumes real `CombatData`. If IINACT is unavailable, the embedded sample Compatibility Host remains available as a diagnostic fallback. `/actcompat stop` stops either bridge.
+`/actcompat host` starts the embedded ACT host, official FFXIV_ACT_Plugin, enabled OverlayPlugin runtime, and enabled optional packages. `/actcompat stop` unloads them in reverse order.
+
+Optional package ZIPs contain `actcompat.plugin.json` at their root:
+
+```json
+{
+  "id": "example.plugin",
+  "name": "Example ACT Plugin",
+  "version": "1.0.0",
+  "entryAssembly": "Example.Plugin.dll",
+  "entryType": "Example.Plugin.EntryPoint",
+  "hostApiVersion": 1
+}
+```
+
+Factory reset is confirmed in Settings. It stops the host and moves the existing configuration, logs, history, overlays, and optional plugin directory into `factory-reset-backups/<timestamp>` before recreating defaults.
 
 ## Custom Repository
 
@@ -82,12 +100,11 @@ For Windows-side testing from a custom repository, follow `docs/WINDOWS_CUSTOM_R
 
 ## Current Limits
 
-- FFXIV_ACT_Plugin is hosted by IINACT; install and enable IINACT before starting the real parser bridge.
 - No live combat parsing has been verified in game.
 - FFLogs-compatible combat log output is directory-separated but not implemented.
-- HTML Overlay, WebSocket Overlay, Cactbot, TTS, and arbitrary ACT plugins are not supported yet.
-- Third-party ACT plugin loading must remain out-of-process unless a specific module is audited as safe for the game process.
+- OverlayPlugin is embedded, but its HTML/WebSocket behavior still needs an in-game validation pass.
+- Optional packages run in-process and must target host API version 1. Arbitrary legacy ACT plugins may depend on unsupported .NET Framework or ACT UI behavior.
 
 ## Next Stage
 
-Integrate IINACT/NotACT into `DalamudActCompat.Host`, define the named-pipe protocol, translate parser events into `EncounterSnapshot`, and add version checks plus dependency diagnostics before enabling real parsing.
+Validate the self-hosted parser and OverlayPlugin in game, translate `DataSubscription` events into `EncounterSnapshot`, then add a graphical package installer and compatibility diagnostics for legacy ACT plugins.

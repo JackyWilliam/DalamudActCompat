@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\vendor\IINACT\IINACT\IINACT.csproj" />
+    <Reference Include="Dalamud">
+      <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Common">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Common.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Config">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Config.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Logfile">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Logfile.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Memory">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Memory.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Network">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Network.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Parse">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Parse.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Resource">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Resource.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Network.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Parse.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

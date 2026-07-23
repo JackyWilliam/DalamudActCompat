@@ -3,8 +3,8 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
-    <Version>0.1.6</Version>
-    <AssemblyVersion>0.1.6.0</AssemblyVersion>
+    <Version>0.1.7</Version>
+    <AssemblyVersion>0.1.7.0</AssemblyVersion>
     <Name>Dalamud ACT Compat</Name>
     <Author>raynording</Author>
     <Punchline>In-game ACT-compatible parsing platform foundation.</Punchline>
@@ -16,10 +16,13 @@
 
   <ItemGroup>
     <ProjectReference Include="../DalamudActCompat.Host/DalamudActCompat.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>$(DalamudLibPath)Newtonsoft.Json.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
+    <Content Include="../../vendor/IINACT/LICENSE" Link="LICENSES/IINACT-GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/IINACT/OverlayPlugin.Core/LICENSE.txt" Link="LICENSES/OverlayPlugin.Core-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/IINACT/OverlayPlugin.Common/LICENSE.txt" Link="LICENSES/OverlayPlugin.Common-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/IINACT/machina/LICENSE.md" Link="LICENSES/Machina-LICENSE.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../LICENSE.md" Link="LICENSE.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="CopyCompatibilityHost" BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">

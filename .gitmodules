@@ -1,0 +1,3 @@
+[submodule "vendor/IINACT"]
+	path = vendor/IINACT
+	url = https://github.com/JackyWilliam/IINACT.git
