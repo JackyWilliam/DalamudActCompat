@@ -3,7 +3,7 @@ param(
     [string] $Version,
 
     [Parameter(Mandatory = $false)]
-    [string] $SourceRepository = "https://github.com/raynording/DalamudActCompat",
+    [string] $SourceRepository = "https://github.com/JackyWilliam/DalamudActCompat",
 
     [Parameter(Mandatory = $false)]
     [string] $PluginMasterPath = "repo/pluginmaster.json",
@@ -32,4 +32,4 @@ $entry.Changelog = $Changelog
 
 Write-Host "Updated $PluginMasterPath"
 Write-Host "Custom repository raw URL:"
-Write-Host "https://raw.githubusercontent.com/raynording/DalamudActCompatRepo/main/pluginmaster.json"
+Write-Host "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json"

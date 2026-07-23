@@ -7,14 +7,14 @@
     "TestingAssemblyVersion": null,
     "Description": "Dalamud-side UI, storage, parser abstraction, and compatibility-host bridge for an ACT-compatible FFXIV parsing platform. This early build does not yet load FFXIV_ACT_Plugin.",
     "Punchline": "In-game ACT-compatible parsing platform foundation.",
-    "RepoUrl": "https://github.com/raynording/DalamudActCompat",
+    "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 14,
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/raynording/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip",
+    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip",
     "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/raynording/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip",
+    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip",
     "LastUpdate": "1784775146",
     "Changelog": "Initial development build with plugin lifecycle, Meter UI, encounter history, parser abstraction, settings, and compatibility-host boundary."
   }

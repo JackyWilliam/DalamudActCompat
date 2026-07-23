@@ -26,9 +26,9 @@ Custom repository metadata:
 Planned remote URLs:
 
 ```text
-https://github.com/raynording/DalamudActCompat
-https://github.com/raynording/DalamudActCompatRepo
-https://raw.githubusercontent.com/raynording/DalamudActCompatRepo/main/pluginmaster.json
+https://github.com/JackyWilliam/DalamudActCompat
+https://github.com/JackyWilliam/DalamudActCompatRepo
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 ## Windows Setup

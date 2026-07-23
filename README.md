@@ -47,7 +47,7 @@ GitHub Actions are included for Windows-based CI:
 
 - `.github/workflows/build.yml` builds branches and pull requests and uploads `DalamudActCompat.zip`.
 - `.github/workflows/release.yml` builds and publishes a GitHub Release when a `vX.Y.Z` tag is pushed.
-- `.github/workflows/sync-custom-repo.yml` updates the separate custom repository file. It requires a `DALAMUD_REPO_TOKEN` secret with write access to `raynording/DalamudActCompatRepo`.
+- `.github/workflows/sync-custom-repo.yml` updates the separate custom repository file. It requires a `DALAMUD_REPO_TOKEN` secret with write access to `JackyWilliam/DalamudActCompatRepo`.
 
 ## Run
 
@@ -65,7 +65,7 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 The planned custom repository raw URL is:
 
 ```text
-https://raw.githubusercontent.com/raynording/DalamudActCompatRepo/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 The template store entry lives at `repo/pluginmaster.json`. Users add the raw JSON URL to Dalamud; the JSON points to the plugin ZIP in GitHub Releases. See `docs/CUSTOM_REPOSITORY.md` for the release flow.

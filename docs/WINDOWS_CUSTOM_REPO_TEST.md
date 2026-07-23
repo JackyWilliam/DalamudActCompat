@@ -7,22 +7,22 @@ This is the shortest path to test the plugin from a custom Dalamud repository on
 Source repository:
 
 ```text
-https://github.com/raynording/DalamudActCompat
+https://github.com/JackyWilliam/DalamudActCompat
 ```
 
 Custom repository raw URL:
 
 ```text
-https://raw.githubusercontent.com/raynording/DalamudActCompatRepo/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 Release ZIP expected by `pluginmaster.json`:
 
 ```text
-https://github.com/raynording/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip
+https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip
 ```
 
-The raw URL will only work after `raynording/DalamudActCompatRepo` exists on GitHub and contains `pluginmaster.json` at the repository root. The install link will only work after the source repository has a `v0.1.0` release with `DalamudActCompat.zip`.
+The raw URL will only work after `JackyWilliam/DalamudActCompatRepo` exists on GitHub and contains `pluginmaster.json` at the repository root. The install link will only work after the source repository has a `v0.1.0` release with `DalamudActCompat.zip`.
 
 ## Prepare GitHub Repositories
 
@@ -30,13 +30,13 @@ From Windows PowerShell after authenticating GitHub CLI:
 
 ```powershell
 gh auth login -h github.com
-gh repo create raynording/DalamudActCompat --public --source . --remote origin --push
+gh repo create JackyWilliam/DalamudActCompat --public --source . --remote origin --push
 ```
 
 For the custom repository, run from the `DalamudActCompatRepo` folder:
 
 ```powershell
-gh repo create raynording/DalamudActCompatRepo --public --source . --remote origin --push
+gh repo create JackyWilliam/DalamudActCompatRepo --public --source . --remote origin --push
 ```
 
 ## Build and Release
@@ -83,7 +83,7 @@ In-game:
 3. Add the raw custom repository URL:
 
 ```text
-https://raw.githubusercontent.com/raynording/DalamudActCompatRepo/main/pluginmaster.json
+https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json
 ```
 
 4. Save, open `/xlplugins`, and search for `Dalamud ACT Compat`.
