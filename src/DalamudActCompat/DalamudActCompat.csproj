@@ -3,8 +3,8 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
-    <Version>0.1.4</Version>
-    <AssemblyVersion>0.1.4.0</AssemblyVersion>
+    <Version>0.1.5</Version>
+    <AssemblyVersion>0.1.5.0</AssemblyVersion>
     <Name>Dalamud ACT Compat</Name>
     <Author>raynording</Author>
     <Punchline>In-game ACT-compatible parsing platform foundation.</Punchline>
@@ -24,5 +24,20 @@
     </ItemGroup>
     <MakeDir Directories="$(OutputPath)host" />
     <Copy SourceFiles="@(CompatibilityHostFiles)" DestinationFolder="$(OutputPath)host" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="EmbedCompatibilityHost"
+          AfterTargets="ResolveProjectReferences"
+          BeforeTargets="PrepareResources">
+    <ItemGroup>
+      <EmbeddedResource Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/DalamudActCompat.Host.exe"
+                        LogicalName="DalamudActCompat.HostAssets.DalamudActCompat.Host.exe" />
+      <EmbeddedResource Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/DalamudActCompat.Host.dll"
+                        LogicalName="DalamudActCompat.HostAssets.DalamudActCompat.Host.dll" />
+      <EmbeddedResource Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/DalamudActCompat.Host.deps.json"
+                        LogicalName="DalamudActCompat.HostAssets.DalamudActCompat.Host.deps.json" />
+      <EmbeddedResource Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/DalamudActCompat.Host.runtimeconfig.json"
+                        LogicalName="DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json" />
+    </ItemGroup>
   </Target>
 </Project>

@@ -9,8 +9,10 @@ public sealed class IinactAdapter : IParserEngine
 {
     private readonly HostIpcClient ipcClient;
     private readonly CompatibilityHostProcess hostProcess;
+    private readonly CompatibilityHostAssets hostAssets;
     private readonly PluginLogger logger;
     private readonly string pluginDirectory;
+    private readonly string extractedHostDirectory;
     private readonly object syncRoot = new();
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
@@ -18,13 +20,17 @@ public sealed class IinactAdapter : IParserEngine
     public IinactAdapter(
         HostIpcClient ipcClient,
         CompatibilityHostProcess hostProcess,
+        CompatibilityHostAssets hostAssets,
         PluginLogger logger,
-        string pluginDirectory)
+        string pluginDirectory,
+        string extractedHostDirectory)
     {
         this.ipcClient = ipcClient;
         this.hostProcess = hostProcess;
+        this.hostAssets = hostAssets;
         this.logger = logger;
         this.pluginDirectory = pluginDirectory;
+        this.extractedHostDirectory = extractedHostDirectory;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -49,18 +55,19 @@ public sealed class IinactAdapter : IParserEngine
             await StopAsync(CancellationToken.None).ConfigureAwait(false);
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var pipeName = $"DalamudActCompat-{Guid.NewGuid():N}";
-            var hostPath = ResolveHostExecutable();
+            hostAssets.EnsureExtracted();
+            var host = ResolveHostLaunchSpec();
 
-            if (hostPath is null)
+            if (host is null)
             {
                 SetStatus(
                     ParserState.MissingDependency,
                     "Compatibility host executable was not found.",
-                    $"Expected DalamudActCompat.Host.exe under {Path.Combine(pluginDirectory, "host")}.");
+                    $"Expected embedded host assets or host files under {extractedHostDirectory}.");
                 return;
             }
 
-            await hostProcess.StartAsync(hostPath, $"--pipe {pipeName} --sample", activeRun.Token).ConfigureAwait(false);
+            await hostProcess.StartAsync(host, ["--pipe", pipeName, "--sample"], activeRun.Token).ConfigureAwait(false);
             await ipcClient.ConnectAsync(pipeName, activeRun.Token).ConfigureAwait(false);
             SetStatus(ParserState.Running, "Compatibility host IPC bridge is running with sample snapshots.");
         }
@@ -98,31 +105,34 @@ public sealed class IinactAdapter : IParserEngine
         await hostProcess.DisposeAsync().ConfigureAwait(false);
     }
 
-    private string? ResolveHostExecutable()
+    private HostLaunchSpec? ResolveHostLaunchSpec()
     {
-        var hostDirectory = Path.Combine(pluginDirectory, "host");
-        var exePath = Path.Combine(hostDirectory, "DalamudActCompat.Host.exe");
-        if (File.Exists(exePath))
+        var directories = new[]
         {
-            return exePath;
-        }
+            extractedHostDirectory,
+            Path.Combine(pluginDirectory, "host"),
+            pluginDirectory,
+        };
 
-        var platformExePath = Path.Combine(hostDirectory, "DalamudActCompat.Host");
-        if (File.Exists(platformExePath))
+        foreach (var directory in directories.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            return platformExePath;
-        }
+            var exePath = Path.Combine(directory, "DalamudActCompat.Host.exe");
+            if (File.Exists(exePath))
+            {
+                return HostLaunchSpec.ForExecutable(exePath);
+            }
 
-        var rootExePath = Path.Combine(pluginDirectory, "DalamudActCompat.Host.exe");
-        if (File.Exists(rootExePath))
-        {
-            return rootExePath;
-        }
+            var platformExePath = Path.Combine(directory, "DalamudActCompat.Host");
+            if (File.Exists(platformExePath))
+            {
+                return HostLaunchSpec.ForExecutable(platformExePath);
+            }
 
-        var rootPlatformExePath = Path.Combine(pluginDirectory, "DalamudActCompat.Host");
-        if (File.Exists(rootPlatformExePath))
-        {
-            return rootPlatformExePath;
+            var dllPath = Path.Combine(directory, "DalamudActCompat.Host.dll");
+            if (File.Exists(dllPath))
+            {
+                return HostLaunchSpec.ForDotnet(dllPath);
+            }
         }
 
         return null;

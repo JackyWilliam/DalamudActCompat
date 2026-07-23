@@ -15,26 +15,30 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
 
     public bool IsRunning => process is { HasExited: false };
 
-    public Task StartAsync(string executablePath, string arguments, CancellationToken cancellationToken)
+    public Task StartAsync(HostLaunchSpec launchSpec, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         if (IsRunning)
         {
             return Task.CompletedTask;
         }
 
-        if (!File.Exists(executablePath))
+        if (launchSpec.RequiresExistingExecutable && !File.Exists(launchSpec.FileName))
         {
-            throw new FileNotFoundException("Compatibility host executable was not found.", executablePath);
+            throw new FileNotFoundException("Compatibility host executable was not found.", launchSpec.FileName);
         }
 
-        var startInfo = new ProcessStartInfo(executablePath, arguments)
+        var startInfo = new ProcessStartInfo(launchSpec.FileName)
         {
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardError = true,
             RedirectStandardOutput = true,
-            WorkingDirectory = Path.GetDirectoryName(executablePath) ?? Environment.CurrentDirectory,
+            WorkingDirectory = launchSpec.WorkingDirectory,
         };
+        foreach (var argument in launchSpec.PrefixArguments.Concat(arguments))
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         process = Process.Start(startInfo) ?? throw new InvalidOperationException("Compatibility host process did not start.");
         _ = DrainOutputAsync(process, cancellationToken);
@@ -105,4 +109,25 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
             logger.Warning($"Host error drain stopped: {ex.Message}");
         }
     }
+}
+
+public sealed record HostLaunchSpec(
+    string FileName,
+    string WorkingDirectory,
+    IReadOnlyList<string> PrefixArguments,
+    bool RequiresExistingExecutable)
+{
+    public static HostLaunchSpec ForExecutable(string executablePath)
+        => new(
+            executablePath,
+            Path.GetDirectoryName(executablePath) ?? Environment.CurrentDirectory,
+            Array.Empty<string>(),
+            true);
+
+    public static HostLaunchSpec ForDotnet(string assemblyPath)
+        => new(
+            "dotnet",
+            Path.GetDirectoryName(assemblyPath) ?? Environment.CurrentDirectory,
+            [assemblyPath],
+            false);
 }
