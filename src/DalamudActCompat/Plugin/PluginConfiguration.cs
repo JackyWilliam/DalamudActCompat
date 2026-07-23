@@ -7,9 +7,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
 
-    public bool EnableParsing { get; set; } = true;
+    public bool EnableParsing { get; set; }
 
-    public bool AutoStartParser { get; set; } = true;
+    public bool AutoStartParser { get; set; }
 
     public bool DebugMode { get; set; }
 

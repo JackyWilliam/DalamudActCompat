@@ -59,7 +59,11 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat history
 /actcompat settings
 /actcompat status
+/actcompat sample
+/actcompat clear
 ```
+
+`/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
 
 ## Custom Repository
 

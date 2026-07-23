@@ -1,6 +1,7 @@
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Infrastructure.Storage;
 
 namespace DalamudActCompat.Plugin;
 
@@ -8,6 +9,7 @@ internal sealed class PluginLifecycle : IAsyncDisposable
 {
     private readonly IParserEngine parserEngine;
     private readonly EncounterService encounterService;
+    private readonly PluginPaths paths;
     private readonly PluginConfiguration configuration;
     private readonly PluginLogger logger;
     private readonly CancellationTokenSource shutdown = new();
@@ -15,11 +17,13 @@ internal sealed class PluginLifecycle : IAsyncDisposable
     public PluginLifecycle(
         IParserEngine parserEngine,
         EncounterService encounterService,
+        PluginPaths paths,
         PluginConfiguration configuration,
         PluginLogger logger)
     {
         this.parserEngine = parserEngine;
         this.encounterService = encounterService;
+        this.paths = paths;
         this.configuration = configuration;
         this.logger = logger;
     }
@@ -30,6 +34,8 @@ internal sealed class PluginLifecycle : IAsyncDisposable
         {
             try
             {
+                await Task.Delay(TimeSpan.FromMilliseconds(1500), shutdown.Token).ConfigureAwait(false);
+                paths.EnsureCreated();
                 await encounterService.InitializeAsync(shutdown.Token).ConfigureAwait(false);
                 if (configuration.EnableParsing && configuration.AutoStartParser)
                 {

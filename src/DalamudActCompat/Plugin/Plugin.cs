@@ -3,6 +3,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
+using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -24,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
+    private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
@@ -43,13 +45,12 @@ public sealed class Plugin : IDalamudPlugin
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface);
-        paths.EnsureCreated();
         if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
         {
             configuration.LogDirectory = paths.CombatLogDirectory;
         }
 
-        var stateStore = new EncounterStateStore();
+        stateStore = new EncounterStateStore();
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger);
@@ -76,7 +77,7 @@ public sealed class Plugin : IDalamudPlugin
             HelpMessage = "Open Dalamud ACT compatibility platform windows. Args: meter, history, status, settings.",
         });
 
-        lifecycle = new PluginLifecycle(parserEngine, encounterService, configuration, logger);
+        lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
     }
 
@@ -118,6 +119,13 @@ public sealed class Plugin : IDalamudPlugin
             case "settings":
                 settingsWindow.IsOpen = true;
                 break;
+            case "sample":
+                LoadSampleEncounter();
+                meterWindow.IsOpen = true;
+                break;
+            case "clear":
+                stateStore.ResetCurrent();
+                break;
             case "meter":
             case "":
                 meterWindow.IsOpen = true;
@@ -126,6 +134,13 @@ public sealed class Plugin : IDalamudPlugin
                 settingsWindow.IsOpen = true;
                 break;
         }
+    }
+
+    private void LoadSampleEncounter()
+    {
+        var snapshot = stateStore.GetSnapshot();
+        stateStore.Replace(SampleEncounterFactory.Create(DateTimeOffset.UtcNow), snapshot.Recent);
+        logger.Information("Loaded sample encounter snapshot.");
     }
 
     private void SaveConfiguration()
