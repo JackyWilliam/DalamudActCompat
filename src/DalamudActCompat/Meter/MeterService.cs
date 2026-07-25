@@ -51,7 +51,7 @@ public sealed class MeterService
             combatant.Name,
             combatant.Job,
             combatant.IsLocalPlayer,
-            combatant.TotalDamage / duration,
+            ResolveDps(combatant, duration),
             combatant.TotalHealing / duration,
             combatant.TotalDamage,
             combatant.TotalHealing,
@@ -66,6 +66,15 @@ public sealed class MeterService
             _ => rows.OrderByDescending(static row => row.Dps).ToArray(),
         };
     }
+
+    private double ResolveDps(Combatant combatant, double encounterDuration)
+        => settings.DpsMetric switch
+        {
+            DpsMetric.Dps when combatant.Dps > 0 => combatant.Dps,
+            DpsMetric.ExtDps when combatant.ExtDps > 0 => combatant.ExtDps,
+            DpsMetric.EncDps when combatant.EncDps > 0 => combatant.EncDps,
+            _ => combatant.TotalDamage / encounterDuration,
+        };
 }
 
 public sealed record CombatantRow(

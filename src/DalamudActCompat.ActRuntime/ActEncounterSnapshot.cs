@@ -15,4 +15,7 @@ public sealed record ActCombatantSnapshot(
     bool IsLocalPlayer,
     long TotalDamage,
     long TotalHealing,
-    int Deaths);
+    int Deaths,
+    double Dps = 0,
+    double EncDps = 0,
+    double ExtDps = 0);

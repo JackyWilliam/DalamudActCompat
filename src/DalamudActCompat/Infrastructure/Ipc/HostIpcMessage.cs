@@ -23,7 +23,10 @@ internal sealed record HostCombatantDto(
     bool IsLocalPlayer,
     long TotalDamage,
     long TotalHealing,
-    int Deaths);
+    int Deaths,
+    double Dps = 0,
+    double EncDps = 0,
+    double ExtDps = 0);
 
 internal static class HostIpcMapper
 {
@@ -37,7 +40,10 @@ internal static class HostIpcMapper
                 combatant.IsLocalPlayer,
                 combatant.TotalDamage,
                 combatant.TotalHealing,
-                combatant.Deaths))
+                combatant.Deaths,
+                combatant.Dps,
+                combatant.EncDps,
+                combatant.ExtDps))
             .ToArray();
 
         var jobSummaries = combatants

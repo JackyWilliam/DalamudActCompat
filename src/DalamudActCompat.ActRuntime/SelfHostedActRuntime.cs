@@ -372,6 +372,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         var localJob = ResolveJob(playerJobId());
+        var elapsedSeconds = Math.Max(
+            1,
+            ((finished ? chatLastDamage : DateTimeOffset.Now) - chatEncounterStart).TotalSeconds);
         var combatants = chatDamageTotals
             .Select(pair => new ActCombatantSnapshot(
                 pair.Key,
@@ -380,7 +383,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                 string.Equals(pair.Key, localPlayerName, StringComparison.OrdinalIgnoreCase),
                 pair.Value,
                 0,
-                0))
+                0,
+                pair.Value / elapsedSeconds,
+                pair.Value / elapsedSeconds,
+                pair.Value / elapsedSeconds))
             .ToArray();
         EncounterChanged?.Invoke(
             new ActEncounterSnapshot(
@@ -442,7 +448,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                         string.Equals(combatant.Name, ActGlobals.charName, StringComparison.OrdinalIgnoreCase),
                         combatant.Damage,
                         combatant.Healed,
-                        combatant.Deaths))
+                        combatant.Deaths,
+                        combatant.DPS,
+                        combatant.EncDPS,
+                        combatant.ExtDPS))
                     .ToArray();
 
                 snapshot = new ActEncounterSnapshot(
