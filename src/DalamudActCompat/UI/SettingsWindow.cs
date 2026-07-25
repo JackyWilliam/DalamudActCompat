@@ -21,6 +21,9 @@ public sealed class SettingsWindow : Window
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action selectPluginPackage;
     private readonly Action openPluginDirectory;
+    private readonly UiText text;
+    private readonly Func<bool> isCactbotInstalled;
+    private readonly Action selectCactbotPackage;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
     private string? resetResult;
@@ -34,8 +37,11 @@ public sealed class SettingsWindow : Window
         Func<Task<string>> factoryReset,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action selectPluginPackage,
-        Action openPluginDirectory)
-        : base("ACT Compat Settings###DalamudActCompatSettings")
+        Action openPluginDirectory,
+        UiText text,
+        Func<bool> isCactbotInstalled,
+        Action selectCactbotPackage)
+        : base("ACT 兼容设置###DalamudActCompatSettings")
     {
         this.configuration = configuration;
         this.parserEngine = parserEngine;
@@ -46,6 +52,9 @@ public sealed class SettingsWindow : Window
         this.discoverPlugins = discoverPlugins;
         this.selectPluginPackage = selectPluginPackage;
         this.openPluginDirectory = openPluginDirectory;
+        this.text = text;
+        this.isCactbotInstalled = isCactbotInstalled;
+        this.selectCactbotPackage = selectCactbotPackage;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
     }
@@ -53,23 +62,38 @@ public sealed class SettingsWindow : Window
     public override void Draw()
     {
         var changed = false;
-        changed |= Checkbox("Enable parsing", configuration.EnableParsing, value => configuration.EnableParsing = value);
-        changed |= Checkbox("Auto start parser", configuration.AutoStartParser, value => configuration.AutoStartParser = value);
-        changed |= Checkbox("Debug mode", configuration.DebugMode, value => configuration.DebugMode = value);
+        if (ImGui.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
+        {
+            if (ImGui.Selectable("简体中文", text.IsChinese))
+            {
+                configuration.UiLanguage = "zh-CN";
+                changed = true;
+            }
+            if (ImGui.Selectable("English", !text.IsChinese))
+            {
+                configuration.UiLanguage = "en";
+                changed = true;
+            }
+            ImGui.EndCombo();
+        }
+        WindowName = text.Get("ACT 兼容设置###DalamudActCompatSettings", "ACT Compat Settings###DalamudActCompatSettings");
+        changed |= Checkbox(text.Get("启用解析", "Enable parsing"), configuration.EnableParsing, value => configuration.EnableParsing = value);
+        changed |= Checkbox(text.Get("自动启动解析器", "Auto start parser"), configuration.AutoStartParser, value => configuration.AutoStartParser = value);
+        changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);
         changed |= Checkbox(
-            "System plugin: FFXIV_ACT_Plugin",
+            text.Get("系统插件：FFXIV_ACT_Plugin", "System plugin: FFXIV_ACT_Plugin"),
             configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             value => configuration.EmbeddedPlugins.FfxivActPluginEnabled = value);
         changed |= Checkbox(
-            "System plugin: OverlayPlugin",
+            text.Get("系统插件：OverlayPlugin", "System plugin: OverlayPlugin"),
             configuration.EmbeddedPlugins.OverlayPluginEnabled,
             value => configuration.EmbeddedPlugins.OverlayPluginEnabled = value);
 
-        ImGui.TextUnformatted("Installed ACT plugins");
+        ImGui.TextUnformatted(text.Get("已安装的 ACT 扩展", "Installed ACT plugins"));
         var installedPlugins = discoverPlugins();
         if (installedPlugins.Count == 0)
         {
-            ImGui.TextDisabled("No optional ACT plugins installed.");
+            ImGui.TextDisabled(text.Get("没有安装可选 ACT 扩展。", "No optional ACT plugins installed."));
         }
 
         foreach (var plugin in installedPlugins)
@@ -92,33 +116,48 @@ public sealed class SettingsWindow : Window
             }
         }
 
-        if (ImGui.Button("Install ACT plugin package..."))
+        if (ImGui.Button(text.Get("安装 ACT 扩展 DLL 或 ZIP...", "Install ACT plugin DLL or ZIP...")))
         {
             selectPluginPackage();
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Open ACT plugin folder"))
+        if (ImGui.Button(text.Get("打开 ACT 扩展文件夹", "Open ACT plugin folder")))
         {
             openPluginDirectory();
         }
 
-        ImGui.TextDisabled("Restart the parser after installing or changing plugins.");
-        ImGui.TextUnformatted("Third-party compatibility targets");
-        DrawCompatibilityTarget("CactbotSelf", "Download and install it yourself; not redistributed by this project.", "https://github.com/tssailzz8/cacbotSelf");
-        DrawCompatibilityTarget("PostNamazu", "Download and install it yourself; not redistributed by this project.", "https://github.com/Natsukage/PostNamazu");
-        DrawCompatibilityTarget("ACT.FoxTTS", "Manual installation; compatibility layer is experimental.", "https://github.com/Noisyfox/ACT.FoxTTS");
-        DrawCompatibilityTarget("Triggernometry", "Manual installation; compatibility layer is experimental.", "https://github.com/paissaheavyindustries/Triggernometry");
+        ImGui.TextDisabled(text.Get("安装或启停扩展后请重启解析器。", "Restart the parser after installing or changing plugins."));
+        ImGui.Separator();
+        ImGui.TextUnformatted("Cactbot（OverlayPlugin addon）");
+        ImGui.TextDisabled(isCactbotInstalled()
+            ? text.Get("资源已安装；OverlayPlugin 事件源可用。", "Assets installed; OverlayPlugin event source is available.")
+            : text.Get("未安装。请选择 OverlayPlugin/cactbot 官方 Release ZIP。", "Not installed. Select the official OverlayPlugin/cactbot Release ZIP."));
+        if (ImGui.Button(text.Get("安装/更新 Cactbot...", "Install/update Cactbot...")))
+        {
+            selectCactbotPackage();
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton(text.Get("打开官方项目页###Cactbot", "Open official project###Cactbot")))
+        {
+            OpenUrl("https://github.com/OverlayPlugin/cactbot");
+        }
+
+        ImGui.TextUnformatted(text.Get("可选 ACT 扩展（与 Cactbot 本体分开）", "Optional ACT extensions (separate from Cactbot)"));
+        DrawCompatibilityTarget("CactbotSelf / MoreLogLine", text.Get("国服额外日志扩展；实验性兼容。", "CN extra-log extension; experimental compatibility."), "https://github.com/tssailzz8/cacbotSelf");
+        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；安装/基础加载，游戏写入联动需实测。", "Install/basic load; game-write integration requires testing."), "https://github.com/Natsukage/PostNamazu");
+        DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
+        DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML；日志/战斗生命周期/TTS API 已接入。", "DLL and translation XML supported; log/combat/TTS APIs wired."), "https://github.com/MnFeN/Triggernometry");
 
         ImGui.Separator();
-        ImGui.TextUnformatted($"Parser: {parserStatus.State}");
+        ImGui.TextUnformatted($"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
         ImGui.TextWrapped(parserStatus.Message);
         if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
         {
             ImGui.TextWrapped(parserStatus.Detail);
         }
 
-        if (ImGui.Button("Restart parser"))
+        if (ImGui.Button(text.Get("重启解析器", "Restart parser")))
         {
             _ = Task.Run(async () =>
             {
@@ -136,56 +175,56 @@ public sealed class SettingsWindow : Window
 
         ImGui.Separator();
         var historyLimit = configuration.HistoryLimit;
-        if (ImGui.SliderInt("History limit", ref historyLimit, 1, 200))
+        if (ImGui.SliderInt(text.Get("历史记录上限", "History limit"), ref historyLimit, 1, 200))
         {
             configuration.HistoryLimit = historyLimit;
             changed = true;
         }
 
-        changed |= Checkbox("Meter visible", configuration.Meter.IsVisible, value => configuration.Meter.IsVisible = value);
-        changed |= Checkbox("Window locked", configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
-        changed |= Checkbox("Click-through when locked", configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
-        changed |= Checkbox("Auto hide", configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
-        changed |= SliderFloat("Background opacity", configuration.Meter.BackgroundOpacity, 0.05f, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
-        changed |= SliderFloat("Font scale", configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
-        ImGui.TextUnformatted("Meter columns");
-        changed |= Checkbox("Encounter header", configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
-        changed |= Checkbox("Job", configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+        changed |= Checkbox(text.Get("显示悬浮窗", "Meter visible"), configuration.Meter.IsVisible, value => configuration.Meter.IsVisible = value);
+        changed |= Checkbox(text.Get("锁定窗口", "Window locked"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
+        changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
+        changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
+        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0.05f, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
+        changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
+        ImGui.TextUnformatted(text.Get("悬浮窗列", "Meter columns"));
+        changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
+        changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
         changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
-        changed |= Checkbox("Damage", configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
-        changed |= Checkbox("Damage percent", configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
+        changed |= Checkbox(text.Get("伤害", "Damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
+        changed |= Checkbox(text.Get("伤害占比", "Damage percent"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
         changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-        changed |= Checkbox("Healing", configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
-        changed |= Checkbox("Deaths", configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
+        changed |= Checkbox(text.Get("治疗量", "Healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
+        changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
         var localPlayerColor = configuration.Meter.LocalPlayerColor;
-        if (ImGui.ColorEdit4("Local player color", ref localPlayerColor))
+        if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
         {
             configuration.Meter.LocalPlayerColor = localPlayerColor;
             changed = true;
         }
 
         ImGui.Separator();
-        ImGui.TextUnformatted($"Config: {paths.ConfigDirectory}");
-        ImGui.TextUnformatted($"Debug logs: {paths.LogDirectory}");
-        ImGui.TextUnformatted($"Combat logs: {paths.CombatLogDirectory}");
-        if (ImGui.Button("Open log directory"))
+        ImGui.TextUnformatted($"{text.Get("配置", "Config")}: {paths.ConfigDirectory}");
+        ImGui.TextUnformatted($"{text.Get("调试日志", "Debug logs")}: {paths.LogDirectory}");
+        ImGui.TextUnformatted($"{text.Get("战斗日志", "Combat logs")}: {paths.CombatLogDirectory}");
+        if (ImGui.Button(text.Get("打开日志文件夹", "Open log directory")))
         {
             OpenDirectory(paths.LogDirectory);
         }
 
         ImGui.Separator();
-        ImGui.TextWrapped("Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings.");
+        ImGui.TextWrapped(text.Get("恢复出厂设置会停止 ACT 宿主、备份所有可变数据，并恢复两个系统插件和默认设置。", "Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings."));
         if (!confirmFactoryReset)
         {
-            if (ImGui.Button("Restore factory settings..."))
+            if (ImGui.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
             {
                 confirmFactoryReset = true;
             }
         }
         else
         {
-            ImGui.TextWrapped("Press confirm to continue. The previous state remains recoverable from the backup directory.");
-            if (ImGui.Button("Confirm factory reset"))
+            ImGui.TextWrapped(text.Get("按确认继续。此前状态仍可从备份目录恢复。", "Press confirm to continue. The previous state remains recoverable from the backup directory."));
+            if (ImGui.Button(text.Get("确认恢复", "Confirm factory reset")))
             {
                 confirmFactoryReset = false;
                 _ = Task.Run(async () =>
@@ -203,7 +242,7 @@ public sealed class SettingsWindow : Window
             }
 
             ImGui.SameLine();
-            if (ImGui.Button("Cancel"))
+            if (ImGui.Button(text.Get("取消", "Cancel")))
             {
                 confirmFactoryReset = false;
             }
@@ -211,7 +250,7 @@ public sealed class SettingsWindow : Window
 
         if (!string.IsNullOrWhiteSpace(resetResult))
         {
-            ImGui.TextWrapped($"Last factory reset backup: {resetResult}");
+            ImGui.TextWrapped($"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {resetResult}");
         }
 
         if (changed)
@@ -276,7 +315,7 @@ public sealed class SettingsWindow : Window
         ImGui.SameLine();
         ImGui.TextDisabled(note);
         ImGui.SameLine();
-        if (ImGui.SmallButton($"Open project page###{name}"))
+        if (ImGui.SmallButton($"{text.Get("打开项目页", "Open project page")}###{name}"))
         {
             OpenUrl(url);
         }
@@ -296,4 +335,16 @@ public sealed class SettingsWindow : Window
             logger.Error(ex, $"Failed to open {url}.");
         }
     }
+
+    private string LocalizeState(ParserState state) => state switch
+    {
+        ParserState.Stopped => text.Get("已停止", "Stopped"),
+        ParserState.Initializing => text.Get("初始化中", "Initializing"),
+        ParserState.Running => text.Get("运行中", "Running"),
+        ParserState.Disabled => text.Get("已禁用", "Disabled"),
+        ParserState.MissingDependency => text.Get("缺少依赖", "Missing dependency"),
+        ParserState.VersionIncompatible => text.Get("版本不兼容", "Version incompatible"),
+        ParserState.Faulted => text.Get("故障", "Faulted"),
+        _ => state.ToString(),
+    };
 }

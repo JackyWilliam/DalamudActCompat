@@ -20,6 +20,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string ActPluginDirectory { get; set; } = string.Empty;
 
+    public string UiLanguage { get; set; } = "zh-CN";
+
     public MeterSettings Meter { get; set; } = new();
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
@@ -34,6 +36,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         HistoryLimit = 20;
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
+        UiLanguage = "zh-CN";
         Meter = new MeterSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

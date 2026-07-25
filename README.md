@@ -1,5 +1,8 @@
 # Dalamud ACT Compat
 
+第三方组件的维护来源、安装模型和已验证兼容范围见
+[第三方 ACT 扩展兼容说明](docs/third-party-compatibility.md)。
+
 Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users install one Dalamud plugin; it directly hosts the official `FFXIV_ACT_Plugin`, embeds `OverlayPlugin`, and can install optional ACT-compatible plugin packages inside its own managed directory.
 
 ## Architecture Audit

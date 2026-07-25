@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DalamudActCompat.Infrastructure.Storage;
@@ -11,6 +13,13 @@ public sealed partial class ActPluginPackageInstaller
     private const long MaximumExpandedBytes = 256L * 1024 * 1024;
     private readonly PluginPaths paths;
     private readonly SemaphoreSlim installLock = new(1, 1);
+    private static readonly KnownPlugin[] KnownPlugins =
+    [
+        new("cactbotself", "CactbotSelf / MoreLogLine", "CactbotSelf.dll", "CactbotSelf.CactbotSelf"),
+        new("postnamazu", "PostNamazu", "PostNamazu.dll", "PostNamazu.PostNamazu"),
+        new("act.foxtts", "ACT.FoxTTS", "ACT.FoxTTS.dll", "ACT.FoxTTS.FoxTTSPlugin"),
+        new("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
+    ];
 
     public ActPluginPackageInstaller(PluginPaths paths)
     {
@@ -44,8 +53,22 @@ public sealed partial class ActPluginPackageInstaller
                 paths.PluginStagingDirectory,
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stagingDirectory);
-            using var archive = ZipFile.OpenRead(fullPackagePath);
-            ExtractSafely(archive, stagingDirectory);
+            switch (Path.GetExtension(fullPackagePath).ToLowerInvariant())
+            {
+                case ".zip":
+                    using (var archive = ZipFile.OpenRead(fullPackagePath))
+                    {
+                        ExtractSafely(archive, stagingDirectory);
+                    }
+
+                    break;
+                case ".dll":
+                    StageLooseDll(fullPackagePath, stagingDirectory);
+                    break;
+                default:
+                    throw new InvalidDataException("Select an ACT plugin .dll or .zip file.");
+            }
+
             CreateKnownManifestWhenMissing(stagingDirectory);
             var manifest = await ReadManifestAsync(stagingDirectory, cancellationToken).ConfigureAwait(false);
             ValidateManifest(manifest, stagingDirectory);
@@ -155,14 +178,7 @@ public sealed partial class ActPluginPackageInstaller
             return;
         }
 
-        var knownPlugins = new[]
-        {
-            new KnownPlugin("cactbotself", "CactbotSelf", "CactbotSelf.dll", "CactbotSelf.CactbotSelf"),
-            new KnownPlugin("postnamazu", "PostNamazu", "PostNamazu.dll", "PostNamazu.PostNamazu"),
-            new KnownPlugin("act.foxtts", "ACT.FoxTTS", "ACT.FoxTTS.dll", "ACT.FoxTTS.FoxTTSPlugin"),
-            new KnownPlugin("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
-        };
-        foreach (var known in knownPlugins)
+        foreach (var known in KnownPlugins)
         {
             var assembly = Directory
                 .EnumerateFiles(stagingDirectory, known.AssemblyName, SearchOption.AllDirectories)
@@ -192,6 +208,98 @@ public sealed partial class ActPluginPackageInstaller
 
         throw new InvalidDataException(
             $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, or Triggernometry release.");
+    }
+
+    private static void StageLooseDll(string dllPath, string stagingDirectory)
+    {
+        var fileName = Path.GetFileName(dllPath);
+        var known = KnownPlugins.FirstOrDefault(
+            plugin => string.Equals(plugin.AssemblyName, fileName, StringComparison.OrdinalIgnoreCase));
+        if (known is null)
+        {
+            throw new InvalidDataException(
+                $"Unknown ACT plugin DLL '{fileName}'. Supported DLLs: {string.Join(", ", KnownPlugins.Select(plugin => plugin.AssemblyName))}.");
+        }
+
+        File.Copy(dllPath, Path.Combine(stagingDirectory, fileName));
+        var sourceDirectory = Path.GetDirectoryName(dllPath)!;
+        CopyManagedDependencies(dllPath, sourceDirectory, stagingDirectory);
+        CopyCompanionWhenPresent(sourceDirectory, stagingDirectory, $"{fileName}.config");
+        CopyCompanionWhenPresent(
+            sourceDirectory,
+            stagingDirectory,
+            $"{Path.GetFileNameWithoutExtension(fileName)}.pdb");
+
+        if (known.Id == "triggernometry")
+        {
+            foreach (var translation in Directory.EnumerateFiles(sourceDirectory, "*.triglations.xml"))
+            {
+                File.Copy(
+                    translation,
+                    Path.Combine(stagingDirectory, Path.GetFileName(translation)),
+                    overwrite: false);
+            }
+        }
+    }
+
+    private static void CopyManagedDependencies(
+        string entryDll,
+        string sourceDirectory,
+        string stagingDirectory)
+    {
+        var pending = new Queue<string>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        pending.Enqueue(entryDll);
+        while (pending.Count > 0 && visited.Count < 128)
+        {
+            var assemblyPath = pending.Dequeue();
+            if (!visited.Add(Path.GetFullPath(assemblyPath)))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var stream = File.OpenRead(assemblyPath);
+                using var reader = new PEReader(stream);
+                if (!reader.HasMetadata)
+                {
+                    continue;
+                }
+
+                var metadata = reader.GetMetadataReader();
+                foreach (var referenceHandle in metadata.AssemblyReferences)
+                {
+                    var reference = metadata.GetAssemblyReference(referenceHandle);
+                    var dependencyName = $"{metadata.GetString(reference.Name)}.dll";
+                    var dependencyPath = Path.Combine(sourceDirectory, dependencyName);
+                    var destinationPath = Path.Combine(stagingDirectory, dependencyName);
+                    if (!File.Exists(dependencyPath) || File.Exists(destinationPath))
+                    {
+                        continue;
+                    }
+
+                    File.Copy(dependencyPath, destinationPath);
+                    pending.Enqueue(dependencyPath);
+                }
+            }
+            catch (BadImageFormatException)
+            {
+                // Validation later reports an invalid plugin; dependency discovery is best effort.
+            }
+        }
+    }
+
+    private static void CopyCompanionWhenPresent(
+        string sourceDirectory,
+        string stagingDirectory,
+        string fileName)
+    {
+        var source = Path.Combine(sourceDirectory, fileName);
+        if (File.Exists(source))
+        {
+            File.Copy(source, Path.Combine(stagingDirectory, fileName), overwrite: false);
+        }
     }
 
     private static async Task<ActPluginManifest> ReadManifestAsync(

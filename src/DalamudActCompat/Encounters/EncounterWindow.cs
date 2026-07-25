@@ -1,17 +1,20 @@
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.State;
 using Dalamud.Bindings.ImGui;
+using DalamudActCompat.UI;
 
 namespace DalamudActCompat.Encounters;
 
 public sealed class EncounterWindow : Window
 {
     private readonly EncounterStateStore stateStore;
+    private readonly UiText text;
 
-    public EncounterWindow(EncounterStateStore stateStore)
-        : base("Encounter History###DalamudActCompatHistory")
+    public EncounterWindow(EncounterStateStore stateStore, UiText text)
+        : base("战斗历史###DalamudActCompatHistory")
     {
         this.stateStore = stateStore;
+        this.text = text;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new System.Numerics.Vector2(640, 260),
@@ -22,9 +25,10 @@ public sealed class EncounterWindow : Window
     public override void Draw()
     {
         var snapshot = stateStore.GetSnapshot();
+        WindowName = text.Get("战斗历史###DalamudActCompatHistory", "Encounter History###DalamudActCompatHistory");
         if (snapshot.Recent.Count == 0)
         {
-            ImGui.TextUnformatted("No saved encounters.");
+            ImGui.TextUnformatted(text.Get("没有已保存的战斗。", "No saved encounters."));
             return;
         }
 
@@ -33,15 +37,15 @@ public sealed class EncounterWindow : Window
             return;
         }
 
-        ImGui.TableSetupColumn("Start");
-        ImGui.TableSetupColumn("End");
-        ImGui.TableSetupColumn("Zone");
-        ImGui.TableSetupColumn("Enemy");
-        ImGui.TableSetupColumn("Duration");
-        ImGui.TableSetupColumn("Party");
+        ImGui.TableSetupColumn(text.Get("开始", "Start"));
+        ImGui.TableSetupColumn(text.Get("结束", "End"));
+        ImGui.TableSetupColumn(text.Get("区域", "Zone"));
+        ImGui.TableSetupColumn(text.Get("敌人", "Enemy"));
+        ImGui.TableSetupColumn(text.Get("时长", "Duration"));
+        ImGui.TableSetupColumn(text.Get("人数", "Party"));
         ImGui.TableSetupColumn("DPS");
         ImGui.TableSetupColumn("HPS");
-        ImGui.TableSetupColumn("Deaths");
+        ImGui.TableSetupColumn(text.Get("死亡", "Deaths"));
         ImGui.TableHeadersRow();
 
         foreach (var encounter in snapshot.Recent)
