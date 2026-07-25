@@ -4,19 +4,21 @@ namespace DalamudActCompat.Infrastructure.Storage;
 
 public sealed class PluginPaths
 {
-    public PluginPaths(IDalamudPluginInterface pluginInterface)
-        : this(pluginInterface.ConfigDirectory.FullName)
+    public PluginPaths(IDalamudPluginInterface pluginInterface, string? actPluginDirectory = null)
+        : this(pluginInterface.ConfigDirectory.FullName, actPluginDirectory)
     {
     }
 
-    public PluginPaths(string configDirectory)
+    public PluginPaths(string configDirectory, string? actPluginDirectory = null)
     {
         ConfigDirectory = Path.GetFullPath(configDirectory);
         HistoryFile = Path.Combine(ConfigDirectory, "encounters.json");
         LogDirectory = Path.Combine(ConfigDirectory, "logs");
         CombatLogDirectory = Path.Combine(LogDirectory, "ffxiv");
         HostDirectory = Path.Combine(ConfigDirectory, "host");
-        ActPluginDirectory = Path.Combine(ConfigDirectory, "act-plugins");
+        ActPluginDirectory = string.IsNullOrWhiteSpace(actPluginDirectory)
+            ? Path.Combine(ConfigDirectory, "act-plugins")
+            : Path.GetFullPath(actPluginDirectory);
         PluginStagingDirectory = Path.Combine(ConfigDirectory, ".plugin-staging");
         PluginBackupDirectory = Path.Combine(ConfigDirectory, "plugin-backups");
     }
@@ -31,11 +33,14 @@ public sealed class PluginPaths
 
     public string HostDirectory { get; }
 
-    public string ActPluginDirectory { get; }
+    public string ActPluginDirectory { get; private set; }
 
     public string PluginStagingDirectory { get; }
 
     public string PluginBackupDirectory { get; }
+
+    public void SetActPluginDirectory(string directory)
+        => ActPluginDirectory = Path.GetFullPath(directory);
 
     public void EnsureCreated()
     {
@@ -43,7 +48,6 @@ public sealed class PluginPaths
         Directory.CreateDirectory(LogDirectory);
         Directory.CreateDirectory(CombatLogDirectory);
         Directory.CreateDirectory(HostDirectory);
-        Directory.CreateDirectory(ActPluginDirectory);
         Directory.CreateDirectory(PluginStagingDirectory);
         Directory.CreateDirectory(PluginBackupDirectory);
     }

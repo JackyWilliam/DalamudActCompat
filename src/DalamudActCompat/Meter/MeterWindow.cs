@@ -33,7 +33,7 @@ public sealed class MeterWindow : Window
         }
 
         var snapshot = meterService.Snapshot;
-        return !settings.AutoHideOutOfCombat || snapshot.Current?.IsActive == true || snapshot.Current is not null;
+        return !settings.AutoHideOutOfCombat || snapshot.Current?.IsActive == true;
     }
 
     public override void PreDraw()
@@ -66,7 +66,10 @@ public sealed class MeterWindow : Window
         }
 
         var encounter = snapshot.Current;
-        ImGui.TextUnformatted($"{encounter.EnemyName} | {encounter.ZoneName} | {FormatDuration(encounter.Duration)} | {(encounter.IsActive ? "Running" : "Ended")}");
+        if (settings.ShowHeader)
+        {
+            ImGui.TextUnformatted($"{encounter.EnemyName} | {encounter.ZoneName} | {FormatDuration(encounter.Duration)} | {(encounter.IsActive ? "Running" : "Ended")}");
+        }
 
         if (ImGui.BeginCombo("Sort", settings.SortMode.ToString()))
         {
@@ -87,16 +90,24 @@ public sealed class MeterWindow : Window
             stateStore.ResetCurrent();
         }
 
-        if (ImGui.BeginTable("meter-table", 8, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
+        var columnCount = 1 +
+                          (settings.ShowJob ? 1 : 0) +
+                          (settings.ShowDps ? 1 : 0) +
+                          (settings.ShowDamage ? 1 : 0) +
+                          (settings.ShowDamagePercent ? 1 : 0) +
+                          (settings.ShowHps ? 1 : 0) +
+                          (settings.ShowHealing ? 1 : 0) +
+                          (settings.ShowDeaths ? 1 : 0);
+        if (ImGui.BeginTable("meter-table", columnCount, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
         {
-            ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 42);
+            if (settings.ShowJob) ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 42);
             ImGui.TableSetupColumn("Name");
-            ImGui.TableSetupColumn("DPS");
-            ImGui.TableSetupColumn("Damage");
-            ImGui.TableSetupColumn("%");
-            ImGui.TableSetupColumn("HPS");
-            ImGui.TableSetupColumn("Healing");
-            ImGui.TableSetupColumn("Deaths");
+            if (settings.ShowDps) ImGui.TableSetupColumn("DPS");
+            if (settings.ShowDamage) ImGui.TableSetupColumn("Damage");
+            if (settings.ShowDamagePercent) ImGui.TableSetupColumn("%");
+            if (settings.ShowHps) ImGui.TableSetupColumn("HPS");
+            if (settings.ShowHealing) ImGui.TableSetupColumn("Healing");
+            if (settings.ShowDeaths) ImGui.TableSetupColumn("Deaths");
             ImGui.TableHeadersRow();
 
             foreach (var row in meterService.GetRows())
@@ -104,25 +115,22 @@ public sealed class MeterWindow : Window
                 ImGui.TableNextRow();
                 if (row.IsLocalPlayer)
                 {
-                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(new System.Numerics.Vector4(0.25f, 0.42f, 0.55f, 0.45f)));
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(settings.LocalPlayerColor));
                 }
 
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(JobIconText(row.Job));
+                if (settings.ShowJob)
+                {
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(JobIconText(row.Job));
+                }
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(row.Name);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Dps.ToString("N0"));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.TotalDamage.ToString("N0"));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted($"{row.DamagePercent:N1}%");
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Hps.ToString("N0"));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.TotalHealing.ToString("N0"));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Deaths.ToString());
+                if (settings.ShowDps) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Dps.ToString("N0")); }
+                if (settings.ShowDamage) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.TotalDamage.ToString("N0")); }
+                if (settings.ShowDamagePercent) { ImGui.TableNextColumn(); ImGui.TextUnformatted($"{row.DamagePercent:N1}%"); }
+                if (settings.ShowHps) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Hps.ToString("N0")); }
+                if (settings.ShowHealing) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.TotalHealing.ToString("N0")); }
+                if (settings.ShowDeaths) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Deaths.ToString()); }
             }
 
             ImGui.EndTable();

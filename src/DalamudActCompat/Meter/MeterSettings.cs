@@ -1,5 +1,7 @@
 namespace DalamudActCompat.Meter;
 
+using System.Numerics;
+
 public enum MeterSortMode
 {
     Dps,
@@ -23,4 +25,22 @@ public sealed class MeterSettings
     public float FontScale { get; set; } = 1.0f;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
+
+    public bool ShowHeader { get; set; } = true;
+
+    public bool ShowJob { get; set; } = true;
+
+    public bool ShowDps { get; set; } = true;
+
+    public bool ShowDamage { get; set; } = true;
+
+    public bool ShowDamagePercent { get; set; } = true;
+
+    public bool ShowHps { get; set; } = true;
+
+    public bool ShowHealing { get; set; } = true;
+
+    public bool ShowDeaths { get; set; } = true;
+
+    public Vector4 LocalPlayerColor { get; set; } = new(0.25f, 0.42f, 0.55f, 0.45f);
 }

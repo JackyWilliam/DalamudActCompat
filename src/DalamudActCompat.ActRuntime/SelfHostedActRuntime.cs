@@ -3,6 +3,7 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using System.Reflection;
+using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -11,12 +12,15 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
     private readonly IDataManager dataManager;
+    private readonly Func<string> playerName;
+    private readonly Func<uint> playerJobId;
     private readonly IChatGui chatGui;
     private readonly IFramework framework;
     private readonly ICondition condition;
     private readonly IGameInteropProvider gameInteropProvider;
     private readonly INotificationManager notificationManager;
     private IINACT.FfxivActPluginWrapper? parser;
+    private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
     private HttpClient? httpClient;
@@ -29,11 +33,15 @@ public sealed class SelfHostedActRuntime : IDisposable
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
     private string chatActor = string.Empty;
+    private string chatEnemy = string.Empty;
+    private string chatZone = string.Empty;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
         IPluginLog log,
         IDataManager dataManager,
+        Func<string> playerName,
+        Func<uint> playerJobId,
         IChatGui chatGui,
         IFramework framework,
         ICondition condition,
@@ -43,6 +51,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.pluginInterface = pluginInterface;
         this.log = log;
         this.dataManager = dataManager;
+        this.playerName = playerName;
+        this.playerJobId = playerJobId;
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
@@ -75,6 +85,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         actGlobalsInitialized = true;
         ActGlobals.oFormActMain = new FormActMain(log)
         {
+            AppDataFolder = pluginInterface.ConfigDirectory,
             LogFilePath = logDirectory,
             WriteLogFile = true,
         };
@@ -100,9 +111,17 @@ public sealed class SelfHostedActRuntime : IDisposable
                 chatGui,
                 framework,
                 condition);
+            parserPluginData = RegisterSystemPlugin(
+                parser.ActPluginInstance,
+                "FFXIV_ACT_Plugin.dll");
+            framework.Update += OnFrameworkUpdate;
         }
         catch
         {
+            RemovePluginData(parserPluginData);
+            parserPluginData = null;
+            parser?.Dispose();
+            parser = null;
             zoneDownHookManager?.Dispose();
             zoneDownHookManager = null;
             ActGlobals.Dispose();
@@ -204,6 +223,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         try
         {
+            RemovePluginData(parserPluginData);
+            parserPluginData = null;
             parser?.Dispose();
         }
         catch (Exception ex)
@@ -212,6 +233,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         parser = null;
+        framework.Update -= OnFrameworkUpdate;
         try
         {
             zoneDownHookManager?.Dispose();
@@ -236,6 +258,31 @@ public sealed class SelfHostedActRuntime : IDisposable
                 actGlobalsInitialized = false;
             }
         }
+    }
+
+    private static ActPluginData RegisterSystemPlugin(IActPluginV1 plugin, string fileName)
+    {
+        var data = new ActPluginData(
+            new FileInfo(Path.Combine(AppContext.BaseDirectory, fileName)),
+            plugin,
+            new TabPage(fileName),
+            new Label { Text = "FFXIV_ACT_Plugin Started." });
+        ActGlobals.oFormActMain.ActPlugins.Add(data);
+        return data;
+    }
+
+    private static void RemovePluginData(ActPluginData? data)
+    {
+        if (data is null)
+        {
+            return;
+        }
+
+        ActGlobals.oFormActMain.ActPlugins.Remove(data);
+        data.tpPluginSpace.Dispose();
+        data.lblPluginStatus.Dispose();
+        data.lblPluginTitle.Dispose();
+        data.cbEnabled.Dispose();
     }
 
     public void Dispose() => StopParser();
@@ -266,19 +313,54 @@ public sealed class SelfHostedActRuntime : IDisposable
         var now = new DateTimeOffset(logInfo.detectedTime);
         if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
         {
+            PublishChatEncounter(finished: chatEncounterId != Guid.Empty);
             chatEncounterId = Guid.NewGuid();
             chatEncounterStart = now;
             chatDamageTotals.Clear();
         }
 
         chatLastDamage = now;
+        chatEnemy = target;
+        chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
         chatDamageTotals[chatActor] = chatDamageTotals.GetValueOrDefault(chatActor) + damage;
+        PublishChatEncounter(finished: false);
+    }
+
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        if (chatEncounterId == Guid.Empty || chatLastDamage == default ||
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
+            DateTimeOffset.Now - chatLastDamage < TimeSpan.FromSeconds(3))
+        {
+            return;
+        }
+
+        PublishChatEncounter(finished: true);
+        chatEncounterId = Guid.Empty;
+        chatDamageTotals.Clear();
+        chatActor = string.Empty;
+    }
+
+    private void PublishChatEncounter(bool finished)
+    {
+        if (chatEncounterId == Guid.Empty)
+        {
+            return;
+        }
+
+        var localPlayerName = playerName();
+        if (string.IsNullOrWhiteSpace(localPlayerName))
+        {
+            localPlayerName = ActGlobals.charName ?? string.Empty;
+        }
+
+        var localJob = ResolveJob(playerJobId());
         var combatants = chatDamageTotals
             .Select(pair => new ActCombatantSnapshot(
                 pair.Key,
                 pair.Key,
-                string.Empty,
-                string.Equals(pair.Key, ActGlobals.charName, StringComparison.OrdinalIgnoreCase),
+                string.Equals(pair.Key, localPlayerName, StringComparison.OrdinalIgnoreCase) ? localJob : string.Empty,
+                string.Equals(pair.Key, localPlayerName, StringComparison.OrdinalIgnoreCase),
                 pair.Value,
                 0,
                 0))
@@ -287,11 +369,11 @@ public sealed class SelfHostedActRuntime : IDisposable
             new ActEncounterSnapshot(
                 chatEncounterId,
                 chatEncounterStart,
-                null,
-                logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
-                target,
+                finished ? chatLastDamage : null,
+                chatZone,
+                string.IsNullOrWhiteSpace(chatEnemy) ? "Encounter" : chatEnemy,
                 combatants),
-            false);
+            finished);
     }
 
     private void OnAfterCombatAction(bool isImport, CombatActionEventArgs action)
@@ -378,6 +460,17 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         return string.Empty;
     }
+
+    private static string ResolveJob(uint? jobId)
+        => jobId switch
+        {
+            19 => "PLD", 20 => "MNK", 21 => "WAR", 22 => "DRG", 23 => "BRD",
+            24 => "WHM", 25 => "BLM", 26 => "ACN", 27 => "SMN", 28 => "SCH",
+            30 => "NIN", 31 => "MCH", 32 => "DRK", 33 => "AST", 34 => "SAM",
+            35 => "RDM", 36 => "BLU", 37 => "GNB", 38 => "DNC", 39 => "RPR",
+            40 => "SGE", 41 => "VPR", 42 => "PCT",
+            _ => string.Empty,
+        };
 
     private void SetUpstreamLogger()
     {
