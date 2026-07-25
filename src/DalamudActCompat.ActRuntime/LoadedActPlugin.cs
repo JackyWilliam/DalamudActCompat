@@ -144,7 +144,18 @@ internal sealed class LoadedActPlugin : IDisposable
                     statusLabel.Text = "Loaded; legacy Triggernometry integration unavailable.";
                 }
 
+                NormalizePluginRootControl(tabPage);
+                if (string.Equals(spec.Id, "postnamazu", StringComparison.OrdinalIgnoreCase) &&
+                    !System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription.StartsWith(
+                        ".NET Framework",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    StopLegacyPostNamazuProcessMonitor(instance);
+                    statusLabel.Text = "Loaded; GreyMagic process injection is unavailable on modern .NET.";
+                }
+
                 configurationForm.Text = string.IsNullOrWhiteSpace(tabPage.Text) ? spec.Id : tabPage.Text;
+                configurationForm.Shown += (_, _) => NormalizePluginRootControl(tabPage);
                 configurationForm.FormClosing += (_, eventArgs) =>
                 {
                     if (eventArgs.CloseReason == CloseReason.UserClosing)
@@ -230,5 +241,32 @@ internal sealed class LoadedActPlugin : IDisposable
         }));
         uiThread.Join(TimeSpan.FromSeconds(10));
         loadContext.Resolving -= resolvingHandler;
+    }
+
+    private static void NormalizePluginRootControl(TabPage tabPage)
+    {
+        if (tabPage.Controls.Count != 1)
+        {
+            tabPage.PerformLayout();
+            return;
+        }
+
+        var root = tabPage.Controls[0];
+        root.Dock = DockStyle.Fill;
+        root.Visible = true;
+        root.BringToFront();
+        tabPage.PerformLayout();
+        root.PerformLayout();
+    }
+
+    private static void StopLegacyPostNamazuProcessMonitor(object instance)
+    {
+        var field = instance.GetType().GetField(
+            "_processManager",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var manager = field?.GetValue(instance);
+        manager?.GetType()
+            .GetMethod("StopProcessMonitoring", BindingFlags.Instance | BindingFlags.Public)
+            ?.Invoke(manager, null);
     }
 }
