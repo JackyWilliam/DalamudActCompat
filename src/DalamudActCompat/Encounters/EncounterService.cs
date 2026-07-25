@@ -2,6 +2,8 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.Infrastructure.Storage;
+using System.Text.Json;
 
 namespace DalamudActCompat.Encounters;
 
@@ -11,6 +13,7 @@ public sealed class EncounterService : IAsyncDisposable
     private readonly EncounterStateStore stateStore;
     private readonly PluginConfiguration configuration;
     private readonly PluginLogger logger;
+    private readonly PluginPaths paths;
     private readonly SemaphoreSlim saveLock = new(1, 1);
     private IReadOnlyList<Encounter> recent = Array.Empty<Encounter>();
 
@@ -18,12 +21,14 @@ public sealed class EncounterService : IAsyncDisposable
         EncounterRepository repository,
         EncounterStateStore stateStore,
         PluginConfiguration configuration,
-        PluginLogger logger)
+        PluginLogger logger,
+        PluginPaths paths)
     {
         this.repository = repository;
         this.stateStore = stateStore;
         this.configuration = configuration;
         this.logger = logger;
+        this.paths = paths;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -49,6 +54,12 @@ public sealed class EncounterService : IAsyncDisposable
                 .ToArray();
             stateStore.Replace(stateStore.GetSnapshot().Current, recent);
             await repository.SaveRecentAsync(recent, cancellationToken).ConfigureAwait(false);
+            Directory.CreateDirectory(paths.EncounterLogDirectory);
+            var fileName = $"{encounter.StartTime.LocalDateTime:yyyyMMdd-HHmmss}-{encounter.Id:N}.json";
+            await File.WriteAllTextAsync(
+                Path.Combine(paths.EncounterLogDirectory, fileName),
+                JsonSerializer.Serialize(encounter, new JsonSerializerOptions { WriteIndented = true }),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

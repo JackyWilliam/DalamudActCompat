@@ -9,12 +9,14 @@ public sealed class EncounterWindow : Window
 {
     private readonly EncounterStateStore stateStore;
     private readonly UiText text;
+    private readonly Action openLogHistory;
 
-    public EncounterWindow(EncounterStateStore stateStore, UiText text)
+    public EncounterWindow(EncounterStateStore stateStore, UiText text, Action openLogHistory)
         : base("战斗历史###DalamudActCompatHistory")
     {
         this.stateStore = stateStore;
         this.text = text;
+        this.openLogHistory = openLogHistory;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new System.Numerics.Vector2(640, 260),
@@ -26,6 +28,10 @@ public sealed class EncounterWindow : Window
     {
         var snapshot = stateStore.GetSnapshot();
         WindowName = text.Get("战斗历史###DalamudActCompatHistory", "Encounter History###DalamudActCompatHistory");
+        if (ImGui.Button(text.Get("查看战斗日志文件", "View encounter log files")))
+        {
+            openLogHistory();
+        }
         if (snapshot.Recent.Count == 0)
         {
             ImGui.TextUnformatted(text.Get("没有已保存的战斗。", "No saved encounters."));

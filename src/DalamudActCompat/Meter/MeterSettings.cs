@@ -24,6 +24,8 @@ public sealed class MeterSettings
 
     public float FontScale { get; set; } = 1.0f;
 
+    public int RefreshIntervalMs { get; set; } = 750;
+
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
 
     public bool ShowHeader { get; set; } = true;

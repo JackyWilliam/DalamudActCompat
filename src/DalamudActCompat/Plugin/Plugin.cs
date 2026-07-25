@@ -32,10 +32,12 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginLogger logger;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
+    private readonly SelfHostedActRuntime actRuntime;
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
     private readonly EncounterWindow encounterWindow;
+    private readonly LogHistoryWindow logHistoryWindow;
     private readonly SettingsWindow settingsWindow;
     private readonly StatusWindow statusWindow;
     private readonly FactoryResetService factoryResetService;
@@ -54,7 +56,8 @@ public sealed class Plugin : IDalamudPlugin
         IFramework framework,
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
-        INotificationManager notificationManager)
+        INotificationManager notificationManager,
+        IPartyList partyList)
     {
         services = new PluginServices(
             pluginInterface,
@@ -67,6 +70,11 @@ public sealed class Plugin : IDalamudPlugin
             condition,
             gameInteropProvider,
             notificationManager);
+        var localDeathWhilePartyContinues = () =>
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious] &&
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
+            partyList.Count > 1 &&
+            partyList.Any(member => member.CurrentHP > 0);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
@@ -78,8 +86,8 @@ public sealed class Plugin : IDalamudPlugin
         stateStore = new EncounterStateStore();
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
-        encounterService = new EncounterService(repository, stateStore, configuration, logger);
-        var actRuntime = new SelfHostedActRuntime(
+        encounterService = new EncounterService(repository, stateStore, configuration, logger, paths);
+        actRuntime = new SelfHostedActRuntime(
             pluginInterface,
             log,
             dataManager,
@@ -89,7 +97,8 @@ public sealed class Plugin : IDalamudPlugin
             framework,
             condition,
             gameInteropProvider,
-            notificationManager);
+            notificationManager,
+            localDeathWhilePartyContinues);
         parserEngine = new ParserEngine(new IinactAdapter(
             actRuntime,
             logger,
@@ -106,7 +115,8 @@ public sealed class Plugin : IDalamudPlugin
         var text = new UiText(configuration);
         meterWindow = new MeterWindow(meterService, stateStore, configuration, text);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
-        encounterWindow = new EncounterWindow(stateStore, text);
+        logHistoryWindow = new LogHistoryWindow(paths, text);
+        encounterWindow = new EncounterWindow(stateStore, text, () => logHistoryWindow.IsOpen = true);
         factoryResetService = new FactoryResetService(
             parserEngine,
             paths,
@@ -127,10 +137,12 @@ public sealed class Plugin : IDalamudPlugin
             OpenPluginDirectory,
             text,
             () => cactbotInstaller.IsInstalled,
-            SelectCactbotPackage);
+            SelectCactbotPackage,
+            OpenActPluginConfiguration);
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
+        windowSystem.AddWindow(logHistoryWindow);
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(statusWindow);
 
@@ -185,6 +197,9 @@ public sealed class Plugin : IDalamudPlugin
         {
             case "history":
                 encounterWindow.IsOpen = true;
+                break;
+            case "logs":
+                logHistoryWindow.IsOpen = true;
                 break;
             case "status":
                 statusWindow.IsOpen = true;
@@ -364,6 +379,14 @@ public sealed class Plugin : IDalamudPlugin
         catch (Exception ex)
         {
             logger.Error(ex, "Failed to open the ACT plugin directory.");
+        }
+    }
+
+    private void OpenActPluginConfiguration(string pluginId)
+    {
+        if (!actRuntime.OpenCustomPluginConfiguration(pluginId))
+        {
+            logger.Warning($"ACT plugin '{pluginId}' is not running. Restart the parser and try again.");
         }
     }
 

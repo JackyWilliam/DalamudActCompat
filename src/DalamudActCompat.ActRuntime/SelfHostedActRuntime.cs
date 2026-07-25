@@ -19,6 +19,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly ICondition condition;
     private readonly IGameInteropProvider gameInteropProvider;
     private readonly INotificationManager notificationManager;
+    private readonly Func<bool> localDeathWhilePartyContinues;
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -46,7 +47,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         IFramework framework,
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
-        INotificationManager notificationManager)
+        INotificationManager notificationManager,
+        Func<bool> localDeathWhilePartyContinues)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -58,6 +60,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.condition = condition;
         this.gameInteropProvider = gameInteropProvider;
         this.notificationManager = notificationManager;
+        this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
     }
 
     public bool IsParserRunning => parser is not null;
@@ -66,6 +69,19 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
+
+    public bool OpenCustomPluginConfiguration(string id)
+    {
+        var plugin = customPlugins.FirstOrDefault(
+            candidate => string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (plugin is null)
+        {
+            return false;
+        }
+
+        plugin.OpenConfiguration();
+        return true;
+    }
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
 
@@ -330,6 +346,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         if (chatEncounterId == Guid.Empty || chatLastDamage == default ||
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
+            localDeathWhilePartyContinues() ||
             DateTimeOffset.Now - chatLastDamage < TimeSpan.FromSeconds(3))
         {
             return;

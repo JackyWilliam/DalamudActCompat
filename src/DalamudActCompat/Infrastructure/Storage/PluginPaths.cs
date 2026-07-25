@@ -15,6 +15,7 @@ public sealed class PluginPaths
         HistoryFile = Path.Combine(ConfigDirectory, "encounters.json");
         LogDirectory = Path.Combine(ConfigDirectory, "logs");
         CombatLogDirectory = Path.Combine(LogDirectory, "ffxiv");
+        EncounterLogDirectory = Path.Combine(LogDirectory, "encounters");
         HostDirectory = Path.Combine(ConfigDirectory, "host");
         ActPluginDirectory = string.IsNullOrWhiteSpace(actPluginDirectory)
             ? Path.Combine(ConfigDirectory, "act-plugins")
@@ -31,6 +32,8 @@ public sealed class PluginPaths
     public string LogDirectory { get; }
 
     public string CombatLogDirectory { get; }
+
+    public string EncounterLogDirectory { get; }
 
     public string HostDirectory { get; }
 
@@ -50,6 +53,7 @@ public sealed class PluginPaths
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogDirectory);
         Directory.CreateDirectory(CombatLogDirectory);
+        Directory.CreateDirectory(EncounterLogDirectory);
         Directory.CreateDirectory(HostDirectory);
         Directory.CreateDirectory(CactbotDirectory);
         Directory.CreateDirectory(PluginStagingDirectory);
