@@ -1,4 +1,5 @@
-﻿{
+[
+{
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
@@ -14,6 +15,7 @@
     "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.10/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
     "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.10/DalamudActCompat.zip",
-    "LastUpdate":  "1784974677",
+    "LastUpdate":  "1784975086",
     "Changelog":  "Package the complete executable FFXIV_ACT_Plugin runtime instead of protected SDK reference stubs."
 }
+]

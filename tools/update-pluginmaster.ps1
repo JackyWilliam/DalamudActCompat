@@ -28,7 +28,9 @@ $entry.DownloadLinkUpdate = $downloadUrl
 $entry.LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
 $entry.Changelog = $Changelog
 
-@($entry) | ConvertTo-Json -Depth 10 | Set-Content -Path $PluginMasterPath -Encoding UTF8
+$json = $entry | ConvertTo-Json -Depth 10
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($PluginMasterPath, "[`n$json`n]`n", $utf8NoBom)
 
 Write-Host "Updated $PluginMasterPath"
 Write-Host "Custom repository raw URL:"
