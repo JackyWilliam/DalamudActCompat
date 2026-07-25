@@ -119,7 +119,7 @@ public sealed class SettingsWindow : Window
             }
 
             ImGui.SameLine();
-            if (ImGui.SmallButton($"{text.Get("打开配置", "Open configuration")}###{plugin.Manifest.Id}"))
+            if (ImGui.SmallButton($"{text.Get("打开配置", "Open configuration")}###open-config-{plugin.Manifest.Id}"))
             {
                 openPluginConfiguration(plugin.Manifest.Id);
             }
