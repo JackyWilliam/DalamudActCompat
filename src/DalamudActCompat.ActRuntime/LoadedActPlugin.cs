@@ -110,6 +110,23 @@ internal sealed class LoadedActPlugin : IDisposable
                 statusLabel = new Label();
                 pluginData = new ActPluginData(new FileInfo(assemblyPath), actPlugin, tabPage, statusLabel);
                 ActGlobals.oFormActMain.ActPlugins.Add(pluginData);
+
+                var tabs = new TabControl { Dock = DockStyle.Fill };
+                tabs.TabPages.Add(tabPage);
+                configurationForm = new Form
+                {
+                    Text = spec.Id,
+                    Width = 960,
+                    Height = 720,
+                    StartPosition = FormStartPosition.CenterScreen,
+                    ShowInTaskbar = true,
+                };
+                configurationForm.Controls.Add(tabs);
+                _ = configurationForm.Handle;
+                _ = tabs.Handle;
+                _ = tabPage.Handle;
+                configurationForm.PerformLayout();
+
                 try
                 {
                     initPlugin.Invoke(instance, [tabPage, statusLabel]);
@@ -127,17 +144,7 @@ internal sealed class LoadedActPlugin : IDisposable
                     statusLabel.Text = "Loaded; legacy Triggernometry integration unavailable.";
                 }
 
-                var tabs = new TabControl { Dock = DockStyle.Fill };
-                tabs.TabPages.Add(tabPage);
-                configurationForm = new Form
-                {
-                    Text = string.IsNullOrWhiteSpace(tabPage.Text) ? spec.Id : tabPage.Text,
-                    Width = 960,
-                    Height = 720,
-                    StartPosition = FormStartPosition.CenterScreen,
-                    ShowInTaskbar = true,
-                };
-                configurationForm.Controls.Add(tabs);
+                configurationForm.Text = string.IsNullOrWhiteSpace(tabPage.Text) ? spec.Id : tabPage.Text;
                 configurationForm.FormClosing += (_, eventArgs) =>
                 {
                     if (eventArgs.CloseReason == CloseReason.UserClosing)
@@ -146,7 +153,6 @@ internal sealed class LoadedActPlugin : IDisposable
                         configurationForm.Hide();
                     }
                 };
-                _ = configurationForm.Handle;
                 ready.Set();
                 Application.Run(new ApplicationContext());
             }
