@@ -2,8 +2,10 @@ using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text.Json;
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Infrastructure.Storage;
+using DalamudActCompat.Parser;
 
 var testRoot = Path.Combine(Path.GetTempPath(), $"DalamudActCompat-{Guid.NewGuid():N}");
 Directory.CreateDirectory(testRoot);
@@ -44,6 +46,7 @@ try
     ValidateFfxivModuleInitializer();
     ValidateFfxivPluginConstructor();
     ValidateFfxivRuntimeAssemblies();
+    ValidateActEncounterMapping();
 
     Console.WriteLine("Package and FFXIV_ACT_Plugin smoke tests passed.");
     return 0;
@@ -178,6 +181,34 @@ static void ValidateFfxivRuntimeAssemblies()
         }
     }
 }
+
+static void ValidateActEncounterMapping()
+{
+    var id = Guid.NewGuid();
+    var start = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(10);
+    var snapshot = new ActEncounterSnapshot(
+        id,
+        start,
+        null,
+        "Test Zone",
+        "Test Enemy",
+        [
+            new ActCombatantSnapshot("local", "You", "SAM", true, 120_000, 2_000, 0),
+            new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
+        ]);
+
+    var encounter = ActEncounterMapper.Map(snapshot);
+    Assert(encounter.Id == id, "ACT encounter id was not preserved.");
+    Assert(encounter.StartTime == start, "ACT encounter start time was not preserved.");
+    Assert(encounter.IsActive, "Active ACT encounter was mapped as finished.");
+    Assert(encounter.TotalDamage == 140_000, "ACT combatant damage totals were not mapped.");
+    Assert(encounter.TotalHealing == 92_000, "ACT combatant healing totals were not mapped.");
+    Assert(encounter.TotalDeaths == 1, "ACT combatant deaths were not mapped.");
+    Assert(encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer).Name == "You",
+        "ACT local player marker was not mapped.");
+    Assert(encounter.JobSummaries.Count == 2, "ACT job summaries were not generated.");
+}
+
 static string FindProjectRoot()
 {
     var directory = new DirectoryInfo(AppContext.BaseDirectory);
