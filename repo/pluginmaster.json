@@ -1,21 +1,19 @@
-[
-  {
-    "Author": "raynording",
-    "Name": "Dalamud ACT Compat",
-    "InternalName": "DalamudActCompat",
-    "AssemblyVersion": "0.1.9.0",
-    "TestingAssemblyVersion": null,
-    "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
-    "Punchline": "In-game ACT-compatible parsing platform foundation.",
-    "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
-    "ApplicableVersion": "any",
-    "DalamudApiLevel": 15,
-    "IsHide": false,
-    "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.9/DalamudActCompat.zip",
-    "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.9/DalamudActCompat.zip",
-    "LastUpdate": "1784973155",
-    "Changelog": "Replace the protected CN parser stub with the official executable FFXIV_ACT_Plugin package."
-  }
-]
+﻿{
+    "Author":  "raynording",
+    "Name":  "Dalamud ACT Compat",
+    "InternalName":  "DalamudActCompat",
+    "AssemblyVersion":  "0.1.10.0",
+    "TestingAssemblyVersion":  null,
+    "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
+    "Punchline":  "In-game ACT-compatible parsing platform foundation.",
+    "RepoUrl":  "https://github.com/JackyWilliam/DalamudActCompat",
+    "ApplicableVersion":  "any",
+    "DalamudApiLevel":  15,
+    "IsHide":  false,
+    "IsTestingExclusive":  false,
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.10/DalamudActCompat.zip",
+    "DownloadLinkTesting":  null,
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.10/DalamudActCompat.zip",
+    "LastUpdate":  "1784974677",
+    "Changelog":  "Package the complete executable FFXIV_ACT_Plugin runtime instead of protected SDK reference stubs."
+}
