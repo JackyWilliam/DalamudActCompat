@@ -21,52 +21,55 @@
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Common">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Common.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Common.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Config">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Config.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Config.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Logfile">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Logfile.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Logfile.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Memory">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Memory.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Memory.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Network">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Network.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Network.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Parse">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Parse.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Parse.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FFXIV_ACT_Plugin.Resource">
-      <HintPath>..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Resource.dll</HintPath>
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Resource.dll</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Config.dll">
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Common.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Logfile.dll">
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Config.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Memory.dll">
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Logfile.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Network.dll">
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Memory.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Parse.dll">
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Network.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Resource.dll">
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Parse.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Resource.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

@@ -43,6 +43,7 @@ try
 
     ValidateFfxivModuleInitializer();
     ValidateFfxivPluginConstructor();
+    ValidateFfxivRuntimeAssemblies();
 
     Console.WriteLine("Package and FFXIV_ACT_Plugin smoke tests passed.");
     return 0;
@@ -132,6 +133,51 @@ static void ValidateFfxivPluginConstructor()
     throw new InvalidOperationException("FFXIV_ACT_Plugin constructor was not found.");
 }
 
+static void ValidateFfxivRuntimeAssemblies()
+{
+    var runtimeDirectory = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    var assemblyNames = new[]
+    {
+        "FFXIV_ACT_Plugin.Common.dll",
+        "FFXIV_ACT_Plugin.Config.dll",
+        "FFXIV_ACT_Plugin.Logfile.dll",
+        "FFXIV_ACT_Plugin.Memory.dll",
+        "FFXIV_ACT_Plugin.Network.dll",
+        "FFXIV_ACT_Plugin.Parse.dll",
+        "FFXIV_ACT_Plugin.Resource.dll",
+    };
+
+    foreach (var assemblyName in assemblyNames)
+    {
+        var assemblyPath = Path.Combine(runtimeDirectory, assemblyName);
+        Assert(File.Exists(assemblyPath), $"{assemblyName} was not found at {assemblyPath}.");
+
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            var type = metadata.GetTypeDefinition(typeHandle);
+            foreach (var methodHandle in type.GetMethods())
+            {
+                var method = metadata.GetMethodDefinition(methodHandle);
+                if (method.RelativeVirtualAddress == 0)
+                    continue;
+
+                var il = peReader.GetMethodBody(method.RelativeVirtualAddress).GetILBytes();
+                Assert(il is not [0x14, 0x7a],
+                    $"{assemblyName} contains a protected throw-null method: " +
+                    $"{metadata.GetString(type.Namespace)}.{metadata.GetString(type.Name)}." +
+                    $"{metadata.GetString(method.Name)}.");
+            }
+        }
+    }
+}
 static string FindProjectRoot()
 {
     var directory = new DirectoryInfo(AppContext.BaseDirectory);
