@@ -80,6 +80,8 @@ public sealed class Plugin : IDalamudPlugin
         parserEngine = new ParserEngine(new IinactAdapter(
             actRuntime,
             logger,
+            stateStore,
+            encounterService,
             paths.CombatLogDirectory,
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,

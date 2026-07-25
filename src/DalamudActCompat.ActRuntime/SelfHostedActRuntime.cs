@@ -19,6 +19,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private HttpClient? httpClient;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
+    private EncounterData? activeEncounter;
+    private Guid activeEncounterId;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -43,6 +45,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
 
+    public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
+
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
 
@@ -62,6 +66,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             LogFilePath = logDirectory,
             WriteLogFile = true,
         };
+        ActGlobals.oFormActMain.AfterCombatAction += OnAfterCombatAction;
+        ActGlobals.oFormActMain.AfterCombatEnd += OnAfterCombatEnd;
 
         var configuration = new IINACT.Configuration
         {
@@ -191,6 +197,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             try
             {
+                ActGlobals.oFormActMain.AfterCombatAction -= OnAfterCombatAction;
+                ActGlobals.oFormActMain.AfterCombatEnd -= OnAfterCombatEnd;
                 ActGlobals.Dispose();
             }
             finally
@@ -201,6 +209,91 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     public void Dispose() => StopParser();
+
+    private void OnAfterCombatAction(bool isImport, CombatActionEventArgs action)
+    {
+        if (isImport)
+        {
+            return;
+        }
+
+        var encounter = action.combatAction.ParentEncounter;
+        if (encounter is null)
+        {
+            return;
+        }
+
+        PublishEncounter(encounter, false);
+    }
+
+    private void OnAfterCombatEnd(EncounterData encounter)
+        => PublishEncounter(encounter, true);
+
+    private void PublishEncounter(EncounterData encounter, bool finished)
+    {
+        try
+        {
+            ActEncounterSnapshot snapshot;
+            lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
+            {
+                if (!ReferenceEquals(activeEncounter, encounter))
+                {
+                    activeEncounter = encounter;
+                    activeEncounterId = Guid.NewGuid();
+                }
+
+                var startTime = encounter.StartTime == DateTime.MaxValue
+                    ? DateTimeOffset.Now
+                    : new DateTimeOffset(encounter.StartTime);
+                DateTimeOffset? endTime = finished
+                    ? encounter.EndTime == DateTime.MinValue
+                        ? DateTimeOffset.Now
+                        : new DateTimeOffset(encounter.EndTime)
+                    : null;
+                var combatants = encounter.Items.Values
+                    .Where(static combatant => combatant.Damage > 0 || combatant.Healed > 0 || combatant.Deaths > 0)
+                    .Select(combatant => new ActCombatantSnapshot(
+                        combatant.Name,
+                        combatant.Name,
+                        ResolveJob(combatant),
+                        string.Equals(combatant.Name, ActGlobals.charName, StringComparison.OrdinalIgnoreCase),
+                        combatant.Damage,
+                        combatant.Healed,
+                        combatant.Deaths))
+                    .ToArray();
+
+                snapshot = new ActEncounterSnapshot(
+                    activeEncounterId,
+                    startTime,
+                    endTime,
+                    encounter.ZoneName ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
+                    encounter.Title ?? string.Empty,
+                    combatants);
+
+                if (finished)
+                {
+                    activeEncounter = null;
+                    activeEncounterId = Guid.Empty;
+                }
+            }
+
+            EncounterChanged?.Invoke(snapshot, finished);
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to publish ACT encounter snapshot.");
+        }
+    }
+
+    private static string ResolveJob(CombatantData combatant)
+    {
+        if (combatant.Tags.TryGetValue("Job", out var job) && job is not null)
+        {
+            return job.ToString() ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
 
     private void SetUpstreamLogger()
     {

@@ -1,5 +1,7 @@
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Core.Interfaces;
+using DalamudActCompat.Core.State;
+using DalamudActCompat.Encounters;
 using DalamudActCompat.Infrastructure.Logging;
 
 namespace DalamudActCompat.Parser;
@@ -8,6 +10,8 @@ public sealed class IinactAdapter : IParserEngine
 {
     private readonly SelfHostedActRuntime actRuntime;
     private readonly PluginLogger logger;
+    private readonly EncounterStateStore stateStore;
+    private readonly EncounterService encounterService;
     private readonly string logDirectory;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
@@ -19,6 +23,8 @@ public sealed class IinactAdapter : IParserEngine
     public IinactAdapter(
         SelfHostedActRuntime actRuntime,
         PluginLogger logger,
+        EncounterStateStore stateStore,
+        EncounterService encounterService,
         string logDirectory,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
@@ -26,10 +32,13 @@ public sealed class IinactAdapter : IParserEngine
     {
         this.actRuntime = actRuntime;
         this.logger = logger;
+        this.stateStore = stateStore;
+        this.encounterService = encounterService;
         this.logDirectory = logDirectory;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
+        actRuntime.EncounterChanged += OnEncounterChanged;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -104,8 +113,22 @@ public sealed class IinactAdapter : IParserEngine
     public async ValueTask DisposeAsync()
     {
         SetStatus(ParserState.Stopped, "Parser disposed.");
+        actRuntime.EncounterChanged -= OnEncounterChanged;
         actRuntime.Dispose();
         await Task.CompletedTask;
+    }
+
+    private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)
+    {
+        var encounter = ActEncounterMapper.Map(snapshot);
+        if (!finished)
+        {
+            stateStore.Replace(encounter, stateStore.GetSnapshot().Recent);
+            return;
+        }
+
+        stateStore.ResetCurrent();
+        _ = encounterService.AddFinishedEncounterAsync(encounter, CancellationToken.None);
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)
