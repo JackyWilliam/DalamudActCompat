@@ -24,6 +24,11 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
     private Guid activeEncounterId;
+    private readonly Dictionary<string, long> chatDamageTotals = new(StringComparer.OrdinalIgnoreCase);
+    private Guid chatEncounterId;
+    private DateTimeOffset chatEncounterStart;
+    private DateTimeOffset chatLastDamage;
+    private string chatActor = string.Empty;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -73,6 +78,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             LogFilePath = logDirectory,
             WriteLogFile = true,
         };
+        ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
         ActGlobals.oFormActMain.AfterCombatAction += OnAfterCombatAction;
         ActGlobals.oFormActMain.AfterCombatEnd += OnAfterCombatEnd;
 
@@ -222,6 +228,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             {
                 ActGlobals.oFormActMain.AfterCombatAction -= OnAfterCombatAction;
                 ActGlobals.oFormActMain.AfterCombatEnd -= OnAfterCombatEnd;
+                ActGlobals.oFormActMain.BeforeLogLineRead -= OnBeforeLogLineRead;
                 ActGlobals.Dispose();
             }
             finally
@@ -232,6 +239,60 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     public void Dispose() => StopParser();
+
+    private void OnBeforeLogLineRead(bool isImport, LogLineEventArgs logInfo)
+    {
+        if (isImport)
+        {
+            return;
+        }
+
+        var fields = logInfo.originalLogLine.Split('|');
+        if (fields.Length < 5 || fields[0] != "00")
+        {
+            return;
+        }
+
+        if (!ChineseCombatChatParser.TryParse(
+                fields[4],
+                chatActor,
+                out chatActor,
+                out var target,
+                out var damage))
+        {
+            return;
+        }
+
+        var now = new DateTimeOffset(logInfo.detectedTime);
+        if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
+        {
+            chatEncounterId = Guid.NewGuid();
+            chatEncounterStart = now;
+            chatDamageTotals.Clear();
+        }
+
+        chatLastDamage = now;
+        chatDamageTotals[chatActor] = chatDamageTotals.GetValueOrDefault(chatActor) + damage;
+        var combatants = chatDamageTotals
+            .Select(pair => new ActCombatantSnapshot(
+                pair.Key,
+                pair.Key,
+                string.Empty,
+                string.Equals(pair.Key, ActGlobals.charName, StringComparison.OrdinalIgnoreCase),
+                pair.Value,
+                0,
+                0))
+            .ToArray();
+        EncounterChanged?.Invoke(
+            new ActEncounterSnapshot(
+                chatEncounterId,
+                chatEncounterStart,
+                null,
+                logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
+                target,
+                combatants),
+            false);
+    }
 
     private void OnAfterCombatAction(bool isImport, CombatActionEventArgs action)
     {

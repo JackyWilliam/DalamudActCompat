@@ -47,6 +47,7 @@ try
     ValidateFfxivPluginConstructor();
     ValidateFfxivRuntimeAssemblies();
     ValidateActEncounterMapping();
+    ValidateChineseCombatChatParsing();
 
     Console.WriteLine("Package and FFXIV_ACT_Plugin smoke tests passed.");
     return 0;
@@ -207,6 +208,30 @@ static void ValidateActEncounterMapping()
     Assert(encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer).Name == "You",
         "ACT local player marker was not mapped.");
     Assert(encounter.JobSummaries.Count == 2, "ACT job summaries were not generated.");
+}
+
+static void ValidateChineseCombatChatParsing()
+{
+    Assert(
+        ChineseCombatChatParser.TryParse(
+            "埃斯蒂尼安丿发动攻击 \uE06F 木人受到了3714点伤害。",
+            string.Empty,
+            out var actor,
+            out var target,
+            out var damage),
+        "Chinese auto-attack combat chat was not parsed.");
+    Assert(actor == "埃斯蒂尼安丿" && target == "木人" && damage == 3714,
+        "Chinese auto-attack fields were mapped incorrectly.");
+    Assert(
+        ChineseCombatChatParser.TryParse(
+            "  \uE06F 暴击！ 木人受到了39870(+56%)点伤害。",
+            actor,
+            out var inheritedActor,
+            out target,
+            out damage),
+        "Chinese ability damage chat was not parsed.");
+    Assert(inheritedActor == actor && target == "木人" && damage == 39870,
+        "Chinese ability damage fields were mapped incorrectly.");
 }
 
 static string FindProjectRoot()
