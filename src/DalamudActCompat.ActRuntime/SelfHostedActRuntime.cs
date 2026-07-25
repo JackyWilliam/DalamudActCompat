@@ -193,7 +193,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         IEnumerable<RuntimePluginSpec> plugins)
     {
         var failures = new List<(string Id, Exception Error)>();
-        foreach (var plugin in plugins)
+        foreach (var plugin in plugins
+                     .OrderBy(GetPluginLoadPriority)
+                     .ThenBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase))
         {
             try
             {
@@ -221,6 +223,16 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         return failures;
     }
+
+    private static int GetPluginLoadPriority(RuntimePluginSpec plugin)
+        => plugin.Id.ToLowerInvariant() switch
+        {
+            "cactbotself" => 100,
+            "triggernometry" => 200,
+            "postnamazu" => 300,
+            "act.foxtts" => 400,
+            _ => 1000,
+        };
 
     private static bool IsPluginInitializationError(string status)
         => status.Contains("error", StringComparison.OrdinalIgnoreCase) ||
