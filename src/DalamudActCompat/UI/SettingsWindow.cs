@@ -24,6 +24,7 @@ public sealed class SettingsWindow : Window
     private readonly UiText text;
     private readonly Func<bool> isCactbotInstalled;
     private readonly Action selectCactbotPackage;
+    private readonly Action<string> openPluginConfiguration;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
     private string? resetResult;
@@ -40,7 +41,8 @@ public sealed class SettingsWindow : Window
         Action openPluginDirectory,
         UiText text,
         Func<bool> isCactbotInstalled,
-        Action selectCactbotPackage)
+        Action selectCactbotPackage,
+        Action<string> openPluginConfiguration)
         : base("ACT 兼容设置###DalamudActCompatSettings")
     {
         this.configuration = configuration;
@@ -55,6 +57,7 @@ public sealed class SettingsWindow : Window
         this.text = text;
         this.isCactbotInstalled = isCactbotInstalled;
         this.selectCactbotPackage = selectCactbotPackage;
+        this.openPluginConfiguration = openPluginConfiguration;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
     }
@@ -113,6 +116,12 @@ public sealed class SettingsWindow : Window
                 }
 
                 changed = true;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"{text.Get("打开配置", "Open configuration")}###{plugin.Manifest.Id}"))
+            {
+                openPluginConfiguration(plugin.Manifest.Id);
             }
         }
 
@@ -187,6 +196,12 @@ public sealed class SettingsWindow : Window
         changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
         changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0.05f, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
         changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
+        var refreshInterval = configuration.Meter.RefreshIntervalMs;
+        if (ImGui.SliderInt(text.Get("DPS 刷新间隔（毫秒）", "DPS refresh interval (ms)"), ref refreshInterval, 250, 2000))
+        {
+            configuration.Meter.RefreshIntervalMs = refreshInterval;
+            changed = true;
+        }
         ImGui.TextUnformatted(text.Get("悬浮窗列", "Meter columns"));
         changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
         changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);

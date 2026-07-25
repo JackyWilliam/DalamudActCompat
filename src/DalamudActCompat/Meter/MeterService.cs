@@ -7,6 +7,10 @@ public sealed class MeterService
 {
     private readonly EncounterStateStore stateStore;
     private readonly MeterSettings settings;
+    private readonly object cacheLock = new();
+    private IReadOnlyList<CombatantRow> cachedRows = Array.Empty<CombatantRow>();
+    private Guid cachedEncounterId;
+    private DateTimeOffset nextRefresh;
 
     public MeterService(EncounterStateStore stateStore, MeterSettings settings)
     {
@@ -24,6 +28,23 @@ public sealed class MeterService
             return Array.Empty<CombatantRow>();
         }
 
+        lock (cacheLock)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (cachedEncounterId == encounter.Id && now < nextRefresh)
+            {
+                return cachedRows;
+            }
+
+            cachedEncounterId = encounter.Id;
+            nextRefresh = now.AddMilliseconds(Math.Clamp(settings.RefreshIntervalMs, 250, 2000));
+            cachedRows = BuildRows(encounter);
+            return cachedRows;
+        }
+    }
+
+    private IReadOnlyList<CombatantRow> BuildRows(Encounter encounter)
+    {
         var duration = Math.Max(1.0, encounter.Duration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
         var rows = encounter.Combatants.Select(combatant => new CombatantRow(

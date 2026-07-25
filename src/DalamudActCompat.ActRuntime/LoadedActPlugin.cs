@@ -13,6 +13,7 @@ internal sealed class LoadedActPlugin : IDisposable
     private readonly TabPage tabPage;
     private readonly Label statusLabel;
     private readonly ActPluginData pluginData;
+    private Form? configurationForm;
 
     private LoadedActPlugin(
         string id,
@@ -35,6 +36,31 @@ internal sealed class LoadedActPlugin : IDisposable
     public string Id { get; }
 
     public string Status => statusLabel.Text;
+
+    public void OpenConfiguration()
+    {
+        if (configurationForm is null || configurationForm.IsDisposed)
+        {
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            tabs.TabPages.Add(tabPage);
+            configurationForm = new Form
+            {
+                Text = tabPage.Text.Length == 0 ? Id : tabPage.Text,
+                Width = 960,
+                Height = 720,
+                StartPosition = FormStartPosition.CenterScreen,
+            };
+            configurationForm.Controls.Add(tabs);
+            configurationForm.FormClosing += (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                configurationForm.Hide();
+            };
+        }
+
+        configurationForm.Show();
+        configurationForm.BringToFront();
+    }
 
     public static LoadedActPlugin Load(RuntimePluginSpec spec)
     {
@@ -101,6 +127,7 @@ internal sealed class LoadedActPlugin : IDisposable
         }
         finally
         {
+            configurationForm?.Dispose();
             ActGlobals.oFormActMain.ActPlugins.Remove(pluginData);
             tabPage.Dispose();
             statusLabel.Dispose();

@@ -127,7 +127,7 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
-        stateStore.ResetCurrent();
+        stateStore.Replace(encounter, stateStore.GetSnapshot().Recent);
         _ = encounterService.AddFinishedEncounterAsync(encounter, CancellationToken.None);
     }
 
