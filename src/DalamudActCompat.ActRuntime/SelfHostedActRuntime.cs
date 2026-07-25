@@ -76,10 +76,12 @@ public sealed class SelfHostedActRuntime : IDisposable
             candidate => string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase));
         if (plugin is null)
         {
+            log.Warning($"ACT plugin '{id}' configuration was requested, but the plugin is not loaded.");
             return false;
         }
 
         plugin.OpenConfiguration();
+        log.Information($"Opened ACT plugin '{id}' configuration.");
         return true;
     }
 
@@ -195,9 +197,11 @@ public sealed class SelfHostedActRuntime : IDisposable
             try
             {
                 customPlugins.Add(LoadedActPlugin.Load(plugin));
+                log.Information($"ACT plugin '{plugin.Id}' loaded.");
             }
             catch (Exception ex)
             {
+                log.Error(ex, $"ACT plugin '{plugin.Id}' failed to load.");
                 failures.Add((plugin.Id, ex));
             }
         }
