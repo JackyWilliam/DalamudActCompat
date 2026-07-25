@@ -197,8 +197,20 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             try
             {
-                customPlugins.Add(LoadedActPlugin.Load(plugin));
-                log.Information($"ACT plugin '{plugin.Id}' loaded.");
+                var loadedPlugin = LoadedActPlugin.Load(plugin);
+                customPlugins.Add(loadedPlugin);
+                if (IsPluginInitializationError(loadedPlugin.Status))
+                {
+                    var error = new InvalidOperationException(
+                        $"ACT plugin '{plugin.Id}' reported an initialization error:{Environment.NewLine}" +
+                        loadedPlugin.Status);
+                    log.Error(error, $"ACT plugin '{plugin.Id}' initialized incompletely.");
+                    failures.Add((plugin.Id, error));
+                    continue;
+                }
+
+                log.Information(
+                    $"ACT plugin '{plugin.Id}' loaded. Status: {loadedPlugin.Status}");
             }
             catch (Exception ex)
             {
@@ -209,6 +221,11 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         return failures;
     }
+
+    private static bool IsPluginInitializationError(string status)
+        => status.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+           status.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+           status.Contains("exception", StringComparison.OrdinalIgnoreCase);
 
     public void StopOverlay()
     {
