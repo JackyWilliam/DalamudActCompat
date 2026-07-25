@@ -51,10 +51,22 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Config.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Logfile.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Memory.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Network.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Parse.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\vendor\IINACT\external_dependencies\SDK\FFXIV_ACT_Plugin.Resource.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

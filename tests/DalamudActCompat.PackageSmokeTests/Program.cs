@@ -42,6 +42,7 @@ try
     }
 
     ValidateFfxivModuleInitializer();
+    ValidateFfxivPluginConstructor();
 
     Console.WriteLine("Package and FFXIV_ACT_Plugin smoke tests passed.");
     return 0;
@@ -92,6 +93,43 @@ static void ValidateFfxivModuleInitializer()
     }
 
     throw new InvalidOperationException("FFXIV_ACT_Plugin module initializer was not found.");
+}
+
+static void ValidateFfxivPluginConstructor()
+{
+    var assemblyPath = Path.Combine(
+        FindProjectRoot(),
+        "vendor",
+        "IINACT",
+        "external_dependencies",
+        "FFXIV_ACT_Plugin.dll");
+    Assert(File.Exists(assemblyPath), $"FFXIV_ACT_Plugin.dll was not found at {assemblyPath}.");
+
+    using var stream = File.OpenRead(assemblyPath);
+    using var peReader = new PEReader(stream);
+    var metadata = peReader.GetMetadataReader();
+
+    foreach (var typeHandle in metadata.TypeDefinitions)
+    {
+        var type = metadata.GetTypeDefinition(typeHandle);
+        if (metadata.GetString(type.Namespace) != "FFXIV_ACT_Plugin" ||
+            metadata.GetString(type.Name) != "FFXIV_ACT_Plugin")
+            continue;
+
+        foreach (var methodHandle in type.GetMethods())
+        {
+            var method = metadata.GetMethodDefinition(methodHandle);
+            if (metadata.GetString(method.Name) != ".ctor" || method.RelativeVirtualAddress == 0)
+                continue;
+
+            var il = peReader.GetMethodBody(method.RelativeVirtualAddress).GetILBytes();
+            Assert(il is not [0x14, 0x7a],
+                "FFXIV_ACT_Plugin constructor is a protected throw-null stub.");
+            return;
+        }
+    }
+
+    throw new InvalidOperationException("FFXIV_ACT_Plugin constructor was not found.");
 }
 
 static string FindProjectRoot()
