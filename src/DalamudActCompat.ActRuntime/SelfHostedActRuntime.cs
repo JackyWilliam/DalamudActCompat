@@ -98,6 +98,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         Directory.CreateDirectory(logDirectory);
+        Directory.CreateDirectory(Path.Combine(pluginInterface.ConfigDirectory.FullName, "Config"));
         SetUpstreamLogger();
         ActGlobals.Init();
         actGlobalsInitialized = true;

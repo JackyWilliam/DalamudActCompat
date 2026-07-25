@@ -110,7 +110,22 @@ internal sealed class LoadedActPlugin : IDisposable
                 statusLabel = new Label();
                 pluginData = new ActPluginData(new FileInfo(assemblyPath), actPlugin, tabPage, statusLabel);
                 ActGlobals.oFormActMain.ActPlugins.Add(pluginData);
-                initPlugin.Invoke(instance, [tabPage, statusLabel]);
+                try
+                {
+                    initPlugin.Invoke(instance, [tabPage, statusLabel]);
+                }
+                catch (TargetInvocationException ex) when (
+                    string.Equals(spec.Id, "postnamazu", StringComparison.OrdinalIgnoreCase) &&
+                    ex.InnerException is FileLoadException fileLoadException &&
+                    fileLoadException.FileName?.StartsWith(
+                        "Advanced Combat Tracker,",
+                        StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    // PostNamazu treats its optional Triggernometry integration probe as
+                    // fatal when the legacy strong-named ACT identity cannot be loaded on
+                    // modern .NET. Keep its already initialized base UI and core services.
+                    statusLabel.Text = "Loaded; legacy Triggernometry integration unavailable.";
+                }
 
                 var tabs = new TabControl { Dock = DockStyle.Fill };
                 tabs.TabPages.Add(tabPage);
