@@ -9,6 +9,7 @@ namespace DalamudActCompat.ActRuntime;
 internal sealed class LoadedActPlugin : IDisposable
 {
     private readonly AssemblyLoadContext loadContext;
+    private readonly Func<AssemblyLoadContext, AssemblyName, Assembly?> resolvingHandler;
     private readonly object instance;
     private readonly MethodInfo deInitPlugin;
     private readonly TabPage tabPage;
@@ -21,6 +22,7 @@ internal sealed class LoadedActPlugin : IDisposable
     private LoadedActPlugin(
         string id,
         AssemblyLoadContext loadContext,
+        Func<AssemblyLoadContext, AssemblyName, Assembly?> resolvingHandler,
         object instance,
         MethodInfo deInitPlugin,
         TabPage tabPage,
@@ -31,6 +33,7 @@ internal sealed class LoadedActPlugin : IDisposable
     {
         Id = id;
         this.loadContext = loadContext;
+        this.resolvingHandler = resolvingHandler;
         this.instance = instance;
         this.deInitPlugin = deInitPlugin;
         this.tabPage = tabPage;
@@ -59,6 +62,7 @@ internal sealed class LoadedActPlugin : IDisposable
         using var ready = new ManualResetEventSlim();
         Exception? failure = null;
         AssemblyLoadContext? loadContext = null;
+        Func<AssemblyLoadContext, AssemblyName, Assembly?>? resolvingHandler = null;
         object? instance = null;
         MethodInfo? deInitPlugin = null;
         TabPage? tabPage = null;
@@ -70,7 +74,25 @@ internal sealed class LoadedActPlugin : IDisposable
         {
             try
             {
-                loadContext = new PluginLoadContext(assemblyPath);
+                loadContext = AssemblyLoadContext.GetLoadContext(typeof(IActPluginV1).Assembly)
+                              ?? throw new InvalidOperationException("ACT host assembly has no load context.");
+                var resolver = new AssemblyDependencyResolver(assemblyPath);
+                resolvingHandler = (context, assemblyName) =>
+                {
+                    var shared = context.Assemblies.FirstOrDefault(
+                        candidate => string.Equals(
+                            candidate.GetName().Name,
+                            assemblyName.Name,
+                            StringComparison.OrdinalIgnoreCase));
+                    if (shared is not null)
+                    {
+                        return shared;
+                    }
+
+                    var dependencyPath = resolver.ResolveAssemblyToPath(assemblyName);
+                    return dependencyPath is null ? null : context.LoadFromAssemblyPath(dependencyPath);
+                };
+                loadContext.Resolving += resolvingHandler;
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
                 var entryType = assembly.GetType(spec.EntryType, throwOnError: true)!;
                 instance = Activator.CreateInstance(entryType)
@@ -125,6 +147,10 @@ internal sealed class LoadedActPlugin : IDisposable
                 tabPage?.Dispose();
                 statusLabel?.Dispose();
                 configurationForm?.Dispose();
+                if (loadContext is not null && resolvingHandler is not null)
+                {
+                    loadContext.Resolving -= resolvingHandler;
+                }
                 ready.Set();
             }
         })
@@ -147,6 +173,7 @@ internal sealed class LoadedActPlugin : IDisposable
         return new LoadedActPlugin(
             spec.Id,
             loadContext!,
+            resolvingHandler!,
             instance!,
             deInitPlugin!,
             tabPage!,
@@ -181,44 +208,6 @@ internal sealed class LoadedActPlugin : IDisposable
             }
         }));
         uiThread.Join(TimeSpan.FromSeconds(10));
-    }
-
-    private sealed class PluginLoadContext : AssemblyLoadContext
-    {
-        private readonly AssemblyDependencyResolver resolver;
-
-        public PluginLoadContext(string entryAssembly)
-            : base($"DalamudActCompat:{Path.GetFileNameWithoutExtension(entryAssembly)}", isCollectible: false)
-            => resolver = new AssemblyDependencyResolver(entryAssembly);
-
-        protected override Assembly? Load(AssemblyName assemblyName)
-        {
-            // ACT plugins usually reference a strongly-named upstream ACT assembly whose
-            // version differs from our compatibility assembly. They must all bind to the
-            // host copy so IActPluginV1 and ActGlobals retain the same type identity.
-            if (string.Equals(
-                    assemblyName.Name,
-                    typeof(IActPluginV1).Assembly.GetName().Name,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return typeof(IActPluginV1).Assembly;
-            }
-
-            var shared = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(
-                assembly => AssemblyName.ReferenceMatchesDefinition(assembly.GetName(), assemblyName));
-            if (shared is not null)
-            {
-                return shared;
-            }
-
-            var path = resolver.ResolveAssemblyToPath(assemblyName);
-            return path is null ? null : LoadFromAssemblyPath(path);
-        }
-
-        protected override nint LoadUnmanagedDll(string unmanagedDllName)
-        {
-            var path = resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
-            return path is null ? nint.Zero : LoadUnmanagedDllFromPath(path);
-        }
+        loadContext.Resolving -= resolvingHandler;
     }
 }
