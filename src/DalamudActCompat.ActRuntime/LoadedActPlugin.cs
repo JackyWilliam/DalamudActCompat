@@ -58,6 +58,13 @@ internal sealed class LoadedActPlugin : IDisposable
 
     public static LoadedActPlugin Load(RuntimePluginSpec spec)
     {
+        if (string.Equals(spec.Id, "triggernometry", StringComparison.OrdinalIgnoreCase))
+        {
+            AppContext.SetSwitch(
+                "System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization",
+                true);
+        }
+
         var assemblyPath = Path.GetFullPath(Path.Combine(spec.InstallDirectory, spec.EntryAssembly));
         using var ready = new ManualResetEventSlim();
         Exception? failure = null;
