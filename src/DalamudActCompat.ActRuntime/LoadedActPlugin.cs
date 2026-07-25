@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Windows.Forms;
+using Advanced_Combat_Tracker;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -11,6 +12,7 @@ internal sealed class LoadedActPlugin : IDisposable
     private readonly MethodInfo deInitPlugin;
     private readonly TabPage tabPage;
     private readonly Label statusLabel;
+    private readonly ActPluginData pluginData;
 
     private LoadedActPlugin(
         string id,
@@ -18,7 +20,8 @@ internal sealed class LoadedActPlugin : IDisposable
         object instance,
         MethodInfo deInitPlugin,
         TabPage tabPage,
-        Label statusLabel)
+        Label statusLabel,
+        ActPluginData pluginData)
     {
         Id = id;
         this.loadContext = loadContext;
@@ -26,6 +29,7 @@ internal sealed class LoadedActPlugin : IDisposable
         this.deInitPlugin = deInitPlugin;
         this.tabPage = tabPage;
         this.statusLabel = statusLabel;
+        this.pluginData = pluginData;
     }
 
     public string Id { get; }
@@ -38,18 +42,30 @@ internal sealed class LoadedActPlugin : IDisposable
         var loadContext = new PluginLoadContext(assemblyPath);
         TabPage? tabPage = null;
         Label? statusLabel = null;
+        ActPluginData? pluginData = null;
         try
         {
             var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
             var entryType = assembly.GetType(spec.EntryType, throwOnError: true)!;
             var instance = Activator.CreateInstance(entryType)
                            ?? throw new InvalidOperationException($"Could not create plugin type {spec.EntryType}.");
+            if (instance is not IActPluginV1 actPlugin)
+            {
+                throw new InvalidOperationException($"{spec.EntryType} does not implement IActPluginV1.");
+            }
+
             var initPlugin = entryType.GetMethod("InitPlugin", BindingFlags.Public | BindingFlags.Instance)
                              ?? throw new MissingMethodException(spec.EntryType, "InitPlugin");
             var deInitPlugin = entryType.GetMethod("DeInitPlugin", BindingFlags.Public | BindingFlags.Instance)
                                ?? throw new MissingMethodException(spec.EntryType, "DeInitPlugin");
             tabPage = new TabPage(spec.Id);
             statusLabel = new Label();
+            pluginData = new ActPluginData(
+                new FileInfo(assemblyPath),
+                actPlugin,
+                tabPage,
+                statusLabel);
+            ActGlobals.oFormActMain.ActPlugins.Add(pluginData);
             initPlugin.Invoke(instance, [tabPage, statusLabel]);
             return new LoadedActPlugin(
                 spec.Id,
@@ -57,10 +73,18 @@ internal sealed class LoadedActPlugin : IDisposable
                 instance,
                 deInitPlugin,
                 tabPage,
-                statusLabel);
+                statusLabel,
+                pluginData);
         }
         catch
         {
+            if (pluginData is not null)
+            {
+                ActGlobals.oFormActMain.ActPlugins.Remove(pluginData);
+                pluginData.lblPluginTitle.Dispose();
+                pluginData.cbEnabled.Dispose();
+            }
+
             tabPage?.Dispose();
             statusLabel?.Dispose();
             loadContext.Unload();
@@ -77,8 +101,11 @@ internal sealed class LoadedActPlugin : IDisposable
         }
         finally
         {
+            ActGlobals.oFormActMain.ActPlugins.Remove(pluginData);
             tabPage.Dispose();
             statusLabel.Dispose();
+            pluginData.lblPluginTitle.Dispose();
+            pluginData.cbEnabled.Dispose();
             loadContext.Unload();
         }
     }

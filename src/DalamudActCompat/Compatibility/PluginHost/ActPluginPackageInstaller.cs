@@ -34,12 +34,19 @@ public sealed partial class ActPluginPackageInstaller
         try
         {
             paths.EnsureCreated();
+            if (!Directory.Exists(paths.ActPluginDirectory))
+            {
+                throw new DirectoryNotFoundException(
+                    "The ACT plugin folder has not been created. Choose it from ACT Compat Settings first.");
+            }
+
             stagingDirectory = Path.Combine(
                 paths.PluginStagingDirectory,
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stagingDirectory);
             using var archive = ZipFile.OpenRead(fullPackagePath);
             ExtractSafely(archive, stagingDirectory);
+            CreateKnownManifestWhenMissing(stagingDirectory);
             var manifest = await ReadManifestAsync(stagingDirectory, cancellationToken).ConfigureAwait(false);
             ValidateManifest(manifest, stagingDirectory);
 
@@ -140,6 +147,53 @@ public sealed partial class ActPluginPackageInstaller
         }
     }
 
+    private static void CreateKnownManifestWhenMissing(string stagingDirectory)
+    {
+        var manifestPath = Path.Combine(stagingDirectory, ActPluginManifest.FileName);
+        if (File.Exists(manifestPath))
+        {
+            return;
+        }
+
+        var knownPlugins = new[]
+        {
+            new KnownPlugin("cactbotself", "CactbotSelf", "CactbotSelf.dll", "CactbotSelf.CactbotSelf"),
+            new KnownPlugin("postnamazu", "PostNamazu", "PostNamazu.dll", "PostNamazu.PostNamazu"),
+            new KnownPlugin("act.foxtts", "ACT.FoxTTS", "ACT.FoxTTS.dll", "ACT.FoxTTS.FoxTTSPlugin"),
+            new KnownPlugin("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
+        };
+        foreach (var known in knownPlugins)
+        {
+            var assembly = Directory
+                .EnumerateFiles(stagingDirectory, known.AssemblyName, SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (assembly is null)
+            {
+                continue;
+            }
+
+            var relativeAssembly = Path.GetRelativePath(stagingDirectory, assembly);
+            var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly).FileVersion ?? "unknown";
+            var manifest = new ActPluginManifest
+            {
+                Id = known.Id,
+                Name = known.Name,
+                Version = version,
+                HostApiVersion = 1,
+                EntryAssembly = relativeAssembly,
+                EntryType = known.EntryType,
+            };
+            File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+            }));
+            return;
+        }
+
+        throw new InvalidDataException(
+            $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, or Triggernometry release.");
+    }
+
     private static async Task<ActPluginManifest> ReadManifestAsync(
         string directory,
         CancellationToken cancellationToken)
@@ -188,4 +242,6 @@ public sealed partial class ActPluginPackageInstaller
 
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{1,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex PluginIdPattern();
+
+    private sealed record KnownPlugin(string Id, string Name, string AssemblyName, string EntryType);
 }

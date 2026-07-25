@@ -18,6 +18,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string LogDirectory { get; set; } = string.Empty;
 
+    public string ActPluginDirectory { get; set; } = string.Empty;
+
     public MeterSettings Meter { get; set; } = new();
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
@@ -31,6 +33,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         DebugMode = false;
         HistoryLimit = 20;
         LogDirectory = defaultLogDirectory;
+        ActPluginDirectory = string.Empty;
         Meter = new MeterSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

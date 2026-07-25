@@ -1,5 +1,6 @@
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
@@ -38,12 +39,14 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StatusWindow statusWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly ActPluginPackageInstaller packageInstaller;
+    private readonly FileDialogManager fileDialogManager = new();
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
         IPluginLog log,
         IClientState clientState,
+        IPlayerState playerState,
         IDataManager dataManager,
         IChatGui chatGui,
         IFramework framework,
@@ -64,7 +67,7 @@ public sealed class Plugin : IDalamudPlugin
             notificationManager);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         logger = new PluginLogger(log);
-        paths = new PluginPaths(pluginInterface);
+        paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
         {
             configuration.LogDirectory = paths.CombatLogDirectory;
@@ -78,6 +81,8 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface,
             log,
             dataManager,
+            () => playerState.CharacterName,
+            () => playerState.ClassJob.RowId,
             chatGui,
             framework,
             condition,
@@ -113,7 +118,9 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             SaveConfiguration,
             FactoryResetAsync,
-            () => packageInstaller.Discover(configuration.DisabledActPluginIds));
+            () => packageInstaller.Discover(configuration.DisabledActPluginIds),
+            SelectPluginPackage,
+            OpenPluginDirectory);
         statusWindow = new StatusWindow(parserEngine);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
@@ -150,7 +157,11 @@ public sealed class Plugin : IDalamudPlugin
         parserEngine.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
-    private void Draw() => windowSystem.Draw();
+    private void Draw()
+    {
+        windowSystem.Draw();
+        fileDialogManager.Draw();
+    }
 
     private void OpenConfigUi() => settingsWindow.IsOpen = true;
 
@@ -277,6 +288,66 @@ public sealed class Plugin : IDalamudPlugin
                 logger.Error(ex, "ACT plugin package installation failed.");
             }
         });
+    }
+
+    private void SelectPluginPackage()
+    {
+        if (!Directory.Exists(paths.ActPluginDirectory))
+        {
+            ChoosePluginDirectory(SelectPluginPackage);
+            return;
+        }
+
+        fileDialogManager.OpenFileDialog(
+            "Select ACT plugin package",
+            "ZIP package{.zip}",
+            (success, selectedPath) =>
+            {
+                if (success && !string.IsNullOrWhiteSpace(selectedPath))
+                {
+                    InstallActPlugin(selectedPath);
+                }
+            });
+    }
+
+    private void OpenPluginDirectory()
+    {
+        if (!Directory.Exists(paths.ActPluginDirectory))
+        {
+            ChoosePluginDirectory(OpenPluginDirectory);
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.ActPluginDirectory)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Failed to open the ACT plugin directory.");
+        }
+    }
+
+    private void ChoosePluginDirectory(Action continueWith)
+    {
+        fileDialogManager.OpenFolderDialog(
+            "Choose where the ACT plugin folder should be created",
+            (success, directory) =>
+            {
+                if (!success || string.IsNullOrWhiteSpace(directory))
+                {
+                    return;
+                }
+
+                paths.SetActPluginDirectory(directory);
+                configuration.ActPluginDirectory = paths.ActPluginDirectory;
+                SaveConfiguration();
+                Directory.CreateDirectory(paths.ActPluginDirectory);
+                continueWith();
+            });
     }
 
     private IReadOnlyList<RuntimePluginSpec> DiscoverRuntimePlugins()

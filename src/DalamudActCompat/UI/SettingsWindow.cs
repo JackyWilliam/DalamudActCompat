@@ -19,6 +19,8 @@ public sealed class SettingsWindow : Window
     private readonly Action saveConfiguration;
     private readonly Func<Task<string>> factoryReset;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
+    private readonly Action selectPluginPackage;
+    private readonly Action openPluginDirectory;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
     private string? resetResult;
@@ -30,7 +32,9 @@ public sealed class SettingsWindow : Window
         PluginLogger logger,
         Action saveConfiguration,
         Func<Task<string>> factoryReset,
-        Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins)
+        Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
+        Action selectPluginPackage,
+        Action openPluginDirectory)
         : base("ACT Compat Settings###DalamudActCompatSettings")
     {
         this.configuration = configuration;
@@ -40,6 +44,8 @@ public sealed class SettingsWindow : Window
         this.saveConfiguration = saveConfiguration;
         this.factoryReset = factoryReset;
         this.discoverPlugins = discoverPlugins;
+        this.selectPluginPackage = selectPluginPackage;
+        this.openPluginDirectory = openPluginDirectory;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
     }
@@ -86,7 +92,23 @@ public sealed class SettingsWindow : Window
             }
         }
 
-        ImGui.TextDisabled("Install: /actcompat install \"C:\\path\\plugin.zip\". Restart the ACT host after changes.");
+        if (ImGui.Button("Install ACT plugin package..."))
+        {
+            selectPluginPackage();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Open ACT plugin folder"))
+        {
+            openPluginDirectory();
+        }
+
+        ImGui.TextDisabled("Restart the parser after installing or changing plugins.");
+        ImGui.TextUnformatted("Third-party compatibility targets");
+        DrawCompatibilityTarget("CactbotSelf", "Download and install it yourself; not redistributed by this project.", "https://github.com/tssailzz8/cacbotSelf");
+        DrawCompatibilityTarget("PostNamazu", "Download and install it yourself; not redistributed by this project.", "https://github.com/Natsukage/PostNamazu");
+        DrawCompatibilityTarget("ACT.FoxTTS", "Manual installation; compatibility layer is experimental.", "https://github.com/Noisyfox/ACT.FoxTTS");
+        DrawCompatibilityTarget("Triggernometry", "Manual installation; compatibility layer is experimental.", "https://github.com/paissaheavyindustries/Triggernometry");
 
         ImGui.Separator();
         ImGui.TextUnformatted($"Parser: {parserStatus.State}");
@@ -126,6 +148,21 @@ public sealed class SettingsWindow : Window
         changed |= Checkbox("Auto hide", configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
         changed |= SliderFloat("Background opacity", configuration.Meter.BackgroundOpacity, 0.05f, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
         changed |= SliderFloat("Font scale", configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
+        ImGui.TextUnformatted("Meter columns");
+        changed |= Checkbox("Encounter header", configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
+        changed |= Checkbox("Job", configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+        changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
+        changed |= Checkbox("Damage", configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
+        changed |= Checkbox("Damage percent", configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
+        changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
+        changed |= Checkbox("Healing", configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
+        changed |= Checkbox("Deaths", configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
+        var localPlayerColor = configuration.Meter.LocalPlayerColor;
+        if (ImGui.ColorEdit4("Local player color", ref localPlayerColor))
+        {
+            configuration.Meter.LocalPlayerColor = localPlayerColor;
+            changed = true;
+        }
 
         ImGui.Separator();
         ImGui.TextUnformatted($"Config: {paths.ConfigDirectory}");
@@ -231,5 +268,32 @@ public sealed class SettingsWindow : Window
 
         set(value);
         return true;
+    }
+
+    private void DrawCompatibilityTarget(string name, string note, string url)
+    {
+        ImGui.BulletText(name);
+        ImGui.SameLine();
+        ImGui.TextDisabled(note);
+        ImGui.SameLine();
+        if (ImGui.SmallButton($"Open project page###{name}"))
+        {
+            OpenUrl(url);
+        }
+    }
+
+    private void OpenUrl(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, $"Failed to open {url}.");
+        }
     }
 }

@@ -15,6 +15,7 @@ try
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
     var paths = new PluginPaths(Path.Combine(testRoot, "config"));
+    Directory.CreateDirectory(paths.ActPluginDirectory);
     var installer = new ActPluginPackageInstaller(paths);
 
     var installed = await installer.InstallAsync(packagePath, CancellationToken.None);
@@ -25,6 +26,18 @@ try
     installed = await installer.InstallAsync(packagePath, CancellationToken.None);
     Assert(installed.Manifest.Version == "1.1.0", "Upgrade did not replace the installed package.");
     Assert(Directory.EnumerateDirectories(paths.PluginBackupDirectory).Any(), "Upgrade did not preserve a backup.");
+
+    var knownPackagePath = Path.Combine(testRoot, "postnamazu.zip");
+    using (var archive = ZipFile.Open(knownPackagePath, ZipArchiveMode.Create))
+    {
+        var entry = archive.CreateEntry("release/PostNamazu.dll");
+        await using var stream = entry.Open();
+        await stream.WriteAsync(new byte[] { 1, 2, 3 });
+    }
+
+    var knownPlugin = await installer.InstallAsync(knownPackagePath, CancellationToken.None);
+    Assert(knownPlugin.Manifest.Id == "postnamazu", "Known third-party package was not recognized.");
+    Assert(knownPlugin.Manifest.EntryType == "PostNamazu.PostNamazu", "Known plugin entry type is incorrect.");
 
     var unsafePackagePath = Path.Combine(testRoot, "unsafe.zip");
     using (var archive = ZipFile.Open(unsafePackagePath, ZipArchiveMode.Create))
