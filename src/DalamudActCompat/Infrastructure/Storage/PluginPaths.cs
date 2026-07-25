@@ -19,6 +19,7 @@ public sealed class PluginPaths
         ActPluginDirectory = string.IsNullOrWhiteSpace(actPluginDirectory)
             ? Path.Combine(ConfigDirectory, "act-plugins")
             : Path.GetFullPath(actPluginDirectory);
+        CactbotDirectory = Path.Combine(ConfigDirectory, "cactbot");
         PluginStagingDirectory = Path.Combine(ConfigDirectory, ".plugin-staging");
         PluginBackupDirectory = Path.Combine(ConfigDirectory, "plugin-backups");
     }
@@ -35,6 +36,8 @@ public sealed class PluginPaths
 
     public string ActPluginDirectory { get; private set; }
 
+    public string CactbotDirectory { get; }
+
     public string PluginStagingDirectory { get; }
 
     public string PluginBackupDirectory { get; }
@@ -48,6 +51,7 @@ public sealed class PluginPaths
         Directory.CreateDirectory(LogDirectory);
         Directory.CreateDirectory(CombatLogDirectory);
         Directory.CreateDirectory(HostDirectory);
+        Directory.CreateDirectory(CactbotDirectory);
         Directory.CreateDirectory(PluginStagingDirectory);
         Directory.CreateDirectory(PluginBackupDirectory);
     }

@@ -4,6 +4,7 @@ using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Parser;
 
@@ -17,6 +18,19 @@ try
     var paths = new PluginPaths(Path.Combine(testRoot, "config"));
     Directory.CreateDirectory(paths.ActPluginDirectory);
     var installer = new ActPluginPackageInstaller(paths);
+
+    var cactbotPackage = Path.Combine(testRoot, "cactbot.zip");
+    using (var archive = ZipFile.Open(cactbotPackage, ZipArchiveMode.Create))
+    {
+        await WriteArchiveEntryAsync(archive, "cactbot/cactbot/CactbotOverlay.dll", [1, 2, 3]);
+        await WriteArchiveEntryAsync(archive, "cactbot/cactbot/ui/raidboss/raidboss.html", "<html></html>"u8.ToArray());
+        await WriteArchiveEntryAsync(archive, "cactbot/cactbot/resources/test.txt", "ok"u8.ToArray());
+    }
+    var cactbotInstaller = new CactbotPackageInstaller(paths);
+    await cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None);
+    Assert(cactbotInstaller.IsInstalled, "Official Cactbot package layout was not installed.");
+    Assert(File.Exists(Path.Combine(paths.CactbotDirectory, "resources", "test.txt")),
+        "Cactbot resources were not preserved.");
 
     var installed = await installer.InstallAsync(packagePath, CancellationToken.None);
     Assert(installed.Manifest.Id == "example.plugin", "Valid package id was not preserved.");
@@ -38,6 +52,41 @@ try
     var knownPlugin = await installer.InstallAsync(knownPackagePath, CancellationToken.None);
     Assert(knownPlugin.Manifest.Id == "postnamazu", "Known third-party package was not recognized.");
     Assert(knownPlugin.Manifest.EntryType == "PostNamazu.PostNamazu", "Known plugin entry type is incorrect.");
+
+    var loosePluginDirectory = Path.Combine(testRoot, "loose-plugin");
+    Directory.CreateDirectory(loosePluginDirectory);
+    var loosePluginPath = Path.Combine(loosePluginDirectory, "Triggernometry.dll");
+    var builtRuntimeDirectory = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    File.Copy(Path.Combine(builtRuntimeDirectory, "DalamudActCompat.ActRuntime.dll"), loosePluginPath);
+    File.Copy(
+        Path.Combine(builtRuntimeDirectory, "Advanced Combat Tracker.dll"),
+        Path.Combine(loosePluginDirectory, "Advanced Combat Tracker.dll"));
+    var translationPath = Path.Combine(loosePluginDirectory, "zh-CN.triglations.xml");
+    await File.WriteAllTextAsync(translationPath, "<Triggernometry />");
+    var loosePlugin = await installer.InstallAsync(loosePluginPath, CancellationToken.None);
+    Assert(loosePlugin.Manifest.Id == "triggernometry", "Loose Triggernometry DLL was not recognized.");
+    Assert(File.Exists(Path.Combine(loosePlugin.InstallDirectory, "Triggernometry.dll")),
+        "Loose ACT plugin DLL was not installed.");
+    Assert(File.Exists(Path.Combine(loosePlugin.InstallDirectory, "zh-CN.triglations.xml")),
+        "Triggernometry translation companion was not preserved.");
+    Assert(File.Exists(Path.Combine(loosePlugin.InstallDirectory, "Advanced Combat Tracker.dll")),
+        "Loose ACT plugin managed dependency was not preserved.");
+
+    var unknownDllPath = Path.Combine(loosePluginDirectory, "UnknownPlugin.dll");
+    await File.WriteAllBytesAsync(unknownDllPath, new byte[] { 0x4d, 0x5a });
+    try
+    {
+        await installer.InstallAsync(unknownDllPath, CancellationToken.None);
+        throw new InvalidOperationException("Unknown loose DLL was accepted.");
+    }
+    catch (InvalidDataException)
+    {
+    }
 
     var unsafePackagePath = Path.Combine(testRoot, "unsafe.zip");
     using (var archive = ZipFile.Open(unsafePackagePath, ZipArchiveMode.Create))
@@ -284,6 +333,13 @@ static async Task CreatePackageAsync(string packagePath, string id, string versi
     var assemblyEntry = archive.CreateEntry("Example.Plugin.dll");
     await using var assemblyStream = assemblyEntry.Open();
     await assemblyStream.WriteAsync(new byte[] { 0x4d, 0x5a });
+}
+
+static async Task WriteArchiveEntryAsync(ZipArchive archive, string path, byte[] content)
+{
+    var entry = archive.CreateEntry(path);
+    await using var stream = entry.Open();
+    await stream.WriteAsync(content);
 }
 
 static void Assert(bool condition, string message)

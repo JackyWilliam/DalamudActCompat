@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
@@ -39,6 +40,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StatusWindow statusWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly ActPluginPackageInstaller packageInstaller;
+    private readonly CactbotPackageInstaller cactbotInstaller;
     private readonly FileDialogManager fileDialogManager = new();
 
     public Plugin(
@@ -101,9 +103,10 @@ public sealed class Plugin : IDalamudPlugin
 
         _ = new OverlayManager(new OverlayEventBus());
 
-        meterWindow = new MeterWindow(meterService, stateStore, configuration);
+        var text = new UiText(configuration);
+        meterWindow = new MeterWindow(meterService, stateStore, configuration, text);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
-        encounterWindow = new EncounterWindow(stateStore);
+        encounterWindow = new EncounterWindow(stateStore, text);
         factoryResetService = new FactoryResetService(
             parserEngine,
             paths,
@@ -111,6 +114,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             SaveConfiguration);
         packageInstaller = new ActPluginPackageInstaller(paths);
+        cactbotInstaller = new CactbotPackageInstaller(paths);
         settingsWindow = new SettingsWindow(
             configuration,
             parserEngine,
@@ -120,8 +124,11 @@ public sealed class Plugin : IDalamudPlugin
             FactoryResetAsync,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
-            OpenPluginDirectory);
-        statusWindow = new StatusWindow(parserEngine);
+            OpenPluginDirectory,
+            text,
+            () => cactbotInstaller.IsInstalled,
+            SelectCactbotPackage);
+        statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(settingsWindow);
@@ -132,7 +139,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open ACT Compat UI. Args: meter, history, status, settings, sample, clear, host, stop, install <zip>, factory-reset.",
+            HelpMessage = "Open ACT Compat UI. Args: meter, history, status, settings, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -266,7 +273,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (string.IsNullOrWhiteSpace(packagePath))
         {
-            logger.Warning("Usage: /actcompat install <path-to-plugin.zip>");
+            logger.Warning("Usage: /actcompat install <path-to-plugin.dll-or-zip>");
             return;
         }
 
@@ -300,12 +307,41 @@ public sealed class Plugin : IDalamudPlugin
 
         fileDialogManager.OpenFileDialog(
             "Select ACT plugin package",
-            "ZIP package{.zip}",
+            "ACT plugin{.dll,.zip}",
             (success, selectedPath) =>
             {
                 if (success && !string.IsNullOrWhiteSpace(selectedPath))
                 {
                     InstallActPlugin(selectedPath);
+                }
+            });
+    }
+
+    private void SelectCactbotPackage()
+    {
+        fileDialogManager.OpenFileDialog(
+            "选择 OverlayPlugin/cactbot 官方 Release ZIP",
+            "Cactbot Release{.zip}",
+            async (success, selectedPath) =>
+            {
+                if (!success || string.IsNullOrWhiteSpace(selectedPath))
+                {
+                    return;
+                }
+
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                    await cactbotInstaller.InstallAsync(selectedPath, timeout.Token).ConfigureAwait(false);
+                    services.NotificationManager.AddNotification(new()
+                    {
+                        Title = "ACT 兼容",
+                        Content = "Cactbot 资源已安装。重启解析器以加载 OverlayPlugin 事件源。",
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.Error(ex, "Cactbot installation failed.");
                 }
             });
     }
