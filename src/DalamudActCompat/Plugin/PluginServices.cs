@@ -13,7 +13,9 @@ internal sealed class PluginServices
         IDataManager dataManager,
         IChatGui chatGui,
         IFramework framework,
-        ICondition condition)
+        ICondition condition,
+        IGameInteropProvider gameInteropProvider,
+        INotificationManager notificationManager)
     {
         PluginInterface = pluginInterface;
         CommandManager = commandManager;
@@ -23,6 +25,8 @@ internal sealed class PluginServices
         ChatGui = chatGui;
         Framework = framework;
         Condition = condition;
+        GameInteropProvider = gameInteropProvider;
+        NotificationManager = notificationManager;
     }
 
     public IDalamudPluginInterface PluginInterface { get; }
@@ -40,4 +44,8 @@ internal sealed class PluginServices
     public IFramework Framework { get; }
 
     public ICondition Condition { get; }
+
+    public IGameInteropProvider GameInteropProvider { get; }
+
+    public INotificationManager NotificationManager { get; }
 }

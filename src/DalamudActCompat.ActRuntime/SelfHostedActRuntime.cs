@@ -14,7 +14,10 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IChatGui chatGui;
     private readonly IFramework framework;
     private readonly ICondition condition;
+    private readonly IGameInteropProvider gameInteropProvider;
+    private readonly INotificationManager notificationManager;
     private IINACT.FfxivActPluginWrapper? parser;
+    private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
     private HttpClient? httpClient;
     private readonly List<LoadedActPlugin> customPlugins = [];
@@ -28,7 +31,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         IDataManager dataManager,
         IChatGui chatGui,
         IFramework framework,
-        ICondition condition)
+        ICondition condition,
+        IGameInteropProvider gameInteropProvider,
+        INotificationManager notificationManager)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -36,6 +41,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
+        this.gameInteropProvider = gameInteropProvider;
+        this.notificationManager = notificationManager;
     }
 
     public bool IsParserRunning => parser is not null;
@@ -77,6 +84,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         configuration.Initialize(pluginInterface);
         try
         {
+            IINACT.FfxivActPluginWrapper.ConfigureRegion(dataManager.Language);
+            zoneDownHookManager = new IINACT.Network.ZoneDownHookManager(
+                notificationManager,
+                gameInteropProvider);
             parser = new IINACT.FfxivActPluginWrapper(
                 configuration,
                 dataManager.Language,
@@ -86,6 +97,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
         catch
         {
+            zoneDownHookManager?.Dispose();
+            zoneDownHookManager = null;
             ActGlobals.Dispose();
             actGlobalsInitialized = false;
             throw;
@@ -193,6 +206,16 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         parser = null;
+        try
+        {
+            zoneDownHookManager?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to stop the Chinese-region packet unscrambler.");
+        }
+
+        zoneDownHookManager = null;
         if (actGlobalsInitialized)
         {
             try

@@ -40,7 +40,7 @@ Local validation status:
 - .NET SDK 10.0.302 was installed under `~/.dotnet`.
 - `dotnet restore DalamudActCompat.slnx` succeeds when NuGet network access is available.
 - `src/DalamudActCompat.Host/DalamudActCompat.Host.csproj` builds successfully.
-- `0.1.12` targets Dalamud API Level 15, decodes Chinese-region combat packets for the in-game meter, and packages the complete self-hosted runtime in one ZIP.
+- `0.1.13` targets Dalamud API Level 15, unscrambles Chinese-region combat packets for the in-game meter, and opens the visible meter automatically.
 - Windows Release build succeeds with XIVLauncherCN/Dalamud development files at `C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\Dev\`.
 - The release collector verifies the plugin manifest, packaged Host executable, and all four embedded Host resources.
 
