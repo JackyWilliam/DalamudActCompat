@@ -125,7 +125,6 @@ internal sealed class LoadedActPlugin : IDisposable
                 tabPage?.Dispose();
                 statusLabel?.Dispose();
                 configurationForm?.Dispose();
-                loadContext?.Unload();
                 ready.Set();
             }
         })
@@ -182,7 +181,6 @@ internal sealed class LoadedActPlugin : IDisposable
             }
         }));
         uiThread.Join(TimeSpan.FromSeconds(10));
-        loadContext.Unload();
     }
 
     private sealed class PluginLoadContext : AssemblyLoadContext
@@ -190,11 +188,22 @@ internal sealed class LoadedActPlugin : IDisposable
         private readonly AssemblyDependencyResolver resolver;
 
         public PluginLoadContext(string entryAssembly)
-            : base($"DalamudActCompat:{Path.GetFileNameWithoutExtension(entryAssembly)}", isCollectible: true)
+            : base($"DalamudActCompat:{Path.GetFileNameWithoutExtension(entryAssembly)}", isCollectible: false)
             => resolver = new AssemblyDependencyResolver(entryAssembly);
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
+            // ACT plugins usually reference a strongly-named upstream ACT assembly whose
+            // version differs from our compatibility assembly. They must all bind to the
+            // host copy so IActPluginV1 and ActGlobals retain the same type identity.
+            if (string.Equals(
+                    assemblyName.Name,
+                    typeof(IActPluginV1).Assembly.GetName().Name,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return typeof(IActPluginV1).Assembly;
+            }
+
             var shared = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(
                 assembly => AssemblyName.ReferenceMatchesDefinition(assembly.GetName(), assemblyName));
             if (shared is not null)

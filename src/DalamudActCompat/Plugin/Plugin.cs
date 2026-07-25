@@ -387,6 +387,11 @@ public sealed class Plugin : IDalamudPlugin
         if (!actRuntime.OpenCustomPluginConfiguration(pluginId))
         {
             logger.Warning($"ACT plugin '{pluginId}' is not running. Restart the parser and try again.");
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = "ACT 兼容",
+                Content = $"扩展 {pluginId} 未成功加载，请重启解析器并查看状态日志。",
+            });
         }
     }
 
