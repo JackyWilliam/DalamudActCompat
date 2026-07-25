@@ -10,6 +10,13 @@ public enum MeterSortMode
     Deaths,
 }
 
+public enum DpsMetric
+{
+    Dps,
+    EncDps,
+    ExtDps,
+}
+
 public sealed class MeterSettings
 {
     public bool IsVisible { get; set; } = true;
@@ -25,6 +32,8 @@ public sealed class MeterSettings
     public float FontScale { get; set; } = 1.0f;
 
     public int RefreshIntervalMs { get; set; } = 750;
+
+    public DpsMetric DpsMetric { get; set; } = DpsMetric.EncDps;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
 

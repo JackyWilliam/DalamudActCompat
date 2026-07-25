@@ -15,7 +15,10 @@ public static class ActEncounterMapper
                 combatant.IsLocalPlayer,
                 combatant.TotalDamage,
                 combatant.TotalHealing,
-                combatant.Deaths))
+                combatant.Deaths,
+                combatant.Dps,
+                combatant.EncDps,
+                combatant.ExtDps))
             .ToArray();
         var jobs = combatants
             .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))

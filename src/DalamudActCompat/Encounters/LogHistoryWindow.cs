@@ -124,11 +124,13 @@ public sealed class LogHistoryWindow : Window
             $"{text.Get("总伤害", "Damage")}: {encounter.TotalDamage:N0}  |  DPS: {encounter.TotalDamage / duration:N0}");
         ImGui.Separator();
 
-        if (ImGui.BeginTable("combatants", 7, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable("combatants", 9, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableSetupColumn(text.Get("职业", "Job"));
             ImGui.TableSetupColumn(text.Get("玩家", "Player"));
             ImGui.TableSetupColumn("DPS");
+            ImGui.TableSetupColumn("EncDPS");
+            ImGui.TableSetupColumn("ExtDPS");
             ImGui.TableSetupColumn(text.Get("伤害", "Damage"));
             ImGui.TableSetupColumn("HPS");
             ImGui.TableSetupColumn(text.Get("治疗量", "Healing"));
@@ -139,7 +141,9 @@ public sealed class LogHistoryWindow : Window
                 ImGui.TableNextRow();
                 Cell(combatant.Job);
                 Cell(combatant.Name);
-                Cell((combatant.TotalDamage / duration).ToString("N0"));
+                Cell((combatant.Dps > 0 ? combatant.Dps : combatant.TotalDamage / duration).ToString("N0"));
+                Cell((combatant.EncDps > 0 ? combatant.EncDps : combatant.TotalDamage / duration).ToString("N0"));
+                Cell((combatant.ExtDps > 0 ? combatant.ExtDps : combatant.TotalDamage / duration).ToString("N0"));
                 Cell(combatant.TotalDamage.ToString("N0"));
                 Cell((combatant.TotalHealing / duration).ToString("N0"));
                 Cell(combatant.TotalHealing.ToString("N0"));

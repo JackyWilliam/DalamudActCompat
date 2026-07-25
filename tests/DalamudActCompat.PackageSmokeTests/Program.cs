@@ -256,7 +256,7 @@ static void ValidateActEncounterMapping()
         "Test Zone",
         "Test Enemy",
         [
-            new ActCombatantSnapshot("local", "You", "SAM", true, 120_000, 2_000, 0),
+            new ActCombatantSnapshot("local", "You", "SAM", true, 120_000, 2_000, 0, 13_000, 12_000, 12_000),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
         ]);
 
@@ -270,6 +270,9 @@ static void ValidateActEncounterMapping()
     Assert(encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer).Name == "You",
         "ACT local player marker was not mapped.");
     Assert(encounter.JobSummaries.Count == 2, "ACT job summaries were not generated.");
+    var local = encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer);
+    Assert(local.Dps == 13_000 && local.EncDps == 12_000 && local.ExtDps == 12_000,
+        "ACT DPS metric fields were not mapped.");
 }
 
 static void ValidateChineseCombatChatParsing()
