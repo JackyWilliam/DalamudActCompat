@@ -47,7 +47,9 @@ public sealed class Plugin : IDalamudPlugin
         IDataManager dataManager,
         IChatGui chatGui,
         IFramework framework,
-        ICondition condition)
+        ICondition condition,
+        IGameInteropProvider gameInteropProvider,
+        INotificationManager notificationManager)
     {
         services = new PluginServices(
             pluginInterface,
@@ -57,7 +59,9 @@ public sealed class Plugin : IDalamudPlugin
             dataManager,
             chatGui,
             framework,
-            condition);
+            condition,
+            gameInteropProvider,
+            notificationManager);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface);
@@ -76,7 +80,9 @@ public sealed class Plugin : IDalamudPlugin
             dataManager,
             chatGui,
             framework,
-            condition);
+            condition,
+            gameInteropProvider,
+            notificationManager);
         parserEngine = new ParserEngine(new IinactAdapter(
             actRuntime,
             logger,
@@ -91,6 +97,7 @@ public sealed class Plugin : IDalamudPlugin
         _ = new OverlayManager(new OverlayEventBus());
 
         meterWindow = new MeterWindow(meterService, stateStore, configuration);
+        meterWindow.IsOpen = configuration.Meter.IsVisible;
         encounterWindow = new EncounterWindow(stateStore);
         factoryResetService = new FactoryResetService(
             parserEngine,
