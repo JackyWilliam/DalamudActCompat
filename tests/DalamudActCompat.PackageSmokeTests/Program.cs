@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text.Json;
+using System.Windows.Forms;
 using System.Xml;
 using Advanced_Combat_Tracker;
 using DalamudActCompat.ActRuntime;
@@ -16,6 +17,7 @@ Directory.CreateDirectory(testRoot);
 try
 {
     ValidateSettingsSerializerMemberTypes();
+    ValidateActPluginDataCompatibility();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -141,6 +143,17 @@ static void ValidateSettingsSerializerMemberTypes()
     Assert(
         owner.PluginIntegration == PluginIntegrationMode.Auto,
         "SettingsSerializer did not use the member's enum type for a legacy integer registration.");
+}
+
+static void ValidateActPluginDataCompatibility()
+{
+    var type = typeof(ActPluginData);
+    Assert(
+        type.GetField("pPluginInfo")?.FieldType == typeof(Panel),
+        "ActPluginData.pPluginInfo compatibility field is missing.");
+    Assert(
+        type.GetField("btnXButton")?.FieldType == typeof(Button),
+        "ActPluginData.btnXButton compatibility field is missing.");
 }
 
 static void ValidateLegacyResourceRuntimeDependencies()

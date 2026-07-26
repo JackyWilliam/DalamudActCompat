@@ -32,6 +32,7 @@ public static class LegacyResourceCompatibility
 
     internal static void ProbeEmbeddedResources(Assembly assembly, AssemblyLoadContext loadContext)
     {
+        PreloadTriggernometryScriptingAssemblies(assembly, loadContext);
         assembly = ResolveImplementationAssembly(assembly, loadContext);
         var resourceNames = assembly.GetManifestResourceNames()
             .Where(name => name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
@@ -63,6 +64,41 @@ public static class LegacyResourceCompatibility
                         ex);
                 }
             }
+        }
+    }
+
+    private static void PreloadTriggernometryScriptingAssemblies(
+        Assembly assembly,
+        AssemblyLoadContext loadContext)
+    {
+        string[] resources =
+        [
+            "costura.microsoft.codeanalysis.dll.compressed",
+            "costura.microsoft.codeanalysis.scripting.dll.compressed",
+            "costura.microsoft.codeanalysis.csharp.dll.compressed",
+            "costura.microsoft.codeanalysis.csharp.scripting.dll.compressed",
+        ];
+        foreach (var resourceName in resources)
+        {
+            using var compressed = assembly.GetManifestResourceStream(resourceName)
+                                   ?? throw new MissingManifestResourceException(
+                                       $"Triggernometry scripting dependency {resourceName} is missing.");
+            using var deflate = new DeflateStream(compressed, CompressionMode.Decompress);
+            using var dependency = new MemoryStream();
+            deflate.CopyTo(dependency);
+            dependency.Position = 0;
+            using var definition = AssemblyDefinition.ReadAssembly(dependency);
+            var assemblyName = definition.Name.Name;
+            if (loadContext.Assemblies.Any(candidate => string.Equals(
+                    candidate.GetName().Name,
+                    assemblyName,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            dependency.Position = 0;
+            loadContext.LoadFromStream(dependency);
         }
     }
 
