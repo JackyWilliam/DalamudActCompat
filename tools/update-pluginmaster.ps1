@@ -19,13 +19,13 @@ if (-not (Test-Path $PluginMasterPath)) {
 }
 
 $downloadUrl = "$SourceRepository/releases/download/v$Version/DalamudActCompat.zip"
-$entries = Get-Content $PluginMasterPath -Raw | ConvertFrom-Json
+$entries = Get-Content $PluginMasterPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $entry = @($entries)[0]
 
 $entry.AssemblyVersion = "$Version.0"
 $entry.DownloadLinkInstall = $downloadUrl
 $entry.DownloadLinkUpdate = $downloadUrl
-$entry.LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+$entry.LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $entry.Changelog = $Changelog
 
 $json = $entry | ConvertTo-Json -Depth 10
