@@ -10,6 +10,8 @@ using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Parser;
+using Machina.FFXIV;
+using Machina.FFXIV.Headers.Opcodes;
 
 var testRoot = Path.Combine(Path.GetTempPath(), $"DalamudActCompat-{Guid.NewGuid():N}");
 Directory.CreateDirectory(testRoot);
@@ -19,6 +21,7 @@ try
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
     ValidatePlayerIdentityResolution();
+    ValidateChinese751bOpcodes();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -128,6 +131,35 @@ finally
     if (Directory.Exists(testRoot))
     {
         Directory.Delete(testRoot, true);
+    }
+}
+
+static void ValidateChinese751bOpcodes()
+{
+    OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
+    var opcodes = OpcodeManager.Instance.CurrentOpcodes;
+    var expected = new Dictionary<string, ushort>
+    {
+        ["Ability1"] = 0x037D,
+        ["Ability8"] = 0x0350,
+        ["Ability16"] = 0x027E,
+        ["Ability24"] = 0x01A4,
+        ["Ability32"] = 0x02A2,
+        ["ActorCast"] = 0x01C9,
+        ["EffectResult"] = 0x02EF,
+        ["ActorControl"] = 0x019F,
+        ["ActorControlSelf"] = 0x0164,
+        ["ActorControlTarget"] = 0x02D1,
+        ["StatusEffectList"] = 0x0132,
+        ["StatusEffectList2"] = 0x0078,
+        ["StatusEffectList3"] = 0x028B,
+    };
+
+    foreach (var pair in expected)
+    {
+        Assert(
+            opcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
+            $"Chinese 7.51b opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
     }
 }
 

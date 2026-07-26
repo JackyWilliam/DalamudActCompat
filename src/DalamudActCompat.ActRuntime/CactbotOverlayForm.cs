@@ -3,13 +3,16 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Drawing;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
 
 internal sealed class CactbotOverlayForm : IDisposable
 {
+    private const int GwlExStyle = -20;
+    private const nint WsExTransparent = 0x00000020;
+    private const nint WsExLayered = 0x00080000;
+    private const nint WsExNoActivate = 0x08000000;
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
 
     private readonly string htmlPath;
@@ -66,54 +69,6 @@ internal sealed class CactbotOverlayForm : IDisposable
         });
     }
 
-    public void ShowAlert(string text, int durationMilliseconds = 5000)
-    {
-        if (webView?.CoreWebView2 is null || form is null)
-        {
-            log.Warning($"Cactbot alert was dropped before the browser was ready: {text}");
-            return;
-        }
-
-        form.BeginInvoke(async () =>
-        {
-            form.Show();
-            var textJson = JsonSerializer.Serialize(text);
-            var script = $$"""
-                (() => {
-                  let host = document.getElementById('dalamud-act-compat-alert');
-                  if (!host) {
-                    host = document.createElement('div');
-                    host.id = 'dalamud-act-compat-alert';
-                    Object.assign(host.style, {
-                      position: 'fixed', left: '50%', top: '18%',
-                      transform: 'translateX(-50%)', zIndex: '2147483647',
-                      padding: '12px 24px', borderRadius: '8px',
-                      background: 'rgba(0, 0, 0, 0.72)', color: '#fff',
-                      fontFamily: '"Microsoft YaHei UI", sans-serif',
-                      fontSize: '32px', fontWeight: '700',
-                      textShadow: '0 2px 4px #000', pointerEvents: 'none'
-                    });
-                    document.body.appendChild(host);
-                  }
-                  host.textContent = {{textJson}};
-                  host.style.display = 'block';
-                  clearTimeout(window.__dalamudActCompatAlertTimer);
-                  window.__dalamudActCompatAlertTimer =
-                    setTimeout(() => host.style.display = 'none', {{durationMilliseconds}});
-                })();
-                """;
-            try
-            {
-                await webView.ExecuteScriptAsync(script);
-                log.Information($"Cactbot compatibility alert displayed: {text}");
-            }
-            catch (Exception ex)
-            {
-                log.Error(ex, $"Could not display Cactbot compatibility alert: {text}");
-            }
-        });
-    }
-
     private void Run()
     {
         try
@@ -137,7 +92,15 @@ internal sealed class CactbotOverlayForm : IDisposable
             webView.NavigationCompleted += OnNavigationCompleted;
             form.Controls.Add(webView);
             form.FormClosing += OnFormClosing;
-            form.Shown += async (_, _) => await InitializeWebViewAsync();
+            form.Shown += async (_, _) =>
+            {
+                if (overlayMode)
+                {
+                    EnableMouseClickThrough(form.Handle);
+                }
+
+                await InitializeWebViewAsync();
+            };
             ready.Set();
             Application.Run(form);
         }
@@ -230,6 +193,15 @@ internal sealed class CactbotOverlayForm : IDisposable
         log.Error($"Cactbot browser process failed: {args.ProcessFailedKind}; {args.Reason}");
     }
 
+    private static void EnableMouseClickThrough(nint windowHandle)
+    {
+        var extendedStyle = GetWindowLongPtr(windowHandle, GwlExStyle);
+        SetWindowLongPtr(
+            windowHandle,
+            GwlExStyle,
+            extendedStyle | WsExTransparent | WsExLayered | WsExNoActivate);
+    }
+
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
     {
         if (disposing)
@@ -258,4 +230,10 @@ internal sealed class CactbotOverlayForm : IDisposable
         uiThread?.Join(TimeSpan.FromSeconds(5));
         ready.Dispose();
     }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLongPtr(nint windowHandle, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr(nint windowHandle, int index, nint newLong);
 }
