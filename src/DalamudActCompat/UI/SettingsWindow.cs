@@ -24,6 +24,7 @@ public sealed class SettingsWindow : Window
     private readonly UiText text;
     private readonly Func<bool> isCactbotInstalled;
     private readonly Action selectCactbotPackage;
+    private readonly Action openCactbotOverlay;
     private readonly Action<string> openPluginConfiguration;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
@@ -42,6 +43,7 @@ public sealed class SettingsWindow : Window
         UiText text,
         Func<bool> isCactbotInstalled,
         Action selectCactbotPackage,
+        Action openCactbotOverlay,
         Action<string> openPluginConfiguration)
         : base("ACT 兼容设置###DalamudActCompatSettings")
     {
@@ -57,6 +59,7 @@ public sealed class SettingsWindow : Window
         this.text = text;
         this.isCactbotInstalled = isCactbotInstalled;
         this.selectCactbotPackage = selectCactbotPackage;
+        this.openCactbotOverlay = openCactbotOverlay;
         this.openPluginConfiguration = openPluginConfiguration;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -145,6 +148,11 @@ public sealed class SettingsWindow : Window
         if (ImGui.Button(text.Get("安装/更新 Cactbot...", "Install/update Cactbot...")))
         {
             selectCactbotPackage();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("打开 Cactbot 窗口", "Open Cactbot window")))
+        {
+            openCactbotOverlay();
         }
         ImGui.SameLine();
         if (ImGui.SmallButton(text.Get("打开官方项目页###Cactbot", "Open official project###Cactbot")))

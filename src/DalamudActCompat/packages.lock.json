@@ -19,6 +19,11 @@
         "resolved": "10.0.1",
         "contentHash": "HqAEbtoAhgvH53c54IV5e4vQ60PYvl7Z/WIHsbet+UGGE7n+7dwVNXw1mb9LZlWbsxnupCevvtgIne5P//ZKpQ=="
       },
+      "Microsoft.Web.WebView2": {
+        "type": "Transitive",
+        "resolved": "1.0.4078.44",
+        "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
+      },
       "NAudio": {
         "type": "Transitive",
         "resolved": "2.2.1",
@@ -103,7 +108,8 @@
       "dalamudactcompat.actruntime": {
         "type": "Project",
         "dependencies": {
-          "IINACT": "[2.10.3.2, )"
+          "IINACT": "[2.10.3.2, )",
+          "Microsoft.Web.WebView2": "[1.0.4078.44, )"
         }
       },
       "fetchdependencies": {

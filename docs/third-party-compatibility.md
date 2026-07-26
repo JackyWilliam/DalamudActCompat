@@ -16,4 +16,4 @@ Cactbot 本体，两者在设置页和安装目录中保持独立。
 
 “DLL 成功加载”只代表基础 ABI 通过，不代表插件所有功能已经兼容。完整联动依赖
 ACT 的日志、战斗生命周期、插件列表、TTS/声音、WinForms 兼容对象，以及
-OverlayPlugin 的事件源、WebSocket 和 HTML Overlay。
+OverlayPlugin 的事件源、WebSocket 和基于 WebView2 的 Cactbot HTML Overlay 窗口。

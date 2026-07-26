@@ -105,7 +105,7 @@ For Windows-side testing from a custom repository, follow `docs/WINDOWS_CUSTOM_R
 
 - No live combat parsing has been verified in game.
 - FFLogs-compatible combat log output is directory-separated but not implemented.
-- OverlayPlugin is embedded, but its HTML/WebSocket behavior still needs an in-game validation pass.
+- OverlayPlugin starts its WebSocket event source and opens installed Cactbot raidboss resources in a topmost WebView2 window; encounter alerts and TTS still require an in-game validation pass.
 - Optional packages run in-process and must target host API version 1. Arbitrary legacy ACT plugins may depend on unsupported .NET Framework or ACT UI behavior.
 
 ## Next Stage
