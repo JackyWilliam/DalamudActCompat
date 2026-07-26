@@ -138,6 +138,7 @@ public sealed class Plugin : IDalamudPlugin
             text,
             () => cactbotInstaller.IsInstalled,
             SelectCactbotPackage,
+            OpenCactbotOverlay,
             OpenActPluginConfiguration);
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
@@ -151,7 +152,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open ACT Compat UI. Args: meter, history, status, settings, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open ACT Compat UI. Args: meter, cactbot, history, status, settings, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -206,6 +207,13 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "settings":
                 settingsWindow.IsOpen = true;
+                break;
+            case "cactbot":
+                if (!actRuntime.ShowCactbotOverlay())
+                {
+                    logger.Warning(
+                        "Cactbot overlay is not running. Install Cactbot, enable OverlayPlugin, and restart the parser.");
+                }
                 break;
             case "sample":
                 LoadSampleEncounter();
@@ -392,6 +400,15 @@ public sealed class Plugin : IDalamudPlugin
                 Title = "ACT 兼容",
                 Content = $"扩展 {pluginId} 未成功加载，请重启解析器并查看状态日志。",
             });
+        }
+    }
+
+    private void OpenCactbotOverlay()
+    {
+        if (!actRuntime.ShowCactbotOverlay())
+        {
+            logger.Warning(
+                "Cactbot overlay is not running. Install Cactbot, enable OverlayPlugin, and restart the parser.");
         }
     }
 

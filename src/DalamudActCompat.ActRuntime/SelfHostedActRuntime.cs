@@ -24,6 +24,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
+    private CactbotOverlayForm? cactbotOverlay;
     private HttpClient? httpClient;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
@@ -66,6 +67,17 @@ public sealed class SelfHostedActRuntime : IDisposable
     public bool IsParserRunning => parser is not null;
 
     public bool IsOverlayRunning => overlay is not null;
+
+    public bool ShowCactbotOverlay()
+    {
+        if (cactbotOverlay is null)
+        {
+            return false;
+        }
+
+        cactbotOverlay.Show();
+        return true;
+    }
 
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
@@ -179,6 +191,36 @@ public sealed class SelfHostedActRuntime : IDisposable
             container.Register(overlay);
             ActGlobals.oFormActMain.OverlayPluginContainer = container;
             overlay.InitPlugin(pluginInterface.ConfigDirectory.FullName);
+            var server = container.Resolve<RainbowMage.OverlayPlugin.WebSocket.ServerController>();
+            var raidbossHtml = Path.Combine(
+                pluginInterface.ConfigDirectory.FullName,
+                "cactbot",
+                "ui",
+                "raidboss",
+                "raidboss.html");
+            if (File.Exists(raidbossHtml))
+            {
+                if (!server.Running)
+                {
+                    server.Start();
+                }
+
+                if (!server.Running)
+                {
+                    throw new InvalidOperationException(
+                        "OverlayPlugin WebSocket server could not be started.",
+                        server.LastException);
+                }
+
+                var webSocketUri = server.GetModernUrl("http://localhost/")
+                    .Split("OVERLAY_WS=", 2)[1];
+                cactbotOverlay = new CactbotOverlayForm(
+                    raidbossHtml,
+                    webSocketUri,
+                    Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2"),
+                    log);
+                cactbotOverlay.Show();
+            }
         }
         catch
         {
@@ -241,6 +283,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public void StopOverlay()
     {
+        cactbotOverlay?.Dispose();
+        cactbotOverlay = null;
         overlay?.DeInitPlugin();
         overlay = null;
         httpClient?.Dispose();

@@ -9,15 +9,25 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <NoWarn>$(NoWarn);NU1510</NoWarn>
+    <WebView2PackagePath>$(NuGetPackageRoot)microsoft.web.webview2\1.0.4078.44</WebView2PackagePath>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageDownload Include="Microsoft.Web.WebView2" Version="[1.0.4078.44]" />
     <ProjectReference Include="..\..\vendor\IINACT\IINACT\IINACT.csproj" />
     <PackageReference Include="System.Formats.Nrbf" Version="10.0.10" GeneratePathProperty="true" />
     <PackageReference Include="System.Resources.Extensions" Version="10.0.10" />
     <Reference Include="Mono.Cecil">
       <HintPath>$(DalamudLibPath)Mono.Cecil.dll</HintPath>
       <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>$(WebView2PackagePath)\lib_manual\netcoreapp3.0\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms">
+      <HintPath>$(WebView2PackagePath)\lib_manual\netcoreapp3.0\Microsoft.Web.WebView2.WinForms.dll</HintPath>
+      <Private>true</Private>
     </Reference>
     <Reference Include="Dalamud">
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
@@ -58,6 +68,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="$(WebView2PackagePath)\runtimes\win-x64\native\WebView2Loader.dll"
+             Link="runtimes\win-x64\native\WebView2Loader.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="$(PkgSystem_Formats_Nrbf)\lib\net10.0\System.Formats.Nrbf.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
