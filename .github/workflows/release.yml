@@ -32,7 +32,14 @@ jobs:
 
       - name: Collect plugin artifact
         shell: pwsh
-        run: ./tools/collect-release.ps1 -Configuration Release -OutputDirectory artifacts/release
+        env:
+          TAG_NAME: ${{ inputs.tag }}
+        run: |
+          $version = $env:TAG_NAME.TrimStart("v")
+          ./tools/collect-release.ps1 `
+            -Configuration Release `
+            -OutputDirectory artifacts/release `
+            -ExpectedAssemblyVersion "$version.0"
 
       - name: Create GitHub release
         shell: pwsh
@@ -42,4 +49,4 @@ jobs:
         run: |
           gh release create $env:TAG_NAME artifacts/release/DalamudActCompat.zip `
             --title $env:TAG_NAME `
-            --notes "Dalamud ACT Compat development release. FFXIV_ACT_Plugin/IINACT runtime integration is not live yet."
+            --generate-notes
