@@ -24,6 +24,25 @@ try
     LegacyResourceCompatibility.ProbeEmbeddedResources(
         assembly,
         AssemblyLoadContext.Default);
+    string[] scriptingAssemblies =
+    [
+        "Microsoft.CodeAnalysis",
+        "Microsoft.CodeAnalysis.Scripting",
+        "Microsoft.CodeAnalysis.CSharp",
+        "Microsoft.CodeAnalysis.CSharp.Scripting",
+    ];
+    foreach (var scriptingAssembly in scriptingAssemblies)
+    {
+        if (!AssemblyLoadContext.Default.Assemblies.Any(candidate => string.Equals(
+                candidate.GetName().Name,
+                scriptingAssembly,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                $"Triggernometry scripting dependency {scriptingAssembly} was not preloaded.");
+        }
+    }
+
     var implementation = AppDomain.CurrentDomain.GetAssemblies()
         .SingleOrDefault(candidate => string.Equals(
             candidate.GetName().Name,
