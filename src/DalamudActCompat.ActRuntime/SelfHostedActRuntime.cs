@@ -25,6 +25,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
     private CactbotOverlayForm? cactbotOverlay;
+    private CactbotOverlayForm? cactbotSettings;
     private HttpClient? httpClient;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
@@ -78,6 +79,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         cactbotOverlay.Show();
+        return true;
+    }
+
+    public bool ShowCactbotSettings()
+    {
+        if (cactbotSettings is null)
+        {
+            return false;
+        }
+
+        cactbotSettings.Show();
         return true;
     }
 
@@ -223,8 +235,30 @@ public sealed class SelfHostedActRuntime : IDisposable
                     Path.Combine(
                         pluginInterface.AssemblyLocation.Directory!.FullName,
                         "WebView2Loader.dll"),
+                    "Cactbot Raidboss",
+                    true,
                     log);
                 cactbotOverlay.Show();
+
+                var configHtml = Path.Combine(
+                    pluginInterface.ConfigDirectory.FullName,
+                    "cactbot",
+                    "ui",
+                    "config",
+                    "config.html");
+                if (File.Exists(configHtml))
+                {
+                    cactbotSettings = new CactbotOverlayForm(
+                        configHtml,
+                        webSocketUri,
+                        Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2"),
+                        Path.Combine(
+                            pluginInterface.AssemblyLocation.Directory!.FullName,
+                            "WebView2Loader.dll"),
+                        "Cactbot Settings",
+                        false,
+                        log);
+                }
             }
         }
         catch
@@ -290,6 +324,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         cactbotOverlay?.Dispose();
         cactbotOverlay = null;
+        cactbotSettings?.Dispose();
+        cactbotSettings = null;
         overlay?.DeInitPlugin();
         overlay = null;
         httpClient?.Dispose();
