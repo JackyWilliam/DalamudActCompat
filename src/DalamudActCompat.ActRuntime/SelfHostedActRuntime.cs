@@ -3,12 +3,17 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
 
 public sealed class SelfHostedActRuntime : IDisposable
 {
+    private static readonly Regex ChineseActionUsed = new(
+        @"^(?<source>.+?)发动了[“""](?<action>神圣领域|死斗|超火流星|行尸走肉)[”""]。$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
     private readonly IDataManager dataManager;
@@ -435,6 +440,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
+        TryDispatchCompatibilityAlert(fields[4]);
+
         if (!ChineseCombatChatParser.TryParse(
                 fields[4],
                 chatActor,
@@ -459,6 +466,30 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
         chatDamageTotals[chatActor] = chatDamageTotals.GetValueOrDefault(chatActor) + damage;
         PublishChatEncounter(finished: false);
+    }
+
+    private void TryDispatchCompatibilityAlert(string message)
+    {
+        var match = ChineseActionUsed.Match(message);
+        if (!match.Success)
+        {
+            return;
+        }
+
+        var source = match.Groups["source"].Value.Trim();
+        var action = match.Groups["action"].Value;
+        var alert = $"{action}: {source}";
+
+        cactbotOverlay?.ShowAlert(alert);
+        try
+        {
+            ActGlobals.oFormActMain.TTS(alert);
+            log.Information($"ACT TTS compatibility alert dispatched: {alert}");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, $"ACT TTS compatibility alert failed: {alert}");
+        }
     }
 
     private void OnFrameworkUpdate(IFramework _)
