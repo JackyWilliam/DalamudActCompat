@@ -98,7 +98,11 @@ internal sealed class LoadedActPlugin : IDisposable
                     return dependencyPath is null ? null : context.LoadFromAssemblyPath(dependencyPath);
                 };
                 loadContext.Resolving += resolvingHandler;
-                var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+                var assembly = string.Equals(spec.Id, "postnamazu", StringComparison.OrdinalIgnoreCase)
+                    ? LegacyResourceCompatibility.LoadPostNamazuWithClipboardCompatibility(
+                        assemblyPath,
+                        loadContext)
+                    : loadContext.LoadFromAssemblyPath(assemblyPath);
                 if (string.Equals(spec.Id, "triggernometry", StringComparison.OrdinalIgnoreCase))
                 {
                     LegacyResourceCompatibility.ProbeEmbeddedResources(assembly, loadContext);

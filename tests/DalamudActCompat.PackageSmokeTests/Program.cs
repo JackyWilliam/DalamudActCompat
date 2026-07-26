@@ -2,6 +2,8 @@ using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text.Json;
+using System.Xml;
+using Advanced_Combat_Tracker;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
@@ -13,6 +15,8 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    ValidateSettingsSerializerMemberTypes();
+
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
     var paths = new PluginPaths(Path.Combine(testRoot, "config"));
@@ -115,12 +119,28 @@ try
     Console.WriteLine("Package and FFXIV_ACT_Plugin smoke tests passed.");
     return 0;
 }
+
 finally
 {
     if (Directory.Exists(testRoot))
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateSettingsSerializerMemberTypes()
+{
+    var owner = new EnumSettingsOwner();
+    using var serializer = new SettingsSerializer(owner);
+    serializer.AddIntSetting(nameof(EnumSettingsOwner.PluginIntegration));
+    using var textReader = new StringReader(
+        "<SettingsSerializer><PluginIntegration>Auto</PluginIntegration></SettingsSerializer>");
+    using var reader = new XmlTextReader(textReader);
+    reader.ReadToFollowing("SettingsSerializer");
+    serializer.ImportFromXml(reader);
+    Assert(
+        owner.PluginIntegration == PluginIntegrationMode.Auto,
+        "SettingsSerializer did not use the member's enum type for a legacy integer registration.");
 }
 
 static void ValidateLegacyResourceRuntimeDependencies()
@@ -387,4 +407,15 @@ static void Assert(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+internal enum PluginIntegrationMode
+{
+    Disabled,
+    Auto,
+}
+
+internal sealed class EnumSettingsOwner
+{
+    public PluginIntegrationMode PluginIntegration { get; set; }
 }

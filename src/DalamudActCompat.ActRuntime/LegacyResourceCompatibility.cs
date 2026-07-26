@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Formats.Nrbf;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.IO.Compression;
 using System.Reflection;
 using System.Resources;
@@ -61,6 +62,102 @@ public static class LegacyResourceCompatibility
                         $"Triggernometry resource {resourceName}/{key} could not be read after safe NRBF conversion.",
                         ex);
                 }
+            }
+        }
+    }
+
+    internal static Assembly LoadPostNamazuWithClipboardCompatibility(
+        string assemblyPath,
+        AssemblyLoadContext loadContext)
+    {
+        using var input = File.OpenRead(assemblyPath);
+        using var definition = AssemblyDefinition.ReadAssembly(input);
+        var setText = typeof(Clipboard).GetMethod(
+                          nameof(Clipboard.SetText),
+                          BindingFlags.Public | BindingFlags.Static,
+                          binder: null,
+                          [typeof(string)],
+                          modifiers: null)
+                      ?? throw new MissingMethodException(typeof(Clipboard).FullName, nameof(Clipboard.SetText));
+        var getText = typeof(Clipboard).GetMethod(
+                          nameof(Clipboard.GetText),
+                          BindingFlags.Public | BindingFlags.Static,
+                          binder: null,
+                          Type.EmptyTypes,
+                          modifiers: null)
+                      ?? throw new MissingMethodException(typeof(Clipboard).FullName, nameof(Clipboard.GetText));
+        var safeSetText = definition.MainModule.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(SetClipboardText),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var safeGetText = definition.MainModule.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(GetClipboardText),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var setTextFullName = definition.MainModule.ImportReference(setText).FullName;
+        var getTextFullName = definition.MainModule.ImportReference(getText).FullName;
+        var patchedCalls = 0;
+
+        foreach (var instruction in definition.MainModule.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody)
+                     .SelectMany(method => method.Body.Instructions))
+        {
+            if (instruction.Operand is not MethodReference called ||
+                called.DeclaringType.FullName != typeof(Clipboard).FullName)
+            {
+                continue;
+            }
+
+            if (called.FullName == setTextFullName)
+            {
+                instruction.OpCode = OpCodes.Call;
+                instruction.Operand = safeSetText;
+                patchedCalls++;
+            }
+            else if (called.FullName == getTextFullName)
+            {
+                instruction.OpCode = OpCodes.Call;
+                instruction.Operand = safeGetText;
+                patchedCalls++;
+            }
+        }
+
+        if (patchedCalls == 0)
+        {
+            throw new InvalidOperationException(
+                "PostNamazu contains no recognized clipboard calls to patch.");
+        }
+
+        using var output = new MemoryStream();
+        definition.Write(output);
+        output.Position = 0;
+        return loadContext.LoadFromStream(output);
+    }
+
+    public static void SetClipboardText(string text)
+        => RetryClipboard(() => Clipboard.SetText(text));
+
+    public static string GetClipboardText()
+    {
+        string result = string.Empty;
+        RetryClipboard(() => result = Clipboard.GetText());
+        return result;
+    }
+
+    private static void RetryClipboard(Action action)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                action();
+                return;
+            }
+            catch (ExternalException) when (attempt < 9)
+            {
+                Thread.Sleep(20 * (attempt + 1));
             }
         }
     }

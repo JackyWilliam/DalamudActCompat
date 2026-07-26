@@ -2,9 +2,10 @@ using System.Reflection;
 using System.Runtime.Loader;
 using DalamudActCompat.ActRuntime;
 
-if (args.Length != 1)
+if (args.Length is < 1 or > 2)
 {
-    throw new ArgumentException("Pass the path to an installed Triggernometry.dll.");
+    throw new ArgumentException(
+        "Pass the path to an installed Triggernometry.dll and optionally PostNamazu.dll.");
 }
 
 var assemblyPath = Path.GetFullPath(args[0]);
@@ -44,6 +45,15 @@ try
     var proxyType = assembly.GetType("TriggernometryProxy.ProxyPlugin", throwOnError: true)!;
     _ = Activator.CreateInstance(proxyType)
         ?? throw new InvalidOperationException("Triggernometry proxy could not be constructed.");
+
+    if (args.Length == 2)
+    {
+        var postNamazuPath = Path.GetFullPath(args[1]);
+        var postNamazu = LegacyResourceCompatibility.LoadPostNamazuWithClipboardCompatibility(
+            postNamazuPath,
+            AssemblyLoadContext.Default);
+        _ = postNamazu.GetType("PostNamazu.PostNamazu", throwOnError: true);
+    }
 
     Console.WriteLine("Safe NRBF conversion and Triggernometry embedded-resource probes passed.");
 }
