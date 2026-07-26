@@ -21,7 +21,7 @@ Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users
 ## Current Features
 
 - Dalamud plugin lifecycle with command `/actcompat`.
-- Native ImGui Meter window with DPS/HPS columns, damage percent, death count, duration, sorting, local-player highlight, lock, opacity, font scale, click-through flag, auto-hide flag, and reset.
+- Native ImGui Meter window restricted to the local player/current party, with `UserName@ServerName`, live jobs, supplemented death detection, a DPS/HPS primary rate column that follows sorting, damage percent, duration, local-player highlight, lock, opacity, font scale, click-through flag, auto-hide flag, and reset.
 - Encounter history window backed by plugin config storage.
 - Settings window for parser enablement, autostart, Meter settings, history limit, debug flag, parser status, parser restart, and log directory.
 - Parser status model: disabled, initializing, running, stopped, missing dependency, incompatible, faulted.

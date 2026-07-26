@@ -99,17 +99,17 @@ public sealed class MeterWindow : Window
                           (settings.ShowDps ? 1 : 0) +
                           (settings.ShowDamage ? 1 : 0) +
                           (settings.ShowDamagePercent ? 1 : 0) +
-                          (settings.ShowHps ? 1 : 0) +
+                          (settings.ShowHps && settings.SortMode != MeterSortMode.Hps ? 1 : 0) +
                           (settings.ShowHealing ? 1 : 0) +
                           (settings.ShowDeaths ? 1 : 0);
         if (ImGui.BeginTable("meter-table", columnCount, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
         {
             if (settings.ShowJob) ImGui.TableSetupColumn(text.Get("职业", "Job"), ImGuiTableColumnFlags.WidthFixed, 42);
             ImGui.TableSetupColumn(text.Get("名称", "Name"));
-            if (settings.ShowDps) ImGui.TableSetupColumn("DPS");
+            if (settings.ShowDps) ImGui.TableSetupColumn(PrimaryRateLabel(settings));
             if (settings.ShowDamage) ImGui.TableSetupColumn(text.Get("伤害", "Damage"));
             if (settings.ShowDamagePercent) ImGui.TableSetupColumn("%");
-            if (settings.ShowHps) ImGui.TableSetupColumn("HPS");
+            if (settings.ShowHps && settings.SortMode != MeterSortMode.Hps) ImGui.TableSetupColumn("HPS");
             if (settings.ShowHealing) ImGui.TableSetupColumn(text.Get("治疗量", "Healing"));
             if (settings.ShowDeaths) ImGui.TableSetupColumn(text.Get("死亡", "Deaths"));
             ImGui.TableHeadersRow();
@@ -129,10 +129,19 @@ public sealed class MeterWindow : Window
                 }
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(row.Name);
-                if (settings.ShowDps) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Dps.ToString("N0")); }
+                if (settings.ShowDps)
+                {
+                    ImGui.TableNextColumn();
+                    var primaryRate = settings.SortMode == MeterSortMode.Hps ? row.Hps : row.Dps;
+                    ImGui.TextUnformatted(primaryRate.ToString("N0"));
+                }
                 if (settings.ShowDamage) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.TotalDamage.ToString("N0")); }
                 if (settings.ShowDamagePercent) { ImGui.TableNextColumn(); ImGui.TextUnformatted($"{row.DamagePercent:N1}%"); }
-                if (settings.ShowHps) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Hps.ToString("N0")); }
+                if (settings.ShowHps && settings.SortMode != MeterSortMode.Hps)
+                {
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(row.Hps.ToString("N0"));
+                }
                 if (settings.ShowHealing) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.TotalHealing.ToString("N0")); }
                 if (settings.ShowDeaths) { ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Deaths.ToString()); }
             }
@@ -143,6 +152,16 @@ public sealed class MeterWindow : Window
 
     private static string FormatDuration(TimeSpan duration)
         => $"{(int)duration.TotalMinutes:00}:{duration.Seconds:00}";
+
+    private static string PrimaryRateLabel(MeterSettings settings)
+        => settings.SortMode == MeterSortMode.Hps
+            ? "HPS"
+            : settings.DpsMetric switch
+            {
+                DpsMetric.EncDps => "EncDPS",
+                DpsMetric.ExtDps => "ExtDPS",
+                _ => "DPS",
+            };
 
     private static string JobIconText(string job)
         => string.IsNullOrWhiteSpace(job) ? "?" : job[..Math.Min(3, job.Length)].ToUpperInvariant();

@@ -13,7 +13,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IPluginLog log;
     private readonly IDataManager dataManager;
     private readonly Func<string> playerName;
-    private readonly Func<uint> playerJobId;
+    private readonly Func<IReadOnlyList<ActPlayerIdentity>> playerIdentities;
     private readonly IChatGui chatGui;
     private readonly IFramework framework;
     private readonly ICondition condition;
@@ -30,6 +30,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
     private Guid activeEncounterId;
+    private readonly Dictionary<string, bool> lastKnownDead = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> observedDeaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> chatDamageTotals = new(StringComparer.OrdinalIgnoreCase);
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
@@ -43,7 +45,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         IPluginLog log,
         IDataManager dataManager,
         Func<string> playerName,
-        Func<uint> playerJobId,
+        Func<IReadOnlyList<ActPlayerIdentity>> playerIdentities,
         IChatGui chatGui,
         IFramework framework,
         ICondition condition,
@@ -55,7 +57,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.log = log;
         this.dataManager = dataManager;
         this.playerName = playerName;
-        this.playerJobId = playerJobId;
+        this.playerIdentities = playerIdentities;
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
@@ -422,6 +424,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnFrameworkUpdate(IFramework _)
     {
+        TrackPlayerDeaths();
         if (chatEncounterId == Guid.Empty || chatLastDamage == default ||
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
             localDeathWhilePartyContinues() ||
@@ -449,22 +452,24 @@ public sealed class SelfHostedActRuntime : IDisposable
             localPlayerName = ActGlobals.charName ?? string.Empty;
         }
 
-        var localJob = ResolveJob(playerJobId());
+        var identities = playerIdentities();
         var elapsedSeconds = Math.Max(
             1,
             ((finished ? chatLastDamage : DateTimeOffset.Now) - chatEncounterStart).TotalSeconds);
         var combatants = chatDamageTotals
-            .Select(pair => new ActCombatantSnapshot(
-                pair.Key,
-                pair.Key,
-                string.Equals(pair.Key, localPlayerName, StringComparison.OrdinalIgnoreCase) ? localJob : string.Empty,
-                string.Equals(pair.Key, localPlayerName, StringComparison.OrdinalIgnoreCase),
-                pair.Value,
+            .Select(pair => (Pair: pair, Identity: ActPlayerIdentityResolver.Resolve(identities, pair.Key)))
+            .Where(static item => item.Identity is not null)
+            .Select(item => new ActCombatantSnapshot(
+                item.Identity!.DisplayName,
+                item.Identity.DisplayName,
+                item.Identity.Job,
+                item.Identity.IsLocalPlayer,
+                item.Pair.Value,
                 0,
-                0,
-                pair.Value / elapsedSeconds,
-                pair.Value / elapsedSeconds,
-                pair.Value / elapsedSeconds))
+                observedDeaths.GetValueOrDefault(item.Identity.DisplayName),
+                item.Pair.Value / elapsedSeconds,
+                item.Pair.Value / elapsedSeconds,
+                item.Pair.Value / elapsedSeconds))
             .ToArray();
         EncounterChanged?.Invoke(
             new ActEncounterSnapshot(
@@ -507,6 +512,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                 {
                     activeEncounter = encounter;
                     activeEncounterId = Guid.NewGuid();
+                    lastKnownDead.Clear();
+                    observedDeaths.Clear();
                 }
 
                 var startTime = encounter.StartTime == DateTime.MaxValue
@@ -517,19 +524,25 @@ public sealed class SelfHostedActRuntime : IDisposable
                         ? DateTimeOffset.Now
                         : new DateTimeOffset(encounter.EndTime)
                     : null;
+                var identities = playerIdentities();
                 var combatants = encounter.Items.Values
-                    .Where(static combatant => combatant.Damage > 0 || combatant.Healed > 0 || combatant.Deaths > 0)
-                    .Select(combatant => new ActCombatantSnapshot(
-                        combatant.Name,
-                        combatant.Name,
-                        ResolveJob(combatant),
-                        string.Equals(combatant.Name, ActGlobals.charName, StringComparison.OrdinalIgnoreCase),
-                        combatant.Damage,
-                        combatant.Healed,
-                        combatant.Deaths,
-                        combatant.DPS,
-                        combatant.EncDPS,
-                        combatant.ExtDPS))
+                    .Select(combatant => (
+                        Combatant: combatant,
+                        Identity: ActPlayerIdentityResolver.Resolve(identities, combatant.Name)))
+                    .Where(static item => item.Identity is not null)
+                    .Select(item => new ActCombatantSnapshot(
+                        item.Identity!.DisplayName,
+                        item.Identity.DisplayName,
+                        item.Identity.Job,
+                        item.Identity.IsLocalPlayer,
+                        item.Combatant.Damage,
+                        item.Combatant.Healed,
+                        Math.Max(
+                            item.Combatant.Deaths,
+                            observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
+                        item.Combatant.DPS,
+                        item.Combatant.EncDPS,
+                        item.Combatant.ExtDPS))
                     .ToArray();
 
                 snapshot = new ActEncounterSnapshot(
@@ -544,6 +557,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                 {
                     activeEncounter = null;
                     activeEncounterId = Guid.Empty;
+                    lastKnownDead.Clear();
+                    observedDeaths.Clear();
                 }
             }
 
@@ -555,26 +570,31 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
     }
 
-    private static string ResolveJob(CombatantData combatant)
+    private void TrackPlayerDeaths()
     {
-        if (combatant.Tags.TryGetValue("Job", out var job) && job is not null)
+        if (activeEncounter is null)
         {
-            return job.ToString() ?? string.Empty;
+            return;
         }
 
-        return string.Empty;
-    }
-
-    private static string ResolveJob(uint? jobId)
-        => jobId switch
+        var changed = false;
+        foreach (var identity in playerIdentities())
         {
-            19 => "PLD", 20 => "MNK", 21 => "WAR", 22 => "DRG", 23 => "BRD",
-            24 => "WHM", 25 => "BLM", 26 => "ACN", 27 => "SMN", 28 => "SCH",
-            30 => "NIN", 31 => "MCH", 32 => "DRK", 33 => "AST", 34 => "SAM",
-            35 => "RDM", 36 => "BLU", 37 => "GNB", 38 => "DNC", 39 => "RPR",
-            40 => "SGE", 41 => "VPR", 42 => "PCT",
-            _ => string.Empty,
-        };
+            var name = identity.DisplayName;
+            if (lastKnownDead.TryGetValue(name, out var wasDead) && !wasDead && identity.IsDead)
+            {
+                observedDeaths[name] = observedDeaths.GetValueOrDefault(name) + 1;
+                changed = true;
+            }
+
+            lastKnownDead[name] = identity.IsDead;
+        }
+
+        if (changed && activeEncounter is not null)
+        {
+            PublishEncounter(activeEncounter, false);
+        }
+    }
 
     private void SetUpstreamLogger()
     {
