@@ -1,63 +1,31 @@
 using System.Collections;
+using System.ComponentModel;
+using System.Drawing;
+using System.Formats.Nrbf;
+using System.Globalization;
 using System.IO.Compression;
 using System.Reflection;
 using System.Resources;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
-using System.Runtime.Serialization.Formatters.Binary;
+using System.Runtime.Serialization;
+using System.Windows.Forms;
 using Mono.Cecil;
+using Mono.Cecil.Cil;
 using System.Resources.Extensions;
 
 [assembly: InternalsVisibleTo("DalamudActCompat.LegacyResourceSmokeTests")]
 
 namespace DalamudActCompat.ActRuntime;
 
-internal static class LegacyResourceCompatibility
+public static class LegacyResourceCompatibility
 {
-    private const string BinaryFormatterSwitch =
-        "System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization";
-    private const string ResourceBinaryFormatterSwitch =
-        "System.Resources.Extensions.UseBinaryFormatter";
-
-#pragma warning disable CA2255
-    [ModuleInitializer]
-    internal static void Initialize()
+    internal static void EnsureLegacyResourceDecoderAvailable()
     {
-        AppContext.SetSwitch(BinaryFormatterSwitch, true);
-        AppContext.SetSwitch(ResourceBinaryFormatterSwitch, true);
-    }
-#pragma warning restore CA2255
-
-    internal static void EnsureBinaryFormatterAvailable()
-    {
-        AppContext.SetSwitch(BinaryFormatterSwitch, true);
-        AppContext.SetSwitch(ResourceBinaryFormatterSwitch, true);
-        AppContext.TryGetSwitch(BinaryFormatterSwitch, out var enabled);
-        if (!enabled)
+        if (typeof(NrbfDecoder).Assembly.GetName().Name != "System.Formats.Nrbf")
         {
             throw new InvalidOperationException(
-                $"Legacy resource compatibility switch {BinaryFormatterSwitch} is disabled.");
-        }
-
-        AppContext.TryGetSwitch(ResourceBinaryFormatterSwitch, out var resourceFormatterEnabled);
-        if (!resourceFormatterEnabled)
-        {
-            throw new InvalidOperationException(
-                $"Legacy resource compatibility switch {ResourceBinaryFormatterSwitch} is disabled.");
-        }
-
-        var payload = new ProbePayload("DalamudActCompat", 1);
-        using var stream = new MemoryStream();
-#pragma warning disable SYSLIB0011
-        var formatter = new BinaryFormatter();
-        formatter.Serialize(stream, payload);
-        stream.Position = 0;
-        var restored = formatter.Deserialize(stream) as ProbePayload;
-#pragma warning restore SYSLIB0011
-        if (restored != payload)
-        {
-            throw new InvalidOperationException(
-                "System.Runtime.Serialization.Formatters loaded, but its BinaryFormatter smoke test returned invalid data.");
+                "System.Formats.Nrbf is unavailable for legacy Triggernometry resources.");
         }
     }
 
@@ -90,8 +58,7 @@ internal static class LegacyResourceCompatibility
                 catch (NotSupportedException ex)
                 {
                     throw new NotSupportedException(
-                        $"Triggernometry resource {resourceName}/{key} cannot be deserialized by .NET 10 " +
-                        "after conversion to DeserializingResourceReader format.",
+                        $"Triggernometry resource {resourceName}/{key} could not be read after safe NRBF conversion.",
                         ex);
                 }
             }
@@ -155,9 +122,10 @@ internal static class LegacyResourceCompatibility
                     }
                     else
                     {
-#pragma warning disable SYSLIB0011
-                        writer.AddBinaryFormattedResource(key, payload, typeName);
-#pragma warning restore SYSLIB0011
+                        WriteConvertedResource(
+                            writer,
+                            key,
+                            DeserializeLegacyPayload(payload));
                     }
                 }
             }
@@ -167,12 +135,165 @@ internal static class LegacyResourceCompatibility
                 new EmbeddedResource(resource.Name, resource.Attributes, output.ToArray());
         }
 
+        RedirectResourceManagerCalls(definition.MainModule);
         var patched = new MemoryStream();
         definition.Write(patched);
         patched.Position = 0;
         return patched;
     }
 
-    [Serializable]
-    private sealed record ProbePayload(string Name, int Version);
+    private static object DeserializeLegacyPayload(byte[] payload)
+    {
+        using var stream = new MemoryStream(payload, writable: false);
+        var record = NrbfDecoder.DecodeClassRecord(stream, leaveOpen: true);
+        if (record.TypeNameMatches(typeof(ImageListStreamer)))
+        {
+            return ReadByteArray(record, "Data");
+        }
+
+        if (record.TypeNameMatches(typeof(Bitmap)))
+        {
+            using var imageStream = new MemoryStream(
+                ReadByteArray(record, "Data"),
+                writable: false);
+            using var bitmap = new Bitmap(imageStream);
+            return new Bitmap(bitmap);
+        }
+
+        if (record.TypeNameMatches(typeof(Point)))
+        {
+            return new Point(record.GetInt32("x"), record.GetInt32("y"));
+        }
+
+        throw new NotSupportedException(
+            $"Legacy resource type {record.TypeName} is not in the safe NRBF conversion allowlist.");
+    }
+
+    private static byte[] ReadByteArray(ClassRecord record, string memberName)
+    {
+        var array = record.GetArrayRecord(memberName)
+                    ?? throw new InvalidDataException(
+                        $"Legacy resource {record.TypeName}/{memberName} has no byte array.");
+        var lengths = array.Lengths;
+        if (lengths.Length != 1 || lengths[0] > 64 * 1024 * 1024)
+        {
+            throw new InvalidDataException(
+                $"Legacy resource {record.TypeName}/{memberName} has an invalid byte array length.");
+        }
+
+        return (byte[])array.GetArray(typeof(byte[]), allowNulls: false);
+    }
+
+    private static void WriteConvertedResource(
+        PreserializedResourceWriter writer,
+        string key,
+        object value)
+    {
+        var type = value.GetType();
+        var typeName = type.AssemblyQualifiedName
+                       ?? throw new InvalidOperationException(
+                           $"Legacy resource type {type.FullName} has no assembly-qualified name.");
+        TypeConverter converter = TypeDescriptor.GetConverter(type);
+        if (value is byte[] imageListData &&
+            key.EndsWith(".ImageStream", StringComparison.Ordinal))
+        {
+            writer.AddResource(key, imageListData);
+            return;
+        }
+
+        if (converter.CanConvertTo(typeof(byte[])) &&
+            converter.CanConvertFrom(typeof(byte[])))
+        {
+            var bytes = converter.ConvertTo(
+                            null,
+                            CultureInfo.InvariantCulture,
+                            value,
+                            typeof(byte[])) as byte[]
+                        ?? throw new InvalidOperationException(
+                            $"TypeConverter for {typeName} returned no byte array.");
+            writer.AddTypeConverterResource(key, bytes, typeName);
+            return;
+        }
+
+        if (converter.CanConvertTo(typeof(string)) &&
+            converter.CanConvertFrom(typeof(string)))
+        {
+            var text = converter.ConvertToInvariantString(value)
+                       ?? throw new InvalidOperationException(
+                           $"TypeConverter for {typeName} returned no string.");
+            writer.AddResource(key, text, typeName);
+            return;
+        }
+
+        throw new NotSupportedException(
+            $"Legacy resource {key} has type {typeName}, which has no safe byte[] or string TypeConverter.");
+    }
+
+    public static object? GetResourceObject(ResourceManager resourceManager, string key)
+    {
+        var value = resourceManager.GetObject(key);
+        if (value is not byte[] data ||
+            !key.EndsWith(".ImageStream", StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        var type = typeof(ImageListStreamer);
+#pragma warning disable SYSLIB0050
+        var info = new SerializationInfo(type, new FormatterConverter());
+#pragma warning restore SYSLIB0050
+        info.AddValue("Data", data, typeof(byte[]));
+        var constructor = type.GetConstructor(
+                              BindingFlags.Instance | BindingFlags.NonPublic,
+                              binder: null,
+                              [typeof(SerializationInfo), typeof(StreamingContext)],
+                              modifiers: null)
+                          ?? throw new MissingMethodException(
+                              type.FullName,
+                              ".ctor(SerializationInfo, StreamingContext)");
+#pragma warning disable SYSLIB0050
+        return constructor.Invoke([info, new StreamingContext(StreamingContextStates.All)]);
+#pragma warning restore SYSLIB0050
+    }
+
+    private static void RedirectResourceManagerCalls(ModuleDefinition module)
+    {
+        var helper = typeof(LegacyResourceCompatibility).GetMethod(
+                         nameof(GetResourceObject),
+                         BindingFlags.Public | BindingFlags.Static)
+                     ?? throw new MissingMethodException(
+                         typeof(LegacyResourceCompatibility).FullName,
+                         nameof(GetResourceObject));
+        var helperReference = module.ImportReference(helper);
+        foreach (var method in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody))
+        {
+            foreach (var instruction in method.Body.Instructions)
+            {
+                if (instruction.OpCode != OpCodes.Callvirt ||
+                    instruction.Operand is not MethodReference called ||
+                    called.DeclaringType.FullName != typeof(ResourceManager).FullName ||
+                    called.Name != nameof(ResourceManager.GetObject) ||
+                    called.Parameters.Count != 1 ||
+                    called.Parameters[0].ParameterType.FullName != typeof(string).FullName)
+                {
+                    continue;
+                }
+
+                instruction.OpCode = OpCodes.Call;
+                instruction.Operand = helperReference;
+            }
+        }
+    }
+
+    private static IEnumerable<TypeDefinition> EnumerateTypes(TypeDefinition type)
+    {
+        yield return type;
+        foreach (var nested in type.NestedTypes.SelectMany(EnumerateTypes))
+        {
+            yield return nested;
+        }
+    }
 }

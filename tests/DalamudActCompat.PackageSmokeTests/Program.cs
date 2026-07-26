@@ -131,12 +131,12 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "DalamudActCompat",
         "bin",
         "Release");
-    var formatterPath = Path.Combine(
+    var nrbfPath = Path.Combine(
         releaseDirectory,
-        "System.Runtime.Serialization.Formatters.dll");
+        "System.Formats.Nrbf.dll");
     Assert(
-        File.Exists(formatterPath),
-        "BinaryFormatter compatibility implementation was not copied to the plugin output.");
+        File.Exists(nrbfPath),
+        "Safe NRBF resource decoder was not copied to the plugin output.");
 
     var packagePath = Path.Combine(
         releaseDirectory,
@@ -147,9 +147,15 @@ static void ValidateLegacyResourceRuntimeDependencies()
     Assert(
         archive.Entries.Any(entry => string.Equals(
             entry.Name,
+            "System.Formats.Nrbf.dll",
+            StringComparison.OrdinalIgnoreCase)),
+        "Safe NRBF resource decoder is missing from the Dalamud release package.");
+    Assert(
+        archive.Entries.All(entry => !string.Equals(
+            entry.Name,
             "System.Runtime.Serialization.Formatters.dll",
             StringComparison.OrdinalIgnoreCase)),
-        "BinaryFormatter compatibility implementation is missing from the Dalamud release package.");
+        "The removed BinaryFormatter compatibility package must not be shipped.");
 }
 
 static void ValidateFfxivModuleInitializer()

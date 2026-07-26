@@ -60,7 +60,7 @@ internal sealed class LoadedActPlugin : IDisposable
     {
         if (string.Equals(spec.Id, "triggernometry", StringComparison.OrdinalIgnoreCase))
         {
-            LegacyResourceCompatibility.EnsureBinaryFormatterAvailable();
+            LegacyResourceCompatibility.EnsureLegacyResourceDecoderAvailable();
         }
 
         var assemblyPath = Path.GetFullPath(Path.Combine(spec.InstallDirectory, spec.EntryAssembly));

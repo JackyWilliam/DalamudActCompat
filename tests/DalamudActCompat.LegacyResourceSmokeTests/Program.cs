@@ -13,7 +13,7 @@ if (!File.Exists(assemblyPath))
     throw new FileNotFoundException("Triggernometry assembly was not found.", assemblyPath);
 }
 
-LegacyResourceCompatibility.EnsureBinaryFormatterAvailable();
+LegacyResourceCompatibility.EnsureLegacyResourceDecoderAvailable();
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
 AssemblyLoadContext.Default.Resolving += ResolveDependency;
@@ -45,7 +45,7 @@ try
     _ = Activator.CreateInstance(proxyType)
         ?? throw new InvalidOperationException("Triggernometry proxy could not be constructed.");
 
-    Console.WriteLine("BinaryFormatter and Triggernometry embedded-resource probes passed.");
+    Console.WriteLine("Safe NRBF conversion and Triggernometry embedded-resource probes passed.");
 }
 finally
 {
