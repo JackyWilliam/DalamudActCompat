@@ -9,6 +9,8 @@ namespace DalamudActCompat.ActRuntime;
 
 internal sealed class CactbotOverlayForm : IDisposable
 {
+    private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
+
     private readonly string raidbossHtmlPath;
     private readonly string webSocketUri;
     private readonly string userDataDirectory;
@@ -67,13 +69,15 @@ internal sealed class CactbotOverlayForm : IDisposable
                 ClientSize = new Size(900, 320),
                 StartPosition = FormStartPosition.CenterScreen,
                 TopMost = true,
-                BackColor = Color.Black,
+                BackColor = TransparencyColor,
+                TransparencyKey = TransparencyColor,
             };
             webView = new WebView2
             {
                 Dock = DockStyle.Fill,
                 DefaultBackgroundColor = Color.Transparent,
             };
+            webView.NavigationCompleted += OnNavigationCompleted;
             form.Controls.Add(webView);
             form.FormClosing += OnFormClosing;
             form.Shown += async (_, _) => await InitializeWebViewAsync();
@@ -87,6 +91,11 @@ internal sealed class CactbotOverlayForm : IDisposable
         }
         finally
         {
+            if (webView is not null)
+            {
+                webView.NavigationCompleted -= OnNavigationCompleted;
+            }
+
             webView?.Dispose();
             form?.Dispose();
             webView = null;
@@ -144,6 +153,20 @@ internal sealed class CactbotOverlayForm : IDisposable
             Query = $"OVERLAY_WS={Uri.EscapeDataString(webSocketUri)}",
         };
         return builder.Uri;
+    }
+
+    private void OnNavigationCompleted(
+        object? sender,
+        CoreWebView2NavigationCompletedEventArgs args)
+    {
+        if (args.IsSuccess)
+        {
+            log.Information($"Cactbot navigation completed: {webView?.Source}");
+            return;
+        }
+
+        log.Error(
+            $"Cactbot navigation failed: {args.WebErrorStatus}; URI: {webView?.Source}");
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
