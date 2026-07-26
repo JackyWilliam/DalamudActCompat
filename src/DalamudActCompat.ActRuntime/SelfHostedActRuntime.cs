@@ -220,6 +220,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                     raidbossHtml,
                     webSocketUri,
                     Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2"),
+                    Path.Combine(
+                        pluginInterface.AssemblyLocation.Directory!.FullName,
+                        "WebView2Loader.dll"),
                     log);
                 cactbotOverlay.Show();
             }

@@ -2,6 +2,7 @@ using Dalamud.Plugin.Services;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
@@ -11,6 +12,7 @@ internal sealed class CactbotOverlayForm : IDisposable
     private readonly string raidbossHtmlPath;
     private readonly string webSocketUri;
     private readonly string userDataDirectory;
+    private readonly string loaderPath;
     private readonly IPluginLog log;
     private readonly ManualResetEventSlim ready = new();
     private Thread? uiThread;
@@ -22,11 +24,13 @@ internal sealed class CactbotOverlayForm : IDisposable
         string raidbossHtmlPath,
         string webSocketUri,
         string userDataDirectory,
+        string loaderPath,
         IPluginLog log)
     {
         this.raidbossHtmlPath = raidbossHtmlPath;
         this.webSocketUri = webSocketUri;
         this.userDataDirectory = userDataDirectory;
+        this.loaderPath = loaderPath;
         this.log = log;
     }
 
@@ -99,6 +103,14 @@ internal sealed class CactbotOverlayForm : IDisposable
 
         try
         {
+            if (!File.Exists(loaderPath))
+            {
+                throw new FileNotFoundException(
+                    "The packaged WebView2Loader.dll was not found.",
+                    loaderPath);
+            }
+
+            NativeLibrary.Load(loaderPath);
             Directory.CreateDirectory(userDataDirectory);
             var options = new CoreWebView2EnvironmentOptions(
                 "--autoplay-policy=no-user-gesture-required");
