@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.2.17.0",
+    "AssemblyVersion":  "0.2.18.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.17/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.18/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.17/DalamudActCompat.zip",
-    "LastUpdate":  1785054009365,
-    "Changelog":  "新增 Cactbot raidboss 警报窗口，接入 OverlayPlugin WebSocket，并支持文字、音频与 TTS 播放链路。"
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.18/DalamudActCompat.zip",
+    "LastUpdate":  1785054850237,
+    "Changelog":  "Meter 仅显示玩家并补齐职业与服务器名；补充死亡识别；HPS 排序时主速率列同步切换。"
 }
 ]
