@@ -65,7 +65,10 @@ internal sealed class CactbotOverlayForm : IDisposable
         {
             form.Show();
             form.WindowState = FormWindowState.Normal;
-            form.Activate();
+            if (!overlayMode)
+            {
+                form.Activate();
+            }
         });
     }
 
@@ -114,6 +117,10 @@ internal sealed class CactbotOverlayForm : IDisposable
             if (webView is not null)
             {
                 webView.NavigationCompleted -= OnNavigationCompleted;
+                if (webView.CoreWebView2 is not null)
+                {
+                    webView.CoreWebView2.ProcessFailed -= OnProcessFailed;
+                }
             }
 
             webView?.Dispose();
