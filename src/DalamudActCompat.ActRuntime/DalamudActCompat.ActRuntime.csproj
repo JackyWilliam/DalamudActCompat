@@ -8,10 +8,17 @@
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NoWarn>$(NoWarn);NU1510</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\vendor\IINACT\IINACT\IINACT.csproj" />
+    <PackageReference Include="System.Resources.Extensions" Version="10.0.10" />
+    <PackageReference Include="System.Runtime.Serialization.Formatters" Version="10.0.10" />
+    <Reference Include="Mono.Cecil">
+      <HintPath>$(DalamudLibPath)Mono.Cecil.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Dalamud">
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
       <Private>false</Private>
