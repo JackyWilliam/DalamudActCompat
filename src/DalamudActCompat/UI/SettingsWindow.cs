@@ -1,5 +1,6 @@
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Interfaces;
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
@@ -26,6 +27,8 @@ public sealed class SettingsWindow : Window
     private readonly Action selectCactbotPackage;
     private readonly Action openCactbotOverlay;
     private readonly Action openCactbotSettings;
+    private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
+    private readonly Action<string> openHtmlOverlay;
     private readonly Action<string> openPluginConfiguration;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
@@ -46,6 +49,8 @@ public sealed class SettingsWindow : Window
         Action selectCactbotPackage,
         Action openCactbotOverlay,
         Action openCactbotSettings,
+        Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
+        Action<string> openHtmlOverlay,
         Action<string> openPluginConfiguration)
         : base("ACT 兼容设置###DalamudActCompatSettings")
     {
@@ -63,6 +68,8 @@ public sealed class SettingsWindow : Window
         this.selectCactbotPackage = selectCactbotPackage;
         this.openCactbotOverlay = openCactbotOverlay;
         this.openCactbotSettings = openCactbotSettings;
+        this.getOverlayTemplates = getOverlayTemplates;
+        this.openHtmlOverlay = openHtmlOverlay;
         this.openPluginConfiguration = openPluginConfiguration;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -168,9 +175,55 @@ public sealed class SettingsWindow : Window
             OpenUrl("https://github.com/OverlayPlugin/cactbot");
         }
 
+        ImGui.TextUnformatted(text.Get("OverlayPlugin HTML 悬浮窗", "OverlayPlugin HTML overlays"));
+        var templates = getOverlayTemplates();
+        if (templates.Count == 0)
+        {
+            ImGui.TextDisabled(text.Get(
+                "OverlayPlugin 尚未运行；启动或重启解析器后可选择模板。",
+                "OverlayPlugin is not running; start or restart the parser to select a template."));
+        }
+        else
+        {
+            if (!templates.Any(template =>
+                    string.Equals(
+                        template.Name,
+                        configuration.SelectedOverlayTemplate,
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                configuration.SelectedOverlayTemplate = templates[0].Name;
+                changed = true;
+            }
+
+            if (ImGui.BeginCombo(
+                    text.Get("悬浮窗模板", "Overlay template"),
+                    configuration.SelectedOverlayTemplate))
+            {
+                foreach (var template in templates)
+                {
+                    var selected = string.Equals(
+                        template.Name,
+                        configuration.SelectedOverlayTemplate,
+                        StringComparison.OrdinalIgnoreCase);
+                    if (ImGui.Selectable(template.Name, selected))
+                    {
+                        configuration.SelectedOverlayTemplate = template.Name;
+                        changed = true;
+                    }
+                }
+
+                ImGui.EndCombo();
+            }
+
+            if (ImGui.Button(text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
+            {
+                openHtmlOverlay(configuration.SelectedOverlayTemplate);
+            }
+        }
+
         ImGui.TextUnformatted(text.Get("可选 ACT 扩展（与 Cactbot 本体分开）", "Optional ACT extensions (separate from Cactbot)"));
         DrawCompatibilityTarget("CactbotSelf / MoreLogLine", text.Get("国服额外日志扩展；实验性兼容。", "CN extra-log extension; experimental compatibility."), "https://github.com/tssailzz8/cacbotSelf");
-        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；安装/基础加载，游戏写入联动需实测。", "Install/basic load; game-write integration requires testing."), "https://github.com/Natsukage/PostNamazu");
+        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；使用 Dalamud 同进程原生写入桥，保留 Triggernometry/HTTP/OverlayPlugin 入口。", "Uses the Dalamud in-process native write bridge while preserving Triggernometry, HTTP, and OverlayPlugin entry points."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
         DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML；日志/战斗生命周期/TTS API 已接入。", "DLL and translation XML supported; log/combat/TTS APIs wired."), "https://github.com/MnFeN/Triggernometry");
 

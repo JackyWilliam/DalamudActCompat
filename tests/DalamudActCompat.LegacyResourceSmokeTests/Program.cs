@@ -15,6 +15,13 @@ if (!File.Exists(assemblyPath))
 }
 
 LegacyResourceCompatibility.EnsureLegacyResourceDecoderAvailable();
+var overlayTemplates = SelfHostedActRuntime.ProbeOverlayTemplates();
+if (!overlayTemplates.Any(template => template.Name == "Kagerou") ||
+    !overlayTemplates.Any(template => template.Name.Contains("Cactbot DPS", StringComparison.Ordinal)))
+{
+    throw new InvalidOperationException(
+        "OverlayPlugin built-in HTML templates were not exposed by the runtime.");
+}
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
 AssemblyLoadContext.Default.Resolving += ResolveDependency;
@@ -71,14 +78,47 @@ try
         var postNamazu = LegacyResourceCompatibility.LoadPostNamazuWithClipboardCompatibility(
             postNamazuPath,
             AssemblyLoadContext.Default);
-        _ = postNamazu.GetType("PostNamazu.PostNamazu", throwOnError: true);
+        var postNamazuType = postNamazu.GetType("PostNamazu.PostNamazu", throwOnError: true)!;
+        AssertCallsNativeBridge(
+            postNamazuType.GetMethod("Attach", BindingFlags.Instance | BindingFlags.NonPublic)!,
+            nameof(NativePostNamazuBridge.Attach));
+        AssertCallsNativeBridge(
+            postNamazu.GetType("PostNamazu.Actions.Command", throwOnError: true)!
+                .GetMethod("DoTextCommand", BindingFlags.Instance | BindingFlags.Public)!,
+            nameof(NativePostNamazuBridge.SendCommand));
     }
 
-    Console.WriteLine("Safe NRBF conversion and Triggernometry embedded-resource probes passed.");
+    Console.WriteLine(
+        "Safe NRBF conversion, Triggernometry resources, and PostNamazu native bridge probes passed.");
 }
 finally
 {
     AssemblyLoadContext.Default.Resolving -= ResolveDependency;
+}
+
+static void AssertCallsNativeBridge(MethodInfo method, string expectedMethod)
+{
+    var il = method.GetMethodBody()?.GetILAsByteArray()
+        ?? throw new InvalidOperationException($"{method} has no IL body.");
+    for (var index = 0; index <= il.Length - 5; index++)
+    {
+        if (il[index] != 0x28)
+        {
+            continue;
+        }
+
+        var token = BitConverter.ToInt32(il, index + 1);
+        if (method.Module.ResolveMethod(token) is MethodInfo called &&
+            called.DeclaringType == typeof(NativePostNamazuBridge) &&
+            called.Name == expectedMethod)
+        {
+            return;
+        }
+    }
+
+    throw new InvalidOperationException(
+        $"{method.DeclaringType?.FullName}.{method.Name} was not redirected to " +
+        $"{nameof(NativePostNamazuBridge)}.{expectedMethod}.");
 }
 
 Assembly? ResolveDependency(AssemblyLoadContext context, AssemblyName name)

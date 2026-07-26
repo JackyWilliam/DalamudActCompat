@@ -8,7 +8,10 @@ using Advanced_Combat_Tracker;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
+using DalamudActCompat.Core.Models;
+using DalamudActCompat.Core.State;
 using DalamudActCompat.Infrastructure.Storage;
+using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using Machina.FFXIV;
 using Machina.FFXIV.Headers.Opcodes;
@@ -22,6 +25,7 @@ try
     ValidateActPluginDataCompatibility();
     ValidatePlayerIdentityResolution();
     ValidateChinese751bOpcodes();
+    ValidateMeterRows();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -132,6 +136,46 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateMeterRows()
+{
+    var start = DateTimeOffset.UtcNow.AddSeconds(-10);
+    var encounter = new Encounter(
+        Guid.NewGuid(),
+        start,
+        start.AddSeconds(10),
+        "Test Zone",
+        "Test Enemy",
+        [
+            new Combatant("tank", "Tank@Alpha", "PLD", true, 100_000, 10_000, 1, 11_000, 10_000, 10_000),
+            new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 0, 2_500, 2_000, 2_000),
+        ],
+        [],
+        [],
+        [],
+        [],
+        []);
+    var state = new EncounterStateStore();
+    state.Replace(encounter, []);
+    var settings = new MeterSettings
+    {
+        RefreshIntervalMs = 250,
+        DpsMetric = DpsMetric.EncDps,
+        SortMode = MeterSortMode.Dps,
+    };
+    var meter = new MeterService(state, settings);
+    var rows = meter.GetRows();
+    Assert(rows[0].Name == "Tank@Alpha", "DPS sorting did not preserve the player server name.");
+    Assert(rows[0].Job == "PLD", "The resolved player job was not preserved.");
+    Assert(rows[0].Deaths == 1, "The resolved player death count was not preserved.");
+    Assert(rows[0].Dps == 10_000, "EncDPS did not use the ACT encounter-duration field.");
+
+    settings.SortMode = MeterSortMode.Hps;
+    Thread.Sleep(settings.RefreshIntervalMs + 20);
+    rows = meter.GetRows();
+    Assert(rows[0].Name == "Healer@Beta", "HPS sorting did not promote the highest-healing player.");
+    Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
 }
 
 static void ValidateChinese751bOpcodes()

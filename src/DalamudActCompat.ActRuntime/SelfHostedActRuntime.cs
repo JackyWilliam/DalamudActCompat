@@ -2,7 +2,10 @@ using Advanced_Combat_Tracker;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using System.Drawing;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
@@ -24,8 +27,13 @@ public sealed class SelfHostedActRuntime : IDisposable
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
-    private CactbotOverlayForm? cactbotOverlay;
-    private CactbotOverlayForm? cactbotSettings;
+    private HtmlOverlayForm? cactbotOverlay;
+    private HtmlOverlayForm? cactbotSettings;
+    private readonly Dictionary<string, HtmlOverlayForm> htmlOverlays =
+        new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<ActOverlayTemplate> overlayTemplates = [];
+    private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
+    private string? overlayWebSocketUri;
     private HttpClient? httpClient;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
@@ -65,6 +73,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.gameInteropProvider = gameInteropProvider;
         this.notificationManager = notificationManager;
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
+        NativePostNamazuBridge.Configure(framework, log);
     }
 
     public bool IsParserRunning => parser is not null;
@@ -90,6 +99,40 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         cactbotSettings.Show();
+        return true;
+    }
+
+    public IReadOnlyList<ActOverlayTemplate> OverlayTemplates => overlayTemplates;
+
+    public bool ShowHtmlOverlay(string name)
+    {
+        var template = overlayTemplates.FirstOrDefault(
+            candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (template is null || overlayWebSocketUri is null)
+        {
+            return false;
+        }
+
+        if (!htmlOverlays.TryGetValue(template.Name, out var window))
+        {
+            var source = overlayTemplateSources.First(
+                candidate => string.Equals(candidate.Name, template.Name, StringComparison.OrdinalIgnoreCase));
+            var pageUri = BuildTemplateUri(source, new Uri(overlayWebSocketUri));
+
+            window = new HtmlOverlayForm(
+                pageUri,
+                Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2", SanitizePath(template.Name)),
+                Path.Combine(
+                    pluginInterface.AssemblyLocation.Directory!.FullName,
+                    "WebView2Loader.dll"),
+                template.Name,
+                true,
+                new Size(template.Width, template.Height),
+                log);
+            htmlOverlays.Add(template.Name, window);
+        }
+
+        window.Show();
         return true;
     }
 
@@ -206,6 +249,31 @@ public sealed class SelfHostedActRuntime : IDisposable
             ActGlobals.oFormActMain.OverlayPluginContainer = container;
             overlay.InitPlugin(pluginInterface.ConfigDirectory.FullName);
             var server = container.Resolve<RainbowMage.OverlayPlugin.WebSocket.ServerController>();
+            if (!server.Running)
+            {
+                server.Start();
+            }
+
+            if (!server.Running)
+            {
+                throw new InvalidOperationException(
+                    "OverlayPlugin WebSocket server could not be started.",
+                    server.LastException);
+            }
+
+            var webSocketUri = server.GetModernUrl("http://localhost/")
+                .Split("OVERLAY_WS=", 2)[1];
+            overlayWebSocketUri = webSocketUri;
+            overlayTemplateSources = LoadOverlayTemplateConfig().Overlays;
+            overlayTemplates = overlayTemplateSources
+                .Where(template => !template.Features.Contains("system"))
+                .Select(template => new ActOverlayTemplate(
+                    template.Name,
+                    template.Uri,
+                    template.SuggestedWidth ?? 900,
+                    template.SuggestedHeight ?? 500))
+                .ToArray();
+
             var raidbossHtml = Path.Combine(
                 pluginInterface.ConfigDirectory.FullName,
                 "cactbot",
@@ -214,29 +282,15 @@ public sealed class SelfHostedActRuntime : IDisposable
                 "raidboss.html");
             if (File.Exists(raidbossHtml))
             {
-                if (!server.Running)
-                {
-                    server.Start();
-                }
-
-                if (!server.Running)
-                {
-                    throw new InvalidOperationException(
-                        "OverlayPlugin WebSocket server could not be started.",
-                        server.LastException);
-                }
-
-                var webSocketUri = server.GetModernUrl("http://localhost/")
-                    .Split("OVERLAY_WS=", 2)[1];
-                cactbotOverlay = new CactbotOverlayForm(
-                    raidbossHtml,
-                    webSocketUri,
+                cactbotOverlay = new HtmlOverlayForm(
+                    BuildOverlayUri(new Uri(raidbossHtml), "OVERLAY_WS", webSocketUri),
                     Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2"),
                     Path.Combine(
                         pluginInterface.AssemblyLocation.Directory!.FullName,
                         "WebView2Loader.dll"),
                     "Cactbot Raidboss",
                     true,
+                    new Size(900, 320),
                     log);
                 cactbotOverlay.Show();
 
@@ -248,27 +302,114 @@ public sealed class SelfHostedActRuntime : IDisposable
                     "config.html");
                 if (File.Exists(configHtml))
                 {
-                    cactbotSettings = new CactbotOverlayForm(
-                        configHtml,
-                        webSocketUri,
+                    cactbotSettings = new HtmlOverlayForm(
+                        BuildOverlayUri(new Uri(configHtml), "OVERLAY_WS", webSocketUri),
                         Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2"),
                         Path.Combine(
                             pluginInterface.AssemblyLocation.Directory!.FullName,
                             "WebView2Loader.dll"),
                         "Cactbot Settings",
                         false,
+                        new Size(1100, 760),
                         log);
                 }
             }
         }
         catch
         {
+            cactbotOverlay?.Dispose();
+            cactbotOverlay = null;
+            cactbotSettings?.Dispose();
+            cactbotSettings = null;
+            foreach (var window in htmlOverlays.Values)
+            {
+                window.Dispose();
+            }
+            htmlOverlays.Clear();
+            overlayWebSocketUri = null;
+            overlayTemplates = [];
+            overlayTemplateSources = [];
+            try
+            {
+                overlay?.DeInitPlugin();
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "Failed to roll back OverlayPlugin after startup failure.");
+            }
             overlay = null;
             httpClient.Dispose();
             httpClient = null;
             throw;
         }
     }
+
+    private static OverlayTemplateDocument LoadOverlayTemplateConfig()
+    {
+        var assembly = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .Single(name => name.EndsWith("overlays.json", StringComparison.OrdinalIgnoreCase));
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("OverlayPlugin template resource could not be opened.");
+        using var reader = new StreamReader(stream);
+        return JsonSerializer.Deserialize<OverlayTemplateDocument>(
+                   reader.ReadToEnd(),
+                   new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+               ?? throw new InvalidDataException("OverlayPlugin template resource is invalid.");
+    }
+
+    internal static IReadOnlyList<ActOverlayTemplate> ProbeOverlayTemplates()
+    {
+        var sources = LoadOverlayTemplateConfig().Overlays;
+        var webSocket = new Uri("ws://127.0.0.1:10501/ws");
+        foreach (var source in sources)
+        {
+            _ = BuildTemplateUri(source, webSocket);
+        }
+
+        return sources
+            .Where(template => !template.Features.Contains("system"))
+            .Select(template => new ActOverlayTemplate(
+                template.Name,
+                template.Uri,
+                template.SuggestedWidth ?? 900,
+                template.SuggestedHeight ?? 500))
+            .ToArray();
+    }
+
+    private static Uri BuildTemplateUri(OverlayTemplateSource template, Uri webSocketUri)
+    {
+        var pageUri = new Uri(
+            webSocketUri.Scheme == "ws" && !string.IsNullOrWhiteSpace(template.PlaintextUri)
+                ? template.PlaintextUri
+                : template.Uri);
+        if (template.Features.Contains("overlay_ws"))
+        {
+            return BuildOverlayUri(pageUri, "OVERLAY_WS", webSocketUri.ToString());
+        }
+
+        if (template.Features.Contains("host_port"))
+        {
+            return BuildOverlayUri(
+                pageUri,
+                "HOST_PORT",
+                webSocketUri.GetComponents(UriComponents.SchemeAndServer, UriFormat.SafeUnescaped));
+        }
+
+        return pageUri;
+    }
+
+    private static Uri BuildOverlayUri(Uri pageUri, string parameter, string value)
+    {
+        // OverlayPlugin templates historically consume raw OVERLAY_WS/HOST_PORT
+        // values before URLSearchParams decoding, so preserve the unescaped value.
+        var separator = string.IsNullOrEmpty(pageUri.Query) ? "?" : "&";
+        return new Uri($"{pageUri.AbsoluteUri}{separator}{parameter}={value}");
+    }
+
+    private static string SanitizePath(string value)
+        => string.Concat(value.Select(character =>
+            Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
 
     public IReadOnlyList<(string Id, Exception Error)> LoadCustomPlugins(
         IEnumerable<RuntimePluginSpec> plugins)
@@ -326,11 +467,30 @@ public sealed class SelfHostedActRuntime : IDisposable
         cactbotOverlay = null;
         cactbotSettings?.Dispose();
         cactbotSettings = null;
+        foreach (var window in htmlOverlays.Values)
+        {
+            window.Dispose();
+        }
+        htmlOverlays.Clear();
+        overlayTemplates = [];
+        overlayTemplateSources = [];
+        overlayWebSocketUri = null;
         overlay?.DeInitPlugin();
         overlay = null;
         httpClient?.Dispose();
         httpClient = null;
     }
+
+    private sealed record OverlayTemplateDocument(
+        [property: JsonPropertyName("overlays")] IReadOnlyList<OverlayTemplateSource> Overlays);
+
+    private sealed record OverlayTemplateSource(
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("uri")] string Uri,
+        [property: JsonPropertyName("plaintext_uri")] string? PlaintextUri,
+        [property: JsonPropertyName("suggested_width")] int? SuggestedWidth,
+        [property: JsonPropertyName("suggested_height")] int? SuggestedHeight,
+        [property: JsonPropertyName("features")] IReadOnlyList<string> Features);
 
     public void StopParser()
     {

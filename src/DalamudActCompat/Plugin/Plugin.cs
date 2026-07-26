@@ -143,6 +143,8 @@ public sealed class Plugin : IDalamudPlugin
             SelectCactbotPackage,
             OpenCactbotOverlay,
             OpenCactbotSettings,
+            () => actRuntime.OverlayTemplates,
+            OpenHtmlOverlay,
             OpenActPluginConfiguration);
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
@@ -156,7 +158,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open ACT Compat UI. Args: meter, cactbot, history, status, settings, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open ACT Compat UI. Args: meter, cactbot, overlay [template], history, status, settings, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -218,6 +220,11 @@ public sealed class Plugin : IDalamudPlugin
                     logger.Warning(
                         "Cactbot overlay is not running. Install Cactbot, enable OverlayPlugin, and restart the parser.");
                 }
+                break;
+            case "overlay":
+                OpenHtmlOverlay(string.IsNullOrWhiteSpace(remainder)
+                    ? configuration.SelectedOverlayTemplate
+                    : remainder);
                 break;
             case "sample":
                 LoadSampleEncounter();
@@ -423,6 +430,19 @@ public sealed class Plugin : IDalamudPlugin
             logger.Warning(
                 "Cactbot settings are not available. Install Cactbot, enable OverlayPlugin, and restart the parser.");
         }
+    }
+
+    private void OpenHtmlOverlay(string name)
+    {
+        if (actRuntime.ShowHtmlOverlay(name))
+        {
+            configuration.SelectedOverlayTemplate = name;
+            SaveConfiguration();
+            return;
+        }
+
+        logger.Warning(
+            $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
     }
 
     private void ChoosePluginDirectory(Action continueWith)
