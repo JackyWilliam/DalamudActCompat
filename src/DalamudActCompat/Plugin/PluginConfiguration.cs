@@ -22,6 +22,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string UiLanguage { get; set; } = "zh-CN";
 
+    public string SelectedOverlayTemplate { get; set; } = "Kagerou";
+
     public MeterSettings Meter { get; set; } = new();
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
@@ -37,6 +39,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
+        SelectedOverlayTemplate = "Kagerou";
         Meter = new MeterSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

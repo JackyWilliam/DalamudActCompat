@@ -160,6 +160,8 @@ public static class LegacyResourceCompatibility
             }
         }
 
+        patchedCalls += PatchPostNamazuNativeBridge(definition);
+
         if (patchedCalls == 0)
         {
             throw new InvalidOperationException(
@@ -170,6 +172,139 @@ public static class LegacyResourceCompatibility
         definition.Write(output);
         output.Position = 0;
         return loadContext.LoadFromStream(output);
+    }
+
+    private static int PatchPostNamazuNativeBridge(AssemblyDefinition definition)
+    {
+        var module = definition.MainModule;
+        var bridgeType = typeof(NativePostNamazuBridge);
+        var attachBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.Attach))!);
+        var sendCommandBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.SendCommand))!);
+        var callBridge = module.ImportReference(bridgeType.GetMethods()
+            .Single(method => method.Name == nameof(NativePostNamazuBridge.Call) && !method.IsGenericMethod));
+        var genericCallBridge = module.ImportReference(bridgeType.GetMethods()
+            .Single(method => method.Name == nameof(NativePostNamazuBridge.Call) && method.IsGenericMethod));
+        var executeBridge = module.ImportReference(bridgeType.GetMethods()
+            .Single(method => method.Name == nameof(NativePostNamazuBridge.Execute) && !method.IsGenericMethod));
+        var genericExecuteBridge = module.ImportReference(bridgeType.GetMethods()
+            .Single(method => method.Name == nameof(NativePostNamazuBridge.Execute) && method.IsGenericMethod));
+        var readBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.Read))!);
+        var writeBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.Write))!);
+        var writeBytesBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.WriteBytes))!);
+        var patched = 0;
+
+        foreach (var type in module.Types.SelectMany(EnumerateTypes))
+        {
+            foreach (var method in type.Methods.Where(method => method.HasBody))
+            {
+                if (type.FullName == "PostNamazu.PostNamazu" && method.Name == "Attach")
+                {
+                    ReplaceBody(method, attachBridge, loadInstance: true);
+                    patched++;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.Command" &&
+                    method.Name == "DoTextCommand" &&
+                    method.Parameters.Count == 1)
+                {
+                    ReplaceBody(method, sendCommandBridge, loadInstance: false);
+                    patched++;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.PostNamazu" &&
+                    method.Name is "Call" or "DirectCall" or "ExecuteInFrameLock")
+                {
+                    var bridge = method.Name == "ExecuteInFrameLock"
+                        ? method.HasGenericParameters
+                            ? MakeGenericMethod(genericExecuteBridge, method.GenericParameters)
+                            : executeBridge
+                        : method.HasGenericParameters
+                            ? MakeGenericMethod(genericCallBridge, method.GenericParameters)
+                            : callBridge;
+                    ReplaceBody(method, bridge, loadInstance: false);
+                    patched++;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.NamazuModule" &&
+                    method.Name == "ExecuteWithLock")
+                {
+                    var bridge = method.HasGenericParameters
+                        ? MakeGenericMethod(genericExecuteBridge, method.GenericParameters)
+                        : executeBridge;
+                    ReplaceBody(method, bridge, loadInstance: false);
+                    patched++;
+                    continue;
+                }
+
+                foreach (var instruction in method.Body.Instructions)
+                {
+                    if (instruction.Operand is not MethodReference called ||
+                        called.DeclaringType.FullName != "GreyMagic.ExternalProcessMemory")
+                    {
+                        continue;
+                    }
+
+                    MethodReference? replacement = called.Name switch
+                    {
+                        "Read" when called is GenericInstanceMethod generic =>
+                            MakeGenericMethod(readBridge, generic.GenericArguments),
+                        "Write" when called is GenericInstanceMethod generic =>
+                            MakeGenericMethod(writeBridge, generic.GenericArguments),
+                        "WriteBytes" => writeBytesBridge,
+                        _ => null,
+                    };
+                    if (replacement is null)
+                    {
+                        continue;
+                    }
+
+                    instruction.OpCode = OpCodes.Call;
+                    instruction.Operand = replacement;
+                    patched++;
+                }
+            }
+        }
+
+        return patched;
+    }
+
+    private static GenericInstanceMethod MakeGenericMethod(
+        MethodReference method,
+        IEnumerable<TypeReference> arguments)
+    {
+        var instance = new GenericInstanceMethod(method);
+        foreach (var argument in arguments)
+        {
+            instance.GenericArguments.Add(argument);
+        }
+
+        return instance;
+    }
+
+    private static void ReplaceBody(
+        MethodDefinition method,
+        MethodReference bridge,
+        bool loadInstance)
+    {
+        method.Body = new Mono.Cecil.Cil.MethodBody(method);
+        var processor = method.Body.GetILProcessor();
+        if (loadInstance)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg_0));
+        }
+        else
+        {
+            foreach (var parameter in method.Parameters)
+            {
+                processor.Append(processor.Create(OpCodes.Ldarg, parameter));
+            }
+        }
+
+        processor.Append(processor.Create(OpCodes.Call, bridge));
+        processor.Append(processor.Create(OpCodes.Ret));
     }
 
     public static void SetClipboardText(string text)

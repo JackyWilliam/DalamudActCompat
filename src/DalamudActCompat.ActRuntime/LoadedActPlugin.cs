@@ -165,7 +165,8 @@ internal sealed class LoadedActPlugin : IDisposable
                         StringComparison.OrdinalIgnoreCase))
                 {
                     StopLegacyPostNamazuProcessMonitor(instance);
-                    statusLabel.Text = "Loaded; GreyMagic process injection is unavailable on modern .NET.";
+                    NativePostNamazuBridge.Start(instance);
+                    statusLabel.Text = "Loaded; native Dalamud game-write bridge active.";
                 }
 
                 configurationForm.Text = string.IsNullOrWhiteSpace(tabPage.Text) ? spec.Id : tabPage.Text;

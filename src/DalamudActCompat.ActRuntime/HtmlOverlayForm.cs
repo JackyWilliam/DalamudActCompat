@@ -7,7 +7,7 @@ using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
 
-internal sealed class CactbotOverlayForm : IDisposable
+internal sealed class HtmlOverlayForm : IDisposable
 {
     private const int GwlExStyle = -20;
     private const nint WsExTransparent = 0x00000020;
@@ -15,8 +15,7 @@ internal sealed class CactbotOverlayForm : IDisposable
     private const nint WsExNoActivate = 0x08000000;
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
 
-    private readonly string htmlPath;
-    private readonly string webSocketUri;
+    private readonly Uri pageUri;
     private readonly string userDataDirectory;
     private readonly string loaderPath;
     private readonly string title;
@@ -27,24 +26,27 @@ internal sealed class CactbotOverlayForm : IDisposable
     private Form? form;
     private WebView2? webView;
     private bool disposing;
+    private Exception? startupFailure;
 
-    public CactbotOverlayForm(
-        string htmlPath,
-        string webSocketUri,
+    public HtmlOverlayForm(
+        Uri pageUri,
         string userDataDirectory,
         string loaderPath,
         string title,
         bool overlayMode,
+        Size clientSize,
         IPluginLog log)
     {
-        this.htmlPath = htmlPath;
-        this.webSocketUri = webSocketUri;
+        this.pageUri = pageUri;
         this.userDataDirectory = userDataDirectory;
         this.loaderPath = loaderPath;
         this.title = title;
         this.overlayMode = overlayMode;
+        ClientSize = clientSize;
         this.log = log;
     }
+
+    private Size ClientSize { get; }
 
     public void Show()
     {
@@ -53,12 +55,25 @@ internal sealed class CactbotOverlayForm : IDisposable
             uiThread = new Thread(Run)
             {
                 IsBackground = true,
-                Name = "DalamudActCompat Cactbot Overlay",
+                Name = $"DalamudActCompat HTML Overlay: {title}",
             };
             uiThread.SetApartmentState(ApartmentState.STA);
             uiThread.Start();
-            ready.Wait(TimeSpan.FromSeconds(10));
+            if (!ready.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException($"{title} did not create its UI thread within 10 seconds.");
+            }
+
+            if (startupFailure is not null)
+            {
+                throw new InvalidOperationException($"{title} could not be created.", startupFailure);
+            }
             return;
+        }
+
+        if (form is null)
+        {
+            throw new InvalidOperationException($"{title} is no longer available.");
         }
 
         form?.BeginInvoke(() =>
@@ -79,7 +94,7 @@ internal sealed class CactbotOverlayForm : IDisposable
             form = new Form
             {
                 Text = title,
-                ClientSize = overlayMode ? new Size(900, 320) : new Size(1100, 760),
+                ClientSize = ClientSize,
                 StartPosition = FormStartPosition.CenterScreen,
                 TopMost = overlayMode,
                 BackColor = overlayMode ? TransparencyColor : SystemColors.Window,
@@ -109,8 +124,9 @@ internal sealed class CactbotOverlayForm : IDisposable
         }
         catch (Exception ex)
         {
+            startupFailure = ex;
             ready.Set();
-            log.Error(ex, "Cactbot overlay window failed.");
+            log.Error(ex, $"HTML overlay window failed: {title}.");
         }
         finally
         {
@@ -160,25 +176,18 @@ internal sealed class CactbotOverlayForm : IDisposable
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreDevToolsEnabled = true;
             core.Settings.IsStatusBarEnabled = false;
-            webView.Source = BuildUri();
+            webView.Source = pageUri;
             log.Information($"Opened {title}: {webView.Source}");
         }
         catch (Exception ex)
         {
-            log.Error(ex, "Cactbot WebView2 initialization failed. Ensure the WebView2 Runtime is installed.");
+            log.Error(ex, $"HTML overlay WebView2 initialization failed for {title}. Ensure the WebView2 Runtime is installed.");
             MessageBox.Show(
-                "Cactbot 浏览器初始化失败。请确认 Microsoft Edge WebView2 Runtime 已安装，并查看 Dalamud 日志。",
+                $"{title} 浏览器初始化失败。请确认 Microsoft Edge WebView2 Runtime 已安装，并查看 Dalamud 日志。",
                 "Dalamud ACT Compat",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
-    }
-
-    private Uri BuildUri()
-    {
-        // OverlayPlugin explicitly recommends leaving OVERLAY_WS unescaped because
-        // a number of overlays parse the URI before URLSearchParams decoding.
-        return new Uri($"{new Uri(htmlPath).AbsoluteUri}?OVERLAY_WS={webSocketUri}");
     }
 
     private void OnNavigationCompleted(
@@ -187,17 +196,17 @@ internal sealed class CactbotOverlayForm : IDisposable
     {
         if (args.IsSuccess)
         {
-            log.Information($"Cactbot navigation completed: {webView?.Source}");
+            log.Information($"HTML overlay navigation completed: {webView?.Source}");
             return;
         }
 
         log.Error(
-            $"Cactbot navigation failed: {args.WebErrorStatus}; URI: {webView?.Source}");
+            $"HTML overlay navigation failed: {args.WebErrorStatus}; URI: {webView?.Source}");
     }
 
     private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args)
     {
-        log.Error($"Cactbot browser process failed: {args.ProcessFailedKind}; {args.Reason}");
+        log.Error($"HTML overlay browser process failed: {args.ProcessFailedKind}; {args.Reason}");
     }
 
     private static void EnableMouseClickThrough(nint windowHandle)
