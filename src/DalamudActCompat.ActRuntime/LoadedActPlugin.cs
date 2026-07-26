@@ -60,9 +60,7 @@ internal sealed class LoadedActPlugin : IDisposable
     {
         if (string.Equals(spec.Id, "triggernometry", StringComparison.OrdinalIgnoreCase))
         {
-            AppContext.SetSwitch(
-                "System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization",
-                true);
+            LegacyResourceCompatibility.EnsureBinaryFormatterAvailable();
         }
 
         var assemblyPath = Path.GetFullPath(Path.Combine(spec.InstallDirectory, spec.EntryAssembly));
@@ -101,6 +99,11 @@ internal sealed class LoadedActPlugin : IDisposable
                 };
                 loadContext.Resolving += resolvingHandler;
                 var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+                if (string.Equals(spec.Id, "triggernometry", StringComparison.OrdinalIgnoreCase))
+                {
+                    LegacyResourceCompatibility.ProbeEmbeddedResources(assembly, loadContext);
+                }
+
                 var entryType = assembly.GetType(spec.EntryType, throwOnError: true)!;
                 instance = Activator.CreateInstance(entryType)
                            ?? throw new InvalidOperationException($"Could not create plugin type {spec.EntryType}.");

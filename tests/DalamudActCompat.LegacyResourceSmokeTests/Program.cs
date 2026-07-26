@@ -1,0 +1,59 @@
+using System.Reflection;
+using System.Runtime.Loader;
+using DalamudActCompat.ActRuntime;
+
+if (args.Length != 1)
+{
+    throw new ArgumentException("Pass the path to an installed Triggernometry.dll.");
+}
+
+var assemblyPath = Path.GetFullPath(args[0]);
+if (!File.Exists(assemblyPath))
+{
+    throw new FileNotFoundException("Triggernometry assembly was not found.", assemblyPath);
+}
+
+LegacyResourceCompatibility.EnsureBinaryFormatterAvailable();
+
+var resolver = new AssemblyDependencyResolver(assemblyPath);
+AssemblyLoadContext.Default.Resolving += ResolveDependency;
+try
+{
+    var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+    LegacyResourceCompatibility.ProbeEmbeddedResources(
+        assembly,
+        AssemblyLoadContext.Default);
+    var implementation = AppDomain.CurrentDomain.GetAssemblies()
+        .SingleOrDefault(candidate => string.Equals(
+            candidate.GetName().Name,
+            "TriggernometryPlugin",
+            StringComparison.OrdinalIgnoreCase));
+    if (implementation is null)
+    {
+        throw new InvalidOperationException(
+            "The patched TriggernometryPlugin implementation was not preloaded.");
+    }
+
+    if (implementation.GetManifestResourceNames()
+        .Count(name => name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase)) < 10)
+    {
+        throw new InvalidOperationException(
+            "The patched Triggernometry implementation is missing expected UI resources.");
+    }
+
+    var proxyType = assembly.GetType("TriggernometryProxy.ProxyPlugin", throwOnError: true)!;
+    _ = Activator.CreateInstance(proxyType)
+        ?? throw new InvalidOperationException("Triggernometry proxy could not be constructed.");
+
+    Console.WriteLine("BinaryFormatter and Triggernometry embedded-resource probes passed.");
+}
+finally
+{
+    AssemblyLoadContext.Default.Resolving -= ResolveDependency;
+}
+
+Assembly? ResolveDependency(AssemblyLoadContext context, AssemblyName name)
+{
+    var dependencyPath = resolver.ResolveAssemblyToPath(name);
+    return dependencyPath is null ? null : context.LoadFromAssemblyPath(dependencyPath);
+}

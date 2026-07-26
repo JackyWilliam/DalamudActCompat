@@ -108,6 +108,7 @@ try
     ValidateFfxivModuleInitializer();
     ValidateFfxivPluginConstructor();
     ValidateFfxivRuntimeAssemblies();
+    ValidateLegacyResourceRuntimeDependencies();
     ValidateActEncounterMapping();
     ValidateChineseCombatChatParsing();
 
@@ -120,6 +121,35 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateLegacyResourceRuntimeDependencies()
+{
+    var releaseDirectory = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    var formatterPath = Path.Combine(
+        releaseDirectory,
+        "System.Runtime.Serialization.Formatters.dll");
+    Assert(
+        File.Exists(formatterPath),
+        "BinaryFormatter compatibility implementation was not copied to the plugin output.");
+
+    var packagePath = Path.Combine(
+        releaseDirectory,
+        "DalamudActCompat",
+        "latest.zip");
+    Assert(File.Exists(packagePath), $"Dalamud release package was not found at {packagePath}.");
+    using var archive = ZipFile.OpenRead(packagePath);
+    Assert(
+        archive.Entries.Any(entry => string.Equals(
+            entry.Name,
+            "System.Runtime.Serialization.Formatters.dll",
+            StringComparison.OrdinalIgnoreCase)),
+        "BinaryFormatter compatibility implementation is missing from the Dalamud release package.");
 }
 
 static void ValidateFfxivModuleInitializer()
