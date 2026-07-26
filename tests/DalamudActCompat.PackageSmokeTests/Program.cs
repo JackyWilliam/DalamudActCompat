@@ -18,6 +18,7 @@ try
 {
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
+    ValidatePlayerIdentityResolution();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -128,6 +129,29 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidatePlayerIdentityResolution()
+{
+    ActPlayerIdentity[] identities =
+    [
+        new("Same Name", "Alpha", "PLD", true, false),
+        new("Same Name", "Beta", "WHM", false, false),
+        new("Unique Name", "Gamma", "DRG", false, true),
+    ];
+
+    Assert(
+        ActPlayerIdentityResolver.Resolve(identities, "Same Name@Beta")?.Job == "WHM",
+        "Cross-world player identity did not resolve by UserName@ServerName.");
+    Assert(
+        ActPlayerIdentityResolver.Resolve(identities, "Same Name") is null,
+        "Ambiguous cross-world player name should not be guessed.");
+    Assert(
+        ActPlayerIdentityResolver.Resolve(identities, "Unique Name")?.DisplayName == "Unique Name@Gamma",
+        "Unique player name did not resolve to its world-qualified display name.");
+    Assert(
+        ActPlayerIdentityResolver.Resolve(identities, "Summon") is null,
+        "Unknown pets or NPCs must not resolve as players.");
 }
 
 static void ValidateSettingsSerializerMemberTypes()

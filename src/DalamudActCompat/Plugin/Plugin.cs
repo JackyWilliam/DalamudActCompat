@@ -92,7 +92,10 @@ public sealed class Plugin : IDalamudPlugin
             log,
             dataManager,
             () => playerState.CharacterName,
-            () => playerState.ClassJob.RowId,
+            () => BuildPlayerIdentities(
+                playerState,
+                partyList,
+                condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]),
             chatGui,
             framework,
             condition,
@@ -441,4 +444,41 @@ public sealed class Plugin : IDalamudPlugin
                 plugin.Manifest.EntryAssembly,
                 plugin.Manifest.EntryType))
             .ToArray();
+
+    private static IReadOnlyList<ActPlayerIdentity> BuildPlayerIdentities(
+        IPlayerState playerState,
+        IPartyList partyList,
+        bool localPlayerDead)
+    {
+        var identities = new Dictionary<string, ActPlayerIdentity>(StringComparer.OrdinalIgnoreCase);
+        if (playerState.IsLoaded && !string.IsNullOrWhiteSpace(playerState.CharacterName))
+        {
+            var identity = new ActPlayerIdentity(
+                playerState.CharacterName,
+                playerState.HomeWorld.ValueNullable?.Name.ToString() ?? string.Empty,
+                playerState.ClassJob.ValueNullable?.Abbreviation.ToString() ?? string.Empty,
+                true,
+                localPlayerDead);
+            identities[identity.DisplayName] = identity;
+        }
+
+        foreach (var member in partyList)
+        {
+            var name = member.Name.TextValue;
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            var identity = new ActPlayerIdentity(
+                name,
+                member.World.ValueNullable?.Name.ToString() ?? string.Empty,
+                member.ClassJob.ValueNullable?.Abbreviation.ToString() ?? string.Empty,
+                string.Equals(name, playerState.CharacterName, StringComparison.OrdinalIgnoreCase),
+                member.MaxHP > 0 && member.CurrentHP == 0);
+            identities[identity.DisplayName] = identity;
+        }
+
+        return identities.Values.ToArray();
+    }
 }
