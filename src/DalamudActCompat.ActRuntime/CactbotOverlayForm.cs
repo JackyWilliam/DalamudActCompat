@@ -11,10 +11,12 @@ internal sealed class CactbotOverlayForm : IDisposable
 {
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
 
-    private readonly string raidbossHtmlPath;
+    private readonly string htmlPath;
     private readonly string webSocketUri;
     private readonly string userDataDirectory;
     private readonly string loaderPath;
+    private readonly string title;
+    private readonly bool overlayMode;
     private readonly IPluginLog log;
     private readonly ManualResetEventSlim ready = new();
     private Thread? uiThread;
@@ -23,16 +25,20 @@ internal sealed class CactbotOverlayForm : IDisposable
     private bool disposing;
 
     public CactbotOverlayForm(
-        string raidbossHtmlPath,
+        string htmlPath,
         string webSocketUri,
         string userDataDirectory,
         string loaderPath,
+        string title,
+        bool overlayMode,
         IPluginLog log)
     {
-        this.raidbossHtmlPath = raidbossHtmlPath;
+        this.htmlPath = htmlPath;
         this.webSocketUri = webSocketUri;
         this.userDataDirectory = userDataDirectory;
         this.loaderPath = loaderPath;
+        this.title = title;
+        this.overlayMode = overlayMode;
         this.log = log;
     }
 
@@ -65,12 +71,14 @@ internal sealed class CactbotOverlayForm : IDisposable
         {
             form = new Form
             {
-                Text = "Cactbot Raidboss",
-                ClientSize = new Size(900, 320),
+                Text = title,
+                ClientSize = overlayMode ? new Size(900, 320) : new Size(1100, 760),
                 StartPosition = FormStartPosition.CenterScreen,
-                TopMost = true,
-                BackColor = TransparencyColor,
-                TransparencyKey = TransparencyColor,
+                TopMost = overlayMode,
+                BackColor = overlayMode ? TransparencyColor : SystemColors.Window,
+                TransparencyKey = overlayMode ? TransparencyColor : Color.Empty,
+                FormBorderStyle = overlayMode ? FormBorderStyle.None : FormBorderStyle.Sizable,
+                ShowInTaskbar = !overlayMode,
             };
             webView = new WebView2
             {
@@ -132,8 +140,8 @@ internal sealed class CactbotOverlayForm : IDisposable
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreDevToolsEnabled = true;
             core.Settings.IsStatusBarEnabled = false;
-            webView.Source = BuildRaidbossUri();
-            log.Information($"Opened Cactbot raidboss overlay: {webView.Source}");
+            webView.Source = BuildUri();
+            log.Information($"Opened {title}: {webView.Source}");
         }
         catch (Exception ex)
         {
@@ -146,9 +154,9 @@ internal sealed class CactbotOverlayForm : IDisposable
         }
     }
 
-    private Uri BuildRaidbossUri()
+    private Uri BuildUri()
     {
-        var builder = new UriBuilder(new Uri(raidbossHtmlPath))
+        var builder = new UriBuilder(new Uri(htmlPath))
         {
             Query = $"OVERLAY_WS={Uri.EscapeDataString(webSocketUri)}",
         };

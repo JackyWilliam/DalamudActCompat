@@ -142,6 +142,7 @@ public sealed class Plugin : IDalamudPlugin
             () => cactbotInstaller.IsInstalled,
             SelectCactbotPackage,
             OpenCactbotOverlay,
+            OpenCactbotSettings,
             OpenActPluginConfiguration);
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
@@ -412,6 +413,15 @@ public sealed class Plugin : IDalamudPlugin
         {
             logger.Warning(
                 "Cactbot overlay is not running. Install Cactbot, enable OverlayPlugin, and restart the parser.");
+        }
+    }
+
+    private void OpenCactbotSettings()
+    {
+        if (!actRuntime.ShowCactbotSettings())
+        {
+            logger.Warning(
+                "Cactbot settings are not available. Install Cactbot, enable OverlayPlugin, and restart the parser.");
         }
     }
 
