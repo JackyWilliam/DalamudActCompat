@@ -188,6 +188,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        OverlayEditShield.Draw(actRuntime.HasVisibleEditingOverlay);
         windowSystem.Draw();
         fileDialogManager.Draw();
     }

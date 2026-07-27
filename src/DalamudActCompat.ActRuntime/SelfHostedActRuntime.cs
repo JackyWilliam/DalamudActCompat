@@ -2,6 +2,7 @@ using Advanced_Combat_Tracker;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Reflection;
 using System.Text.Json;
@@ -35,7 +36,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
     private HtmlOverlayForm? cactbotOverlay;
     private HtmlOverlayForm? cactbotSettings;
-    private readonly Dictionary<string, HtmlOverlayForm> htmlOverlays =
+    private readonly ConcurrentDictionary<string, HtmlOverlayForm> htmlOverlays =
         new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<ActOverlayTemplate> overlayTemplates = [];
     private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
@@ -93,6 +94,10 @@ public sealed class SelfHostedActRuntime : IDisposable
     public bool IsParserRunning => parser is not null;
 
     public bool IsOverlayRunning => overlay is not null;
+
+    public bool HasVisibleEditingOverlay
+        => cactbotOverlay?.IsVisibleEditing == true ||
+           htmlOverlays.Values.Any(static window => window.IsVisibleEditing);
 
     public bool ShowCactbotOverlay()
     {
@@ -162,7 +167,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                 new Size(template.Width, template.Height),
                 debugMode(),
                 log);
-            htmlOverlays.Add(template.Name, window);
+            if (!htmlOverlays.TryAdd(template.Name, window))
+            {
+                window.Dispose();
+                window = htmlOverlays[template.Name];
+            }
         }
 
         window.Show();
