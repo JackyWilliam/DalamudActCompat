@@ -16,6 +16,7 @@ using Mono.Cecil.Cil;
 using System.Resources.Extensions;
 
 [assembly: InternalsVisibleTo("DalamudActCompat.LegacyResourceSmokeTests")]
+[assembly: InternalsVisibleTo("DalamudActCompat.PackageSmokeTests")]
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -191,6 +192,8 @@ public static class LegacyResourceCompatibility
         var readBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.Read))!);
         var writeBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.Write))!);
         var writeBytesBridge = module.ImportReference(bridgeType.GetMethod(nameof(NativePostNamazuBridge.WriteBytes))!);
+        var skipProcessMonitoringBridge = module.ImportReference(
+            bridgeType.GetMethod(nameof(NativePostNamazuBridge.SkipLegacyProcessMonitoring))!);
         var patched = 0;
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
@@ -200,6 +203,14 @@ public static class LegacyResourceCompatibility
                 if (type.FullName == "PostNamazu.PostNamazu" && method.Name == "Attach")
                 {
                     ReplaceBody(method, attachBridge, loadInstance: true);
+                    patched++;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Common.ProcessManager" &&
+                    method.Name == "StartProcessMonitoring")
+                {
+                    ReplaceBody(method, skipProcessMonitoringBridge, loadInstance: true);
                     patched++;
                     continue;
                 }

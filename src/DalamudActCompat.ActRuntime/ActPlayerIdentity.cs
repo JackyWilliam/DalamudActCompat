@@ -7,6 +7,32 @@ public sealed record ActPlayerIdentity(
     bool IsLocalPlayer,
     bool IsDead)
 {
+    public uint EntityId { get; init; }
+
+    public ulong ContentId { get; init; }
+
+    public uint WorldId { get; init; }
+
+    public byte JobId { get; init; }
+
+    public byte Level { get; init; }
+
+    public uint CurrentHp { get; init; }
+
+    public uint MaxHp { get; init; }
+
+    public ushort CurrentMp { get; init; }
+
+    public ushort MaxMp { get; init; }
+
+    public ushort TerritoryId { get; init; }
+
+    public float PositionX { get; init; }
+
+    public float PositionY { get; init; }
+
+    public float PositionZ { get; init; }
+
     public string DisplayName
         => string.IsNullOrWhiteSpace(World) ? Name : $"{Name}@{World}";
 }
@@ -17,6 +43,11 @@ public static class ActPlayerIdentityResolver
         IReadOnlyList<ActPlayerIdentity> identities,
         string combatantName)
     {
+        if (string.Equals(combatantName, "YOU", StringComparison.OrdinalIgnoreCase))
+        {
+            return identities.FirstOrDefault(static identity => identity.IsLocalPlayer);
+        }
+
         var exact = identities.FirstOrDefault(identity =>
             string.Equals(combatantName, identity.DisplayName, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(

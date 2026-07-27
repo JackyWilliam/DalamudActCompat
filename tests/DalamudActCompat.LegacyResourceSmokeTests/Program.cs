@@ -86,6 +86,10 @@ try
             postNamazu.GetType("PostNamazu.Actions.Command", throwOnError: true)!
                 .GetMethod("DoTextCommand", BindingFlags.Instance | BindingFlags.Public)!,
             nameof(NativePostNamazuBridge.SendCommand));
+        AssertCallsNativeBridge(
+            postNamazu.GetType("PostNamazu.Common.ProcessManager", throwOnError: true)!
+                .GetMethod("StartProcessMonitoring", BindingFlags.Instance | BindingFlags.Public)!,
+            nameof(NativePostNamazuBridge.SkipLegacyProcessMonitoring));
     }
 
     Console.WriteLine(

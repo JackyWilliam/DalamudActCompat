@@ -15,7 +15,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     env:
-      TARGET_REPO: raynording/DalamudActCompatRepo
+      TARGET_REPO: JackyWilliam/DalamudActCompatRepo
 
     steps:
       - name: Checkout source repository
