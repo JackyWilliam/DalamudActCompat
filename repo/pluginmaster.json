@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.2.27.0",
+    "AssemblyVersion":  "0.2.28.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.27/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.28/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.27/DalamudActCompat.zip",
-    "LastUpdate":  1785158533180,
-    "Changelog":  "修复 FoxTTS 晚于 OverlayPlugin/Cactbot 启动导致首条语音提示丢失的问题；针对 WebView2 子窗口改用原生宿主命中测试，编辑模式可直接拖动悬浮窗并从右下角缩放，锁定后恢复网页交互。"
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.28/DalamudActCompat.zip",
+    "LastUpdate":  1785159573725,
+    "Changelog":  "修复 WebView2/Chromium 子窗口持续拦截鼠标导致悬浮窗仍无法移动的问题；编辑模式现由宿主直接检测全局鼠标按键与窗口范围，按住任意位置拖动、右下角缩放，不再依赖网页或窗口消息转发。"
 }
 ]

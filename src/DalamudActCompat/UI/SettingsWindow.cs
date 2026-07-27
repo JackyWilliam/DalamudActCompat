@@ -430,8 +430,8 @@ public sealed class SettingsWindow : Window
         ImGui.SameLine();
         ImGui.TextDisabled(editing
             ? text.Get(
-                "现在可拖动，右下角可调整大小；编辑期间网页交互暂时关闭。",
-                "Drag now; resize from the bottom-right. Page interaction is disabled while editing.")
+                "现在按住悬浮窗任意位置可拖动，右下角可调整大小；编辑期间网页交互暂时关闭。",
+                "Hold anywhere on the overlay to drag; resize from the bottom-right. Page interaction is disabled while editing.")
             : text.Get("按钮会同时解除鼠标穿透和位置锁定。", "The button disables click-through and locking together."));
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
