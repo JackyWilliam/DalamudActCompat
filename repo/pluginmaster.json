@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.2.25.0",
+    "AssemblyVersion":  "0.2.26.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.25/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.26/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.25/DalamudActCompat.zip",
-    "LastUpdate":  1785156102092,
-    "Changelog":  "修正 Cactbot 默认输出配置迁移，使挑衅、神圣领域等 infoText 通过 FoxTTS 播报；在高页面缩放和较矮窗口下自适应上移信息文字，避免提示被底部裁掉。"
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.26/DalamudActCompat.zip",
+    "LastUpdate":  1785157246486,
+    "Changelog":  "将 Cactbot/Triggernometry 的 ACT TTS 请求接入 FoxTTS 标准 Speak 接口，并在卸载时恢复原委托；按 OverlayPlugin 原生锁定与穿透语义重做 WebView2 宿主拖动和右下角缩放，修复解锁后仍无法调整窗口的问题。"
 }
 ]

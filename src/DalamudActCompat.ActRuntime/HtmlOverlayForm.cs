@@ -14,9 +14,9 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const nint WsExTransparent = 0x00000020;
     private const nint WsExLayered = 0x00080000;
     private const nint WsExNoActivate = 0x08000000;
-    private const int WmNcLeftButtonDown = 0x00A1;
-    private const int HtCaption = 2;
-    private const int HtBottomRight = 17;
+    private const int VirtualKeyLeftButton = 0x01;
+    private const int MinimumOverlayWidth = 120;
+    private const int MinimumOverlayHeight = 80;
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
     internal const string CactbotResponsiveAlertLayoutScript =
         """
@@ -61,6 +61,10 @@ internal sealed class HtmlOverlayForm : IDisposable
     private WebView2? webView;
     private CoreWebView2DevToolsProtocolEventReceiver? consoleEventReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? exceptionEventReceiver;
+    private System.Windows.Forms.Timer? interactionTimer;
+    private OverlayInteraction interaction;
+    private Point interactionStartCursor;
+    private Rectangle interactionStartBounds;
     private bool disposing;
     private bool applyingSettings;
     private Exception? startupFailure;
@@ -196,6 +200,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
         finally
         {
+            StopOverlayInteraction();
             if (webView is not null)
             {
                 webView.NavigationCompleted -= OnNavigationCompleted;
@@ -371,24 +376,107 @@ internal sealed class HtmlOverlayForm : IDisposable
                 return;
             }
 
-            var hitTest = action.GetString() switch
+            var requestedInteraction = action.GetString() switch
             {
-                "move" => HtCaption,
-                "resize" => HtBottomRight,
-                _ => 0,
+                "move" => OverlayInteraction.Move,
+                "resize" => OverlayInteraction.Resize,
+                _ => OverlayInteraction.None,
             };
-            if (hitTest == 0)
+            if (requestedInteraction == OverlayInteraction.None)
             {
                 return;
             }
 
-            ReleaseCapture();
-            SendMessage(form.Handle, WmNcLeftButtonDown, hitTest, 0);
+            BeginOverlayInteraction(requestedInteraction);
         }
         catch (JsonException ex)
         {
             log.Warning(ex, $"Ignored an invalid host message from {title}.");
         }
+    }
+
+    private void BeginOverlayInteraction(OverlayInteraction requestedInteraction)
+    {
+        if (form is null || settings?.IsLocked != false ||
+            GetAsyncKeyState(VirtualKeyLeftButton) >= 0 ||
+            !GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        interaction = requestedInteraction;
+        interactionStartCursor = new Point(cursor.X, cursor.Y);
+        interactionStartBounds = form.Bounds;
+        interactionTimer ??= new System.Windows.Forms.Timer
+        {
+            Interval = 15,
+        };
+        interactionTimer.Tick -= OnOverlayInteractionTick;
+        interactionTimer.Tick += OnOverlayInteractionTick;
+        interactionTimer.Start();
+    }
+
+    private void OnOverlayInteractionTick(object? sender, EventArgs args)
+    {
+        if (form is null || settings?.IsLocked != false ||
+            GetAsyncKeyState(VirtualKeyLeftButton) >= 0 ||
+            !GetCursorPos(out var cursor))
+        {
+            StopOverlayInteraction();
+            return;
+        }
+
+        var bounds = CalculateInteractionBounds(
+            interactionStartBounds,
+            interactionStartCursor,
+            new Point(cursor.X, cursor.Y),
+            interaction);
+        if (interaction == OverlayInteraction.Move)
+        {
+            form.Location = bounds.Location;
+        }
+        else if (interaction == OverlayInteraction.Resize)
+        {
+            form.ClientSize = bounds.Size;
+        }
+    }
+
+    internal static Rectangle CalculateInteractionBounds(
+        Rectangle startBounds,
+        Point startCursor,
+        Point currentCursor,
+        OverlayInteraction interaction)
+    {
+        var deltaX = currentCursor.X - startCursor.X;
+        var deltaY = currentCursor.Y - startCursor.Y;
+        return interaction switch
+        {
+            OverlayInteraction.Move => new Rectangle(
+                startBounds.X + deltaX,
+                startBounds.Y + deltaY,
+                startBounds.Width,
+                startBounds.Height),
+            OverlayInteraction.Resize => new Rectangle(
+                startBounds.Location,
+                new Size(
+                    Math.Max(MinimumOverlayWidth, startBounds.Width + deltaX),
+                    Math.Max(MinimumOverlayHeight, startBounds.Height + deltaY))),
+            _ => startBounds,
+        };
+    }
+
+    private void StopOverlayInteraction()
+    {
+        interaction = OverlayInteraction.None;
+        if (interactionTimer is null)
+        {
+            return;
+        }
+
+        interactionTimer.Stop();
+        interactionTimer.Tick -= OnOverlayInteractionTick;
+        interactionTimer.Dispose();
+        interactionTimer = null;
     }
 
     private void ApplyOverlaySettings()
@@ -430,6 +518,10 @@ internal sealed class HtmlOverlayForm : IDisposable
                 ? extendedStyle | WsExTransparent
                 : extendedStyle & ~WsExTransparent;
             SetWindowLongPtr(form.Handle, GwlExStyle, extendedStyle);
+            if (settings.IsLocked)
+            {
+                StopOverlayInteraction();
+            }
             _ = NotifyOverlayStateAsync();
         }
         finally
@@ -485,6 +577,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
     {
+        StopOverlayInteraction();
         if (disposing)
         {
             return;
@@ -519,15 +612,25 @@ internal sealed class HtmlOverlayForm : IDisposable
     private static extern nint SetWindowLongPtr(nint windowHandle, int index, nint newLong);
 
     [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ReleaseCapture();
+    private static extern short GetAsyncKeyState(int virtualKey);
 
-    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
-    private static extern nint SendMessage(
-        nint windowHandle,
-        int message,
-        nint wParam,
-        nint lParam);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NativePoint
+    {
+        public readonly int X;
+        public readonly int Y;
+    }
+
+    internal enum OverlayInteraction
+    {
+        None,
+        Move,
+        Resize,
+    }
 
     private sealed class OverlayHostForm : Form
     {

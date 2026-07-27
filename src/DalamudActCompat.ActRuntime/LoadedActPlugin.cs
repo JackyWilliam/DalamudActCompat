@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using System.Runtime.Loader;
 using System.Windows.Forms;
 using Advanced_Combat_Tracker;
+using Dalamud.Plugin.Services;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -17,6 +18,7 @@ internal sealed class LoadedActPlugin : IDisposable
     private readonly ActPluginData pluginData;
     private readonly Form configurationForm;
     private readonly Thread uiThread;
+    private readonly Action? removeTtsBridge;
     private bool disposing;
 
     private LoadedActPlugin(
@@ -29,7 +31,8 @@ internal sealed class LoadedActPlugin : IDisposable
         Label statusLabel,
         ActPluginData pluginData,
         Form configurationForm,
-        Thread uiThread)
+        Thread uiThread,
+        Action? removeTtsBridge)
     {
         Id = id;
         this.loadContext = loadContext;
@@ -41,6 +44,7 @@ internal sealed class LoadedActPlugin : IDisposable
         this.pluginData = pluginData;
         this.configurationForm = configurationForm;
         this.uiThread = uiThread;
+        this.removeTtsBridge = removeTtsBridge;
     }
 
     public string Id { get; }
@@ -56,7 +60,7 @@ internal sealed class LoadedActPlugin : IDisposable
             configurationForm.BringToFront();
         }));
 
-    public static LoadedActPlugin Load(RuntimePluginSpec spec)
+    public static LoadedActPlugin Load(RuntimePluginSpec spec, IPluginLog log)
     {
         if (string.Equals(spec.Id, "triggernometry", StringComparison.OrdinalIgnoreCase))
         {
@@ -74,6 +78,7 @@ internal sealed class LoadedActPlugin : IDisposable
         Label? statusLabel = null;
         ActPluginData? pluginData = null;
         Form? configurationForm = null;
+        Action? removeTtsBridge = null;
 
         var uiThread = new Thread(() =>
         {
@@ -158,6 +163,12 @@ internal sealed class LoadedActPlugin : IDisposable
                     statusLabel.Text = "Loaded; legacy Triggernometry integration unavailable.";
                 }
 
+                if (string.Equals(spec.Id, "act.foxtts", StringComparison.OrdinalIgnoreCase) &&
+                    statusLabel.Text.StartsWith("Init Success", StringComparison.OrdinalIgnoreCase))
+                {
+                    removeTtsBridge = InstallFoxTtsBridge(instance, log);
+                }
+
                 NormalizePluginRootControl(tabPage);
                 if (string.Equals(spec.Id, "postnamazu", StringComparison.OrdinalIgnoreCase) &&
                     !System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription.StartsWith(
@@ -183,6 +194,8 @@ internal sealed class LoadedActPlugin : IDisposable
             }
             catch (Exception ex)
             {
+                removeTtsBridge?.Invoke();
+                removeTtsBridge = null;
                 failure = ex;
                 if (pluginData is not null)
                 {
@@ -226,7 +239,8 @@ internal sealed class LoadedActPlugin : IDisposable
             statusLabel!,
             pluginData!,
             configurationForm!,
-            uiThread);
+            uiThread,
+            removeTtsBridge);
     }
 
     public void Dispose()
@@ -237,6 +251,7 @@ internal sealed class LoadedActPlugin : IDisposable
         }
 
         disposing = true;
+        removeTtsBridge?.Invoke();
         configurationForm.BeginInvoke((Action)(() =>
         {
             try
@@ -260,6 +275,47 @@ internal sealed class LoadedActPlugin : IDisposable
         }));
         uiThread.Join(TimeSpan.FromSeconds(10));
         loadContext.Resolving -= resolvingHandler;
+    }
+
+    internal static Action InstallFoxTtsBridge(object plugin, IPluginLog log)
+    {
+        var speak = plugin.GetType().GetMethod(
+                        "Speak",
+                        BindingFlags.Instance | BindingFlags.Public,
+                        binder: null,
+                        types: [typeof(string)],
+                        modifiers: null)
+                    ?? throw new MissingMethodException(plugin.GetType().FullName, "Speak");
+        var actMain = ActGlobals.oFormActMain;
+        var previous = actMain.PlayTtsMethod;
+        FormActMain.PlayTtsDelegate bridge = message =>
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    speak.Invoke(plugin, [message]);
+                }
+                catch (TargetInvocationException ex) when (ex.InnerException is not null)
+                {
+                    log.Error(ex.InnerException, "ACT.FoxTTS failed to speak a message.");
+                }
+                catch (Exception ex)
+                {
+                    log.Error(ex, "ACT.FoxTTS failed to speak a message.");
+                }
+            });
+        };
+        actMain.PlayTtsMethod = bridge;
+        log.Information("ACT.FoxTTS connected to the ACT TTS dispatcher.");
+
+        return () =>
+        {
+            if (ReferenceEquals(actMain.PlayTtsMethod, bridge))
+            {
+                actMain.PlayTtsMethod = previous;
+            }
+        };
     }
 
     private static void NormalizePluginRootControl(TabPage tabPage)

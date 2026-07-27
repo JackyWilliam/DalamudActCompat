@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Windows.Forms;
 using System.Xml;
 using Advanced_Combat_Tracker;
+using Dalamud.Plugin.Services;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
@@ -29,6 +30,8 @@ try
 {
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
+    ValidateActTtsDispatch();
+    ValidateFoxTtsBridge();
     ValidatePlayerIdentityResolution();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -357,6 +360,70 @@ static void ValidateHtmlOverlayDefaults()
         layoutScript?.Contains("#popup-text-info", StringComparison.Ordinal) == true &&
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
         "The Cactbot responsive layout no longer protects info text from clipping.");
+
+    var interactionType = formType.GetNestedType(
+                              "OverlayInteraction",
+                              BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "HTML overlay interaction mode was not found.");
+    var calculateBounds = formType.GetMethod(
+                              "CalculateInteractionBounds",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "HTML overlay interaction calculation was not found.");
+    var move = Enum.Parse(interactionType, "Move");
+    var resize = Enum.Parse(interactionType, "Resize");
+    var startBounds = new System.Drawing.Rectangle(100, 200, 900, 320);
+    var startCursor = new System.Drawing.Point(400, 300);
+    var currentCursor = new System.Drawing.Point(430, 350);
+    Assert(
+        calculateBounds.Invoke(null, [startBounds, startCursor, currentCursor, move])
+            is System.Drawing.Rectangle { X: 130, Y: 250, Width: 900, Height: 320 },
+        "HTML overlay dragging no longer follows the host cursor delta.");
+    Assert(
+        calculateBounds.Invoke(null, [startBounds, startCursor, currentCursor, resize])
+            is System.Drawing.Rectangle { X: 100, Y: 200, Width: 930, Height: 370 },
+        "HTML overlay resizing no longer follows the host cursor delta.");
+}
+
+static void ValidateActTtsDispatch()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    string? spoken = null;
+    actMain.PlayTtsMethod = message => spoken = message;
+    actMain.TTS("FoxTTS bridge");
+    Assert(
+        spoken == "FoxTTS bridge",
+        "The ACT TTS entry point bypassed the standard PlayTtsMethod delegate.");
+}
+
+static void ValidateFoxTtsBridge()
+{
+    var previousActMain = ActGlobals.oFormActMain;
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    var restored = false;
+    actMain.PlayTtsMethod = _ => restored = true;
+    ActGlobals.oFormActMain = actMain;
+    try
+    {
+        using var foxTts = new FoxTtsProbe();
+        var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+        var removeBridge = LoadedActPlugin.InstallFoxTtsBridge(foxTts, log);
+        actMain.TTS("Cactbot alert");
+        Assert(
+            foxTts.Wait(TimeSpan.FromSeconds(5)) && foxTts.LastMessage == "Cactbot alert",
+            "The ACT.FoxTTS bridge did not forward a TTS request to FoxTTS Speak.");
+
+        removeBridge();
+        actMain.TTS("restored");
+        Assert(restored, "Removing the ACT.FoxTTS bridge did not restore the previous TTS delegate.");
+    }
+    finally
+    {
+        ActGlobals.oFormActMain = previousActMain;
+    }
 }
 
 static void ValidateCactbotSpokenAlertDefaults()
@@ -756,4 +823,34 @@ internal enum PluginIntegrationMode
 internal sealed class EnumSettingsOwner
 {
     public PluginIntegrationMode PluginIntegration { get; set; }
+}
+
+internal sealed class FoxTtsProbe : IDisposable
+{
+    private readonly ManualResetEventSlim spoken = new();
+
+    public string? LastMessage { get; private set; }
+
+    public void Speak(string message)
+    {
+        LastMessage = message;
+        spoken.Set();
+    }
+
+    public bool Wait(TimeSpan timeout) => spoken.Wait(timeout);
+
+    public void Dispose() => spoken.Dispose();
+}
+
+public class NoOpPluginLogProxy : DispatchProxy
+{
+    protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+    {
+        var returnType = targetMethod?.ReturnType;
+        return returnType is null || returnType == typeof(void)
+            ? null
+            : returnType.IsValueType
+                ? Activator.CreateInstance(returnType)
+                : null;
+    }
 }
