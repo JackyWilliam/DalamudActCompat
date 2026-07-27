@@ -464,7 +464,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             try
             {
-                var loadedPlugin = LoadedActPlugin.Load(plugin);
+                var loadedPlugin = LoadedActPlugin.Load(plugin, log);
                 customPlugins.Add(loadedPlugin);
                 if (IsPluginInitializationError(loadedPlugin.Status))
                 {
