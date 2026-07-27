@@ -16,9 +16,9 @@ public static class ActEncounterMapper
                 combatant.TotalDamage,
                 combatant.TotalHealing,
                 combatant.Deaths,
-                combatant.Dps,
-                combatant.EncDps,
-                combatant.ExtDps))
+                NormalizeRate(combatant.Dps),
+                NormalizeRate(combatant.EncDps),
+                NormalizeRate(combatant.ExtDps)))
             .ToArray();
         var jobs = combatants
             .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))
@@ -43,4 +43,7 @@ public static class ActEncounterMapper
             Array.Empty<ActionSummary>(),
             jobs);
     }
+
+    private static double NormalizeRate(double value)
+        => double.IsFinite(value) ? value : 0;
 }

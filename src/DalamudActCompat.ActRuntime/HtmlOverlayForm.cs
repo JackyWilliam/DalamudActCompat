@@ -18,6 +18,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const int MinimumOverlayWidth = 120;
     private const int MinimumOverlayHeight = 80;
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
+    private static nint interactionOwner;
     internal const string CactbotResponsiveAlertLayoutScript =
         """
         (() => {
@@ -65,7 +66,9 @@ internal sealed class HtmlOverlayForm : IDisposable
     private OverlayInteraction interaction;
     private Point interactionStartCursor;
     private Rectangle interactionStartBounds;
+    private nint interactionWindowHandle;
     private bool leftButtonWasDown;
+    private bool ownsMouseCapture;
     private bool disposing;
     private bool applyingSettings;
     private Exception? startupFailure;
@@ -415,7 +418,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         var isButtonDown = IsLeftButtonDown();
         if (!GetCursorPos(out var nativeCursor))
         {
-            interaction = OverlayInteraction.None;
+            EndOverlayInteraction();
             leftButtonWasDown = isButtonDown;
             return;
         }
@@ -423,9 +426,9 @@ internal sealed class HtmlOverlayForm : IDisposable
         var cursor = new Point(nativeCursor.X, nativeCursor.Y);
         if (interaction != OverlayInteraction.None)
         {
-            if (!isButtonDown)
+            if (!isButtonDown || GetCapture() != form.Handle)
             {
-                interaction = OverlayInteraction.None;
+                EndOverlayInteraction();
             }
             else
             {
@@ -449,13 +452,28 @@ internal sealed class HtmlOverlayForm : IDisposable
                      form.Visible,
                      isButtonDown,
                      leftButtonWasDown,
-                     form.Bounds.Contains(cursor)))
+                     form.Bounds.Contains(cursor)) &&
+                 TryAcquireInteraction(form.Handle))
         {
+            interactionWindowHandle = form.Handle;
             interaction = GetOverlayInteraction(
                 form.ClientSize,
                 form.PointToClient(cursor));
             interactionStartCursor = cursor;
             interactionStartBounds = form.Bounds;
+            SetCapture(form.Handle);
+            ownsMouseCapture = GetCapture() == form.Handle;
+            if (!ownsMouseCapture)
+            {
+                EndOverlayInteraction();
+            }
+            else
+            {
+                log.Debug(
+                    $"{title} edit interaction started: {interaction}; " +
+                    $"cursor={cursor.X},{cursor.Y}; " +
+                    $"bounds={form.Left},{form.Top},{form.Width},{form.Height}.");
+            }
         }
 
         leftButtonWasDown = isButtonDown;
@@ -463,7 +481,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void StopEditMonitor()
     {
-        interaction = OverlayInteraction.None;
+        EndOverlayInteraction();
         if (editMonitor is null)
         {
             return;
@@ -473,6 +491,45 @@ internal sealed class HtmlOverlayForm : IDisposable
         editMonitor.Tick -= OnEditMonitorTick;
         editMonitor.Dispose();
         editMonitor = null;
+    }
+
+    internal static bool TryAcquireInteraction(nint windowHandle)
+        => windowHandle != nint.Zero &&
+           Interlocked.CompareExchange(
+               ref interactionOwner,
+               windowHandle,
+               nint.Zero) == nint.Zero;
+
+    internal static void ReleaseInteraction(nint windowHandle)
+    {
+        if (windowHandle != nint.Zero)
+        {
+            Interlocked.CompareExchange(
+                ref interactionOwner,
+                nint.Zero,
+                windowHandle);
+        }
+    }
+
+    private void EndOverlayInteraction()
+    {
+        var windowHandle = interactionWindowHandle;
+        if (ownsMouseCapture && GetCapture() == windowHandle)
+        {
+            ReleaseCapture();
+        }
+
+        if (interaction != OverlayInteraction.None && form is not null)
+        {
+            log.Debug(
+                $"{title} edit interaction ended; " +
+                $"bounds={form.Left},{form.Top},{form.Width},{form.Height}.");
+        }
+
+        ownsMouseCapture = false;
+        interaction = OverlayInteraction.None;
+        interactionWindowHandle = nint.Zero;
+        ReleaseInteraction(windowHandle);
     }
 
     private static bool IsLeftButtonDown()
@@ -624,6 +681,16 @@ internal sealed class HtmlOverlayForm : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetCapture(nint windowHandle);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetCapture();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ReleaseCapture();
 
     [StructLayout(LayoutKind.Sequential)]
     private readonly struct NativePoint

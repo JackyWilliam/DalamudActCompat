@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.2.28.0",
+    "AssemblyVersion":  "0.2.29.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.28/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.29/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.28/DalamudActCompat.zip",
-    "LastUpdate":  1785159573725,
-    "Changelog":  "修复 WebView2/Chromium 子窗口持续拦截鼠标导致悬浮窗仍无法移动的问题；编辑模式现由宿主直接检测全局鼠标按键与窗口范围，按住任意位置拖动、右下角缩放，不再依赖网页或窗口消息转发。"
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.29/DalamudActCompat.zip",
+    "LastUpdate":  1785160624797,
+    "Changelog":  "修复游戏持有鼠标输入时悬浮窗拖动只在屏幕中央抖动的问题；编辑操作现由唯一目标窗口取得 Windows 鼠标捕获，并规范化 ACT 的 Infinity/NaN 速率，恢复 /actcompat logs 最近战斗记录保存。"
 }
 ]
