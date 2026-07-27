@@ -362,23 +362,68 @@ static void ValidateHtmlOverlayDefaults()
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
         "The Cactbot responsive layout no longer protects info text from clipping.");
 
-    var hitTest = formType.GetMethod(
-                      "GetOverlayHitTestResult",
-                      BindingFlags.Static | BindingFlags.NonPublic)
-                  ?? throw new InvalidOperationException(
-                      "HTML overlay native hit-test helper was not found.");
+    var interactionType = formType.GetNestedType(
+                              "OverlayInteraction",
+                              BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "HTML overlay interaction mode was not found.");
+    var getInteraction = formType.GetMethod(
+                             "GetOverlayInteraction",
+                             BindingFlags.Static | BindingFlags.NonPublic)
+                         ?? throw new InvalidOperationException(
+                             "HTML overlay cursor interaction helper was not found.");
+    var move = Enum.Parse(interactionType, "Move");
+    var resize = Enum.Parse(interactionType, "Resize");
     Assert(
-        hitTest.Invoke(
-            null,
-            [new System.Drawing.Size(900, 320), new System.Drawing.Point(450, 160)])
-        is 2,
-        "HTML overlay edit mode no longer exposes the client area as a native drag caption.");
+        Equals(
+            getInteraction.Invoke(
+                null,
+                [new System.Drawing.Size(900, 320), new System.Drawing.Point(450, 160)]),
+            move),
+        "HTML overlay cursor polling no longer treats the client area as a drag target.");
     Assert(
-        hitTest.Invoke(
+        Equals(
+            getInteraction.Invoke(
+                null,
+                [new System.Drawing.Size(900, 320), new System.Drawing.Point(895, 315)]),
+            resize),
+        "HTML overlay cursor polling no longer exposes a bottom-right resize target.");
+    var shouldBeginInteraction = formType.GetMethod(
+                                     "ShouldBeginOverlayInteraction",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay interaction transition helper was not found.");
+    Assert(
+        shouldBeginInteraction.Invoke(
             null,
-            [new System.Drawing.Size(900, 320), new System.Drawing.Point(895, 315)])
-        is 17,
-        "HTML overlay edit mode no longer exposes a native bottom-right resize grip.");
+            [true, true, true, false, true]) as bool? == true,
+        "A fresh left click inside a visible editing overlay did not begin an interaction.");
+    Assert(
+        shouldBeginInteraction.Invoke(
+            null,
+            [true, true, true, true, true]) as bool? == false,
+        "Holding the settings click while entering edit mode incorrectly began a drag.");
+    Assert(
+        shouldBeginInteraction.Invoke(
+            null,
+            [true, true, true, false, false]) as bool? == false,
+        "A click outside the overlay incorrectly began an interaction.");
+    var calculateBounds = formType.GetMethod(
+                              "CalculateInteractionBounds",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "HTML overlay interaction calculation was not found.");
+    var startBounds = new System.Drawing.Rectangle(100, 200, 900, 320);
+    var startCursor = new System.Drawing.Point(400, 300);
+    var currentCursor = new System.Drawing.Point(430, 350);
+    Assert(
+        calculateBounds.Invoke(null, [startBounds, startCursor, currentCursor, move])
+            is System.Drawing.Rectangle { X: 130, Y: 250, Width: 900, Height: 320 },
+        "HTML overlay dragging no longer follows the global cursor delta.");
+    Assert(
+        calculateBounds.Invoke(null, [startBounds, startCursor, currentCursor, resize])
+            is System.Drawing.Rectangle { X: 100, Y: 200, Width: 930, Height: 370 },
+        "HTML overlay resizing no longer follows the global cursor delta.");
     var shouldEnableBrowserInput = formType.GetMethod(
                                        "ShouldEnableBrowserInput",
                                        BindingFlags.Static | BindingFlags.NonPublic)

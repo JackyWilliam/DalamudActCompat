@@ -13,9 +13,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const nint WsExTransparent = 0x00000020;
     private const nint WsExLayered = 0x00080000;
     private const nint WsExNoActivate = 0x08000000;
-    private const int WmNcHitTest = 0x0084;
-    private const int HtCaption = 2;
-    private const int HtBottomRight = 17;
+    private const int VirtualKeyLeftButton = 0x01;
     private const int ResizeGripSize = 16;
     private const int MinimumOverlayWidth = 120;
     private const int MinimumOverlayHeight = 80;
@@ -63,6 +61,11 @@ internal sealed class HtmlOverlayForm : IDisposable
     private WebView2? webView;
     private CoreWebView2DevToolsProtocolEventReceiver? consoleEventReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? exceptionEventReceiver;
+    private System.Windows.Forms.Timer? editMonitor;
+    private OverlayInteraction interaction;
+    private Point interactionStartCursor;
+    private Rectangle interactionStartBounds;
+    private bool leftButtonWasDown;
     private bool disposing;
     private bool applyingSettings;
     private Exception? startupFailure;
@@ -124,7 +127,11 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             form.Show();
             form.WindowState = FormWindowState.Normal;
-            if (!overlayMode)
+            if (overlayMode)
+            {
+                ApplyOverlaySettings();
+            }
+            else
             {
                 form.Activate();
             }
@@ -148,9 +155,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             var initialSize = new Size(
                 settings?.Width is > 0 ? settings.Width.Value : ClientSize.Width,
                 settings?.Height is > 0 ? settings.Height.Value : ClientSize.Height);
-            form = overlayMode
-                ? new OverlayHostForm(() => settings?.IsEditing == true)
-                : new Form();
+            form = overlayMode ? new OverlayHostForm() : new Form();
             form.Text = title;
             form.ClientSize = initialSize;
             form.MinimumSize = new Size(MinimumOverlayWidth, MinimumOverlayHeight);
@@ -201,6 +206,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
         finally
         {
+            StopEditMonitor();
             if (webView is not null)
             {
                 webView.NavigationCompleted -= OnNavigationCompleted;
@@ -332,18 +338,145 @@ internal sealed class HtmlOverlayForm : IDisposable
         CoreWebView2DevToolsProtocolEventReceivedEventArgs args)
         => log.Error($"{title} browser exception: {args.ParameterObjectAsJson}");
 
-    internal static int GetOverlayHitTestResult(
+    internal static OverlayInteraction GetOverlayInteraction(
         Size clientSize,
         Point clientPoint)
     {
         return clientPoint.X >= clientSize.Width - ResizeGripSize &&
                clientPoint.Y >= clientSize.Height - ResizeGripSize
-            ? HtBottomRight
-            : HtCaption;
+            ? OverlayInteraction.Resize
+            : OverlayInteraction.Move;
+    }
+
+    internal static bool ShouldBeginOverlayInteraction(
+        bool isEditing,
+        bool isVisible,
+        bool isButtonDown,
+        bool wasButtonDown,
+        bool cursorInside)
+        => isEditing &&
+           isVisible &&
+           isButtonDown &&
+           !wasButtonDown &&
+           cursorInside;
+
+    internal static Rectangle CalculateInteractionBounds(
+        Rectangle startBounds,
+        Point startCursor,
+        Point currentCursor,
+        OverlayInteraction interaction)
+    {
+        var deltaX = currentCursor.X - startCursor.X;
+        var deltaY = currentCursor.Y - startCursor.Y;
+        return interaction switch
+        {
+            OverlayInteraction.Move => new Rectangle(
+                startBounds.X + deltaX,
+                startBounds.Y + deltaY,
+                startBounds.Width,
+                startBounds.Height),
+            OverlayInteraction.Resize => new Rectangle(
+                startBounds.Location,
+                new Size(
+                    Math.Max(MinimumOverlayWidth, startBounds.Width + deltaX),
+                    Math.Max(MinimumOverlayHeight, startBounds.Height + deltaY))),
+            _ => startBounds,
+        };
     }
 
     internal static bool ShouldEnableBrowserInput(HtmlOverlayWindowSettings settings)
         => !settings.IsEditing;
+
+    private void StartEditMonitor()
+    {
+        if (editMonitor is not null)
+        {
+            return;
+        }
+
+        leftButtonWasDown = IsLeftButtonDown();
+        editMonitor = new System.Windows.Forms.Timer
+        {
+            Interval = 15,
+        };
+        editMonitor.Tick += OnEditMonitorTick;
+        editMonitor.Start();
+        log.Information($"{title} edit mode enabled; native cursor polling is active.");
+    }
+
+    private void OnEditMonitorTick(object? sender, EventArgs args)
+    {
+        if (form is null || settings?.IsEditing != true)
+        {
+            StopEditMonitor();
+            return;
+        }
+
+        var isButtonDown = IsLeftButtonDown();
+        if (!GetCursorPos(out var nativeCursor))
+        {
+            interaction = OverlayInteraction.None;
+            leftButtonWasDown = isButtonDown;
+            return;
+        }
+
+        var cursor = new Point(nativeCursor.X, nativeCursor.Y);
+        if (interaction != OverlayInteraction.None)
+        {
+            if (!isButtonDown)
+            {
+                interaction = OverlayInteraction.None;
+            }
+            else
+            {
+                var bounds = CalculateInteractionBounds(
+                    interactionStartBounds,
+                    interactionStartCursor,
+                    cursor,
+                    interaction);
+                if (interaction == OverlayInteraction.Move)
+                {
+                    form.Location = bounds.Location;
+                }
+                else
+                {
+                    form.ClientSize = bounds.Size;
+                }
+            }
+        }
+        else if (ShouldBeginOverlayInteraction(
+                     settings.IsEditing,
+                     form.Visible,
+                     isButtonDown,
+                     leftButtonWasDown,
+                     form.Bounds.Contains(cursor)))
+        {
+            interaction = GetOverlayInteraction(
+                form.ClientSize,
+                form.PointToClient(cursor));
+            interactionStartCursor = cursor;
+            interactionStartBounds = form.Bounds;
+        }
+
+        leftButtonWasDown = isButtonDown;
+    }
+
+    private void StopEditMonitor()
+    {
+        interaction = OverlayInteraction.None;
+        if (editMonitor is null)
+        {
+            return;
+        }
+
+        editMonitor.Stop();
+        editMonitor.Tick -= OnEditMonitorTick;
+        editMonitor.Dispose();
+        editMonitor = null;
+    }
+
+    private static bool IsLeftButtonDown()
+        => (GetAsyncKeyState(VirtualKeyLeftButton) & 0x8000) != 0;
 
     private void ApplyOverlaySettings()
     {
@@ -388,6 +521,14 @@ internal sealed class HtmlOverlayForm : IDisposable
                 ? extendedStyle | WsExTransparent
                 : extendedStyle & ~WsExTransparent;
             SetWindowLongPtr(form.Handle, GwlExStyle, extendedStyle);
+            if (settings.IsEditing)
+            {
+                StartEditMonitor();
+            }
+            else
+            {
+                StopEditMonitor();
+            }
             _ = NotifyOverlayStateAsync();
         }
         finally
@@ -443,6 +584,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
     {
+        StopEditMonitor();
         if (disposing)
         {
             return;
@@ -476,15 +618,29 @@ internal sealed class HtmlOverlayForm : IDisposable
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
     private static extern nint SetWindowLongPtr(nint windowHandle, int index, nint newLong);
 
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NativePoint
+    {
+        public readonly int X;
+        public readonly int Y;
+    }
+
+    internal enum OverlayInteraction
+    {
+        None,
+        Move,
+        Resize,
+    }
+
     private sealed class OverlayHostForm : Form
     {
-        private readonly Func<bool> isEditing;
-
-        public OverlayHostForm(Func<bool> isEditing)
-        {
-            this.isEditing = isEditing;
-        }
-
         protected override bool ShowWithoutActivation => true;
 
         protected override CreateParams CreateParams
@@ -495,23 +651,6 @@ internal sealed class HtmlOverlayForm : IDisposable
                 parameters.ExStyle |= unchecked((int)(WsExLayered | WsExNoActivate));
                 return parameters;
             }
-        }
-
-        protected override void WndProc(ref Message message)
-        {
-            if (message.Msg == WmNcHitTest && isEditing())
-            {
-                var packedPoint = message.LParam.ToInt64();
-                var screenPoint = new Point(
-                    unchecked((short)(packedPoint & 0xFFFF)),
-                    unchecked((short)((packedPoint >> 16) & 0xFFFF)));
-                message.Result = (nint)GetOverlayHitTestResult(
-                    ClientSize,
-                    PointToClient(screenPoint));
-                return;
-            }
-
-            base.WndProc(ref message);
         }
     }
 }
