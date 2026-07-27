@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text.Json;
@@ -15,6 +16,11 @@ using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using Machina.FFXIV;
 using Machina.FFXIV.Headers.Opcodes;
+using Newtonsoft.Json.Linq;
+using RainbowMage.OverlayPlugin.EventSources;
+using RainbowMage.OverlayPlugin.MemoryProcessors;
+using RainbowMage.OverlayPlugin.MemoryProcessors.InCombat;
+using RainbowMage.OverlayPlugin.MemoryProcessors.Party;
 
 var testRoot = Path.Combine(Path.GetTempPath(), $"DalamudActCompat-{Guid.NewGuid():N}");
 Directory.CreateDirectory(testRoot);
@@ -24,6 +30,9 @@ try
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
     ValidatePlayerIdentityResolution();
+    ValidateDalamudGameStateBridge();
+    ValidateCactbotSpokenAlertDefaults();
+    ValidateHtmlOverlayDefaults();
     ValidateChinese751bOpcodes();
     ValidateMeterRows();
 
@@ -226,8 +235,119 @@ static void ValidatePlayerIdentityResolution()
         ActPlayerIdentityResolver.Resolve(identities, "Unique Name")?.DisplayName == "Unique Name@Gamma",
         "Unique player name did not resolve to its world-qualified display name.");
     Assert(
+        ActPlayerIdentityResolver.Resolve(identities, "YOU")?.DisplayName == "Same Name@Alpha",
+        "ACT's YOU alias did not resolve to the local player.");
+    Assert(
         ActPlayerIdentityResolver.Resolve(identities, "Summon") is null,
         "Unknown pets or NPCs must not resolve as players.");
+}
+
+static void ValidateDalamudGameStateBridge()
+{
+    var provider = new CachedDalamudGameStateProvider();
+    ActPlayerIdentity[] identities =
+    [
+        new("Local Player", "Alpha", "PLD", true, false)
+        {
+            EntityId = 0x10000001,
+            ContentId = 0x12345678,
+            WorldId = 21,
+            JobId = 19,
+            Level = 100,
+            CurrentHp = 120_000,
+            MaxHp = 120_000,
+            CurrentMp = 10_000,
+            MaxMp = 10_000,
+            TerritoryId = 1234,
+        },
+        new("Party Member", "Beta", "WHM", false, false)
+        {
+            EntityId = 0x10000002,
+            ContentId = 0x87654321,
+            WorldId = 22,
+            JobId = 24,
+            Level = 100,
+            CurrentHp = 80_000,
+            MaxHp = 80_000,
+            CurrentMp = 9_000,
+            MaxMp = 10_000,
+            TerritoryId = 1234,
+        },
+    ];
+
+    provider.Update(identities, true);
+    Assert(provider.Snapshot.GameExists, "Dalamud game state did not report the active game.");
+    Assert(provider.Snapshot.InGameCombat, "Dalamud combat state was not preserved.");
+    Assert(provider.Snapshot.Player?.JobId == 19, "Dalamud local player job was not preserved.");
+    Assert(provider.Snapshot.Party.Count == 2, "Dalamud party members were not preserved.");
+
+    var overlayAssembly = typeof(IDalamudGameStateProvider).Assembly;
+    var partyAdapterType = overlayAssembly.GetType(
+        "RainbowMage.OverlayPlugin.MemoryProcessors.Party.DalamudPartyMemory",
+        throwOnError: true)!;
+    var partyAdapter = (IPartyMemory)Activator.CreateInstance(
+        partyAdapterType,
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        binder: null,
+        [provider],
+        culture: null)!;
+    var party = partyAdapter.GetPartyLists();
+    Assert(party.memberCount == 2, "OverlayPlugin PartyChanged bridge lost party members.");
+    Assert(party.partyMembers[0].classJob == 19, "OverlayPlugin PartyChanged bridge lost the local job.");
+    Assert(party.partyMembers[1].name == "Party Member", "OverlayPlugin PartyChanged bridge lost a party name.");
+
+    var combatAdapterType = overlayAssembly.GetType(
+        "RainbowMage.OverlayPlugin.MemoryProcessors.InCombat.DalamudInCombatMemory",
+        throwOnError: true)!;
+    var combatAdapter = (IInCombatMemory)Activator.CreateInstance(
+        combatAdapterType,
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        binder: null,
+        [provider],
+        culture: null)!;
+    Assert(combatAdapter.IsValid(), "OverlayPlugin InCombat bridge did not see the game.");
+    Assert(combatAdapter.GetInCombat(), "OverlayPlugin InCombat bridge lost the combat state.");
+
+    provider.Clear();
+    Assert(!provider.Snapshot.GameExists, "Clearing the Dalamud game state left the game active.");
+}
+
+static void ValidateHtmlOverlayDefaults()
+{
+    var settings = new HtmlOverlayWindowSettings();
+    Assert(settings.IsClickThrough, "HTML overlays must be click-through by default.");
+    Assert(settings.IsLocked, "HTML overlays must be locked by default.");
+    Assert(settings.ZoomFactor == 1.0f, "HTML overlay default zoom changed unexpectedly.");
+}
+
+static void ValidateCactbotSpokenAlertDefaults()
+{
+    var method = typeof(CactbotEventSource).GetMethod(
+        "EnsureSpokenAlertsEnabled",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("Cactbot spoken-alert migration helper was not found.");
+    var empty = new Dictionary<string, JToken>();
+    Assert(
+        method.Invoke(null, [empty]) as bool? == true,
+        "A new Cactbot configuration did not enable spoken raidboss alerts.");
+    Assert(
+        empty["options"]["raidboss"]?["SpokenAlertsEnabled"]?.Value<bool>() == true,
+        "The initial Cactbot spoken-alert setting was written to the wrong configuration path.");
+
+    var existing = new Dictionary<string, JToken>
+    {
+        ["options"] = JObject.FromObject(new
+        {
+            raidboss = new
+            {
+                SpokenAlertsEnabled = false,
+            },
+        }),
+    };
+    Assert(
+        method.Invoke(null, [existing]) as bool? == false &&
+        existing["options"]["raidboss"]?["SpokenAlertsEnabled"]?.Value<bool>() == false,
+        "An explicit Cactbot spoken-alert preference was overwritten.");
 }
 
 static void ValidateSettingsSerializerMemberTypes()

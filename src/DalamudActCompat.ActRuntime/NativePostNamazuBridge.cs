@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
+using RainbowMage.OverlayPlugin;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -16,6 +17,7 @@ public static class NativePostNamazuBridge
     private static readonly Dictionary<int, Func<nint, ulong[], ulong>> NativeCalls = [];
     private static IFramework? framework;
     private static IPluginLog? log;
+    private static PostNamazuEventSource? overlayEventSource;
 
     internal static void Configure(IFramework frameworkService, IPluginLog pluginLog)
     {
@@ -23,7 +25,7 @@ public static class NativePostNamazuBridge
         log = pluginLog;
     }
 
-    internal static void Start(object plugin)
+    internal static string Start(object plugin)
     {
         ArgumentNullException.ThrowIfNull(plugin);
         var pluginType = plugin.GetType();
@@ -48,13 +50,46 @@ public static class NativePostNamazuBridge
         if (!offsetsReady)
         {
             throw new InvalidOperationException(
-                "PostNamazu could not resolve the active FFXIV 7.51 function signatures.");
+                "PostNamazu could not resolve the active FFXIV function signatures.");
         }
 
-        Attach(plugin);
+        var failedModules = AttachCore(plugin);
+        var overlayIntegrationActive = false;
+        try
+        {
+            overlayIntegrationActive = InitializeOverlayEventSource(plugin);
+        }
+        catch (Exception ex)
+        {
+            log?.Warning(ex, "PostNamazu optional OverlayPlugin integration could not be initialized.");
+        }
+
+        var moduleStatus = failedModules.Count == 0
+            ? string.Empty
+            : $" Unavailable modules: {string.Join(", ", failedModules)}.";
+        var overlayStatus = overlayIntegrationActive
+            ? " OverlayPlugin handler active."
+            : " OverlayPlugin handler unavailable.";
+        return $"Loaded; native Dalamud game-write bridge active.{overlayStatus}{moduleStatus}";
+    }
+
+    internal static void Stop(object plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+        lock (SyncRoot)
+        {
+            overlayEventSource?.SetAction(null);
+        }
     }
 
     public static void Attach(object plugin)
+        => _ = AttachCore(plugin);
+
+    public static void SkipLegacyProcessMonitoring(object _)
+    {
+    }
+
+    private static IReadOnlyList<string> AttachCore(object plugin)
     {
         ArgumentNullException.ThrowIfNull(plugin);
         var pluginType = plugin.GetType();
@@ -68,7 +103,6 @@ public static class NativePostNamazuBridge
                 "GetRegion",
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             ?.Invoke(plugin, null);
-        InitializeOverlayIntegration(plugin);
         var failedModules = new List<string>();
         if (modules is not null)
         {
@@ -79,26 +113,35 @@ public static class NativePostNamazuBridge
                     continue;
                 }
 
-                SetState(module, "Waiting");
-                module.GetType()
-                    .GetMethod("Setup", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                    ?.Invoke(module, null);
-                var state = module.GetType().GetProperty(
-                        "State",
-                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                    ?.GetValue(module)?.ToString();
-                if (string.Equals(state, "Failure", StringComparison.Ordinal))
+                try
+                {
+                    SetState(module, "Waiting");
+                    module.GetType()
+                        .GetMethod("Setup", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        ?.Invoke(module, null);
+                    var state = module.GetType().GetProperty(
+                            "State",
+                            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        ?.GetValue(module)?.ToString();
+                    if (string.Equals(state, "Failure", StringComparison.Ordinal))
+                    {
+                        failedModules.Add(module.GetType().Name);
+                    }
+                }
+                catch (Exception ex)
                 {
                     failedModules.Add(module.GetType().Name);
+                    log?.Warning(
+                        ex,
+                        $"PostNamazu module {module.GetType().Name} failed to initialize.");
                 }
             }
         }
 
         if (failedModules.Count > 0)
         {
-            SetState(plugin, "Failure");
-            throw new InvalidOperationException(
-                $"PostNamazu 7.51 signature resolution failed for: {string.Join(", ", failedModules)}.");
+            log?.Warning(
+                $"PostNamazu loaded with unavailable modules: {string.Join(", ", failedModules)}.");
         }
 
         pluginType.GetMethod(
@@ -106,6 +149,7 @@ public static class NativePostNamazuBridge
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             ?.Invoke(plugin, ["AttachedNative"]);
         log?.Information("PostNamazu attached through the Dalamud in-process native bridge.");
+        return failedModules;
     }
 
     public static void Execute(Action action)
@@ -219,25 +263,13 @@ public static class NativePostNamazuBridge
         property.SetValue(target, Enum.Parse(property.PropertyType, stateName));
     }
 
-    private static void InitializeOverlayIntegration(object plugin)
+    private static bool InitializeOverlayEventSource(object plugin)
     {
-        if (ActGlobals.oFormActMain.OverlayPluginContainer is null)
+        if (ActGlobals.oFormActMain.OverlayPluginContainer is not TinyIoCContainer container)
         {
-            return;
+            return false;
         }
 
-        var integrationManager = plugin.GetType().GetField(
-                "_integrationManager",
-                BindingFlags.Instance | BindingFlags.NonPublic)
-            ?.GetValue(plugin)
-            ?? throw new MissingMemberException(plugin.GetType().FullName, "_integrationManager");
-        var hosterField = integrationManager.GetType().GetField(
-                "_overlayHoster",
-                BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new MissingFieldException(integrationManager.GetType().FullName, "_overlayHoster");
-        var hosterType = hosterField.FieldType;
-        var hoster = Activator.CreateInstance(hosterType)
-            ?? throw new InvalidOperationException("PostNamazu OverlayHoster could not be created.");
         var doAction = plugin.GetType().GetMethod(
                 "DoAction",
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -245,15 +277,30 @@ public static class NativePostNamazuBridge
         var action = (Action<string, string>)doAction.CreateDelegate(
             typeof(Action<string, string>),
             plugin);
-        hosterType.GetMethod(
-                "Init",
-                BindingFlags.Instance | BindingFlags.Public,
-                binder: null,
-                [typeof(Action<string, string>)],
-                modifiers: null)
-            ?.Invoke(hoster, [action]);
+        lock (SyncRoot)
+        {
+            var registry = container.Resolve<Registry>();
+            var existingEventSource = registry.EventSources.FirstOrDefault(source =>
+                string.Equals(source.Name, PostNamazuEventSource.EventSourceName, StringComparison.Ordinal));
+            if (existingEventSource is not null &&
+                existingEventSource is not PostNamazuEventSource)
+            {
+                log?.Information("PostNamazu upstream OverlayPlugin event source is already active.");
+                return true;
+            }
 
-        hosterField.SetValue(integrationManager, hoster);
+            overlayEventSource = existingEventSource as PostNamazuEventSource;
+            if (overlayEventSource is null)
+            {
+                overlayEventSource = new PostNamazuEventSource(container);
+                registry.StartEventSource(overlayEventSource);
+            }
+
+            overlayEventSource.SetAction(action);
+        }
+
+        log?.Information("PostNamazu OverlayPlugin handler registered in the shared event dispatcher.");
+        return true;
     }
 
     private static ulong ToNativeArgument(object argument)

@@ -12,6 +12,8 @@ namespace DalamudActCompat.ActRuntime;
 
 public sealed class SelfHostedActRuntime : IDisposable
 {
+    public const string CactbotOverlayName = "Cactbot Raidboss";
+
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
     private readonly IDataManager dataManager;
@@ -23,6 +25,10 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IGameInteropProvider gameInteropProvider;
     private readonly INotificationManager notificationManager;
     private readonly Func<bool> localDeathWhilePartyContinues;
+    private readonly Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings;
+    private readonly Func<bool> debugMode;
+    private readonly CachedDalamudGameStateProvider gameStateProvider = new();
+    private readonly object encounterSync = new();
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -45,9 +51,13 @@ public sealed class SelfHostedActRuntime : IDisposable
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
+    private bool chatEncounterDirty;
+    private bool chatEncounterPublished;
     private string chatActor = string.Empty;
     private string chatEnemy = string.Empty;
     private string chatZone = string.Empty;
+    private bool activeEncounterPublished;
+    private bool activeEncounterNamesLogged;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -60,7 +70,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
         INotificationManager notificationManager,
-        Func<bool> localDeathWhilePartyContinues)
+        Func<bool> localDeathWhilePartyContinues,
+        Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
+        Func<bool> debugMode)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -73,6 +85,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.gameInteropProvider = gameInteropProvider;
         this.notificationManager = notificationManager;
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
+        this.getOverlayWindowSettings = getOverlayWindowSettings;
+        this.debugMode = debugMode;
         NativePostNamazuBridge.Configure(framework, log);
     }
 
@@ -104,6 +118,23 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public IReadOnlyList<ActOverlayTemplate> OverlayTemplates => overlayTemplates;
 
+    public bool ApplyOverlayWindowSettings(string name)
+    {
+        if (string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        {
+            cactbotOverlay?.ApplySettings();
+            return cactbotOverlay is not null;
+        }
+
+        if (!htmlOverlays.TryGetValue(name, out var overlayWindow))
+        {
+            return false;
+        }
+
+        overlayWindow.ApplySettings();
+        return true;
+    }
+
     public bool ShowHtmlOverlay(string name)
     {
         var template = overlayTemplates.FirstOrDefault(
@@ -127,7 +158,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                     "WebView2Loader.dll"),
                 template.Name,
                 true,
+                getOverlayWindowSettings(template.Name),
                 new Size(template.Width, template.Height),
+                debugMode(),
                 log);
             htmlOverlays.Add(template.Name, window);
         }
@@ -187,6 +220,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             WriteLogFile = true,
         };
         configuration.Initialize(pluginInterface);
+        configuration.PlayerCharacterName = playerName();
         try
         {
             IINACT.FfxivActPluginWrapper.ConfigureRegion(dataManager.Language);
@@ -235,6 +269,11 @@ public sealed class SelfHostedActRuntime : IDisposable
         var overlayLogger = new RainbowMage.OverlayPlugin.Logger(log);
         container.Register(overlayLogger);
         container.Register<RainbowMage.OverlayPlugin.ILogger>(overlayLogger);
+        gameStateProvider.Update(
+            playerIdentities(),
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
+        container.Register<RainbowMage.OverlayPlugin.MemoryProcessors.IDalamudGameStateProvider>(
+            gameStateProvider);
         container.Register(httpClient);
         container.Register(new FileDialogManager());
         container.Register(pluginInterface);
@@ -290,7 +329,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                         "WebView2Loader.dll"),
                     "Cactbot Raidboss",
                     true,
+                    getOverlayWindowSettings(CactbotOverlayName),
                     new Size(900, 320),
+                    debugMode(),
                     log);
                 cactbotOverlay.Show();
 
@@ -310,7 +351,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                             "WebView2Loader.dll"),
                         "Cactbot Settings",
                         false,
+                        null,
                         new Size(1100, 760),
+                        debugMode(),
                         log);
                 }
             }
@@ -553,6 +596,18 @@ public sealed class SelfHostedActRuntime : IDisposable
                 actGlobalsInitialized = false;
             }
         }
+
+        gameStateProvider.Clear();
+        lock (encounterSync)
+        {
+            activeEncounter = null;
+            activeEncounterId = Guid.Empty;
+            activeEncounterPublished = false;
+            activeEncounterNamesLogged = false;
+            lastKnownDead.Clear();
+            observedDeaths.Clear();
+            ResetChatEncounterUnsafe();
+        }
     }
 
     private static ActPluginData RegisterSystemPlugin(IActPluginV1 plugin, string fileName)
@@ -595,63 +650,117 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
-        if (!ChineseCombatChatParser.TryParse(
-                fields[4],
-                chatActor,
-                out chatActor,
-                out var target,
-                out var damage))
+        ActEncounterSnapshot? completedEncounter = null;
+        lock (encounterSync)
         {
-            return;
+            if (!ChineseCombatChatParser.TryParse(
+                    fields[4],
+                    chatActor,
+                    out var actor,
+                    out var target,
+                    out var damage))
+            {
+                return;
+            }
+
+            var now = new DateTimeOffset(logInfo.detectedTime);
+            if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
+            {
+                if (chatEncounterPublished && !activeEncounterPublished)
+                {
+                    completedEncounter = CreateChatEncounterSnapshot(
+                        finished: true,
+                        gameStateProvider.Identities);
+                }
+
+                ResetChatEncounterUnsafe();
+                if (activeEncounter is null)
+                {
+                    lastKnownDead.Clear();
+                    observedDeaths.Clear();
+                }
+                chatEncounterId = Guid.NewGuid();
+                chatEncounterStart = now;
+            }
+
+            chatActor = actor;
+            chatLastDamage = now;
+            chatEnemy = target;
+            chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
+            chatDamageTotals[actor] = chatDamageTotals.GetValueOrDefault(actor) + damage;
+            chatEncounterDirty = true;
         }
 
-        var now = new DateTimeOffset(logInfo.detectedTime);
-        if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
+        if (completedEncounter is not null)
         {
-            PublishChatEncounter(finished: chatEncounterId != Guid.Empty);
-            chatEncounterId = Guid.NewGuid();
-            chatEncounterStart = now;
-            chatDamageTotals.Clear();
+            EncounterChanged?.Invoke(completedEncounter, true);
         }
-
-        chatLastDamage = now;
-        chatEnemy = target;
-        chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
-        chatDamageTotals[chatActor] = chatDamageTotals.GetValueOrDefault(chatActor) + damage;
-        PublishChatEncounter(finished: false);
     }
 
     private void OnFrameworkUpdate(IFramework _)
     {
-        TrackPlayerDeaths();
-        if (chatEncounterId == Guid.Empty || chatLastDamage == default ||
-            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
-            localDeathWhilePartyContinues() ||
-            DateTimeOffset.Now - chatLastDamage < TimeSpan.FromSeconds(3))
+        var identities = playerIdentities();
+        var inCombat = condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
+        gameStateProvider.Update(
+            identities,
+            inCombat);
+        TrackPlayerDeaths(identities);
+
+        ActEncounterSnapshot? activeChatEncounter = null;
+        ActEncounterSnapshot? completedChatEncounter = null;
+        lock (encounterSync)
         {
-            return;
+            if (chatEncounterId == Guid.Empty || chatLastDamage == default)
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.Now;
+            if (!activeEncounterPublished &&
+                chatEncounterDirty &&
+                now - chatEncounterStart >= TimeSpan.FromMilliseconds(250))
+            {
+                activeChatEncounter = CreateChatEncounterSnapshot(
+                    finished: false,
+                    identities);
+                chatEncounterPublished |= activeChatEncounter is not null;
+                chatEncounterDirty = false;
+            }
+
+            if (activeEncounter is null &&
+                !inCombat &&
+                !localDeathWhilePartyContinues() &&
+                now - chatLastDamage >= TimeSpan.FromSeconds(3))
+            {
+                completedChatEncounter = CreateChatEncounterSnapshot(
+                    finished: true,
+                    identities);
+                ResetChatEncounterUnsafe();
+                lastKnownDead.Clear();
+                observedDeaths.Clear();
+            }
         }
 
-        PublishChatEncounter(finished: true);
-        chatEncounterId = Guid.Empty;
-        chatDamageTotals.Clear();
-        chatActor = string.Empty;
+        if (activeChatEncounter is not null)
+        {
+            EncounterChanged?.Invoke(activeChatEncounter, false);
+        }
+
+        if (completedChatEncounter is not null)
+        {
+            EncounterChanged?.Invoke(completedChatEncounter, true);
+        }
     }
 
-    private void PublishChatEncounter(bool finished)
+    private ActEncounterSnapshot? CreateChatEncounterSnapshot(
+        bool finished,
+        IReadOnlyList<ActPlayerIdentity> identities)
     {
         if (chatEncounterId == Guid.Empty)
         {
-            return;
+            return null;
         }
 
-        var localPlayerName = playerName();
-        if (string.IsNullOrWhiteSpace(localPlayerName))
-        {
-            localPlayerName = ActGlobals.charName ?? string.Empty;
-        }
-
-        var identities = playerIdentities();
         var elapsedSeconds = Math.Max(
             1,
             ((finished ? chatLastDamage : DateTimeOffset.Now) - chatEncounterStart).TotalSeconds);
@@ -670,15 +779,15 @@ public sealed class SelfHostedActRuntime : IDisposable
                 item.Pair.Value / elapsedSeconds,
                 item.Pair.Value / elapsedSeconds))
             .ToArray();
-        EncounterChanged?.Invoke(
-            new ActEncounterSnapshot(
-                chatEncounterId,
+        return combatants.Length == 0
+            ? null
+            : new ActEncounterSnapshot(
+                activeEncounterId == Guid.Empty ? chatEncounterId : activeEncounterId,
                 chatEncounterStart,
                 finished ? chatLastDamage : null,
                 chatZone,
                 string.IsNullOrWhiteSpace(chatEnemy) ? "Encounter" : chatEnemy,
-                combatants),
-            finished);
+                combatants);
     }
 
     private void OnAfterCombatAction(bool isImport, CombatActionEventArgs action)
@@ -704,64 +813,113 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         try
         {
-            ActEncounterSnapshot snapshot;
+            ActEncounterSnapshot? snapshot = null;
+            ActEncounterSnapshot? fallbackSnapshot = null;
+            string? unmatchedNames = null;
             lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
             {
-                if (!ReferenceEquals(activeEncounter, encounter))
+                lock (encounterSync)
                 {
-                    activeEncounter = encounter;
-                    activeEncounterId = Guid.NewGuid();
-                    lastKnownDead.Clear();
-                    observedDeaths.Clear();
-                }
+                    if (!ReferenceEquals(activeEncounter, encounter))
+                    {
+                        var continuesChatEncounter = chatEncounterId != Guid.Empty;
+                        activeEncounter = encounter;
+                        activeEncounterId = continuesChatEncounter
+                            ? chatEncounterId
+                            : Guid.NewGuid();
+                        activeEncounterPublished = false;
+                        activeEncounterNamesLogged = false;
+                        if (!continuesChatEncounter)
+                        {
+                            lastKnownDead.Clear();
+                            observedDeaths.Clear();
+                        }
+                    }
 
-                var startTime = encounter.StartTime == DateTime.MaxValue
-                    ? DateTimeOffset.Now
-                    : new DateTimeOffset(encounter.StartTime);
-                DateTimeOffset? endTime = finished
-                    ? encounter.EndTime == DateTime.MinValue
+                    var startTime = encounter.StartTime == DateTime.MaxValue
                         ? DateTimeOffset.Now
-                        : new DateTimeOffset(encounter.EndTime)
-                    : null;
-                var identities = playerIdentities();
-                var combatants = encounter.Items.Values
-                    .Select(combatant => (
-                        Combatant: combatant,
-                        Identity: ActPlayerIdentityResolver.Resolve(identities, combatant.Name)))
-                    .Where(static item => item.Identity is not null)
-                    .Select(item => new ActCombatantSnapshot(
-                        item.Identity!.DisplayName,
-                        item.Identity.DisplayName,
-                        item.Identity.Job,
-                        item.Identity.IsLocalPlayer,
-                        item.Combatant.Damage,
-                        item.Combatant.Healed,
-                        Math.Max(
-                            item.Combatant.Deaths,
-                            observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
-                        item.Combatant.DPS,
-                        item.Combatant.EncDPS,
-                        item.Combatant.ExtDPS))
-                    .ToArray();
+                        : new DateTimeOffset(encounter.StartTime);
+                    DateTimeOffset? endTime = finished
+                        ? encounter.EndTime == DateTime.MinValue
+                            ? DateTimeOffset.Now
+                            : new DateTimeOffset(encounter.EndTime)
+                        : null;
+                    var identities = gameStateProvider.Identities;
+                    var combatants = encounter.Items.Values
+                        .Select(combatant => (
+                            Combatant: combatant,
+                            Identity: ActPlayerIdentityResolver.Resolve(identities, combatant.Name)))
+                        .Where(static item => item.Identity is not null)
+                        .Select(item => new ActCombatantSnapshot(
+                            item.Identity!.DisplayName,
+                            item.Identity.DisplayName,
+                            item.Identity.Job,
+                            item.Identity.IsLocalPlayer,
+                            item.Combatant.Damage,
+                            item.Combatant.Healed,
+                            Math.Max(
+                                item.Combatant.Deaths,
+                                observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
+                            item.Combatant.DPS,
+                            item.Combatant.EncDPS,
+                            item.Combatant.ExtDPS))
+                        .ToArray();
 
-                snapshot = new ActEncounterSnapshot(
-                    activeEncounterId,
-                    startTime,
-                    endTime,
-                    encounter.ZoneName ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
-                    encounter.Title ?? string.Empty,
-                    combatants);
+                    if (combatants.Length > 0)
+                    {
+                        activeEncounterPublished = true;
+                        snapshot = new ActEncounterSnapshot(
+                            activeEncounterId,
+                            startTime,
+                            endTime,
+                            encounter.ZoneName ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
+                            encounter.Title ?? string.Empty,
+                            combatants);
+                    }
+                    else if (!activeEncounterNamesLogged)
+                    {
+                        activeEncounterNamesLogged = true;
+                        unmatchedNames = string.Join(
+                            ", ",
+                            encounter.Items.Values.Select(item => item.Name));
+                    }
 
-                if (finished)
-                {
-                    activeEncounter = null;
-                    activeEncounterId = Guid.Empty;
-                    lastKnownDead.Clear();
-                    observedDeaths.Clear();
+                    if (finished)
+                    {
+                        activeEncounter = null;
+                        if (snapshot is null)
+                        {
+                            fallbackSnapshot = CreateChatEncounterSnapshot(
+                                finished: true,
+                                identities);
+                        }
+
+                        activeEncounterId = Guid.Empty;
+                        activeEncounterPublished = false;
+                        activeEncounterNamesLogged = false;
+                        lastKnownDead.Clear();
+                        observedDeaths.Clear();
+                        ResetChatEncounterUnsafe();
+                    }
                 }
             }
 
-            EncounterChanged?.Invoke(snapshot, finished);
+            if (unmatchedNames is not null)
+            {
+                log.Warning(
+                    "ACT encounter has no combatants matching the current player or party. " +
+                    $"Raw names: {unmatchedNames}. " +
+                    "The Chinese combat-chat fallback will be used for this encounter.");
+            }
+
+            if (snapshot is not null)
+            {
+                EncounterChanged?.Invoke(snapshot, finished);
+            }
+            else if (fallbackSnapshot is not null)
+            {
+                EncounterChanged?.Invoke(fallbackSnapshot, true);
+            }
         }
         catch (Exception ex)
         {
@@ -769,30 +927,69 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
     }
 
-    private void TrackPlayerDeaths()
+    private void TrackPlayerDeaths(IReadOnlyList<ActPlayerIdentity> identities)
     {
-        if (activeEncounter is null)
+        EncounterData? encounterToPublish = null;
+        lock (encounterSync)
         {
-            return;
-        }
-
-        var changed = false;
-        foreach (var identity in playerIdentities())
-        {
-            var name = identity.DisplayName;
-            if (lastKnownDead.TryGetValue(name, out var wasDead) && !wasDead && identity.IsDead)
+            if (activeEncounter is null && chatEncounterId == Guid.Empty)
             {
-                observedDeaths[name] = observedDeaths.GetValueOrDefault(name) + 1;
-                changed = true;
+                return;
             }
 
-            lastKnownDead[name] = identity.IsDead;
+            var changed = false;
+            foreach (var identity in identities)
+            {
+                var name = identity.DisplayName;
+                if (!lastKnownDead.TryGetValue(name, out var wasDead))
+                {
+                    if (identity.IsDead)
+                    {
+                        observedDeaths[name] = Math.Max(
+                            1,
+                            observedDeaths.GetValueOrDefault(name));
+                        changed = true;
+                    }
+                }
+                else if (!wasDead && identity.IsDead)
+                {
+                    observedDeaths[name] = observedDeaths.GetValueOrDefault(name) + 1;
+                    changed = true;
+                }
+
+                lastKnownDead[name] = identity.IsDead;
+            }
+
+            if (changed)
+            {
+                if (activeEncounterPublished && activeEncounter is not null)
+                {
+                    encounterToPublish = activeEncounter;
+                }
+                else if (chatEncounterId != Guid.Empty)
+                {
+                    chatEncounterDirty = true;
+                }
+            }
         }
 
-        if (changed && activeEncounter is not null)
+        if (encounterToPublish is not null)
         {
-            PublishEncounter(activeEncounter, false);
+            PublishEncounter(encounterToPublish, false);
         }
+    }
+
+    private void ResetChatEncounterUnsafe()
+    {
+        chatEncounterId = Guid.Empty;
+        chatEncounterStart = default;
+        chatLastDamage = default;
+        chatEncounterDirty = false;
+        chatEncounterPublished = false;
+        chatDamageTotals.Clear();
+        chatActor = string.Empty;
+        chatEnemy = string.Empty;
+        chatZone = string.Empty;
     }
 
     private void SetUpstreamLogger()

@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Compatibility.PluginHost;
 
@@ -24,6 +25,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string SelectedOverlayTemplate { get; set; } = "Kagerou";
 
+    public Dictionary<string, HtmlOverlayWindowSettings> OverlayWindows { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public MeterSettings Meter { get; set; } = new();
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
@@ -40,8 +44,23 @@ public sealed class PluginConfiguration : IPluginConfiguration
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
         SelectedOverlayTemplate = "Kagerou";
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase);
         Meter = new MeterSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public HtmlOverlayWindowSettings GetOverlayWindowSettings(string name)
+    {
+        OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase);
+        if (!OverlayWindows.TryGetValue(name, out var settings))
+        {
+            settings = new HtmlOverlayWindowSettings();
+            OverlayWindows[name] = settings;
+        }
+
+        return settings;
     }
 }

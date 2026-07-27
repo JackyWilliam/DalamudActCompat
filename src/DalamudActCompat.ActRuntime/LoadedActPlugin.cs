@@ -165,8 +165,7 @@ internal sealed class LoadedActPlugin : IDisposable
                         StringComparison.OrdinalIgnoreCase))
                 {
                     StopLegacyPostNamazuProcessMonitor(instance);
-                    NativePostNamazuBridge.Start(instance);
-                    statusLabel.Text = "Loaded; native Dalamud game-write bridge active.";
+                    statusLabel.Text = NativePostNamazuBridge.Start(instance);
                 }
 
                 configurationForm.Text = string.IsNullOrWhiteSpace(tabPage.Text) ? spec.Id : tabPage.Text;
@@ -242,6 +241,11 @@ internal sealed class LoadedActPlugin : IDisposable
         {
             try
             {
+                if (string.Equals(Id, "postnamazu", StringComparison.OrdinalIgnoreCase))
+                {
+                    NativePostNamazuBridge.Stop(instance);
+                }
+
                 deInitPlugin.Invoke(instance, null);
                 (instance as IDisposable)?.Dispose();
                 ActGlobals.oFormActMain.ActPlugins.Remove(pluginData);

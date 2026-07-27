@@ -101,7 +101,9 @@ public sealed class Plugin : IDalamudPlugin
             condition,
             gameInteropProvider,
             notificationManager,
-            localDeathWhilePartyContinues);
+            localDeathWhilePartyContinues,
+            configuration.GetOverlayWindowSettings,
+            () => configuration.DebugMode);
         parserEngine = new ParserEngine(new IinactAdapter(
             actRuntime,
             logger,
@@ -145,6 +147,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenCactbotSettings,
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
+            name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration);
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
@@ -488,7 +491,16 @@ public sealed class Plugin : IDalamudPlugin
                 playerState.HomeWorld.ValueNullable?.Name.ToString() ?? string.Empty,
                 playerState.ClassJob.ValueNullable?.Abbreviation.ToString() ?? string.Empty,
                 true,
-                localPlayerDead);
+                localPlayerDead)
+            {
+                EntityId = playerState.EntityId,
+                ContentId = playerState.ContentId,
+                WorldId = playerState.HomeWorld.RowId,
+                JobId = unchecked((byte)playerState.ClassJob.RowId),
+                Level = unchecked((byte)playerState.EffectiveLevel),
+                CurrentHp = localPlayerDead ? 0u : 1u,
+                MaxHp = 1,
+            };
             identities[identity.DisplayName] = identity;
         }
 
@@ -504,8 +516,24 @@ public sealed class Plugin : IDalamudPlugin
                 name,
                 member.World.ValueNullable?.Name.ToString() ?? string.Empty,
                 member.ClassJob.ValueNullable?.Abbreviation.ToString() ?? string.Empty,
-                string.Equals(name, playerState.CharacterName, StringComparison.OrdinalIgnoreCase),
-                member.MaxHP > 0 && member.CurrentHP == 0);
+                (member.ContentId != 0 && member.ContentId == playerState.ContentId) ||
+                (member.EntityId != 0 && member.EntityId == playerState.EntityId),
+                member.MaxHP > 0 && member.CurrentHP == 0)
+            {
+                EntityId = member.EntityId,
+                ContentId = member.ContentId,
+                WorldId = member.World.RowId,
+                JobId = unchecked((byte)member.ClassJob.RowId),
+                Level = member.Level,
+                CurrentHp = member.CurrentHP,
+                MaxHp = member.MaxHP,
+                CurrentMp = member.CurrentMP,
+                MaxMp = member.MaxMP,
+                TerritoryId = unchecked((ushort)member.Territory.RowId),
+                PositionX = member.Position.X,
+                PositionY = member.Position.Y,
+                PositionZ = member.Position.Z,
+            };
             identities[identity.DisplayName] = identity;
         }
 

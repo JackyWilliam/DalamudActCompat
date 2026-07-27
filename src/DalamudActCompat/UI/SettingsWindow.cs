@@ -29,6 +29,7 @@ public sealed class SettingsWindow : Window
     private readonly Action openCactbotSettings;
     private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
     private readonly Action<string> openHtmlOverlay;
+    private readonly Action<string> applyOverlayWindowSettings;
     private readonly Action<string> openPluginConfiguration;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
@@ -51,6 +52,7 @@ public sealed class SettingsWindow : Window
         Action openCactbotSettings,
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
         Action<string> openHtmlOverlay,
+        Action<string> applyOverlayWindowSettings,
         Action<string> openPluginConfiguration)
         : base("ACT 兼容设置###DalamudActCompatSettings")
     {
@@ -70,6 +72,7 @@ public sealed class SettingsWindow : Window
         this.openCactbotSettings = openCactbotSettings;
         this.getOverlayTemplates = getOverlayTemplates;
         this.openHtmlOverlay = openHtmlOverlay;
+        this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         this.openPluginConfiguration = openPluginConfiguration;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -175,6 +178,13 @@ public sealed class SettingsWindow : Window
             OpenUrl("https://github.com/OverlayPlugin/cactbot");
         }
 
+        var cactbotWindowChanged = DrawHtmlOverlaySettings(SelfHostedActRuntime.CactbotOverlayName);
+        changed |= cactbotWindowChanged;
+        if (cactbotWindowChanged)
+        {
+            applyOverlayWindowSettings(SelfHostedActRuntime.CactbotOverlayName);
+        }
+
         ImGui.TextUnformatted(text.Get("OverlayPlugin HTML 悬浮窗", "OverlayPlugin HTML overlays"));
         var templates = getOverlayTemplates();
         if (templates.Count == 0)
@@ -218,6 +228,14 @@ public sealed class SettingsWindow : Window
             if (ImGui.Button(text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
             {
                 openHtmlOverlay(configuration.SelectedOverlayTemplate);
+            }
+
+            var overlayWindowChanged = DrawHtmlOverlaySettings(
+                configuration.SelectedOverlayTemplate);
+            changed |= overlayWindowChanged;
+            if (overlayWindowChanged)
+            {
+                applyOverlayWindowSettings(configuration.SelectedOverlayTemplate);
             }
         }
 
@@ -392,6 +410,37 @@ public sealed class SettingsWindow : Window
 
         set(value);
         return true;
+    }
+
+    private bool DrawHtmlOverlaySettings(string name)
+    {
+        var changed = false;
+        var settings = configuration.GetOverlayWindowSettings(name);
+        ImGui.TextDisabled($"{text.Get("窗口设置", "Window settings")}: {name}");
+        changed |= Checkbox(
+            $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
+            settings.IsClickThrough,
+            value => settings.IsClickThrough = value);
+        ImGui.SameLine();
+        changed |= Checkbox(
+            $"{text.Get("锁定位置和大小", "Lock position and size")}###{name}-locked",
+            settings.IsLocked,
+            value => settings.IsLocked = value);
+        var zoomFactor = settings.ZoomFactor;
+        if (ImGui.SliderFloat(
+                $"{text.Get("页面缩放", "Page zoom")}###{name}-zoom",
+                ref zoomFactor,
+                0.5f,
+                2.0f))
+        {
+            settings.ZoomFactor = zoomFactor;
+            changed = true;
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "悬浮窗始终无边框透明置顶；关闭穿透并解除锁定后可拖动，右下角可调整大小。",
+            "Overlays stay borderless, transparent, and topmost; disable click-through and unlock to drag or resize from the bottom-right."));
+        return changed;
     }
 
     private static bool SliderFloat(string label, float current, float min, float max, Action<float> set)
