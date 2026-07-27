@@ -417,6 +417,20 @@ public sealed class SettingsWindow : Window
         var changed = false;
         var settings = configuration.GetOverlayWindowSettings(name);
         ImGui.TextDisabled($"{text.Get("窗口设置", "Window settings")}: {name}");
+        var editing = settings.IsEditing;
+        if (ImGui.Button(
+                editing
+                    ? $"{text.Get("完成编辑悬浮窗", "Finish editing overlay")}###{name}-edit-mode"
+                    : $"{text.Get("编辑位置和大小", "Edit position and size")}###{name}-edit-mode"))
+        {
+            settings.SetEditing(!editing);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        ImGui.TextDisabled(editing
+            ? text.Get("现在可拖动，右下角可调整大小。", "Drag now; resize from the bottom-right.")
+            : text.Get("按钮会同时解除鼠标穿透和位置锁定。", "The button disables click-through and locking together."));
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
             settings.IsClickThrough,

@@ -32,6 +32,7 @@ try
     ValidatePlayerIdentityResolution();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
+    ValidateOverlayInitialStateEvents();
     ValidateHtmlOverlayDefaults();
     ValidateChinese751bOpcodes();
     ValidateMeterRows();
@@ -317,7 +318,16 @@ static void ValidateHtmlOverlayDefaults()
     var settings = new HtmlOverlayWindowSettings();
     Assert(settings.IsClickThrough, "HTML overlays must be click-through by default.");
     Assert(settings.IsLocked, "HTML overlays must be locked by default.");
+    Assert(!settings.IsEditing, "HTML overlays must not start in editing mode.");
     Assert(settings.ZoomFactor == 1.0f, "HTML overlay default zoom changed unexpectedly.");
+    settings.SetEditing(true);
+    Assert(
+        settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
+        "HTML overlay editing mode did not disable click-through and locking together.");
+    settings.SetEditing(false);
+    Assert(
+        !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
+        "Finishing HTML overlay editing did not restore click-through and locking together.");
 }
 
 static void ValidateCactbotSpokenAlertDefaults()
@@ -348,6 +358,37 @@ static void ValidateCactbotSpokenAlertDefaults()
         method.Invoke(null, [existing]) as bool? == false &&
         existing["options"]["raidboss"]?["SpokenAlertsEnabled"]?.Value<bool>() == false,
         "An explicit Cactbot spoken-alert preference was overwritten.");
+}
+
+static void ValidateOverlayInitialStateEvents()
+{
+    var eventSource = typeof(CactbotEventSource).Assembly.GetType(
+                          "RainbowMage.OverlayPlugin.EventSources.FFXIVOptionalEventSource")
+                      ?? throw new InvalidOperationException(
+                          "OverlayPlugin optional event source was not found.");
+    var createZone = eventSource.GetMethod(
+                         "CreateChangeZoneEvent",
+                         BindingFlags.Static | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException(
+                         "Initial ChangeZone event factory was not found.");
+    var zone = (JObject)createZone.Invoke(null, [0x155u, "The Goblet"])!;
+    Assert(
+        zone["type"]?.Value<string>() == "ChangeZone" &&
+        zone["zoneID"]?.Value<uint>() == 0x155u &&
+        zone["zoneName"]?.Value<string>() == "The Goblet",
+        "Initial ChangeZone event did not match the OverlayPlugin protocol.");
+
+    var createPlayer = eventSource.GetMethod(
+                           "CreateChangePrimaryPlayerEvent",
+                           BindingFlags.Static | BindingFlags.NonPublic)
+                       ?? throw new InvalidOperationException(
+                           "Initial ChangePrimaryPlayer event factory was not found.");
+    var player = (JObject)createPlayer.Invoke(null, [0x100227F7u, "Test Player"])!;
+    Assert(
+        player["type"]?.Value<string>() == "ChangePrimaryPlayer" &&
+        player["charID"]?.Value<uint>() == 0x100227F7u &&
+        player["charName"]?.Value<string>() == "Test Player",
+        "Initial ChangePrimaryPlayer event did not match the OverlayPlugin protocol.");
 }
 
 static void ValidateSettingsSerializerMemberTypes()
