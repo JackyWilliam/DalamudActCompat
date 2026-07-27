@@ -290,11 +290,13 @@ internal sealed class LoadedActPlugin : IDisposable
         var previous = actMain.PlayTtsMethod;
         FormActMain.PlayTtsDelegate bridge = message =>
         {
+            log.Debug($"ACT.FoxTTS speech request: {message}");
             _ = Task.Run(() =>
             {
                 try
                 {
                     speak.Invoke(plugin, [message]);
+                    log.Debug("ACT.FoxTTS accepted the speech request.");
                 }
                 catch (TargetInvocationException ex) when (ex.InnerException is not null)
                 {

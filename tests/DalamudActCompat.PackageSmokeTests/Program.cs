@@ -32,6 +32,7 @@ try
     ValidateActPluginDataCompatibility();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
+    ValidateRuntimePluginStartupOrder();
     ValidatePlayerIdentityResolution();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -361,29 +362,36 @@ static void ValidateHtmlOverlayDefaults()
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
         "The Cactbot responsive layout no longer protects info text from clipping.");
 
-    var interactionType = formType.GetNestedType(
-                              "OverlayInteraction",
-                              BindingFlags.NonPublic)
-                          ?? throw new InvalidOperationException(
-                              "HTML overlay interaction mode was not found.");
-    var calculateBounds = formType.GetMethod(
-                              "CalculateInteractionBounds",
-                              BindingFlags.Static | BindingFlags.NonPublic)
-                          ?? throw new InvalidOperationException(
-                              "HTML overlay interaction calculation was not found.");
-    var move = Enum.Parse(interactionType, "Move");
-    var resize = Enum.Parse(interactionType, "Resize");
-    var startBounds = new System.Drawing.Rectangle(100, 200, 900, 320);
-    var startCursor = new System.Drawing.Point(400, 300);
-    var currentCursor = new System.Drawing.Point(430, 350);
+    var hitTest = formType.GetMethod(
+                      "GetOverlayHitTestResult",
+                      BindingFlags.Static | BindingFlags.NonPublic)
+                  ?? throw new InvalidOperationException(
+                      "HTML overlay native hit-test helper was not found.");
     Assert(
-        calculateBounds.Invoke(null, [startBounds, startCursor, currentCursor, move])
-            is System.Drawing.Rectangle { X: 130, Y: 250, Width: 900, Height: 320 },
-        "HTML overlay dragging no longer follows the host cursor delta.");
+        hitTest.Invoke(
+            null,
+            [new System.Drawing.Size(900, 320), new System.Drawing.Point(450, 160)])
+        is 2,
+        "HTML overlay edit mode no longer exposes the client area as a native drag caption.");
     Assert(
-        calculateBounds.Invoke(null, [startBounds, startCursor, currentCursor, resize])
-            is System.Drawing.Rectangle { X: 100, Y: 200, Width: 930, Height: 370 },
-        "HTML overlay resizing no longer follows the host cursor delta.");
+        hitTest.Invoke(
+            null,
+            [new System.Drawing.Size(900, 320), new System.Drawing.Point(895, 315)])
+        is 17,
+        "HTML overlay edit mode no longer exposes a native bottom-right resize grip.");
+    var shouldEnableBrowserInput = formType.GetMethod(
+                                       "ShouldEnableBrowserInput",
+                                       BindingFlags.Static | BindingFlags.NonPublic)
+                                   ?? throw new InvalidOperationException(
+                                       "HTML overlay browser input routing helper was not found.");
+    settings.SetEditing(true);
+    Assert(
+        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == false,
+        "Windowed WebView2 still captures mouse input while editing an overlay.");
+    settings.IsLocked = true;
+    Assert(
+        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
+        "Windowed WebView2 did not resume page interaction after the overlay was locked.");
 }
 
 static void ValidateActTtsDispatch()
@@ -424,6 +432,31 @@ static void ValidateFoxTtsBridge()
     {
         ActGlobals.oFormActMain = previousActMain;
     }
+}
+
+static void ValidateRuntimePluginStartupOrder()
+{
+    var mustLoadBeforeOverlay = typeof(IinactAdapter).GetMethod(
+                                    "MustLoadBeforeOverlay",
+                                    BindingFlags.Static | BindingFlags.NonPublic)
+                                ?? throw new InvalidOperationException(
+                                    "Runtime plugin startup phase selector was not found.");
+    var foxTts = new RuntimePluginSpec(
+        "ACT.FoxTTS",
+        "C:\\plugins\\foxtts",
+        "ACT.FoxTTS.dll",
+        "ACT.FoxTTS.FoxTTSPlugin");
+    var triggernometry = new RuntimePluginSpec(
+        "triggernometry",
+        "C:\\plugins\\triggernometry",
+        "Triggernometry.dll",
+        "Triggernometry.Plugin");
+    Assert(
+        mustLoadBeforeOverlay.Invoke(null, [foxTts]) as bool? == true,
+        "FoxTTS is no longer guaranteed to own the ACT TTS dispatcher before Cactbot starts.");
+    Assert(
+        mustLoadBeforeOverlay.Invoke(null, [triggernometry]) as bool? == false,
+        "An unrelated ACT extension was moved ahead of OverlayPlugin startup.");
 }
 
 static void ValidateCactbotSpokenAlertDefaults()

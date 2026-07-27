@@ -69,15 +69,15 @@ public sealed class IinactAdapter : IParserEngine
             await StopAsync(CancellationToken.None).ConfigureAwait(false);
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             actRuntime.StartParser(logDirectory);
+
+            var runtimePlugins = customPlugins();
+            LoadCustomPlugins(runtimePlugins.Where(MustLoadBeforeOverlay));
             if (overlayEnabled())
             {
                 actRuntime.StartOverlay();
             }
 
-            foreach (var failure in actRuntime.LoadCustomPlugins(customPlugins()))
-            {
-                logger.Error(failure.Error, $"ACT plugin '{failure.Id}' failed to load.");
-            }
+            LoadCustomPlugins(runtimePlugins.Where(plugin => !MustLoadBeforeOverlay(plugin)));
             SetStatus(
                 ParserState.Running,
                 actRuntime.IsOverlayRunning
@@ -94,6 +94,17 @@ public sealed class IinactAdapter : IParserEngine
             SetStatus(ParserState.Faulted, "Parser initialization failed.", ex.Message);
         }
     }
+
+    private void LoadCustomPlugins(IEnumerable<RuntimePluginSpec> plugins)
+    {
+        foreach (var failure in actRuntime.LoadCustomPlugins(plugins))
+        {
+            logger.Error(failure.Error, $"ACT plugin '{failure.Id}' failed to load.");
+        }
+    }
+
+    private static bool MustLoadBeforeOverlay(RuntimePluginSpec plugin)
+        => string.Equals(plugin.Id, "act.foxtts", StringComparison.OrdinalIgnoreCase);
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {

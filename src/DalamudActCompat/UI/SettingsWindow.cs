@@ -429,7 +429,9 @@ public sealed class SettingsWindow : Window
 
         ImGui.SameLine();
         ImGui.TextDisabled(editing
-            ? text.Get("现在可拖动，右下角可调整大小。", "Drag now; resize from the bottom-right.")
+            ? text.Get(
+                "现在可拖动，右下角可调整大小；编辑期间网页交互暂时关闭。",
+                "Drag now; resize from the bottom-right. Page interaction is disabled while editing.")
             : text.Get("按钮会同时解除鼠标穿透和位置锁定。", "The button disables click-through and locking together."));
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
@@ -452,8 +454,8 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.TextDisabled(text.Get(
-            "悬浮窗始终无边框透明置顶；关闭穿透并解除锁定后可拖动，右下角可调整大小。",
-            "Overlays stay borderless, transparent, and topmost; disable click-through and unlock to drag or resize from the bottom-right."));
+            "悬浮窗始终无边框透明置顶；完成位置编辑后，锁定窗口但保持关闭穿透即可操作网页内容。",
+            "Overlays stay borderless, transparent, and topmost. After positioning, lock the window but leave click-through off to interact with the page."));
         return changed;
     }
 
