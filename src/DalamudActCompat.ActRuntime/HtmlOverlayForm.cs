@@ -18,6 +18,34 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const int HtCaption = 2;
     private const int HtBottomRight = 17;
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
+    internal const string CactbotResponsiveAlertLayoutScript =
+        """
+        (() => {
+          const install = () => {
+            if (document.getElementById('dalamud-act-compat-cactbot-layout'))
+              return;
+            const style = document.createElement('style');
+            style.id = 'dalamud-act-compat-cactbot-layout';
+            style.textContent = `
+              @media (max-height: 220px) {
+                #popup-text-info {
+                  top: max(0px, calc(100vh - 2.5em)) !important;
+                }
+              }
+              @media (max-height: 140px) {
+                #popup-text-alert {
+                  top: max(0px, calc(100vh - 3em)) !important;
+                }
+              }
+            `;
+            (document.head || document.documentElement).appendChild(style);
+          };
+          if (document.readyState === 'loading')
+            document.addEventListener('DOMContentLoaded', install, { once: true });
+          else
+            install();
+        })();
+        """;
 
     private readonly Uri pageUri;
     private readonly string userDataDirectory;
@@ -261,6 +289,11 @@ internal sealed class HtmlOverlayForm : IDisposable
                     })();
                     """);
             }
+            if (IsCactbotRaidbossPage(pageUri))
+            {
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    CactbotResponsiveAlertLayoutScript);
+            }
 
             webView.Source = pageUri;
             log.Information($"Opened {title}: {webView.Source}");
@@ -430,6 +463,11 @@ internal sealed class HtmlOverlayForm : IDisposable
             log.Warning(ex, $"Failed to notify {title} about its OverlayPlugin lock state.");
         }
     }
+
+    internal static bool IsCactbotRaidbossPage(Uri uri)
+        => uri.IsFile &&
+           uri.LocalPath.Replace('\\', '/')
+               .EndsWith("/ui/raidboss/raidboss.html", StringComparison.OrdinalIgnoreCase);
 
     private void OnOverlayBoundsChanged(object? sender, EventArgs args)
     {

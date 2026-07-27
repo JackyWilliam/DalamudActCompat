@@ -328,23 +328,70 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
         "Finishing HTML overlay editing did not restore click-through and locking together.");
+
+    var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
+                       "DalamudActCompat.ActRuntime.HtmlOverlayForm")
+                   ?? throw new InvalidOperationException("HTML overlay form was not found.");
+    var isRaidbossPage = formType.GetMethod(
+                             "IsCactbotRaidbossPage",
+                             BindingFlags.Static | BindingFlags.NonPublic)
+                         ?? throw new InvalidOperationException(
+                             "Cactbot raidboss page detector was not found.");
+    Assert(
+        isRaidbossPage.Invoke(
+            null,
+            [new Uri("file:///C:/cactbot/ui/raidboss/raidboss.html?OVERLAY_WS=ws://127.0.0.1")])
+            as bool? == true,
+        "The Cactbot raidboss page was not recognized for responsive alert layout.");
+    Assert(
+        isRaidbossPage.Invoke(
+            null,
+            [new Uri("file:///C:/cactbot/ui/config/config.html")])
+            as bool? == false,
+        "The responsive raidboss layout leaked into another Cactbot page.");
+    var layoutScript = formType.GetField(
+                           "CactbotResponsiveAlertLayoutScript",
+                           BindingFlags.Static | BindingFlags.NonPublic)
+                       ?.GetRawConstantValue() as string;
+    Assert(
+        layoutScript?.Contains("#popup-text-info", StringComparison.Ordinal) == true &&
+        layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
+        "The Cactbot responsive layout no longer protects info text from clipping.");
 }
 
 static void ValidateCactbotSpokenAlertDefaults()
 {
     var method = typeof(CactbotEventSource).GetMethod(
-        "EnsureSpokenAlertsEnabled",
+        "EnsureDefaultAlertOutput",
         BindingFlags.Static | BindingFlags.NonPublic)
-        ?? throw new InvalidOperationException("Cactbot spoken-alert migration helper was not found.");
+        ?? throw new InvalidOperationException("Cactbot alert-output migration helper was not found.");
     var empty = new Dictionary<string, JToken>();
     Assert(
         method.Invoke(null, [empty]) as bool? == true,
-        "A new Cactbot configuration did not enable spoken raidboss alerts.");
+        "A new Cactbot configuration did not select text and TTS output.");
     Assert(
-        empty["options"]["raidboss"]?["SpokenAlertsEnabled"]?.Value<bool>() == true,
-        "The initial Cactbot spoken-alert setting was written to the wrong configuration path.");
+        empty["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "ttsAndText" &&
+        empty["options"]["raidboss"]?["SpokenAlertsEnabled"] is null,
+        "The initial Cactbot output mode was written to an option raidboss does not consume.");
 
-    var existing = new Dictionary<string, JToken>
+    var legacyEnabled = new Dictionary<string, JToken>
+    {
+        ["options"] = JObject.FromObject(new
+        {
+            raidboss = new
+            {
+                SpokenAlertsEnabled = true,
+            },
+        }),
+    };
+    Assert(
+        method.Invoke(null, [legacyEnabled]) as bool? == true &&
+        legacyEnabled["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() ==
+            "ttsAndText" &&
+        legacyEnabled["options"]["raidboss"]?["SpokenAlertsEnabled"] is null,
+        "The v0.2.24 spoken-alert setting was not migrated to text and TTS output.");
+
+    var legacyDisabled = new Dictionary<string, JToken>
     {
         ["options"] = JObject.FromObject(new
         {
@@ -355,9 +402,26 @@ static void ValidateCactbotSpokenAlertDefaults()
         }),
     };
     Assert(
+        method.Invoke(null, [legacyDisabled]) as bool? == true &&
+        legacyDisabled["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() ==
+            "textAndSound" &&
+        legacyDisabled["options"]["raidboss"]?["SpokenAlertsEnabled"] is null,
+        "A legacy Cactbot spoken-alert opt-out was not preserved during migration.");
+
+    var existing = new Dictionary<string, JToken>
+    {
+        ["options"] = JObject.FromObject(new
+        {
+            raidboss = new
+            {
+                DefaultAlertOutput = "textOnly",
+            },
+        }),
+    };
+    Assert(
         method.Invoke(null, [existing]) as bool? == false &&
-        existing["options"]["raidboss"]?["SpokenAlertsEnabled"]?.Value<bool>() == false,
-        "An explicit Cactbot spoken-alert preference was overwritten.");
+        existing["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "textOnly",
+        "An explicit Cactbot default output mode was overwritten.");
 }
 
 static void ValidateOverlayInitialStateEvents()
