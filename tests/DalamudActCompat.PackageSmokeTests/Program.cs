@@ -464,6 +464,22 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
         "Windowed WebView2 did not resume page interaction after the overlay was locked.");
+    var shieldType = typeof(MeterService).Assembly.GetType(
+                         "DalamudActCompat.UI.OverlayEditShield",
+                         throwOnError: true)
+                     ?? throw new InvalidOperationException(
+                         "The transparent overlay edit shield was not found.");
+    var isShieldRequired = shieldType.GetMethod(
+                               "IsRequired",
+                               BindingFlags.Static | BindingFlags.NonPublic)
+                           ?? throw new InvalidOperationException(
+                               "The transparent overlay edit shield condition was not found.");
+    Assert(
+        isShieldRequired.Invoke(null, [false]) as bool? == false,
+        "The transparent edit shield remained active without a visible editing overlay.");
+    Assert(
+        isShieldRequired.Invoke(null, [true]) as bool? == true,
+        "The transparent edit shield did not activate for a visible editing overlay.");
 }
 
 static void ValidateActTtsDispatch()

@@ -69,6 +69,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private nint interactionWindowHandle;
     private bool leftButtonWasDown;
     private bool ownsMouseCapture;
+    private volatile bool visible;
     private bool disposing;
     private bool applyingSettings;
     private Exception? startupFailure;
@@ -96,6 +97,9 @@ internal sealed class HtmlOverlayForm : IDisposable
     }
 
     private Size ClientSize { get; }
+
+    public bool IsVisibleEditing
+        => visible && settings?.IsEditing == true;
 
     public void Show()
     {
@@ -129,6 +133,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         form.BeginInvoke(() =>
         {
             form.Show();
+            visible = true;
             form.WindowState = FormWindowState.Normal;
             if (overlayMode)
             {
@@ -191,6 +196,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             form.SizeChanged += OnOverlayBoundsChanged;
             form.Shown += async (_, _) =>
             {
+                visible = true;
                 if (overlayMode)
                 {
                     ApplyOverlaySettings();
@@ -209,6 +215,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
         finally
         {
+            visible = false;
             StopEditMonitor();
             if (webView is not null)
             {
@@ -641,6 +648,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
     {
+        visible = false;
         StopEditMonitor();
         if (disposing)
         {
