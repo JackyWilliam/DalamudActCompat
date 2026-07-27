@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.2.26.0",
+    "AssemblyVersion":  "0.2.27.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.26/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.27/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.26/DalamudActCompat.zip",
-    "LastUpdate":  1785157246486,
-    "Changelog":  "将 Cactbot/Triggernometry 的 ACT TTS 请求接入 FoxTTS 标准 Speak 接口，并在卸载时恢复原委托；按 OverlayPlugin 原生锁定与穿透语义重做 WebView2 宿主拖动和右下角缩放，修复解锁后仍无法调整窗口的问题。"
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.27/DalamudActCompat.zip",
+    "LastUpdate":  1785158533180,
+    "Changelog":  "修复 FoxTTS 晚于 OverlayPlugin/Cactbot 启动导致首条语音提示丢失的问题；针对 WebView2 子窗口改用原生宿主命中测试，编辑模式可直接拖动悬浮窗并从右下角缩放，锁定后恢复网页交互。"
 }
 ]
