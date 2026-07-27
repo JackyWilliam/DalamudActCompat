@@ -408,6 +408,33 @@ static void ValidateHtmlOverlayDefaults()
             null,
             [true, true, true, false, false]) as bool? == false,
         "A click outside the overlay incorrectly began an interaction.");
+    var tryAcquireInteraction = formType.GetMethod(
+                                    "TryAcquireInteraction",
+                                    BindingFlags.Static | BindingFlags.NonPublic)
+                                ?? throw new InvalidOperationException(
+                                    "HTML overlay interaction ownership helper was not found.");
+    var releaseInteraction = formType.GetMethod(
+                                 "ReleaseInteraction",
+                                 BindingFlags.Static | BindingFlags.NonPublic)
+                             ?? throw new InvalidOperationException(
+                                 "HTML overlay interaction release helper was not found.");
+    var firstWindow = (nint)101;
+    var secondWindow = (nint)202;
+    Assert(
+        tryAcquireInteraction.Invoke(null, [firstWindow]) as bool? == true,
+        "The first editing overlay could not acquire mouse interaction ownership.");
+    Assert(
+        tryAcquireInteraction.Invoke(null, [secondWindow]) as bool? == false,
+        "Two editing overlays acquired the same mouse interaction.");
+    releaseInteraction.Invoke(null, [secondWindow]);
+    Assert(
+        tryAcquireInteraction.Invoke(null, [secondWindow]) as bool? == false,
+        "A non-owner released another overlay's mouse interaction.");
+    releaseInteraction.Invoke(null, [firstWindow]);
+    Assert(
+        tryAcquireInteraction.Invoke(null, [secondWindow]) as bool? == true,
+        "Mouse interaction ownership was not released after dragging ended.");
+    releaseInteraction.Invoke(null, [secondWindow]);
     var calculateBounds = formType.GetMethod(
                               "CalculateInteractionBounds",
                               BindingFlags.Static | BindingFlags.NonPublic)
@@ -797,21 +824,38 @@ static void ValidateActEncounterMapping()
         [
             new ActCombatantSnapshot("local", "You", "SAM", true, 120_000, 2_000, 0, 13_000, 12_000, 12_000),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
+            new ActCombatantSnapshot(
+                "early",
+                "Early Pull",
+                "DRG",
+                false,
+                1,
+                0,
+                0,
+                double.PositiveInfinity,
+                double.NegativeInfinity,
+                double.NaN),
         ]);
 
     var encounter = ActEncounterMapper.Map(snapshot);
     Assert(encounter.Id == id, "ACT encounter id was not preserved.");
     Assert(encounter.StartTime == start, "ACT encounter start time was not preserved.");
     Assert(encounter.IsActive, "Active ACT encounter was mapped as finished.");
-    Assert(encounter.TotalDamage == 140_000, "ACT combatant damage totals were not mapped.");
+    Assert(encounter.TotalDamage == 140_001, "ACT combatant damage totals were not mapped.");
     Assert(encounter.TotalHealing == 92_000, "ACT combatant healing totals were not mapped.");
     Assert(encounter.TotalDeaths == 1, "ACT combatant deaths were not mapped.");
     Assert(encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer).Name == "You",
         "ACT local player marker was not mapped.");
-    Assert(encounter.JobSummaries.Count == 2, "ACT job summaries were not generated.");
+    Assert(encounter.JobSummaries.Count == 3, "ACT job summaries were not generated.");
     var local = encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer);
     Assert(local.Dps == 13_000 && local.EncDps == 12_000 && local.ExtDps == 12_000,
         "ACT DPS metric fields were not mapped.");
+    var early = encounter.Combatants.Single(static combatant => combatant.Name == "Early Pull");
+    Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0,
+        "Non-finite ACT rates were not normalized before persistence.");
+    Assert(
+        !string.IsNullOrWhiteSpace(JsonSerializer.Serialize(encounter)),
+        "A mapped ACT encounter with early-pull rates could not be serialized.");
 }
 
 static void ValidateChineseCombatChatParsing()
