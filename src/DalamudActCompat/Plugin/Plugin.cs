@@ -40,8 +40,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly LogHistoryWindow logHistoryWindow;
     private readonly SettingsWindow settingsWindow;
     private readonly StatusWindow statusWindow;
+    private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly ActPluginPackageInstaller packageInstaller;
+    private readonly BundledActPluginManager bundledPluginManager;
     private readonly CactbotPackageInstaller cactbotInstaller;
     private readonly FileDialogManager fileDialogManager = new();
 
@@ -83,6 +85,12 @@ public sealed class Plugin : IDalamudPlugin
             configuration.LogDirectory = paths.CombatLogDirectory;
         }
 
+        packageInstaller = new ActPluginPackageInstaller(paths);
+        bundledPluginManager = new BundledActPluginManager(
+            pluginInterface.AssemblyLocation.Directory!.FullName,
+            typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown",
+            packageInstaller,
+            configuration);
         stateStore = new EncounterStateStore();
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
@@ -128,8 +136,12 @@ public sealed class Plugin : IDalamudPlugin
             configuration,
             logger,
             SaveConfiguration);
-        packageInstaller = new ActPluginPackageInstaller(paths);
         cactbotInstaller = new CactbotPackageInstaller(paths);
+        thirdPartyPluginNoticeWindow = new ThirdPartyPluginNoticeWindow(
+            bundledPluginManager.GetPendingDisclosures,
+            InstallBundledPluginsAsync,
+            logger,
+            text);
         settingsWindow = new SettingsWindow(
             configuration,
             parserEngine,
@@ -148,13 +160,15 @@ public sealed class Plugin : IDalamudPlugin
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
-            OpenActPluginConfiguration);
+            OpenActPluginConfiguration,
+            thirdPartyPluginNoticeWindow.OpenNotice);
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(logHistoryWindow);
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(statusWindow);
+        windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -335,6 +349,27 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
+    private async Task InstallBundledPluginsAsync(
+        IReadOnlyList<BundledActPluginDescriptor> plugins)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
+        await bundledPluginManager
+            .InstallAndAcknowledgeAsync(plugins, timeout.Token)
+            .ConfigureAwait(false);
+        SaveConfiguration();
+        if (configuration.EnableParsing && configuration.AutoStartParser)
+        {
+            await parserEngine.StartAsync(timeout.Token).ConfigureAwait(false);
+        }
+
+        services.NotificationManager.AddNotification(new()
+        {
+            Title = "ACT 兼容",
+            Content = "内置第三方 DLL 已按随包最新版安装/更新；作者、版本和来源告知已记录。",
+        });
+    }
+
     private void SelectPluginPackage()
     {
         if (!Directory.Exists(paths.ActPluginDirectory))
@@ -471,7 +506,7 @@ public sealed class Plugin : IDalamudPlugin
     private IReadOnlyList<RuntimePluginSpec> DiscoverRuntimePlugins()
         => packageInstaller
             .Discover(configuration.DisabledActPluginIds)
-            .Where(plugin => plugin.Enabled)
+            .Where(plugin => plugin.Enabled && bundledPluginManager.IsAllowedToLoad(plugin))
             .Select(plugin => new RuntimePluginSpec(
                 plugin.Manifest.Id,
                 plugin.InstallDirectory,

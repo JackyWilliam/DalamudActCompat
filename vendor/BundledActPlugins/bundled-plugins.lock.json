@@ -1,0 +1,50 @@
+﻿{
+    "schemaVersion":  1,
+    "plugins":  [
+                    {
+                        "id":  "triggernometry",
+                        "name":  "Triggernometry CN Maintained Edition",
+                        "version":  "2.1.1.2",
+                        "author":  "Paissa Heavy Industries",
+                        "maintainer":  "MnFeN (Chinese maintained edition)",
+                        "copyright":  "(c) 2016-2025 Paissa Heavy Industries",
+                        "projectUrl":  "https://github.com/MnFeN/Triggernometry",
+                        "downloadUrl":  "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/Triggernometry.dll",
+                        "sourceUrl":  "https://github.com/MnFeN/Triggernometry",
+                        "license":  "MIT",
+                        "licenseFile":  "triggernometry/LICENSE.txt",
+                        "relativeAssembly":  "triggernometry/Triggernometry.dll",
+                        "sha256":  "60dd0b097b3b3f33ffe73766742840b6481277e0f0f241c20effec99d3423772"
+                    },
+                    {
+                        "id":  "act.foxtts",
+                        "name":  "ACT.FoxTTS",
+                        "version":  "3.3.1.189",
+                        "author":  "Noisyfox",
+                        "maintainer":  "Noisyfox",
+                        "copyright":  "Copyright (c) 2018-2022 Noisyfox",
+                        "projectUrl":  "https://github.com/Noisyfox/ACT.FoxTTS",
+                        "downloadUrl":  "https://github.com/Noisyfox/ACT.FoxTTS/releases/download/3.3.1/ACT.FoxTTS-3.3.1.189-Release.7z",
+                        "sourceUrl":  "https://github.com/Noisyfox/ACT.FoxTTS",
+                        "license":  "GPL-3.0",
+                        "licenseFile":  "act.foxtts/LICENSE.txt",
+                        "relativeAssembly":  "act.foxtts/ACT.FoxTTS.dll",
+                        "sha256":  "ec237d37b77f33b6d706b3959c3720b05273bc0b06795c6479f7fb8dab32d87b"
+                    },
+                    {
+                        "id":  "postnamazu",
+                        "name":  "PostNamazu",
+                        "version":  "1.3.6.6",
+                        "author":  "Natsukage",
+                        "maintainer":  "Natsukage",
+                        "copyright":  "",
+                        "projectUrl":  "https://github.com/Natsukage/PostNamazu",
+                        "downloadUrl":  "https://github.com/Natsukage/PostNamazu/releases/download/1.3.6.6/PostNamazu.zip",
+                        "sourceUrl":  "https://github.com/Natsukage/PostNamazu",
+                        "license":  "Redistribution authorized by the author; the upstream repository declares no SPDX license",
+                        "licenseFile":  "",
+                        "relativeAssembly":  "postnamazu/PostNamazu.dll",
+                        "sha256":  "f8f0e09b6eec83d52f76556b289ba7448b56609b1c4d232a0729eac8e0239097"
+                    }
+                ]
+}

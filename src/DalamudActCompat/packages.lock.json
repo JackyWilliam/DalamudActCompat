@@ -19,11 +19,6 @@
         "resolved": "10.0.1",
         "contentHash": "HqAEbtoAhgvH53c54IV5e4vQ60PYvl7Z/WIHsbet+UGGE7n+7dwVNXw1mb9LZlWbsxnupCevvtgIne5P//ZKpQ=="
       },
-      "Microsoft.Web.WebView2": {
-        "type": "Transitive",
-        "resolved": "1.0.4078.44",
-        "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
-      },
       "NAudio": {
         "type": "Transitive",
         "resolved": "2.2.1",
@@ -99,8 +94,8 @@
       },
       "Unscrambler.XIV": {
         "type": "Transitive",
-        "resolved": "7.51.1",
-        "contentHash": "hsVrIO3grJ8CvuyNAt8gE4v1Lhqm/XtEZY9ODyp8xqfAeLMDuBKlcs+LXqVWfVlg0K4xyNlxXAANdmbMfrxtgQ=="
+        "resolved": "7.55.0",
+        "contentHash": "ehgTzOZYE+VOuVIJ4N2nxuCJkTWUlETP4EYh1lUEG6ge/lMLX8VgrbRbfXmvHZheaBr0YSIfhaUHHY0SjeYHqA=="
       },
       "Advanced Combat Tracker": {
         "type": "Project"
@@ -108,8 +103,7 @@
       "dalamudactcompat.actruntime": {
         "type": "Project",
         "dependencies": {
-          "IINACT": "[2.10.3.2, )",
-          "Microsoft.Web.WebView2": "[1.0.4078.44, )"
+          "IINACT": "[2.10.3.4, )"
         }
       },
       "fetchdependencies": {
@@ -124,9 +118,9 @@
           "Machina": "[2.3.1.3, )",
           "Machina.FFXIV": "[2.4.5.5, )",
           "NAudio": "[2.2.1, )",
-          "OverlayPlugin.Core": "[0.19.100, )",
+          "OverlayPlugin.Core": "[0.19.103, )",
           "System.Speech": "[10.0.0, )",
-          "Unscrambler.XIV": "[7.51.1, )"
+          "Unscrambler.XIV": "[7.55.0, )"
         }
       },
       "machina": {

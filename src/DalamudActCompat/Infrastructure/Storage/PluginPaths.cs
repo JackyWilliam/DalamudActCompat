@@ -55,6 +55,7 @@ public sealed class PluginPaths
         Directory.CreateDirectory(CombatLogDirectory);
         Directory.CreateDirectory(EncounterLogDirectory);
         Directory.CreateDirectory(HostDirectory);
+        Directory.CreateDirectory(ActPluginDirectory);
         Directory.CreateDirectory(CactbotDirectory);
         Directory.CreateDirectory(PluginStagingDirectory);
         Directory.CreateDirectory(PluginBackupDirectory);

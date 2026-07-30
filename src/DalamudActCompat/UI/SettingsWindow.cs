@@ -31,6 +31,7 @@ public sealed class SettingsWindow : Window
     private readonly Action<string> openHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
     private readonly Action<string> openPluginConfiguration;
+    private readonly Action openBundledPluginNotice;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
     private string? resetResult;
@@ -53,7 +54,8 @@ public sealed class SettingsWindow : Window
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
         Action<string> openHtmlOverlay,
         Action<string> applyOverlayWindowSettings,
-        Action<string> openPluginConfiguration)
+        Action<string> openPluginConfiguration,
+        Action openBundledPluginNotice)
         : base("ACT 兼容设置###DalamudActCompatSettings")
     {
         this.configuration = configuration;
@@ -74,6 +76,7 @@ public sealed class SettingsWindow : Window
         this.openHtmlOverlay = openHtmlOverlay;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         this.openPluginConfiguration = openPluginConfiguration;
+        this.openBundledPluginNotice = openBundledPluginNotice;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
     }
@@ -150,6 +153,13 @@ public sealed class SettingsWindow : Window
         if (ImGui.Button(text.Get("打开 ACT 扩展文件夹", "Open ACT plugin folder")))
         {
             openPluginDirectory();
+        }
+
+        if (ImGui.Button(text.Get(
+                "查看内置 DLL 作者、版本与来源网址",
+                "View bundled DLL authors, versions, and source URLs")))
+        {
+            openBundledPluginNotice();
         }
 
         ImGui.TextDisabled(text.Get("安装或启停扩展后请重启解析器。", "Restart the parser after installing or changing plugins."));
@@ -476,11 +486,7 @@ public sealed class SettingsWindow : Window
         ImGui.BulletText(name);
         ImGui.SameLine();
         ImGui.TextDisabled(note);
-        ImGui.SameLine();
-        if (ImGui.SmallButton($"{text.Get("打开项目页", "Open project page")}###{name}"))
-        {
-            OpenUrl(url);
-        }
+        ImGui.TextWrapped($"{text.Get("网址", "URL")}: {url}");
     }
 
     private void OpenUrl(string url)

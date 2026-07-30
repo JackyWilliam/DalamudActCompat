@@ -27,6 +27,13 @@ Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users
 - Parser status model: disabled, initializing, running, stopped, missing dependency, incompatible, faulted.
 - In-process official FFXIV_ACT_Plugin runtime using the NotACT compatibility assembly.
 - Embedded OverlayPlugin runtime initialized against the same ACT host.
+- FFXIV 7.55 parser stack: IINACT 2.10.3.4, OverlayPlugin Core 0.19.103,
+  Machina 7.55 opcodes, Unscrambler.XIV 7.55.0, and FFXIV_ACT_Plugin 3.0.2.5.
+- Triggernometry CN 2.1.1.2, ACT.FoxTTS 3.3.1.189, and PostNamazu 1.3.6.6 are
+  bundled with the release. Their author, maintainer, version, permission,
+  project/source URL, exact DLL download URL, and SHA-256 are shown on first
+  install and after every DalamudActCompat update; they remain unloaded until
+  the notice is acknowledged.
 - Optional ACT plugin packages with manifest validation, safe ZIP extraction, atomic installation, upgrade backup, enable/disable composition, and isolated load contexts.
 - Recoverable factory reset: mutable state is moved to a timestamped backup before default system plugins and settings are restored.
 
@@ -36,6 +43,16 @@ Use a Windows machine with .NET 10 SDK and XIVLauncher/Dalamud API 15 developmen
 
 ```bash
 dotnet build DalamudActCompat.slnx
+```
+
+Before a release, synchronize and verify the pinned parser and bundled ACT
+plugin binaries:
+
+```powershell
+./tools/sync-parser-dependencies.ps1
+./tools/sync-bundled-act-plugins.ps1
+./tools/sync-parser-dependencies.ps1 -Check
+./tools/sync-bundled-act-plugins.ps1 -Check
 ```
 
 Local validation status:
