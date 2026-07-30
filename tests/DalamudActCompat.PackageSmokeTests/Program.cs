@@ -31,6 +31,7 @@ try
 {
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
+    ValidatePostNamazuRawLogCompatibility();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
@@ -208,19 +209,19 @@ static void ValidateChinese755Opcodes()
     var opcodes = OpcodeManager.Instance.CurrentOpcodes;
     var expected = new Dictionary<string, ushort>
     {
-        ["Ability1"] = 0x01E7,
-        ["Ability8"] = 0x0077,
-        ["Ability16"] = 0x038F,
-        ["Ability24"] = 0x00B2,
-        ["Ability32"] = 0x007C,
-        ["ActorCast"] = 0x01A1,
-        ["EffectResult"] = 0x0114,
-        ["ActorControl"] = 0x02C8,
-        ["ActorControlSelf"] = 0x02B3,
-        ["ActorControlTarget"] = 0x00E0,
-        ["StatusEffectList"] = 0x031E,
-        ["StatusEffectList2"] = 0x009F,
-        ["StatusEffectList3"] = 0x00EB,
+        ["Ability1"] = 0x01F3,
+        ["Ability8"] = 0x0114,
+        ["Ability16"] = 0x02CD,
+        ["Ability24"] = 0x00ED,
+        ["Ability32"] = 0x02C7,
+        ["ActorCast"] = 0x016B,
+        ["EffectResult"] = 0x0238,
+        ["ActorControl"] = 0x0112,
+        ["ActorControlSelf"] = 0x020E,
+        ["ActorControlTarget"] = 0x01A2,
+        ["StatusEffectList"] = 0x014C,
+        ["StatusEffectList2"] = 0x0201,
+        ["StatusEffectList3"] = 0x02E8,
     };
 
     foreach (var pair in expected)
@@ -229,6 +230,19 @@ static void ValidateChinese755Opcodes()
             opcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
             $"Chinese 7.55 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
     }
+}
+
+static void ValidatePostNamazuRawLogCompatibility()
+{
+    var method = typeof(FormActMain).GetMethod(
+        "ParseRawLogLine",
+        BindingFlags.Instance | BindingFlags.Public,
+        binder: null,
+        [typeof(bool), typeof(DateTime), typeof(string)],
+        modifiers: null);
+    Assert(
+        method is not null && method.ReturnType == typeof(void),
+        "The ACT three-argument ParseRawLogLine ABI required by PostNamazu is missing.");
 }
 
 static void ValidateParserDependencyVersions()
