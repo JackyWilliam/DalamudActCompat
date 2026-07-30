@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.2.30.0",
+    "AssemblyVersion":  "0.2.31.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,10 +12,10 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.30/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.31/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.30/DalamudActCompat.zip",
-    "LastUpdate":  1785161723748,
-    "Changelog":  "修复悬浮窗只有在 Dalamud 页面垫底时才能平滑移动的问题；可见悬浮窗进入编辑模式后会启用完全透明的游戏内鼠标底层，阻止 FFXIV 重置光标且不改变窗口外观，完成编辑后自动移除。"
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.31/DalamudActCompat.zip",
+    "LastUpdate":  1785395943153,
+    "Changelog":  "适配 FFXIV 7.55：更新解析链；随包提供 Triggernometry 中文维护版、ACT.FoxTTS 与鲶鱼精邮差。首次安装、宿主更新及启动时发现作者上游 DLL 更新后，均先弹窗展示作者、版本、授权和网址，确认前不加载。"
 }
 ]

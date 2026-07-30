@@ -18,17 +18,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
+      - name: Verify bundled dependency versions
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./tools/sync-parser-dependencies.ps1 -Check
+          ./tools/sync-bundled-act-plugins.ps1 -Check
+
       - name: Restore
         run: dotnet restore DalamudActCompat.slnx
 
       - name: Build
-        run: dotnet build DalamudActCompat.slnx --configuration Release --no-restore
+        shell: pwsh
+        run: |
+          $candidates = @(
+            (Join-Path $env:APPDATA "XIVLauncherCN/addon/Hooks/dev"),
+            (Join-Path $env:APPDATA "XIVLauncher/addon/Hooks/dev")
+          )
+          $dalamud = $candidates |
+            Where-Object { Test-Path (Join-Path $_ "Dalamud.dll") } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($dalamud)) {
+            throw "Dalamud development files were not found."
+          }
+          $dalamud = $dalamud.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+          dotnet build DalamudActCompat.slnx `
+            --configuration Release `
+            --no-restore `
+            "-p:DalamudLibPath=$dalamud"
 
       - name: Collect plugin artifact
         shell: pwsh

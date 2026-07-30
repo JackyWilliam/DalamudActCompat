@@ -10,6 +10,8 @@ public sealed class ActPluginManifest
 
     public string Version { get; set; } = string.Empty;
 
+    public string SourceSha256 { get; set; } = string.Empty;
+
     public string EntryAssembly { get; set; } = string.Empty;
 
     public string EntryType { get; set; } = string.Empty;

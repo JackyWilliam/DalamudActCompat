@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DalamudActCompat.Infrastructure.Storage;
@@ -195,6 +196,7 @@ public sealed partial class ActPluginPackageInstaller
                 Id = known.Id,
                 Name = known.Name,
                 Version = version,
+                SourceSha256 = ComputeSha256(assembly),
                 HostApiVersion = 1,
                 EntryAssembly = relativeAssembly,
                 EntryType = known.EntryType,
@@ -300,6 +302,12 @@ public sealed partial class ActPluginPackageInstaller
         {
             File.Copy(source, Path.Combine(stagingDirectory, fileName), overwrite: false);
         }
+    }
+
+    private static string ComputeSha256(string filePath)
+    {
+        using var stream = File.OpenRead(filePath);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     private static async Task<ActPluginManifest> ReadManifestAsync(

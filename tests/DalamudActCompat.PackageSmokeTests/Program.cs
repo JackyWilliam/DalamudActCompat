@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -38,7 +39,8 @@ try
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
     ValidateHtmlOverlayDefaults();
-    ValidateChinese751bOpcodes();
+    ValidateParserDependencyVersions();
+    ValidateChinese755Opcodes();
     ValidateMeterRows();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
@@ -46,6 +48,14 @@ try
     var paths = new PluginPaths(Path.Combine(testRoot, "config"));
     Directory.CreateDirectory(paths.ActPluginDirectory);
     var installer = new ActPluginPackageInstaller(paths);
+    await ValidateBundledPluginDisclosureAsync(testRoot);
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("ACTCOMPAT_ONLINE_UPDATE_SMOKE"),
+            "1",
+            StringComparison.Ordinal))
+    {
+        await ValidateLiveBundledPluginUpdateCheckAsync(testRoot);
+    }
 
     var cactbotPackage = Path.Combine(testRoot, "cactbot.zip");
     using (var archive = ZipFile.Open(cactbotPackage, ZipArchiveMode.Create))
@@ -192,33 +202,251 @@ static void ValidateMeterRows()
     Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
 }
 
-static void ValidateChinese751bOpcodes()
+static void ValidateChinese755Opcodes()
 {
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
     var opcodes = OpcodeManager.Instance.CurrentOpcodes;
     var expected = new Dictionary<string, ushort>
     {
-        ["Ability1"] = 0x037D,
-        ["Ability8"] = 0x0350,
-        ["Ability16"] = 0x027E,
-        ["Ability24"] = 0x01A4,
-        ["Ability32"] = 0x02A2,
-        ["ActorCast"] = 0x01C9,
-        ["EffectResult"] = 0x02EF,
-        ["ActorControl"] = 0x019F,
-        ["ActorControlSelf"] = 0x0164,
-        ["ActorControlTarget"] = 0x02D1,
-        ["StatusEffectList"] = 0x0132,
-        ["StatusEffectList2"] = 0x0078,
-        ["StatusEffectList3"] = 0x028B,
+        ["Ability1"] = 0x01E7,
+        ["Ability8"] = 0x0077,
+        ["Ability16"] = 0x038F,
+        ["Ability24"] = 0x00B2,
+        ["Ability32"] = 0x007C,
+        ["ActorCast"] = 0x01A1,
+        ["EffectResult"] = 0x0114,
+        ["ActorControl"] = 0x02C8,
+        ["ActorControlSelf"] = 0x02B3,
+        ["ActorControlTarget"] = 0x00E0,
+        ["StatusEffectList"] = 0x031E,
+        ["StatusEffectList2"] = 0x009F,
+        ["StatusEffectList3"] = 0x00EB,
     };
 
     foreach (var pair in expected)
     {
         Assert(
             opcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
-            $"Chinese 7.51b opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+            $"Chinese 7.55 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
     }
+}
+
+static void ValidateParserDependencyVersions()
+{
+    Assert(
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 4),
+        "IINACT is not at 2.10.3.4.");
+    Assert(
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 103, 0),
+        "OverlayPlugin Core is not at 0.19.103.");
+
+    var runtimeDirectory = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    AssertFileVersion(
+        Path.Combine(runtimeDirectory, "Unscrambler.dll"),
+        "7.55.0.0",
+        "Unscrambler.XIV");
+    AssertFileVersion(
+        Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
+        "3.0.2.5",
+        "FFXIV_ACT_Plugin");
+
+    var overlayAssembly = typeof(FFXIVMemory).Assembly;
+    var opcodeResource = overlayAssembly
+        .GetManifestResourceNames()
+        .Single(name => name.EndsWith("opcodes.jsonc", StringComparison.OrdinalIgnoreCase));
+    using var opcodeStream = overlayAssembly.GetManifestResourceStream(opcodeResource)
+                             ?? throw new InvalidOperationException(
+                                 "OverlayPlugin opcode resource was not found.");
+    using var document = JsonDocument.Parse(
+        opcodeStream,
+        new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip,
+        });
+    var chinese755 = document.RootElement
+        .GetProperty("Chinese")
+        .GetProperty("2026.07.16.0001.0000");
+    Assert(
+        chinese755.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 887 &&
+        chinese755.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 552,
+        "OverlayPlugin Chinese 7.55 opcodes are stale.");
+}
+
+static void AssertFileVersion(string path, string expected, string component)
+{
+    Assert(File.Exists(path), $"{component} assembly is missing: {path}");
+    var actual = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileVersion;
+    Assert(actual == expected, $"{component} version was {actual}, expected {expected}.");
+}
+
+static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
+{
+    var bundleParent = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    var paths = new PluginPaths(Path.Combine(testRoot, "bundled-config"));
+    var installer = new ActPluginPackageInstaller(paths);
+    var configuration = new DalamudActCompat.Plugin.PluginConfiguration();
+    var manager = new BundledActPluginManager(
+        bundleParent,
+        "0.2.31.0",
+        installer,
+        configuration);
+
+    var pending = manager.GetPendingDisclosures();
+    Assert(pending.Count == 3, "A new install did not require all three bundled DLL disclosures.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "triggernometry" &&
+            plugin.Author == "Paissa Heavy Industries" &&
+            plugin.Maintainer.Contains("MnFeN", StringComparison.Ordinal) &&
+            plugin.DownloadUrl.StartsWith("https://", StringComparison.Ordinal)),
+        "Triggernometry author, maintainer, or DLL URL disclosure is incomplete.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "act.foxtts" &&
+            plugin.Author == "Noisyfox" &&
+            plugin.ProjectUrl == "https://github.com/Noisyfox/ACT.FoxTTS"),
+        "ACT.FoxTTS author or project URL disclosure is incomplete.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "postnamazu" &&
+            plugin.Author == "Natsukage" &&
+            plugin.DownloadUrl.Contains("/releases/download/", StringComparison.Ordinal)),
+        "PostNamazu author or DLL URL disclosure is incomplete.");
+
+    await manager.InstallAndAcknowledgeAsync(pending, CancellationToken.None);
+    Assert(
+        manager.GetPendingDisclosures().Count == 0,
+        "Acknowledged current bundled DLLs still required disclosure.");
+    var installed = installer.Discover(configuration.DisabledActPluginIds);
+    Assert(installed.Count == 3, "Not all bundled DLLs were installed.");
+    Assert(
+        installed.All(manager.IsAllowedToLoad),
+        "Acknowledged current bundled DLLs were not enabled for runtime loading.");
+
+    var triggernometry = installed.Single(plugin => plugin.Manifest.Id == "triggernometry");
+    var duplicateDirectory = Path.Combine(paths.ActPluginDirectory, "triggernometry-old-copy");
+    Directory.CreateDirectory(duplicateDirectory);
+    foreach (var file in Directory.EnumerateFiles(triggernometry.InstallDirectory))
+    {
+        File.Copy(file, Path.Combine(duplicateDirectory, Path.GetFileName(file)));
+    }
+
+    Assert(
+        manager.GetPendingDisclosures().Count == 0,
+        "A duplicate legacy plugin id interrupted bundled DLL disclosure checks.");
+
+    using (var httpClient = new HttpClient(
+               new BundledPluginUpdateHandler(manager.Plugins)))
+    using (var updateChecker = new BundledActPluginUpdateChecker(
+               paths.BundledPluginUpdateCacheDirectory,
+               httpClient))
+    {
+        var check = await updateChecker.CheckAsync(
+            manager.Plugins,
+            CancellationToken.None);
+        Assert(
+            check.Failures.Count == 0 && check.Updates.Count == 3,
+            "Runtime author-source checking did not find all simulated DLL updates.");
+        Assert(
+            check.Updates.All(plugin =>
+                plugin.IsOnlineUpdate &&
+                plugin.DownloadUrl.StartsWith("https://", StringComparison.Ordinal) &&
+                File.Exists(plugin.AssemblyPath)),
+            "Runtime DLL update candidates were not cached with disclosure URLs.");
+        Assert(
+            manager.ApplyOnlineUpdates(check.Updates) == 3,
+            "Runtime DLL update candidates were not applied to the disclosure gate.");
+        var onlinePending = manager.GetPendingDisclosures();
+        Assert(
+            onlinePending.Count == 3 &&
+            onlinePending.All(plugin => plugin.IsOnlineUpdate),
+            "Online DLL updates did not require a new disclosure.");
+        Assert(
+            installed.All(plugin => !manager.IsAllowedToLoad(plugin)),
+            "Old DLLs remained loadable after an online update was discovered.");
+
+        await manager.InstallAndAcknowledgeAsync(
+            onlinePending,
+            CancellationToken.None);
+        Assert(
+            manager.GetPendingDisclosures().Count == 0 &&
+            configuration.BundledPluginUpdateRecords.Count == 3,
+            "Online DLL updates were not installed, acknowledged, and persisted.");
+    }
+
+    configuration = Newtonsoft.Json.JsonConvert.DeserializeObject<
+                        DalamudActCompat.Plugin.PluginConfiguration>(
+                        Newtonsoft.Json.JsonConvert.SerializeObject(configuration))
+                    ?? throw new InvalidOperationException(
+                        "Plugin configuration update records did not round-trip.");
+    var persistedOnline = new BundledActPluginManager(
+        bundleParent,
+        "0.2.31.0",
+        installer,
+        configuration);
+    Assert(
+        persistedOnline.GetPendingDisclosures().Count == 0,
+        "An accepted online DLL update was lost after recreating the manager.");
+    Assert(
+        installer
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin => configuration.BundledPluginUpdateRecords.ContainsKey(
+                plugin.Manifest.Id))
+            .Any(persistedOnline.IsAllowedToLoad),
+        "Persisted online DLL updates were not loadable while offline.");
+
+    var nextRelease = new BundledActPluginManager(
+        bundleParent,
+        "0.2.32.0",
+        installer,
+        configuration);
+    Assert(
+        nextRelease.GetPendingDisclosures().Count == 3,
+        "A DalamudActCompat update did not require the bundled DLL disclosure again.");
+    Assert(
+        installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
+        "Bundled DLLs were loadable before acknowledging the new host release notice.");
+}
+
+static async Task ValidateLiveBundledPluginUpdateCheckAsync(string testRoot)
+{
+    var bundleParent = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    var paths = new PluginPaths(Path.Combine(testRoot, "live-update-config"));
+    var installer = new ActPluginPackageInstaller(paths);
+    var configuration = new DalamudActCompat.Plugin.PluginConfiguration();
+    var manager = new BundledActPluginManager(
+        bundleParent,
+        "0.2.31.0",
+        installer,
+        configuration);
+    using var checker = new BundledActPluginUpdateChecker(
+        paths.BundledPluginUpdateCacheDirectory);
+    var check = await checker.CheckAsync(
+        manager.Plugins,
+        CancellationToken.None);
+    Assert(
+        check.Failures.Count == 0,
+        "Live author-source DLL checking failed: " +
+        string.Join("; ", check.Failures));
+    Assert(
+        check.Updates.Count == 0,
+        "The bundled DLL lock is stale compared with the live author sources.");
 }
 
 static void ValidatePlayerIdentityResolution()
@@ -702,6 +930,33 @@ static void ValidateLegacyResourceRuntimeDependencies()
             "System.Runtime.Serialization.Formatters.dll",
             StringComparison.OrdinalIgnoreCase)),
         "The removed BinaryFormatter compatibility package must not be shipped.");
+    Assert(
+        archive.Entries.Any(entry => string.Equals(
+            entry.Name,
+            "SharpCompress.dll",
+            StringComparison.OrdinalIgnoreCase)),
+        "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
+
+    var requiredBundledPluginFiles = new[]
+    {
+        "BundledActPlugins/bundled-plugins.lock.json",
+        "BundledActPlugins/triggernometry/Triggernometry.dll",
+        "BundledActPlugins/triggernometry/zh-CN.triglations.xml",
+        "BundledActPlugins/triggernometry/LICENSE.txt",
+        "BundledActPlugins/act.foxtts/ACT.FoxTTS.dll",
+        "BundledActPlugins/act.foxtts/LICENSE.txt",
+        "BundledActPlugins/postnamazu/PostNamazu.dll",
+    };
+    foreach (var required in requiredBundledPluginFiles)
+    {
+        Assert(
+            archive.Entries.Any(entry =>
+                string.Equals(
+                    entry.FullName.Replace('\\', '/'),
+                    required,
+                    StringComparison.OrdinalIgnoreCase)),
+            $"Bundled third-party plugin file is missing from the release package: {required}.");
+    }
 }
 
 static void ValidateFfxivModuleInitializer()
@@ -990,5 +1245,115 @@ public class NoOpPluginLogProxy : DispatchProxy
             : returnType.IsValueType
                 ? Activator.CreateInstance(returnType)
                 : null;
+    }
+}
+
+internal sealed class BundledPluginUpdateHandler : HttpMessageHandler
+{
+    private const string TriggerTranslationUrl =
+        "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/zh-CN.triglations.xml";
+    private const string FoxApiUrl =
+        "https://api.github.com/repos/Noisyfox/ACT.FoxTTS/releases/latest";
+    private const string PostApiUrl =
+        "https://api.github.com/repos/Natsukage/PostNamazu/releases/latest";
+    private const string FoxDownloadUrl = "https://downloads.example/ACT.FoxTTS.7z";
+    private const string PostDownloadUrl = "https://downloads.example/PostNamazu.zip";
+
+    private readonly string triggerDownloadUrl;
+    private readonly byte[] triggerAssembly;
+    private readonly byte[] foxArchive;
+    private readonly byte[] postArchive;
+
+    public BundledPluginUpdateHandler(
+        IReadOnlyList<BundledActPluginDescriptor> bundled)
+    {
+        var trigger = bundled.Single(plugin => plugin.Id == "triggernometry");
+        var fox = bundled.Single(plugin => plugin.Id == "act.foxtts");
+        var post = bundled.Single(plugin => plugin.Id == "postnamazu");
+        triggerDownloadUrl = trigger.DownloadUrl;
+        triggerAssembly = CreateChangedAssembly(trigger.AssemblyPath);
+        foxArchive = CreateArchive(
+            "release/ACT.FoxTTS.dll",
+            CreateChangedAssembly(fox.AssemblyPath));
+        postArchive = CreateArchive(
+            "release/PostNamazu.dll",
+            CreateChangedAssembly(post.AssemblyPath));
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var url = request.RequestUri?.AbsoluteUri ?? string.Empty;
+        var response = url switch
+        {
+            var value when value == triggerDownloadUrl =>
+                Bytes(triggerAssembly),
+            TriggerTranslationUrl =>
+                Bytes("<translations />"u8.ToArray()),
+            FoxApiUrl =>
+                Json(new
+                {
+                    assets = new[]
+                    {
+                        new
+                        {
+                            name = "ACT.FoxTTS-Test-Release.7z",
+                            browser_download_url = FoxDownloadUrl,
+                        },
+                    },
+                }),
+            PostApiUrl =>
+                Json(new
+                {
+                    assets = new[]
+                    {
+                        new
+                        {
+                            name = "PostNamazu.zip",
+                            browser_download_url = PostDownloadUrl,
+                        },
+                    },
+                }),
+            FoxDownloadUrl =>
+                Bytes(foxArchive),
+            PostDownloadUrl =>
+                Bytes(postArchive),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        };
+        return Task.FromResult(response);
+    }
+
+    private static HttpResponseMessage Json<T>(T value)
+        => Bytes(JsonSerializer.SerializeToUtf8Bytes(value));
+
+    private static HttpResponseMessage Bytes(byte[] value)
+        => new(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(value),
+        };
+
+    private static byte[] CreateChangedAssembly(string path)
+    {
+        var original = File.ReadAllBytes(path);
+        Array.Resize(ref original, original.Length + 1);
+        original[^1] = 0x5a;
+        return original;
+    }
+
+    private static byte[] CreateArchive(string path, byte[] content)
+    {
+        using var output = new MemoryStream();
+        using (var archive = new ZipArchive(
+                   output,
+                   ZipArchiveMode.Create,
+                   leaveOpen: true))
+        {
+            var entry = archive.CreateEntry(path);
+            using var stream = entry.Open();
+            stream.Write(content);
+        }
+
+        return output.ToArray();
     }
 }

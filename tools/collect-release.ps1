@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.1.14.0",
+    [string] $ExpectedAssemblyVersion = "0.2.31.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -103,10 +103,18 @@ $requiredRuntimeFiles = @(
     "FFXIV_ACT_Plugin.Resource.dll",
     "OverlayPlugin.Common.dll",
     "OverlayPlugin.Core.dll",
+    "SharpCompress.dll",
     "LICENSE.md",
     "LICENSES/IINACT-GPL-3.0.txt",
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "BundledActPlugins/bundled-plugins.lock.json",
+    "BundledActPlugins/triggernometry/Triggernometry.dll",
+    "BundledActPlugins/triggernometry/zh-CN.triglations.xml",
+    "BundledActPlugins/triggernometry/LICENSE.txt",
+    "BundledActPlugins/act.foxtts/ACT.FoxTTS.dll",
+    "BundledActPlugins/act.foxtts/LICENSE.txt",
+    "BundledActPlugins/postnamazu/PostNamazu.dll"
 )
 $missingRuntimeFiles = @($requiredRuntimeFiles | Where-Object {
     -not (Test-Path (Join-Path $validationDir $_))

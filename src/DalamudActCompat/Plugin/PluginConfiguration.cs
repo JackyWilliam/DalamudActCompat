@@ -34,6 +34,12 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public HashSet<string> DisabledActPluginIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    public Dictionary<string, string> BundledPluginDisclosureKeys { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public Dictionary<string, BundledActPluginUpdateRecord> BundledPluginUpdateRecords { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public void ResetToDefaults(string defaultLogDirectory)
     {
         EnableParsing = false;
@@ -49,6 +55,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
         Meter = new MeterSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        BundledPluginUpdateRecords =
+            new Dictionary<string, BundledActPluginUpdateRecord>(StringComparer.OrdinalIgnoreCase);
     }
 
     public HtmlOverlayWindowSettings GetOverlayWindowSettings(string name)
