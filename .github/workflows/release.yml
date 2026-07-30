@@ -33,6 +33,7 @@ jobs:
         run: |
           ./tools/sync-parser-dependencies.ps1 -Check
           ./tools/sync-bundled-act-plugins.ps1 -Check
+          ./tools/sync-cactbot.ps1 -Check
 
       - name: Restore
         run: dotnet restore DalamudActCompat.slnx

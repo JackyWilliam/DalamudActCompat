@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using DalamudActCompat.Infrastructure.Storage;
 
@@ -11,6 +12,21 @@ public sealed class CactbotPackageInstaller(PluginPaths paths)
     public bool IsInstalled =>
         File.Exists(Path.Combine(paths.CactbotDirectory, "CactbotOverlay.dll")) &&
         File.Exists(Path.Combine(paths.CactbotDirectory, "ui", "raidboss", "raidboss.html"));
+
+    public Version? InstalledVersion
+    {
+        get
+        {
+            var assembly = Path.Combine(paths.CactbotDirectory, "CactbotOverlay.dll");
+            if (!File.Exists(assembly))
+            {
+                return null;
+            }
+
+            var version = FileVersionInfo.GetVersionInfo(assembly).FileVersion;
+            return Version.TryParse(version, out var parsed) ? parsed : null;
+        }
+    }
 
     public async Task InstallAsync(string zipPath, CancellationToken cancellationToken)
     {
@@ -74,6 +90,7 @@ public sealed class CactbotPackageInstaller(PluginPaths paths)
                 throw new InvalidDataException("这不是有效的 OverlayPlugin/cactbot Release ZIP。");
             }
 
+            PreserveUserFiles(staging);
             if (Directory.Exists(paths.CactbotDirectory))
             {
                 Directory.Move(paths.CactbotDirectory, backup);
@@ -98,6 +115,27 @@ public sealed class CactbotPackageInstaller(PluginPaths paths)
             }
 
             throw;
+        }
+    }
+
+    private void PreserveUserFiles(string staging)
+    {
+        var source = Path.Combine(paths.CactbotDirectory, "user");
+        if (!Directory.Exists(source))
+        {
+            return;
+        }
+
+        var destinationRoot = Path.Combine(staging, "user");
+        foreach (var sourceFile in Directory.EnumerateFiles(
+                     source,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, sourceFile);
+            var destination = Path.Combine(destinationRoot, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(sourceFile, destination, overwrite: true);
         }
     }
 }

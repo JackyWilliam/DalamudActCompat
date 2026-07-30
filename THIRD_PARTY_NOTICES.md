@@ -9,6 +9,18 @@ available from `vendor/IINACT` and
 The release archive includes the applicable upstream license texts under
 `LICENSES/`. Copyright remains with the respective upstream authors.
 
+The release archive also includes the official OverlayPlugin/cactbot release
+package. On first load, DalamudActCompat installs it into the current user's
+own plugin configuration directory; on a later DalamudActCompat update, it
+upgrades older bundled Cactbot versions without overwriting files under
+`cactbot/user/`.
+
+- OverlayPlugin/cactbot 0.37.4
+  - Project/source: <https://github.com/OverlayPlugin/cactbot>
+  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.4>
+  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.4/cactbot-0.37.4.zip>
+  - License: Apache-2.0; the license text is included with the bundled package.
+
 `FFXIV_ACT_Plugin` and its SDK assemblies are official binary dependencies.
 They are not authored by the DalamudActCompat project. Their upstream project
 and releases are maintained at
