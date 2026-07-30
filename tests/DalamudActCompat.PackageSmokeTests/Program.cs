@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -48,6 +49,13 @@ try
     Directory.CreateDirectory(paths.ActPluginDirectory);
     var installer = new ActPluginPackageInstaller(paths);
     await ValidateBundledPluginDisclosureAsync(testRoot);
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("ACTCOMPAT_ONLINE_UPDATE_SMOKE"),
+            "1",
+            StringComparison.Ordinal))
+    {
+        await ValidateLiveBundledPluginUpdateCheckAsync(testRoot);
+    }
 
     var cactbotPackage = Path.Combine(testRoot, "cactbot.zip");
     using (var archive = ZipFile.Open(cactbotPackage, ZipArchiveMode.Create))
@@ -338,6 +346,66 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         manager.GetPendingDisclosures().Count == 0,
         "A duplicate legacy plugin id interrupted bundled DLL disclosure checks.");
 
+    using (var httpClient = new HttpClient(
+               new BundledPluginUpdateHandler(manager.Plugins)))
+    using (var updateChecker = new BundledActPluginUpdateChecker(
+               paths.BundledPluginUpdateCacheDirectory,
+               httpClient))
+    {
+        var check = await updateChecker.CheckAsync(
+            manager.Plugins,
+            CancellationToken.None);
+        Assert(
+            check.Failures.Count == 0 && check.Updates.Count == 3,
+            "Runtime author-source checking did not find all simulated DLL updates.");
+        Assert(
+            check.Updates.All(plugin =>
+                plugin.IsOnlineUpdate &&
+                plugin.DownloadUrl.StartsWith("https://", StringComparison.Ordinal) &&
+                File.Exists(plugin.AssemblyPath)),
+            "Runtime DLL update candidates were not cached with disclosure URLs.");
+        Assert(
+            manager.ApplyOnlineUpdates(check.Updates) == 3,
+            "Runtime DLL update candidates were not applied to the disclosure gate.");
+        var onlinePending = manager.GetPendingDisclosures();
+        Assert(
+            onlinePending.Count == 3 &&
+            onlinePending.All(plugin => plugin.IsOnlineUpdate),
+            "Online DLL updates did not require a new disclosure.");
+        Assert(
+            installed.All(plugin => !manager.IsAllowedToLoad(plugin)),
+            "Old DLLs remained loadable after an online update was discovered.");
+
+        await manager.InstallAndAcknowledgeAsync(
+            onlinePending,
+            CancellationToken.None);
+        Assert(
+            manager.GetPendingDisclosures().Count == 0 &&
+            configuration.BundledPluginUpdateRecords.Count == 3,
+            "Online DLL updates were not installed, acknowledged, and persisted.");
+    }
+
+    configuration = Newtonsoft.Json.JsonConvert.DeserializeObject<
+                        DalamudActCompat.Plugin.PluginConfiguration>(
+                        Newtonsoft.Json.JsonConvert.SerializeObject(configuration))
+                    ?? throw new InvalidOperationException(
+                        "Plugin configuration update records did not round-trip.");
+    var persistedOnline = new BundledActPluginManager(
+        bundleParent,
+        "0.2.31.0",
+        installer,
+        configuration);
+    Assert(
+        persistedOnline.GetPendingDisclosures().Count == 0,
+        "An accepted online DLL update was lost after recreating the manager.");
+    Assert(
+        installer
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin => configuration.BundledPluginUpdateRecords.ContainsKey(
+                plugin.Manifest.Id))
+            .Any(persistedOnline.IsAllowedToLoad),
+        "Persisted online DLL updates were not loadable while offline.");
+
     var nextRelease = new BundledActPluginManager(
         bundleParent,
         "0.2.32.0",
@@ -349,6 +417,36 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
         "Bundled DLLs were loadable before acknowledging the new host release notice.");
+}
+
+static async Task ValidateLiveBundledPluginUpdateCheckAsync(string testRoot)
+{
+    var bundleParent = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    var paths = new PluginPaths(Path.Combine(testRoot, "live-update-config"));
+    var installer = new ActPluginPackageInstaller(paths);
+    var configuration = new DalamudActCompat.Plugin.PluginConfiguration();
+    var manager = new BundledActPluginManager(
+        bundleParent,
+        "0.2.31.0",
+        installer,
+        configuration);
+    using var checker = new BundledActPluginUpdateChecker(
+        paths.BundledPluginUpdateCacheDirectory);
+    var check = await checker.CheckAsync(
+        manager.Plugins,
+        CancellationToken.None);
+    Assert(
+        check.Failures.Count == 0,
+        "Live author-source DLL checking failed: " +
+        string.Join("; ", check.Failures));
+    Assert(
+        check.Updates.Count == 0,
+        "The bundled DLL lock is stale compared with the live author sources.");
 }
 
 static void ValidatePlayerIdentityResolution()
@@ -832,6 +930,12 @@ static void ValidateLegacyResourceRuntimeDependencies()
             "System.Runtime.Serialization.Formatters.dll",
             StringComparison.OrdinalIgnoreCase)),
         "The removed BinaryFormatter compatibility package must not be shipped.");
+    Assert(
+        archive.Entries.Any(entry => string.Equals(
+            entry.Name,
+            "SharpCompress.dll",
+            StringComparison.OrdinalIgnoreCase)),
+        "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
 
     var requiredBundledPluginFiles = new[]
     {
@@ -1141,5 +1245,115 @@ public class NoOpPluginLogProxy : DispatchProxy
             : returnType.IsValueType
                 ? Activator.CreateInstance(returnType)
                 : null;
+    }
+}
+
+internal sealed class BundledPluginUpdateHandler : HttpMessageHandler
+{
+    private const string TriggerTranslationUrl =
+        "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/zh-CN.triglations.xml";
+    private const string FoxApiUrl =
+        "https://api.github.com/repos/Noisyfox/ACT.FoxTTS/releases/latest";
+    private const string PostApiUrl =
+        "https://api.github.com/repos/Natsukage/PostNamazu/releases/latest";
+    private const string FoxDownloadUrl = "https://downloads.example/ACT.FoxTTS.7z";
+    private const string PostDownloadUrl = "https://downloads.example/PostNamazu.zip";
+
+    private readonly string triggerDownloadUrl;
+    private readonly byte[] triggerAssembly;
+    private readonly byte[] foxArchive;
+    private readonly byte[] postArchive;
+
+    public BundledPluginUpdateHandler(
+        IReadOnlyList<BundledActPluginDescriptor> bundled)
+    {
+        var trigger = bundled.Single(plugin => plugin.Id == "triggernometry");
+        var fox = bundled.Single(plugin => plugin.Id == "act.foxtts");
+        var post = bundled.Single(plugin => plugin.Id == "postnamazu");
+        triggerDownloadUrl = trigger.DownloadUrl;
+        triggerAssembly = CreateChangedAssembly(trigger.AssemblyPath);
+        foxArchive = CreateArchive(
+            "release/ACT.FoxTTS.dll",
+            CreateChangedAssembly(fox.AssemblyPath));
+        postArchive = CreateArchive(
+            "release/PostNamazu.dll",
+            CreateChangedAssembly(post.AssemblyPath));
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var url = request.RequestUri?.AbsoluteUri ?? string.Empty;
+        var response = url switch
+        {
+            var value when value == triggerDownloadUrl =>
+                Bytes(triggerAssembly),
+            TriggerTranslationUrl =>
+                Bytes("<translations />"u8.ToArray()),
+            FoxApiUrl =>
+                Json(new
+                {
+                    assets = new[]
+                    {
+                        new
+                        {
+                            name = "ACT.FoxTTS-Test-Release.7z",
+                            browser_download_url = FoxDownloadUrl,
+                        },
+                    },
+                }),
+            PostApiUrl =>
+                Json(new
+                {
+                    assets = new[]
+                    {
+                        new
+                        {
+                            name = "PostNamazu.zip",
+                            browser_download_url = PostDownloadUrl,
+                        },
+                    },
+                }),
+            FoxDownloadUrl =>
+                Bytes(foxArchive),
+            PostDownloadUrl =>
+                Bytes(postArchive),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        };
+        return Task.FromResult(response);
+    }
+
+    private static HttpResponseMessage Json<T>(T value)
+        => Bytes(JsonSerializer.SerializeToUtf8Bytes(value));
+
+    private static HttpResponseMessage Bytes(byte[] value)
+        => new(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(value),
+        };
+
+    private static byte[] CreateChangedAssembly(string path)
+    {
+        var original = File.ReadAllBytes(path);
+        Array.Resize(ref original, original.Length + 1);
+        original[^1] = 0x5a;
+        return original;
+    }
+
+    private static byte[] CreateArchive(string path, byte[] content)
+    {
+        using var output = new MemoryStream();
+        using (var archive = new ZipArchive(
+                   output,
+                   ZipArchiveMode.Create,
+                   leaveOpen: true))
+        {
+            var entry = archive.CreateEntry(path);
+            using var stream = entry.Open();
+            stream.Write(content);
+        }
+
+        return output.ToArray();
     }
 }

@@ -32,8 +32,9 @@ Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users
 - Triggernometry CN 2.1.1.2, ACT.FoxTTS 3.3.1.189, and PostNamazu 1.3.6.6 are
   bundled with the release. Their author, maintainer, version, permission,
   project/source URL, exact DLL download URL, and SHA-256 are shown on first
-  install and after every DalamudActCompat update; they remain unloaded until
-  the notice is acknowledged.
+  install and after every DalamudActCompat update. The plugin also checks the
+  author sources at startup and presents the same notice before installing a
+  newer upstream DLL; affected DLLs remain unloaded until it is acknowledged.
 - Optional ACT plugin packages with manifest validation, safe ZIP extraction, atomic installation, upgrade backup, enable/disable composition, and isolated load contexts.
 - Recoverable factory reset: mutable state is moved to a timestamped backup before default system plugins and settings are restored.
 

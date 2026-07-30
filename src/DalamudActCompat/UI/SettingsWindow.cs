@@ -156,8 +156,8 @@ public sealed class SettingsWindow : Window
         }
 
         if (ImGui.Button(text.Get(
-                "查看内置 DLL 作者、版本与来源网址",
-                "View bundled DLL authors, versions, and source URLs")))
+                "检查 DLL 更新并查看作者与来源网址",
+                "Check DLL updates and view authors/source URLs")))
         {
             openBundledPluginNotice();
         }

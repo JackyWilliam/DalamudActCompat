@@ -39,4 +39,20 @@ public sealed class BundledActPluginDescriptor
 
     [JsonIgnore]
     public string AssemblyPath { get; internal set; } = string.Empty;
+
+    [JsonIgnore]
+    public bool IsOnlineUpdate { get; internal set; }
+}
+
+public sealed class BundledActPluginUpdateRecord
+{
+    public string HostVersionWhenAccepted { get; set; } = string.Empty;
+
+    public string Version { get; set; } = string.Empty;
+
+    public string DownloadUrl { get; set; } = string.Empty;
+
+    public string SourceUrl { get; set; } = string.Empty;
+
+    public string Sha256 { get; set; } = string.Empty;
 }

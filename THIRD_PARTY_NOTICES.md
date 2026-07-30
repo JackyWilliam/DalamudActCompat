@@ -19,7 +19,9 @@ permission from their authors/maintainers. DalamudActCompat displays the same
 author, version, license/permission, project URL, source URL, download URL, and
 SHA-256 details in game on first install and again after every
 DalamudActCompat update. The DLLs are not loaded until that notice is
-acknowledged.
+acknowledged. DalamudActCompat also checks the author sources at startup and
+uses the same notice and load gate before installing an upstream update. URLs
+are displayed for attribution and verification; the notice does not open them.
 
 - Triggernometry CN Maintained Edition 2.1.1.2
   - Original author/copyright holder: Paissa Heavy Industries
@@ -38,3 +40,7 @@ acknowledged.
   - DLL release asset: <https://github.com/Natsukage/PostNamazu/releases/download/1.3.6.6/PostNamazu.zip>
   - Redistribution is authorized by the author; the upstream repository does
     not declare an SPDX license.
+
+SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
+runtime author-source update check. SharpCompress is distributed under the MIT
+license: <https://github.com/adamhathcock/sharpcompress>.

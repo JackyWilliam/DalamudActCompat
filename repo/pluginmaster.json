@@ -16,6 +16,6 @@
     "DownloadLinkTesting":  null,
     "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.2.31/DalamudActCompat.zip",
     "LastUpdate":  1785395943153,
-    "Changelog":  "适配 FFXIV 7.55：更新 IINACT、OverlayPlugin、Machina、Unscrambler 和 FFXIV_ACT_Plugin；随包提供 Triggernometry 中文维护版、ACT.FoxTTS 与鲶鱼精邮差，并在首次安装及每次更新后弹窗展示 DLL 作者、版本、授权和来源网址，确认前不加载。"
+    "Changelog":  "适配 FFXIV 7.55：更新解析链；随包提供 Triggernometry 中文维护版、ACT.FoxTTS 与鲶鱼精邮差。首次安装、宿主更新及启动时发现作者上游 DLL 更新后，均先弹窗展示作者、版本、授权和网址，确认前不加载。"
 }
 ]

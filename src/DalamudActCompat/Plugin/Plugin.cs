@@ -44,8 +44,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FactoryResetService factoryResetService;
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
+    private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
     private readonly CactbotPackageInstaller cactbotInstaller;
     private readonly FileDialogManager fileDialogManager = new();
+    private readonly CancellationTokenSource bundledUpdateCancellation = new();
+    private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -91,6 +94,8 @@ public sealed class Plugin : IDalamudPlugin
             typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown",
             packageInstaller,
             configuration);
+        bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
+            paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
@@ -161,7 +166,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration,
-            thirdPartyPluginNoticeWindow.OpenNotice);
+            () => StartBundledPluginUpdateCheck(openWindow: true));
         statusWindow = new StatusWindow(parserEngine, text);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
@@ -180,12 +185,15 @@ public sealed class Plugin : IDalamudPlugin
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
+        StartBundledPluginUpdateCheck(openWindow: false);
     }
 
     public string Name => "Dalamud ACT Compat";
 
     public void Dispose()
     {
+        bundledUpdateCancellation.Cancel();
+        bundledPluginUpdateChecker.Dispose();
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
@@ -366,8 +374,106 @@ public sealed class Plugin : IDalamudPlugin
         services.NotificationManager.AddNotification(new()
         {
             Title = "ACT 兼容",
-            Content = "内置第三方 DLL 已按随包最新版安装/更新；作者、版本和来源告知已记录。",
+            Content = "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。",
         });
+    }
+
+    private void StartBundledPluginUpdateCheck(bool openWindow)
+    {
+        _ = Task.Run(async () =>
+        {
+            var cancellationToken = bundledUpdateCancellation.Token;
+            if (!await bundledUpdateCheckLock
+                    .WaitAsync(0)
+                    .ConfigureAwait(false))
+            {
+                if (openWindow)
+                {
+                    await services.Framework
+                        .RunOnFrameworkThread(thirdPartyPluginNoticeWindow.OpenNotice)
+                        .ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await services.Framework
+                    .RunOnFrameworkThread(
+                        () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(openWindow))
+                    .ConfigureAwait(false);
+                var check = await bundledPluginUpdateChecker
+                    .CheckAsync(
+                        bundledPluginManager.Plugins,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                var appliedUpdates = bundledPluginManager.ApplyOnlineUpdates(
+                    check.Updates);
+                var pendingOnline = bundledPluginManager
+                    .GetPendingDisclosures()
+                    .Where(plugin => plugin.IsOnlineUpdate)
+                    .ToArray();
+                if (appliedUpdates > 0 && pendingOnline.Length > 0)
+                {
+                    using var stopTimeout = CancellationTokenSource
+                        .CreateLinkedTokenSource(cancellationToken);
+                    stopTimeout.CancelAfter(TimeSpan.FromSeconds(20));
+                    await parserEngine
+                        .StopAsync(stopTimeout.Token)
+                        .ConfigureAwait(false);
+                }
+
+                var message = BuildBundledPluginUpdateMessage(
+                    check,
+                    pendingOnline.Length);
+                await services.Framework
+                    .RunOnFrameworkThread(
+                        () => thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
+                            message,
+                            openWindow))
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Plugin shutdown cancels the online check.
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                // Disposing the HTTP client can surface a non-cancellation exception.
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Bundled ACT plugin online update check failed.");
+                await services.Framework
+                    .RunOnFrameworkThread(
+                        () => thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
+                            $"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}",
+                            openWindow))
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                bundledUpdateCheckLock.Release();
+            }
+        });
+    }
+
+    private static string BuildBundledPluginUpdateMessage(
+        BundledActPluginUpdateCheckResult check,
+        int pendingOnlineCount)
+    {
+        var summary = pendingOnlineCount > 0
+            ? $"发现 {pendingOnlineCount} 项作者上游 DLL 更新；确认前这些 DLL 不会重新加载。"
+            : "DLL 作者上游检查完成，当前没有新的在线更新。";
+        if (check.Failures.Count == 0)
+        {
+            return summary;
+        }
+
+        return $"{summary} {check.Failures.Count} 项来源检查失败：" +
+               string.Join("；", check.Failures);
     }
 
     private void SelectPluginPackage()

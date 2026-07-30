@@ -103,6 +103,7 @@ $requiredRuntimeFiles = @(
     "FFXIV_ACT_Plugin.Resource.dll",
     "OverlayPlugin.Common.dll",
     "OverlayPlugin.Core.dll",
+    "SharpCompress.dll",
     "LICENSE.md",
     "LICENSES/IINACT-GPL-3.0.txt",
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",

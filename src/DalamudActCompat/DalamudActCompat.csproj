@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="../DalamudActCompat.Host/DalamudActCompat.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
+    <PackageReference Include="SharpCompress" Version="0.50.1" />
     <Content Include="../../vendor/IINACT/LICENSE" Link="LICENSES/IINACT-GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Core/LICENSE.txt" Link="LICENSES/OverlayPlugin.Core-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Common/LICENSE.txt" Link="LICENSES/OverlayPlugin.Common-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />

@@ -14,6 +14,12 @@
         "resolved": "1.2.39",
         "contentHash": "fcFN01tDTIQqDuTwr1jUQK/geofiwjG5DycJQOnC72i1SsLAk1ELe+apBOuZ11UMQG8YKFZG1FgvjZPbqHyatg=="
       },
+      "SharpCompress": {
+        "type": "Direct",
+        "requested": "[0.50.1, )",
+        "resolved": "0.50.1",
+        "contentHash": "VY90K8BBvaAMvvRDJ8EvsfI/GgoIYxlgxMpxdgwpzaesJ0pGSHTLbZ7SD4JYxsGCnOibzua/+8HvDjV6KTw4jA=="
+      },
       "Microsoft.Extensions.ObjectPool": {
         "type": "Transitive",
         "resolved": "10.0.1",

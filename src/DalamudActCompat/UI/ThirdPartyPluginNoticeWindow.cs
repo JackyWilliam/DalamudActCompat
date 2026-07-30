@@ -26,7 +26,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         this.install = install;
         this.logger = logger;
         this.text = text;
-        Refresh(openWhenPending: true);
+        Refresh(openWhenPending: false);
     }
 
     public override void Draw()
@@ -37,8 +37,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
         CompleteInstallWhenReady();
         ImGui.TextWrapped(text.Get(
-            "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL。它们不是本项目作者编写的；本项目已取得随包分发许可。首次安装本插件及本插件每次更新后，都会再次展示本告知，并把随包版本安装或更新到用户插件目录。",
-            "Dalamud ACT Compat bundles the third-party ACT DLLs below. They are not authored by this project, and redistribution permission has been obtained. This notice is shown on first install and after every Dalamud ACT Compat update before the bundled versions are installed or updated."));
+            "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL，并在启动时主动检查作者上游。它们不是本项目作者编写的；本项目已取得随包分发许可。首次安装、本插件每次更新及发现上游 DLL 更新后，都会在安装或更新前展示本告知。",
+            "Dalamud ACT Compat bundles the third-party ACT DLLs below and checks their author sources at startup. They are not authored by this project, and redistribution permission has been obtained. This notice is shown before installation on first use, after every Dalamud ACT Compat update, and when a newer upstream DLL is found."));
         ImGui.TextWrapped(text.Get(
             "网址仅用于说明 DLL 的作者项目、源码和实际下载来源；本窗口不会自动打开网页。",
             "The URLs identify the author project, source, and actual DLL download location. This window does not open a web page."));
@@ -47,6 +47,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         {
             ImGui.Separator();
             ImGui.TextUnformatted($"{plugin.Name}  {plugin.Version}");
+            ImGui.TextDisabled(plugin.IsOnlineUpdate
+                ? text.Get("来源：启动时检查到的作者上游版本", "Source: author upstream version found at startup")
+                : text.Get("来源：当前 Dalamud ACT Compat 安装包", "Source: current Dalamud ACT Compat package"));
             ImGui.TextWrapped($"{text.Get("DLL 作者", "DLL author")}: {plugin.Author}");
             if (!string.Equals(plugin.Author, plugin.Maintainer, StringComparison.Ordinal))
             {
@@ -90,6 +93,12 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 IsOpen = false;
             }
         }
+        else
+        {
+            ImGui.TextDisabled(text.Get(
+                "当前没有需要确认或安装的 DLL 更新。",
+                "There are no DLL updates awaiting acknowledgement or installation."));
+        }
 
         if (!string.IsNullOrWhiteSpace(result))
         {
@@ -101,6 +110,27 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     {
         Refresh(openWhenPending: false);
         IsOpen = true;
+    }
+
+    public void BeginUpdateCheck(bool openWindow)
+    {
+        result = text.Get(
+            "正在检查三项 DLL 的作者上游版本……",
+            "Checking the author sources for all three DLLs...");
+        if (openWindow)
+        {
+            IsOpen = true;
+        }
+    }
+
+    public void CompleteUpdateCheck(string message, bool openWindow)
+    {
+        result = message;
+        Refresh(openWhenPending: true);
+        if (openWindow)
+        {
+            IsOpen = true;
+        }
     }
 
     private void CompleteInstallWhenReady()

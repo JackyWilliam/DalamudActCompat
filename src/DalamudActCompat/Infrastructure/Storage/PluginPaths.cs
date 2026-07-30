@@ -23,6 +23,9 @@ public sealed class PluginPaths
         CactbotDirectory = Path.Combine(ConfigDirectory, "cactbot");
         PluginStagingDirectory = Path.Combine(ConfigDirectory, ".plugin-staging");
         PluginBackupDirectory = Path.Combine(ConfigDirectory, "plugin-backups");
+        BundledPluginUpdateCacheDirectory = Path.Combine(
+            ConfigDirectory,
+            "bundled-plugin-updates");
     }
 
     public string ConfigDirectory { get; }
@@ -45,6 +48,8 @@ public sealed class PluginPaths
 
     public string PluginBackupDirectory { get; }
 
+    public string BundledPluginUpdateCacheDirectory { get; }
+
     public void SetActPluginDirectory(string directory)
         => ActPluginDirectory = Path.GetFullPath(directory);
 
@@ -59,5 +64,6 @@ public sealed class PluginPaths
         Directory.CreateDirectory(CactbotDirectory);
         Directory.CreateDirectory(PluginStagingDirectory);
         Directory.CreateDirectory(PluginBackupDirectory);
+        Directory.CreateDirectory(BundledPluginUpdateCacheDirectory);
     }
 }
