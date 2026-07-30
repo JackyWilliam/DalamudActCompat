@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows.Forms;
 using System.Xml;
@@ -70,6 +71,15 @@ try
     Assert(cactbotInstaller.IsInstalled, "Official Cactbot package layout was not installed.");
     Assert(File.Exists(Path.Combine(paths.CactbotDirectory, "resources", "test.txt")),
         "Cactbot resources were not preserved.");
+    var customCactbotUserFile = Path.Combine(paths.CactbotDirectory, "user", "custom.js");
+    Directory.CreateDirectory(Path.GetDirectoryName(customCactbotUserFile)!);
+    await File.WriteAllTextAsync(customCactbotUserFile, "custom");
+    await cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None);
+    Assert(
+        await File.ReadAllTextAsync(customCactbotUserFile) == "custom",
+        "Cactbot upgrade overwrote the user's custom files.");
+    await ValidateBundledCactbotPortableInstallAsync(testRoot);
+    await ValidateOfficialBundledCactbotAsync(testRoot);
 
     var installed = await installer.InstallAsync(packagePath, CancellationToken.None);
     Assert(installed.Manifest.Id == "example.plugin", "Valid package id was not preserved.");
@@ -431,6 +441,99 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
         "Bundled DLLs were loadable before acknowledging the new host release notice.");
+}
+
+static async Task ValidateBundledCactbotPortableInstallAsync(string testRoot)
+{
+    var pluginDirectory = Path.Combine(testRoot, "portable-plugin");
+    var bundleDirectory = Path.Combine(
+        pluginDirectory,
+        BundledCactbotManager.DirectoryName);
+    Directory.CreateDirectory(bundleDirectory);
+    var archiveName = "cactbot-test.zip";
+    var archivePath = Path.Combine(bundleDirectory, archiveName);
+    var builtRuntime = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release",
+        "DalamudActCompat.ActRuntime.dll");
+    var assemblyBytes = await File.ReadAllBytesAsync(builtRuntime);
+    using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+    {
+        await WriteArchiveEntryAsync(
+            archive,
+            "cactbot/cactbot/CactbotOverlay.dll",
+            assemblyBytes);
+        await WriteArchiveEntryAsync(
+            archive,
+            "cactbot/cactbot/ui/raidboss/raidboss.html",
+            "<html></html>"u8.ToArray());
+    }
+
+    var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(builtRuntime).FileVersion!;
+    var sha256 = Convert
+        .ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(archivePath)))
+        .ToLowerInvariant();
+    var lockPath = Path.Combine(
+        bundleDirectory,
+        BundledCactbotManager.LockFileName);
+    await File.WriteAllTextAsync(
+        lockPath,
+        JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            version,
+            projectUrl = "https://github.com/OverlayPlugin/cactbot",
+            downloadUrl = "https://example.invalid/cactbot-test.zip",
+            relativeArchive = archiveName,
+            sha256,
+        }));
+
+    var otherUserConfig = Path.Combine(testRoot, "other-user", "plugin-config");
+    var paths = new PluginPaths(otherUserConfig);
+    var installer = new CactbotPackageInstaller(paths);
+    var manager = new BundledCactbotManager(pluginDirectory, installer);
+    Assert(
+        await manager.EnsureCurrentAsync(CancellationToken.None),
+        "Fresh user did not receive bundled Cactbot.");
+    Assert(
+        installer.IsInstalled &&
+        File.Exists(Path.Combine(
+            otherUserConfig,
+            "cactbot",
+            "ui",
+            "raidboss",
+            "raidboss.html")),
+        "Bundled Cactbot was not installed under the supplied user's config path.");
+    Assert(
+        !await manager.EnsureCurrentAsync(CancellationToken.None),
+        "Current bundled Cactbot was unnecessarily reinstalled.");
+}
+
+static async Task ValidateOfficialBundledCactbotAsync(string testRoot)
+{
+    var pluginOutputDirectory = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release");
+    var paths = new PluginPaths(Path.Combine(
+        testRoot,
+        "official-bundle-user",
+        "plugin-config"));
+    var installer = new CactbotPackageInstaller(paths);
+    var manager = new BundledCactbotManager(pluginOutputDirectory, installer);
+    Assert(
+        await manager.EnsureCurrentAsync(CancellationToken.None),
+        "Official bundled Cactbot was not installed for a fresh user.");
+    Assert(
+        installer.IsInstalled &&
+        installer.InstalledVersion is { } installedVersion &&
+        installedVersion >= Version.Parse(manager.BundledVersion),
+        "Official bundled Cactbot version or layout is invalid after installation.");
 }
 
 static async Task ValidateLiveBundledPluginUpdateCheckAsync(string testRoot)

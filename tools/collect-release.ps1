@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.2.32.0",
+    [string] $ExpectedAssemblyVersion = "0.2.33.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -90,6 +90,19 @@ if ($RequireCompatibilityHost) {
     Write-Host "Validated embedded Compatibility Host resources: $($requiredHostResources.Count)"
 }
 
+$cactbotLockRelativePath = "BundledCactbot/bundled-cactbot.lock.json"
+$cactbotLockPath = Join-Path $validationDir $cactbotLockRelativePath
+if (-not (Test-Path $cactbotLockPath)) {
+    throw "Plugin ZIP does not contain $cactbotLockRelativePath."
+}
+
+$cactbotLock = Get-Content -LiteralPath $cactbotLockPath -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($cactbotLock.relativeArchive) -or
+    [string]::IsNullOrWhiteSpace($cactbotLock.sha256)) {
+    throw "Bundled Cactbot lock file is invalid."
+}
+
+$cactbotArchiveRelativePath = "BundledCactbot/$($cactbotLock.relativeArchive)"
 $requiredRuntimeFiles = @(
     "Advanced Combat Tracker.dll",
     "DalamudActCompat.ActRuntime.dll",
@@ -114,13 +127,22 @@ $requiredRuntimeFiles = @(
     "BundledActPlugins/triggernometry/LICENSE.txt",
     "BundledActPlugins/act.foxtts/ACT.FoxTTS.dll",
     "BundledActPlugins/act.foxtts/LICENSE.txt",
-    "BundledActPlugins/postnamazu/PostNamazu.dll"
+    "BundledActPlugins/postnamazu/PostNamazu.dll",
+    $cactbotLockRelativePath,
+    $cactbotArchiveRelativePath,
+    "BundledCactbot/LICENSE.txt"
 )
 $missingRuntimeFiles = @($requiredRuntimeFiles | Where-Object {
     -not (Test-Path (Join-Path $validationDir $_))
 })
 if ($missingRuntimeFiles.Count -gt 0) {
     throw "Plugin ZIP is missing self-hosted ACT runtime files: $($missingRuntimeFiles -join ', ')"
+}
+
+$cactbotArchivePath = Join-Path $validationDir $cactbotArchiveRelativePath
+$cactbotArchiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $cactbotArchivePath).Hash
+if ($cactbotArchiveSha256 -ne $cactbotLock.sha256) {
+    throw "Bundled Cactbot archive does not match its locked SHA-256."
 }
 
 Write-Host "Validated self-hosted ACT runtime files: $($requiredRuntimeFiles.Count)"

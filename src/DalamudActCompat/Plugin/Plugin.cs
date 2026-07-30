@@ -184,6 +184,7 @@ public sealed class Plugin : IDalamudPlugin
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
+        EnsureBundledCactbot(pluginInterface.AssemblyLocation.Directory!.FullName);
         lifecycle.Start();
         StartBundledPluginUpdateCheck(openWindow: false);
     }
@@ -320,6 +321,30 @@ public sealed class Plugin : IDalamudPlugin
         catch (Exception ex)
         {
             logger.Error(ex, "Failed to save plugin configuration.");
+        }
+    }
+
+    private void EnsureBundledCactbot(string pluginAssemblyDirectory)
+    {
+        try
+        {
+            var bundledCactbotManager = new BundledCactbotManager(
+                pluginAssemblyDirectory,
+                cactbotInstaller);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var installed = bundledCactbotManager
+                .EnsureCurrentAsync(timeout.Token)
+                .GetAwaiter()
+                .GetResult();
+            if (installed)
+            {
+                logger.Information(
+                    $"Installed bundled Cactbot {bundledCactbotManager.BundledVersion} into this user's plugin configuration.");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Bundled Cactbot installation failed.");
         }
     }
 

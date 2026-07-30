@@ -7,4 +7,5 @@ obj/
 *.nupkg
 *.snupkg
 *.zip
+!vendor/BundledCactbot/*.zip
 artifacts/
