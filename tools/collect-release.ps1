@@ -80,7 +80,11 @@ if ($RequireCompatibilityHost) {
         "DalamudActCompat.HostAssets.DalamudActCompat.Host.exe",
         "DalamudActCompat.HostAssets.DalamudActCompat.Host.dll",
         "DalamudActCompat.HostAssets.DalamudActCompat.Host.deps.json",
-        "DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json"
+        "DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json",
+        "DalamudActCompat.HostAssets.DalamudActCompat.Protocol.dll",
+        "DalamudActCompat.HostAssets.Advanced Combat Tracker.dll",
+        "DalamudActCompat.HostAssets.FFXIV_ACT_Plugin.dll",
+        "DalamudActCompat.HostAssets.Mono.Cecil.dll"
     )
     $missingHostResources = @($requiredHostResources | Where-Object { $_ -notin $hostResources })
     if ($missingHostResources.Count -gt 0) {

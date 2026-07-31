@@ -68,6 +68,30 @@ try
             "The patched Triggernometry implementation is missing expected UI resources.");
     }
 
+    var administratorCheck = implementation
+        .GetType("Triggernometry.Core.RealPlugin", throwOnError: true)!
+        .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+        .Single(method =>
+            method.Name == "CheckIfAdministrator" &&
+            method.ReturnType == typeof(bool) &&
+            method.GetParameters() is [{ ParameterType: var parameterType }] &&
+            parameterType == typeof(bool));
+    AssertCallsCompatibilityMethod(
+        administratorCheck,
+        nameof(LegacyResourceCompatibility.CheckTriggernometryAdministratorCapability));
+    var realPluginType = implementation
+        .GetType("Triggernometry.Core.RealPlugin", throwOnError: true)!;
+    AssertCallsCompatibilityMethod(
+        realPluginType.GetMethod(
+            "LogLineQueuer",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!,
+        nameof(LegacyResourceCompatibility.EnqueueTriggerEventBounded));
+    AssertCallsCompatibilityMethod(
+        realPluginType.GetMethod(
+            "LogLineQueuerMass",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!,
+        nameof(LegacyResourceCompatibility.EnqueueTriggerEventBounded));
+
     var proxyType = assembly.GetType("TriggernometryProxy.ProxyPlugin", throwOnError: true)!;
     _ = Activator.CreateInstance(proxyType)
         ?? throw new InvalidOperationException("Triggernometry proxy could not be constructed.");
@@ -90,6 +114,12 @@ try
             postNamazu.GetType("PostNamazu.Common.ProcessManager", throwOnError: true)!
                 .GetMethod("StartProcessMonitoring", BindingFlags.Instance | BindingFlags.Public)!,
             nameof(NativePostNamazuBridge.SkipLegacyProcessMonitoring));
+        var copyLog = postNamazu
+            .GetType("PostNamazu.PostNamazuUi", throwOnError: true)!
+            .GetMethod("CopyLog", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        AssertCallsCompatibilityMethod(
+            copyLog,
+            nameof(LegacyResourceCompatibility.SetClipboardText));
     }
 
     Console.WriteLine(
@@ -123,6 +153,31 @@ static void AssertCallsNativeBridge(MethodInfo method, string expectedMethod)
     throw new InvalidOperationException(
         $"{method.DeclaringType?.FullName}.{method.Name} was not redirected to " +
         $"{nameof(NativePostNamazuBridge)}.{expectedMethod}.");
+}
+
+static void AssertCallsCompatibilityMethod(MethodInfo method, string expectedMethod)
+{
+    var il = method.GetMethodBody()?.GetILAsByteArray()
+             ?? throw new InvalidOperationException($"{method} has no IL body.");
+    for (var index = 0; index <= il.Length - 5; index++)
+    {
+        if (il[index] != 0x28)
+        {
+            continue;
+        }
+
+        var token = BitConverter.ToInt32(il, index + 1);
+        if (method.Module.ResolveMethod(token) is MethodInfo called &&
+            called.DeclaringType == typeof(LegacyResourceCompatibility) &&
+            called.Name == expectedMethod)
+        {
+            return;
+        }
+    }
+
+    throw new InvalidOperationException(
+        $"{method.DeclaringType?.FullName}.{method.Name} does not call " +
+        $"{nameof(LegacyResourceCompatibility)}.{expectedMethod}.");
 }
 
 Assembly? ResolveDependency(AssemblyLoadContext context, AssemblyName name)

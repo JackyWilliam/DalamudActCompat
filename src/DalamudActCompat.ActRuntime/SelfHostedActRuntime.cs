@@ -73,7 +73,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         INotificationManager notificationManager,
         Func<bool> localDeathWhilePartyContinues,
         Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
-        Func<bool> debugMode)
+        Func<bool> debugMode,
+        Func<string, ActCapability, bool> permissionCheck)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -89,6 +90,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.getOverlayWindowSettings = getOverlayWindowSettings;
         this.debugMode = debugMode;
         NativePostNamazuBridge.Configure(framework, log);
+        LegacyResourceCompatibility.Configure(log, notificationManager);
+        CompatibilityPermissionBroker.Configure(
+            permissionCheck,
+            message => log.Information($"ACT permission audit: {message}"));
     }
 
     public bool IsParserRunning => parser is not null;
@@ -118,6 +123,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         cactbotSettings.Show();
+        return true;
+    }
+
+    public bool DispatchTts(string text)
+    {
+        if (!IsParserRunning || string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        ActGlobals.oFormActMain.TTS(text);
         return true;
     }
 
@@ -181,6 +197,15 @@ public sealed class SelfHostedActRuntime : IDisposable
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
 
+    public IReadOnlyList<ActPluginRuntimeStatus> CustomPluginStatuses
+        => customPlugins
+            .Select(plugin => new ActPluginRuntimeStatus(
+                plugin.Id,
+                plugin.Status,
+                plugin.Stages,
+                plugin.Diagnostics))
+            .ToArray();
+
     public bool OpenCustomPluginConfiguration(string id)
     {
         var plugin = customPlugins.FirstOrDefault(
@@ -197,6 +222,10 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
+
+    public event Action<DateTimeOffset, string, bool>? RawLogLineReceived;
+
+    public event Action<uint, string>? ZoneChanged;
 
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
@@ -242,6 +271,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                 chatGui,
                 framework,
                 condition);
+            parser.Subscription.ZoneChanged += OnZoneChangedForHost;
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
                 "FFXIV_ACT_Plugin.dll");
@@ -572,6 +602,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             RemovePluginData(parserPluginData);
             parserPluginData = null;
+            if (parser is not null)
+            {
+                parser.Subscription.ZoneChanged -= OnZoneChangedForHost;
+            }
             parser?.Dispose();
         }
         catch (Exception ex)
@@ -644,10 +678,19 @@ public sealed class SelfHostedActRuntime : IDisposable
         data.cbEnabled.Dispose();
     }
 
-    public void Dispose() => StopParser();
+    public void Dispose()
+    {
+        StopParser();
+        LegacyResourceCompatibility.StopServices();
+        CompatibilityPermissionBroker.Reset();
+    }
 
     private void OnBeforeLogLineRead(bool isImport, LogLineEventArgs logInfo)
     {
+        RawLogLineReceived?.Invoke(
+            new DateTimeOffset(logInfo.detectedTime),
+            logInfo.originalLogLine,
+            isImport);
         if (isImport)
         {
             return;
@@ -817,6 +860,9 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnAfterCombatEnd(EncounterData encounter)
         => PublishEncounter(encounter, true);
+
+    private void OnZoneChangedForHost(uint territoryId, string zoneName)
+        => ZoneChanged?.Invoke(territoryId, zoneName);
 
     private void PublishEncounter(EncounterData encounter, bool finished)
     {
@@ -1009,3 +1055,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         property?.SetValue(null, log);
     }
 }
+
+public sealed record ActPluginRuntimeStatus(
+    string Id,
+    string Status,
+    IReadOnlyList<CompatibilityStageResult> Stages,
+    IReadOnlyList<ActPluginDiagnostic> Diagnostics);

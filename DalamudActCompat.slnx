@@ -2,6 +2,8 @@
   <Project Path="src/DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
   <Project Path="src/DalamudActCompat/DalamudActCompat.csproj" />
   <Project Path="src/DalamudActCompat.Host/DalamudActCompat.Host.csproj" />
+  <Project Path="src/DalamudActCompat.Protocol/DalamudActCompat.Protocol.csproj" />
   <Project Path="tests/DalamudActCompat.PackageSmokeTests/DalamudActCompat.PackageSmokeTests.csproj" />
   <Project Path="tests/DalamudActCompat.LegacyResourceSmokeTests/DalamudActCompat.LegacyResourceSmokeTests.csproj" />
+  <Project Path="tests/DalamudActCompat.HostSmokeTests/DalamudActCompat.HostSmokeTests.csproj" />
 </Solution>

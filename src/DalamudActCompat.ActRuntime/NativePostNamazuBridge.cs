@@ -18,6 +18,18 @@ public static class NativePostNamazuBridge
     private static IFramework? framework;
     private static IPluginLog? log;
     private static PostNamazuEventSource? overlayEventSource;
+    private static IReadOnlyList<CompatibilityStageResult> stages = [];
+
+    public static IReadOnlyList<CompatibilityStageResult> Stages
+    {
+        get
+        {
+            lock (SyncRoot)
+            {
+                return stages.ToArray();
+            }
+        }
+    }
 
     internal static void Configure(IFramework frameworkService, IPluginLog pluginLog)
     {
@@ -28,6 +40,36 @@ public static class NativePostNamazuBridge
     internal static string Start(object plugin)
     {
         ArgumentNullException.ThrowIfNull(plugin);
+        var results = new List<CompatibilityStageResult>();
+        AddStage(results, "PostNamazu 程序集加载", CompatibilityStageState.Success,
+            plugin.GetType().Assembly.FullName ?? plugin.GetType().Assembly.GetName().Name ?? "unknown");
+        AddStage(results, "InitPlugin 调用", CompatibilityStageState.Success,
+            "上游 InitPlugin 已返回；后续桥接阶段开始。");
+        AddStage(results, "ACT Host 可用", CompatibilityStageState.Success,
+            $"ActPlugins={ActGlobals.oFormActMain.ActPlugins.Count}");
+        var ffxivPlugin = ActGlobals.oFormActMain.ActPlugins.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.pluginObj?.GetType().Assembly.GetName().Name,
+                "FFXIV_ACT_Plugin",
+                StringComparison.OrdinalIgnoreCase));
+        AddStage(
+            results,
+            "FFXIV_ACT_Plugin 可发现",
+            ffxivPlugin is null ? CompatibilityStageState.Failed : CompatibilityStageState.Success,
+            ffxivPlugin is null
+                ? "ACT 插件列表中没有 FFXIV_ACT_Plugin。"
+                : ffxivPlugin.pluginObj.GetType().FullName ?? "type available");
+        var overlayPlugin = ActGlobals.oFormActMain.ActPlugins.FirstOrDefault(candidate =>
+            candidate.pluginObj?.GetType().Assembly.GetName().Name?.Contains(
+                "OverlayPlugin",
+                StringComparison.OrdinalIgnoreCase) == true);
+        AddStage(
+            results,
+            "OverlayPlugin 可发现",
+            overlayPlugin is null ? CompatibilityStageState.NotImplemented : CompatibilityStageState.Success,
+            overlayPlugin is null
+                ? "共享 OverlayPlugin 当前不在 ACT ActPlugins 列表中；将尝试事件源注册。"
+                : overlayPlugin.pluginObj.GetType().FullName ?? "type available");
         var pluginType = plugin.GetType();
         var manager = pluginType.GetField(
                 "_processManager",
@@ -37,8 +79,19 @@ public static class NativePostNamazuBridge
         var process = manager.GetType().GetMethod(
                 "GetFFXIVProcess",
                 BindingFlags.Instance | BindingFlags.Public)
-            ?.Invoke(manager, null) as Process
-            ?? throw new InvalidOperationException("PostNamazu could not find the active FFXIV process.");
+            ?.Invoke(manager, null) as Process;
+        AddStage(
+            results,
+            "游戏进程可识别",
+            process is null ? CompatibilityStageState.Failed : CompatibilityStageState.Success,
+            process is null
+                ? "ProcessManager.GetFFXIVProcess 未返回活动进程。"
+                : $"{process.ProcessName} ({process.Id})");
+        if (process is null)
+        {
+            PublishStages(results);
+            throw new InvalidOperationException("PostNamazu could not find the active FFXIV process.");
+        }
         pluginType.GetField(
                 "FFXIV",
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -49,11 +102,23 @@ public static class NativePostNamazuBridge
             ?.Invoke(plugin, null) as bool? == true;
         if (!offsetsReady)
         {
+            AddStage(results, "命令桥初始化", CompatibilityStageState.Failed,
+                "PostNamazu GetOffsets 未能解析当前客户端函数签名。");
+            PublishStages(results);
             throw new InvalidOperationException(
                 "PostNamazu could not resolve the active FFXIV function signatures.");
         }
 
         var failedModules = AttachCore(plugin);
+        AddStage(
+            results,
+            "命令桥初始化",
+            failedModules.Count == 0
+                ? CompatibilityStageState.Success
+                : CompatibilityStageState.Failed,
+            failedModules.Count == 0
+                ? "签名已解析，所有模块 Setup 返回非 Failure。"
+                : $"模块不可用：{string.Join(", ", failedModules)}");
         var overlayIntegrationActive = false;
         try
         {
@@ -64,6 +129,31 @@ public static class NativePostNamazuBridge
             log?.Warning(ex, "PostNamazu optional OverlayPlugin integration could not be initialized.");
         }
 
+        AddStage(
+            results,
+            "日志系统初始化",
+            CompatibilityStageState.Success,
+            "PostNamazu 使用共享 ACT BeforeLogLineRead/LogACT 链路。");
+        AddStage(
+            results,
+            "OverlayPlugin 事件入口",
+            overlayIntegrationActive
+                ? CompatibilityStageState.Success
+                : CompatibilityStageState.NotImplemented,
+            overlayIntegrationActive
+                ? "PostNamazu 事件处理器已注册到共享 OverlayPlugin dispatcher。"
+                : "共享 dispatcher 未提供可用入口。");
+        AddStage(
+            results,
+            "命令发送测试",
+            CompatibilityStageState.NotTested,
+            "未自动发送有副作用的游戏命令；需由用户触发白名单无害测试。");
+        AddStage(
+            results,
+            "卸载测试",
+            CompatibilityStageState.NotTested,
+            "将在本次实例 DeInitPlugin/Stop 完成后记录。");
+        PublishStages(results);
         var moduleStatus = failedModules.Count == 0
             ? string.Empty
             : $" Unavailable modules: {string.Join(", ", failedModules)}.";
@@ -79,6 +169,34 @@ public static class NativePostNamazuBridge
         lock (SyncRoot)
         {
             overlayEventSource?.SetAction(null);
+            var updated = stages.ToList();
+            AddStage(updated, "卸载测试", CompatibilityStageState.Success,
+                "事件入口已解除；上游 DeInitPlugin 正在退出。");
+            stages = updated
+                .GroupBy(stage => stage.Stage, StringComparer.Ordinal)
+                .Select(group => group.Last())
+                .ToArray();
+        }
+    }
+
+    private static void AddStage(
+        ICollection<CompatibilityStageResult> target,
+        string stage,
+        CompatibilityStageState state,
+        string detail)
+        => target.Add(new CompatibilityStageResult(stage, state, detail, DateTimeOffset.UtcNow));
+
+    private static void PublishStages(IReadOnlyList<CompatibilityStageResult> results)
+    {
+        lock (SyncRoot)
+        {
+            stages = results.ToArray();
+        }
+
+        foreach (var result in results)
+        {
+            log?.Information(
+                $"PostNamazu stage [{result.State}] {result.Stage}: {result.Detail}");
         }
     }
 
@@ -153,10 +271,14 @@ public static class NativePostNamazuBridge
     }
 
     public static void Execute(Action action)
-        => RunOnFrameworkThread(action);
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
+        RunOnFrameworkThread(action);
+    }
 
     public static T Execute<T>(Func<T> function)
     {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
         T result = default!;
         RunOnFrameworkThread(() => result = function());
         return result;
@@ -168,6 +290,7 @@ public static class NativePostNamazuBridge
     public static T Call<T>(nint function, object[] arguments)
         where T : struct
     {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
         if (function == nint.Zero)
         {
             throw new ArgumentException("PostNamazu attempted to call a null game function.", nameof(function));
@@ -182,6 +305,7 @@ public static class NativePostNamazuBridge
     public static unsafe T Read<T>(object? _, nint address)
         where T : unmanaged
     {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
         if (address == nint.Zero)
         {
             throw new ArgumentException("PostNamazu attempted to read a null address.", nameof(address));
@@ -195,6 +319,7 @@ public static class NativePostNamazuBridge
     public static unsafe void Write<T>(object? _, nint address, T value)
         where T : unmanaged
     {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
         if (address == nint.Zero)
         {
             throw new ArgumentException("PostNamazu attempted to write a null address.", nameof(address));
@@ -205,6 +330,7 @@ public static class NativePostNamazuBridge
 
     public static void WriteBytes(object? _, nint address, byte[] value)
     {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
         ArgumentNullException.ThrowIfNull(value);
         if (address == nint.Zero)
         {
@@ -216,6 +342,15 @@ public static class NativePostNamazuBridge
 
     public static unsafe void SendCommand(string command)
     {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        SendCommandAsync(command, timeout.Token).GetAwaiter().GetResult();
+    }
+
+    public static unsafe Task SendCommandAsync(
+        string command,
+        CancellationToken cancellationToken)
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.GameCommand);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
         if (!command.StartsWith('/'))
         {
@@ -227,7 +362,7 @@ public static class NativePostNamazuBridge
             command = command[1..];
         }
 
-        RunOnFrameworkThread(() =>
+        return RunOnFrameworkThreadAsync(() =>
         {
             var uiModule = UIModule.Instance();
             if (uiModule is null)
@@ -237,7 +372,32 @@ public static class NativePostNamazuBridge
 
             using var message = new Utf8String(command);
             uiModule->ProcessChatBoxEntry(&message);
-        });
+        }, cancellationToken);
+    }
+
+    private static async Task RunOnFrameworkThreadAsync(
+        Action action,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var currentFramework = framework
+            ?? throw new InvalidOperationException("The Dalamud framework bridge is not configured.");
+        cancellationToken.ThrowIfCancellationRequested();
+        if (currentFramework.IsInFrameworkUpdateThread)
+        {
+            action();
+            return;
+        }
+
+        await currentFramework.RunOnFrameworkThread(() =>
+            {
+                // Prevent a command that timed out in the Broker from running
+                // later when the framework queue finally resumes.
+                cancellationToken.ThrowIfCancellationRequested();
+                action();
+            })
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static void RunOnFrameworkThread(Action action)
@@ -251,7 +411,21 @@ public static class NativePostNamazuBridge
             return;
         }
 
-        currentFramework.RunOnFrameworkThread(action).GetAwaiter().GetResult();
+        try
+        {
+            currentFramework.RunOnFrameworkThread(action)
+                .WaitAsync(TimeSpan.FromSeconds(2))
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (TimeoutException ex)
+        {
+            log?.Error(
+                ex,
+                "PostNamazu framework bridge exceeded two seconds. The caller was released; " +
+                "native work cannot be forcibly aborted safely in-process.");
+            throw;
+        }
     }
 
     private static void SetState(object target, string stateName)

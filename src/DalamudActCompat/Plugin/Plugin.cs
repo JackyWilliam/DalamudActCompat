@@ -17,7 +17,9 @@ using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
+using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
+using System.Threading.Channels;
 
 namespace DalamudActCompat.Plugin;
 
@@ -49,6 +51,17 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FileDialogManager fileDialogManager = new();
     private readonly CancellationTokenSource bundledUpdateCancellation = new();
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
+    private readonly ActHostSupervisor hostSupervisor;
+    private readonly Channel<HostCommandInvocation> hostCommandQueue =
+        Channel.CreateBounded<HostCommandInvocation>(new BoundedChannelOptions(64)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false,
+        });
+    private readonly CancellationTokenSource hostCommandCancellation = new();
+    private readonly Task hostCommandWorker;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -97,6 +110,21 @@ public sealed class Plugin : IDalamudPlugin
         bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
             paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
+        paths.EnsureCreated();
+        var hostIpcClient = new HostIpcClient(
+            stateStore,
+            logger,
+            BuildHostPermissionSnapshot);
+        hostSupervisor = new ActHostSupervisor(
+            paths.HostDirectory,
+            paths.ActPluginDirectory,
+            paths.ConfigDirectory,
+            hostIpcClient,
+            logger);
+        hostSupervisor.CommandRequested += OnHostCommandRequested;
+        hostCommandWorker = Task.Run(
+            () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
+            CancellationToken.None);
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger, paths);
@@ -116,7 +144,11 @@ public sealed class Plugin : IDalamudPlugin
             notificationManager,
             localDeathWhilePartyContinues,
             configuration.GetOverlayWindowSettings,
-            () => configuration.DebugMode);
+            () => configuration.DebugMode,
+            configuration.IsActCapabilityAllowed);
+        actRuntime.RawLogLineReceived += OnRawLogLineForHost;
+        actRuntime.ZoneChanged += OnZoneChangedForHost;
+        actRuntime.EncounterChanged += OnEncounterChangedForHost;
         parserEngine = new ParserEngine(new IinactAdapter(
             actRuntime,
             logger,
@@ -167,7 +199,12 @@ public sealed class Plugin : IDalamudPlugin
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration,
             () => StartBundledPluginUpdateCheck(openWindow: true));
-        statusWindow = new StatusWindow(parserEngine, text);
+        statusWindow = new StatusWindow(
+            parserEngine,
+            text,
+            () => hostSupervisor.Snapshot,
+            RestartHostFromUi,
+            StopHostFromUi);
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(logHistoryWindow);
@@ -186,6 +223,7 @@ public sealed class Plugin : IDalamudPlugin
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         EnsureBundledCactbot(pluginInterface.AssemblyLocation.Directory!.FullName);
         lifecycle.Start();
+        _ = Task.Run(StartIndependentHostAsync);
         StartBundledPluginUpdateCheck(openWindow: false);
     }
 
@@ -202,11 +240,38 @@ public sealed class Plugin : IDalamudPlugin
         settingsWindow.Detach();
         statusWindow.Detach();
         windowSystem.RemoveAllWindows();
+        actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
+        actRuntime.ZoneChanged -= OnZoneChangedForHost;
+        actRuntime.EncounterChanged -= OnEncounterChangedForHost;
+        hostSupervisor.CommandRequested -= OnHostCommandRequested;
 
         SaveConfiguration();
-        lifecycle.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        encounterService.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        parserEngine.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        var shutdown = Task.Run(DisposeComponentsAsync);
+        var completed = ReferenceEquals(
+            Task.WhenAny(shutdown, Task.Delay(TimeSpan.FromMilliseconds(250)))
+                .GetAwaiter()
+                .GetResult(),
+            shutdown);
+        if (!completed)
+        {
+            logger.Warning(
+                "ACT compatibility shutdown exceeded 250 ms. Dalamud/FFXIV was released; " +
+                "remaining in-process plugin cleanup will continue only on the background task.");
+            _ = shutdown.ContinueWith(
+                task => logger.Error(
+                    task.Exception?.GetBaseException()
+                    ?? new InvalidOperationException("Unknown shutdown failure."),
+                    "ACT compatibility background shutdown failed."),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        else if (shutdown.IsFaulted)
+        {
+            logger.Error(
+                shutdown.Exception?.GetBaseException() ?? new InvalidOperationException("Unknown shutdown failure."),
+                "ACT compatibility background shutdown failed.");
+        }
     }
 
     private void Draw()
@@ -263,6 +328,7 @@ public sealed class Plugin : IDalamudPlugin
                     try
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
                         await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -279,6 +345,7 @@ public sealed class Plugin : IDalamudPlugin
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                         await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
+                        await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -386,11 +453,13 @@ public sealed class Plugin : IDalamudPlugin
         IReadOnlyList<BundledActPluginDescriptor> plugins)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
         await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
         await bundledPluginManager
             .InstallAndAcknowledgeAsync(plugins, timeout.Token)
             .ConfigureAwait(false);
         SaveConfiguration();
+        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
         if (configuration.EnableParsing && configuration.AutoStartParser)
         {
             await parserEngine.StartAsync(timeout.Token).ConfigureAwait(false);
@@ -446,6 +515,9 @@ public sealed class Plugin : IDalamudPlugin
                         .CreateLinkedTokenSource(cancellationToken);
                     stopTimeout.CancelAfter(TimeSpan.FromSeconds(20));
                     await parserEngine
+                        .StopAsync(stopTimeout.Token)
+                        .ConfigureAwait(false);
+                    await hostSupervisor
                         .StopAsync(stopTimeout.Token)
                         .ConfigureAwait(false);
                 }
@@ -573,15 +645,17 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenActPluginConfiguration(string pluginId)
     {
-        if (!actRuntime.OpenCustomPluginConfiguration(pluginId))
+        if (hostSupervisor.OpenPluginUi(pluginId))
         {
-            logger.Warning($"ACT plugin '{pluginId}' is not running. Restart the parser and try again.");
-            services.NotificationManager.AddNotification(new()
-            {
-                Title = "ACT 兼容",
-                Content = $"扩展 {pluginId} 未成功加载，请重启解析器并查看状态日志。",
-            });
+            return;
         }
+
+        logger.Warning($"ACT plugin '{pluginId}' is not running in the independent Host.");
+        services.NotificationManager.AddNotification(new()
+        {
+            Title = "ACT 兼容",
+            Content = $"扩展 {pluginId} 未在独立 Host 中成功加载，请重启 Host 并查看状态日志。",
+        });
     }
 
     private void OpenCactbotOverlay()
@@ -634,16 +708,268 @@ public sealed class Plugin : IDalamudPlugin
             });
     }
 
+    private async Task StartIndependentHostAsync()
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.Error(
+                ex,
+                "Independent ACT Host did not start. In-process parsing and overlays remain available, " +
+                "but traditional ACT plugins stay unloaded because hard crash isolation is not active.");
+        }
+    }
+
+    private void RestartHostFromUi()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "ACT Host UI restart failed.");
+            }
+        });
+    }
+
+    private void StopHostFromUi()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "ACT Host UI stop failed.");
+            }
+        });
+    }
+
+    private HostPermissionSnapshot BuildHostPermissionSnapshot()
+    {
+        var capabilities = Enum.GetValues<ActCapability>();
+        string[] pluginIds = ["triggernometry", "postnamazu"];
+        var allowed = pluginIds.ToDictionary(
+            pluginId => pluginId,
+            pluginId => (IReadOnlyList<string>)capabilities
+                .Where(capability =>
+                    configuration.IsActCapabilityAllowed(pluginId, capability))
+                .Select(capability => capability.ToString())
+                .ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+        return new HostPermissionSnapshot(
+            allowed,
+            packageInstaller
+                .Discover(configuration.DisabledActPluginIds)
+                .Where(plugin =>
+                    plugin.Enabled &&
+                    bundledPluginManager.IsAllowedToLoad(plugin))
+                .Select(plugin => plugin.Manifest.Id)
+                .ToArray());
+    }
+
+    private async Task DisposeComponentsAsync()
+    {
+        hostCommandQueue.Writer.TryComplete();
+        await hostCommandCancellation.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await hostCommandWorker.WaitAsync(TimeSpan.FromMilliseconds(500))
+                .ConfigureAwait(false);
+            hostCommandCancellation.Dispose();
+        }
+        catch (TimeoutException)
+        {
+            logger.Warning(
+                "ACT Host command broker did not stop within 500 ms; it remains off the game thread.");
+        }
+
+        await lifecycle.DisposeAsync().ConfigureAwait(false);
+        await encounterService.DisposeAsync().ConfigureAwait(false);
+        await parserEngine.DisposeAsync().ConfigureAwait(false);
+        await hostSupervisor.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private void OnRawLogLineForHost(DateTimeOffset timestamp, string line, bool isImport)
+        => hostSupervisor.PublishLog(timestamp, line, isImport);
+
+    private void OnZoneChangedForHost(uint territoryId, string zoneName)
+        => hostSupervisor.PublishZone(territoryId, zoneName);
+
+    private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
+        => hostSupervisor.PublishEncounter(finished);
+
+    private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)
+    {
+        if (hostCommandQueue.Writer.TryWrite(invocation))
+        {
+            return;
+        }
+
+        logger.Warning(
+            $"ACT Host command broker queue is full; rejecting " +
+            $"plugin={invocation.Request.PluginId} action={invocation.Request.Command}.");
+        hostSupervisor.ReplyCommand(
+            invocation.CorrelationId,
+            false,
+            "busy",
+            "The bounded game-side command broker queue is full.");
+    }
+
+    private async Task RunHostCommandBrokerAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var invocation in hostCommandQueue.Reader.ReadAllAsync(cancellationToken)
+                               .ConfigureAwait(false))
+            {
+                await HandleHostCommandAsync(invocation, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task HandleHostCommandAsync(
+        HostCommandInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            switch (invocation.Request.Command)
+            {
+                case "tts":
+                    if (!string.Equals(
+                            invocation.Request.PluginId,
+                            "triggernometry",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Only Triggernometry may request the TTS broker capability.");
+                    }
+
+                    if (!configuration.IsActCapabilityAllowed(
+                            "triggernometry",
+                            ActCapability.TextToSpeech))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Triggernometry TTS capability is denied.");
+                    }
+
+                    if (!invocation.Request.Arguments.TryGetValue("text", out var speech) ||
+                        speech.Length is 0 or > 2000)
+                    {
+                        throw new InvalidDataException("TTS payload is invalid.");
+                    }
+
+                    // Authorization remains game-side, while the actual FoxTTS callback
+                    // stays in the disposable external Host. A blocked/native TTS provider
+                    // can therefore be recovered by killing the Host without freezing FFXIV.
+                    break;
+                case "postnamazu.chat":
+                    if (!string.Equals(
+                            invocation.Request.PluginId,
+                            "postnamazu",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Only PostNamazu may request the game-command broker capability.");
+                    }
+
+                    if (!configuration.IsActCapabilityAllowed(
+                            "postnamazu",
+                            ActCapability.GameCommand))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "PostNamazu game-command capability is denied.");
+                    }
+
+                    if (!invocation.Request.Arguments.TryGetValue("text", out var command))
+                    {
+                        throw new InvalidDataException("PostNamazu command payload is missing.");
+                    }
+
+                    ValidatePostNamazuCommand(command);
+                    await NativePostNamazuBridge
+                        .SendCommandAsync(command, timeout.Token)
+                        .ConfigureAwait(false);
+                    break;
+                default:
+                    throw new UnauthorizedAccessException(
+                        $"Unknown Host command '{invocation.Request.Command}' is denied.");
+            }
+
+            logger.Information(
+                $"ACT Host command broker allowed plugin={invocation.Request.PluginId} " +
+                $"action={invocation.Request.Command}.");
+
+            hostSupervisor.ReplyCommand(
+                invocation.CorrelationId,
+                true,
+                "completed",
+                null);
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, $"ACT Host command '{invocation.Request.Command}' was rejected.");
+            hostSupervisor.ReplyCommand(
+                invocation.CorrelationId,
+                false,
+                "denied",
+                ex.Message);
+        }
+    }
+
+    private static void ValidatePostNamazuCommand(string command)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        if (command.Length > 500 || command.Contains('\r') || command.Contains('\n'))
+        {
+            throw new InvalidDataException(
+                "PostNamazu commands must be a single line of at most 500 characters.");
+        }
+
+        if (!command.StartsWith('/') || command.StartsWith("//", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "PostNamazu commands must use one slash-prefixed semantic command.");
+        }
+
+        var verb = command.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        string[] allowed =
+        [
+            "/e",
+            "/echo",
+            "/p",
+            "/party",
+            "/mk",
+            "/marking",
+            "/waymark",
+        ];
+        if (!allowed.Contains(verb, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException(
+                $"PostNamazu command verb '{verb}' is outside the game-side whitelist.");
+        }
+    }
+
     private IReadOnlyList<RuntimePluginSpec> DiscoverRuntimePlugins()
-        => packageInstaller
-            .Discover(configuration.DisabledActPluginIds)
-            .Where(plugin => plugin.Enabled && bundledPluginManager.IsAllowedToLoad(plugin))
-            .Select(plugin => new RuntimePluginSpec(
-                plugin.Manifest.Id,
-                plugin.InstallDirectory,
-                plugin.Manifest.EntryAssembly,
-                plugin.Manifest.EntryType))
-            .ToArray();
+        => [];
 
     private static IReadOnlyList<ActPlayerIdentity> BuildPlayerIdentities(
         IPlayerState playerState,

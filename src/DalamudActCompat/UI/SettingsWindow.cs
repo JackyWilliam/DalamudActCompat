@@ -251,9 +251,36 @@ public sealed class SettingsWindow : Window
 
         ImGui.TextUnformatted(text.Get("可选 ACT 扩展（与 Cactbot 本体分开）", "Optional ACT extensions (separate from Cactbot)"));
         DrawCompatibilityTarget("CactbotSelf / MoreLogLine", text.Get("国服额外日志扩展；实验性兼容。", "CN extra-log extension; experimental compatibility."), "https://github.com/tssailzz8/cacbotSelf");
-        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；使用 Dalamud 同进程原生写入桥，保留 Triggernometry/HTTP/OverlayPlugin 入口。", "Uses the Dalamud in-process native write bridge while preserving Triggernometry, HTTP, and OverlayPlugin entry points."), "https://github.com/Natsukage/PostNamazu");
+        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；传统 UI/逻辑运行于独立 Host，游戏内仅保留白名单语义命令桥。", "Legacy UI and logic run in the independent Host; only a whitelisted semantic command bridge remains in-game."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
         DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML；日志/战斗生命周期/TTS API 已接入。", "DLL and translation XML supported; log/combat/TTS APIs wired."), "https://github.com/MnFeN/Triggernometry");
+
+        ImGui.Separator();
+        ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
+        ImGui.TextWrapped(text.Get(
+            "高风险能力默认关闭。权限按插件与动作类别保存，撤销后立即对兼容桥生效；" +
+            "完整限制第三方 DLL 的直接系统调用仍需独立受限进程。",
+            "High-risk capabilities are denied by default. Grants are stored per plugin and category " +
+            "and can be revoked; fully constraining direct OS calls still requires a restricted process."));
+        changed |= DrawPluginPermissions(
+            "postnamazu",
+            [
+                ActCapability.Clipboard,
+                ActCapability.NetworkRequest,
+                ActCapability.WriteFiles,
+                ActCapability.GameCommand,
+                ActCapability.NativeGameMemory,
+            ]);
+        changed |= DrawPluginPermissions(
+            "triggernometry",
+            [
+                ActCapability.TextToSpeech,
+                ActCapability.Clipboard,
+                ActCapability.NetworkRequest,
+                ActCapability.LaunchExternalProcess,
+                ActCapability.WriteFiles,
+                ActCapability.HighRiskScript,
+            ]);
 
         ImGui.Separator();
         ImGui.TextUnformatted($"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
@@ -390,6 +417,32 @@ public sealed class SettingsWindow : Window
     }
 
     public void Detach() => parserEngine.StatusChanged -= OnParserStatusChanged;
+
+    private bool DrawPluginPermissions(
+        string pluginId,
+        IReadOnlyList<ActCapability> capabilities)
+    {
+        var changed = false;
+        if (!ImGui.TreeNode($"{pluginId}##permissions-{pluginId}"))
+        {
+            return false;
+        }
+
+        foreach (var capability in capabilities)
+        {
+            var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
+            if (ImGui.Checkbox($"{capability}##{pluginId}-{capability}", ref allowed))
+            {
+                configuration.SetActCapability(pluginId, capability, allowed);
+                logger.Information(
+                    $"ACT permission changed: plugin={pluginId}, capability={capability}, allowed={allowed}.");
+                changed = true;
+            }
+        }
+
+        ImGui.TreePop();
+        return changed;
+    }
 
     private void OnParserStatusChanged(object? sender, ParserStatus status)
         => parserStatus = status;

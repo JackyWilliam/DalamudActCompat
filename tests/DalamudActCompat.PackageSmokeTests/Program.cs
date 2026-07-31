@@ -15,8 +15,10 @@ using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Infrastructure.Storage;
+using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
+using DalamudActCompat.Protocol;
 using Machina.FFXIV;
 using Machina.FFXIV.Headers.Opcodes;
 using Newtonsoft.Json.Linq;
@@ -36,6 +38,9 @@ try
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
+    ValidateBoundedHostQueue();
+    ValidateBoundedNotActQueues();
+    ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -171,6 +176,163 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateBoundedHostQueue()
+{
+    using var queue = new BoundedHostMessageQueue();
+    var session = Guid.NewGuid().ToString("N");
+    for (var index = 0; index < HostProtocol.ControlQueueCapacity; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                index + 1,
+                HostMessageTypes.Heartbeat,
+                HostMessagePriority.Control,
+                new { index })),
+            "Control queue rejected an item before reaching its configured capacity.");
+    }
+
+    Assert(
+        !queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            HostProtocol.ControlQueueCapacity + 1,
+            HostMessageTypes.Heartbeat,
+            HostMessagePriority.Control,
+            new { overflow = true })),
+        "Control queue did not reject overflow.");
+
+    queue.Clear();
+    for (var index = 0; index <= HostProtocol.DataQueueCapacity; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                index + 1,
+                HostMessageTypes.LogBatch,
+                HostMessagePriority.Data,
+                new { index })),
+            "Data queue rejected a low-priority item instead of applying drop-oldest backpressure.");
+    }
+
+    Assert(
+        queue.DataCount == HostProtocol.DataQueueCapacity,
+        "Data queue exceeded its configured bound.");
+    Assert(
+        queue.DroppedDataMessages == 1,
+        "Data queue did not record its dropped oldest item.");
+    queue.Clear();
+    Assert(
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            1,
+            HostMessageTypes.Snapshot,
+            HostMessagePriority.State,
+            new { value = 1 })) &&
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            2,
+            HostMessageTypes.Snapshot,
+            HostMessagePriority.State,
+            new { value = 2 })) &&
+        queue.DataCount == 1,
+        "State messages were not coalesced to the latest value.");
+}
+
+static void ValidateBoundedNotActQueues()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    typeof(FormActMain).GetField(
+            "<PluginLog>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(actMain, new TestActLogger());
+    typeof(FormActMain).GetField(
+            "<LogQueue>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(actMain, new System.Collections.Concurrent.ConcurrentQueue<string>());
+    typeof(FormActMain).GetField(
+            "afterActionsQueue",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(
+            actMain,
+            new System.Collections.Concurrent.ConcurrentQueue<MasterSwing>());
+
+    var enqueueLogLine = typeof(FormActMain).GetMethod(
+                             "EnqueueLogLine",
+                             BindingFlags.Instance | BindingFlags.NonPublic)
+                         ?? throw new MissingMethodException(
+                             typeof(FormActMain).FullName,
+                             "EnqueueLogLine");
+    for (var index = 0; index < 8193; index++)
+    {
+        enqueueLogLine.Invoke(actMain, [$"line-{index}"]);
+    }
+
+    Assert(actMain.LogQueue.Count == 8192, "NotACT log queue exceeded 8192 entries.");
+    Assert(actMain.DroppedLogLines == 1, "NotACT log queue did not report drop-oldest.");
+
+    var enqueueCombatAction = typeof(FormActMain).GetMethod(
+                                  "EnqueueCombatAction",
+                                  BindingFlags.Instance | BindingFlags.NonPublic)
+                              ?? throw new MissingMethodException(
+                                  typeof(FormActMain).FullName,
+                                  "EnqueueCombatAction");
+    for (var index = 0; index < 4097; index++)
+    {
+        enqueueCombatAction.Invoke(
+            actMain,
+            [System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(MasterSwing))]);
+    }
+
+    Assert(
+        actMain.DroppedCombatActions == 1,
+        "NotACT combat action queue did not report drop-oldest.");
+}
+
+static void ValidateActCallbackCircuitBreaker()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    typeof(FormActMain).GetField(
+            "<PluginLog>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(actMain, new TestActLogger());
+    var healthField = typeof(FormActMain).GetField(
+                          "callbackHealth",
+                          BindingFlags.Instance | BindingFlags.NonPublic)
+                      ?? throw new MissingFieldException(
+                          typeof(FormActMain).FullName,
+                          "callbackHealth");
+    healthField.SetValue(
+        actMain,
+        Activator.CreateInstance(healthField.FieldType)
+        ?? throw new InvalidOperationException("Could not create callback health dictionary."));
+    var invokeTracked = typeof(FormActMain).GetMethod(
+                            "InvokeTracked",
+                            BindingFlags.Instance | BindingFlags.NonPublic)
+                        ?? throw new MissingMethodException(
+                            typeof(FormActMain).FullName,
+                            "InvokeTracked");
+    var calls = 0;
+    LogLineEventDelegate handler = (_, _) =>
+    {
+        calls++;
+        throw new InvalidOperationException("injected callback failure");
+    };
+    Action<Delegate> invoke = callback =>
+        ((LogLineEventDelegate)callback)(false, null!);
+    for (var index = 0; index < 6; index++)
+    {
+        invokeTracked.Invoke(actMain, [handler, "FaultInjection", invoke]);
+    }
+
+    var health = actMain.GetCallbackHealth().Single();
+    Assert(calls == 5, "Callback circuit did not stop the sixth failing invocation.");
+    Assert(
+        health.Exceptions == 5 && health.CircuitOpen,
+        "Five consecutive callback exceptions did not open the per-plugin circuit.");
 }
 
 static void ValidateMeterRows()
@@ -1362,6 +1524,21 @@ public class NoOpPluginLogProxy : DispatchProxy
             : returnType.IsValueType
                 ? Activator.CreateInstance(returnType)
                 : null;
+    }
+}
+
+internal sealed class TestActLogger : IActLogger
+{
+    public void Error(Exception exception, string message)
+    {
+    }
+
+    public void Verbose(Exception exception, string message)
+    {
+    }
+
+    public void Warning(string message)
+    {
     }
 }
 

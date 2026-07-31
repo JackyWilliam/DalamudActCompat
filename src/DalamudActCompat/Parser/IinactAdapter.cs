@@ -78,11 +78,21 @@ public sealed class IinactAdapter : IParserEngine
             }
 
             LoadCustomPlugins(runtimePlugins.Where(plugin => !MustLoadBeforeOverlay(plugin)));
+            var pluginDetail = string.Join(
+                Environment.NewLine,
+                actRuntime.CustomPluginStatuses.Select(plugin =>
+                {
+                    var stages = plugin.Stages.Count == 0
+                        ? string.Empty
+                        : $" [{string.Join(", ", plugin.Stages.Select(stage => $"{stage.Stage}={stage.State}"))}]";
+                    return $"{plugin.Id}: {plugin.Status}{stages}";
+                }));
             SetStatus(
                 ParserState.Running,
                 actRuntime.IsOverlayRunning
                     ? "FFXIV_ACT_Plugin and OverlayPlugin are running in DalamudActCompat."
-                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.");
+                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.",
+                string.IsNullOrWhiteSpace(pluginDetail) ? null : pluginDetail);
         }
         catch (OperationCanceledException)
         {

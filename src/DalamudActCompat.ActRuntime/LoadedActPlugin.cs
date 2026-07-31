@@ -19,6 +19,9 @@ internal sealed class LoadedActPlugin : IDisposable
     private readonly Form configurationForm;
     private readonly Thread uiThread;
     private readonly Action? removeTtsBridge;
+    private readonly PluginDiagnosticJournal diagnostics;
+    private readonly IPluginLog log;
+    private readonly TriggernometryDiagnosticMonitor? triggernometryMonitor;
     private bool disposing;
 
     private LoadedActPlugin(
@@ -32,7 +35,10 @@ internal sealed class LoadedActPlugin : IDisposable
         ActPluginData pluginData,
         Form configurationForm,
         Thread uiThread,
-        Action? removeTtsBridge)
+        Action? removeTtsBridge,
+        PluginDiagnosticJournal diagnostics,
+        IPluginLog log,
+        TriggernometryDiagnosticMonitor? triggernometryMonitor)
     {
         Id = id;
         this.loadContext = loadContext;
@@ -45,11 +51,21 @@ internal sealed class LoadedActPlugin : IDisposable
         this.configurationForm = configurationForm;
         this.uiThread = uiThread;
         this.removeTtsBridge = removeTtsBridge;
+        this.diagnostics = diagnostics;
+        this.log = log;
+        this.triggernometryMonitor = triggernometryMonitor;
     }
 
     public string Id { get; }
 
     public string Status => statusLabel.Text;
+
+    public IReadOnlyList<ActPluginDiagnostic> Diagnostics => diagnostics.Snapshot();
+
+    public IReadOnlyList<CompatibilityStageResult> Stages
+        => string.Equals(Id, "postnamazu", StringComparison.OrdinalIgnoreCase)
+            ? NativePostNamazuBridge.Stages
+            : [];
 
     public void OpenConfiguration()
         => configurationForm.BeginInvoke((Action)(() =>
@@ -79,6 +95,8 @@ internal sealed class LoadedActPlugin : IDisposable
         ActPluginData? pluginData = null;
         Form? configurationForm = null;
         Action? removeTtsBridge = null;
+        TriggernometryDiagnosticMonitor? triggernometryMonitor = null;
+        var diagnostics = new PluginDiagnosticJournal(spec.Id);
 
         var uiThread = new Thread(() =>
         {
@@ -168,6 +186,16 @@ internal sealed class LoadedActPlugin : IDisposable
                 {
                     removeTtsBridge = InstallFoxTtsBridge(instance, log);
                 }
+                else if (string.Equals(
+                             spec.Id,
+                             "triggernometry",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    triggernometryMonitor = new TriggernometryDiagnosticMonitor(
+                        instance,
+                        diagnostics,
+                        log);
+                }
 
                 NormalizePluginRootControl(tabPage);
                 if (string.Equals(spec.Id, "postnamazu", StringComparison.OrdinalIgnoreCase) &&
@@ -194,6 +222,10 @@ internal sealed class LoadedActPlugin : IDisposable
             }
             catch (Exception ex)
             {
+                diagnostics.Record(ex, "插件初始化顺序或生命周期", "Load/InitPlugin", true);
+                log.Error(ex, $"ACT plugin '{spec.Id}' UI thread failed during initialization.");
+                triggernometryMonitor?.Dispose();
+                triggernometryMonitor = null;
                 removeTtsBridge?.Invoke();
                 removeTtsBridge = null;
                 failure = ex;
@@ -240,7 +272,10 @@ internal sealed class LoadedActPlugin : IDisposable
             pluginData!,
             configurationForm!,
             uiThread,
-            removeTtsBridge);
+            removeTtsBridge,
+            diagnostics,
+            log,
+            triggernometryMonitor);
     }
 
     public void Dispose()
@@ -251,30 +286,59 @@ internal sealed class LoadedActPlugin : IDisposable
         }
 
         disposing = true;
+        triggernometryMonitor?.Dispose();
         removeTtsBridge?.Invoke();
-        configurationForm.BeginInvoke((Action)(() =>
+        try
         {
-            try
+            configurationForm.BeginInvoke((Action)(() =>
             {
-                if (string.Equals(Id, "postnamazu", StringComparison.OrdinalIgnoreCase))
+                try
                 {
-                    NativePostNamazuBridge.Stop(instance);
-                }
+                    if (string.Equals(Id, "postnamazu", StringComparison.OrdinalIgnoreCase))
+                    {
+                        NativePostNamazuBridge.Stop(instance);
+                    }
 
-                deInitPlugin.Invoke(instance, null);
-                (instance as IDisposable)?.Dispose();
-                ActGlobals.oFormActMain.ActPlugins.Remove(pluginData);
-                pluginData.lblPluginTitle.Dispose();
-                pluginData.cbEnabled.Dispose();
-            }
-            finally
-            {
-                configurationForm.Dispose();
-                Application.ExitThread();
-            }
-        }));
-        uiThread.Join(TimeSpan.FromSeconds(10));
-        loadContext.Resolving -= resolvingHandler;
+                    deInitPlugin.Invoke(instance, null);
+                    (instance as IDisposable)?.Dispose();
+                    ActGlobals.oFormActMain.ActPlugins.Remove(pluginData);
+                    pluginData.lblPluginTitle.Dispose();
+                    pluginData.cbEnabled.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    diagnostics.Record(ex, "插件生命周期问题", "DeInitPlugin", true);
+                    log.Error(ex, $"ACT plugin '{Id}' failed during DeInitPlugin.");
+                }
+                finally
+                {
+                    configurationForm.Dispose();
+                    Application.ExitThread();
+                }
+            }));
+        }
+        catch (Exception ex)
+        {
+            diagnostics.Record(ex, "WinForms 宿主问题", "Queue DeInitPlugin", false);
+            log.Error(ex, $"ACT plugin '{Id}' could not queue DeInitPlugin on its UI thread.");
+        }
+
+        // In-process .NET threads cannot be terminated safely. Never wait long
+        // enough here to freeze Dalamud/FFXIV; a hung plugin is left on its
+        // background thread and reported until out-of-process hosting owns it.
+        if (uiThread.Join(TimeSpan.FromMilliseconds(250)))
+        {
+            loadContext.Resolving -= resolvingHandler;
+        }
+        else
+        {
+            var timeout = new TimeoutException(
+                $"ACT plugin '{Id}' did not stop its UI thread within 250 ms.");
+            diagnostics.Record(timeout, "UI 线程或 SynchronizationContext 问题", "DeInitPlugin", false);
+            log.Warning(
+                $"ACT plugin '{Id}' did not stop promptly. The game thread was released; " +
+                "only the independent host process can forcibly contain this plugin.");
+        }
     }
 
     internal static Action InstallFoxTtsBridge(object plugin, IPluginLog log)
