@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections;
 using System.Diagnostics;
+using System.Net;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
@@ -529,8 +530,61 @@ public static class HostPluginBridge
     public static bool IsPostNamazuNetworkAllowed()
         => AuditDecision("postnamazu", "NetworkRequest");
 
+    public static void StartPostNamazuHttpListener(HttpListener listener)
+    {
+        Demand("postnamazu", "NetworkRequest");
+        ArgumentNullException.ThrowIfNull(listener);
+        var originalPrefixes = listener.Prefixes.Cast<string>().ToArray();
+        var useLoopback = OperatingSystem.IsWindows() && !IsCurrentProcessElevated();
+        if (useLoopback)
+        {
+            var compatiblePrefixes = originalPrefixes
+                .Select(prefix => prefix
+                    .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
+                    .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (!compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
+            {
+                listener.Prefixes.Clear();
+                foreach (var prefix in compatiblePrefixes)
+                {
+                    listener.Prefixes.Add(prefix);
+                }
+
+                Console.WriteLine(
+                    "PostNamazu HTTP listener uses loopback compatibility mode for standard-user Windows sessions.");
+            }
+        }
+
+        try
+        {
+            listener.Start();
+            Console.WriteLine(
+                $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+        }
+        catch (Exception ex)
+        {
+            ReportException("postnamazu", "HTTP listener startup", ex);
+            Console.Error.WriteLine($"PostNamazu HTTP listener failed to start: {ex}");
+            throw;
+        }
+    }
+
+    public static void SkipPostNamazuThreadAbort(Thread _)
+    {
+        // HttpServer.Listen only uses this thread to queue the HttpListener worker.
+        // HttpListener.Stop below this legacy call performs the actual shutdown.
+    }
+
     public static bool IsTriggernometryNetworkAllowed()
         => AuditDecision("triggernometry", "NetworkRequest");
+
+    private static bool IsCurrentProcessElevated()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity)
+            .IsInRole(WindowsBuiltInRole.Administrator);
+    }
 
     public static bool IsTriggernometryHighRiskScriptAllowed()
         => AuditDecision("triggernometry", "HighRiskScript");

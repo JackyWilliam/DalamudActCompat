@@ -60,6 +60,10 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuCommand))!);
         var networkAllowed = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNetworkAllowed))!);
+        var startHttpListener = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.StartPostNamazuHttpListener))!);
+        var skipHttpThreadAbort = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SkipPostNamazuThreadAbort))!);
         var unsupported = module.ImportReference(
             bridgeType.GetMethods().Single(method =>
                 method.Name == nameof(HostPluginBridge.UnsupportedNativeOperation) &&
@@ -70,6 +74,8 @@ public static class LegacyAssemblyRewriter
                 method.IsGenericMethod));
         var copyLogPatched = false;
         var overlayAdapterPatched = false;
+        var httpListenerPatched = false;
+        var httpThreadAbortPatched = false;
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
         {
@@ -127,6 +133,32 @@ public static class LegacyAssemblyRewriter
                     InsertBooleanGuard(method, networkAllowed, returnCompletedTask: false);
                 }
 
+                if (type.FullName == "PostNamazu.Common.HttpServer" &&
+                    method.Name is "Listen" or "Stop")
+                {
+                    foreach (var instruction in method.Body.Instructions)
+                    {
+                        if (instruction.Operand is MethodReference called &&
+                            called.DeclaringType.FullName == typeof(System.Net.HttpListener).FullName &&
+                            called.Name == nameof(System.Net.HttpListener.Start) &&
+                            called.Parameters.Count == 0)
+                        {
+                            instruction.OpCode = OpCodes.Call;
+                            instruction.Operand = startHttpListener;
+                            httpListenerPatched = true;
+                        }
+                        else if (instruction.Operand is MethodReference abort &&
+                                 abort.DeclaringType.FullName == typeof(Thread).FullName &&
+                                 abort.Name == nameof(Thread.Abort) &&
+                                 abort.Parameters.Count == 0)
+                        {
+                            instruction.OpCode = OpCodes.Call;
+                            instruction.Operand = skipHttpThreadAbort;
+                            httpThreadAbortPatched = true;
+                        }
+                    }
+                }
+
                 if (type.FullName == "PostNamazu.Actions.Command" &&
                     method.Name == "DoTextCommand" &&
                     method.Parameters.Count == 1)
@@ -172,11 +204,13 @@ public static class LegacyAssemblyRewriter
             }
         }
 
-        if (!copyLogPatched || !overlayAdapterPatched)
+        if (!copyLogPatched || !overlayAdapterPatched || !httpListenerPatched ||
+            !httpThreadAbortPatched)
         {
             throw new InvalidOperationException(
                 "PostNamazu compatibility shape changed; " +
-                $"copyLog={copyLogPatched}, overlayAdapter={overlayAdapterPatched}.");
+                $"copyLog={copyLogPatched}, overlayAdapter={overlayAdapterPatched}, " +
+                $"httpListener={httpListenerPatched}, httpStop={httpThreadAbortPatched}.");
         }
 
         using var output = new MemoryStream();

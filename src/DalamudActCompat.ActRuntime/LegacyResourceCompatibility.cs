@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Formats.Nrbf;
 using System.Globalization;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.IO.Compression;
 using System.Reflection;
@@ -165,6 +166,14 @@ public static class LegacyResourceCompatibility
                 BindingFlags.Public | BindingFlags.Static)!);
         var setTextFullName = definition.MainModule.ImportReference(setText).FullName;
         var getTextFullName = definition.MainModule.ImportReference(getText).FullName;
+        var startHttpListener = definition.MainModule.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(StartPostNamazuHttpListener),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var skipHttpThreadAbort = definition.MainModule.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(SkipPostNamazuThreadAbort),
+                BindingFlags.Public | BindingFlags.Static)!);
         var patchedCalls = 0;
 
         foreach (var instruction in definition.MainModule.Types
@@ -194,11 +203,43 @@ public static class LegacyResourceCompatibility
         }
 
         patchedCalls += PatchPostNamazuNativeBridge(definition);
+        var httpListenerPatched = false;
+        var httpThreadAbortPatched = false;
+        foreach (var method in definition.MainModule.Types
+                     .SelectMany(EnumerateTypes)
+                     .Where(type => type.FullName == "PostNamazu.Common.HttpServer")
+                     .SelectMany(type => type.Methods)
+                     .Where(method => (method.Name is "Listen" or "Stop") && method.HasBody))
+        {
+            foreach (var instruction in method.Body.Instructions)
+            {
+                if (instruction.Operand is MethodReference called &&
+                    called.DeclaringType.FullName == typeof(HttpListener).FullName &&
+                    called.Name == nameof(HttpListener.Start) &&
+                    called.Parameters.Count == 0)
+                {
+                    instruction.OpCode = OpCodes.Call;
+                    instruction.Operand = startHttpListener;
+                    httpListenerPatched = true;
+                }
+                else if (instruction.Operand is MethodReference abort &&
+                         abort.DeclaringType.FullName == typeof(Thread).FullName &&
+                         abort.Name == nameof(Thread.Abort) &&
+                         abort.Parameters.Count == 0)
+                {
+                    instruction.OpCode = OpCodes.Call;
+                    instruction.Operand = skipHttpThreadAbort;
+                    httpThreadAbortPatched = true;
+                }
+            }
+        }
 
-        if (patchedCalls == 0)
+        if (patchedCalls == 0 || !httpListenerPatched || !httpThreadAbortPatched)
         {
             throw new InvalidOperationException(
-                "PostNamazu contains no recognized clipboard calls to patch.");
+                "PostNamazu compatibility shape changed; " +
+                $"patchedCalls={patchedCalls}, httpListener={httpListenerPatched}, " +
+                $"httpStop={httpThreadAbortPatched}.");
         }
 
         using var output = new MemoryStream();
@@ -360,6 +401,53 @@ public static class LegacyResourceCompatibility
     {
         CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.Clipboard);
         return GetClipboardService().GetText();
+    }
+
+    public static void StartPostNamazuHttpListener(HttpListener listener)
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NetworkRequest);
+        ArgumentNullException.ThrowIfNull(listener);
+        var originalPrefixes = listener.Prefixes.Cast<string>().ToArray();
+        if (OperatingSystem.IsWindows() && !IsCurrentProcessElevated())
+        {
+            var compatiblePrefixes = originalPrefixes
+                .Select(prefix => prefix
+                    .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
+                    .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (!compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
+            {
+                listener.Prefixes.Clear();
+                foreach (var prefix in compatiblePrefixes)
+                {
+                    listener.Prefixes.Add(prefix);
+                }
+            }
+        }
+
+        try
+        {
+            listener.Start();
+            compatibilityLog?.Information(
+                $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+        }
+        catch (Exception ex)
+        {
+            compatibilityLog?.Error(ex, "PostNamazu HTTP listener failed to start.");
+            throw;
+        }
+    }
+
+    public static void SkipPostNamazuThreadAbort(Thread _)
+    {
+        // HttpListener.Stop performs the shutdown; Thread.Abort is unavailable on modern .NET.
+    }
+
+    private static bool IsCurrentProcessElevated()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity)
+            .IsInRole(WindowsBuiltInRole.Administrator);
     }
 
     public static bool CheckTriggernometryAdministratorCapability(bool warnIfNotAdmin)

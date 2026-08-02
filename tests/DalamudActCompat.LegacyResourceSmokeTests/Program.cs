@@ -120,6 +120,14 @@ try
         AssertCallsCompatibilityMethod(
             copyLog,
             nameof(LegacyResourceCompatibility.SetClipboardText));
+        AssertCallsCompatibilityMethod(
+            postNamazu.GetType("PostNamazu.Common.HttpServer", throwOnError: true)!
+                .GetMethod("Listen", BindingFlags.Instance | BindingFlags.NonPublic)!,
+            nameof(LegacyResourceCompatibility.StartPostNamazuHttpListener));
+        AssertCallsCompatibilityMethod(
+            postNamazu.GetType("PostNamazu.Common.HttpServer", throwOnError: true)!
+                .GetMethod("Stop", BindingFlags.Instance | BindingFlags.Public)!,
+            nameof(LegacyResourceCompatibility.SkipPostNamazuThreadAbort));
     }
 
     Console.WriteLine(

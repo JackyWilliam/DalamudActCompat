@@ -193,12 +193,14 @@ internal sealed class LegacyPluginRuntime : IDisposable
             "PostNamazu.dll",
             "PostNamazu.PostNamazu");
         LoadManifestPlugins();
-        var isolatedTtsWriter = actMain!.PlayTtsMethod;
-        Action<string>? hostTtsWriter = suppressTtsOutput
-            ? text => Console.WriteLine($"test TTS output suppressed: {text}")
-            : isolatedTtsWriter is null
-                ? null
-                : text => isolatedTtsWriter(text);
+        var isolatedTtsWriter = plugins
+            .Select(plugin => plugin.TtsWriter)
+            .FirstOrDefault(writer => writer is not null);
+        Action<string>? hostTtsWriter = isolatedTtsWriter is null
+            ? null
+            : suppressTtsOutput
+                ? text => Console.WriteLine($"test TTS output suppressed: {text}")
+                : isolatedTtsWriter;
         HostPluginBridge.ConfigureTtsWriter(hostTtsWriter);
         actMain!.PlayTtsMethod = HostPluginBridge.SendTts;
     }
@@ -589,7 +591,8 @@ internal sealed class LegacyPluginHandle : IDisposable
         Form configurationForm,
         Thread uiThread,
         ActPluginData pluginData,
-        string status)
+        string status,
+        Action<string>? ttsWriter)
     {
         Id = id;
         this.instance = instance;
@@ -598,11 +601,14 @@ internal sealed class LegacyPluginHandle : IDisposable
         this.uiThread = uiThread;
         this.pluginData = pluginData;
         Status = status;
+        TtsWriter = ttsWriter;
     }
 
     public string Id { get; }
 
     public string Status { get; }
+
+    public Action<string>? TtsWriter { get; }
 
     public bool OpenConfiguration()
     {
@@ -668,6 +674,7 @@ internal sealed class LegacyPluginHandle : IDisposable
         MethodInfo? deInit = null;
         Form? form = null;
         ActPluginData? pluginData = null;
+        Action<string>? ttsWriter = null;
         var finalStatus = string.Empty;
         var loadContext = AssemblyLoadContext.Default;
         var resolver = new AssemblyDependencyResolver(assemblyPath);
@@ -760,6 +767,18 @@ internal sealed class LegacyPluginHandle : IDisposable
                         "External Host active; clipboard and semantic command broker available.";
                 }
 
+                if (id == "act.foxtts")
+                {
+                    if (!status.Text.StartsWith("Init Success", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"ACT.FoxTTS did not initialize its speech provider: {status.Text}");
+                    }
+
+                    ttsWriter = CreateFoxTtsWriter(instance);
+                    Console.WriteLine("ACT.FoxTTS speech bridge ready in the external Host.");
+                }
+
                 if (tab.Controls.Count == 1)
                 {
                     tab.Controls[0].Dock = DockStyle.Fill;
@@ -813,7 +832,37 @@ internal sealed class LegacyPluginHandle : IDisposable
             form!,
             thread,
             pluginData!,
-            finalStatus);
+            finalStatus,
+            ttsWriter);
+    }
+
+    private static Action<string> CreateFoxTtsWriter(object plugin)
+    {
+        var speak = plugin.GetType().GetMethod(
+                        "Speak",
+                        BindingFlags.Instance | BindingFlags.Public,
+                        binder: null,
+                        types: [typeof(string)],
+                        modifiers: null)
+                    ?? throw new MissingMethodException(plugin.GetType().FullName, "Speak");
+        return message =>
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    speak.Invoke(plugin, [message]);
+                }
+                catch (TargetInvocationException ex) when (ex.InnerException is not null)
+                {
+                    HostPluginBridge.ReportException("act.foxtts", "Speak", ex.InnerException);
+                }
+                catch (Exception ex)
+                {
+                    HostPluginBridge.ReportException("act.foxtts", "Speak", ex);
+                }
+            });
+        };
     }
 
     private static bool IsTriggernometryInitialized(object proxy)

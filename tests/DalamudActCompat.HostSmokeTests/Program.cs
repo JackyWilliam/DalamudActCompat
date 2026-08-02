@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Reflection;
@@ -18,6 +20,7 @@ var hostExecutable = Path.GetFullPath(args[0]);
 var processLogs = new ConcurrentDictionary<int, ProcessLog>();
 var pluginRoot = args.Length == 3 ? Path.GetFullPath(args[1]) : null;
 var configRoot = args.Length == 3 ? Path.GetFullPath(args[2]) : null;
+var postNamazuSmokePort = 0;
 if (!File.Exists(hostExecutable))
 {
     throw new FileNotFoundException("ACT Host executable was not found.", hostExecutable);
@@ -417,6 +420,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                                 "ReadCombatLogs",
                                 "ReadLocalConfiguration",
                                 "Clipboard",
+                                "NetworkRequest",
                             ],
                         },
                         ["triggernometry", "postnamazu", "act.foxtts"]),
@@ -428,6 +432,17 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
             Assert(
                 health.State == "plugins.ready",
                 $"Legacy plugin runtime did not become ready: {health.Detail}");
+            var hasFoxTts = File.Exists(Path.Combine(
+                pluginRoot!,
+                "act.foxtts",
+                "actcompat.plugin.json"));
+            Assert(
+                hasFoxTts,
+                "The real legacy Host smoke requires a standard installed ACT.FoxTTS manifest.");
+            var httpPayload = await WaitForPostNamazuListenerAsync();
+            Assert(
+                httpPayload == "ACTCOMPAT_HTTP_BRIDGE",
+                $"PostNamazu loopback HTTP endpoint returned '{httpPayload}'.");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -525,10 +540,6 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     new HostCombatEvent(false, DateTimeOffset.UtcNow)),
                 CancellationToken.None);
             await ReadAndCompleteExpectedTtsAsync("ACTCOMPAT_COMBAT_END");
-            var hasFoxTts = File.Exists(Path.Combine(
-                pluginRoot!,
-                "act.foxtts",
-                "actcompat.plugin.json"));
             if (hasFoxTts)
             {
                 await HostFrameCodec.WriteAsync(
@@ -581,8 +592,17 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 output.Contains("Legacy plugin 'postnamazu' loaded out-of-process.", StringComparison.Ordinal),
                 $"PostNamazu did not load out-of-process.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
+                output.Contains(
+                    "PostNamazu HTTP listener uses loopback compatibility mode",
+                    StringComparison.Ordinal) &&
+                output.Contains(
+                    $"PostNamazu HTTP listener started: http://127.0.0.1:{postNamazuSmokePort}/",
+                    StringComparison.Ordinal),
+                $"PostNamazu did not start a standard-user loopback listener." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
                 output.Split("test TTS output suppressed:", StringSplitOptions.None).Length - 1 ==
-                (hasFoxTts ? 6 : 5),
+                6,
                 "Authorized Triggernometry TTS requests did not reach the isolated Host output " +
                 $"provider.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
@@ -605,6 +625,12 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                         StringComparison.Ordinal),
                         $"Manifest ACT plugin did not load out-of-process." +
                         $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+                Assert(
+                    output.Contains(
+                        "ACT.FoxTTS speech bridge ready in the external Host.",
+                        StringComparison.Ordinal),
+                    $"ACT.FoxTTS loaded without exposing its real Speak bridge." +
+                    $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
                 Assert(
                     output.Contains(
                         "test TTS output suppressed: ACTCOMPAT_GAME_TTS",
@@ -709,6 +735,63 @@ async Task PrepareLegacySmokeConfigurationAsync()
         </Configuration>
         """;
     await File.WriteAllTextAsync(configurationPath, configuration.Trim());
+
+    using (var reservation = new TcpListener(IPAddress.Loopback, 0))
+    {
+        reservation.Start();
+        postNamazuSmokePort = ((IPEndPoint)reservation.LocalEndpoint).Port;
+    }
+
+    var postNamazuConfigurationPath = Path.Combine(
+        configurationDirectory,
+        "PostNamazu.config.xml");
+    var postNamazuConfiguration = $$"""
+        <?xml version="1.0" encoding="utf-8" standalone="yes"?>
+        <Config>
+          <Port>{{postNamazuSmokePort}}</Port>
+          <AutoStart>True</AutoStart>
+          <Language>EN</Language>
+          <Actions>
+            <Command>True</Command>
+            <Mark>True</Mark>
+            <NormalCommand>True</NormalCommand>
+            <Preset>True</Preset>
+            <Queue>True</Queue>
+            <SendKey>True</SendKey>
+            <WayMark>True</WayMark>
+          </Actions>
+        </Config>
+        """;
+    await File.WriteAllTextAsync(
+        postNamazuConfigurationPath,
+        postNamazuConfiguration.Trim());
+}
+
+async Task<string> WaitForPostNamazuListenerAsync()
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
+    Exception? lastFailure = null;
+    for (var attempt = 0; attempt < 20; attempt++)
+    {
+        try
+        {
+            using var content = new StringContent("ACTCOMPAT_HTTP_BRIDGE", Encoding.UTF8);
+            using var response = await client.PostAsync(
+                $"http://127.0.0.1:{postNamazuSmokePort}/NamazuLog",
+                content);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            lastFailure = ex;
+            await Task.Delay(100);
+        }
+    }
+
+    throw new InvalidOperationException(
+        $"PostNamazu did not listen on loopback port {postNamazuSmokePort}.",
+        lastFailure);
 }
 
 async Task<(Process Host, HostTestPipe Pipe, string Session)> StartConnectedHostAsync(
