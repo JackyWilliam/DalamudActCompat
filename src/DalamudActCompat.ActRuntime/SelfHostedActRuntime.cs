@@ -260,6 +260,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             AppDataFolder = pluginInterface.ConfigDirectory,
             LogFilePath = logDirectory,
             WriteLogFile = true,
+            InvokeSynchronously = true,
         };
         ActGlobals.oFormActMain.PlayTtsMethod = text =>
         {

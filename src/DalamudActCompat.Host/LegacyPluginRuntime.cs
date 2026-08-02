@@ -343,9 +343,16 @@ internal sealed class LegacyPluginRuntime : IDisposable
                 WriteLogFile = false,
                 UseExternalLogSource = true,
                 CurrentZone = string.Empty,
+                ShowInTaskbar = false,
+                FormBorderStyle = FormBorderStyle.None,
+                StartPosition = FormStartPosition.Manual,
+                Location = new Point(-32000, -32000),
+                Size = new Size(1, 1),
+                Opacity = 0,
             };
             ActGlobals.oFormActMain = actMain;
-            _ = actMain.Handle;
+            actMain.Show();
+            actMain.Hide();
             ready.Set();
             Application.Run(new ApplicationContext());
         }

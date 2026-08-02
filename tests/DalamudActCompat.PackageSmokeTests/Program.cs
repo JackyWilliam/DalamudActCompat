@@ -34,6 +34,8 @@ try
 {
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
+    ValidateActCustomTriggerCompatibility();
+    ValidateSynchronousActInvocation();
     ValidatePostNamazuRawLogCompatibility();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
@@ -289,6 +291,48 @@ static void ValidateBoundedNotActQueues()
     Assert(
         actMain.DroppedCombatActions == 1,
         "NotACT combat action queue did not report drop-oldest.");
+}
+
+static void ValidateActCustomTriggerCompatibility()
+{
+    var property = typeof(FormActMain).GetProperty(nameof(FormActMain.CustomTriggers));
+    Assert(
+        property?.PropertyType == typeof(SortedList<string, CustomTrigger>) &&
+        property.GetMethod is not null,
+        "ACT CustomTriggers getter is missing or has an incompatible ABI.");
+
+    var expectedProperties = new Dictionary<string, Type>
+    {
+        [nameof(CustomTrigger.Active)] = typeof(bool),
+        [nameof(CustomTrigger.RestrictToCategoryZone)] = typeof(bool),
+        [nameof(CustomTrigger.Tabbed)] = typeof(bool),
+        [nameof(CustomTrigger.Timer)] = typeof(bool),
+        [nameof(CustomTrigger.SoundType)] = typeof(int),
+        [nameof(CustomTrigger.Category)] = typeof(string),
+        [nameof(CustomTrigger.ShortRegexString)] = typeof(string),
+        [nameof(CustomTrigger.SoundData)] = typeof(string),
+        [nameof(CustomTrigger.TimerName)] = typeof(string),
+    };
+    foreach (var expected in expectedProperties)
+    {
+        Assert(
+            typeof(CustomTrigger).GetProperty(expected.Key)?.PropertyType == expected.Value,
+            $"ACT CustomTrigger.{expected.Key} is missing or has an incompatible type.");
+    }
+}
+
+static void ValidateSynchronousActInvocation()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    actMain.InvokeSynchronously = true;
+    var calls = 0;
+    var result = actMain.Invoke((Func<int>)(() => ++calls));
+    var asyncResult = actMain.BeginInvoke((Func<int>)(() => ++calls), null);
+    var asyncValue = actMain.EndInvoke(asyncResult);
+    Assert(
+        result is 1 && asyncValue is 2 && calls == 2,
+        "Handle-free ACT invocation did not execute synchronously in the in-process runtime.");
 }
 
 static void ValidateActCallbackCircuitBreaker()
@@ -1259,6 +1303,30 @@ static void ValidateLegacyResourceRuntimeDependencies()
                     required,
                     StringComparison.OrdinalIgnoreCase)),
             $"Bundled third-party plugin file is missing from the release package: {required}.");
+    }
+
+    var bundledLockEntry = FindArchiveEntry(
+        archive,
+        "BundledActPlugins/bundled-plugins.lock.json")
+        ?? throw new InvalidDataException("Bundled ACT plugin lock is missing from the release package.");
+    using var bundledLockStream = bundledLockEntry.Open();
+    using var bundledLock = JsonDocument.Parse(bundledLockStream);
+    foreach (var plugin in bundledLock.RootElement.GetProperty("plugins").EnumerateArray())
+    {
+        var relativeAssembly = plugin.GetProperty("relativeAssembly").GetString()
+            ?? throw new InvalidDataException("Bundled ACT plugin assembly path is empty.");
+        var expectedHash = plugin.GetProperty("sha256").GetString()
+            ?? throw new InvalidDataException("Bundled ACT plugin SHA-256 is empty.");
+        var assemblyEntry = FindArchiveEntry(
+            archive,
+            $"BundledActPlugins/{relativeAssembly}")
+            ?? throw new InvalidDataException(
+                $"Bundled ACT plugin assembly is missing: {relativeAssembly}.");
+        using var assemblyStream = assemblyEntry.Open();
+        var actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        Assert(
+            string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase),
+            $"Bundled ACT plugin does not match its locked SHA-256: {relativeAssembly}.");
     }
 }
 
