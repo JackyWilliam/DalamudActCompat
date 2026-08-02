@@ -15,8 +15,10 @@ using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Infrastructure.Storage;
+using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
+using DalamudActCompat.Protocol;
 using Machina.FFXIV;
 using Machina.FFXIV.Headers.Opcodes;
 using Newtonsoft.Json.Linq;
@@ -32,10 +34,15 @@ try
 {
     ValidateSettingsSerializerMemberTypes();
     ValidateActPluginDataCompatibility();
+    ValidateActCustomTriggerCompatibility();
+    ValidateSynchronousActInvocation();
     ValidatePostNamazuRawLogCompatibility();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
+    ValidateBoundedHostQueue();
+    ValidateBoundedNotActQueues();
+    ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -171,6 +178,205 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateBoundedHostQueue()
+{
+    using var queue = new BoundedHostMessageQueue();
+    var session = Guid.NewGuid().ToString("N");
+    for (var index = 0; index < HostProtocol.ControlQueueCapacity; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                index + 1,
+                HostMessageTypes.Heartbeat,
+                HostMessagePriority.Control,
+                new { index })),
+            "Control queue rejected an item before reaching its configured capacity.");
+    }
+
+    Assert(
+        !queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            HostProtocol.ControlQueueCapacity + 1,
+            HostMessageTypes.Heartbeat,
+            HostMessagePriority.Control,
+            new { overflow = true })),
+        "Control queue did not reject overflow.");
+
+    queue.Clear();
+    for (var index = 0; index <= HostProtocol.DataQueueCapacity; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                index + 1,
+                HostMessageTypes.LogBatch,
+                HostMessagePriority.Data,
+                new { index })),
+            "Data queue rejected a low-priority item instead of applying drop-oldest backpressure.");
+    }
+
+    Assert(
+        queue.DataCount == HostProtocol.DataQueueCapacity,
+        "Data queue exceeded its configured bound.");
+    Assert(
+        queue.DroppedDataMessages == 1,
+        "Data queue did not record its dropped oldest item.");
+    queue.Clear();
+    Assert(
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            1,
+            HostMessageTypes.Snapshot,
+            HostMessagePriority.State,
+            new { value = 1 })) &&
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            2,
+            HostMessageTypes.Snapshot,
+            HostMessagePriority.State,
+            new { value = 2 })) &&
+        queue.DataCount == 1,
+        "State messages were not coalesced to the latest value.");
+}
+
+static void ValidateBoundedNotActQueues()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    typeof(FormActMain).GetField(
+            "<PluginLog>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(actMain, new TestActLogger());
+    typeof(FormActMain).GetField(
+            "<LogQueue>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(actMain, new System.Collections.Concurrent.ConcurrentQueue<string>());
+    typeof(FormActMain).GetField(
+            "afterActionsQueue",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(
+            actMain,
+            new System.Collections.Concurrent.ConcurrentQueue<MasterSwing>());
+
+    var enqueueLogLine = typeof(FormActMain).GetMethod(
+                             "EnqueueLogLine",
+                             BindingFlags.Instance | BindingFlags.NonPublic)
+                         ?? throw new MissingMethodException(
+                             typeof(FormActMain).FullName,
+                             "EnqueueLogLine");
+    for (var index = 0; index < 8193; index++)
+    {
+        enqueueLogLine.Invoke(actMain, [$"line-{index}"]);
+    }
+
+    Assert(actMain.LogQueue.Count == 8192, "NotACT log queue exceeded 8192 entries.");
+    Assert(actMain.DroppedLogLines == 1, "NotACT log queue did not report drop-oldest.");
+
+    var enqueueCombatAction = typeof(FormActMain).GetMethod(
+                                  "EnqueueCombatAction",
+                                  BindingFlags.Instance | BindingFlags.NonPublic)
+                              ?? throw new MissingMethodException(
+                                  typeof(FormActMain).FullName,
+                                  "EnqueueCombatAction");
+    for (var index = 0; index < 4097; index++)
+    {
+        enqueueCombatAction.Invoke(
+            actMain,
+            [System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(MasterSwing))]);
+    }
+
+    Assert(
+        actMain.DroppedCombatActions == 1,
+        "NotACT combat action queue did not report drop-oldest.");
+}
+
+static void ValidateActCustomTriggerCompatibility()
+{
+    var property = typeof(FormActMain).GetProperty(nameof(FormActMain.CustomTriggers));
+    Assert(
+        property?.PropertyType == typeof(SortedList<string, CustomTrigger>) &&
+        property.GetMethod is not null,
+        "ACT CustomTriggers getter is missing or has an incompatible ABI.");
+
+    var expectedProperties = new Dictionary<string, Type>
+    {
+        [nameof(CustomTrigger.Active)] = typeof(bool),
+        [nameof(CustomTrigger.RestrictToCategoryZone)] = typeof(bool),
+        [nameof(CustomTrigger.Tabbed)] = typeof(bool),
+        [nameof(CustomTrigger.Timer)] = typeof(bool),
+        [nameof(CustomTrigger.SoundType)] = typeof(int),
+        [nameof(CustomTrigger.Category)] = typeof(string),
+        [nameof(CustomTrigger.ShortRegexString)] = typeof(string),
+        [nameof(CustomTrigger.SoundData)] = typeof(string),
+        [nameof(CustomTrigger.TimerName)] = typeof(string),
+    };
+    foreach (var expected in expectedProperties)
+    {
+        Assert(
+            typeof(CustomTrigger).GetProperty(expected.Key)?.PropertyType == expected.Value,
+            $"ACT CustomTrigger.{expected.Key} is missing or has an incompatible type.");
+    }
+}
+
+static void ValidateSynchronousActInvocation()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    actMain.InvokeSynchronously = true;
+    var calls = 0;
+    var result = actMain.Invoke((Func<int>)(() => ++calls));
+    var asyncResult = actMain.BeginInvoke((Func<int>)(() => ++calls), null);
+    var asyncValue = actMain.EndInvoke(asyncResult);
+    Assert(
+        result is 1 && asyncValue is 2 && calls == 2,
+        "Handle-free ACT invocation did not execute synchronously in the in-process runtime.");
+}
+
+static void ValidateActCallbackCircuitBreaker()
+{
+    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+        typeof(FormActMain));
+    typeof(FormActMain).GetField(
+            "<PluginLog>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+        .SetValue(actMain, new TestActLogger());
+    var healthField = typeof(FormActMain).GetField(
+                          "callbackHealth",
+                          BindingFlags.Instance | BindingFlags.NonPublic)
+                      ?? throw new MissingFieldException(
+                          typeof(FormActMain).FullName,
+                          "callbackHealth");
+    healthField.SetValue(
+        actMain,
+        Activator.CreateInstance(healthField.FieldType)
+        ?? throw new InvalidOperationException("Could not create callback health dictionary."));
+    var invokeTracked = typeof(FormActMain).GetMethod(
+                            "InvokeTracked",
+                            BindingFlags.Instance | BindingFlags.NonPublic)
+                        ?? throw new MissingMethodException(
+                            typeof(FormActMain).FullName,
+                            "InvokeTracked");
+    var calls = 0;
+    LogLineEventDelegate handler = (_, _) =>
+    {
+        calls++;
+        throw new InvalidOperationException("injected callback failure");
+    };
+    Action<Delegate> invoke = callback =>
+        ((LogLineEventDelegate)callback)(false, null!);
+    for (var index = 0; index < 6; index++)
+    {
+        invokeTracked.Invoke(actMain, [handler, "FaultInjection", invoke]);
+    }
+
+    var health = actMain.GetCallbackHealth().Single();
+    Assert(calls == 5, "Callback circuit did not stop the sixth failing invocation.");
+    Assert(
+        health.Exceptions == 5 && health.CircuitOpen,
+        "Five consecutive callback exceptions did not open the per-plugin circuit.");
 }
 
 static void ValidateMeterRows()
@@ -1014,6 +1220,14 @@ static void ValidateActPluginDataCompatibility()
         "ActPluginData.btnXButton compatibility field is missing.");
 }
 
+static ZipArchiveEntry? FindArchiveEntry(ZipArchive archive, string normalizedPath)
+{
+    return archive.Entries.SingleOrDefault(entry => string.Equals(
+        entry.FullName.Replace('\\', '/'),
+        normalizedPath,
+        StringComparison.OrdinalIgnoreCase));
+}
+
 static void ValidateLegacyResourceRuntimeDependencies()
 {
     var releaseDirectory = Path.Combine(
@@ -1054,6 +1268,22 @@ static void ValidateLegacyResourceRuntimeDependencies()
             StringComparison.OrdinalIgnoreCase)),
         "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
 
+    var hostSpeech = FindArchiveEntry(archive, "host/System.Speech.dll");
+    var runtimeSpeech = FindArchiveEntry(
+        archive,
+        "runtimes/win/lib/net10.0/System.Speech.dll");
+    Assert(
+        hostSpeech is not null && runtimeSpeech is not null,
+        "The Compatibility Host or Windows System.Speech runtime implementation is missing.");
+    using (var hostSpeechStream = hostSpeech!.Open())
+    using (var runtimeSpeechStream = runtimeSpeech!.Open())
+    {
+        Assert(
+            SHA256.HashData(hostSpeechStream).AsSpan()
+                .SequenceEqual(SHA256.HashData(runtimeSpeechStream)),
+            "The Compatibility Host packaged the System.Speech reference assembly instead of its Windows runtime implementation.");
+    }
+
     var requiredBundledPluginFiles = new[]
     {
         "BundledActPlugins/bundled-plugins.lock.json",
@@ -1073,6 +1303,30 @@ static void ValidateLegacyResourceRuntimeDependencies()
                     required,
                     StringComparison.OrdinalIgnoreCase)),
             $"Bundled third-party plugin file is missing from the release package: {required}.");
+    }
+
+    var bundledLockEntry = FindArchiveEntry(
+        archive,
+        "BundledActPlugins/bundled-plugins.lock.json")
+        ?? throw new InvalidDataException("Bundled ACT plugin lock is missing from the release package.");
+    using var bundledLockStream = bundledLockEntry.Open();
+    using var bundledLock = JsonDocument.Parse(bundledLockStream);
+    foreach (var plugin in bundledLock.RootElement.GetProperty("plugins").EnumerateArray())
+    {
+        var relativeAssembly = plugin.GetProperty("relativeAssembly").GetString()
+            ?? throw new InvalidDataException("Bundled ACT plugin assembly path is empty.");
+        var expectedHash = plugin.GetProperty("sha256").GetString()
+            ?? throw new InvalidDataException("Bundled ACT plugin SHA-256 is empty.");
+        var assemblyEntry = FindArchiveEntry(
+            archive,
+            $"BundledActPlugins/{relativeAssembly}")
+            ?? throw new InvalidDataException(
+                $"Bundled ACT plugin assembly is missing: {relativeAssembly}.");
+        using var assemblyStream = assemblyEntry.Open();
+        var actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        Assert(
+            string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase),
+            $"Bundled ACT plugin does not match its locked SHA-256: {relativeAssembly}.");
     }
 }
 
@@ -1362,6 +1616,21 @@ public class NoOpPluginLogProxy : DispatchProxy
             : returnType.IsValueType
                 ? Activator.CreateInstance(returnType)
                 : null;
+    }
+}
+
+internal sealed class TestActLogger : IActLogger
+{
+    public void Error(Exception exception, string message)
+    {
+    }
+
+    public void Verbose(Exception exception, string message)
+    {
+    }
+
+    public void Warning(string message)
+    {
     }
 }
 

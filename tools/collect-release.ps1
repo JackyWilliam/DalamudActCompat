@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.2.33.0",
+    [string] $ExpectedAssemblyVersion = "0.2.34.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -80,7 +80,12 @@ if ($RequireCompatibilityHost) {
         "DalamudActCompat.HostAssets.DalamudActCompat.Host.exe",
         "DalamudActCompat.HostAssets.DalamudActCompat.Host.dll",
         "DalamudActCompat.HostAssets.DalamudActCompat.Host.deps.json",
-        "DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json"
+        "DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json",
+        "DalamudActCompat.HostAssets.DalamudActCompat.Protocol.dll",
+        "DalamudActCompat.HostAssets.Advanced Combat Tracker.dll",
+        "DalamudActCompat.HostAssets.FFXIV_ACT_Plugin.dll",
+        "DalamudActCompat.HostAssets.Mono.Cecil.dll",
+        "DalamudActCompat.HostAssets.System.Speech.dll"
     )
     $missingHostResources = @($requiredHostResources | Where-Object { $_ -notin $hostResources })
     if ($missingHostResources.Count -gt 0) {
@@ -88,6 +93,18 @@ if ($RequireCompatibilityHost) {
     }
 
     Write-Host "Validated embedded Compatibility Host resources: $($requiredHostResources.Count)"
+
+    $hostSpeechPath = Join-Path $validationDir "host/System.Speech.dll"
+    $runtimeSpeechPath = Join-Path $validationDir "runtimes/win/lib/net10.0/System.Speech.dll"
+    if (-not (Test-Path $hostSpeechPath) -or -not (Test-Path $runtimeSpeechPath)) {
+        throw "Plugin ZIP is missing the Host or Windows runtime System.Speech implementation."
+    }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $hostSpeechPath).Hash -ne
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $runtimeSpeechPath).Hash) {
+        throw "Compatibility Host contains the System.Speech reference assembly instead of the Windows runtime implementation."
+    }
+
+    Write-Host "Validated Compatibility Host System.Speech runtime implementation."
 }
 
 $cactbotLockRelativePath = "BundledCactbot/bundled-cactbot.lock.json"

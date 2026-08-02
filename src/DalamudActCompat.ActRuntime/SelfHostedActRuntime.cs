@@ -42,6 +42,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
     private string? overlayWebSocketUri;
     private HttpClient? httpClient;
+    private Func<string, bool>? externalTtsDispatcher;
+    private Func<string, string, bool>? externalPostNamazuDispatcher;
+    private PostNamazuEventSource? externalPostNamazuEventSource;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
@@ -73,7 +76,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         INotificationManager notificationManager,
         Func<bool> localDeathWhilePartyContinues,
         Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
-        Func<bool> debugMode)
+        Func<bool> debugMode,
+        Func<string, ActCapability, bool> permissionCheck)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -89,11 +93,25 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.getOverlayWindowSettings = getOverlayWindowSettings;
         this.debugMode = debugMode;
         NativePostNamazuBridge.Configure(framework, log);
+        LegacyResourceCompatibility.Configure(log, notificationManager);
+        CompatibilityPermissionBroker.Configure(
+            permissionCheck,
+            message => log.Information($"ACT permission audit: {message}"));
     }
 
     public bool IsParserRunning => parser is not null;
 
     public bool IsOverlayRunning => overlay is not null;
+
+    public void ConfigureExternalPluginBridges(
+        Func<string, bool> ttsDispatcher,
+        Func<string, string, bool> postNamazuDispatcher)
+    {
+        ArgumentNullException.ThrowIfNull(ttsDispatcher);
+        ArgumentNullException.ThrowIfNull(postNamazuDispatcher);
+        Volatile.Write(ref externalTtsDispatcher, ttsDispatcher);
+        Volatile.Write(ref externalPostNamazuDispatcher, postNamazuDispatcher);
+    }
 
     public bool HasVisibleEditingOverlay
         => cactbotOverlay?.IsVisibleEditing == true ||
@@ -118,6 +136,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         cactbotSettings.Show();
+        return true;
+    }
+
+    public bool DispatchTts(string text)
+    {
+        if (!IsParserRunning || string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        ActGlobals.oFormActMain.TTS(text);
         return true;
     }
 
@@ -181,6 +210,15 @@ public sealed class SelfHostedActRuntime : IDisposable
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
 
+    public IReadOnlyList<ActPluginRuntimeStatus> CustomPluginStatuses
+        => customPlugins
+            .Select(plugin => new ActPluginRuntimeStatus(
+                plugin.Id,
+                plugin.Status,
+                plugin.Stages,
+                plugin.Diagnostics))
+            .ToArray();
+
     public bool OpenCustomPluginConfiguration(string id)
     {
         var plugin = customPlugins.FirstOrDefault(
@@ -197,6 +235,10 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
+
+    public event Action<DateTimeOffset, string, bool>? RawLogLineReceived;
+
+    public event Action<uint, string>? ZoneChanged;
 
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
@@ -218,6 +260,15 @@ public sealed class SelfHostedActRuntime : IDisposable
             AppDataFolder = pluginInterface.ConfigDirectory,
             LogFilePath = logDirectory,
             WriteLogFile = true,
+            InvokeSynchronously = true,
+        };
+        ActGlobals.oFormActMain.PlayTtsMethod = text =>
+        {
+            var dispatcher = Volatile.Read(ref externalTtsDispatcher);
+            if (dispatcher?.Invoke(text) != true)
+            {
+                log.Warning("External ACT Host rejected a game-side TTS request.");
+            }
         };
         ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
         ActGlobals.oFormActMain.AfterCombatAction += OnAfterCombatAction;
@@ -242,6 +293,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                 chatGui,
                 framework,
                 condition);
+            parser.Subscription.ZoneChanged += OnZoneChangedForHost;
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
                 "FFXIV_ACT_Plugin.dll");
@@ -296,6 +348,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             container.Register(overlay);
             ActGlobals.oFormActMain.OverlayPluginContainer = container;
             overlay.InitPlugin(pluginInterface.ConfigDirectory.FullName);
+            RegisterExternalPostNamazuAdapter(container);
             var server = container.Resolve<RainbowMage.OverlayPlugin.WebSocket.ServerController>();
             if (!server.Running)
             {
@@ -515,6 +568,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public void StopOverlay()
     {
+        externalPostNamazuEventSource?.SetAction(null);
+        externalPostNamazuEventSource = null;
         cactbotOverlay?.Dispose();
         cactbotOverlay = null;
         cactbotSettings?.Dispose();
@@ -531,6 +586,46 @@ public sealed class SelfHostedActRuntime : IDisposable
         overlay = null;
         httpClient?.Dispose();
         httpClient = null;
+    }
+
+    private void RegisterExternalPostNamazuAdapter(
+        RainbowMage.OverlayPlugin.TinyIoCContainer container)
+    {
+        if (Volatile.Read(ref externalPostNamazuDispatcher) is null)
+        {
+            return;
+        }
+
+        var registry = container.Resolve<RainbowMage.OverlayPlugin.Registry>();
+        var existing = registry.EventSources.FirstOrDefault(source =>
+            string.Equals(
+                source.Name,
+                PostNamazuEventSource.EventSourceName,
+                StringComparison.Ordinal));
+        if (existing is not null and not PostNamazuEventSource)
+        {
+            log.Information("PostNamazu upstream OverlayPlugin event source is already active.");
+            return;
+        }
+
+        externalPostNamazuEventSource = existing as PostNamazuEventSource;
+        if (externalPostNamazuEventSource is null)
+        {
+            externalPostNamazuEventSource = new PostNamazuEventSource(container);
+            registry.StartEventSource(externalPostNamazuEventSource);
+        }
+
+        externalPostNamazuEventSource.SetAction((action, payload) =>
+        {
+            var dispatcher = Volatile.Read(ref externalPostNamazuDispatcher);
+            if (dispatcher?.Invoke(action, payload) != true)
+            {
+                throw new InvalidOperationException(
+                    "Independent ACT Host rejected the PostNamazu OverlayPlugin action.");
+            }
+        });
+        log.Information(
+            "PostNamazu OverlayPlugin event source is bridged to the independent ACT Host.");
     }
 
     private sealed record OverlayTemplateDocument(
@@ -572,6 +667,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             RemovePluginData(parserPluginData);
             parserPluginData = null;
+            if (parser is not null)
+            {
+                parser.Subscription.ZoneChanged -= OnZoneChangedForHost;
+            }
             parser?.Dispose();
         }
         catch (Exception ex)
@@ -644,10 +743,19 @@ public sealed class SelfHostedActRuntime : IDisposable
         data.cbEnabled.Dispose();
     }
 
-    public void Dispose() => StopParser();
+    public void Dispose()
+    {
+        StopParser();
+        LegacyResourceCompatibility.StopServices();
+        CompatibilityPermissionBroker.Reset();
+    }
 
     private void OnBeforeLogLineRead(bool isImport, LogLineEventArgs logInfo)
     {
+        RawLogLineReceived?.Invoke(
+            new DateTimeOffset(logInfo.detectedTime),
+            logInfo.originalLogLine,
+            isImport);
         if (isImport)
         {
             return;
@@ -817,6 +925,9 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnAfterCombatEnd(EncounterData encounter)
         => PublishEncounter(encounter, true);
+
+    private void OnZoneChangedForHost(uint territoryId, string zoneName)
+        => ZoneChanged?.Invoke(territoryId, zoneName);
 
     private void PublishEncounter(EncounterData encounter, bool finished)
     {
@@ -1009,3 +1120,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         property?.SetValue(null, log);
     }
 }
+
+public sealed record ActPluginRuntimeStatus(
+    string Id,
+    string Status,
+    IReadOnlyList<CompatibilityStageResult> Stages,
+    IReadOnlyList<ActPluginDiagnostic> Diagnostics);

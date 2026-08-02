@@ -1,5 +1,8 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Collections.Concurrent;
 using System.Text.Json;
+using DalamudActCompat.Protocol;
 
 namespace DalamudActCompat.Host;
 
@@ -8,14 +11,12 @@ internal static class Program
     public static async Task<int> Main(string[] args)
     {
         var options = HostOptions.Parse(args);
-        if (string.IsNullOrWhiteSpace(options.PipeName))
+        if (string.IsNullOrWhiteSpace(options.PipeName) ||
+            string.IsNullOrWhiteSpace(options.SessionId))
         {
-            Console.Error.WriteLine("Missing required --pipe <name> argument.");
+            Console.Error.WriteLine("Missing --pipe <name> or --session <id>.");
             return 2;
         }
-
-        Console.WriteLine("DalamudActCompat compatibility host starting.");
-        Console.WriteLine($"Pipe: {options.PipeName}");
 
         using var shutdown = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
@@ -26,12 +27,11 @@ internal static class Program
 
         try
         {
-            await RunPipeServerAsync(options, shutdown.Token).ConfigureAwait(false);
+            await RunPipeServerAsync(options, shutdown).ConfigureAwait(false);
             return 0;
         }
         catch (OperationCanceledException)
         {
-            Console.WriteLine("Compatibility host stopped.");
             return 0;
         }
         catch (Exception ex)
@@ -41,48 +41,539 @@ internal static class Program
         }
     }
 
-    private static async Task RunPipeServerAsync(HostOptions options, CancellationToken cancellationToken)
+    private static async Task RunPipeServerAsync(
+        HostOptions options,
+        CancellationTokenSource shutdown)
     {
-        await using var pipe = new NamedPipeServerStream(
-            options.PipeName,
+        await using var bridgeInput = new NamedPipeServerStream(
+            $"{options.PipeName}-g2h",
+            PipeDirection.In,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var bridgeOutput = new NamedPipeServerStream(
+            $"{options.PipeName}-h2g",
             PipeDirection.Out,
             1,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous);
-
-        Console.WriteLine("Waiting for Dalamud plugin IPC client.");
-        await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-        Console.WriteLine("Dalamud plugin IPC client connected.");
-
-        await using var writer = new StreamWriter(pipe)
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        Console.WriteLine(
+            $"ACT Host protocol {HostProtocol.CurrentVersion}; session {options.SessionId}; waiting.");
+        try
         {
-            AutoFlush = true,
-        };
-
-        var start = DateTimeOffset.UtcNow;
-        var tick = 0;
-        while (!cancellationToken.IsCancellationRequested)
+            await Task.WhenAll(
+                    bridgeInput.WaitForConnectionAsync(shutdown.Token),
+                    bridgeOutput.WaitForConnectionAsync(shutdown.Token))
+                .ConfigureAwait(false);
+        }
+        catch (IOException ex)
         {
-            if (options.SampleMode)
+            Console.WriteLine(
+                $"Dalamud bridge disconnected before handshake completed: {ex.Message}");
+            return;
+        }
+        Console.WriteLine("Dalamud bridge connected.");
+
+        using var outbound = new BlockingCollection<HostEnvelope>(
+            new ConcurrentQueue<HostEnvelope>(),
+            HostProtocol.ControlQueueCapacity);
+        long sendSequence = 0;
+        long receivedSequence = 0;
+        var writer = Task.Factory.StartNew(
+            () => WriteLoop(bridgeOutput, outbound, shutdown.Token),
+            shutdown.Token,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        HostPluginBridge.Configure((type, priority, payload, correlationId, deadline) =>
+        {
+            var envelope = HostEnvelope.Create(
+                options.SessionId,
+                Interlocked.Increment(ref sendSequence),
+                type,
+                priority,
+                payload,
+                correlationId,
+                deadline);
+            return TryAddOutbound(outbound, envelope);
+        });
+        await EnqueueControlAsync(
+            outbound,
+            HostEnvelope.Create(
+                options.SessionId,
+                Interlocked.Increment(ref sendSequence),
+                HostMessageTypes.Hello,
+                HostMessagePriority.Control,
+                new HostHello(
+                    "host",
+                    typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown",
+                    Environment.ProcessId,
+                    [HostProtocol.CurrentVersion])),
+            shutdown.Token).ConfigureAwait(false);
+        LegacyPluginRuntime? pluginRuntime = null;
+        var pluginRuntimeReady = 0;
+        var pluginStartupStarted = 0;
+        var heartbeat = Task.Factory.StartNew(
+            () => HeartbeatLoop(
+                options,
+                outbound,
+                () => Volatile.Read(ref receivedSequence),
+                () => Interlocked.Increment(ref sendSequence),
+                () => Volatile.Read(ref pluginRuntimeReady) == 1
+                    ? pluginRuntime?.GetPluginHealth() ?? []
+                    : [],
+                () => pluginRuntime?.GetStages() ?? [],
+                shutdown.Token),
+            shutdown.Token,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        try
+        {
+            while (!shutdown.IsCancellationRequested)
             {
-                var message = HostIpcMessage.CreateSample(start, tick++);
-                var json = JsonSerializer.Serialize(message);
-                await writer.WriteLineAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
-                continue;
-            }
+                var envelope = await HostFrameCodec.ReadAsync(bridgeInput, shutdown.Token)
+                    .ConfigureAwait(false);
+                if (envelope is null)
+                {
+                    Console.WriteLine("Dalamud bridge disconnected.");
+                    break;
+                }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(
+                        envelope.SessionId,
+                        options.SessionId,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("IPC session identifier mismatch.");
+                }
+
+                var previousSequence = Volatile.Read(ref receivedSequence);
+                if (envelope.Sequence <= previousSequence)
+                {
+                    throw new InvalidDataException(
+                        $"IPC sequence regressed from {previousSequence} to {envelope.Sequence}.");
+                }
+
+                Volatile.Write(ref receivedSequence, envelope.Sequence);
+                if (envelope.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
+                {
+                    Console.Error.WriteLine(
+                        $"Expired game-side IPC message dropped: {envelope.Type}.");
+                    continue;
+                }
+
+                switch (envelope.Type)
+                {
+                    case HostMessageTypes.Hello:
+                        await EnqueueControlAsync(
+                            outbound,
+                            HostEnvelope.Create(
+                                options.SessionId,
+                                Interlocked.Increment(ref sendSequence),
+                                HostMessageTypes.HelloAck,
+                                HostMessagePriority.Control,
+                                new HostHealth(
+                                    "ready",
+                                    "独立 Host 已建立双向、有限队列 IPC；传统插件迁移状态由健康页单独报告。",
+                                    DateTimeOffset.UtcNow),
+                                envelope.CorrelationId),
+                            shutdown.Token).ConfigureAwait(false);
+                        break;
+                    case HostMessageTypes.Permissions:
+                        var permissions =
+                            envelope.Payload.Deserialize<HostPermissionSnapshot>()
+                            ?? throw new InvalidDataException(
+                                "Host permission snapshot is invalid.");
+                        if (Interlocked.Exchange(ref pluginStartupStarted, 1) != 0)
+                        {
+                            throw new InvalidDataException(
+                                "Host permission snapshot may only be configured once per session.");
+                        }
+
+                        HostPluginBridge.ConfigurePermissions(permissions);
+                        if (!string.IsNullOrWhiteSpace(options.PluginRoot) &&
+                            !string.IsNullOrWhiteSpace(options.ConfigRoot))
+                        {
+                            pluginRuntime = new LegacyPluginRuntime(
+                                options.PluginRoot,
+                                options.ConfigRoot,
+                                permissions.AllowedPluginIds,
+                                options.FaultInjectionEnabled);
+                            var runtime = pluginRuntime;
+                            _ = Task.Run(
+                                () => StartLegacyPluginsAsync(
+                                    runtime,
+                                    options,
+                                    outbound,
+                                    () => Interlocked.Increment(ref sendSequence),
+                                    () => Interlocked.Exchange(ref pluginRuntimeReady, 1),
+                                    shutdown.Token),
+                                CancellationToken.None);
+                            _ = MonitorPluginStartupAsync(
+                                () => Volatile.Read(ref pluginRuntimeReady) == 1,
+                                shutdown);
+                        }
+                        break;
+                    case HostMessageTypes.Shutdown:
+                        await EnqueueControlAsync(
+                            outbound,
+                            HostEnvelope.Create(
+                                options.SessionId,
+                                Interlocked.Increment(ref sendSequence),
+                                HostMessageTypes.ShutdownAck,
+                                HostMessagePriority.Control,
+                                new HostHealth("stopping", "Shutdown acknowledged.", DateTimeOffset.UtcNow),
+                                envelope.CorrelationId),
+                            shutdown.Token).ConfigureAwait(false);
+                        CompleteOutbound(outbound);
+                        await writer.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        {
+                            pluginRuntime?.Dispose();
+                        }
+                        shutdown.Cancel();
+                        return;
+                    case HostMessageTypes.CommandRequest:
+                        await EnqueueControlAsync(
+                            outbound,
+                            HostEnvelope.Create(
+                                options.SessionId,
+                                Interlocked.Increment(ref sendSequence),
+                                HostMessageTypes.CommandResult,
+                                HostMessagePriority.Control,
+                                new HostCommandResult(
+                                    false,
+                                    "denied",
+                                    "Host 不允许任意游戏命令；只有游戏内白名单 Broker 可执行语义命令。"),
+                                envelope.CorrelationId),
+                            shutdown.Token).ConfigureAwait(false);
+                        break;
+                    case HostMessageTypes.CommandResult:
+                        if (envelope.Payload.Deserialize<HostCommandResult>() is { } commandResult)
+                        {
+                            HostPluginBridge.CompleteCommand(
+                                envelope.CorrelationId,
+                                commandResult);
+                            Console.WriteLine(
+                                $"command result correlation={envelope.CorrelationId ?? "none"} " +
+                                $"status={commandResult.Status} success={commandResult.Success} " +
+                                $"detail={commandResult.Detail ?? string.Empty}");
+                        }
+                        break;
+                    case HostMessageTypes.LogBatch:
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        {
+                            pluginRuntime?.AcceptLogs(
+                                envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? []);
+                        }
+                        break;
+                    case HostMessageTypes.ZoneChanged:
+                        if (envelope.Payload.Deserialize<HostZoneEvent>() is { } zone)
+                        {
+                            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                            {
+                                pluginRuntime?.ChangeZone(zone.TerritoryId, zone.ZoneName);
+                            }
+                        }
+                        break;
+                    case HostMessageTypes.CombatStarted:
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        {
+                            pluginRuntime?.SetCombatState(true);
+                        }
+                        break;
+                    case HostMessageTypes.CombatEnded:
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        {
+                            pluginRuntime?.SetCombatState(false);
+                        }
+                        break;
+                    case HostMessageTypes.PluginOpen:
+                        var pluginId = envelope.Payload.GetProperty("pluginId").GetString();
+                        if (!string.IsNullOrWhiteSpace(pluginId))
+                        {
+                            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                            {
+                                if (pluginRuntime?.OpenPluginUi(pluginId) == true)
+                                {
+                                    Console.WriteLine(
+                                        $"Opened legacy plugin '{pluginId}' configuration window.");
+                                }
+                                else
+                                {
+                                    Console.Error.WriteLine(
+                                        $"Legacy plugin '{pluginId}' configuration window is unavailable.");
+                                }
+                            }
+                        }
+                        break;
+                    case HostMessageTypes.PluginInvoke:
+                        var invocation = envelope.Payload.Deserialize<HostPluginInvocation>()
+                                         ?? throw new InvalidDataException(
+                                             "Plugin invocation payload is invalid.");
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1 &&
+                            pluginRuntime?.InvokePlugin(invocation) == true)
+                        {
+                            Console.WriteLine(
+                                $"Invoked legacy plugin '{invocation.PluginId}' action '{invocation.Action}'.");
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine(
+                                $"Legacy plugin '{invocation.PluginId}' rejected action '{invocation.Action}'.");
+                        }
+                        break;
+                    case HostMessageTypes.TtsRequest:
+                        var ttsRequest = envelope.Payload.Deserialize<HostTtsRequest>()
+                                         ?? throw new InvalidDataException(
+                                             "TTS request payload is invalid.");
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1 &&
+                            pluginRuntime?.PlayTts(ttsRequest.Text) == true)
+                        {
+                            Console.WriteLine(
+                                $"Game-side TTS request reached the isolated provider; source={ttsRequest.Source}.");
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine(
+                                $"Game-side TTS request was rejected; source={ttsRequest.Source}.");
+                        }
+                        break;
+                    case HostMessageTypes.Snapshot:
+                        // Phase-two bridge receives ordered events here. Plugin
+                        // execution will move behind this boundary incrementally.
+                        break;
+                    case HostMessageTypes.FaultInject when options.FaultInjectionEnabled:
+                        var fault = envelope.Payload.Deserialize<HostFaultInjection>()
+                                    ?? throw new InvalidDataException(
+                                        "Fault-injection payload is invalid.");
+                        if (fault.Kind != "block-reader" ||
+                            fault.DurationMilliseconds is < 1 or > 30_000)
+                        {
+                            throw new InvalidDataException(
+                                "Only a 1..30000 ms block-reader fault is supported.");
+                        }
+
+                        Console.WriteLine(
+                            $"TEST ONLY: blocking Host event reader for " +
+                            $"{fault.DurationMilliseconds} ms.");
+                        Thread.Sleep(fault.DurationMilliseconds);
+                        break;
+                    default:
+                        Console.Error.WriteLine($"Unsupported IPC message type: {envelope.Type}");
+                        break;
+                }
+            }
+        }
+        catch (Exception ex) when (
+            ex is IOException or ObjectDisposedException &&
+            !shutdown.IsCancellationRequested)
+        {
+            Console.WriteLine($"Dalamud bridge disconnected: {ex.Message}");
+        }
+        finally
+        {
+            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+            {
+                pluginRuntime?.Dispose();
+            }
+            CompleteOutbound(outbound);
+            shutdown.Cancel();
+            await Task.WhenAll(
+                    IgnoreCancellationAsync(writer),
+                    IgnoreCancellationAsync(heartbeat))
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static async Task StartLegacyPluginsAsync(
+        LegacyPluginRuntime runtime,
+        HostOptions options,
+        BlockingCollection<HostEnvelope> outbound,
+        Func<long> nextSequence,
+        Action markReady,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            runtime.Start();
+            markReady();
+            var degraded = runtime.GetStages().Any(stage =>
+                string.Equals(stage.State, "failed", StringComparison.OrdinalIgnoreCase));
+            await EnqueueControlAsync(
+                outbound,
+                HostEnvelope.Create(
+                    options.SessionId,
+                    nextSequence(),
+                    HostMessageTypes.Health,
+                    HostMessagePriority.Control,
+                    new HostHealth(
+                        degraded ? "plugins.degraded" : "plugins.ready",
+                        $"Loaded out-of-process: {string.Join(", ", runtime.LoadedPluginIds)}",
+                        DateTimeOffset.UtcNow)),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Legacy plugin runtime failed to start: {ex}");
+            await EnqueueControlAsync(
+                outbound,
+                HostEnvelope.Create(
+                    options.SessionId,
+                    nextSequence(),
+                    HostMessageTypes.Health,
+                    HostMessagePriority.Control,
+                    new HostHealth("plugins.failed", ex.ToString(), DateTimeOffset.UtcNow)),
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task MonitorPluginStartupAsync(
+        Func<bool> isReady,
+        CancellationTokenSource shutdown)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(15), shutdown.Token).ConfigureAwait(false);
+            if (!isReady())
+            {
+                Console.Error.WriteLine(
+                    "Traditional ACT plugin startup exceeded fifteen seconds; " +
+                    "the isolated Host will exit so the game-side supervisor can recover.");
+                shutdown.Cancel();
+            }
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static void HeartbeatLoop(
+        HostOptions options,
+        BlockingCollection<HostEnvelope> outbound,
+        Func<long> lastReceivedSequence,
+        Func<long> nextSequence,
+        Func<IReadOnlyList<HostPluginHealth>> pluginHealth,
+        Func<IReadOnlyList<HostPluginStage>> pluginStages,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.WaitHandle.WaitOne(HostProtocol.HeartbeatInterval))
+        {
+            using var process = Process.GetCurrentProcess();
+            var heartbeat = HostEnvelope.Create(
+                    options.SessionId,
+                    nextSequence(),
+                    HostMessageTypes.Heartbeat,
+                    HostMessagePriority.Control,
+                    new HostHeartbeat(
+                        lastReceivedSequence(),
+                        outbound.Count,
+                        0,
+                        0,
+                        process.WorkingSet64,
+                        process.Threads.Count,
+                        pluginHealth(),
+                        pluginStages()));
+            if (!TryAddOutbound(outbound, heartbeat))
+            {
+                Console.Error.WriteLine(
+                    "ACT Host heartbeat queue is full; supervisor will treat this as unhealthy.");
+            }
+        }
+    }
+
+    private static void WriteLoop(
+        Stream output,
+        BlockingCollection<HostEnvelope> outbound,
+        CancellationToken cancellationToken)
+    {
+        long wireSequence = 0;
+        foreach (var queued in outbound.GetConsumingEnumerable(cancellationToken))
+        {
+            var envelope = queued with
+            {
+                Sequence = ++wireSequence,
+            };
+            HostFrameCodec.WriteAsync(output, envelope, cancellationToken)
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
+        }
+    }
+
+    private static ValueTask EnqueueControlAsync(
+        BlockingCollection<HostEnvelope> writer,
+        HostEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            writer.Add(envelope, cancellationToken);
+        }
+        catch (InvalidOperationException) when (writer.IsAddingCompleted)
+        {
+            // Shutdown won the race with a late plugin-startup or heartbeat message.
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    private static bool TryAddOutbound(
+        BlockingCollection<HostEnvelope> outbound,
+        HostEnvelope envelope)
+    {
+        if (outbound.IsAddingCompleted)
+        {
+            return false;
+        }
+
+        try
+        {
+            return outbound.TryAdd(envelope);
+        }
+        catch (InvalidOperationException) when (outbound.IsAddingCompleted)
+        {
+            return false;
+        }
+    }
+
+    private static void CompleteOutbound(BlockingCollection<HostEnvelope> outbound)
+    {
+        if (!outbound.IsAddingCompleted)
+        {
+            outbound.CompleteAdding();
+        }
+    }
+
+    private static async Task IgnoreCancellationAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            Console.WriteLine($"IPC loop stopped after disconnect: {ex.Message}");
         }
     }
 }
 
-internal sealed record HostOptions(string PipeName, bool SampleMode)
+internal sealed record HostOptions(
+    string PipeName,
+    string SessionId,
+    string PluginRoot,
+    string ConfigRoot,
+    bool FaultInjectionEnabled)
 {
     public static HostOptions Parse(string[] args)
     {
         var pipeName = string.Empty;
-        var sample = false;
+        var sessionId = string.Empty;
+        var pluginRoot = string.Empty;
+        var configRoot = string.Empty;
+        var faultInjectionEnabled = false;
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
@@ -90,56 +581,26 @@ internal sealed record HostOptions(string PipeName, bool SampleMode)
                 case "--pipe" when index + 1 < args.Length:
                     pipeName = args[++index];
                     break;
-                case "--sample":
-                    sample = true;
+                case "--session" when index + 1 < args.Length:
+                    sessionId = args[++index];
+                    break;
+                case "--plugin-root" when index + 1 < args.Length:
+                    pluginRoot = args[++index];
+                    break;
+                case "--config-root" when index + 1 < args.Length:
+                    configRoot = args[++index];
+                    break;
+                case "--enable-fault-injection":
+                    faultInjectionEnabled = true;
                     break;
             }
         }
 
-        return new HostOptions(pipeName, sample);
+        return new HostOptions(
+            pipeName,
+            sessionId,
+            pluginRoot,
+            configRoot,
+            faultInjectionEnabled);
     }
 }
-
-internal sealed record HostIpcMessage(
-    string Type,
-    HostEncounterDto? Current,
-    IReadOnlyList<HostEncounterDto> Recent,
-    string? Message)
-{
-    public static HostIpcMessage CreateSample(DateTimeOffset start, int tick)
-    {
-        var scale = tick + 1;
-        var encounter = new HostEncounterDto(
-            Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            start,
-            null,
-            "Host Sample Zone",
-            "IPC Training Dummy",
-            new[]
-            {
-                new HostCombatantDto("local", "You", "SAM", true, 1_245_000 + (38_500 * scale), 18_000, 0),
-                new HostCombatantDto("p2", "Party Member A", "WHM", false, 420_000 + (9_500 * scale), 965_000 + (16_000 * scale), 0),
-                new HostCombatantDto("p3", "Party Member B", "DRG", false, 1_030_000 + (31_000 * scale), 12_000, 1),
-                new HostCombatantDto("p4", "Party Member C", "BRD", false, 880_000 + (26_000 * scale), 24_000, 0),
-            });
-
-        return new HostIpcMessage("snapshot", encounter, Array.Empty<HostEncounterDto>(), null);
-    }
-}
-
-internal sealed record HostEncounterDto(
-    Guid Id,
-    DateTimeOffset StartTime,
-    DateTimeOffset? EndTime,
-    string ZoneName,
-    string EnemyName,
-    IReadOnlyList<HostCombatantDto> Combatants);
-
-internal sealed record HostCombatantDto(
-    string Id,
-    string Name,
-    string Job,
-    bool IsLocalPlayer,
-    long TotalDamage,
-    long TotalHealing,
-    int Deaths);

@@ -7,5 +7,19 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
+    <NoWarn>$(NoWarn);NU1510;CS0436</NoWarn>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DalamudActCompat.Protocol\DalamudActCompat.Protocol.csproj" />
+    <ProjectReference Include="..\..\vendor\IINACT\NotACT\NotACT.csproj" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="System.Formats.Nrbf" Version="10.0.10" />
+    <PackageReference Include="System.Resources.Extensions" Version="10.0.10" />
+    <PackageReference Include="System.Speech" Version="10.0.0" />
+    <Reference Include="FFXIV_ACT_Plugin">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
 </Project>

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Formats.Nrbf;
 using System.Globalization;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.IO.Compression;
 using System.Reflection;
@@ -10,7 +11,10 @@ using System.Resources;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
+using System.Security.Principal;
 using System.Windows.Forms;
+using Dalamud.Interface.ImGuiNotification;
+using Dalamud.Plugin.Services;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using System.Resources.Extensions;
@@ -22,6 +26,35 @@ namespace DalamudActCompat.ActRuntime;
 
 public static class LegacyResourceCompatibility
 {
+    private static readonly object ServiceSync = new();
+    private static StaClipboardService? clipboardService;
+    private static IPluginLog? compatibilityLog;
+    private static INotificationManager? notificationManager;
+    private static long triggerEventDrops;
+
+    internal static void Configure(
+        IPluginLog pluginLog,
+        INotificationManager notifications)
+    {
+        lock (ServiceSync)
+        {
+            compatibilityLog = pluginLog;
+            notificationManager = notifications;
+            clipboardService ??= new StaClipboardService(pluginLog);
+        }
+    }
+
+    internal static void StopServices()
+    {
+        lock (ServiceSync)
+        {
+            clipboardService?.Dispose();
+            clipboardService = null;
+            notificationManager = null;
+            compatibilityLog = null;
+        }
+    }
+
     internal static void EnsureLegacyResourceDecoderAvailable()
     {
         if (typeof(NrbfDecoder).Assembly.GetName().Name != "System.Formats.Nrbf")
@@ -133,6 +166,14 @@ public static class LegacyResourceCompatibility
                 BindingFlags.Public | BindingFlags.Static)!);
         var setTextFullName = definition.MainModule.ImportReference(setText).FullName;
         var getTextFullName = definition.MainModule.ImportReference(getText).FullName;
+        var startHttpListener = definition.MainModule.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(StartPostNamazuHttpListener),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var skipHttpThreadAbort = definition.MainModule.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(SkipPostNamazuThreadAbort),
+                BindingFlags.Public | BindingFlags.Static)!);
         var patchedCalls = 0;
 
         foreach (var instruction in definition.MainModule.Types
@@ -162,11 +203,43 @@ public static class LegacyResourceCompatibility
         }
 
         patchedCalls += PatchPostNamazuNativeBridge(definition);
+        var httpListenerPatched = false;
+        var httpThreadAbortPatched = false;
+        foreach (var method in definition.MainModule.Types
+                     .SelectMany(EnumerateTypes)
+                     .Where(type => type.FullName == "PostNamazu.Common.HttpServer")
+                     .SelectMany(type => type.Methods)
+                     .Where(method => (method.Name is "Listen" or "Stop") && method.HasBody))
+        {
+            foreach (var instruction in method.Body.Instructions)
+            {
+                if (instruction.Operand is MethodReference called &&
+                    called.DeclaringType.FullName == typeof(HttpListener).FullName &&
+                    called.Name == nameof(HttpListener.Start) &&
+                    called.Parameters.Count == 0)
+                {
+                    instruction.OpCode = OpCodes.Call;
+                    instruction.Operand = startHttpListener;
+                    httpListenerPatched = true;
+                }
+                else if (instruction.Operand is MethodReference abort &&
+                         abort.DeclaringType.FullName == typeof(Thread).FullName &&
+                         abort.Name == nameof(Thread.Abort) &&
+                         abort.Parameters.Count == 0)
+                {
+                    instruction.OpCode = OpCodes.Call;
+                    instruction.Operand = skipHttpThreadAbort;
+                    httpThreadAbortPatched = true;
+                }
+            }
+        }
 
-        if (patchedCalls == 0)
+        if (patchedCalls == 0 || !httpListenerPatched || !httpThreadAbortPatched)
         {
             throw new InvalidOperationException(
-                "PostNamazu contains no recognized clipboard calls to patch.");
+                "PostNamazu compatibility shape changed; " +
+                $"patchedCalls={patchedCalls}, httpListener={httpListenerPatched}, " +
+                $"httpStop={httpThreadAbortPatched}.");
         }
 
         using var output = new MemoryStream();
@@ -319,29 +392,119 @@ public static class LegacyResourceCompatibility
     }
 
     public static void SetClipboardText(string text)
-        => RetryClipboard(() => Clipboard.SetText(text));
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.Clipboard);
+        GetClipboardService().QueueSetText(text);
+    }
 
     public static string GetClipboardText()
     {
-        string result = string.Empty;
-        RetryClipboard(() => result = Clipboard.GetText());
-        return result;
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.Clipboard);
+        return GetClipboardService().GetText();
     }
 
-    private static void RetryClipboard(Action action)
+    public static void StartPostNamazuHttpListener(HttpListener listener)
     {
-        for (var attempt = 0; ; attempt++)
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NetworkRequest);
+        ArgumentNullException.ThrowIfNull(listener);
+        var originalPrefixes = listener.Prefixes.Cast<string>().ToArray();
+        if (OperatingSystem.IsWindows() && !IsCurrentProcessElevated())
         {
-            try
+            var compatiblePrefixes = originalPrefixes
+                .Select(prefix => prefix
+                    .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
+                    .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (!compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
             {
-                action();
-                return;
-            }
-            catch (ExternalException) when (attempt < 9)
-            {
-                Thread.Sleep(20 * (attempt + 1));
+                listener.Prefixes.Clear();
+                foreach (var prefix in compatiblePrefixes)
+                {
+                    listener.Prefixes.Add(prefix);
+                }
             }
         }
+
+        try
+        {
+            listener.Start();
+            compatibilityLog?.Information(
+                $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+        }
+        catch (Exception ex)
+        {
+            compatibilityLog?.Error(ex, "PostNamazu HTTP listener failed to start.");
+            throw;
+        }
+    }
+
+    public static void SkipPostNamazuThreadAbort(Thread _)
+    {
+        // HttpListener.Stop performs the shutdown; Thread.Abort is unavailable on modern .NET.
+    }
+
+    private static bool IsCurrentProcessElevated()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity)
+            .IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    public static bool CheckTriggernometryAdministratorCapability(bool warnIfNotAdmin)
+    {
+        bool isAdministrator;
+        using (var identity = WindowsIdentity.GetCurrent())
+        {
+            isAdministrator = new WindowsPrincipal(identity)
+                .IsInRole(WindowsBuiltInRole.Administrator);
+        }
+
+        if (!isAdministrator && warnIfNotAdmin)
+        {
+            const string message =
+                "Triggernometry 正在普通权限下运行。日志、区域/战斗事件、正则、配置和 TTS " +
+                "由兼容宿主提供，不需要管理员权限；需要提升权限的外部进程/受保护资源动作不会被自动放行。";
+            compatibilityLog?.Information(message);
+            notificationManager?.AddNotification(new Notification
+            {
+                Title = "Triggernometry 权限能力",
+                Content = message,
+                Type = NotificationType.Info,
+            });
+        }
+
+        // Preserve the real Windows token state. Triggernometry uses this value
+        // to tighten its script API policy while elevated, so returning true
+        // here would both lie to the plugin and weaken its own safety checks.
+        return isAdministrator;
+    }
+
+    public static void EnqueueTriggerEventBounded<T>(Queue<T> queue, T item)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+        const int capacity = 8192;
+        if (queue.Count >= capacity)
+        {
+            queue.Dequeue();
+            var dropped = Interlocked.Increment(ref triggerEventDrops);
+            if ((dropped & (dropped - 1)) == 0)
+            {
+                compatibilityLog?.Warning(
+                    $"Triggernometry event queue reached {capacity}; dropped oldest low-priority " +
+                    $"log event. Total dropped: {dropped}.");
+            }
+        }
+
+        queue.Enqueue(item);
+    }
+
+    public static void ReportUnstoppableTriggernometryThread(Thread thread)
+    {
+        ArgumentNullException.ThrowIfNull(thread);
+        compatibilityLog?.Warning(
+            $"Triggernometry thread '{thread.Name ?? thread.ManagedThreadId.ToString()}' did not stop " +
+            "cooperatively. Thread.Abort is intentionally disabled; independent Host process recovery " +
+            "is the only safe forced-isolation boundary.");
     }
 
     private static Assembly ResolveImplementationAssembly(
@@ -415,10 +578,118 @@ public static class LegacyResourceCompatibility
         }
 
         RedirectResourceManagerCalls(definition.MainModule);
+        PatchTriggernometryAdministratorCheck(definition.MainModule);
+        PatchTriggernometryEventQueue(definition.MainModule);
+        PatchTriggernometryThreadAbort(definition.MainModule);
         var patched = new MemoryStream();
         definition.Write(patched);
         patched.Position = 0;
         return patched;
+    }
+
+    private static void PatchTriggernometryAdministratorCheck(ModuleDefinition module)
+    {
+        var replacement = module.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(CheckTriggernometryAdministratorCapability),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var method = module.Types
+            .SelectMany(EnumerateTypes)
+            .SelectMany(type => type.Methods)
+            .SingleOrDefault(candidate =>
+                candidate.Name == "CheckIfAdministrator" &&
+                candidate.ReturnType.MetadataType == MetadataType.Boolean &&
+                candidate.Parameters.Count == 1 &&
+                candidate.Parameters[0].ParameterType.MetadataType == MetadataType.Boolean)
+            ?? throw new MissingMethodException(
+                "Triggernometry implementation",
+                "CheckIfAdministrator(Boolean)");
+        ReplaceBody(method, replacement, loadInstance: false);
+    }
+
+    private static void PatchTriggernometryEventQueue(ModuleDefinition module)
+    {
+        var genericBridge = module.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(EnqueueTriggerEventBounded),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var patched = 0;
+        foreach (var method in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody))
+        {
+            foreach (var instruction in method.Body.Instructions)
+            {
+                if (instruction.Operand is not MethodReference
+                    {
+                        Name: "Enqueue",
+                        DeclaringType: GenericInstanceType queueType,
+                    } called ||
+                    queueType.ElementType.FullName != "System.Collections.Generic.Queue`1" ||
+                    queueType.GenericArguments.Count != 1 ||
+                    queueType.GenericArguments[0].FullName != "Triggernometry.Core.LogEvent")
+                {
+                    continue;
+                }
+
+                instruction.OpCode = OpCodes.Call;
+                instruction.Operand = MakeGenericMethod(
+                    genericBridge,
+                    [queueType.GenericArguments[0]]);
+                patched++;
+            }
+        }
+
+        if (patched != 2)
+        {
+            throw new InvalidOperationException(
+                $"Expected two Triggernometry LogEvent enqueue sites, patched {patched}.");
+        }
+    }
+
+    private static void PatchTriggernometryThreadAbort(ModuleDefinition module)
+    {
+        var replacement = module.ImportReference(
+            typeof(LegacyResourceCompatibility).GetMethod(
+                nameof(ReportUnstoppableTriggernometryThread),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var patched = 0;
+        foreach (var instruction in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody)
+                     .SelectMany(method => method.Body.Instructions))
+        {
+            if (instruction.Operand is not MethodReference
+                {
+                    Name: nameof(Thread.Abort),
+                    DeclaringType.FullName: "System.Threading.Thread",
+                })
+            {
+                continue;
+            }
+
+            instruction.OpCode = OpCodes.Call;
+            instruction.Operand = replacement;
+            patched++;
+        }
+
+        if (patched != 3)
+        {
+            throw new InvalidOperationException(
+                $"Expected three Triggernometry Thread.Abort sites, patched {patched}.");
+        }
+    }
+
+    private static StaClipboardService GetClipboardService()
+    {
+        lock (ServiceSync)
+        {
+            return clipboardService
+                   ?? throw new InvalidOperationException(
+                       "The ACT compatibility clipboard service is not configured.");
+        }
     }
 
     private static object DeserializeLegacyPayload(byte[] payload)

@@ -112,6 +112,9 @@
           "IINACT": "[2.10.3.4, )"
         }
       },
+      "dalamudactcompat.protocol": {
+        "type": "Project"
+      },
       "fetchdependencies": {
         "type": "Project"
       },

@@ -17,8 +17,10 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
     private readonly object syncRoot = new();
+    private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
+    private bool disposed;
 
     public IinactAdapter(
         SelfHostedActRuntime actRuntime,
@@ -56,17 +58,33 @@ public sealed class IinactAdapter : IParserEngine
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            StartCore(cancellationToken);
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
+    private void StartCore(CancellationToken cancellationToken)
+    {
         SetStatus(ParserState.Initializing, "Initializing parser host bridge.");
 
         try
         {
+            StopCore(updateStatus: false);
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (!parserEnabled())
             {
                 SetStatus(ParserState.Disabled, "FFXIV_ACT_Plugin is disabled in the embedded plugin manager.");
                 return;
             }
 
-            await StopAsync(CancellationToken.None).ConfigureAwait(false);
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             actRuntime.StartParser(logDirectory);
 
@@ -78,20 +96,44 @@ public sealed class IinactAdapter : IParserEngine
             }
 
             LoadCustomPlugins(runtimePlugins.Where(plugin => !MustLoadBeforeOverlay(plugin)));
+            var pluginDetail = string.Join(
+                Environment.NewLine,
+                actRuntime.CustomPluginStatuses.Select(plugin =>
+                {
+                    var stages = plugin.Stages.Count == 0
+                        ? string.Empty
+                        : $" [{string.Join(", ", plugin.Stages.Select(stage => $"{stage.Stage}={stage.State}"))}]";
+                    return $"{plugin.Id}: {plugin.Status}{stages}";
+                }));
             SetStatus(
                 ParserState.Running,
                 actRuntime.IsOverlayRunning
                     ? "FFXIV_ACT_Plugin and OverlayPlugin are running in DalamudActCompat."
-                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.");
+                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.",
+                string.IsNullOrWhiteSpace(pluginDetail) ? null : pluginDetail);
         }
         catch (OperationCanceledException)
         {
+            CleanupFailedStart();
             SetStatus(ParserState.Stopped, "Parser initialization cancelled.");
         }
         catch (Exception ex)
         {
+            CleanupFailedStart();
             logger.Error(ex, "Parser initialization failed.");
             SetStatus(ParserState.Faulted, "Parser initialization failed.", ex.Message);
+        }
+    }
+
+    private void CleanupFailedStart()
+    {
+        try
+        {
+            StopCore(updateStatus: false);
+        }
+        catch (Exception cleanupError)
+        {
+            logger.Error(cleanupError, "Parser cleanup after failed initialization also failed.");
         }
     }
 
@@ -108,25 +150,76 @@ public sealed class IinactAdapter : IParserEngine
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!disposed)
+            {
+                StopCore(updateStatus: true);
+            }
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
+    private void StopCore(bool updateStatus)
+    {
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
         actRuntime.StopParser();
-        SetStatus(ParserState.Stopped, "Parser stopped.");
+        if (updateStatus)
+        {
+            SetStatus(ParserState.Stopped, "Parser stopped.");
+        }
     }
 
     public async Task RestartAsync(CancellationToken cancellationToken)
     {
-        await StopAsync(cancellationToken).ConfigureAwait(false);
-        await StartAsync(cancellationToken).ConfigureAwait(false);
+        await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            StartCore(cancellationToken);
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        SetStatus(ParserState.Stopped, "Parser disposed.");
-        actRuntime.EncounterChanged -= OnEncounterChanged;
-        actRuntime.Dispose();
-        await Task.CompletedTask;
+        await lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+            try
+            {
+                StopCore(updateStatus: false);
+            }
+            catch (Exception stopError)
+            {
+                logger.Error(stopError, "Parser stop during disposal failed.");
+            }
+            finally
+            {
+                SetStatus(ParserState.Stopped, "Parser disposed.");
+                actRuntime.EncounterChanged -= OnEncounterChanged;
+                actRuntime.Dispose();
+            }
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
     }
 
     private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)

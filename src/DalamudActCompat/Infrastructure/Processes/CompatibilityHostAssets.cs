@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Cryptography;
 using DalamudActCompat.Infrastructure.Logging;
 
 namespace DalamudActCompat.Infrastructure.Processes;
@@ -34,10 +35,7 @@ public sealed class CompatibilityHostAssets
         {
             var fileName = resourceName[ResourcePrefix.Length..];
             var destination = Path.Combine(targetDirectory, fileName);
-            using var source = assembly.GetManifestResourceStream(resourceName)
-                ?? throw new InvalidOperationException($"Embedded host resource could not be opened: {resourceName}");
-
-            if (File.Exists(destination) && new FileInfo(destination).Length == source.Length)
+            if (File.Exists(destination) && ResourceMatchesFile(resourceName, destination))
             {
                 continue;
             }
@@ -45,6 +43,9 @@ public sealed class CompatibilityHostAssets
             var temporary = destination + ".tmp";
             try
             {
+                using var source = assembly.GetManifestResourceStream(resourceName)
+                    ?? throw new InvalidOperationException(
+                        $"Embedded host resource could not be opened: {resourceName}");
                 using (var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
                     source.CopyTo(output);
@@ -63,5 +64,21 @@ public sealed class CompatibilityHostAssets
         }
 
         logger.Information($"Compatibility host assets are available under {targetDirectory}.");
+    }
+
+    private bool ResourceMatchesFile(string resourceName, string path)
+    {
+        using var resource = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException(
+                $"Embedded host resource could not be opened: {resourceName}");
+        var file = new FileInfo(path);
+        if (file.Length != resource.Length)
+        {
+            return false;
+        }
+
+        using var existing = File.OpenRead(path);
+        return SHA256.HashData(resource).AsSpan()
+            .SequenceEqual(SHA256.HashData(existing));
     }
 }

@@ -1,8 +1,13 @@
+using System.Collections.Concurrent;
 using System.IO.Pipes;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Protocol;
+
+[assembly: InternalsVisibleTo("DalamudActCompat.PackageSmokeTests")]
 
 namespace DalamudActCompat.Infrastructure.Ipc;
 
@@ -10,29 +15,179 @@ public sealed class HostIpcClient : IAsyncDisposable
 {
     private readonly EncounterStateStore stateStore;
     private readonly PluginLogger logger;
+    private readonly Func<HostPermissionSnapshot> permissionSnapshot;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
-    private CancellationTokenSource? readLoopCancellation;
-    private Task? readLoop;
+    private readonly BoundedHostMessageQueue outbound = new();
+    private readonly ConcurrentQueue<HostDiagnostic> diagnostics = new();
+    private CancellationTokenSource? sessionCancellation;
+    private NamedPipeClientStream? bridgeInput;
+    private NamedPipeClientStream? bridgeOutput;
+    private Task? writerLoop;
+    private Task? readerLoop;
+    private Task? watchdogLoop;
+    private TaskCompletionSource? shutdownAcknowledged;
+    private string sessionId = string.Empty;
+    private long sendSequence;
+    private long lastWrittenSequence;
+    private long receivedSequence;
+    private long hostLastReceivedSequence;
+    private long lastHeartbeatTicks;
+    private long lastHostProgressTicks;
+    private long hostWorkingSetBytes;
+    private int hostThreadCount;
+    private volatile string hostHealthState = "stopped";
+    private volatile string hostHealthDetail = string.Empty;
+    private IReadOnlyList<HostPluginHealth> pluginHealth = [];
+    private IReadOnlyList<HostPluginStage> pluginStages = [];
+    private volatile HostConnectionStatus status = HostConnectionStatus.Stopped;
 
-    public HostIpcClient(EncounterStateStore stateStore, PluginLogger logger)
+    public HostIpcClient(
+        EncounterStateStore stateStore,
+        PluginLogger logger,
+        Func<HostPermissionSnapshot>? permissionSnapshot = null)
     {
         this.stateStore = stateStore;
         this.logger = logger;
+        this.permissionSnapshot = permissionSnapshot
+                                  ?? (() => new HostPermissionSnapshot(
+                                      new Dictionary<string, IReadOnlyList<string>>(),
+                                      []));
     }
 
-    public async Task ConnectAsync(string pipeName, CancellationToken cancellationToken)
+    public event EventHandler<Exception>? Faulted;
+
+    public event EventHandler<HostCommandInvocation>? CommandRequested;
+
+    public HostConnectionStatus Status => status;
+
+    public int ControlQueueLength => outbound.ControlCount;
+
+    public int DataQueueLength => outbound.DataCount;
+
+    public long DroppedDataMessages => outbound.DroppedDataMessages;
+
+    public long LastWrittenSequence => Volatile.Read(ref lastWrittenSequence);
+
+    public long HostLastReceivedSequence => Volatile.Read(ref hostLastReceivedSequence);
+
+    public long HostWorkingSetBytes => Volatile.Read(ref hostWorkingSetBytes);
+
+    public int HostThreadCount => Volatile.Read(ref hostThreadCount);
+
+    public string HostHealthState => hostHealthState;
+
+    public string HostHealthDetail => hostHealthDetail;
+
+    public IReadOnlyList<HostPluginHealth> PluginHealth
+        => Volatile.Read(ref pluginHealth);
+
+    public IReadOnlyList<HostDiagnostic> Diagnostics => diagnostics.ToArray();
+
+    public IReadOnlyList<HostPluginStage> PluginStages
+        => Volatile.Read(ref pluginStages);
+
+    public async Task ConnectAsync(
+        string pipeName,
+        string expectedSessionId,
+        CancellationToken cancellationToken)
     {
         await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await StopUnlockedAsync(CancellationToken.None).ConfigureAwait(false);
-            readLoopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            readLoop = Task.Run(() => ReadLoopAsync(pipeName, readLoopCancellation.Token), CancellationToken.None);
+            sessionId = expectedSessionId;
+            sendSequence = 0;
+            lastWrittenSequence = 0;
+            receivedSequence = 0;
+            hostLastReceivedSequence = 0;
+            lastHeartbeatTicks = DateTimeOffset.UtcNow.UtcTicks;
+            lastHostProgressTicks = lastHeartbeatTicks;
+            hostWorkingSetBytes = 0;
+            hostThreadCount = 0;
+            hostHealthState = "connecting";
+            hostHealthDetail = string.Empty;
+            pluginHealth = [];
+            pluginStages = [];
+            status = HostConnectionStatus.Connecting;
+            bridgeInput = new NamedPipeClientStream(
+                ".",
+                $"{pipeName}-h2g",
+                PipeDirection.In,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            bridgeOutput = new NamedPipeClientStream(
+                ".",
+                $"{pipeName}-g2h",
+                PipeDirection.Out,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            await Task.WhenAll(
+                    bridgeInput.ConnectAsync(TimeSpan.FromSeconds(10), cancellationToken),
+                    bridgeOutput.ConnectAsync(TimeSpan.FromSeconds(10), cancellationToken))
+                .ConfigureAwait(false);
+            sessionCancellation = new CancellationTokenSource();
+            writerLoop = Task.Run(
+                () => WriteLoopAsync(bridgeOutput, sessionCancellation.Token),
+                CancellationToken.None);
+            readerLoop = Task.Run(
+                () => ReadLoopAsync(bridgeInput, sessionCancellation.Token),
+                CancellationToken.None);
+            watchdogLoop = Task.Run(
+                () => WatchdogLoopAsync(sessionCancellation.Token),
+                CancellationToken.None);
+            status = HostConnectionStatus.Connected;
+            if (!TryEnqueue(
+                    HostMessageTypes.Hello,
+                    HostMessagePriority.Control,
+                    new HostHello(
+                        "game-bridge",
+                        typeof(HostIpcClient).Assembly.GetName().Version?.ToString() ?? "unknown",
+                        Environment.ProcessId,
+                        [HostProtocol.CurrentVersion])))
+            {
+                throw new InvalidOperationException("Host control queue rejected the hello message.");
+            }
+
+            if (!TryEnqueue(
+                    HostMessageTypes.Permissions,
+                    HostMessagePriority.Control,
+                    this.permissionSnapshot()))
+            {
+                throw new InvalidOperationException(
+                    "Host control queue rejected the permission snapshot.");
+            }
+        }
+        catch
+        {
+            status = HostConnectionStatus.Faulted;
+            await StopUnlockedAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
         }
         finally
         {
             lifecycleLock.Release();
         }
+    }
+
+    public bool TryEnqueue<T>(
+        string type,
+        HostMessagePriority priority,
+        T payload,
+        string? correlationId = null,
+        DateTimeOffset? deadline = null)
+    {
+        if (Status is not (HostConnectionStatus.Connected or HostConnectionStatus.Suspect))
+        {
+            return false;
+        }
+
+        var envelope = HostEnvelope.Create(
+            sessionId,
+            0,
+            type,
+            priority,
+            payload,
+            correlationId,
+            deadline);
+        return outbound.TryEnqueue(envelope);
     }
 
     public void ApplySnapshot(Encounter? current, IReadOnlyList<Encounter> recent)
@@ -43,6 +198,31 @@ public sealed class HostIpcClient : IAsyncDisposable
         await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (Status is HostConnectionStatus.Connected or HostConnectionStatus.Suspect)
+            {
+                shutdownAcknowledged = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var queued = TryEnqueue(
+                    HostMessageTypes.Shutdown,
+                    HostMessagePriority.Control,
+                    new HostHealth("stopping", "Game bridge requested shutdown.", DateTimeOffset.UtcNow),
+                    Guid.NewGuid().ToString("N"),
+                    DateTimeOffset.UtcNow.AddSeconds(1));
+                if (queued)
+                {
+                    try
+                    {
+                        await shutdownAcknowledged.Task
+                            .WaitAsync(TimeSpan.FromSeconds(1), cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        logger.Warning("ACT Host did not acknowledge shutdown within one second.");
+                    }
+                }
+            }
+
             await StopUnlockedAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -55,76 +235,429 @@ public sealed class HostIpcClient : IAsyncDisposable
     {
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
         lifecycleLock.Dispose();
+        outbound.Dispose();
     }
 
     private async Task StopUnlockedAsync(CancellationToken cancellationToken)
     {
-        if (readLoopCancellation is not null)
+        var cancellation = sessionCancellation;
+        sessionCancellation = null;
+        if (cancellation is not null)
         {
-            await readLoopCancellation.CancelAsync().ConfigureAwait(false);
-            readLoopCancellation.Dispose();
-            readLoopCancellation = null;
+            await cancellation.CancelAsync().ConfigureAwait(false);
         }
 
-        if (readLoop is not null)
+        bridgeInput?.Dispose();
+        bridgeInput = null;
+        bridgeOutput?.Dispose();
+        bridgeOutput = null;
+        var loops = new[] { writerLoop, readerLoop, watchdogLoop }
+            .Where(static task => task is not null)
+            .Cast<Task>()
+            .ToArray();
+        writerLoop = null;
+        readerLoop = null;
+        watchdogLoop = null;
+        if (loops.Length > 0)
         {
             try
             {
-                await readLoop.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                await Task.WhenAll(loops)
+                    .WaitAsync(TimeSpan.FromSeconds(1), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception) when (cancellation?.IsCancellationRequested == true)
+            {
+                // Cancelling the session and disposing both pipe handles is the
+                // normal stop path for all three loops.
             }
             catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
             {
-                logger.Warning($"Host IPC read loop did not stop cleanly: {ex.Message}");
+                logger.Warning($"Host IPC loops did not stop cleanly: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                logger.Warning($"Host IPC loop stopped with an error: {ex.Message}");
+            }
+        }
+
+        cancellation?.Dispose();
+        shutdownAcknowledged = null;
+        outbound.Clear();
+        hostHealthState = "stopped";
+        hostHealthDetail = string.Empty;
+        pluginHealth = [];
+        pluginStages = [];
+        status = HostConnectionStatus.Stopped;
+    }
+
+    private async Task WriteLoopAsync(Stream target, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var queued = await outbound.DequeueAsync(cancellationToken).ConfigureAwait(false);
+            if (queued.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
+            {
+                logger.Warning($"Expired Host IPC message dropped: {queued.Type}.");
+                continue;
             }
 
-            readLoop = null;
+            var envelope = queued with
+            {
+                Sequence = Interlocked.Increment(ref sendSequence),
+            };
+            await HostFrameCodec.WriteAsync(target, envelope, cancellationToken)
+                .ConfigureAwait(false);
+            var previousWritten = Interlocked.Exchange(
+                ref lastWrittenSequence,
+                envelope.Sequence);
+            if (previousWritten <= Volatile.Read(ref hostLastReceivedSequence))
+            {
+                // Start the processing-stall budget when a new unacknowledged
+                // window opens. Otherwise an idle connection would make the
+                // next legitimate event appear five seconds overdue instantly.
+                Volatile.Write(ref lastHostProgressTicks, DateTimeOffset.UtcNow.UtcTicks);
+            }
         }
     }
 
-    private async Task ReadLoopAsync(string pipeName, CancellationToken cancellationToken)
+    private async Task ReadLoopAsync(Stream source, CancellationToken cancellationToken)
     {
         try
         {
-            using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.In, PipeOptions.Asynchronous);
-            await pipe.ConnectAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-            using var reader = new StreamReader(pipe);
-
             while (!cancellationToken.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-                if (line is null)
+                var envelope = await HostFrameCodec.ReadAsync(source, cancellationToken)
+                    .ConfigureAwait(false);
+                if (envelope is null)
                 {
-                    logger.Warning("Host IPC pipe closed.");
-                    return;
+                    throw new EndOfStreamException("ACT Host IPC pipe closed.");
                 }
 
-                ApplyMessage(line);
+                if (!string.Equals(envelope.SessionId, sessionId, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("ACT Host IPC session identifier mismatch.");
+                }
+
+                if (envelope.Sequence <= Volatile.Read(ref receivedSequence))
+                {
+                    throw new InvalidDataException(
+                        $"ACT Host IPC sequence regressed from {receivedSequence} to {envelope.Sequence}.");
+                }
+
+                Volatile.Write(ref receivedSequence, envelope.Sequence);
+                if (envelope.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
+                {
+                    logger.Warning($"Expired ACT Host message dropped: {envelope.Type}.");
+                    continue;
+                }
+
+                ApplyMessage(envelope);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.Information("Host IPC read loop cancelled.");
         }
         catch (Exception ex)
         {
-            logger.Error(ex, "Host IPC read loop failed.");
+            MarkFaulted(ex);
         }
     }
 
-    private void ApplyMessage(string line)
+    private async Task WatchdogLoopAsync(CancellationToken cancellationToken)
     {
-        var message = JsonSerializer.Deserialize<HostIpcMessage>(line);
-        if (message is null)
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
-            logger.Warning("Host IPC received an empty message.");
+            var elapsed = DateTimeOffset.UtcNow -
+                          new DateTimeOffset(Volatile.Read(ref lastHeartbeatTicks), TimeSpan.Zero);
+            if (elapsed >= HostProtocol.DeadAfter)
+            {
+                MarkFaulted(new TimeoutException(
+                    $"ACT Host heartbeat missing for {elapsed.TotalSeconds:0.0} seconds."));
+                return;
+            }
+
+            var lastWritten = Volatile.Read(ref lastWrittenSequence);
+            var hostAcknowledged = Volatile.Read(ref hostLastReceivedSequence);
+            var progressElapsed = DateTimeOffset.UtcNow -
+                                  new DateTimeOffset(
+                                      Volatile.Read(ref lastHostProgressTicks),
+                                      TimeSpan.Zero);
+            if (lastWritten > hostAcknowledged &&
+                progressElapsed >= HostProtocol.DeadAfter)
+            {
+                MarkFaulted(new TimeoutException(
+                    "ACT Host heartbeat is alive but its event reader has not advanced for " +
+                    $"{progressElapsed.TotalSeconds:0.0} seconds " +
+                    $"(written={lastWritten}, acknowledged={hostAcknowledged})."));
+                return;
+            }
+
+            status = elapsed >= HostProtocol.SuspectAfter
+                ? HostConnectionStatus.Suspect
+                : HostConnectionStatus.Connected;
+        }
+    }
+
+    private void ApplyMessage(HostEnvelope envelope)
+    {
+        switch (envelope.Type)
+        {
+            case HostMessageTypes.Heartbeat:
+                Volatile.Write(ref lastHeartbeatTicks, DateTimeOffset.UtcNow.UtcTicks);
+                var heartbeat = envelope.Payload.Deserialize<HostHeartbeat>()
+                                ?? throw new InvalidDataException(
+                                    "ACT Host sent an invalid heartbeat.");
+                var previousAcknowledged = Volatile.Read(ref hostLastReceivedSequence);
+                if (heartbeat.LastReceivedSequence < previousAcknowledged ||
+                    heartbeat.LastReceivedSequence > Volatile.Read(ref sendSequence))
+                {
+                    throw new InvalidDataException(
+                        "ACT Host heartbeat contains an invalid received sequence " +
+                        $"{heartbeat.LastReceivedSequence} " +
+                        $"(previous={previousAcknowledged}, sent={sendSequence}).");
+                }
+
+                if (heartbeat.LastReceivedSequence > previousAcknowledged)
+                {
+                    Volatile.Write(
+                        ref hostLastReceivedSequence,
+                        heartbeat.LastReceivedSequence);
+                    Volatile.Write(
+                        ref lastHostProgressTicks,
+                        DateTimeOffset.UtcNow.UtcTicks);
+                }
+
+                Volatile.Write(ref hostWorkingSetBytes, heartbeat.WorkingSetBytes);
+                Volatile.Write(ref hostThreadCount, heartbeat.ThreadCount);
+                Volatile.Write(ref pluginHealth, heartbeat.Plugins ?? []);
+                Volatile.Write(ref pluginStages, heartbeat.Stages ?? []);
+                if (heartbeat.WorkingSetBytes > HostProtocol.MaximumHostWorkingSetBytes)
+                {
+                    throw new InvalidDataException(
+                        $"ACT Host working set {heartbeat.WorkingSetBytes} exceeds " +
+                        $"{HostProtocol.MaximumHostWorkingSetBytes} bytes.");
+                }
+
+                if (heartbeat.ThreadCount > HostProtocol.MaximumHostThreadCount)
+                {
+                    throw new InvalidDataException(
+                        $"ACT Host thread count {heartbeat.ThreadCount} exceeds " +
+                        $"{HostProtocol.MaximumHostThreadCount}.");
+                }
+                break;
+            case HostMessageTypes.Hello:
+            case HostMessageTypes.HelloAck:
+                Volatile.Write(ref lastHeartbeatTicks, DateTimeOffset.UtcNow.UtcTicks);
+                logger.Information($"ACT Host handshake completed for session {sessionId}.");
+                break;
+            case HostMessageTypes.ShutdownAck:
+                shutdownAcknowledged?.TrySetResult();
+                break;
+            case HostMessageTypes.Health:
+                var health = envelope.Payload.Deserialize<HostHealth>();
+                if (health is not null)
+                {
+                    hostHealthState = health.State;
+                    hostHealthDetail = health.Detail;
+                    logger.Information(
+                        $"ACT Host health changed to {health.State}: {health.Detail}");
+                }
+                break;
+            case HostMessageTypes.Diagnostic:
+                var diagnostic = envelope.Payload.Deserialize<HostDiagnostic>();
+                if (diagnostic is not null)
+                {
+                    diagnostics.Enqueue(diagnostic);
+                    while (diagnostics.Count > 100 && diagnostics.TryDequeue(out _))
+                    {
+                    }
+
+                    logger.Warning(
+                        $"ACT Host diagnostic [{diagnostic.PluginId}/{diagnostic.Phase}] " +
+                        $"{diagnostic.ExceptionType}: {diagnostic.Message} " +
+                        $"(repeat={diagnostic.RepeatCount}, thread={diagnostic.ThreadId}).");
+                }
+                break;
+            case HostMessageTypes.Snapshot:
+                var message = envelope.Payload.Deserialize<HostIpcMessage>();
+                if (message?.Current is not null)
+                {
+                    ApplySnapshot(
+                        HostIpcMapper.ToEncounter(message.Current),
+                        message.Recent?.Select(HostIpcMapper.ToEncounter).ToArray()
+                        ?? Array.Empty<Encounter>());
+                }
+                break;
+            case HostMessageTypes.CommandRequest:
+                var request = envelope.Payload.Deserialize<HostCommandRequest>();
+                if (request is null || string.IsNullOrWhiteSpace(envelope.CorrelationId))
+                {
+                    logger.Warning("ACT Host sent an invalid command request; request denied.");
+                    break;
+                }
+
+                CommandRequested?.Invoke(
+                    this,
+                    new HostCommandInvocation(envelope.CorrelationId, request));
+                break;
+        }
+    }
+
+    private void MarkFaulted(Exception exception)
+    {
+        if (Status == HostConnectionStatus.Faulted)
+        {
             return;
         }
 
-        if (message.Type.Equals("snapshot", StringComparison.OrdinalIgnoreCase) && message.Current is not null)
+        status = HostConnectionStatus.Faulted;
+        logger.Error(exception, "ACT Host IPC faulted; FFXIV remains isolated.");
+        Faulted?.Invoke(this, exception);
+    }
+}
+
+public sealed record HostCommandInvocation(
+    string CorrelationId,
+    HostCommandRequest Request);
+
+public enum HostConnectionStatus
+{
+    Stopped,
+    Connecting,
+    Connected,
+    Suspect,
+    Faulted,
+}
+
+internal sealed class BoundedHostMessageQueue : IDisposable
+{
+    private readonly object syncRoot = new();
+    private readonly Queue<HostEnvelope> control = new();
+    private readonly Queue<HostEnvelope> data = new();
+    private readonly Dictionary<string, HostEnvelope> state = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim available = new(0);
+    private long droppedDataMessages;
+    private bool disposed;
+
+    public int ControlCount
+    {
+        get
         {
-            var current = HostIpcMapper.ToEncounter(message.Current);
-            var recent = message.Recent?.Select(HostIpcMapper.ToEncounter).ToArray() ?? Array.Empty<Encounter>();
-            ApplySnapshot(current, recent);
+            lock (syncRoot)
+            {
+                return control.Count;
+            }
         }
+    }
+
+    public int DataCount
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return data.Count + state.Count;
+            }
+        }
+    }
+
+    public long DroppedDataMessages => Interlocked.Read(ref droppedDataMessages);
+
+    public bool TryEnqueue(HostEnvelope envelope)
+    {
+        var added = false;
+        lock (syncRoot)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            switch (envelope.Priority)
+            {
+                case HostMessagePriority.Control:
+                case HostMessagePriority.Critical:
+                    if (control.Count >= HostProtocol.ControlQueueCapacity)
+                    {
+                        return false;
+                    }
+
+                    control.Enqueue(envelope);
+                    added = true;
+                    break;
+                case HostMessagePriority.State:
+                    added = !state.ContainsKey(envelope.Type);
+                    state[envelope.Type] = envelope;
+                    break;
+                default:
+                    if (data.Count >= HostProtocol.DataQueueCapacity)
+                    {
+                        data.Dequeue();
+                        Interlocked.Increment(ref droppedDataMessages);
+                    }
+                    else
+                    {
+                        added = true;
+                    }
+
+                    data.Enqueue(envelope);
+                    break;
+            }
+        }
+
+        if (added)
+        {
+            available.Release();
+        }
+
+        return true;
+    }
+
+    public async ValueTask<HostEnvelope> DequeueAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            await available.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lock (syncRoot)
+            {
+                if (control.TryDequeue(out var controlMessage))
+                {
+                    return controlMessage;
+                }
+
+                if (state.Count > 0)
+                {
+                    var pair = state.First();
+                    state.Remove(pair.Key);
+                    return pair.Value;
+                }
+
+                if (data.TryDequeue(out var dataMessage))
+                {
+                    return dataMessage;
+                }
+            }
+        }
+    }
+
+    public void Clear()
+    {
+        lock (syncRoot)
+        {
+            control.Clear();
+            data.Clear();
+            state.Clear();
+            while (available.Wait(0))
+            {
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (syncRoot)
+        {
+            disposed = true;
+        }
+
+        available.Dispose();
     }
 }

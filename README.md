@@ -3,7 +3,11 @@
 第三方组件的维护来源、安装模型和已验证兼容范围见
 [第三方 ACT 扩展兼容说明](docs/third-party-compatibility.md)。
 
-Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users install one Dalamud plugin; it directly hosts the official `FFXIV_ACT_Plugin`, embeds `OverlayPlugin`, and can install optional ACT-compatible plugin packages inside its own managed directory.
+Dalamud ACT Compat is a hybrid ACT-compatible runtime. The game process keeps the
+Dalamud data collector, parser/Overlay runtime, status UI, IPC client, and a small
+validated command broker. Traditional ACT plugins run in
+`DalamudActCompat.Host.exe`, so a hung Triggernometry/PostNamazu/legacy plugin can
+be terminated without terminating FFXIV.
 
 ## Architecture Audit
 
@@ -25,8 +29,18 @@ Dalamud ACT Compat is a self-contained in-game ACT-compatible plugin host. Users
 - Encounter history window backed by plugin config storage.
 - Settings window for parser enablement, autostart, Meter settings, history limit, debug flag, parser status, parser restart, and log directory.
 - Parser status model: disabled, initializing, running, stopped, missing dependency, incompatible, faulted.
-- In-process official FFXIV_ACT_Plugin runtime using the NotACT compatibility assembly.
-- Embedded OverlayPlugin runtime initialized against the same ACT host.
+- In-process official FFXIV_ACT_Plugin parser and embedded OverlayPlugin runtime.
+- Independent `DalamudActCompat.Host.exe` for the NotACT compatibility layer,
+  WinForms, Triggernometry, PostNamazu, FoxTTS, and other manifest-based legacy
+  ACT plugins. The game process does not load those traditional plugin DLLs.
+- Versioned, current-user-only named-pipe IPC with bounded control/data queues,
+  ordered log batches, state replay, deadlines, heartbeats, progress detection,
+  crash restart, and a restart circuit breaker.
+- Per-plugin capability controls and an allowlisted semantic game-command broker;
+  no function pointer, memory address, PowerShell, or arbitrary-code IPC command.
+- Structured Host/plugin diagnostics, callback duration/exception health,
+  PostNamazu staged connection state, and game-side controls to stop or restart
+  the Host.
 - FFXIV 7.55 parser stack: IINACT 2.10.3.4, OverlayPlugin Core 0.19.103,
   Machina 7.55 opcodes, Unscrambler.XIV 7.55.0, and FFXIV_ACT_Plugin 3.0.2.5.
 - Triggernometry CN 2.1.1.2, ACT.FoxTTS 3.3.1.189, and PostNamazu 1.3.6.6 are
@@ -90,7 +104,10 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
 
-`/actcompat host` starts the embedded ACT host, official FFXIV_ACT_Plugin, enabled OverlayPlugin runtime, and enabled optional packages. `/actcompat stop` unloads them in reverse order.
+`/actcompat host` starts the independent legacy ACT Host and restarts the
+in-process parser. `/actcompat stop` stops parsing and terminates the Host. The
+Host also starts automatically; its heartbeat and plugin stages are visible in
+`/actcompat status`.
 
 Optional package ZIPs contain `actcompat.plugin.json` at their root:
 
@@ -121,11 +138,28 @@ For Windows-side testing from a custom repository, follow `docs/WINDOWS_CUSTOM_R
 
 ## Current Limits
 
-- No live combat parsing has been verified in game.
+- No live combat parsing or PostNamazu game-command execution has been verified
+  in game yet. The offline real-plugin test covers Triggernometry configuration,
+  standard/network-equivalent log matching, zone restrictions, combat start/end,
+  game-side TTS authorization plus isolated Host output dispatch, clean shutdown,
+  broken pipes, and Host process death. Actual audio-device output still needs a
+  live manual check.
 - FFLogs-compatible combat log output is directory-separated but not implemented.
 - OverlayPlugin starts its WebSocket event source and opens installed Cactbot raidboss resources in a topmost WebView2 window; encounter alerts and TTS still require an in-game validation pass.
-- Optional packages run in-process and must target host API version 1. Arbitrary legacy ACT plugins may depend on unsupported .NET Framework or ACT UI behavior.
+- The legacy Host is a full-trust desktop process, not an OS sandbox. Process
+  isolation protects FFXIV from a Host crash/deadlock/runaway allocation, but a
+  malicious plugin in the same Host can impersonate another plugin or directly
+  use desktop APIs. Strong per-plugin enforcement requires one restricted worker
+  process/AppContainer per trust domain.
+- OverlayPlugin and the official parser still run in the game process; migrating
+  or further reducing that trusted core is separate follow-up work.
+- Arbitrary legacy ACT plugins may still depend on unsupported .NET Framework,
+  ACT UI, packet capture, memory, or injection behavior.
 
 ## Next Stage
 
-Validate the self-hosted parser and OverlayPlugin in game, translate `DataSubscription` events into `EncounterSnapshot`, then add a graphical package installer and compatibility diagnostics for legacy ACT plugins.
+Perform the live-game validation matrix, finish the remaining PostNamazu semantic
+actions, and then split untrusted legacy plugins into independently restartable,
+restricted workers where stronger per-plugin security is required. See
+[`docs/act-host-isolation.md`](docs/act-host-isolation.md) and
+[`docs/act-compat-phase2-investigation.md`](docs/act-compat-phase2-investigation.md).
