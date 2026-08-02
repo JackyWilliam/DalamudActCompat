@@ -293,8 +293,49 @@ internal static class Program
                         {
                             if (Volatile.Read(ref pluginRuntimeReady) == 1)
                             {
-                                _ = pluginRuntime?.OpenPluginUi(pluginId);
+                                if (pluginRuntime?.OpenPluginUi(pluginId) == true)
+                                {
+                                    Console.WriteLine(
+                                        $"Opened legacy plugin '{pluginId}' configuration window.");
+                                }
+                                else
+                                {
+                                    Console.Error.WriteLine(
+                                        $"Legacy plugin '{pluginId}' configuration window is unavailable.");
+                                }
                             }
+                        }
+                        break;
+                    case HostMessageTypes.PluginInvoke:
+                        var invocation = envelope.Payload.Deserialize<HostPluginInvocation>()
+                                         ?? throw new InvalidDataException(
+                                             "Plugin invocation payload is invalid.");
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1 &&
+                            pluginRuntime?.InvokePlugin(invocation) == true)
+                        {
+                            Console.WriteLine(
+                                $"Invoked legacy plugin '{invocation.PluginId}' action '{invocation.Action}'.");
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine(
+                                $"Legacy plugin '{invocation.PluginId}' rejected action '{invocation.Action}'.");
+                        }
+                        break;
+                    case HostMessageTypes.TtsRequest:
+                        var ttsRequest = envelope.Payload.Deserialize<HostTtsRequest>()
+                                         ?? throw new InvalidDataException(
+                                             "TTS request payload is invalid.");
+                        if (Volatile.Read(ref pluginRuntimeReady) == 1 &&
+                            pluginRuntime?.PlayTts(ttsRequest.Text) == true)
+                        {
+                            Console.WriteLine(
+                                $"Game-side TTS request reached the isolated provider; source={ttsRequest.Source}.");
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine(
+                                $"Game-side TTS request was rejected; source={ttsRequest.Source}.");
                         }
                         break;
                     case HostMessageTypes.Snapshot:
@@ -445,8 +486,13 @@ internal static class Program
         BlockingCollection<HostEnvelope> outbound,
         CancellationToken cancellationToken)
     {
-        foreach (var envelope in outbound.GetConsumingEnumerable(cancellationToken))
+        long wireSequence = 0;
+        foreach (var queued in outbound.GetConsumingEnumerable(cancellationToken))
         {
+            var envelope = queued with
+            {
+                Sequence = ++wireSequence,
+            };
             HostFrameCodec.WriteAsync(output, envelope, cancellationToken)
                 .AsTask()
                 .GetAwaiter()

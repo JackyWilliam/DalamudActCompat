@@ -42,6 +42,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
     private string? overlayWebSocketUri;
     private HttpClient? httpClient;
+    private Func<string, bool>? externalTtsDispatcher;
+    private Func<string, string, bool>? externalPostNamazuDispatcher;
+    private PostNamazuEventSource? externalPostNamazuEventSource;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
@@ -99,6 +102,16 @@ public sealed class SelfHostedActRuntime : IDisposable
     public bool IsParserRunning => parser is not null;
 
     public bool IsOverlayRunning => overlay is not null;
+
+    public void ConfigureExternalPluginBridges(
+        Func<string, bool> ttsDispatcher,
+        Func<string, string, bool> postNamazuDispatcher)
+    {
+        ArgumentNullException.ThrowIfNull(ttsDispatcher);
+        ArgumentNullException.ThrowIfNull(postNamazuDispatcher);
+        Volatile.Write(ref externalTtsDispatcher, ttsDispatcher);
+        Volatile.Write(ref externalPostNamazuDispatcher, postNamazuDispatcher);
+    }
 
     public bool HasVisibleEditingOverlay
         => cactbotOverlay?.IsVisibleEditing == true ||
@@ -248,6 +261,14 @@ public sealed class SelfHostedActRuntime : IDisposable
             LogFilePath = logDirectory,
             WriteLogFile = true,
         };
+        ActGlobals.oFormActMain.PlayTtsMethod = text =>
+        {
+            var dispatcher = Volatile.Read(ref externalTtsDispatcher);
+            if (dispatcher?.Invoke(text) != true)
+            {
+                log.Warning("External ACT Host rejected a game-side TTS request.");
+            }
+        };
         ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
         ActGlobals.oFormActMain.AfterCombatAction += OnAfterCombatAction;
         ActGlobals.oFormActMain.AfterCombatEnd += OnAfterCombatEnd;
@@ -326,6 +347,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             container.Register(overlay);
             ActGlobals.oFormActMain.OverlayPluginContainer = container;
             overlay.InitPlugin(pluginInterface.ConfigDirectory.FullName);
+            RegisterExternalPostNamazuAdapter(container);
             var server = container.Resolve<RainbowMage.OverlayPlugin.WebSocket.ServerController>();
             if (!server.Running)
             {
@@ -545,6 +567,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public void StopOverlay()
     {
+        externalPostNamazuEventSource?.SetAction(null);
+        externalPostNamazuEventSource = null;
         cactbotOverlay?.Dispose();
         cactbotOverlay = null;
         cactbotSettings?.Dispose();
@@ -561,6 +585,46 @@ public sealed class SelfHostedActRuntime : IDisposable
         overlay = null;
         httpClient?.Dispose();
         httpClient = null;
+    }
+
+    private void RegisterExternalPostNamazuAdapter(
+        RainbowMage.OverlayPlugin.TinyIoCContainer container)
+    {
+        if (Volatile.Read(ref externalPostNamazuDispatcher) is null)
+        {
+            return;
+        }
+
+        var registry = container.Resolve<RainbowMage.OverlayPlugin.Registry>();
+        var existing = registry.EventSources.FirstOrDefault(source =>
+            string.Equals(
+                source.Name,
+                PostNamazuEventSource.EventSourceName,
+                StringComparison.Ordinal));
+        if (existing is not null and not PostNamazuEventSource)
+        {
+            log.Information("PostNamazu upstream OverlayPlugin event source is already active.");
+            return;
+        }
+
+        externalPostNamazuEventSource = existing as PostNamazuEventSource;
+        if (externalPostNamazuEventSource is null)
+        {
+            externalPostNamazuEventSource = new PostNamazuEventSource(container);
+            registry.StartEventSource(externalPostNamazuEventSource);
+        }
+
+        externalPostNamazuEventSource.SetAction((action, payload) =>
+        {
+            var dispatcher = Volatile.Read(ref externalPostNamazuDispatcher);
+            if (dispatcher?.Invoke(action, payload) != true)
+            {
+                throw new InvalidOperationException(
+                    "Independent ACT Host rejected the PostNamazu OverlayPlugin action.");
+            }
+        });
+        log.Information(
+            "PostNamazu OverlayPlugin event source is bridged to the independent ACT Host.");
     }
 
     private sealed record OverlayTemplateDocument(

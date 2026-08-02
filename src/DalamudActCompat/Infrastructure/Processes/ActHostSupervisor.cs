@@ -165,6 +165,24 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             new { pluginId },
             deadline: DateTimeOffset.UtcNow.AddSeconds(2));
 
+    public bool InvokePluginAction(
+        string pluginId,
+        string action,
+        IReadOnlyDictionary<string, string> arguments)
+        => ipc.TryEnqueue(
+            HostMessageTypes.PluginInvoke,
+            HostMessagePriority.Control,
+            new HostPluginInvocation(pluginId, action, arguments),
+            deadline: DateTimeOffset.UtcNow.AddSeconds(2));
+
+    public bool RequestTts(string text, string source)
+        => !string.IsNullOrWhiteSpace(text) &&
+           ipc.TryEnqueue(
+               HostMessageTypes.TtsRequest,
+               HostMessagePriority.Control,
+               new HostTtsRequest(text, source),
+               deadline: DateTimeOffset.UtcNow.AddSeconds(2));
+
     public bool ReplyCommand(
         string correlationId,
         bool success,

@@ -40,6 +40,8 @@ public static class HostMessageTypes
     public const string CommandRequest = "command.request";
     public const string CommandResult = "command.result";
     public const string PluginOpen = "plugin.ui.open";
+    public const string PluginInvoke = "plugin.invoke";
+    public const string TtsRequest = "tts.request";
     public const string Permissions = "permission.snapshot";
     public const string FaultInject = "test.fault.inject";
     public const string Diagnostic = "diagnostic.exception";
@@ -138,6 +140,15 @@ public sealed record HostCommandResult(
     bool Success,
     string Status,
     string? Detail);
+
+public sealed record HostPluginInvocation(
+    string PluginId,
+    string Action,
+    IReadOnlyDictionary<string, string> Arguments);
+
+public sealed record HostTtsRequest(
+    string Text,
+    string Source);
 
 public sealed record HostPermissionSnapshot(
     IReadOnlyDictionary<string, IReadOnlyList<string>> AllowedCapabilities,

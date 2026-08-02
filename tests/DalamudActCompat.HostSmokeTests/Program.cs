@@ -525,11 +525,44 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     new HostCombatEvent(false, DateTimeOffset.UtcNow)),
                 CancellationToken.None);
             await ReadAndCompleteExpectedTtsAsync("ACTCOMPAT_COMBAT_END");
+            var hasFoxTts = File.Exists(Path.Combine(
+                pluginRoot!,
+                "act.foxtts",
+                "actcompat.plugin.json"));
+            if (hasFoxTts)
+            {
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.TtsRequest,
+                        HostMessagePriority.Control,
+                        new HostTtsRequest("ACTCOMPAT_GAME_TTS", "host-smoke")),
+                    CancellationToken.None);
+            }
+
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
                     session,
-                    clientSequence,
+                    clientSequence++,
+                    HostMessageTypes.PluginInvoke,
+                    HostMessagePriority.Control,
+                    new HostPluginInvocation(
+                        "postnamazu",
+                        "overlay",
+                        new Dictionary<string, string>
+                        {
+                            ["command"] = "NamazuLog",
+                            ["payload"] = "ACTCOMPAT_OVERLAY_BRIDGE",
+                        })),
+                CancellationToken.None);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
                     HostMessageTypes.Shutdown,
                     HostMessagePriority.Control,
                     new HostHealth("stopping", "legacy test", DateTimeOffset.UtcNow),
@@ -548,13 +581,23 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 output.Contains("Legacy plugin 'postnamazu' loaded out-of-process.", StringComparison.Ordinal),
                 $"PostNamazu did not load out-of-process.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
-                output.Split("test TTS output suppressed:", StringSplitOptions.None).Length - 1 == 5,
+                output.Split("test TTS output suppressed:", StringSplitOptions.None).Length - 1 ==
+                (hasFoxTts ? 6 : 5),
                 "Authorized Triggernometry TTS requests did not reach the isolated Host output " +
                 $"provider.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
-            if (File.Exists(Path.Combine(
-                    pluginRoot!,
-                    "act.foxtts",
-                    "actcompat.plugin.json")))
+            Assert(
+                output.Contains(
+                    "PostNamazu selected the cross-process game-side OverlayPlugin adapter.",
+                    StringComparison.Ordinal),
+                $"PostNamazu did not select the real cross-process OverlayPlugin adapter." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "Invoked legacy plugin 'postnamazu' action 'overlay'.",
+                    StringComparison.Ordinal),
+                $"PostNamazu OverlayPlugin invocation did not cross the Host boundary." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            if (hasFoxTts)
             {
                 Assert(
                     output.Contains(
@@ -562,6 +605,12 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                         StringComparison.Ordinal),
                         $"Manifest ACT plugin did not load out-of-process." +
                         $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+                Assert(
+                    output.Contains(
+                        "test TTS output suppressed: ACTCOMPAT_GAME_TTS",
+                        StringComparison.Ordinal),
+                    $"Game-side ACT/Cactbot TTS did not reach isolated FoxTTS." +
+                    $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             }
 
             async Task ReadAndCompleteExpectedTtsAsync(string expectedText)

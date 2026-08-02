@@ -52,6 +52,8 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.CopyPostNamazuLog))!);
         var attach = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.AttachPostNamazu))!);
+        var overlayAdapter = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.UsePostNamazuOverlayAdapter))!);
         var skipMonitor = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SkipLegacyProcessMonitoring))!);
         var command = module.ImportReference(
@@ -67,6 +69,7 @@ public static class LegacyAssemblyRewriter
                 method.Name == nameof(HostPluginBridge.UnsupportedNativeOperation) &&
                 method.IsGenericMethod));
         var copyLogPatched = false;
+        var overlayAdapterPatched = false;
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
         {
@@ -75,6 +78,19 @@ public static class LegacyAssemblyRewriter
                 if (type.FullName == "PostNamazu.PostNamazu" && method.Name == "Attach")
                 {
                     ReplaceWithBridge(method, attach, loadInstance: true, loadParameters: false);
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Common.PluginIntegrationManager" &&
+                    method.Name == "InitializeOverlayIntegration" &&
+                    method.Parameters.Count == 0)
+                {
+                    ReplaceWithBridge(
+                        method,
+                        overlayAdapter,
+                        loadInstance: true,
+                        loadParameters: false);
+                    overlayAdapterPatched = true;
                     continue;
                 }
 
@@ -156,10 +172,11 @@ public static class LegacyAssemblyRewriter
             }
         }
 
-        if (!copyLogPatched)
+        if (!copyLogPatched || !overlayAdapterPatched)
         {
             throw new InvalidOperationException(
-                "PostNamazu CopyLog shape changed; asynchronous clipboard adapter was not applied.");
+                "PostNamazu compatibility shape changed; " +
+                $"copyLog={copyLogPatched}, overlayAdapter={overlayAdapterPatched}.");
         }
 
         using var output = new MemoryStream();

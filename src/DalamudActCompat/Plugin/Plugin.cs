@@ -146,6 +146,16 @@ public sealed class Plugin : IDalamudPlugin
             configuration.GetOverlayWindowSettings,
             () => configuration.DebugMode,
             configuration.IsActCapabilityAllowed);
+        actRuntime.ConfigureExternalPluginBridges(
+            text => hostSupervisor.RequestTts(text, "game-side-act"),
+            (action, payload) => hostSupervisor.InvokePluginAction(
+                "postnamazu",
+                "overlay",
+                new Dictionary<string, string>
+                {
+                    ["command"] = action,
+                    ["payload"] = payload,
+                }));
         actRuntime.RawLogLineReceived += OnRawLogLineForHost;
         actRuntime.ZoneChanged += OnZoneChangedForHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;

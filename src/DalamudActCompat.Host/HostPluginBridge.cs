@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -53,6 +54,26 @@ public static class HostPluginBridge
 
     internal static void ConfigureTtsWriter(Action<string>? writer)
         => Volatile.Write(ref ttsWriter, writer);
+
+    public static void PlayTtsFromGame(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (text.Length > 2000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(text),
+                "TTS text exceeds 2000 characters.");
+        }
+
+        var writer = Volatile.Read(ref ttsWriter)
+                     ?? throw new InvalidOperationException(
+                         "No isolated ACT TTS provider is loaded in the external Host.");
+        writer(text);
+    }
 
     internal static void ConfigureClipboardWriterForTests(Action<string> writer)
     {
@@ -190,6 +211,34 @@ public static class HostPluginBridge
                 System.Reflection.BindingFlags.Public |
                 System.Reflection.BindingFlags.NonPublic)
             ?.Invoke(plugin, ["AttachedExternalHost"]);
+    }
+
+    public static void UsePostNamazuOverlayAdapter(object integrationManager)
+    {
+        ArgumentNullException.ThrowIfNull(integrationManager);
+        const BindingFlags flags =
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var plugin = integrationManager.GetType().GetField("_plugin", flags)
+                         ?.GetValue(integrationManager)
+                     ?? throw new MissingFieldException(
+                         integrationManager.GetType().FullName,
+                         "_plugin");
+        var pluginUi = plugin.GetType().GetField("PluginUi", flags)?.GetValue(plugin)
+                       ?? throw new MissingFieldException(
+                           plugin.GetType().FullName,
+                           "PluginUi");
+        var log = pluginUi.GetType().GetMethod(
+                      "Log",
+                      flags,
+                      null,
+                      [typeof(string)],
+                      null)
+                  ?? throw new MissingMethodException(pluginUi.GetType().FullName, "Log");
+        log.Invoke(
+            pluginUi,
+            ["OverlayPlugin bridge active through the game-side event dispatcher."]);
+        Console.WriteLine(
+            "PostNamazu selected the cross-process game-side OverlayPlugin adapter.");
     }
 
     public static void SkipLegacyProcessMonitoring(object _)

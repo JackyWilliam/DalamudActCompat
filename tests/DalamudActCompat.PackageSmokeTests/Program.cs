@@ -1176,6 +1176,14 @@ static void ValidateActPluginDataCompatibility()
         "ActPluginData.btnXButton compatibility field is missing.");
 }
 
+static ZipArchiveEntry? FindArchiveEntry(ZipArchive archive, string normalizedPath)
+{
+    return archive.Entries.SingleOrDefault(entry => string.Equals(
+        entry.FullName.Replace('\\', '/'),
+        normalizedPath,
+        StringComparison.OrdinalIgnoreCase));
+}
+
 static void ValidateLegacyResourceRuntimeDependencies()
 {
     var releaseDirectory = Path.Combine(
@@ -1215,6 +1223,22 @@ static void ValidateLegacyResourceRuntimeDependencies()
             "SharpCompress.dll",
             StringComparison.OrdinalIgnoreCase)),
         "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
+
+    var hostSpeech = FindArchiveEntry(archive, "host/System.Speech.dll");
+    var runtimeSpeech = FindArchiveEntry(
+        archive,
+        "runtimes/win/lib/net10.0/System.Speech.dll");
+    Assert(
+        hostSpeech is not null && runtimeSpeech is not null,
+        "The Compatibility Host or Windows System.Speech runtime implementation is missing.");
+    using (var hostSpeechStream = hostSpeech!.Open())
+    using (var runtimeSpeechStream = runtimeSpeech!.Open())
+    {
+        Assert(
+            SHA256.HashData(hostSpeechStream).AsSpan()
+                .SequenceEqual(SHA256.HashData(runtimeSpeechStream)),
+            "The Compatibility Host packaged the System.Speech reference assembly instead of its Windows runtime implementation.");
+    }
 
     var requiredBundledPluginFiles = new[]
     {

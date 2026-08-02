@@ -181,7 +181,7 @@ public sealed class HostIpcClient : IAsyncDisposable
 
         var envelope = HostEnvelope.Create(
             sessionId,
-            Interlocked.Increment(ref sendSequence),
+            0,
             type,
             priority,
             payload,
@@ -295,13 +295,17 @@ public sealed class HostIpcClient : IAsyncDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var envelope = await outbound.DequeueAsync(cancellationToken).ConfigureAwait(false);
-            if (envelope.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
+            var queued = await outbound.DequeueAsync(cancellationToken).ConfigureAwait(false);
+            if (queued.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
             {
-                logger.Warning($"Expired Host IPC message dropped: {envelope.Type}.");
+                logger.Warning($"Expired Host IPC message dropped: {queued.Type}.");
                 continue;
             }
 
+            var envelope = queued with
+            {
+                Sequence = Interlocked.Increment(ref sendSequence),
+            };
             await HostFrameCodec.WriteAsync(target, envelope, cancellationToken)
                 .ConfigureAwait(false);
             var previousWritten = Interlocked.Exchange(

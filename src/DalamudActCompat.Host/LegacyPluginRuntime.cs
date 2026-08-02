@@ -47,8 +47,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
         SetStage(
             "postnamazu",
             "OverlayPlugin discovery",
-            "not-implemented",
-            "OverlayPlugin remains game-side; no full-trust OverlayPlugin DLL is loaded in the external Host.");
+            "pending",
+            "Waiting for the cross-process game-side OverlayPlugin adapter.");
         SetStage(
             "postnamazu",
             "Game process recognition",
@@ -251,6 +251,45 @@ internal sealed class LegacyPluginRuntime : IDisposable
         return plugin?.OpenConfiguration() == true;
     }
 
+    public bool InvokePlugin(HostPluginInvocation invocation)
+    {
+        var plugin = plugins.FirstOrDefault(candidate => string.Equals(
+            candidate.Id,
+            invocation.PluginId,
+            StringComparison.OrdinalIgnoreCase));
+        if (plugin is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return plugin.Invoke(invocation);
+        }
+        catch (Exception ex)
+        {
+            HostPluginBridge.ReportException(invocation.PluginId, invocation.Action, ex);
+            Console.Error.WriteLine(
+                $"Legacy plugin '{invocation.PluginId}' action '{invocation.Action}' failed: {ex}");
+            return false;
+        }
+    }
+
+    public bool PlayTts(string text)
+    {
+        try
+        {
+            HostPluginBridge.PlayTtsFromGame(text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            HostPluginBridge.ReportException("act.foxtts", "Game-side TTS", ex);
+            Console.Error.WriteLine($"Isolated ACT TTS provider failed: {ex}");
+            return false;
+        }
+    }
+
     public void Dispose()
     {
         if (disposed)
@@ -363,6 +402,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
         try
         {
+            if (id == "triggernometry")
+            {
+                PreloadSystemSpeechRuntime();
+            }
+
             var handle = LegacyPluginHandle.Load(id, assemblyPath, entryType);
             plugins.Add(handle);
             Console.WriteLine($"Legacy plugin '{id}' loaded out-of-process. Status: {handle.Status}");
@@ -374,6 +418,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     "Command bridge",
                     "success",
                     "Clipboard and whitelisted semantic commands route through the game-side broker.");
+                SetStage(
+                    id,
+                    "OverlayPlugin discovery",
+                    "success",
+                    "The game-side OverlayPlugin event source forwards PostNamazu actions over bounded IPC.");
             }
         }
         catch (Exception ex)
@@ -454,6 +503,36 @@ internal sealed class LegacyPluginRuntime : IDisposable
             detail,
             DateTimeOffset.UtcNow);
 
+    private static void PreloadSystemSpeechRuntime()
+    {
+        if (AssemblyLoadContext.Default.Assemblies.Any(candidate => string.Equals(
+                candidate.GetName().Name,
+                "System.Speech",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        string[] candidates =
+        [
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "runtimes",
+                "win",
+                "lib",
+                "net10.0",
+                "System.Speech.dll"),
+            Path.Combine(AppContext.BaseDirectory, "System.Speech.dll"),
+        ];
+        var implementation = candidates.FirstOrDefault(File.Exists)
+                             ?? throw new FileNotFoundException(
+                                 "The Windows System.Speech runtime implementation is missing.");
+        var loaded = AssemblyLoadContext.Default.LoadFromAssemblyPath(
+            Path.GetFullPath(implementation));
+        Console.WriteLine(
+            $"Preloaded {loaded.GetName().FullName} from {loaded.Location}.");
+    }
+
     internal static void ConfigureWindowsFormsExceptionHandling()
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -527,11 +606,47 @@ internal sealed class LegacyPluginHandle : IDisposable
 
         configurationForm.BeginInvoke((Action)(() =>
         {
+            var previousTopMost = configurationForm.TopMost;
+            configurationForm.TopMost = true;
             configurationForm.Show();
             configurationForm.WindowState = FormWindowState.Normal;
             configurationForm.Activate();
             configurationForm.BringToFront();
+            var releaseTopMost = new System.Windows.Forms.Timer { Interval = 500 };
+            releaseTopMost.Tick += (_, _) =>
+            {
+                releaseTopMost.Stop();
+                if (!configurationForm.IsDisposed)
+                {
+                    configurationForm.TopMost = previousTopMost;
+                }
+                releaseTopMost.Dispose();
+            };
+            releaseTopMost.Start();
         }));
+        return true;
+    }
+
+    public bool Invoke(HostPluginInvocation invocation)
+    {
+        if (!string.Equals(Id, "postnamazu", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(invocation.Action, "overlay", StringComparison.OrdinalIgnoreCase) ||
+            !invocation.Arguments.TryGetValue("command", out var command))
+        {
+            return false;
+        }
+
+        var payload = invocation.Arguments.GetValueOrDefault("payload", string.Empty);
+        var doAction = instance.GetType().GetMethod(
+                           "DoAction",
+                           BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                           null,
+                           [typeof(string), typeof(string)],
+                           null)
+                       ?? throw new MissingMethodException(
+                           instance.GetType().FullName,
+                           "DoAction");
+        doAction.Invoke(instance, [command, payload]);
         return true;
     }
 
