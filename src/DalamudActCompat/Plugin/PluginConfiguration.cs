@@ -2,6 +2,7 @@ using Dalamud.Configuration;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Fflogs;
 
 namespace DalamudActCompat.Plugin;
 
@@ -25,6 +26,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public bool ShowLauncherButton { get; set; } = true;
 
+    public int LauncherButtonSize { get; set; } = 80;
+
     public float LauncherPositionX { get; set; } = 80;
 
     public float LauncherPositionY { get; set; } = 160;
@@ -35,6 +38,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
         new(StringComparer.OrdinalIgnoreCase);
 
     public MeterSettings Meter { get; set; } = new();
+
+    public FflogsSettings Fflogs { get; set; } = new();
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
 
@@ -59,12 +64,14 @@ public sealed class PluginConfiguration : IPluginConfiguration
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
         ShowLauncherButton = true;
+        LauncherButtonSize = 80;
         LauncherPositionX = 80;
         LauncherPositionY = 160;
         SelectedOverlayTemplate = "Kagerou";
         OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
             StringComparer.OrdinalIgnoreCase);
         Meter = new MeterSettings();
+        Fflogs = new FflogsSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

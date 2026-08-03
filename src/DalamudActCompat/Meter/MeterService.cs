@@ -48,6 +48,7 @@ public sealed class MeterService
         var duration = Math.Max(1.0, encounter.Duration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
         var rows = encounter.Combatants.Select(combatant => new CombatantRow(
+            combatant.Id,
             combatant.Name,
             combatant.Job,
             combatant.IsLocalPlayer,
@@ -78,6 +79,7 @@ public sealed class MeterService
 }
 
 public sealed record CombatantRow(
+    string Id,
     string Name,
     string Job,
     bool IsLocalPlayer,

@@ -2,7 +2,10 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.ActRuntime;
+using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Core.Interfaces;
+using DalamudActCompat.Core.Models;
+using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
@@ -22,16 +25,19 @@ public sealed class ControlCenterWindow : Window
         Diagnostics,
     }
 
-    private static readonly Vector4 Navy = new(0.045f, 0.065f, 0.105f, 1);
-    private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 1);
-    private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 1);
+    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
+    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
+    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
     private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.38f, 0.72f, 0.90f, 1);
+    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static readonly string VersionLabel = BuildVersionLabel();
 
     private readonly PluginConfiguration configuration;
     private readonly IParserEngine parserEngine;
     private readonly PluginLogger logger;
     private readonly UiText text;
+    private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
     private readonly Action saveConfiguration;
     private readonly Action<bool> setMeterVisible;
@@ -39,6 +45,8 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openHistory;
     private readonly Action openStatus;
     private readonly Action openAdvancedSettings;
+    private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
+    private readonly Action<string> openPluginConfiguration;
     private readonly Func<bool> isCactbotInstalled;
     private readonly Action selectCactbotPackage;
     private readonly Action openCactbotOverlay;
@@ -49,12 +57,16 @@ public sealed class ControlCenterWindow : Window
     private Page selectedPage;
     private ParserStatus parserStatus;
     private string? selectedCreatedOverlay;
+    private string? fflogsEncounterInputKey;
+    private int fflogsEncounterIdInput;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
         IParserEngine parserEngine,
         PluginLogger logger,
         UiText text,
+        FflogsEstimateService fflogsEstimateService,
+        Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
         Action saveConfiguration,
         Action<bool> setMeterVisible,
@@ -62,6 +74,8 @@ public sealed class ControlCenterWindow : Window
         Action openHistory,
         Action openStatus,
         Action openAdvancedSettings,
+        Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
+        Action<string> openPluginConfiguration,
         Func<bool> isCactbotInstalled,
         Action selectCactbotPackage,
         Action openCactbotOverlay,
@@ -75,6 +89,8 @@ public sealed class ControlCenterWindow : Window
         this.parserEngine = parserEngine;
         this.logger = logger;
         this.text = text;
+        this.fflogsEstimateService = fflogsEstimateService;
+        this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
         this.saveConfiguration = saveConfiguration;
         this.setMeterVisible = setMeterVisible;
@@ -82,6 +98,8 @@ public sealed class ControlCenterWindow : Window
         this.openHistory = openHistory;
         this.openStatus = openStatus;
         this.openAdvancedSettings = openAdvancedSettings;
+        this.discoverPlugins = discoverPlugins;
+        this.openPluginConfiguration = openPluginConfiguration;
         this.isCactbotInstalled = isCactbotInstalled;
         this.selectCactbotPackage = selectCactbotPackage;
         this.openCactbotOverlay = openCactbotOverlay;
@@ -109,7 +127,7 @@ public sealed class ControlCenterWindow : Window
         PushTheme();
         try
         {
-            var sidebarWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.23f, 170, 210);
+            var sidebarWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.20f, 158, 188);
             if (ImGui.BeginChild("control-center-sidebar", new Vector2(sidebarWidth, -1), true))
             {
                 DrawSidebar();
@@ -119,6 +137,11 @@ public sealed class ControlCenterWindow : Window
             ImGui.SameLine();
             if (ImGui.BeginChild("control-center-content", new Vector2(-1, -1), true))
             {
+                DrawPageTabs();
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
                 var changed = selectedPage switch
                 {
                     Page.Overview => DrawOverview(),
@@ -155,29 +178,65 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
 
         CenteredText("Dalamud ACT Compat");
-        var stateColor = parserStatus.State == ParserState.Running ? IceBlue : new Vector4(0.70f, 0.72f, 0.76f, 1);
-        var stateLabel = $"● {LocalizeState(parserStatus.State)}";
-        ImGui.SetCursorPosX(Math.Max(8, (ImGui.GetWindowWidth() - ImGui.CalcTextSize(stateLabel).X) * 0.5f));
-        ImGui.TextColored(stateColor, stateLabel);
-
+        ImGui.TextDisabled(text.Get("游戏内 ACT 工作台", "In-game ACT workspace"));
         ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        NavButton(Page.Overview, text.Get("概览", "Overview"));
-        NavButton(Page.Meter, "Meter");
-        NavButton(Page.Overlays, text.Get("悬浮窗", "Overlays"));
-        NavButton(Page.Extensions, text.Get("扩展", "Extensions"));
-        NavButton(Page.Diagnostics, text.Get("诊断与设置", "Diagnostics & Settings"));
 
-        var footerY = ImGui.GetWindowHeight() - ImGui.GetTextLineHeightWithSpacing() * 2.2f;
-        if (footerY > ImGui.GetCursorPosY())
+        if (ImGui.BeginChild("parser-state-card", new Vector2(-1, 76), true))
+        {
+            ImGui.TextDisabled(text.Get("解析状态", "Parser status"));
+            var stateColor = parserStatus.State == ParserState.Running
+                ? IceBlue
+                : new Vector4(0.70f, 0.72f, 0.76f, 1);
+            ImGui.TextColored(stateColor, $"● {LocalizeState(parserStatus.State)}");
+            if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
+            {
+                ImGui.TextDisabled(TrimText(parserStatus.Detail, 26));
+            }
+        }
+        ImGui.EndChild();
+
+        var footerY = ImGui.GetWindowHeight() - ImGui.GetTextLineHeightWithSpacing() - 12;
+        if (ImGui.GetCursorPosY() < footerY)
         {
             ImGui.SetCursorPosY(footerY);
         }
-        ImGui.Separator();
-        ImGui.TextDisabled(text.Get("简洁、原生、可实现", "Simple, native, practical"));
+        ImGui.SetCursorPosX(Math.Max(8, (ImGui.GetWindowWidth() - ImGui.CalcTextSize(VersionLabel).X) * 0.5f));
+        ImGui.TextDisabled(VersionLabel);
+
     }
 
+    private void DrawPageTabs()
+    {
+        var tabs = new (Page Page, string Label)[]
+        {
+            (Page.Overview, text.Get("概览", "Overview")),
+            (Page.Meter, text.Get("战斗统计", "Combat Meter")),
+            (Page.Overlays, text.Get("悬浮窗", "Overlays")),
+            (Page.Extensions, text.Get("扩展", "Extensions")),
+            (Page.Diagnostics, text.Get("诊断", "Settings")),
+        };
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var tabWidth = Math.Max(86, (ImGui.GetContentRegionAvail().X - (spacing * (tabs.Length - 1))) / tabs.Length);
+        for (var index = 0; index < tabs.Length; index++)
+        {
+            if (index > 0)
+            {
+                ImGui.SameLine();
+            }
+
+            var tab = tabs[index];
+            var selected = selectedPage == tab.Page;
+            ImGui.PushStyleColor(
+                ImGuiCol.Button,
+                selected ? new Vector4(0.11f, 0.25f, 0.34f, 1) : new Vector4(0.055f, 0.075f, 0.10f, 1));
+            ImGui.PushStyleColor(ImGuiCol.Text, selected ? IceBlue : new Vector4(0.78f, 0.82f, 0.87f, 1));
+            if (ImGui.Button($"{tab.Label}##top-nav-{tab.Page}", new Vector2(tabWidth, 38)))
+            {
+                selectedPage = tab.Page;
+            }
+            ImGui.PopStyleColor(2);
+        }
+    }
     private bool DrawOverview()
     {
         DrawPageHeader(
@@ -196,7 +255,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
-        if (ImGui.Button(text.Get("打开 Meter", "Open Meter"), new Vector2(150, 36)))
+        if (ImGui.Button(text.Get("打开战斗统计", "Open Combat Meter"), new Vector2(150, 36)))
         {
             openMeter();
         }
@@ -229,25 +288,25 @@ public sealed class ControlCenterWindow : Window
             configuration.ShowLauncherButton,
             value => configuration.ShowLauncherButton = value);
         ImGui.TextDisabled(text.Get(
-            "快捷按钮：左键设置、右键 Meter、按住中键拖动。",
-            "Quick button: left settings, right Meter, hold middle mouse to move."));
+            "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
+            "Quick button: left settings, right Combat Meter, hold middle mouse to move."));
         return changed;
     }
 
     private bool DrawMeter()
     {
         DrawPageHeader(
-            "Meter",
-            text.Get("仅调整原生 Meter 的显示，不影响 Cactbot 或 HTML Overlay。", "These options affect only the native Meter, not Cactbot or HTML overlays."));
+            text.Get("战斗统计", "Combat Meter"),
+            text.Get("仅调整内置战斗统计的显示，不影响 Cactbot 或 HTML Overlay。", "These options affect only the built-in Combat Meter, not Cactbot or HTML overlays."));
 
         var changed = false;
         var visible = configuration.Meter.IsVisible;
-        if (ImGui.Checkbox(text.Get("显示 Meter", "Show Meter"), ref visible))
+        if (ImGui.Checkbox(text.Get("显示战斗统计", "Show Combat Meter"), ref visible))
         {
             setMeterVisible(visible);
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("定位到 Meter", "Open Meter window")))
+        if (ImGui.Button(text.Get("定位到战斗统计", "Open Combat Meter window")))
         {
             openMeter();
         }
@@ -279,6 +338,9 @@ public sealed class ControlCenterWindow : Window
             }
             ImGui.EndCombo();
         }
+
+        changed |= DrawPlayerIdentityControls();
+        changed |= DrawFflogsSettings();
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -333,6 +395,9 @@ public sealed class ControlCenterWindow : Window
         {
             selectCactbotPackage();
         }
+        ImGui.TextDisabled(text.Get(
+            "提示中的玩家默认显示职业全称；可在 Cactbot 设置的“默认玩家代称”中修改。",
+            "Player callouts default to full job names; change this under Default Player Label in Cactbot settings."));
         changed |= DrawOverlayWindowSettings(SelfHostedActRuntime.CactbotOverlayName);
 
         ImGui.Spacing();
@@ -432,13 +497,84 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("兼容扩展", "Compatibility extensions"));
+        var installedPlugins = discoverPlugins();
+        changed |= DrawExtensionEntry(
+            installedPlugins,
+            "act.foxtts",
+            "ACT.FoxTTS",
+            text.Get("TTS 语音合成与播报", "TTS speech synthesis and announcements"));
+        changed |= DrawExtensionEntry(
+            installedPlugins,
+            "postnamazu",
+            text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
+            text.Get("游戏命令、标点与本地桥接", "Game commands, markers, and local bridge"));
+        changed |= DrawExtensionEntry(
+            installedPlugins,
+            "triggernometry",
+            "Triggernometry",
+            text.Get("触发器、时间轴、TTS 与绘图", "Triggers, timelines, TTS, and drawing"));
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
         ImGui.TextWrapped(text.Get(
-            "第三方 DLL 的安装、更新来源、权限白名单等低频选项仍放在完整设置页，避免主界面过于复杂。",
-            "Low-frequency options such as third-party DLL installation, update sources, and permission grants remain in the full settings page."));
+            "安装、更新来源和权限白名单等低频选项仍放在完整设置页。",
+            "Low-frequency installation, update-source, and permission options remain in the full settings page."));
         if (ImGui.Button(text.Get("打开完整设置", "Open full settings")))
         {
             openAdvancedSettings();
         }
+        return changed;
+    }
+
+    private bool DrawExtensionEntry(
+        IReadOnlyList<InstalledActPlugin> installedPlugins,
+        string pluginId,
+        string displayName,
+        string description)
+    {
+        var installed = installedPlugins.FirstOrDefault(plugin =>
+            string.Equals(plugin.Manifest.Id, pluginId, StringComparison.OrdinalIgnoreCase));
+        var changed = false;
+        ImGui.PushID($"extension-{pluginId}");
+        if (installed is null)
+        {
+            ImGui.TextUnformatted(displayName);
+            ImGui.SameLine();
+            ImGui.TextDisabled(text.Get("未安装", "Not installed"));
+        }
+        else
+        {
+            var enabled = installed.Enabled;
+            if (ImGui.Checkbox(displayName, ref enabled))
+            {
+                if (enabled)
+                {
+                    configuration.DisabledActPluginIds.Remove(pluginId);
+                }
+                else
+                {
+                    configuration.DisabledActPluginIds.Add(pluginId);
+                }
+                changed = true;
+            }
+
+            ImGui.SameLine();
+            ImGui.TextColored(
+                enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
+                enabled ? text.Get("已启用", "Enabled") : text.Get("已禁用", "Disabled"));
+            ImGui.SameLine();
+            if (enabled && ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+            {
+                openPluginConfiguration(pluginId);
+            }
+            ImGui.SameLine();
+            ImGui.TextDisabled($"v{installed.Manifest.Version}");
+        }
+
+        ImGui.TextDisabled(description);
+        ImGui.PopID();
         return changed;
     }
 
@@ -484,10 +620,17 @@ public sealed class ControlCenterWindow : Window
         }
         changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);
         changed |= Checkbox(text.Get("显示 ACT 快捷按钮", "Show ACT quick button"), configuration.ShowLauncherButton, value => configuration.ShowLauncherButton = value);
-        if (ImGui.Button(text.Get("重置快捷按钮位置", "Reset quick-button position")))
+        var launcherButtonSize = configuration.LauncherButtonSize;
+        if (ImGui.SliderInt(text.Get("快捷按钮尺寸（像素）", "Quick-button size (pixels)"), ref launcherButtonSize, 56, 128))
+        {
+            configuration.LauncherButtonSize = launcherButtonSize;
+            changed = true;
+        }
+        if (ImGui.Button(text.Get("重置快捷按钮大小与位置", "Reset quick-button size and position")))
         {
             configuration.LauncherPositionX = 80;
             configuration.LauncherPositionY = 160;
+            configuration.LauncherButtonSize = 80;
             configuration.ShowLauncherButton = true;
             changed = true;
         }
@@ -555,18 +698,6 @@ public sealed class ControlCenterWindow : Window
         });
     }
 
-    private void NavButton(Page page, string label)
-    {
-        var selected = selectedPage == page;
-        ImGui.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(0.26f, 0.23f, 0.14f, 1) : Vector4.Zero);
-        ImGui.PushStyleColor(ImGuiCol.Text, selected ? new Vector4(0.95f, 0.86f, 0.60f, 1) : new Vector4(0.84f, 0.87f, 0.91f, 1));
-        if (ImGui.Button($"{label}##nav-{page}", new Vector2(-1, 34)))
-        {
-            selectedPage = page;
-        }
-        ImGui.PopStyleColor(2);
-    }
-
     private void DrawPageHeader(string title, string description)
     {
         ImGui.TextColored(Gold, title);
@@ -580,6 +711,15 @@ public sealed class ControlCenterWindow : Window
     {
         ImGui.SetCursorPosX(Math.Max(8, (ImGui.GetWindowWidth() - ImGui.CalcTextSize(value).X) * 0.5f));
         ImGui.TextUnformatted(value);
+    }
+
+    private static string TrimText(string value, int maximumLength)
+        => value.Length <= maximumLength ? value : $"{value[..Math.Max(1, maximumLength - 1)]}…";
+
+    private static string BuildVersionLabel()
+    {
+        var version = typeof(ControlCenterWindow).Assembly.GetName().Version;
+        return version is null ? "v?" : $"v{version.Major}.{version.Minor}.{version.Build}";
     }
 
     private static bool Checkbox(string label, bool current, Action<bool> set)
@@ -624,6 +764,179 @@ public sealed class ControlCenterWindow : Window
         DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
         DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),
         _ => metric.ToString(),
+    };
+
+    private bool DrawPlayerIdentityControls()
+    {
+        var changed = false;
+        var identityMode = configuration.Meter.PlayerIdentityMode;
+        if (ImGui.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
+        {
+            foreach (var mode in Enum.GetValues<PlayerIdentityMode>())
+            {
+                if (ImGui.Selectable(PlayerIdentityModeLabel(mode), mode == identityMode))
+                {
+                    configuration.Meter.PlayerIdentityMode = mode;
+                    changed = true;
+                }
+            }
+            ImGui.EndCombo();
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "遮盖只影响界面显示，不修改解析数据和保存的战斗日志。",
+            "Masking affects display only; parsed data and saved encounter logs are unchanged."));
+        if (configuration.Meter.PlayerIdentityMode == PlayerIdentityMode.Anonymous)
+        {
+            var alias = configuration.Meter.LocalPlayerAlias;
+            if (ImGui.InputText(text.Get("自己的代称", "Your alias"), ref alias, 32))
+            {
+                configuration.Meter.LocalPlayerAlias = alias;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private bool DrawFflogsSettings()
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("FFLogs 实时估算", "FFLogs live estimate"));
+        ImGui.TextWrapped(text.Get(
+            "使用 FFLogs 公共排名样本估算自己的当前 EncDPS 百分位；显示为带“~”的颜色与数字，不是官方实时日志分数。",
+            "Estimate your current EncDPS percentile from public FFLogs ranking samples. The colored number is prefixed with '~' and is not an official live-log score."));
+
+        var changed = false;
+        var enabled = configuration.Fflogs.Enabled;
+        if (ImGui.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
+        {
+            configuration.Fflogs.Enabled = enabled;
+            fflogsEstimateService.NotifyCredentialsChanged();
+            changed = true;
+            if (enabled)
+            {
+                fflogsEstimateService.RequestRefresh(getCurrentEncounter());
+            }
+        }
+
+        var clientId = configuration.Fflogs.ClientId;
+        if (ImGui.InputText("Client ID", ref clientId, 128))
+        {
+            configuration.Fflogs.ClientId = clientId.Trim();
+            fflogsEstimateService.NotifyCredentialsChanged();
+            changed = true;
+        }
+
+        var clientSecret = configuration.Fflogs.ClientSecret;
+        if (ImGui.InputText("Client Secret", ref clientSecret, 256, ImGuiInputTextFlags.Password))
+        {
+            configuration.Fflogs.ClientSecret = clientSecret.Trim();
+            fflogsEstimateService.NotifyCredentialsChanged();
+            changed = true;
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "使用免费的 FFLogs API Client；密钥保存在本机插件配置中，可随时撤销；不会上传玩家 ID。",
+            "Uses a free FFLogs API client. The secret is stored locally and can be revoked; player IDs are never uploaded."));
+        if (ImGui.Button(text.Get("创建 / 管理 API Client", "Create / manage API client")))
+        {
+            OpenUrl("https://www.fflogs.com/api/clients/");
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("测试并刷新", "Test and refresh")))
+        {
+            fflogsEstimateService.RequestRefresh(getCurrentEncounter());
+        }
+
+        var status = fflogsEstimateService.Status;
+        ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
+        if (status.State is FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched)
+        {
+            ImGui.TextWrapped(status.Message);
+        }
+
+        var encounter = getCurrentEncounter();
+        if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))
+        {
+            configuration.Fflogs.EncounterMappings ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (!string.Equals(fflogsEncounterInputKey, encounter.EnemyName, StringComparison.Ordinal))
+            {
+                fflogsEncounterInputKey = encounter.EnemyName;
+                fflogsEncounterIdInput = configuration.Fflogs.EncounterMappings.TryGetValue(encounter.EnemyName, out var mappedId)
+                    ? mappedId
+                    : 0;
+            }
+
+            ImGui.Spacing();
+            ImGui.TextDisabled($"{text.Get("当前首领", "Current boss")}: {encounter.EnemyName}");
+            if (ImGui.InputInt(text.Get("FFLogs Encounter ID", "FFLogs encounter ID"), ref fflogsEncounterIdInput))
+            {
+                fflogsEncounterIdInput = Math.Max(0, fflogsEncounterIdInput);
+            }
+            if (ImGui.Button(text.Get("绑定当前战斗", "Bind current encounter")) && fflogsEncounterIdInput > 0)
+            {
+                configuration.Fflogs.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput;
+                fflogsEstimateService.RequestRefresh(encounter);
+                changed = true;
+            }
+            ImGui.SameLine();
+            if (ImGui.Button(text.Get("清除绑定", "Clear binding")) &&
+                configuration.Fflogs.EncounterMappings.Remove(encounter.EnemyName))
+            {
+                fflogsEncounterIdInput = 0;
+                changed = true;
+            }
+            ImGui.TextDisabled(text.Get(
+                "自动匹配失败时，可从 FFLogs 对应首领页面 URL 中填写 Encounter ID。",
+                "If automatic matching fails, enter the encounter ID from the matching FFLogs boss page URL."));
+        }
+
+        return changed;
+    }
+
+    private string FflogsStatusLabel(FflogsEstimateState state) => state switch
+    {
+        FflogsEstimateState.Disabled => text.Get("状态：未启用", "Status: disabled"),
+        FflogsEstimateState.NeedsCredentials => text.Get("状态：需要 Client ID 与 Secret", "Status: client ID and secret required"),
+        FflogsEstimateState.Idle => text.Get("状态：等待测试或战斗数据", "Status: waiting for a test or encounter data"),
+        FflogsEstimateState.Loading => text.Get("状态：正在连接 FFLogs…", "Status: connecting to FFLogs…"),
+        FflogsEstimateState.Ready => text.Get("状态：估算数据已就绪", "Status: estimate data ready"),
+        FflogsEstimateState.EncounterNotMatched => text.Get("状态：未匹配到当前战斗", "Status: current encounter not matched"),
+        FflogsEstimateState.Error => text.Get("状态：连接失败", "Status: connection failed"),
+        _ => state.ToString(),
+    };
+
+    private static Vector4 FflogsStatusColor(FflogsEstimateState state) => state switch
+    {
+        FflogsEstimateState.Ready => IceBlue,
+        FflogsEstimateState.Error => new Vector4(0.93f, 0.38f, 0.36f, 1),
+        FflogsEstimateState.EncounterNotMatched => Gold,
+        _ => new Vector4(0.70f, 0.72f, 0.76f, 1),
+    };
+
+    private void OpenUrl(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, $"Could not open URL: {url}");
+        }
+    }
+
+    private string PlayerIdentityModeLabel(PlayerIdentityMode mode) => mode switch
+    {
+        PlayerIdentityMode.Job => text.Get("用职业替换 ID", "Replace names with jobs"),
+        PlayerIdentityMode.Anonymous => text.Get("匿名编号", "Anonymous numbering"),
+        _ => text.Get("显示原始 ID", "Show original names"),
     };
 
     private static void PushTheme()
