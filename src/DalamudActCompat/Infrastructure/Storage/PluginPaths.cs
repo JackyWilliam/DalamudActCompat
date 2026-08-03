@@ -16,6 +16,7 @@ public sealed class PluginPaths
         LogDirectory = Path.Combine(ConfigDirectory, "logs");
         CombatLogDirectory = Path.Combine(LogDirectory, "ffxiv");
         EncounterLogDirectory = Path.Combine(LogDirectory, "encounters");
+        FflogsCacheFile = Path.Combine(ConfigDirectory, "fflogs-estimates.json");
         HostDirectory = Path.Combine(ConfigDirectory, "host");
         ActPluginDirectory = string.IsNullOrWhiteSpace(actPluginDirectory)
             ? Path.Combine(ConfigDirectory, "act-plugins")
@@ -37,6 +38,8 @@ public sealed class PluginPaths
     public string CombatLogDirectory { get; }
 
     public string EncounterLogDirectory { get; }
+
+    public string FflogsCacheFile { get; }
 
     public string HostDirectory { get; }
 

@@ -314,7 +314,7 @@ public sealed class SettingsWindow : Window
             changed = true;
         }
 
-        changed |= Checkbox(text.Get("显示悬浮窗", "Meter visible"), configuration.Meter.IsVisible, value => configuration.Meter.IsVisible = value);
+        changed |= Checkbox(text.Get("显示战斗统计", "Combat Meter visible"), configuration.Meter.IsVisible, value => configuration.Meter.IsVisible = value);
         changed |= Checkbox(text.Get("锁定窗口", "Window locked"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
         changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
         changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
@@ -339,7 +339,8 @@ public sealed class SettingsWindow : Window
             }
             ImGui.EndCombo();
         }
-        ImGui.TextUnformatted(text.Get("悬浮窗列", "Meter columns"));
+        changed |= DrawPlayerIdentityControls();
+        ImGui.TextUnformatted(text.Get("战斗统计显示列", "Combat Meter columns"));
         changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
         changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
         changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
@@ -575,5 +576,45 @@ public sealed class SettingsWindow : Window
         DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
         DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),
         _ => metric.ToString(),
+    };
+
+    private bool DrawPlayerIdentityControls()
+    {
+        var changed = false;
+        var identityMode = configuration.Meter.PlayerIdentityMode;
+        if (ImGui.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
+        {
+            foreach (var mode in Enum.GetValues<PlayerIdentityMode>())
+            {
+                if (ImGui.Selectable(PlayerIdentityModeLabel(mode), mode == identityMode))
+                {
+                    configuration.Meter.PlayerIdentityMode = mode;
+                    changed = true;
+                }
+            }
+            ImGui.EndCombo();
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "遮盖只影响界面显示，不修改解析数据和保存的战斗日志。",
+            "Masking affects display only; parsed data and saved encounter logs are unchanged."));
+        if (configuration.Meter.PlayerIdentityMode == PlayerIdentityMode.Anonymous)
+        {
+            var alias = configuration.Meter.LocalPlayerAlias;
+            if (ImGui.InputText(text.Get("自己的代称", "Your alias"), ref alias, 32))
+            {
+                configuration.Meter.LocalPlayerAlias = alias;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private string PlayerIdentityModeLabel(PlayerIdentityMode mode) => mode switch
+    {
+        PlayerIdentityMode.Job => text.Get("用职业替换 ID", "Replace names with jobs"),
+        PlayerIdentityMode.Anonymous => text.Get("匿名编号", "Anonymous numbering"),
+        _ => text.Get("显示原始 ID", "Show original names"),
     };
 }

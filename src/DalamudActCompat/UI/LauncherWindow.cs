@@ -8,8 +8,8 @@ namespace DalamudActCompat.UI;
 
 public sealed class LauncherWindow : Window
 {
-    private const float ButtonSize = 56;
-    private static readonly Vector2 ButtonDimensions = new(ButtonSize, ButtonSize);
+    private const int MinimumButtonSize = 56;
+    private const int MaximumButtonSize = 128;
     private static readonly Vector2 TextureUvMin = new(1f / 6f, 0);
     private static readonly Vector2 TextureUvMax = new(5f / 6f, 1);
 
@@ -55,14 +55,16 @@ public sealed class LauncherWindow : Window
 
     public override void PreDraw()
     {
+        var buttonSize = GetButtonSize();
+        var buttonDimensions = new Vector2(buttonSize, buttonSize);
         var position = ClampPosition(new Vector2(
             configuration.LauncherPositionX,
-            configuration.LauncherPositionY));
+            configuration.LauncherPositionY), buttonSize);
         configuration.LauncherPositionX = position.X;
         configuration.LauncherPositionY = position.Y;
         Position = position;
         PositionCondition = ImGuiCond.Always;
-        Size = ButtonDimensions;
+        Size = buttonDimensions;
         SizeCondition = ImGuiCond.Always;
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0);
@@ -75,8 +77,10 @@ public sealed class LauncherWindow : Window
 
     public override void Draw()
     {
+        var buttonSize = GetButtonSize();
+        var buttonDimensions = new Vector2(buttonSize, buttonSize);
         var wrap = buttonTexture.GetWrapOrEmpty();
-        ImGui.Image(wrap.Handle, ButtonDimensions, TextureUvMin, TextureUvMax);
+        ImGui.Image(wrap.Handle, buttonDimensions, TextureUvMin, TextureUvMax);
 
         var hovered = ImGui.IsItemHovered();
         var leftClicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
@@ -89,9 +93,9 @@ public sealed class LauncherWindow : Window
                 ImGui.GetItemRectMin(),
                 ImGui.GetItemRectMax(),
                 ImGui.GetColorU32(new Vector4(0.78f, 0.66f, 0.36f, 0.9f)),
-                14,
+                buttonSize * 0.25f,
                 ImDrawFlags.None,
-                1.5f);
+                2);
             DrawHelpTooltip();
         }
 
@@ -113,7 +117,7 @@ public sealed class LauncherWindow : Window
 
         if (isDragging && ImGui.IsMouseDown(ImGuiMouseButton.Middle))
         {
-            var position = ClampPosition(ImGui.GetMousePos() - dragOffset);
+            var position = ClampPosition(ImGui.GetMousePos() - dragOffset, buttonSize);
             configuration.LauncherPositionX = position.X;
             configuration.LauncherPositionY = position.Y;
             ImGui.SetWindowPos(position, ImGuiCond.Always);
@@ -132,21 +136,30 @@ public sealed class LauncherWindow : Window
         ImGui.TextUnformatted(text.Get("ACT 快捷按钮", "ACT quick button"));
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("左键：打开设置", "Left click: Open settings"));
-        ImGui.TextUnformatted(text.Get("右键：显示或隐藏 Meter", "Right click: Show or hide Meter"));
+        ImGui.TextUnformatted(text.Get("右键：显示或隐藏战斗统计", "Right click: Show or hide Combat Meter"));
         ImGui.TextUnformatted(text.Get("按住中键：拖动按钮", "Hold middle mouse: Move button"));
         ImGui.EndTooltip();
     }
 
-    private static Vector2 ClampPosition(Vector2 position)
+    private float GetButtonSize()
+    {
+        configuration.LauncherButtonSize = Math.Clamp(
+            configuration.LauncherButtonSize,
+            MinimumButtonSize,
+            MaximumButtonSize);
+        return configuration.LauncherButtonSize;
+    }
+
+    private static Vector2 ClampPosition(Vector2 position, float buttonSize)
     {
         var displaySize = ImGui.GetIO().DisplaySize;
-        if (displaySize.X <= ButtonSize || displaySize.Y <= ButtonSize)
+        if (displaySize.X <= buttonSize || displaySize.Y <= buttonSize)
         {
             return position;
         }
 
-        var maxX = Math.Max(0, displaySize.X - ButtonSize);
-        var maxY = Math.Max(0, displaySize.Y - ButtonSize);
+        var maxX = Math.Max(0, displaySize.X - buttonSize);
+        var maxY = Math.Max(0, displaySize.Y - buttonSize);
         return new Vector2(
             Math.Clamp(position.X, 0, maxX),
             Math.Clamp(position.Y, 0, maxY));

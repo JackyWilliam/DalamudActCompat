@@ -17,6 +17,13 @@ public enum DpsMetric
     ExtDps,
 }
 
+public enum PlayerIdentityMode
+{
+    Original,
+    Job,
+    Anonymous,
+}
+
 public sealed class MeterSettings
 {
     public bool IsVisible { get; set; } = true;
@@ -36,6 +43,10 @@ public sealed class MeterSettings
     public DpsMetric DpsMetric { get; set; } = DpsMetric.EncDps;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
+
+    public PlayerIdentityMode PlayerIdentityMode { get; set; } = PlayerIdentityMode.Original;
+
+    public string LocalPlayerAlias { get; set; } = "自己";
 
     public bool ShowHeader { get; set; } = true;
 

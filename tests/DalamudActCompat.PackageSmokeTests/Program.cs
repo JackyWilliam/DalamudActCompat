@@ -14,11 +14,14 @@ using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
+using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
+using DalamudActCompat.Plugin;
 using DalamudActCompat.Protocol;
+using DalamudActCompat.UI;
 using Machina.FFXIV;
 using Machina.FFXIV.Headers.Opcodes;
 using Newtonsoft.Json.Linq;
@@ -51,6 +54,7 @@ try
     ValidateParserDependencyVersions();
     ValidateChinese755Opcodes();
     ValidateMeterRows();
+    ValidateFflogsEstimateCurve();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -417,6 +421,55 @@ static void ValidateMeterRows()
     rows = meter.GetRows();
     Assert(rows[0].Name == "Healer@Beta", "HPS sorting did not promote the highest-healing player.");
     Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
+
+    var configuration = new PluginConfiguration
+    {
+        UiLanguage = "zh-CN",
+    };
+    var text = new UiText(configuration);
+    settings.PlayerIdentityMode = PlayerIdentityMode.Job;
+    Assert(
+        PlayerIdentityFormatter.Format(encounter.Combatants[0], encounter.Combatants, settings, text) == "骑士",
+        "Job identity mode did not replace the player ID with the localized job.");
+    settings.PlayerIdentityMode = PlayerIdentityMode.Anonymous;
+    settings.LocalPlayerAlias = "我";
+    Assert(
+        PlayerIdentityFormatter.Format(encounter.Combatants[0], encounter.Combatants, settings, text) == "我" &&
+        PlayerIdentityFormatter.Format(encounter.Combatants[1], encounter.Combatants, settings, text) == "玩家 1",
+        "Anonymous identity mode did not produce stable local and party aliases.");
+    Assert(
+        encounter.Combatants[0].Name == "Tank@Alpha",
+        "Display-only player ID masking mutated the encounter data.");
+}
+
+static void ValidateFflogsEstimateCurve()
+{
+    var estimatePercentile = typeof(FflogsEstimateService).GetMethod(
+        "EstimatePercentile",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("FFLogs percentile estimator was not found.");
+    var curve = new FflogsCurvePoint[]
+    {
+        new(0, 1_000),
+        new(50, 2_000),
+        new(75, 3_000),
+        new(100, 5_000),
+    };
+    var midpoint = (double)estimatePercentile.Invoke(null, [curve, 2_500d])!;
+    Assert(
+        Math.Abs(midpoint - 62.5) < 0.001,
+        "FFLogs estimate did not interpolate between public ranking samples.");
+    Assert(
+        (double)estimatePercentile.Invoke(null, [curve, 100d])! == 0 &&
+        (double)estimatePercentile.Invoke(null, [curve, 9_000d])! == 100,
+        "FFLogs estimate did not clamp values outside the sampled curve.");
+
+    var legendary = FflogsEstimateService.ColorForPercentile(100);
+    var pink = FflogsEstimateService.ColorForPercentile(99);
+    var orange = FflogsEstimateService.ColorForPercentile(95);
+    Assert(
+        legendary != pink && pink != orange,
+        "FFLogs estimate color thresholds collapsed distinct ranking tiers.");
 }
 
 static void ValidateChinese755Opcodes()
@@ -1110,8 +1163,9 @@ static void ValidateCactbotSpokenAlertDefaults()
         "A new Cactbot configuration did not select text and TTS output.");
     Assert(
         empty["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "ttsAndText" &&
+        empty["options"]["raidboss"]?["DefaultPlayerLabel"]?.Value<string>() == "jobFull" &&
         empty["options"]["raidboss"]?["SpokenAlertsEnabled"] is null,
-        "The initial Cactbot output mode was written to an option raidboss does not consume.");
+        "The initial Cactbot output or full-job player label was written incorrectly.");
 
     var legacyEnabled = new Dictionary<string, JToken>
     {
@@ -1154,13 +1208,15 @@ static void ValidateCactbotSpokenAlertDefaults()
             raidboss = new
             {
                 DefaultAlertOutput = "textOnly",
+                DefaultPlayerLabel = "name",
             },
         }),
     };
     Assert(
         method.Invoke(null, [existing]) as bool? == false &&
-        existing["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "textOnly",
-        "An explicit Cactbot default output mode was overwritten.");
+        existing["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "textOnly" &&
+        existing["options"]["raidboss"]?["DefaultPlayerLabel"]?.Value<string>() == "name",
+        "An explicit Cactbot output mode or player label was overwritten.");
 }
 
 static void ValidateOverlayInitialStateEvents()

@@ -10,6 +10,7 @@ using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
+using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
@@ -38,8 +39,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
+    private readonly FflogsEstimateService fflogsEstimateService;
     private readonly EncounterWindow encounterWindow;
-    private readonly LogHistoryWindow logHistoryWindow;
     private readonly ControlCenterWindow settingsWindow;
     private readonly SettingsWindow advancedSettingsWindow;
     private readonly StatusWindow statusWindow;
@@ -172,6 +173,11 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins));
         var meterService = new MeterService(stateStore, configuration.Meter);
+        fflogsEstimateService = new FflogsEstimateService(
+            () => configuration.Fflogs,
+            paths.FflogsCacheFile,
+            dataManager,
+            logger);
 
         _ = new OverlayManager(new OverlayEventBus());
 
@@ -183,10 +189,15 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(assetDirectory, "act-logo.jpg"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
-        meterWindow = new MeterWindow(meterService, stateStore, configuration, text, SaveConfiguration);
+        meterWindow = new MeterWindow(
+            meterService,
+            stateStore,
+            fflogsEstimateService,
+            configuration,
+            text,
+            SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
-        logHistoryWindow = new LogHistoryWindow(paths, text);
-        encounterWindow = new EncounterWindow(stateStore, text, () => logHistoryWindow.IsOpen = true);
+        encounterWindow = new EncounterWindow(stateStore, paths, configuration, text);
         factoryResetService = new FactoryResetService(
             parserEngine,
             paths,
@@ -230,13 +241,17 @@ public sealed class Plugin : IDalamudPlugin
             parserEngine,
             logger,
             text,
+            fflogsEstimateService,
+            () => stateStore.GetSnapshot().Current,
             logoTexture,
             SaveConfiguration,
             SetMeterVisible,
             () => SetMeterVisible(true),
-            () => encounterWindow.IsOpen = true,
+            encounterWindow.OpenRecent,
             () => statusWindow.IsOpen = true,
             () => advancedSettingsWindow.IsOpen = true,
+            () => packageInstaller.Discover(configuration.DisabledActPluginIds),
+            OpenActPluginConfiguration,
             () => cactbotInstaller.IsInstalled,
             SelectCactbotPackage,
             OpenCactbotOverlay,
@@ -256,7 +271,6 @@ public sealed class Plugin : IDalamudPlugin
         };
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
-        windowSystem.AddWindow(logHistoryWindow);
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(advancedSettingsWindow);
         windowSystem.AddWindow(statusWindow);
@@ -291,6 +305,7 @@ public sealed class Plugin : IDalamudPlugin
         settingsWindow.Detach();
         advancedSettingsWindow.Detach();
         statusWindow.Detach();
+        fflogsEstimateService.Dispose();
         windowSystem.RemoveAllWindows();
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
@@ -360,10 +375,10 @@ public sealed class Plugin : IDalamudPlugin
         switch (verb)
         {
             case "history":
-                encounterWindow.IsOpen = true;
+                encounterWindow.OpenRecent();
                 break;
             case "logs":
-                logHistoryWindow.IsOpen = true;
+                encounterWindow.OpenLogFiles();
                 break;
             case "status":
                 statusWindow.IsOpen = true;

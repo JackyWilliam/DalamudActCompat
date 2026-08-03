@@ -1,0 +1,786 @@
+using System.Collections.Concurrent;
+using System.Net.Http.Headers;
+using System.Numerics;
+using System.Text;
+using System.Text.Json;
+using Dalamud.Game;
+using Dalamud.Plugin.Services;
+using DalamudActCompat.Core.Models;
+using DalamudActCompat.Infrastructure.Logging;
+using Lumina.Excel.Sheets;
+
+namespace DalamudActCompat.Fflogs;
+
+public enum FflogsEstimateState
+{
+    Disabled,
+    NeedsCredentials,
+    Idle,
+    Loading,
+    Ready,
+    EncounterNotMatched,
+    Error,
+}
+
+public sealed record FflogsEstimateStatus(FflogsEstimateState State, string Message);
+
+public sealed record FflogsEstimate(double Percentile, Vector4 Color, string EncounterName)
+{
+    public int Score => Math.Clamp((int)Math.Round(Percentile), 0, 100);
+}
+
+public sealed class FflogsEstimateService : IDisposable
+{
+    private const string TokenEndpoint = "https://www.fflogs.com/oauth/token";
+    private const string GraphQlEndpoint = "https://www.fflogs.com/api/v2/client";
+    private const int PageSize = 100;
+    private const int MaximumPage = 4096;
+    private static readonly double[] PercentilePoints = [0, 25, 50, 75, 95, 99, 100];
+
+    private readonly Func<FflogsSettings> getSettings;
+    private readonly string cachePath;
+    private readonly IDataManager dataManager;
+    private readonly PluginLogger logger;
+    private readonly HttpClient httpClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(20),
+    };
+    private readonly SemaphoreSlim apiGate = new(1, 1);
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly ConcurrentDictionary<string, byte> loading = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FflogsCurveCacheEntry> curves = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int?> resolvedEncounterIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object cacheLock = new();
+    private readonly object statusLock = new();
+    private IReadOnlyList<FflogsEncounterCatalogEntry> encounters = [];
+    private DateTimeOffset catalogFetchedAt;
+    private FflogsEstimateStatus status = new(FflogsEstimateState.Disabled, "FFLogs estimation is disabled.");
+    private string accessToken = string.Empty;
+    private DateTimeOffset accessTokenExpiresAt;
+    private string tokenClientId = string.Empty;
+    private string tokenClientSecret = string.Empty;
+    private Dictionary<string, string>? localizedEnemyNames;
+
+    public FflogsEstimateService(
+        Func<FflogsSettings> getSettings,
+        string cachePath,
+        IDataManager dataManager,
+        PluginLogger logger)
+    {
+        this.getSettings = getSettings;
+        this.cachePath = cachePath;
+        this.dataManager = dataManager;
+        this.logger = logger;
+        LoadCache();
+        CanUseApi(getSettings());
+    }
+
+    public FflogsEstimateStatus Status
+    {
+        get
+        {
+            lock (statusLock)
+            {
+                return status;
+            }
+        }
+    }
+
+    public FflogsEstimate? GetEstimate(Encounter encounter)
+    {
+        var settings = getSettings();
+        if (!CanUseApi(settings))
+        {
+            return null;
+        }
+
+        var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
+        if (localPlayer is null || string.IsNullOrWhiteSpace(localPlayer.Job) || encounter.Duration.TotalSeconds < 15)
+        {
+            return null;
+        }
+
+        var encounterId = TryResolveEncounterId(encounter.EnemyName, settings);
+        var specName = ToFflogsSpecName(localPlayer.Job);
+        if (encounterId is int resolvedId)
+        {
+            var key = CurveKey(resolvedId, specName);
+            FflogsCurveCacheEntry? curve;
+            lock (cacheLock)
+            {
+                curves.TryGetValue(key, out curve);
+            }
+
+            if (curve is not null && !IsExpired(curve.FetchedAt, settings.CacheHours))
+            {
+                var encounterDps = localPlayer.EncDps > 0
+                    ? localPlayer.EncDps
+                    : localPlayer.TotalDamage / Math.Max(1, encounter.Duration.TotalSeconds);
+                var percentile = EstimatePercentile(curve.Points, encounterDps);
+                SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
+                return new FflogsEstimate(
+                    percentile,
+                    ColorForPercentile(percentile),
+                    curve.EncounterName);
+            }
+        }
+
+        QueueCurveLoad(encounter.EnemyName, specName);
+        return null;
+    }
+
+    public void RequestRefresh(Encounter? encounter)
+    {
+        var settings = getSettings();
+        if (!CanUseApi(settings))
+        {
+            return;
+        }
+
+        if (encounter is null)
+        {
+            QueueCatalogRefresh();
+            return;
+        }
+
+        var encounterId = TryResolveEncounterId(encounter.EnemyName, settings);
+        var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
+        if (localPlayer is null || string.IsNullOrWhiteSpace(localPlayer.Job))
+        {
+            QueueCatalogRefresh();
+            return;
+        }
+
+        if (encounterId is int resolvedId && localPlayer is not null)
+        {
+            lock (cacheLock)
+            {
+                curves.Remove(CurveKey(resolvedId, ToFflogsSpecName(localPlayer.Job)));
+            }
+        }
+
+        QueueCurveLoad(encounter.EnemyName, localPlayer is null ? string.Empty : ToFflogsSpecName(localPlayer.Job));
+    }
+
+    public void NotifyCredentialsChanged()
+    {
+        accessToken = string.Empty;
+        accessTokenExpiresAt = default;
+        tokenClientId = string.Empty;
+        tokenClientSecret = string.Empty;
+        var settings = getSettings();
+        if (settings.Enabled &&
+            !string.IsNullOrWhiteSpace(settings.ClientId) &&
+            !string.IsNullOrWhiteSpace(settings.ClientSecret))
+        {
+            SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
+        }
+        else
+        {
+            CanUseApi(settings);
+        }
+    }
+
+    private bool CanUseApi(FflogsSettings settings)
+    {
+        if (!settings.Enabled)
+        {
+            SetStatus(FflogsEstimateState.Disabled, "FFLogs estimation is disabled.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ClientId) || string.IsNullOrWhiteSpace(settings.ClientSecret))
+        {
+            SetStatus(FflogsEstimateState.NeedsCredentials, "FFLogs API credentials are required.");
+            return false;
+        }
+
+        if (Status.State is FflogsEstimateState.Disabled or FflogsEstimateState.NeedsCredentials)
+        {
+            SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
+        }
+        return true;
+    }
+
+    public static Vector4 ColorForPercentile(double percentile)
+    {
+        if (percentile >= 100) return Rgb(229, 204, 128);
+        if (percentile >= 99) return Rgb(226, 104, 168);
+        if (percentile >= 95) return Rgb(255, 128, 0);
+        if (percentile >= 75) return Rgb(163, 53, 238);
+        if (percentile >= 50) return Rgb(0, 112, 255);
+        if (percentile >= 25) return Rgb(30, 255, 0);
+        return Rgb(102, 102, 102);
+    }
+
+    internal static double EstimatePercentile(IReadOnlyList<FflogsCurvePoint> points, double amount)
+    {
+        if (points.Count == 0 || amount <= 0)
+        {
+            return 0;
+        }
+
+        var ordered = points.OrderBy(static point => point.Amount).ToArray();
+        if (amount <= ordered[0].Amount)
+        {
+            return ordered[0].Percentile;
+        }
+        if (amount >= ordered[^1].Amount)
+        {
+            return ordered[^1].Percentile;
+        }
+
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            var upper = ordered[index];
+            if (amount > upper.Amount)
+            {
+                continue;
+            }
+
+            var lower = ordered[index - 1];
+            if (Math.Abs(upper.Amount - lower.Amount) < 0.001)
+            {
+                return upper.Percentile;
+            }
+
+            var ratio = (amount - lower.Amount) / (upper.Amount - lower.Amount);
+            return Math.Clamp(
+                lower.Percentile + ((upper.Percentile - lower.Percentile) * ratio),
+                0,
+                100);
+        }
+
+        return 100;
+    }
+
+    private void QueueCurveLoad(string enemyName, string specName)
+    {
+        if (string.IsNullOrWhiteSpace(enemyName) || string.IsNullOrWhiteSpace(specName))
+        {
+            return;
+        }
+
+        var loadKey = $"{enemyName}|{specName}";
+        if (!loading.TryAdd(loadKey, 0))
+        {
+            return;
+        }
+
+        SetStatus(FflogsEstimateState.Loading, "Loading FFLogs public ranking samples…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await EnsureCatalogAsync(lifetime.Token).ConfigureAwait(false);
+                var settings = getSettings();
+                var encounterId = TryResolveEncounterId(enemyName, settings);
+                if (encounterId is null)
+                {
+                    SetStatus(
+                        FflogsEstimateState.EncounterNotMatched,
+                        $"Could not match encounter '{enemyName}'. Bind its FFLogs encounter ID in settings.");
+                    return;
+                }
+
+                var curve = await BuildCurveAsync(encounterId.Value, specName, lifetime.Token).ConfigureAwait(false);
+                lock (cacheLock)
+                {
+                    curves[CurveKey(encounterId.Value, specName)] = curve;
+                }
+                SaveCache();
+                SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "FFLogs public-ranking estimate refresh failed.");
+                SetStatus(FflogsEstimateState.Error, ex.Message);
+            }
+            finally
+            {
+                loading.TryRemove(loadKey, out _);
+            }
+        }, lifetime.Token);
+    }
+
+    private void QueueCatalogRefresh()
+    {
+        if (!loading.TryAdd("catalog", 0))
+        {
+            return;
+        }
+
+        SetStatus(FflogsEstimateState.Loading, "Refreshing FFLogs encounter catalog…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                catalogFetchedAt = default;
+                await EnsureCatalogAsync(lifetime.Token).ConfigureAwait(false);
+                SetStatus(FflogsEstimateState.Ready, "FFLogs encounter catalog refreshed.");
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "FFLogs encounter catalog refresh failed.");
+                SetStatus(FflogsEstimateState.Error, ex.Message);
+            }
+            finally
+            {
+                loading.TryRemove("catalog", out _);
+            }
+        }, lifetime.Token);
+    }
+
+    private async Task EnsureCatalogAsync(CancellationToken cancellationToken)
+    {
+        if (encounters.Count > 0 && !IsExpired(catalogFetchedAt, 24))
+        {
+            return;
+        }
+
+        const string query = """
+            query EncounterCatalog {
+              worldData {
+                zones {
+                  id
+                  name
+                  frozen
+                  encounters { id name }
+                }
+              }
+            }
+            """;
+        using var document = await QueryAsync(query, new { }, cancellationToken).ConfigureAwait(false);
+        var result = new List<FflogsEncounterCatalogEntry>();
+        foreach (var zone in document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("zones").EnumerateArray())
+        {
+            var frozen = zone.TryGetProperty("frozen", out var frozenValue) && frozenValue.ValueKind == JsonValueKind.True;
+            var zoneName = zone.GetProperty("name").GetString() ?? string.Empty;
+            foreach (var encounter in zone.GetProperty("encounters").EnumerateArray())
+            {
+                result.Add(new FflogsEncounterCatalogEntry(
+                    encounter.GetProperty("id").GetInt32(),
+                    encounter.GetProperty("name").GetString() ?? string.Empty,
+                    zoneName,
+                    frozen));
+            }
+        }
+
+        encounters = result;
+        catalogFetchedAt = DateTimeOffset.UtcNow;
+        lock (cacheLock)
+        {
+            resolvedEncounterIds.Clear();
+        }
+        SaveCache();
+    }
+
+    private async Task<FflogsCurveCacheEntry> BuildCurveAsync(
+        int encounterId,
+        string specName,
+        CancellationToken cancellationToken)
+    {
+        var pages = new Dictionary<int, FflogsRankingPage>();
+        async Task<FflogsRankingPage> GetPage(int page)
+        {
+            if (pages.TryGetValue(page, out var cached))
+            {
+                return cached;
+            }
+
+            var fetched = await FetchRankingPageAsync(encounterId, specName, page, cancellationToken).ConfigureAwait(false);
+            pages[page] = fetched;
+            return fetched;
+        }
+
+        var first = await GetPage(1).ConfigureAwait(false);
+        if (first.Amounts.Count == 0)
+        {
+            throw new InvalidOperationException("FFLogs returned no ranking samples for this encounter and job.");
+        }
+
+        var lastPage = 1;
+        if (first.HasMorePages)
+        {
+            var low = 1;
+            var high = 2;
+            while (high <= MaximumPage && (await GetPage(high).ConfigureAwait(false)).HasMorePages)
+            {
+                low = high;
+                high *= 2;
+            }
+
+            if (high > MaximumPage)
+            {
+                throw new InvalidOperationException("FFLogs ranking list exceeded the safe pagination limit.");
+            }
+
+            while (low + 1 < high)
+            {
+                var middle = low + ((high - low) / 2);
+                if ((await GetPage(middle).ConfigureAwait(false)).HasMorePages)
+                {
+                    low = middle;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            lastPage = high;
+        }
+
+        var last = await GetPage(lastPage).ConfigureAwait(false);
+        while (lastPage > 1 && last.Amounts.Count == 0)
+        {
+            lastPage--;
+            last = await GetPage(lastPage).ConfigureAwait(false);
+        }
+        var total = ((lastPage - 1) * PageSize) + last.Amounts.Count;
+        if (total <= 0)
+        {
+            throw new InvalidOperationException("FFLogs returned an empty ranking sample set.");
+        }
+
+        var points = new List<FflogsCurvePoint>();
+        foreach (var percentile in PercentilePoints)
+        {
+            var rank = percentile >= 100
+                ? 1
+                : percentile <= 0
+                    ? total
+                    : Math.Max(1, (int)Math.Ceiling(total * ((100 - percentile) / 100)));
+            var pageNumber = ((rank - 1) / PageSize) + 1;
+            var offset = (rank - 1) % PageSize;
+            var page = await GetPage(pageNumber).ConfigureAwait(false);
+            if (page.Amounts.Count == 0)
+            {
+                continue;
+            }
+            points.Add(new FflogsCurvePoint(percentile, page.Amounts[Math.Min(offset, page.Amounts.Count - 1)]));
+        }
+
+        return new FflogsCurveCacheEntry(
+            encounterId,
+            first.EncounterName,
+            specName,
+            DateTimeOffset.UtcNow,
+            points);
+    }
+
+    private async Task<FflogsRankingPage> FetchRankingPageAsync(
+        int encounterId,
+        string specName,
+        int page,
+        CancellationToken cancellationToken)
+    {
+        const string query = """
+            query RankingPage($encounterId: Int!, $specName: String!, $page: Int!) {
+              worldData {
+                encounter(id: $encounterId) {
+                  name
+                  characterRankings(metric: dps, specName: $specName, page: $page)
+                }
+              }
+            }
+            """;
+        using var document = await QueryAsync(query, new { encounterId, specName, page }, cancellationToken).ConfigureAwait(false);
+        var encounter = document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("encounter");
+        if (encounter.ValueKind == JsonValueKind.Null)
+        {
+            throw new InvalidOperationException($"FFLogs encounter {encounterId} was not found.");
+        }
+
+        var rankings = encounter.GetProperty("characterRankings");
+        var amounts = rankings.GetProperty("rankings")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("amount").GetDouble())
+            .ToArray();
+        return new FflogsRankingPage(
+            encounter.GetProperty("name").GetString() ?? encounterId.ToString(),
+            rankings.TryGetProperty("hasMorePages", out var hasMore) && hasMore.ValueKind == JsonValueKind.True,
+            amounts);
+    }
+
+    private async Task<JsonDocument> QueryAsync(string query, object variables, CancellationToken cancellationToken)
+    {
+        await apiGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var token = await GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            using var request = new HttpRequestMessage(HttpMethod.Post, GraphQlEndpoint);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(new { query, variables }),
+                Encoding.UTF8,
+                "application/json");
+            using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"FFLogs API returned HTTP {(int)response.StatusCode}.");
+            }
+
+            var document = JsonDocument.Parse(body);
+            if (document.RootElement.TryGetProperty("errors", out var errors))
+            {
+                var message = "Unknown GraphQL error.";
+                foreach (var error in errors.EnumerateArray())
+                {
+                    if (error.ValueKind == JsonValueKind.Object &&
+                        error.TryGetProperty("message", out var errorMessage) &&
+                        !string.IsNullOrWhiteSpace(errorMessage.GetString()))
+                    {
+                        message = errorMessage.GetString()!;
+                        break;
+                    }
+                }
+                document.Dispose();
+                throw new InvalidOperationException($"FFLogs API error: {message}");
+            }
+
+            await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+            return document;
+        }
+        finally
+        {
+            apiGate.Release();
+        }
+    }
+
+    private async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
+    {
+        var settings = getSettings();
+        if (!string.IsNullOrWhiteSpace(accessToken) &&
+            accessTokenExpiresAt > DateTimeOffset.UtcNow.AddMinutes(1) &&
+            string.Equals(tokenClientId, settings.ClientId, StringComparison.Ordinal) &&
+            string.Equals(tokenClientSecret, settings.ClientSecret, StringComparison.Ordinal))
+        {
+            return accessToken;
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint);
+        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.ClientId}:{settings.ClientSecret}"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "client_credentials",
+        });
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException("FFLogs API authentication failed. Check the client ID and secret.");
+        }
+
+        using var tokenDocument = JsonDocument.Parse(body);
+        accessToken = tokenDocument.RootElement.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("FFLogs did not return an access token.");
+        var expiresIn = tokenDocument.RootElement.TryGetProperty("expires_in", out var expires)
+            ? expires.GetInt32()
+            : 3600;
+        accessTokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expiresIn);
+        tokenClientId = settings.ClientId;
+        tokenClientSecret = settings.ClientSecret;
+        return accessToken;
+    }
+
+    private int? TryResolveEncounterId(string enemyName, FflogsSettings settings)
+    {
+        settings.EncounterMappings ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (settings.EncounterMappings.TryGetValue(enemyName, out var configured) && configured > 0)
+        {
+            return configured;
+        }
+
+        lock (cacheLock)
+        {
+            if (resolvedEncounterIds.TryGetValue(enemyName, out var cached))
+            {
+                return cached;
+            }
+        }
+
+        var names = new[] { enemyName, TranslateEnemyName(enemyName) }
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(NormalizeName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var resolved = encounters
+            .Where(entry => names.Contains(NormalizeName(entry.Name), StringComparer.OrdinalIgnoreCase))
+            .OrderBy(static entry => entry.Frozen)
+            .Select(static entry => (int?)entry.Id)
+            .FirstOrDefault();
+        lock (cacheLock)
+        {
+            resolvedEncounterIds[enemyName] = resolved;
+        }
+        return resolved;
+    }
+
+    private string TranslateEnemyName(string enemyName)
+    {
+        if (enemyName.All(character => character <= sbyte.MaxValue))
+        {
+            return enemyName;
+        }
+
+        try
+        {
+            localizedEnemyNames ??= BuildLocalizedEnemyNameMap();
+            return localizedEnemyNames.TryGetValue(enemyName, out var english) ? english : enemyName;
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"FFLogs local encounter-name translation was unavailable: {ex.Message}");
+            localizedEnemyNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            return enemyName;
+        }
+    }
+
+    private Dictionary<string, string> BuildLocalizedEnemyNameMap()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var localizedSheet = dataManager.GetExcelSheet<BNpcName>();
+        var englishSheet = dataManager.GetExcelSheet<BNpcName>(ClientLanguage.English);
+        foreach (var localized in localizedSheet)
+        {
+            var localizedName = localized.Singular.ToString();
+            if (string.IsNullOrWhiteSpace(localizedName))
+            {
+                continue;
+            }
+
+            var english = englishSheet.GetRow(localized.RowId).Singular.ToString();
+            if (!string.IsNullOrWhiteSpace(english))
+            {
+                map.TryAdd(localizedName, english);
+            }
+        }
+        return map;
+    }
+
+    private void LoadCache()
+    {
+        try
+        {
+            if (!File.Exists(cachePath))
+            {
+                return;
+            }
+
+            var cache = JsonSerializer.Deserialize<FflogsCacheDocument>(File.ReadAllText(cachePath));
+            if (cache is null)
+            {
+                return;
+            }
+
+            encounters = cache.Encounters ?? [];
+            catalogFetchedAt = cache.CatalogFetchedAt;
+            foreach (var curve in cache.Curves ?? [])
+            {
+                curves[CurveKey(curve.EncounterId, curve.SpecName)] = curve;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"FFLogs estimate cache could not be loaded: {ex.Message}");
+        }
+    }
+
+    private void SaveCache()
+    {
+        try
+        {
+            FflogsCurveCacheEntry[] curveSnapshot;
+            lock (cacheLock)
+            {
+                curveSnapshot = curves.Values.ToArray();
+            }
+            var document = new FflogsCacheDocument(catalogFetchedAt, encounters.ToArray(), curveSnapshot);
+            Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+            File.WriteAllText(cachePath, JsonSerializer.Serialize(document));
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"FFLogs estimate cache could not be saved: {ex.Message}");
+        }
+    }
+
+    private void SetStatus(FflogsEstimateState stateValue, string message)
+    {
+        lock (statusLock)
+        {
+            status = new FflogsEstimateStatus(stateValue, message);
+        }
+    }
+
+    private static bool IsExpired(DateTimeOffset fetchedAt, int hours)
+        => fetchedAt == default || fetchedAt.AddHours(Math.Clamp(hours, 1, 168)) <= DateTimeOffset.UtcNow;
+
+    private static string CurveKey(int encounterId, string specName) => $"{encounterId}:{specName}";
+
+    private static string NormalizeName(string value)
+        => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    private static string ToFflogsSpecName(string job) => job.Trim().ToUpperInvariant() switch
+    {
+        "PLD" => "Paladin",
+        "WAR" => "Warrior",
+        "DRK" => "DarkKnight",
+        "GNB" => "Gunbreaker",
+        "WHM" => "WhiteMage",
+        "SCH" => "Scholar",
+        "AST" => "Astrologian",
+        "SGE" => "Sage",
+        "MNK" => "Monk",
+        "DRG" => "Dragoon",
+        "NIN" => "Ninja",
+        "SAM" => "Samurai",
+        "RPR" => "Reaper",
+        "VPR" => "Viper",
+        "BRD" => "Bard",
+        "MCH" => "Machinist",
+        "DNC" => "Dancer",
+        "BLM" => "BlackMage",
+        "SMN" => "Summoner",
+        "RDM" => "RedMage",
+        "PCT" => "Pictomancer",
+        "BLU" => "BlueMage",
+        var value => value,
+    };
+
+    private static Vector4 Rgb(byte red, byte green, byte blue)
+        => new(red / 255f, green / 255f, blue / 255f, 1);
+
+    public void Dispose()
+    {
+        lifetime.Cancel();
+        httpClient.Dispose();
+        lifetime.Dispose();
+    }
+}
+
+public sealed record FflogsCurvePoint(double Percentile, double Amount);
+
+public sealed record FflogsCurveCacheEntry(
+    int EncounterId,
+    string EncounterName,
+    string SpecName,
+    DateTimeOffset FetchedAt,
+    IReadOnlyList<FflogsCurvePoint> Points);
+
+public sealed record FflogsEncounterCatalogEntry(int Id, string Name, string ZoneName, bool Frozen);
+
+public sealed record FflogsCacheDocument(
+    DateTimeOffset CatalogFetchedAt,
+    IReadOnlyList<FflogsEncounterCatalogEntry> Encounters,
+    IReadOnlyList<FflogsCurveCacheEntry> Curves);
+
+internal sealed record FflogsRankingPage(string EncounterName, bool HasMorePages, IReadOnlyList<double> Amounts);
