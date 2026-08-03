@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.2.34.0",
+    [string] $ExpectedAssemblyVersion = "0.3.0.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -62,6 +62,19 @@ if ($manifest.AssemblyVersion -ne $ExpectedAssemblyVersion) {
 if ([int]$manifest.DalamudApiLevel -ne $ExpectedDalamudApiLevel) {
     throw "Plugin ZIP DalamudApiLevel mismatch. Expected $ExpectedDalamudApiLevel, got $($manifest.DalamudApiLevel). Rebuild the plugin before publishing."
 }
+
+$requiredUiAssets = @(
+    "Assets/act-logo.jpg",
+    "Assets/act-button.png"
+)
+$missingUiAssets = @($requiredUiAssets | Where-Object {
+    -not (Test-Path (Join-Path $validationDir $_))
+})
+if ($missingUiAssets.Count -gt 0) {
+    throw "Plugin ZIP is missing required UI assets: $($missingUiAssets -join ', ')"
+}
+
+Write-Host "Validated UI assets: $($requiredUiAssets.Count)"
 
 if ($RequireCompatibilityHost) {
     $hostExePath = Join-Path $validationDir "host/DalamudActCompat.Host.exe"

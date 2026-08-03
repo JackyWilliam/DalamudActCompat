@@ -40,8 +40,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MeterWindow meterWindow;
     private readonly EncounterWindow encounterWindow;
     private readonly LogHistoryWindow logHistoryWindow;
-    private readonly SettingsWindow settingsWindow;
+    private readonly ControlCenterWindow settingsWindow;
+    private readonly SettingsWindow advancedSettingsWindow;
     private readonly StatusWindow statusWindow;
+    private readonly LauncherWindow launcherWindow;
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly ActPluginPackageInstaller packageInstaller;
@@ -75,7 +77,8 @@ public sealed class Plugin : IDalamudPlugin
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
         INotificationManager notificationManager,
-        IPartyList partyList)
+        IPartyList partyList,
+        ITextureProvider textureProvider)
     {
         services = new PluginServices(
             pluginInterface,
@@ -173,7 +176,14 @@ public sealed class Plugin : IDalamudPlugin
         _ = new OverlayManager(new OverlayEventBus());
 
         var text = new UiText(configuration);
-        meterWindow = new MeterWindow(meterService, stateStore, configuration, text);
+        var assetDirectory = Path.Combine(
+            pluginInterface.AssemblyLocation.Directory!.FullName,
+            "Assets");
+        var logoTexture = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "act-logo.jpg"));
+        var launcherTexture = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "act-button.png"));
+        meterWindow = new MeterWindow(meterService, stateStore, configuration, text, SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
         logHistoryWindow = new LogHistoryWindow(paths, text);
         encounterWindow = new EncounterWindow(stateStore, text, () => logHistoryWindow.IsOpen = true);
@@ -189,7 +199,7 @@ public sealed class Plugin : IDalamudPlugin
             InstallBundledPluginsAsync,
             logger,
             text);
-        settingsWindow = new SettingsWindow(
+        advancedSettingsWindow = new SettingsWindow(
             configuration,
             parserEngine,
             paths,
@@ -215,12 +225,43 @@ public sealed class Plugin : IDalamudPlugin
             () => hostSupervisor.Snapshot,
             RestartHostFromUi,
             StopHostFromUi);
+        settingsWindow = new ControlCenterWindow(
+            configuration,
+            parserEngine,
+            logger,
+            text,
+            logoTexture,
+            SaveConfiguration,
+            SetMeterVisible,
+            () => SetMeterVisible(true),
+            () => encounterWindow.IsOpen = true,
+            () => statusWindow.IsOpen = true,
+            () => advancedSettingsWindow.IsOpen = true,
+            () => cactbotInstaller.IsInstalled,
+            SelectCactbotPackage,
+            OpenCactbotOverlay,
+            OpenCactbotSettings,
+            () => actRuntime.OverlayTemplates,
+            OpenHtmlOverlay,
+            name => _ = actRuntime.ApplyOverlayWindowSettings(name));
+        launcherWindow = new LauncherWindow(
+            configuration,
+            launcherTexture,
+            text,
+            () => settingsWindow.IsOpen = true,
+            ToggleMeter,
+            SaveConfiguration)
+        {
+            IsOpen = true,
+        };
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(logHistoryWindow);
         windowSystem.AddWindow(settingsWindow);
+        windowSystem.AddWindow(advancedSettingsWindow);
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
+        windowSystem.AddWindow(launcherWindow);
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -248,6 +289,7 @@ public sealed class Plugin : IDalamudPlugin
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         services.PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
         settingsWindow.Detach();
+        advancedSettingsWindow.Detach();
         statusWindow.Detach();
         windowSystem.RemoveAllWindows();
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
@@ -294,7 +336,20 @@ public sealed class Plugin : IDalamudPlugin
     private void OpenConfigUi() => settingsWindow.IsOpen = true;
 
     private void OpenMainUi()
-        => meterWindow.IsOpen = true;
+        => settingsWindow.IsOpen = true;
+
+    private void ToggleMeter()
+    {
+        var shouldShow = !configuration.Meter.IsVisible || !meterWindow.IsOpen;
+        SetMeterVisible(shouldShow);
+    }
+
+    private void SetMeterVisible(bool visible)
+    {
+        configuration.Meter.IsVisible = visible;
+        meterWindow.IsOpen = visible;
+        SaveConfiguration();
+    }
 
     private void OnCommand(string command, string arguments)
     {

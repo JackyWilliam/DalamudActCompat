@@ -3,6 +3,7 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using Dalamud.Bindings.ImGui;
+using System.Numerics;
 
 namespace DalamudActCompat.Meter;
 
@@ -12,14 +13,21 @@ public sealed class MeterWindow : Window
     private readonly EncounterStateStore stateStore;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
+    private readonly Action saveConfiguration;
 
-    public MeterWindow(MeterService meterService, EncounterStateStore stateStore, PluginConfiguration configuration, UiText text)
+    public MeterWindow(
+        MeterService meterService,
+        EncounterStateStore stateStore,
+        PluginConfiguration configuration,
+        UiText text,
+        Action saveConfiguration)
         : base("ACT 兼容悬浮窗###DalamudActCompatMeter")
     {
         this.meterService = meterService;
         this.stateStore = stateStore;
         this.configuration = configuration;
         this.text = text;
+        this.saveConfiguration = saveConfiguration;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new System.Numerics.Vector2(420, 180),
@@ -55,6 +63,22 @@ public sealed class MeterWindow : Window
         }
 
         ImGui.SetNextWindowBgAlpha(Math.Clamp(settings.BackgroundOpacity, 0.05f, 1.0f));
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.035f, 0.055f, 0.09f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.62f, 0.52f, 0.28f, 0.85f));
+        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.50f, 0.42f, 0.24f, 0.75f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.075f, 0.11f, 0.17f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.17f, 0.25f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.17f, 0.25f, 0.35f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.15f, 0.21f, 0.29f, 1));
+        ImGui.PushStyleColor(ImGuiCol.TableHeaderBg, new Vector4(0.10f, 0.14f, 0.21f, 1));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 7);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 4);
+    }
+
+    public override void PostDraw()
+    {
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(8);
     }
 
     public override void Draw()
@@ -65,16 +89,29 @@ public sealed class MeterWindow : Window
 
         if (snapshot.Current is null)
         {
-            ImGui.TextUnformatted(text.Get("暂无战斗数据。", "No encounter data."));
+            ImGui.TextColored(
+                new Vector4(0.38f, 0.72f, 0.90f, 1),
+                text.Get("● 等待战斗数据", "● Waiting for encounter data"));
+            ImGui.TextDisabled(text.Get("解析开始后数据会自动显示在这里。", "Data will appear here when parsing begins."));
             return;
         }
 
         var encounter = snapshot.Current;
         if (settings.ShowHeader)
         {
-            ImGui.TextUnformatted($"{encounter.EnemyName} | {encounter.ZoneName} | {FormatDuration(encounter.Duration)} | {(encounter.IsActive ? text.Get("战斗中", "Running") : text.Get("已结束", "Ended"))}");
+            ImGui.TextColored(
+                encounter.IsActive
+                    ? new Vector4(0.38f, 0.78f, 0.66f, 1)
+                    : new Vector4(0.66f, 0.69f, 0.74f, 1),
+                encounter.IsActive ? "●" : "○");
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.90f, 0.81f, 0.55f, 1), encounter.EnemyName);
+            ImGui.SameLine();
+            ImGui.TextDisabled($"{encounter.ZoneName}  ·  {FormatDuration(encounter.Duration)}  ·  {(encounter.IsActive ? text.Get("战斗中", "Running") : text.Get("已结束", "Ended"))}");
+            ImGui.Separator();
         }
 
+        ImGui.SetNextItemWidth(150);
         if (ImGui.BeginCombo(text.Get("排序", "Sort"), settings.SortMode.ToString()))
         {
             foreach (var mode in Enum.GetValues<MeterSortMode>())
@@ -82,6 +119,7 @@ public sealed class MeterWindow : Window
                 if (ImGui.Selectable(mode.ToString(), settings.SortMode == mode))
                 {
                     settings.SortMode = mode;
+                    saveConfiguration();
                 }
             }
 
@@ -102,7 +140,13 @@ public sealed class MeterWindow : Window
                           (settings.ShowHps && settings.SortMode != MeterSortMode.Hps ? 1 : 0) +
                           (settings.ShowHealing ? 1 : 0) +
                           (settings.ShowDeaths ? 1 : 0);
-        if (ImGui.BeginTable("meter-table", columnCount, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
+        var tableFlags = ImGuiTableFlags.RowBg |
+                         ImGuiTableFlags.BordersInnerH |
+                         ImGuiTableFlags.BordersInnerV |
+                         ImGuiTableFlags.PadOuterX |
+                         ImGuiTableFlags.SizingStretchProp |
+                         ImGuiTableFlags.ScrollY;
+        if (ImGui.BeginTable("meter-table", columnCount, tableFlags, new Vector2(0, -1)))
         {
             if (settings.ShowJob) ImGui.TableSetupColumn(text.Get("职业", "Job"), ImGuiTableColumnFlags.WidthFixed, 42);
             ImGui.TableSetupColumn(text.Get("名称", "Name"));
@@ -148,6 +192,12 @@ public sealed class MeterWindow : Window
 
             ImGui.EndTable();
         }
+    }
+
+    public override void OnClose()
+    {
+        configuration.Meter.IsVisible = false;
+        saveConfiguration();
     }
 
     private static string FormatDuration(TimeSpan duration)

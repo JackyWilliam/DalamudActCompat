@@ -23,6 +23,12 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string UiLanguage { get; set; } = "zh-CN";
 
+    public bool ShowLauncherButton { get; set; } = true;
+
+    public float LauncherPositionX { get; set; } = 80;
+
+    public float LauncherPositionY { get; set; } = 160;
+
     public string SelectedOverlayTemplate { get; set; } = "Kagerou";
 
     public Dictionary<string, HtmlOverlayWindowSettings> OverlayWindows { get; set; } =
@@ -52,6 +58,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
+        ShowLauncherButton = true;
+        LauncherPositionX = 80;
+        LauncherPositionY = 160;
         SelectedOverlayTemplate = "Kagerou";
         OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
             StringComparer.OrdinalIgnoreCase);
