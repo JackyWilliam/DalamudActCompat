@@ -158,6 +158,13 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             new HostCombatEvent(nextCombatState, DateTimeOffset.UtcNow));
     }
 
+    public bool PublishFfxivEntities(HostFfxivEntitySnapshot snapshot)
+        => ipc.TryEnqueue(
+            HostMessageTypes.FfxivEntities,
+            HostMessagePriority.State,
+            snapshot,
+            deadline: DateTimeOffset.UtcNow.AddSeconds(2));
+
     public bool OpenPluginUi(string pluginId)
         => ipc.TryEnqueue(
             HostMessageTypes.PluginOpen,

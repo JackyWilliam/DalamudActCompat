@@ -53,6 +53,7 @@ try
     ValidateOverlayInitialStateEvents();
     ValidateHtmlOverlayDefaults();
     ValidateParserDependencyVersions();
+    ValidatePluginRepositoryMetadata();
     ValidateChinese755Opcodes();
     ValidateMeterRows();
     ValidateCompactMeterLayout();
@@ -211,6 +212,31 @@ static void ValidatePictoActOverlayCommands()
         } &&
         commands[1] is { Tag: "ACTCOMPAT_OLD", Remove: true, Circle: null },
         "Game-side PictoACT circle create/remove parsing failed.");
+}
+
+static void ValidatePluginRepositoryMetadata()
+{
+    var projectRoot = FindProjectRoot();
+    using var document = JsonDocument.Parse(File.ReadAllText(
+        Path.Combine(projectRoot, "repo", "pluginmaster.json")));
+    var entry = document.RootElement.EnumerateArray().Single();
+    var iconUrl = entry.GetProperty("IconUrl").GetString();
+    Assert(
+        Uri.TryCreate(iconUrl, UriKind.Absolute, out var iconUri) &&
+        iconUri.Scheme == Uri.UriSchemeHttps &&
+        iconUri.Host == "raw.githubusercontent.com" &&
+        iconUri.AbsolutePath.EndsWith(
+            "/src/DalamudActCompat/Assets/act-logo.jpg",
+            StringComparison.Ordinal),
+        "Dalamud custom repository does not expose the ACT logo through a public HTTPS IconUrl.");
+    Assert(
+        File.Exists(Path.Combine(
+            projectRoot,
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "act-logo.jpg")),
+        "The public custom-repository IconUrl target is missing from the source repository.");
 }
 
 static void ValidateBoundedHostQueue()

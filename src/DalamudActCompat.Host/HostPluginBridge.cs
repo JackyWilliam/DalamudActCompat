@@ -27,6 +27,7 @@ public static class HostPluginBridge
         new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, PendingTtsAuthorization> PendingTts =
         new(StringComparer.Ordinal);
+    private static readonly FfxivDataRepository FfxivRepositoryInstance = new();
     private static readonly object TriggerZoneListenerLock = new();
     private static WeakReference<object>? triggerZoneListener;
     private static Action<string>? ttsWriter;
@@ -52,6 +53,11 @@ public static class HostPluginBridge
                 $"permission plugin={pair.Key} allowed=[{string.Join(",", pair.Value.Order())}]");
         }
     }
+
+    internal static FfxivDataRepository FfxivRepository => FfxivRepositoryInstance;
+
+    internal static void ApplyFfxivEntitySnapshot(HostFfxivEntitySnapshot snapshot)
+        => FfxivRepositoryInstance.Apply(snapshot);
 
     internal static void ConfigureTtsWriter(Action<string>? writer)
         => Volatile.Write(ref ttsWriter, writer);

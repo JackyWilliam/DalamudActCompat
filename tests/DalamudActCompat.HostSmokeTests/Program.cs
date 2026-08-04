@@ -39,7 +39,7 @@ if (pluginRoot is not null && configRoot is not null)
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
 }
 Console.WriteLine(
-    "Host handshake, sequence/deadline validation, bounded IPC, command denial, crash isolation, disconnect, 100k-line PostNamazu copy, and real Triggernometry log/network/zone/combat/TTS/expression/mark/waymark/PictoACT closed-loop tests passed.");
+    "Host handshake, sequence/deadline validation, bounded IPC, command denial, crash isolation, disconnect, 100k-line PostNamazu copy, and real Triggernometry log/network/zone/combat/TTS/_me entity/mark/waymark/PictoACT closed-loop tests passed.");
 
 void ValidateLargePostNamazuCopyReturnsQuickly()
 {
@@ -463,6 +463,15 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 HostEnvelope.Create(
                     session,
                     3,
+                    HostMessageTypes.FfxivEntities,
+                    HostMessagePriority.State,
+                    CreateTestFfxivSnapshot()),
+                CancellationToken.None);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    4,
                     HostMessageTypes.LogBatch,
                     HostMessagePriority.Data,
                     new[]
@@ -495,7 +504,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
             Assert(
                 ttsTexts.SetEquals(["ACTCOMPAT_LOG_MATCH", "ACTCOMPAT_NETWORK_MATCH"]),
                 "Triggernometry did not complete both standard-log and FFXIV-network-equivalent regex/TTS paths.");
-            var clientSequence = 4L;
+            var clientSequence = 5L;
             foreach (var request in ttsRequests)
             {
                 await HostFrameCodec.WriteAsync(
@@ -622,7 +631,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 CancellationToken.None);
             await ReadAndCompleteExpectedPostNamazuAsync(
                 "postnamazu.mark",
-                "\"MarkType\":\"attack1\"");
+                "\"ActorID\":\"0x10001234\"");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -640,7 +649,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 CancellationToken.None);
             await ReadAndCompleteExpectedPostNamazuAsync(
                 "postnamazu.place",
-                "\"Active\":true");
+                "\"X\":1.25");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -805,6 +814,49 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
     }
 }
 
+HostFfxivEntitySnapshot CreateTestFfxivSnapshot()
+    => new(
+        TerritoryId: 1,
+        CurrentPlayerId: 0x10001234,
+        Timestamp: DateTimeOffset.UtcNow,
+        Combatants:
+        [
+            new HostFfxivCombatant(
+                Id: 0x10001234,
+                OwnerId: 0,
+                Type: 1,
+                Job: 19,
+                Level: 100,
+                Name: "Host Smoke Player",
+                CurrentHp: 100_000,
+                MaxHp: 100_000,
+                CurrentMp: 10_000,
+                MaxMp: 10_000,
+                CurrentCp: 0,
+                MaxCp: 0,
+                CurrentGp: 0,
+                MaxGp: 0,
+                IsCasting: false,
+                CastId: 0,
+                CastTargetId: 0,
+                CastTime: 0,
+                MaxCastTime: 0,
+                PosX: 1.25f,
+                PosY: 2.5f,
+                PosZ: -3.75f,
+                Heading: 0.5f,
+                CurrentWorldId: 21,
+                WorldId: 21,
+                WorldName: "Ravana",
+                BNpcNameId: 0,
+                BNpcId: 0,
+                TargetId: 0,
+                EffectiveDistance: 0,
+                PartyType: 1,
+                Address: 0x12345678,
+                Statuses: [new HostFfxivStatus(1191, 1, 20, 0x10001234)]),
+        ]);
+
 async Task PrepareLegacySmokeConfigurationAsync()
 {
     var configurationDirectory = Path.Combine(configRoot!, "Config");
@@ -832,23 +884,19 @@ async Task PrepareLegacySmokeConfigurationAsync()
                   <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;BridgeNamazu.InitializeModules(() =&gt; BridgeNamazu.RegisterAnnotatedMethods());&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
                 </Actions>
               </Trigger>
-              <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">
+              <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT _me callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_HOST_PICTO&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_env[ACTCOMPAT_HOST_PICTO_POS]}&#xD;&#xA;Scale: 5, 5, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.65" />
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_HOST_PICTO&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Scale: 5, 5, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.65" />
                 </Actions>
               </Trigger>
-              <Trigger Enabled="true" Id="80d5ffc0-d534-4fcb-95a7-1ee3b72519b0" Name="Mark expression callback closed loop" RegularExpression="ACTCOMPAT_MARK_LINE" Source="Log">
+              <Trigger Enabled="true" Id="80d5ffc0-d534-4fcb-95a7-1ee3b72519b0" Name="Mark _me expression callback closed loop" RegularExpression="ACTCOMPAT_MARK_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="Variable" OrderNumber="1" VariableOp="SetString" VariableName="ACTCOMPAT_MARK_ACTOR" VariableExpression="E0000000" />
-                  <Action ActionType="NamedCallback" OrderNumber="2" NamedCallbackName="mark" NamedCallbackParam="{&quot;ActorID&quot;:&quot;0x${v:ACTCOMPAT_MARK_ACTOR}&quot;,&quot;MarkType&quot;:&quot;attack1&quot;,&quot;LocalOnly&quot;:true}" />
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="mark" NamedCallbackParam="{&quot;ActorID&quot;:&quot;0x${_me.id}&quot;,&quot;MarkType&quot;:&quot;attack1&quot;,&quot;LocalOnly&quot;:true}" />
                 </Actions>
               </Trigger>
-              <Trigger Enabled="true" Id="a9c32bf3-3346-40e9-878e-1cbb944247c8" Name="Waymark expression callback closed loop" RegularExpression="ACTCOMPAT_PLACE_LINE" Source="Log">
+              <Trigger Enabled="true" Id="a9c32bf3-3346-40e9-878e-1cbb944247c8" Name="Waymark _me expression callback closed loop" RegularExpression="ACTCOMPAT_PLACE_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="Variable" OrderNumber="1" VariableOp="SetNumeric" VariableName="ACTCOMPAT_WAY_X" VariableExpression="1.25" />
-                  <Action ActionType="Variable" OrderNumber="2" VariableOp="SetNumeric" VariableName="ACTCOMPAT_WAY_Y" VariableExpression="2.5" />
-                  <Action ActionType="Variable" OrderNumber="3" VariableOp="SetNumeric" VariableName="ACTCOMPAT_WAY_Z" VariableExpression="-3.75" />
-                  <Action ActionType="NamedCallback" OrderNumber="4" NamedCallbackName="place" NamedCallbackParam="{&quot;A&quot;:{&quot;X&quot;:${v:ACTCOMPAT_WAY_X},&quot;Y&quot;:${v:ACTCOMPAT_WAY_Y},&quot;Z&quot;:${v:ACTCOMPAT_WAY_Z},&quot;Active&quot;:true}}" />
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="place" NamedCallbackParam="{&quot;LocalOnly&quot;:true,&quot;A&quot;:{&quot;X&quot;:${_me.x},&quot;Y&quot;:${_me.z},&quot;Z&quot;:${_me.y},&quot;Active&quot;:true}}" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="0b595eff-da67-45ce-ab7c-1e4f7477d6d2" Name="Combat start closed loop" RegularExpression="^OnCombatStart$" Source="ACT">

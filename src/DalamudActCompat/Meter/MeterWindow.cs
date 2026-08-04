@@ -269,8 +269,14 @@ public sealed class MeterWindow : Window
             start + new Vector2(28, 6),
             ImGui.GetColorU32(Gold),
             LocalizeEncounterTitle(encounter));
-        var subtitle = $"{localizeZoneName(encounter.ZoneName)}  ·  {FormatDuration(encounter.Duration)}  ·  " +
-                       (encounter.IsActive ? text.Get("战斗中", "Running") : text.Get("已结束", "Ended"));
+        var subtitle = $"{localizeZoneName(encounter.ZoneName)}  ·  {FormatDuration(encounter.Duration)}";
+        if (!UsesStatusAsEncounterTitle(encounter))
+        {
+            subtitle += "  ·  " +
+                        (encounter.IsActive
+                            ? text.Get("战斗中", "Running")
+                            : text.Get("已结束", "Ended"));
+        }
         drawList.AddText(start + new Vector2(28, 24), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), subtitle);
     }
 
@@ -305,12 +311,25 @@ public sealed class MeterWindow : Window
     }
 
     private string LocalizeEncounterTitle(Encounter encounter)
-        => string.Equals(
+    {
+        if (UsesStatusAsEncounterTitle(encounter))
+        {
+            return encounter.IsActive
+                ? text.Get("状态：战斗中", "Status: Running")
+                : text.Get("状态：已结束", "Status: Ended");
+        }
+
+        return string.Equals(
             encounter.EnemyName,
             encounter.ZoneName,
             StringComparison.OrdinalIgnoreCase)
             ? localizeZoneName(encounter.EnemyName)
             : encounter.EnemyName;
+    }
+
+    private static bool UsesStatusAsEncounterTitle(Encounter encounter)
+        => string.IsNullOrWhiteSpace(encounter.EnemyName) ||
+           string.Equals(encounter.EnemyName, "Encounter", StringComparison.OrdinalIgnoreCase);
 
     private void DrawCompactDragHandle(MeterSettings settings)
     {
