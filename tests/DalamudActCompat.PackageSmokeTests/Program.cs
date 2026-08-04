@@ -395,7 +395,7 @@ static void ValidateMeterRows()
         "Test Enemy",
         [
             new Combatant("tank", "Tank@Alpha", "PLD", true, 100_000, 10_000, 1, 11_000, 10_000, 10_000),
-            new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 0, 2_500, 2_000, 2_000),
+            new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3, 2_500, 2_000, 2_000),
         ],
         [],
         [],
@@ -416,12 +416,35 @@ static void ValidateMeterRows()
     Assert(rows[0].Job == "PLD", "The resolved player job was not preserved.");
     Assert(rows[0].Deaths == 1, "The resolved player death count was not preserved.");
     Assert(rows[0].Dps == 10_000, "EncDPS did not use the ACT encounter-duration field.");
+    Assert(
+        Math.Abs(rows.Sum(row => row.DamagePercent) - 100) < 0.01,
+        "Meter damage percentages did not cover the encounter total.");
 
     settings.SortMode = MeterSortMode.Hps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
     Assert(rows[0].Name == "Healer@Beta", "HPS sorting did not promote the highest-healing player.");
     Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
+
+    settings.SortMode = MeterSortMode.Deaths;
+    Thread.Sleep(settings.RefreshIntervalMs + 20);
+    rows = meter.GetRows();
+    Assert(
+        rows[0].Name == "Tank@Alpha",
+        "Legacy death sorting did not safely fall back to DPS.");
+    Assert(
+        MeterSortModeOptions.Supported.SequenceEqual(
+            [MeterSortMode.Dps, MeterSortMode.Hps]),
+        "Meter exposed a sort mode other than DPS or HPS.");
+    Assert(
+        JobDisplayFormatter.FormatText("WHM", JobDisplayStyle.Abbreviation) == "WHM" &&
+        JobDisplayFormatter.FormatText("WHM", JobDisplayStyle.ChineseAbbreviation) == "白魔" &&
+        JobDisplayFormatter.SupportedJobCodes.Count == 32 &&
+        JobDisplayFormatter.SupportedJobCodes.Distinct(StringComparer.Ordinal).Count() == 32 &&
+        JobDisplayFormatter.UsesIcon(JobDisplayStyle.MinimalIcon) &&
+        JobDisplayFormatter.UsesIcon(JobDisplayStyle.ClassicIcon) &&
+        JobDisplayFormatter.UsesIcon(JobDisplayStyle.FlatIcon),
+        "The five job display styles were not preserved.");
 
     var configuration = new PluginConfiguration
     {
@@ -460,6 +483,33 @@ static void ValidateCompactMeterLayout()
     Assert(
         compact.Y is >= 90 and <= 120,
         "Single-combatant Meter kept the oversized multi-player height.");
+
+    var rowHeightMethod = typeof(MeterWindow).GetMethod(
+                              "CalculateCombatantRowHeight",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Meter row-height helper was not found.");
+    var multiRowHeight = (float)(rowHeightMethod.Invoke(null, [false, 19.0f])
+                                 ?? throw new InvalidOperationException(
+                                     "Multi-player Meter returned no row height."));
+    var singleRowHeight = (float)(rowHeightMethod.Invoke(null, [true, 19.0f])
+                                  ?? throw new InvalidOperationException(
+                                      "Single-player Meter returned no row height."));
+    Assert(
+        multiRowHeight <= 30 && multiRowHeight < singleRowHeight,
+        "Multi-player Meter did not keep each player on one compact line.");
+
+    var iconSizeMethod = typeof(MeterWindow).GetMethod(
+                             "CalculateJobIconSize",
+                             BindingFlags.Static | BindingFlags.NonPublic)
+                         ?? throw new InvalidOperationException(
+                             "Meter job-icon sizing helper was not found.");
+    var iconSize = (float)(iconSizeMethod.Invoke(null, [multiRowHeight, 17.0f])
+                           ?? throw new InvalidOperationException(
+                               "Meter returned no job-icon size."));
+    Assert(
+        iconSize is >= 20 and <= 24 && iconSize <= multiRowHeight - 4,
+        "Job icons were not normalized to the one-line Meter slot.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -1344,6 +1394,16 @@ static void ValidateLegacyResourceRuntimeDependencies()
             "SharpCompress.dll",
             StringComparison.OrdinalIgnoreCase)),
         "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
+
+    foreach (var style in new[] { "Minimal", "Classic", "Flat" })
+    {
+        foreach (var job in JobDisplayFormatter.SupportedJobCodes)
+        {
+            Assert(
+                FindArchiveEntry(archive, $"Assets/JobIcons/{style}/{job}.png") is not null,
+                $"Release package is missing the {style} {job} job icon.");
+        }
+    }
 
     var hostSpeech = FindArchiveEntry(archive, "host/System.Speech.dll");
     var runtimeSpeech = FindArchiveEntry(

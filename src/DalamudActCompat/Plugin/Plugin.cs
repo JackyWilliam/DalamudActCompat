@@ -98,6 +98,8 @@ public sealed class Plugin : IDalamudPlugin
             partyList.Count > 1 &&
             partyList.Any(member => member.CurrentHP > 0);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
+        configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
+            configuration.Meter.SortMode);
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
@@ -189,12 +191,16 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(assetDirectory, "act-logo.jpg"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
+        var jobIcons = new JobIconTextureSet(
+            textureProvider,
+            Path.Combine(assetDirectory, "JobIcons"));
         meterWindow = new MeterWindow(
             meterService,
             stateStore,
             fflogsEstimateService,
             configuration,
             text,
+            jobIcons,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
         encounterWindow = new EncounterWindow(stateStore, paths, configuration, text);

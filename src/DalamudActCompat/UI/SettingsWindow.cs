@@ -357,12 +357,33 @@ public sealed class SettingsWindow : Window
         ImGui.TextUnformatted(text.Get("战斗统计显示列", "Combat Meter columns"));
         changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
         changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
-        changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
-        changed |= Checkbox(text.Get("伤害", "Damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
-        changed |= Checkbox(text.Get("伤害占比", "Damage percent"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
-        changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-        changed |= Checkbox(text.Get("治疗量", "Healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
-        changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
+        if (configuration.Meter.ShowJob)
+        {
+            var jobStyle = configuration.Meter.JobDisplayStyle;
+            ImGui.SetNextItemWidth(190);
+            if (ImGui.BeginCombo(
+                    text.Get("职业显示方式", "Job display"),
+                    JobDisplayFormatter.Label(jobStyle, text)))
+            {
+                foreach (var style in Enum.GetValues<JobDisplayStyle>())
+                {
+                    if (ImGui.Selectable(
+                            JobDisplayFormatter.Label(style, text),
+                            style == jobStyle))
+                    {
+                        configuration.Meter.JobDisplayStyle = style;
+                        changed = true;
+                    }
+                }
+                ImGui.EndCombo();
+            }
+        }
+        ImGui.TextDisabled(text.Get(
+            "每行固定显示当前 DPS/HPS、伤害占比和死亡数；以下是单人详情附加字段。",
+            "Every row always shows DPS/HPS, damage percent, and deaths; the following are optional single-player details."));
+        changed |= Checkbox(text.Get("单人总伤害", "Single-player damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
+        changed |= Checkbox(text.Get("单人附加 HPS", "Single-player extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
+        changed |= Checkbox(text.Get("单人治疗量", "Single-player healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
         var localPlayerColor = configuration.Meter.LocalPlayerColor;
         if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
         {
