@@ -18,6 +18,7 @@ using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Meter;
+using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.Protocol;
@@ -55,6 +56,7 @@ try
     ValidateChinese755Opcodes();
     ValidateMeterRows();
     ValidateCompactMeterLayout();
+    ValidatePictoActOverlayCommands();
     ValidateDutyEncounterAggregation();
     ValidateControlCenterPresentation();
     ValidateFflogsEstimateCurve();
@@ -185,6 +187,30 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidatePictoActOverlayCommands()
+{
+    var commands = PictoActOverlayService.Parse(
+        "Omen: Circle\nTag: ACTCOMPAT_SMOKE\nt: 5\nPos: <1.25, 2.5, -3.75>\n" +
+        "Scale: 5, 5, 1\nColor: 0.2, 1, 0.3, 0.65\n---\n" +
+        "Action: Remove\nTag: ACTCOMPAT_OLD");
+    Assert(
+        commands.Count == 2 &&
+        commands[0] is
+        {
+            Tag: "ACTCOMPAT_SMOKE",
+            Remove: false,
+            Circle:
+            {
+                Radius: 5,
+                Position.X: 1.25f,
+                Position.Y: -3.75f,
+                Position.Z: 2.5f,
+            },
+        } &&
+        commands[1] is { Tag: "ACTCOMPAT_OLD", Remove: true, Circle: null },
+        "Game-side PictoACT circle create/remove parsing failed.");
 }
 
 static void ValidateBoundedHostQueue()
@@ -611,6 +637,10 @@ static void ValidateDutyEncounterAggregation()
     Assert(
         afterFirst.IsActive && afterFirst.TotalDamage == 100,
         "A completed boss incorrectly ended or reset the active duty session.");
+    var duplicateFirst = accumulator.Update(first, finished: true, start.AddMinutes(3));
+    Assert(
+        duplicateFirst.TotalDamage == 100,
+        "A repeated completed boss snapshot was counted twice in the duty session.");
 
     var secondId = Guid.NewGuid();
     var secondActive = CreateDutySegment(

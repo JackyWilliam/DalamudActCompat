@@ -109,6 +109,7 @@
       "dalamudactcompat.actruntime": {
         "type": "Project",
         "dependencies": {
+          "DalamudActCompat.Protocol": "[1.0.0, )",
           "IINACT": "[2.10.3.4, )"
         }
       },

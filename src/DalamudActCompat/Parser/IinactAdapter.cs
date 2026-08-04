@@ -280,9 +280,12 @@ public sealed class IinactAdapter : IParserEngine
             }
 
             FinalizeDutySession(DateTimeOffset.UtcNow);
-            if (sameDutyZone)
+            lock (dutySessionLock)
             {
-                return;
+                if (sameDutyZone || finalizedDutySegmentIds.Contains(snapshot.Id))
+                {
+                    return;
+                }
             }
         }
 

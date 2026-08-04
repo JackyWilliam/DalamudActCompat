@@ -55,6 +55,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CancellationTokenSource bundledUpdateCancellation = new();
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
     private readonly ActHostSupervisor hostSupervisor;
+    private readonly PictoActOverlayService pictoActOverlay;
     private readonly Channel<HostCommandInvocation> hostCommandQueue =
         Channel.CreateBounded<HostCommandInvocation>(new BoundedChannelOptions(64)
         {
@@ -77,6 +78,7 @@ public sealed class Plugin : IDalamudPlugin
         IFramework framework,
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
+        IGameGui gameGui,
         INotificationManager notificationManager,
         IPartyList partyList,
         ITextureProvider textureProvider)
@@ -92,6 +94,7 @@ public sealed class Plugin : IDalamudPlugin
             condition,
             gameInteropProvider,
             notificationManager);
+        pictoActOverlay = new PictoActOverlayService(gameGui);
         var localDeathWhilePartyContinues = () =>
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious] &&
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
@@ -355,6 +358,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        pictoActOverlay.Draw();
         OverlayEditShield.Draw(actRuntime.HasVisibleEditingOverlay);
         windowSystem.Draw();
         fileDialogManager.Draw();
@@ -1018,6 +1022,49 @@ public sealed class Plugin : IDalamudPlugin
                     await NativePostNamazuBridge
                         .SendCommandAsync(command, timeout.Token)
                         .ConfigureAwait(false);
+                    break;
+                case "postnamazu.mark":
+                case "postnamazu.place":
+                case "postnamazu.pictoact":
+                    if (!string.Equals(
+                            invocation.Request.PluginId,
+                            "postnamazu",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Only PostNamazu may request the marking broker capability.");
+                    }
+
+                    if (!configuration.IsActCapabilityAllowed(
+                            "postnamazu",
+                            ActCapability.GameCommand))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "PostNamazu game-command capability is denied.");
+                    }
+
+                    if (!invocation.Request.Arguments.TryGetValue("payload", out var payload))
+                    {
+                        throw new InvalidDataException("PostNamazu marking payload is missing.");
+                    }
+
+                    if (invocation.Request.Command == "postnamazu.mark")
+                    {
+                        await NativePostNamazuBridge
+                            .SendMarkAsync(payload, timeout.Token)
+                            .ConfigureAwait(false);
+                    }
+                    else if (invocation.Request.Command == "postnamazu.place")
+                    {
+                        await NativePostNamazuBridge
+                            .SendWaymarksAsync(payload, timeout.Token)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        pictoActOverlay.Apply(payload);
+                    }
+
                     break;
                 default:
                     throw new UnauthorizedAccessException(

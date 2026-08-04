@@ -10,6 +10,7 @@ using System.Runtime.Loader;
 using System.Runtime.Serialization;
 using System.Security.Cryptography;
 using System.Windows.Forms;
+using DalamudActCompat.Protocol;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using System.Resources.Extensions;
@@ -103,6 +104,10 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.SkipLegacyProcessMonitoring))!);
         var command = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuCommand))!);
+        var mark = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuMark))!);
+        var waymark = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuWaymark))!);
         var networkAllowed = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNetworkAllowed))!);
         var startHttpListener = module.ImportReference(
@@ -121,6 +126,8 @@ public static class LegacyAssemblyRewriter
         var overlayAdapterPatched = false;
         var httpListenerPatched = false;
         var httpThreadAbortPatched = false;
+        var markPatched = false;
+        var waymarkPatched = false;
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
         {
@@ -212,6 +219,26 @@ public static class LegacyAssemblyRewriter
                     continue;
                 }
 
+                if (type.FullName == "PostNamazu.Actions.Mark" &&
+                    method.Name == "DoMarking" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, mark, loadInstance: false, loadParameters: true);
+                    markPatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.WayMark" &&
+                    method.Name == "DoWaymarks" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, waymark, loadInstance: false, loadParameters: true);
+                    waymarkPatched = true;
+                    continue;
+                }
+
                 if ((type.FullName == "PostNamazu.PostNamazu" &&
                      method.Name is "Call" or "DirectCall" or "ExecuteInFrameLock") ||
                     (type.FullName == "PostNamazu.Actions.NamazuModule" &&
@@ -250,12 +277,13 @@ public static class LegacyAssemblyRewriter
         }
 
         if (!copyLogPatched || !overlayAdapterPatched || !httpListenerPatched ||
-            !httpThreadAbortPatched)
+            !httpThreadAbortPatched || !markPatched || !waymarkPatched)
         {
             throw new InvalidOperationException(
                 "PostNamazu compatibility shape changed; " +
                 $"copyLog={copyLogPatched}, overlayAdapter={overlayAdapterPatched}, " +
-                $"httpListener={httpListenerPatched}, httpStop={httpThreadAbortPatched}.");
+                $"httpListener={httpListenerPatched}, httpStop={httpThreadAbortPatched}, " +
+                $"mark={markPatched}, waymark={waymarkPatched}.");
         }
 
         using var output = new MemoryStream();
@@ -303,11 +331,73 @@ public static class LegacyAssemblyRewriter
         }
 
         RedirectResourceManagerCalls(module);
+        PatchLegacyJavaScriptSerializer(module);
         PatchTriggernometryCompatibility(module);
         var patched = new MemoryStream();
         definition.Write(patched);
         patched.Position = 0;
         return patched;
+    }
+
+    private static void PatchLegacyJavaScriptSerializer(ModuleDefinition module)
+    {
+        var bridgeType = typeof(LegacyJavaScriptSerializer);
+        var constructor = module.ImportReference(bridgeType.GetConstructor(Type.EmptyTypes)!);
+        var serialize = module.ImportReference(bridgeType.GetMethod(
+            nameof(LegacyJavaScriptSerializer.Serialize),
+            [typeof(object)])!);
+        var deserialize = module.ImportReference(bridgeType.GetMethods()
+            .Single(method =>
+                method.Name == nameof(LegacyJavaScriptSerializer.Deserialize) &&
+                method.IsGenericMethodDefinition));
+        var deserializeObject = module.ImportReference(bridgeType.GetMethod(
+            nameof(LegacyJavaScriptSerializer.DeserializeObject),
+            [typeof(string)])!);
+        var patched = 0;
+
+        foreach (var instruction in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody)
+                     .SelectMany(method => method.Body.Instructions))
+        {
+            if (instruction.Operand is not MethodReference called ||
+                called.DeclaringType.FullName !=
+                "System.Web.Script.Serialization.JavaScriptSerializer")
+            {
+                continue;
+            }
+
+            MethodReference replacement = called.Name switch
+            {
+                ".ctor" when called.Parameters.Count == 0 => constructor,
+                nameof(LegacyJavaScriptSerializer.Serialize)
+                    when called.Parameters.Count == 1 => serialize,
+                nameof(LegacyJavaScriptSerializer.Deserialize)
+                    when called is GenericInstanceMethod generic &&
+                         generic.GenericArguments.Count == 1 =>
+                    MakeGenericMethod(deserialize, generic.GenericArguments),
+                nameof(LegacyJavaScriptSerializer.DeserializeObject)
+                    when called.Parameters.Count == 1 => deserializeObject,
+                _ => throw new InvalidOperationException(
+                    $"Unsupported JavaScriptSerializer call {called.FullName}."),
+            };
+            instruction.Operand = replacement;
+            patched++;
+        }
+
+        if (patched != 24)
+        {
+            throw new InvalidOperationException(
+                $"Expected 24 Triggernometry JavaScriptSerializer calls, patched {patched}.");
+        }
+
+        var systemWeb = module.AssemblyReferences.SingleOrDefault(reference =>
+            reference.Name == "System.Web.Extensions");
+        if (systemWeb is not null)
+        {
+            module.AssemblyReferences.Remove(systemWeb);
+        }
     }
 
     private static void PatchTriggernometryCompatibility(ModuleDefinition module)
@@ -323,6 +413,8 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.IsTriggernometryNetworkAllowed))!);
         var scriptAllowed = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.IsTriggernometryHighRiskScriptAllowed))!);
+        var pictoAct = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuPictoAct))!);
         var subscribeZoneChanges = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SubscribeTriggernometryZoneChanges))!);
         var unsubscribeZoneChanges = module.ImportReference(
@@ -390,6 +482,20 @@ public static class LegacyAssemblyRewriter
                 method.Name == "IsFeatureAllowedByConfig" &&
                 method.ReturnType.MetadataType == MetadataType.Boolean);
         InsertBooleanGuard(scriptSecurity, scriptAllowed, returnCompletedTask: false);
+        var pictoActCallback = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.Modules.PictoACTModule")
+            .Methods
+            .Single(method =>
+                method.Name == "CbPictoACT" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.String);
+        ReplaceWithBridge(
+            pictoActCallback,
+            pictoAct,
+            loadInstance: false,
+            loadParameters: true);
 
         var enqueueCount = 0;
         var abortCount = 0;

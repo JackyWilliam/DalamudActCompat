@@ -16,6 +16,7 @@ using System.Security.Principal;
 using System.Windows.Forms;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin.Services;
+using DalamudActCompat.Protocol;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using System.Resources.Extensions;
@@ -623,6 +624,7 @@ public static class LegacyResourceCompatibility
         }
 
         RedirectResourceManagerCalls(definition.MainModule);
+        PatchLegacyJavaScriptSerializer(definition.MainModule);
         PatchTriggernometryAdministratorCheck(definition.MainModule);
         PatchTriggernometryEventQueue(definition.MainModule);
         PatchTriggernometryThreadAbort(definition.MainModule);
@@ -630,6 +632,67 @@ public static class LegacyResourceCompatibility
         definition.Write(patched);
         patched.Position = 0;
         return patched;
+    }
+
+    private static void PatchLegacyJavaScriptSerializer(ModuleDefinition module)
+    {
+        var bridgeType = typeof(LegacyJavaScriptSerializer);
+        var constructor = module.ImportReference(bridgeType.GetConstructor(Type.EmptyTypes)!);
+        var serialize = module.ImportReference(bridgeType.GetMethod(
+            nameof(LegacyJavaScriptSerializer.Serialize),
+            [typeof(object)])!);
+        var deserialize = module.ImportReference(bridgeType.GetMethods()
+            .Single(method =>
+                method.Name == nameof(LegacyJavaScriptSerializer.Deserialize) &&
+                method.IsGenericMethodDefinition));
+        var deserializeObject = module.ImportReference(bridgeType.GetMethod(
+            nameof(LegacyJavaScriptSerializer.DeserializeObject),
+            [typeof(string)])!);
+        var patched = 0;
+
+        foreach (var instruction in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody)
+                     .SelectMany(method => method.Body.Instructions))
+        {
+            if (instruction.Operand is not MethodReference called ||
+                called.DeclaringType.FullName !=
+                "System.Web.Script.Serialization.JavaScriptSerializer")
+            {
+                continue;
+            }
+
+            MethodReference replacement = called.Name switch
+            {
+                ".ctor" when called.Parameters.Count == 0 => constructor,
+                nameof(LegacyJavaScriptSerializer.Serialize)
+                    when called.Parameters.Count == 1 => serialize,
+                nameof(LegacyJavaScriptSerializer.Deserialize)
+                    when called is GenericInstanceMethod generic &&
+                         generic.GenericArguments.Count == 1 =>
+                    MakeGenericMethod(deserialize, generic.GenericArguments),
+                nameof(LegacyJavaScriptSerializer.DeserializeObject)
+                    when called.Parameters.Count == 1 => deserializeObject,
+                _ => throw new InvalidOperationException(
+                    $"Unsupported JavaScriptSerializer call {called.FullName}."),
+            };
+            instruction.Operand = replacement;
+            patched++;
+        }
+
+        if (patched != 24)
+        {
+            throw new InvalidOperationException(
+                $"Expected 24 Triggernometry JavaScriptSerializer calls, patched {patched}.");
+        }
+
+        var systemWeb = module.AssemblyReferences.SingleOrDefault(reference =>
+            reference.Name == "System.Web.Extensions");
+        if (systemWeb is not null)
+        {
+            module.AssemblyReferences.Remove(systemWeb);
+        }
     }
 
     private static void PatchTriggernometryAdministratorCheck(ModuleDefinition module)
