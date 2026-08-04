@@ -46,6 +46,12 @@ public enum JobDisplayStyle
 
 public sealed class MeterSettings
 {
+    private static readonly Vector4 LegacyLocalPlayerColor =
+        new(0.25f, 0.42f, 0.55f, 0.45f);
+
+    public static readonly Vector4 DefaultLocalPlayerColor =
+        new(0x8B / 255f, 0x57 / 255f, 0x33 / 255f, 0x73 / 255f);
+
     public bool IsVisible { get; set; } = true;
 
     public bool IsLocked { get; set; }
@@ -80,5 +86,16 @@ public sealed class MeterSettings
 
     public bool ShowHealing { get; set; } = true;
 
-    public Vector4 LocalPlayerColor { get; set; } = new(0.25f, 0.42f, 0.55f, 0.45f);
+    public Vector4 LocalPlayerColor { get; set; } = DefaultLocalPlayerColor;
+
+    internal bool MigrateLegacyLocalPlayerColor()
+    {
+        if (Vector4.DistanceSquared(LocalPlayerColor, LegacyLocalPlayerColor) > 0.000001f)
+        {
+            return false;
+        }
+
+        LocalPlayerColor = DefaultLocalPlayerColor;
+        return true;
+    }
 }

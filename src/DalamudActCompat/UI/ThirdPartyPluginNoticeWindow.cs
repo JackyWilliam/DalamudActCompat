@@ -1,4 +1,5 @@
 using Dalamud.Interface.Windowing;
+using Dalamud.Interface.Textures;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Infrastructure.Logging;
 using Dalamud.Bindings.ImGui;
@@ -19,11 +20,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private readonly Action<bool> configureFullPermissions;
     private readonly PluginLogger logger;
     private readonly UiText text;
+    private readonly ISharedImmediateTexture logoTexture;
     private IReadOnlyList<BundledActPluginDescriptor> disclosures = [];
     private IReadOnlyList<BundledActPluginDescriptor> pending = [];
     private Task? installTask;
     private string result = string.Empty;
     private bool showPermissionChoice;
+    private bool outerFrameStylePushed;
 
     public ThirdPartyPluginNoticeWindow(
         Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures,
@@ -31,8 +34,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install,
         Action<bool> configureFullPermissions,
         PluginLogger logger,
-        UiText text)
-        : base("内置第三方 DLL 告知###DalamudActCompatThirdPartyDllNotice")
+        UiText text,
+        ISharedImmediateTexture logoTexture)
+        : base("内置第三方 DLL 告知###DalamudActCompatThirdPartyDllNoticeLandscape")
     {
         this.getDisclosures = getDisclosures;
         this.getPending = getPending;
@@ -40,113 +44,163 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         this.configureFullPermissions = configureFullPermissions;
         this.logger = logger;
         this.text = text;
-        Size = new Vector2(780, 680);
+        this.logoTexture = logoTexture;
+        Size = new Vector2(1200, 650);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(650, 520),
+            MinimumSize = new Vector2(960, 540),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+        ShowCloseButton = false;
+        RespectCloseHotkey = false;
+        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
         Refresh(openWhenPending: false);
+    }
+
+    public override void PreDraw()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        outerFrameStylePushed = true;
+    }
+
+    public override void PostDraw()
+    {
+        if (!outerFrameStylePushed)
+        {
+            return;
+        }
+
+        ImGui.PopStyleColor();
+        ImGui.PopStyleVar(2);
+        outerFrameStylePushed = false;
     }
 
     public override void Draw()
     {
         WindowName = text.Get(
-            "内置第三方 DLL 告知###DalamudActCompatThirdPartyDllNotice",
-            "Bundled third-party DLL notice###DalamudActCompatThirdPartyDllNotice");
+            "内置第三方 DLL 告知###DalamudActCompatThirdPartyDllNoticeLandscape",
+            "Bundled third-party DLL notice###DalamudActCompatThirdPartyDllNoticeLandscape");
 
         PushTheme();
         try
         {
             CompleteInstallWhenReady();
-            ImGui.TextColored(Gold, text.Get("第三方扩展来源声明", "Third-party extension sources"));
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get("安装前核对", "Review before installation"));
-            ImGui.Spacing();
-
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-            if (ImGui.BeginChild("third-party-notice-summary", new Vector2(-1, 126), true))
+            var noticeState = pending.Count > 0
+                ? text.Get($"待确认 {pending.Count} 项", $"{pending.Count} pending")
+                : text.Get("声明已确认", "Notices acknowledged");
+            if (BrandedWindowChrome.Draw(
+                    logoTexture,
+                    text.Get("三方扩展", "Third-party extensions"),
+                    noticeState,
+                    pending.Count > 0 ? Gold : IceBlue,
+                    ControlCenterWindow.FormatVersionLabel(
+                        typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
+                    "third-party-notice"))
             {
-                ImGui.TextColored(IceBlue, text.Get("关于这些 DLL", "About these DLLs"));
-                ImGui.TextWrapped(text.Get(
-                    "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL，并在启动时检查其公开上游。它们不由本项目开发，也不代表原作者或维护者与本项目存在合作、认可或联系。首次安装、本插件每次更新及发现上游 DLL 更新后，都会在安装或更新前展示本声明。",
-                    "Dalamud ACT Compat bundles the third-party ACT DLLs below and checks their public upstream sources at startup. They are not authored by this project, and no collaboration, endorsement, or affiliation with their authors or maintainers is implied. This notice is shown before installation on first use, after each plugin update, and when a newer upstream DLL is found."));
-                ImGui.TextDisabled(text.Get(
-                    "下列网址仅用于核对作者项目、许可证、源码和实际下载来源；仅在点击按钮后打开。",
-                    "The URLs below identify the author project, license, source, and actual download location; they open only when you click a button."));
+                IsOpen = false;
             }
-            ImGui.EndChild();
-            ImGui.PopStyleColor();
 
-            ImGui.Spacing();
-            if (disclosures.Count == 0)
+            if (ImGui.BeginChild("third-party-notice-content", new Vector2(-1, -1), true))
             {
-                DrawEmptyState();
-            }
-            else
-            {
-                if (pending.Count == 0)
+                ImGui.TextColored(Gold, text.Get("第三方扩展来源声明", "Third-party extension sources"));
+                ImGui.SameLine();
+                ImGui.TextDisabled(text.Get("安装前核对", "Review before installation"));
+                ImGui.Spacing();
+
+                ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+                if (ImGui.BeginChild("third-party-notice-summary", new Vector2(-1, 110), true))
                 {
-                    ImGui.TextColored(IceBlue, text.Get(
-                        "当前声明已确认；作者和来源信息仍会长期显示。",
-                        "The current notices are acknowledged; author and source details remain visible."));
-                    ImGui.Spacing();
+                    ImGui.TextColored(IceBlue, text.Get("关于这些 DLL", "About these DLLs"));
+                    ImGui.TextWrapped(text.Get(
+                        "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL，并在启动时检查其公开上游。它们不由本项目开发，也不代表原作者或维护者与本项目存在合作、认可或联系。首次安装、本插件每次更新及发现上游 DLL 更新后，都会在安装或更新前展示本声明。",
+                        "Dalamud ACT Compat bundles the third-party ACT DLLs below and checks their public upstream sources at startup. They are not authored by this project, and no collaboration, endorsement, or affiliation with their authors or maintainers is implied. This notice is shown before installation on first use, after each plugin update, and when a newer upstream DLL is found."));
+                    ImGui.TextDisabled(text.Get(
+                        "下列网址仅用于核对作者项目、许可证、源码和实际下载来源；仅在点击按钮后打开。",
+                        "The URLs below identify the author project, license, source, and actual download location; they open only when you click a button."));
                 }
-
-                var pendingIds = pending
-                    .Select(static plugin => plugin.Id)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                foreach (var plugin in disclosures)
-                {
-                    DrawPluginCard(plugin, pendingIds.Contains(plugin.Id));
-                    ImGui.Spacing();
-                }
-            }
-
-            ImGui.Separator();
-            if (installTask is not null)
-            {
-                ImGui.TextColored(IceBlue, text.Get(
-                    "正在安装 / 更新扩展，请稍候……",
-                    "Installing / updating extensions..."));
-            }
-            else if (showPermissionChoice)
-            {
-                DrawPermissionChoice();
-            }
-            else if (pending.Count > 0)
-            {
-                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-                if (ImGui.Button(text.Get(
-                        "知悉并安装 / 更新",
-                        "Acknowledge and install / update"),
-                        new Vector2(190, 36)))
-                {
-                    result = string.Empty;
-                    installTask = install(pending);
-                }
+                ImGui.EndChild();
                 ImGui.PopStyleColor();
 
-                ImGui.SameLine();
-                if (ImGui.Button(text.Get(
-                        "稍后处理",
-                        "Later"),
-                        new Vector2(110, 36)))
-                {
-                    IsOpen = false;
-                }
-                ImGui.SameLine();
-                ImGui.TextDisabled(text.Get(
-                    "稍后处理不会启用待安装的 DLL。",
-                    "Choosing later keeps pending DLLs disabled."));
-            }
-
-            if (!string.IsNullOrWhiteSpace(result))
-            {
                 ImGui.Spacing();
-                ImGui.TextWrapped(result);
+                if (disclosures.Count == 0)
+                {
+                    DrawEmptyState();
+                }
+                else
+                {
+                    if (pending.Count == 0)
+                    {
+                        ImGui.TextColored(IceBlue, text.Get(
+                            "当前声明已确认；作者和来源信息仍会长期显示。",
+                            "The current notices are acknowledged; author and source details remain visible."));
+                        ImGui.Spacing();
+                    }
+
+                    var pendingIds = pending
+                        .Select(static plugin => plugin.Id)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    if (ImGui.BeginTable(
+                            "third-party-plugin-cards",
+                            3,
+                            ImGuiTableFlags.SizingStretchSame | ImGuiTableFlags.BordersInnerV))
+                    {
+                        foreach (var plugin in disclosures)
+                        {
+                            ImGui.TableNextColumn();
+                            DrawPluginCard(plugin, pendingIds.Contains(plugin.Id));
+                        }
+                        ImGui.EndTable();
+                    }
+                }
+
+                ImGui.Separator();
+                if (installTask is not null)
+                {
+                    ImGui.TextColored(IceBlue, text.Get(
+                        "正在安装 / 更新扩展，请稍候……",
+                        "Installing / updating extensions..."));
+                }
+                else if (showPermissionChoice)
+                {
+                    DrawPermissionChoice();
+                }
+                else if (pending.Count > 0)
+                {
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+                    if (ImGui.Button(text.Get(
+                            "知悉并安装 / 更新",
+                            "Acknowledge and install / update"),
+                            new Vector2(190, 36)))
+                    {
+                        result = string.Empty;
+                        installTask = install(pending);
+                    }
+                    ImGui.PopStyleColor();
+
+                    ImGui.SameLine();
+                    if (ImGui.Button(text.Get(
+                            "稍后处理",
+                            "Later"),
+                            new Vector2(110, 36)))
+                    {
+                        IsOpen = false;
+                    }
+                    ImGui.SameLine();
+                    ImGui.TextDisabled(text.Get(
+                        "稍后处理不会启用待安装的 DLL。",
+                        "Choosing later keeps pending DLLs disabled."));
+                }
+
+                if (!string.IsNullOrWhiteSpace(result))
+                {
+                    ImGui.Spacing();
+                    ImGui.TextWrapped(result);
+                }
             }
+            ImGui.EndChild();
         }
         finally
         {
@@ -224,12 +278,11 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     {
         ImGui.PushID($"third-party-card-{plugin.Id}");
         ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-        if (ImGui.BeginChild("card", new Vector2(-1, 286), true))
+        if (ImGui.BeginChild("card", new Vector2(-1, 356), true))
         {
             ImGui.TextColored(Gold, plugin.Name);
             ImGui.SameLine();
             ImGui.TextColored(IceBlue, $"v{plugin.Version}");
-            ImGui.SameLine();
             ImGui.TextColored(
                 requiresAcknowledgement ? Gold : new Vector4(0.66f, 0.70f, 0.75f, 1),
                 requiresAcknowledgement
@@ -253,7 +306,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             DrawUrl(text.Get("项目", "Project"), plugin.ProjectUrl);
             DrawUrl(text.Get("源码", "Source"), plugin.SourceUrl);
             DrawUrl(text.Get("下载", "Download"), plugin.DownloadUrl);
-            ImGui.TextDisabled($"SHA-256  {plugin.Sha256}");
+            ImGui.TextDisabled("SHA-256");
+            ImGui.TextWrapped(plugin.Sha256);
         }
         ImGui.EndChild();
         ImGui.PopStyleColor();
@@ -341,6 +395,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private static void PushTheme()
     {
         ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
         ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
@@ -354,6 +409,6 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private static void PopTheme()
     {
         ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(6);
+        ImGui.PopStyleColor(7);
     }
 }

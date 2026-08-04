@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.5.2",
+    "AssemblyVersion":  "0.3.5.3",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.2/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.3/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.2/DalamudActCompat.zip",
-    "LastUpdate":  1785849139325,
-    "Changelog":  "战斗统计新增暴击率与直暴率；重构圆角设置窗口并统一页面高亮；分离 FFLogs 模块、常驻显示三方作者与网址，并为战斗重置增加二次确认。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.3/DalamudActCompat.zip",
+    "LastUpdate":  1785850966095,
+    "Changelog":  "修复野外战斗被附近玩家持续续期；多人自己的默认高亮改为 #8B573373；近期战斗与三方更新窗口同步新版圆角外框，三方声明改为横向三列；主页与设置导航重新命名并补充恢复出厂设置。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

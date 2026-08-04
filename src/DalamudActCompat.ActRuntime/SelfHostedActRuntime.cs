@@ -57,6 +57,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
+    private DateTimeOffset activeEncounterRelevantStart;
+    private DateTimeOffset lastRelevantCombatAction;
     private bool chatEncounterDirty;
     private bool chatEncounterPublished;
     private string chatActor = string.Empty;
@@ -752,6 +754,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             activeEncounterId = Guid.Empty;
             activeEncounterPublished = false;
             activeEncounterNamesLogged = false;
+            activeEncounterRelevantStart = default;
+            lastRelevantCombatAction = default;
             lastKnownDead.Clear();
             observedDeaths.Clear();
             ResetChatEncounterUnsafe();
@@ -810,12 +814,26 @@ public sealed class SelfHostedActRuntime : IDisposable
         ActEncounterSnapshot? completedEncounter = null;
         lock (encounterSync)
         {
+            var message = fields[4];
+            if (ChineseCombatChatParser.TryExtractActor(message, out var announcedActor))
+            {
+                chatActor = announcedActor;
+            }
             if (!ChineseCombatChatParser.TryParse(
-                    fields[4],
+                    message,
                     chatActor,
                     out var actor,
                     out var target,
                     out var damage))
+            {
+                return;
+            }
+
+            // Keep the parser's actor context even for nearby players, but only let the
+            // local player or party members create and extend this plugin's encounter.
+            chatActor = actor;
+            var identities = gameStateProvider.Identities;
+            if (ActPlayerIdentityResolver.Resolve(identities, actor) is null)
             {
                 return;
             }
@@ -840,7 +858,6 @@ public sealed class SelfHostedActRuntime : IDisposable
                 chatEncounterStart = now;
             }
 
-            chatActor = actor;
             chatLastDamage = now;
             chatEnemy = target;
             chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
@@ -865,36 +882,44 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         ActEncounterSnapshot? activeChatEncounter = null;
         ActEncounterSnapshot? completedChatEncounter = null;
+        EncounterData? activeEncounterToEnd = null;
         lock (encounterSync)
         {
-            if (chatEncounterId == Guid.Empty || chatLastDamage == default)
-            {
-                return;
-            }
-
             var now = DateTimeOffset.Now;
-            if (!activeEncounterPublished &&
-                chatEncounterDirty &&
-                now - chatEncounterStart >= TimeSpan.FromMilliseconds(250))
+            if (chatEncounterId != Guid.Empty && chatLastDamage != default)
             {
-                activeChatEncounter = CreateChatEncounterSnapshot(
-                    finished: false,
-                    identities);
-                chatEncounterPublished |= activeChatEncounter is not null;
-                chatEncounterDirty = false;
+                if (!activeEncounterPublished &&
+                    chatEncounterDirty &&
+                    now - chatEncounterStart >= TimeSpan.FromMilliseconds(250))
+                {
+                    activeChatEncounter = CreateChatEncounterSnapshot(
+                        finished: false,
+                        identities);
+                    chatEncounterPublished |= activeChatEncounter is not null;
+                    chatEncounterDirty = false;
+                }
+
+                if (activeEncounter is null &&
+                    !inCombat &&
+                    !localDeathWhilePartyContinues() &&
+                    now - chatLastDamage >= TimeSpan.FromSeconds(3))
+                {
+                    completedChatEncounter = CreateChatEncounterSnapshot(
+                        finished: true,
+                        identities);
+                    ResetChatEncounterUnsafe();
+                    lastKnownDead.Clear();
+                    observedDeaths.Clear();
+                }
             }
 
-            if (activeEncounter is null &&
+            if (activeEncounter is not null &&
+                !condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
                 !inCombat &&
-                !localDeathWhilePartyContinues() &&
-                now - chatLastDamage >= TimeSpan.FromSeconds(3))
+                lastRelevantCombatAction != default &&
+                now - lastRelevantCombatAction >= TimeSpan.FromSeconds(3))
             {
-                completedChatEncounter = CreateChatEncounterSnapshot(
-                    finished: true,
-                    identities);
-                ResetChatEncounterUnsafe();
-                lastKnownDead.Clear();
-                observedDeaths.Clear();
+                activeEncounterToEnd = activeEncounter;
             }
         }
 
@@ -906,6 +931,22 @@ public sealed class SelfHostedActRuntime : IDisposable
         if (completedChatEncounter is not null)
         {
             EncounterChanged?.Invoke(completedChatEncounter, true);
+        }
+
+        if (activeEncounterToEnd is not null)
+        {
+            try
+            {
+                ActGlobals.oFormActMain.EndCombat(true);
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "Failed to end the local open-world ACT encounter.");
+                lock (encounterSync)
+                {
+                    lastRelevantCombatAction = DateTimeOffset.Now;
+                }
+            }
         }
     }
 
@@ -960,11 +1001,49 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
+        var identities = gameStateProvider.Identities;
+        if (!IsTrackedCombatantEvent(
+                action.combatAction.Attacker,
+                action.combatAction.Victim,
+                identities))
+        {
+            return;
+        }
+
+        lock (encounterSync)
+        {
+            var actionTime = action.combatAction.Time == default
+                ? DateTimeOffset.Now
+                : new DateTimeOffset(action.combatAction.Time);
+            if (!ReferenceEquals(activeEncounter, encounter))
+            {
+                activeEncounterRelevantStart = actionTime;
+            }
+            lastRelevantCombatAction = actionTime;
+        }
+
         PublishEncounter(encounter, false);
     }
 
     private void OnAfterCombatEnd(EncounterData encounter)
-        => PublishEncounter(encounter, true);
+    {
+        lock (encounterSync)
+        {
+            if (!ReferenceEquals(activeEncounter, encounter))
+            {
+                return;
+            }
+        }
+
+        PublishEncounter(encounter, true);
+    }
+
+    internal static bool IsTrackedCombatantEvent(
+        string attacker,
+        string victim,
+        IReadOnlyList<ActPlayerIdentity> identities)
+        => ActPlayerIdentityResolver.Resolve(identities, attacker) is not null ||
+           ActPlayerIdentityResolver.Resolve(identities, victim) is not null;
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
         => ZoneChanged?.Invoke(territoryId, zoneName);
@@ -990,6 +1069,12 @@ public sealed class SelfHostedActRuntime : IDisposable
                             : Guid.NewGuid();
                         activeEncounterPublished = false;
                         activeEncounterNamesLogged = false;
+                        if (activeEncounterRelevantStart == default)
+                        {
+                            activeEncounterRelevantStart = encounter.StartTime == DateTime.MaxValue
+                                ? DateTimeOffset.Now
+                                : new DateTimeOffset(encounter.StartTime);
+                        }
                         if (!continuesChatEncounter)
                         {
                             lastKnownDead.Clear();
@@ -997,14 +1082,21 @@ public sealed class SelfHostedActRuntime : IDisposable
                         }
                     }
 
-                    var startTime = encounter.StartTime == DateTime.MaxValue
-                        ? DateTimeOffset.Now
-                        : new DateTimeOffset(encounter.StartTime);
-                    DateTimeOffset? endTime = finished
-                        ? encounter.EndTime == DateTime.MinValue
+                    var startTime = activeEncounterRelevantStart == default
+                        ? encounter.StartTime == DateTime.MaxValue
                             ? DateTimeOffset.Now
-                            : new DateTimeOffset(encounter.EndTime)
+                            : new DateTimeOffset(encounter.StartTime)
+                        : activeEncounterRelevantStart;
+                    DateTimeOffset? endTime = finished
+                        ? lastRelevantCombatAction == default
+                            ? encounter.EndTime == DateTime.MinValue
+                                ? DateTimeOffset.Now
+                                : new DateTimeOffset(encounter.EndTime)
+                            : lastRelevantCombatAction
                         : null;
+                    var encounterSeconds = Math.Max(
+                        1,
+                        ((endTime ?? DateTimeOffset.Now) - startTime).TotalSeconds);
                     var identities = gameStateProvider.Identities;
                     var combatants = encounter.Items.Values
                         .Select(combatant => (
@@ -1025,7 +1117,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                                     item.Combatant.Deaths,
                                     observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
                                 item.Combatant.DPS,
-                                item.Combatant.EncDPS,
+                                item.Combatant.Damage / encounterSeconds,
                                 item.Combatant.ExtDPS,
                                 hitCounts.DamageHits,
                                 hitCounts.CriticalHits,
@@ -1065,6 +1157,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                         activeEncounterId = Guid.Empty;
                         activeEncounterPublished = false;
                         activeEncounterNamesLogged = false;
+                        activeEncounterRelevantStart = default;
+                        lastRelevantCombatAction = default;
                         lastKnownDead.Clear();
                         observedDeaths.Clear();
                         ResetChatEncounterUnsafe();

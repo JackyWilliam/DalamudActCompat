@@ -18,9 +18,8 @@ public static class ChineseCombatChatParser
         out string target,
         out long damage)
     {
-        var actorMatch = ActorRegex.Match(message);
-        actor = actorMatch.Success
-            ? actorMatch.Groups["actor"].Value.Trim()
+        actor = TryExtractActor(message, out var explicitActor)
+            ? explicitActor
             : previousActor;
 
         var damageMatch = DamageRegex.Match(message);
@@ -34,5 +33,14 @@ public static class ChineseCombatChatParser
 
         target = damageMatch.Groups["target"].Value;
         return true;
+    }
+
+    public static bool TryExtractActor(string message, out string actor)
+    {
+        var actorMatch = ActorRegex.Match(message);
+        actor = actorMatch.Success
+            ? actorMatch.Groups["actor"].Value.Trim()
+            : string.Empty;
+        return !string.IsNullOrWhiteSpace(actor);
     }
 }
