@@ -277,6 +277,15 @@ public static class HostPluginBridge
         }
     }
 
+    public static void SendPostNamazuMark(string payload)
+        => SendPostNamazuSemanticAction("postnamazu.mark", payload);
+
+    public static void SendPostNamazuWaymark(string payload)
+        => SendPostNamazuSemanticAction("postnamazu.place", payload);
+
+    public static void SendPostNamazuPictoAct(string payload)
+        => SendPostNamazuSemanticAction("postnamazu.pictoact", payload);
+
     public static void SendTts(string text)
     {
         Demand("triggernometry", "TextToSpeech");
@@ -336,6 +345,33 @@ public static class HostPluginBridge
                 Interlocked.Decrement(ref pendingTtsCount);
             }
             throw new InvalidOperationException("TTS broker queue rejected the request.");
+        }
+    }
+
+    private static void SendPostNamazuSemanticAction(string action, string payload)
+    {
+        Demand("postnamazu", "GameCommand");
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length is 0 or > 32_768)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(payload),
+                "PostNamazu semantic payload must contain at most 32768 characters.");
+        }
+
+        var queued = sender?.Invoke(
+            HostMessageTypes.CommandRequest,
+            HostMessagePriority.Critical,
+            new HostCommandRequest(
+                "postnamazu",
+                action,
+                new Dictionary<string, string> { ["payload"] = payload }),
+            Guid.NewGuid().ToString("N"),
+            DateTimeOffset.UtcNow.AddSeconds(2)) == true;
+        if (!queued)
+        {
+            throw new InvalidOperationException(
+                $"PostNamazu semantic broker queue rejected '{action}'.");
         }
     }
 

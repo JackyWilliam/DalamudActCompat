@@ -39,7 +39,7 @@ if (pluginRoot is not null && configRoot is not null)
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
 }
 Console.WriteLine(
-    "Host handshake, sequence/deadline validation, bounded IPC, command denial, crash isolation, disconnect, 100k-line PostNamazu copy, and real Triggernometry log/network/zone/combat/TTS closed-loop tests passed.");
+    "Host handshake, sequence/deadline validation, bounded IPC, command denial, crash isolation, disconnect, 100k-line PostNamazu copy, and real Triggernometry log/network/zone/combat/TTS/expression/mark/waymark/PictoACT closed-loop tests passed.");
 
 void ValidateLargePostNamazuCopyReturnsQuickly()
 {
@@ -435,6 +435,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                                 "ReadLocalConfiguration",
                                 "Clipboard",
                                 "NetworkRequest",
+                                "GameCommand",
                             ],
                         },
                         ["triggernometry", "postnamazu", "act.foxtts"]),
@@ -533,6 +534,24 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 HostEnvelope.Create(
                     session,
                     clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.7500000+08:00|0000|ACTCOMPAT_PICTO_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedPostNamazuAsync(
+                "postnamazu.pictoact",
+                "Tag: ACTCOMPAT_HOST_PICTO");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
                     HostMessageTypes.ZoneChanged,
                     HostMessagePriority.Critical,
                     new HostZoneEvent(1, "Host Smoke Zone", DateTimeOffset.UtcNow)),
@@ -586,6 +605,42 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     CancellationToken.None);
             }
 
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:01.5000000+08:00|0000|ACTCOMPAT_MARK_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedPostNamazuAsync(
+                "postnamazu.mark",
+                "\"MarkType\":\"attack1\"");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:01.7500000+08:00|0000|ACTCOMPAT_PLACE_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedPostNamazuAsync(
+                "postnamazu.place",
+                "\"Active\":true");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -703,6 +758,35 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                         envelope.CorrelationId),
                     CancellationToken.None);
             }
+
+            async Task ReadAndCompleteExpectedPostNamazuAsync(
+                string expectedAction,
+                string expectedPayloadFragment)
+            {
+                var envelope = await ReadTriggerCommandAsync(pipe);
+                var request = envelope.Payload.Deserialize<HostCommandRequest>()
+                              ?? throw new InvalidDataException(
+                                  "PostNamazu sent an invalid semantic request.");
+                Assert(
+                    request.PluginId == "postnamazu" &&
+                    request.Command == expectedAction &&
+                    request.Arguments.TryGetValue("payload", out var payload) &&
+                    payload.Contains(expectedPayloadFragment, StringComparison.Ordinal),
+                    $"Expected PostNamazu semantic action '{expectedAction}'.");
+                Assert(
+                    !string.IsNullOrWhiteSpace(envelope.CorrelationId),
+                    "PostNamazu semantic request had no correlation identifier.");
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.CommandResult,
+                        HostMessagePriority.Control,
+                        new HostCommandResult(true, "completed", "smoke"),
+                        envelope.CorrelationId),
+                    CancellationToken.None);
+            }
         }
         catch (Exception ex)
         {
@@ -745,7 +829,26 @@ async Task PrepareLegacySmokeConfigurationAsync()
               </Trigger>
               <Trigger Enabled="true" Id="51997209-fb1d-4c07-80d5-d6542feeeacb" Name="C# self-reference regression" RegularExpression="ACTCOMPAT_SCRIPT_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;BridgeNamazu.InitializeModules(() =&gt; BridgeNamazu.RegisterAnnotatedMethods());&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_HOST_PICTO&#xD;&#xA;t: 5&#xD;&#xA;Pos: &lt;1.25, 2.5, -3.75&gt;&#xD;&#xA;Scale: 5, 5, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.65" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="80d5ffc0-d534-4fcb-95a7-1ee3b72519b0" Name="Mark expression callback closed loop" RegularExpression="ACTCOMPAT_MARK_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="Variable" OrderNumber="1" VariableOp="SetString" VariableName="ACTCOMPAT_MARK_ACTOR" VariableExpression="E0000000" />
+                  <Action ActionType="NamedCallback" OrderNumber="2" NamedCallbackName="mark" NamedCallbackParam="{&quot;ActorID&quot;:&quot;0x${v:ACTCOMPAT_MARK_ACTOR}&quot;,&quot;MarkType&quot;:&quot;attack1&quot;,&quot;LocalOnly&quot;:true}" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="a9c32bf3-3346-40e9-878e-1cbb944247c8" Name="Waymark expression callback closed loop" RegularExpression="ACTCOMPAT_PLACE_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="Variable" OrderNumber="1" VariableOp="SetNumeric" VariableName="ACTCOMPAT_WAY_X" VariableExpression="1.25" />
+                  <Action ActionType="Variable" OrderNumber="2" VariableOp="SetNumeric" VariableName="ACTCOMPAT_WAY_Y" VariableExpression="2.5" />
+                  <Action ActionType="Variable" OrderNumber="3" VariableOp="SetNumeric" VariableName="ACTCOMPAT_WAY_Z" VariableExpression="-3.75" />
+                  <Action ActionType="NamedCallback" OrderNumber="4" NamedCallbackName="place" NamedCallbackParam="{&quot;A&quot;:{&quot;X&quot;:${v:ACTCOMPAT_WAY_X},&quot;Y&quot;:${v:ACTCOMPAT_WAY_Y},&quot;Z&quot;:${v:ACTCOMPAT_WAY_Z},&quot;Active&quot;:true}}" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="0b595eff-da67-45ce-ab7c-1e4f7477d6d2" Name="Combat start closed loop" RegularExpression="^OnCombatStart$" Source="ACT">
@@ -973,8 +1076,9 @@ async Task<HostEnvelope> ReadUntilAsync(
 
 async Task<HostEnvelope> ReadTriggerCommandAsync(HostTestPipe pipe)
 {
+    const int maximumFrames = 90;
     HostHeartbeat? lastHeartbeat = null;
-    for (var index = 0; index < 10; index++)
+    for (var index = 0; index < maximumFrames; index++)
     {
         var envelope = await ReadWithTimeoutAsync(pipe);
         if (envelope.Type == HostMessageTypes.CommandRequest)
@@ -999,7 +1103,7 @@ async Task<HostEnvelope> ReadTriggerCommandAsync(HostTestPipe pipe)
                 $"{plugin.PluginId}:{plugin.CompletedEvents}/{plugin.Exceptions}"))
         : "none";
     throw new InvalidOperationException(
-        "Host did not send Triggernometry command.request within ten frames. " +
+        $"Host did not send Triggernometry command.request within {maximumFrames} frames. " +
         $"Runtime={runtime?.Detail ?? "unavailable"}; " +
         $"bridge={logBridge?.Detail ?? "unavailable"}; callbacks={callbacks}.");
 }

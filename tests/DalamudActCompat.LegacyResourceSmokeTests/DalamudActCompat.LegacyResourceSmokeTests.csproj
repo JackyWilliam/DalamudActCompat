@@ -11,8 +11,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DalamudActCompat.ActRuntime\DalamudActCompat.ActRuntime.csproj" />
+    <ProjectReference Include="..\..\src\DalamudActCompat.Protocol\DalamudActCompat.Protocol.csproj" />
     <Reference Include="Mono.Cecil">
       <HintPath>$(DalamudLibPath)Mono.Cecil.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(DalamudLibPath)Newtonsoft.Json.dll</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>

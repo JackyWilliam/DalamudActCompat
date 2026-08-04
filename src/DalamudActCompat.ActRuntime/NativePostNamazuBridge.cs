@@ -1,6 +1,8 @@
 using Advanced_Combat_Tracker;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.System.String;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
+using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using System.Collections;
 using System.Diagnostics;
@@ -373,6 +375,99 @@ public static class NativePostNamazuBridge
             using var message = new Utf8String(command);
             uiModule->ProcessChatBoxEntry(&message);
         }, cancellationToken);
+    }
+
+    public static Task SendMarkAsync(
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.GameCommand);
+        var request = PostNamazuSemanticActions.ParseMark(payload);
+        if (!request.LocalOnly)
+        {
+            throw new NotSupportedException(
+                "ActorID-based public target marking is not available through the safe game-side broker; use LocalOnly=true.");
+        }
+
+        return RunOnFrameworkThreadAsync(() => ApplyLocalMark(request), cancellationToken);
+    }
+
+    public static Task SendWaymarksAsync(
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.GameCommand);
+        var request = PostNamazuSemanticActions.ParseWaymarks(payload);
+        return RunOnFrameworkThreadAsync(() => ApplyWaymarks(request), cancellationToken);
+    }
+
+    private static unsafe void ApplyLocalMark(PostNamazuMarkAction request)
+    {
+        var controller = MarkingController.Instance();
+        if (controller is null)
+        {
+            throw new InvalidOperationException("FFXIV MarkingController is unavailable.");
+        }
+
+        controller->Markers[request.MarkerIndex] = (GameObjectId)(ulong)request.ActorId;
+    }
+
+    private static unsafe void ApplyWaymarks(PostNamazuWaymarkAction request)
+    {
+        var controller = MarkingController.Instance();
+        if (controller is null)
+        {
+            throw new InvalidOperationException("FFXIV MarkingController is unavailable.");
+        }
+
+        if (request.ClearAll)
+        {
+            EnsureWaymarkResult(controller->ClearFieldMarkers(), "clear all field markers");
+            return;
+        }
+
+        foreach (var update in request.Updates)
+        {
+            if (request.LocalOnly)
+            {
+                ref var marker = ref controller->FieldMarkers[update.Index];
+                marker.Position = update.Position;
+                marker.X = checked((int)(update.Position.X * 1000));
+                marker.Y = checked((int)(update.Position.Y * 1000));
+                marker.Z = checked((int)(update.Position.Z * 1000));
+                marker.Active = update.Active;
+                continue;
+            }
+
+            var position = update.Position;
+            var result = update.Active
+                ? controller->PlaceFieldMarker((uint)update.Index, &position)
+                : controller->ClearFieldMarker((uint)update.Index);
+            EnsureWaymarkResult(
+                result,
+                update.Active
+                    ? $"place field marker {update.Index}"
+                    : $"clear field marker {update.Index}");
+        }
+    }
+
+    private static void EnsureWaymarkResult(byte result, string operation)
+    {
+        if (result == 0)
+        {
+            return;
+        }
+
+        var reason = result switch
+        {
+            1 => "invalid marker index",
+            2 => "operation lock (actions were sent too quickly)",
+            3 => "all markers are pending",
+            4 => "field markers cannot be changed in combat",
+            5 => "field markers are not allowed in this territory",
+            _ => $"unknown game result {result}",
+        };
+        throw new InvalidOperationException($"Could not {operation}: {reason}.");
     }
 
     private static async Task RunOnFrameworkThreadAsync(

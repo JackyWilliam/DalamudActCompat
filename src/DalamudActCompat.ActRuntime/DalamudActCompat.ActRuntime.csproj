@@ -14,6 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\DalamudActCompat.Protocol\DalamudActCompat.Protocol.csproj" />
     <PackageDownload Include="Microsoft.Web.WebView2" Version="[1.0.4078.44]" />
     <ProjectReference Include="..\..\vendor\IINACT\IINACT\IINACT.csproj" />
     <PackageReference Include="System.Formats.Nrbf" Version="10.0.10" GeneratePathProperty="true" />

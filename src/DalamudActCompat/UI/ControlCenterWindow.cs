@@ -1019,10 +1019,23 @@ public sealed class ControlCenterWindow : Window
 
         var status = fflogsEstimateService.Status;
         ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
-        if (status.State is FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched)
+        var statusDetail = status.State is
+            FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched
+            ? status.Message
+            : string.Empty;
+        var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 2.4f;
+        if (ImGui.BeginChild(
+                "fflogs-status-detail",
+                new Vector2(-1, statusDetailHeight),
+                false,
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
-            ImGui.TextWrapped(status.Message);
+            if (!string.IsNullOrWhiteSpace(statusDetail))
+            {
+                ImGui.TextWrapped(statusDetail);
+            }
         }
+        ImGui.EndChild();
 
         var encounter = getCurrentEncounter();
         if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))

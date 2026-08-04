@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using DalamudActCompat.ActRuntime;
+using DalamudActCompat.Protocol;
+using Mono.Cecil;
 
 if (args.Length is < 1 or > 2)
 {
@@ -75,6 +77,10 @@ try
             "The patched Triggernometry implementation is missing expected UI resources.");
     }
 
+    AssertSystemWebExtensionsWasReplaced(implementation);
+    AssertLegacyJavaScriptSerializerCompatibility();
+    AssertPostNamazuSemanticPayloads();
+
     var administratorCheck = implementation
         .GetType("Triggernometry.Core.RealPlugin", throwOnError: true)!
         .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -141,9 +147,122 @@ try
     Console.WriteLine(
         "Safe NRBF conversion, Triggernometry resources, and PostNamazu native bridge probes passed.");
 }
+
 finally
 {
     AssemblyLoadContext.Default.Resolving -= ResolveDependency;
+}
+
+static void AssertSystemWebExtensionsWasReplaced(Assembly implementation)
+{
+    using var definition = AssemblyDefinition.ReadAssembly(implementation.Location);
+    if (definition.MainModule.AssemblyReferences.Any(reference =>
+            reference.Name == "System.Web.Extensions"))
+    {
+        throw new InvalidOperationException(
+            "Patched Triggernometry still references System.Web.Extensions.");
+    }
+
+    var replacementCalls = 0;
+    foreach (var method in definition.MainModule.Types
+                 .SelectMany(EnumerateCecilTypes)
+                 .SelectMany(type => type.Methods)
+                 .Where(method => method.HasBody))
+    {
+        foreach (var instruction in method.Body.Instructions)
+        {
+            if (instruction.Operand is not MemberReference member)
+            {
+                continue;
+            }
+
+            if (member.DeclaringType?.FullName ==
+                "System.Web.Script.Serialization.JavaScriptSerializer")
+            {
+                throw new InvalidOperationException(
+                    $"Patched Triggernometry still calls {member.FullName} from {method.FullName}.");
+            }
+
+            if (member.DeclaringType?.FullName ==
+                typeof(LegacyJavaScriptSerializer).FullName)
+            {
+                replacementCalls++;
+            }
+        }
+    }
+
+    if (replacementCalls != 24)
+    {
+        throw new InvalidOperationException(
+            $"Expected 24 Triggernometry JavaScriptSerializer bridge calls, found {replacementCalls}.");
+    }
+}
+
+static void AssertLegacyJavaScriptSerializerCompatibility()
+{
+    var serializer = new LegacyJavaScriptSerializer();
+    var untyped = serializer.Deserialize<object>(
+        "{\"actor\":{\"id\":3758096384,\"position\":[1.25,true,null]}}")
+        as Dictionary<string, object?>
+        ?? throw new InvalidOperationException("Untyped JSON root was not converted to a dictionary.");
+    var actor = untyped["actor"] as Dictionary<string, object?>
+                ?? throw new InvalidOperationException("Nested JSON object conversion failed.");
+    if (Convert.ToInt64(actor["id"]) != 3_758_096_384L)
+    {
+        throw new InvalidOperationException("Large untyped JSON integer conversion failed.");
+    }
+
+    var typed = serializer.Deserialize<SerializerProbe>("{\"name\":\"compat\",\"count\":17}")
+                ?? throw new InvalidOperationException("Typed JSON conversion returned null.");
+    if (typed.Name != "compat" || typed.Count != 17)
+    {
+        throw new InvalidOperationException("Typed JSON conversion lost properties.");
+    }
+
+    var roundTrip = serializer.Serialize(typed);
+    if (!roundTrip.Contains("compat", StringComparison.Ordinal) ||
+        !roundTrip.Contains("17", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException("Legacy JSON serialization lost values.");
+    }
+}
+
+static void AssertPostNamazuSemanticPayloads()
+{
+    var mark = PostNamazuSemanticActions.ParseMark(
+        "{\"ActorID\":0xE0000000,\"MarkType\":\"attack8\",\"LocalOnly\":true}");
+    if (mark.ActorId != PostNamazuSemanticActions.ClearActorId ||
+        mark.MarkerIndex != 16 ||
+        !mark.LocalOnly)
+    {
+        throw new InvalidOperationException(
+            "PostNamazu hexadecimal ActorID or marker mapping compatibility failed.");
+    }
+
+    var waymarks = PostNamazuSemanticActions.ParseWaymarks(
+        "{\"LocalOnly\":true,\"A\":{\"X\":1.25,\"Y\":2.5,\"Z\":-3.75,\"Active\":true},\"B\":{}}");
+    if (!waymarks.LocalOnly || waymarks.ClearAll || waymarks.Updates.Count != 2 ||
+        !waymarks.Updates[0].Active || waymarks.Updates[1].Active ||
+        waymarks.Updates[0].Position.X != 1.25f ||
+        waymarks.Updates[0].Position.Y != 2.5f ||
+        waymarks.Updates[0].Position.Z != -3.75f)
+    {
+        throw new InvalidOperationException("PostNamazu waymark JSON compatibility failed.");
+    }
+
+    if (!PostNamazuSemanticActions.ParseWaymarks("clear").ClearAll)
+    {
+        throw new InvalidOperationException("PostNamazu clear command compatibility failed.");
+    }
+}
+
+static IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)
+{
+    yield return type;
+    foreach (var nested in type.NestedTypes.SelectMany(EnumerateCecilTypes))
+    {
+        yield return nested;
+    }
 }
 
 static void AssertCallsNativeBridge(MethodInfo method, string expectedMethod)
@@ -291,4 +410,11 @@ Assembly? ResolveDependency(AssemblyLoadContext context, AssemblyName name)
 {
     var dependencyPath = resolver.ResolveAssemblyToPath(name);
     return dependencyPath is null ? null : context.LoadFromAssemblyPath(dependencyPath);
+}
+
+internal sealed class SerializerProbe
+{
+    public string Name { get; set; } = string.Empty;
+
+    public int Count { get; set; }
 }
