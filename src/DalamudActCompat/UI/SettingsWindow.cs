@@ -278,23 +278,10 @@ public sealed class SettingsWindow : Window
             "and can be revoked; fully constraining direct OS calls still requires a restricted process."));
         changed |= DrawPluginPermissions(
             "postnamazu",
-            [
-                ActCapability.Clipboard,
-                ActCapability.NetworkRequest,
-                ActCapability.WriteFiles,
-                ActCapability.GameCommand,
-                ActCapability.NativeGameMemory,
-            ]);
+            BundledActPluginCapabilities.PostNamazu);
         changed |= DrawPluginPermissions(
             "triggernometry",
-            [
-                ActCapability.TextToSpeech,
-                ActCapability.Clipboard,
-                ActCapability.NetworkRequest,
-                ActCapability.LaunchExternalProcess,
-                ActCapability.WriteFiles,
-                ActCapability.HighRiskScript,
-            ]);
+            BundledActPluginCapabilities.Triggernometry);
 
         ImGui.Separator();
         ImGui.TextUnformatted($"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
@@ -459,7 +446,10 @@ public sealed class SettingsWindow : Window
         IReadOnlyList<ActCapability> capabilities)
     {
         var changed = false;
-        if (!ImGui.TreeNode($"{pluginId}##permissions-{pluginId}"))
+        var displayName = string.Equals(pluginId, "postnamazu", StringComparison.OrdinalIgnoreCase)
+            ? text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu")
+            : pluginId;
+        if (!ImGui.TreeNode($"{displayName}##permissions-{pluginId}"))
         {
             return false;
         }
@@ -467,7 +457,9 @@ public sealed class SettingsWindow : Window
         foreach (var capability in capabilities)
         {
             var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
-            if (ImGui.Checkbox($"{capability}##{pluginId}-{capability}", ref allowed))
+            if (ImGui.Checkbox(
+                    $"{ActCapabilityDisplay.Label(capability, text)}##{pluginId}-{capability}",
+                    ref allowed))
             {
                 configuration.SetActCapability(pluginId, capability, allowed);
                 logger.Information(

@@ -55,6 +55,11 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openHistory;
     private readonly Action openStatus;
     private readonly Action openAdvancedSettings;
+    private readonly Action selectPluginPackage;
+    private readonly Action openPluginDirectory;
+    private readonly Action openBundledPluginNotice;
+    private readonly Action checkBundledPluginUpdates;
+    private readonly Action openLogDirectory;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
     private readonly Func<bool> isCactbotInstalled;
@@ -88,6 +93,11 @@ public sealed class ControlCenterWindow : Window
         Action openHistory,
         Action openStatus,
         Action openAdvancedSettings,
+        Action selectPluginPackage,
+        Action openPluginDirectory,
+        Action openBundledPluginNotice,
+        Action checkBundledPluginUpdates,
+        Action openLogDirectory,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
         Func<bool> isCactbotInstalled,
@@ -113,6 +123,11 @@ public sealed class ControlCenterWindow : Window
         this.openHistory = openHistory;
         this.openStatus = openStatus;
         this.openAdvancedSettings = openAdvancedSettings;
+        this.selectPluginPackage = selectPluginPackage;
+        this.openPluginDirectory = openPluginDirectory;
+        this.openBundledPluginNotice = openBundledPluginNotice;
+        this.checkBundledPluginUpdates = checkBundledPluginUpdates;
+        this.openLogDirectory = openLogDirectory;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
         this.isCactbotInstalled = isCactbotInstalled;
@@ -338,7 +353,7 @@ public sealed class ControlCenterWindow : Window
             (Page.Meter, text.Get("战斗统计", "Combat Meter")),
             (Page.Overlays, text.Get("悬浮窗", "Overlays")),
             (Page.Extensions, text.Get("扩展", "Extensions")),
-            (Page.Diagnostics, text.Get("诊断", "Settings")),
+            (Page.Diagnostics, text.Get("诊断", "Diagnostics")),
         };
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var tabWidth = Math.Max(86, (ImGui.GetContentRegionAvail().X - (spacing * (tabs.Length - 1))) / tabs.Length);
@@ -380,9 +395,25 @@ public sealed class ControlCenterWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
-        if (ImGui.Button(text.Get("打开战斗统计", "Open Combat Meter"), new Vector2(150, 36)))
+        var meterVisible = configuration.Meter.IsVisible;
+        if (meterVisible)
         {
-            openMeter();
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
+        }
+        if (ImGui.Button(
+                meterVisible
+                    ? text.Get("关闭战斗统计", "Close Combat Meter")
+                    : text.Get("打开战斗统计", "Open Combat Meter"),
+                new Vector2(150, 36)))
+        {
+            setMeterVisible(!meterVisible);
+        }
+        if (meterVisible)
+        {
+            ImGui.PopStyleColor(4);
         }
         ImGui.SameLine();
         if (ImGui.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
@@ -684,13 +715,68 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextWrapped(text.Get(
-            "安装、更新来源和权限白名单等低频选项仍放在完整设置页。",
-            "Low-frequency installation, update-source, and permission options remain in the full settings page."));
-        if (ImGui.Button(text.Get("打开完整设置", "Open full settings")))
+        ImGui.TextColored(Gold, text.Get("扩展管理", "Extension management"));
+        if (ImGui.Button(text.Get("安装 DLL / ZIP", "Install DLL / ZIP")))
         {
-            openAdvancedSettings();
+            selectPluginPackage();
         }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("打开扩展文件夹", "Open extension folder")))
+        {
+            openPluginDirectory();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("检查更新与来源", "Check updates and sources")))
+        {
+            checkBundledPluginUpdates();
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
+        ImGui.TextWrapped(text.Get(
+            "高风险能力默认关闭，授权按扩展和能力分别保存；撤销后立即对兼容桥生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
+            "High-risk capabilities are denied by default. Grants are stored per extension and capability and take effect immediately when revoked. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
+        changed |= DrawPluginPermissions(
+            "postnamazu",
+            text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
+            BundledActPluginCapabilities.PostNamazu);
+        changed |= DrawPluginPermissions(
+            "triggernometry",
+            "Triggernometry",
+            BundledActPluginCapabilities.Triggernometry);
+        return changed;
+    }
+
+    private bool DrawPluginPermissions(
+        string pluginId,
+        string displayName,
+        IReadOnlyList<ActCapability> capabilities)
+    {
+        var changed = false;
+        if (!ImGui.TreeNode($"{displayName}##control-center-permissions-{pluginId}"))
+        {
+            return false;
+        }
+
+        foreach (var capability in capabilities)
+        {
+            var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
+            if (!ImGui.Checkbox(
+                    $"{ActCapabilityDisplay.Label(capability, text)}##control-center-{pluginId}-{capability}",
+                    ref allowed))
+            {
+                continue;
+            }
+
+            configuration.SetActCapability(pluginId, capability, allowed);
+            logger.Information(
+                $"ACT permission changed: plugin={pluginId}, capability={capability}, allowed={allowed}.");
+            changed = true;
+        }
+
+        ImGui.TreePop();
         return changed;
     }
 
@@ -765,6 +851,16 @@ public sealed class ControlCenterWindow : Window
         {
             openStatus();
         }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("打开日志文件夹", "Open log folder")))
+        {
+            openLogDirectory();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("三方扩展声明", "Third-party extension notice")))
+        {
+            openBundledPluginNotice();
+        }
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -811,7 +907,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        if (ImGui.Button(text.Get("打开完整设置与日志路径", "Open full settings and log paths")))
+        if (ImGui.Button(text.Get("打开完整设置", "Open full settings")))
         {
             openAdvancedSettings();
         }
@@ -885,8 +981,13 @@ public sealed class ControlCenterWindow : Window
     private static string BuildVersionLabel()
     {
         var version = typeof(ControlCenterWindow).Assembly.GetName().Version;
-        return version is null ? "v?" : $"v{version.Major}.{version.Minor}.{version.Build}";
+        return FormatVersionLabel(version);
     }
+
+    internal static string FormatVersionLabel(Version? version)
+        => version is null
+            ? "v?"
+            : $"v{version.Major}.{version.Minor}.{Math.Max(0, version.Build)}.{Math.Max(0, version.Revision)}";
 
     private static bool Checkbox(string label, bool current, Action<bool> set)
     {
@@ -986,6 +1087,31 @@ public sealed class ControlCenterWindow : Window
             {
                 fflogsEstimateService.RequestRefresh(getCurrentEncounter());
             }
+        }
+
+        if (ImGui.CollapsingHeader(text.Get(
+                "如何创建 FFLogs API Client",
+                "How to create an FFLogs API client")))
+        {
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+            if (ImGui.BeginChild("fflogs-client-guide", new Vector2(-1, 150), true))
+            {
+                ImGui.TextWrapped(text.Get(
+                    "1. 登录 FFLogs 网站。\n" +
+                    "2. 点击 Create Client。\n" +
+                    "3. 输入一个名称。\n" +
+                    "4. 输入一个网址；如果不知道填什么，请填写 https://example.com。\n" +
+                    "5. 点击创建。\n" +
+                    "6. 在下方找到 Client ID 和 Client Secret，并分别填入插件对应位置。",
+                    "1. Sign in to FFLogs.\n" +
+                    "2. Click Create Client.\n" +
+                    "3. Enter a name.\n" +
+                    "4. Enter a URL; use https://example.com if you do not have one.\n" +
+                    "5. Create the client.\n" +
+                    "6. Copy the Client ID and Client Secret shown below into the matching plugin fields."));
+            }
+            ImGui.EndChild();
+            ImGui.PopStyleColor();
         }
 
         var clientId = configuration.Fflogs.ClientId;

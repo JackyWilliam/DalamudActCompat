@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.4.2",
+    "AssemblyVersion":  "0.3.5.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.4.2/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.4.2/DalamudActCompat.zip",
-    "LastUpdate":  1785838687019,
-    "Changelog":  "修复 Triggernometry 的游戏实体快照桥，使 _me ID、坐标、头顶标点、地面标点和插件自有绘图可正常工作；无首领名时显示战斗状态，并补充卫月安装器远程 Logo。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5/DalamudActCompat.zip",
+    "LastUpdate":  1785841173246,
+    "Changelog":  "修复 Triggernometry 标点与绘图坐标轴；重做扩展来源声明、权限确认、扩展与诊断入口、战斗记录界面；新增 FFLogs Client 创建指导与战斗统计按钮开关状态；内部版本改为四位。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

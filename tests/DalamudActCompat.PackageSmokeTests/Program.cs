@@ -14,6 +14,7 @@ using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
+using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -738,6 +739,26 @@ static void ValidateControlCenterPresentation()
         Math.Abs(ControlCenterWindow.EaseInOut(0.5f) - 0.5f) < 0.001f &&
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
+    Assert(
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 0)) == "v0.3.5.0",
+        "The ACT control center no longer displays the full four-part assembly version.");
+
+    var combatant = new Combatant(
+        "local",
+        "Player",
+        "WHM",
+        true,
+        120_000,
+        60_000,
+        1,
+        Dps: 2_000,
+        EncDps: 1_500,
+        ExtDps: 1_250);
+    Assert(
+        EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.EncDps) == 1_500 &&
+        EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.ExtDps) == 1_250 &&
+        EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Hps, DpsMetric.EncDps) == 1_000,
+        "Combat History no longer follows the Combat Meter DPS metric and DPS/HPS sort mode.");
 }
 
 static void ValidateChinese755Opcodes()
