@@ -33,6 +33,19 @@ public sealed class BundledActPluginManager
 
     public IReadOnlyList<BundledActPluginDescriptor> Plugins => bundledPlugins;
 
+    public IReadOnlyList<BundledActPluginDescriptor> GetDisclosures()
+    {
+        var installed = installer
+            .Discover(new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        lock (updateLock)
+        {
+            return bundledPlugins
+                .Select(plugin => GetEffectivePlugin(plugin, installed))
+                .ToArray();
+        }
+    }
+
     public int ApplyOnlineUpdates(
         IReadOnlyList<BundledActPluginDescriptor> candidates)
     {

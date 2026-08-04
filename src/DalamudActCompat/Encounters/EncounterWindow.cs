@@ -19,11 +19,11 @@ public sealed class EncounterWindow : Window
         LogFiles,
     }
 
-    private static readonly Vector4 Navy = new(0.045f, 0.065f, 0.105f, 1);
-    private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 1);
-    private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 1);
+    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
+    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
+    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
     private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.38f, 0.72f, 0.90f, 1);
+    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
 
     private readonly EncounterStateStore stateStore;
     private readonly PluginPaths paths;
@@ -341,8 +341,8 @@ public sealed class EncounterWindow : Window
     private void PageButton(HistoryPage page, string label)
     {
         var selected = selectedPage == page;
-        ImGui.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(0.26f, 0.23f, 0.14f, 1) : new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Text, selected ? new Vector4(0.95f, 0.86f, 0.60f, 1) : new Vector4(0.84f, 0.87f, 0.91f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(0.11f, 0.25f, 0.34f, 1) : new Vector4(0.12f, 0.17f, 0.24f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Text, selected ? IceBlue : new Vector4(0.84f, 0.87f, 0.91f, 1));
         if (ImGui.Button($"{label}##history-page-{page}", new Vector2(150, 34)))
         {
             selectedPage = page;
@@ -363,10 +363,10 @@ public sealed class EncounterWindow : Window
         drawList.AddRectFilled(start, start + new Vector2(width, height), ImGui.GetColorU32(hovered ? NavyHover : NavyRaised), 6);
         if (selected)
         {
-            drawList.AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(Gold), 6, ImDrawFlags.None, 1.5f);
-            drawList.AddRectFilled(start, start + new Vector2(3, height), ImGui.GetColorU32(Gold), 6);
+            drawList.AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(IceBlue), 6, ImDrawFlags.None, 1.5f);
+            drawList.AddRectFilled(start, start + new Vector2(3, height), ImGui.GetColorU32(IceBlue), 6);
         }
-        drawList.AddText(start + new Vector2(10, 8), ImGui.GetColorU32(selected ? Gold : Vector4.One), TrimToWidth(EncounterTitle(encounter), width - 20));
+        drawList.AddText(start + new Vector2(10, 8), ImGui.GetColorU32(selected ? IceBlue : Vector4.One), TrimToWidth(EncounterTitle(encounter), width - 20));
         var detail = $"{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(encounter.Duration)}  ·  {encounter.TotalDeaths} {text.Get("死亡", "KO")}";
         drawList.AddText(start + new Vector2(10, 32), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), TrimToWidth(detail, width - 20));
         ImGui.PopID();
@@ -386,9 +386,9 @@ public sealed class EncounterWindow : Window
         drawList.AddRectFilled(start, start + new Vector2(width, height), ImGui.GetColorU32(hovered ? NavyHover : NavyRaised), 6);
         if (selected)
         {
-            drawList.AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(Gold), 6, ImDrawFlags.None, 1.5f);
+            drawList.AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(IceBlue), 6, ImDrawFlags.None, 1.5f);
         }
-        drawList.AddText(start + new Vector2(9, 7), ImGui.GetColorU32(selected ? Gold : Vector4.One), TrimToWidth(label, width - 18));
+        drawList.AddText(start + new Vector2(9, 7), ImGui.GetColorU32(selected ? IceBlue : Vector4.One), TrimToWidth(label, width - 18));
         drawList.AddText(start + new Vector2(9, 29), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), File.GetLastWriteTime(file).ToString("yyyy-MM-dd HH:mm"));
         ImGui.PopID();
         return clicked;

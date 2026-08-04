@@ -30,6 +30,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Func<bool> debugMode;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
+    private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
+        new(StringComparer.OrdinalIgnoreCase);
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -981,6 +983,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     if (!ReferenceEquals(activeEncounter, encounter))
                     {
                         var continuesChatEncounter = chatEncounterId != Guid.Empty;
+                        criticalDirectHitCounters.Clear();
                         activeEncounter = encounter;
                         activeEncounterId = continuesChatEncounter
                             ? chatEncounterId
@@ -1008,19 +1011,26 @@ public sealed class SelfHostedActRuntime : IDisposable
                             Combatant: combatant,
                             Identity: ActPlayerIdentityResolver.Resolve(identities, combatant.Name)))
                         .Where(static item => item.Identity is not null)
-                        .Select(item => new ActCombatantSnapshot(
-                            item.Identity!.DisplayName,
-                            item.Identity.DisplayName,
-                            item.Identity.Job,
-                            item.Identity.IsLocalPlayer,
-                            item.Combatant.Damage,
-                            item.Combatant.Healed,
-                            Math.Max(
-                                item.Combatant.Deaths,
-                                observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
-                            item.Combatant.DPS,
-                            item.Combatant.EncDPS,
-                            item.Combatant.ExtDPS))
+                        .Select(item =>
+                        {
+                            var hitCounts = GetDamageHitCounts(item.Combatant);
+                            return new ActCombatantSnapshot(
+                                item.Identity!.DisplayName,
+                                item.Identity.DisplayName,
+                                item.Identity.Job,
+                                item.Identity.IsLocalPlayer,
+                                item.Combatant.Damage,
+                                item.Combatant.Healed,
+                                Math.Max(
+                                    item.Combatant.Deaths,
+                                    observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
+                                item.Combatant.DPS,
+                                item.Combatant.EncDPS,
+                                item.Combatant.ExtDPS,
+                                hitCounts.DamageHits,
+                                hitCounts.CriticalHits,
+                                hitCounts.CriticalDirectHits);
+                        })
                         .ToArray();
 
                     if (combatants.Length > 0)
@@ -1084,6 +1094,58 @@ public sealed class SelfHostedActRuntime : IDisposable
             log.Error(ex, "Failed to publish ACT encounter snapshot.");
         }
     }
+
+    private CombatantHitCounts GetDamageHitCounts(CombatantData combatant)
+    {
+        var allDamage = combatant.AllOut.Values.MaxBy(static attack => attack.Hits);
+        if (allDamage is null)
+        {
+            return new CombatantHitCounts(
+                Math.Max(0, combatant.Hits),
+                Math.Max(0, combatant.CritHits),
+                0);
+        }
+
+        if (!criticalDirectHitCounters.TryGetValue(combatant.Name, out var counter) ||
+            !ReferenceEquals(counter.Source, allDamage) ||
+            counter.ProcessedSwings > allDamage.Items.Count)
+        {
+            counter = new CriticalDirectHitCounter(allDamage);
+        }
+
+        for (var index = counter.ProcessedSwings; index < allDamage.Items.Count; index++)
+        {
+            var swing = allDamage.Items[index];
+            if (swing.Critical &&
+                swing.Tags.TryGetValue("DirectHit", out var directHit) &&
+                string.Equals(directHit?.ToString(), "True", StringComparison.Ordinal))
+            {
+                counter.CriticalDirectHits++;
+            }
+        }
+
+        counter.ProcessedSwings = allDamage.Items.Count;
+        criticalDirectHitCounters[combatant.Name] = counter;
+
+        return new CombatantHitCounts(
+            Math.Max(0, combatant.Hits),
+            Math.Max(0, combatant.CritHits),
+            counter.CriticalDirectHits);
+    }
+
+    private sealed class CriticalDirectHitCounter(AttackType source)
+    {
+        public AttackType Source { get; } = source;
+
+        public int ProcessedSwings { get; set; }
+
+        public int CriticalDirectHits { get; set; }
+    }
+
+    private readonly record struct CombatantHitCounts(
+        int DamageHits,
+        int CriticalHits,
+        int CriticalDirectHits);
 
     private void TrackPlayerDeaths(IReadOnlyList<ActPlayerIdentity> identities)
     {

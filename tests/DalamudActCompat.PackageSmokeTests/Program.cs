@@ -449,7 +449,10 @@ static void ValidateMeterRows()
         "Test Zone",
         "Test Enemy",
         [
-            new Combatant("tank", "Tank@Alpha", "PLD", true, 100_000, 10_000, 1, 11_000, 10_000, 10_000),
+            new Combatant(
+                "tank", "Tank@Alpha", "PLD", true, 100_000, 10_000, 1,
+                11_000, 10_000, 10_000,
+                DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2),
             new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3, 2_500, 2_000, 2_000),
         ],
         [],
@@ -471,6 +474,9 @@ static void ValidateMeterRows()
     Assert(rows[0].Job == "PLD", "The resolved player job was not preserved.");
     Assert(rows[0].Deaths == 1, "The resolved player death count was not preserved.");
     Assert(rows[0].Dps == 10_000, "EncDPS did not use the ACT encounter-duration field.");
+    Assert(
+        rows[0].CriticalHitPercent == 25 && rows[0].CriticalDirectHitPercent == 10,
+        "The ACT Meter did not calculate critical and critical-direct rates from hit counts.");
     Assert(
         Math.Abs(rows.Sum(row => row.DamagePercent) - 100) < 0.01,
         "Meter damage percentages did not cover the encounter total.");
@@ -598,6 +604,16 @@ static void ValidateCompactMeterLayout()
         otherRateColor.X + otherRateColor.Y + otherRateColor.Z,
         "The local player's DPS/HPS value is not brighter than party values.");
 
+    var hitRateTextMethod = typeof(MeterWindow).GetMethod(
+                                "FormatHitRate",
+                                BindingFlags.Static | BindingFlags.NonPublic)
+                            ?? throw new InvalidOperationException(
+                                "Meter hit-rate formatter was not found.");
+    Assert(
+        Equals(hitRateTextMethod.Invoke(null, ["暴击", 25.0]), "暴击 25.0%") &&
+        Equals(hitRateTextMethod.Invoke(null, ["直暴", null]), "直暴 --"),
+        "The Meter does not format critical and critical-direct rates safely.");
+
     var localizerType = typeof(MeterWindow).Assembly.GetType(
                             "DalamudActCompat.Meter.ZoneNameLocalizer")
                         ?? throw new InvalidOperationException(
@@ -659,7 +675,10 @@ static void ValidateDutyEncounterAggregation()
         "Boss A",
         damage: 100,
         healing: 20,
-        deaths: 1);
+        deaths: 1,
+        damageHits: 10,
+        criticalHits: 3,
+        criticalDirectHits: 1);
     var afterFirst = accumulator.Update(first, finished: true, start.AddMinutes(2));
     Assert(
         afterFirst.IsActive && afterFirst.TotalDamage == 100,
@@ -678,7 +697,10 @@ static void ValidateDutyEncounterAggregation()
         "Boss B",
         damage: 50,
         healing: 10,
-        deaths: 0);
+        deaths: 0,
+        damageHits: 5,
+        criticalHits: 1,
+        criticalDirectHits: 1);
     var combinedActive = accumulator.Update(secondActive, finished: false, start.AddMinutes(5));
     Assert(
         combinedActive.Id == afterFirst.Id &&
@@ -695,6 +717,9 @@ static void ValidateDutyEncounterAggregation()
             {
                 TotalDamage = 80,
                 TotalHealing = 15,
+                DamageHits = 8,
+                CriticalHits = 2,
+                CriticalDirectHits = 1,
             },
         ],
     };
@@ -706,7 +731,10 @@ static void ValidateDutyEncounterAggregation()
         !completed.IsActive &&
         completed.TotalDamage == 180 &&
         completed.TotalHealing == 35 &&
-        completed.TotalDeaths == 1,
+        completed.TotalDeaths == 1 &&
+        completed.Combatants[0].DamageHits == 18 &&
+        completed.Combatants[0].CriticalHits == 5 &&
+        completed.Combatants[0].CriticalDirectHits == 2,
         "Leaving the duty did not finalize the accumulated boss totals exactly once.");
 }
 
@@ -718,14 +746,21 @@ static Encounter CreateDutySegment(
     string enemy,
     long damage,
     long healing,
-    int deaths)
+    int deaths,
+    int damageHits = 0,
+    int criticalHits = 0,
+    int criticalDirectHits = 0)
     => new(
         id,
         start,
         endTime,
         zone,
         enemy,
-        [new Combatant("local", "Player", "PLD", true, damage, healing, deaths)],
+        [new Combatant(
+            "local", "Player", "PLD", true, damage, healing, deaths,
+            DamageHits: damageHits,
+            CriticalHits: criticalHits,
+            CriticalDirectHits: criticalDirectHits)],
         Array.Empty<DamageEvent>(),
         Array.Empty<HealEvent>(),
         Array.Empty<DeathEvent>(),
@@ -740,8 +775,18 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 1)) == "v0.3.5.1",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 2)) == "v0.3.5.2",
         "The ACT control center no longer displays the full four-part assembly version.");
+    Assert(
+        !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
+        ControlCenterWindow.IsResetConfirmationExpired(11_000, 11_000),
+        "The two-step encounter reset confirmation does not expire after ten seconds.");
+    Assert(
+        ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(1, failed: false, userInitiated: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: false, userInitiated: true) &&
+        ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: true) &&
+        !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: false),
+        "The DLL update-check window does not stay hidden when a successful check finds no updates.");
 
     var combatant = new Combatant(
         "local",
@@ -877,6 +922,9 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     var pending = manager.GetPendingDisclosures();
     Assert(pending.Count == 3, "A new install did not require all three bundled DLL disclosures.");
     Assert(
+        manager.GetDisclosures().Count == 3,
+        "The third-party notice did not expose every bundled DLL source.");
+    Assert(
         pending.Any(plugin =>
             plugin.Id == "triggernometry" &&
             plugin.Author == "Paissa Heavy Industries" &&
@@ -900,6 +948,12 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         manager.GetPendingDisclosures().Count == 0,
         "Acknowledged current bundled DLLs still required disclosure.");
+    Assert(
+        manager.GetDisclosures().Count == 3 &&
+        manager.GetDisclosures().All(plugin =>
+            !string.IsNullOrWhiteSpace(plugin.Author) &&
+            Uri.TryCreate(plugin.ProjectUrl, UriKind.Absolute, out _)),
+        "Acknowledged DLL author and project URL disclosures disappeared from the notice.");
     var installed = installer.Discover(configuration.DisabledActPluginIds);
     Assert(installed.Count == 3, "Not all bundled DLLs were installed.");
     Assert(
@@ -1228,6 +1282,63 @@ static void ValidateHtmlOverlayDefaults()
                 parameter.Name == "deleteHtmlOverlay" &&
                 parameter.ParameterType == typeof(Action<string>)),
         "The control center no longer exposes the created-overlay delete action.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "resetCurrentEncounter" &&
+                parameter.ParameterType == typeof(Action)),
+        "The control center no longer owns the guarded encounter-reset action.");
+
+    var controlCenterSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "ControlCenterWindow.cs"));
+    var createdOverlayIndex = controlCenterSource.IndexOf(
+        "changed |= DrawCreatedHtmlOverlays();",
+        StringComparison.Ordinal);
+    var templateOverlayIndex = controlCenterSource.IndexOf(
+        "从模板创建",
+        StringComparison.Ordinal);
+    Assert(
+        createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
+        controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal),
+        "Created HTML overlays are not listed above the template form or the Chinese label regressed.");
+    Assert(
+        controlCenterSource.Contains(
+            "private const int ResetConfirmationMilliseconds = 10_000;",
+            StringComparison.Ordinal),
+        "The encounter-reset confirmation is not configured to close after ten seconds.");
+    var fflogsApiCardIndex = controlCenterSource.IndexOf(
+        "fflogs-api-refresh-card",
+        StringComparison.Ordinal);
+    var fflogsBindingCardIndex = controlCenterSource.IndexOf(
+        "fflogs-encounter-binding-card",
+        StringComparison.Ordinal);
+    Assert(
+        fflogsApiCardIndex >= 0 && fflogsBindingCardIndex > fflogsApiCardIndex &&
+        controlCenterSource.Contains("API 凭据与数据刷新", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("当前战斗绑定", StringComparison.Ordinal),
+        "FFLogs credential refresh and encounter binding are not presented as separate modules.");
+    Assert(
+        !controlCenterSource.Contains("control-center-sidebar", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("parser-state-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("VersionLabel", StringComparison.Ordinal),
+        "The control center did not move branding, centered parser state, version, and close control into rounded top chrome.");
+    var meterWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterWindow.cs"));
+    Assert(
+        !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
+        !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal),
+        "The destructive encounter-reset control is still exposed directly on the Meter overlay.");
 
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
@@ -1862,7 +1973,10 @@ static void ValidateActEncounterMapping()
         "Test Zone",
         "Test Enemy",
         [
-            new ActCombatantSnapshot("local", "You", "SAM", true, 120_000, 2_000, 0, 13_000, 12_000, 12_000),
+            new ActCombatantSnapshot(
+                "local", "You", "SAM", true, 120_000, 2_000, 0,
+                13_000, 12_000, 12_000,
+                DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
             new ActCombatantSnapshot(
                 "early",
@@ -1890,12 +2004,34 @@ static void ValidateActEncounterMapping()
     var local = encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer);
     Assert(local.Dps == 13_000 && local.EncDps == 12_000 && local.ExtDps == 12_000,
         "ACT DPS metric fields were not mapped.");
+    Assert(
+        local.DamageHits == 40 && local.CriticalHits == 12 && local.CriticalDirectHits == 4,
+        "ACT critical and critical-direct hit counts were not mapped.");
     var early = encounter.Combatants.Single(static combatant => combatant.Name == "Early Pull");
     Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0,
         "Non-finite ACT rates were not normalized before persistence.");
     Assert(
         !string.IsNullOrWhiteSpace(JsonSerializer.Serialize(encounter)),
         "A mapped ACT encounter with early-pull rates could not be serialized.");
+
+    var legacyCombatant = JsonSerializer.Deserialize<Combatant>(
+        """
+        {
+          "Id": "legacy",
+          "Name": "Legacy Player",
+          "Job": "PLD",
+          "IsLocalPlayer": true,
+          "TotalDamage": 1,
+          "TotalHealing": 0,
+          "Deaths": 0,
+          "Dps": 1,
+          "EncDps": 1,
+          "ExtDps": 1
+        }
+        """);
+    Assert(
+        legacyCombatant is { DamageHits: 0, CriticalHits: 0, CriticalDirectHits: 0 },
+        "Legacy combatant JSON without hit-count fields is no longer compatible.");
 }
 
 static void ValidateChineseCombatChatParsing()
