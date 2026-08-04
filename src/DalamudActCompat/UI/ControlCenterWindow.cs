@@ -73,6 +73,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Action<string> closeHtmlOverlay;
     private readonly Action<string> deleteHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
+    private readonly Func<Task<string>> factoryReset;
     private readonly Action resetCurrentEncounter;
     private Page selectedPage;
     private ParserStatus parserStatus;
@@ -83,6 +84,8 @@ public sealed class ControlCenterWindow : Window
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
     private long resetEncounterConfirmationExpiresAt;
+    private bool confirmFactoryReset;
+    private string? factoryResetResult;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -113,6 +116,7 @@ public sealed class ControlCenterWindow : Window
         Action<string> openHtmlOverlay,
         Action<string> closeHtmlOverlay,
         Action<string> deleteHtmlOverlay,
+        Func<Task<string>> factoryReset,
         Action resetCurrentEncounter,
         Action<string> applyOverlayWindowSettings)
         : base("ACT 控制中心###DalamudActCompatControlCenter")
@@ -145,6 +149,7 @@ public sealed class ControlCenterWindow : Window
         this.openHtmlOverlay = openHtmlOverlay;
         this.closeHtmlOverlay = closeHtmlOverlay;
         this.deleteHtmlOverlay = deleteHtmlOverlay;
+        this.factoryReset = factoryReset;
         this.resetCurrentEncounter = resetCurrentEncounter;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         parserStatus = parserEngine.Status;
@@ -290,79 +295,20 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawWindowChrome()
     {
-        const float height = 40;
-        const float closeWidth = 34;
-        const float horizontalPadding = 8;
-        const float logoSize = 28;
-        var start = ImGui.GetCursorPos();
-        var screenStart = ImGui.GetCursorScreenPos();
-        var availableWidth = ImGui.GetContentRegionAvail().X;
-        var screenEnd = screenStart + new Vector2(availableWidth, height);
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(
-            screenStart,
-            screenEnd,
-            ImGui.GetColorU32(NavyRaised),
-            9,
-            ImDrawFlags.RoundCornersTop);
-
-        var logoTop = screenStart.Y + ((height - logoSize) * 0.5f);
-        var logoLeft = screenStart.X + horizontalPadding;
-        drawList.AddImage(
-            logoTexture.GetWrapOrEmpty().Handle,
-            new Vector2(logoLeft, logoTop),
-            new Vector2(logoLeft + logoSize, logoTop + logoSize));
-
-        var textTop = screenStart.Y + ((height - ImGui.GetTextLineHeight()) * 0.5f);
-        var title = "Dalamud ACT Compat";
-        var titleLeft = logoLeft + logoSize + 9;
-        drawList.AddText(
-            new Vector2(titleLeft, textTop),
-            ImGui.GetColorU32(Vector4.One),
-            title);
-        drawList.AddText(
-            new Vector2(titleLeft + ImGui.CalcTextSize(title).X + 9, textTop),
-            ImGui.GetColorU32(new Vector4(0.68f, 0.72f, 0.77f, 1)),
-            text.Get("设置", "Settings"));
-
         var stateLabel = $"● {LocalizeState(parserStatus.State)}";
-        var stateSize = ImGui.CalcTextSize(stateLabel);
         var stateColor = parserStatus.State == ParserState.Running
             ? IceBlue
             : new Vector4(0.70f, 0.72f, 0.76f, 1);
-        drawList.AddText(
-            new Vector2(
-                screenStart.X + ((availableWidth - stateSize.X) * 0.5f),
-                textTop),
-            ImGui.GetColorU32(stateColor),
-            stateLabel);
-
-        var versionSize = ImGui.CalcTextSize(VersionLabel);
-        drawList.AddText(
-            new Vector2(
-                screenStart.X + availableWidth - closeWidth - versionSize.X - 12,
-                textTop),
-            ImGui.GetColorU32(new Vector4(0.62f, 0.66f, 0.71f, 1)),
-            VersionLabel);
-
-        ImGui.InvisibleButton(
-            "control-center-drag-handle",
-            new Vector2(Math.Max(1, availableWidth - closeWidth), height));
-        if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
-        {
-            ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
-        }
-
-        ImGui.SetCursorPos(new Vector2(start.X + availableWidth - closeWidth, start.Y));
-        ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
-        if (ImGui.Button("×##close-control-center", new Vector2(closeWidth, height)))
+        if (BrandedWindowChrome.Draw(
+                logoTexture,
+                text.Get("主页", "Home"),
+                stateLabel,
+                stateColor,
+                VersionLabel,
+                "control-center"))
         {
             HideAnimated();
         }
-        ImGui.PopStyleColor(3);
-        ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));
     }
 
     private void DrawPageTabs()
@@ -373,7 +319,7 @@ public sealed class ControlCenterWindow : Window
             (Page.Meter, text.Get("战斗统计", "Combat Meter")),
             (Page.Overlays, text.Get("悬浮窗", "Overlays")),
             (Page.Extensions, text.Get("扩展", "Extensions")),
-            (Page.Diagnostics, text.Get("诊断", "Diagnostics")),
+            (Page.Diagnostics, text.Get("设置", "Settings")),
         };
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var tabWidth = Math.Max(86, (ImGui.GetContentRegionAvail().X - (spacing * (tabs.Length - 1))) / tabs.Length);
@@ -991,8 +937,10 @@ public sealed class ControlCenterWindow : Window
     private bool DrawDiagnostics()
     {
         DrawPageHeader(
-            text.Get("诊断与设置", "Diagnostics & Settings"),
-            text.Get("运行状态、语言和快捷按钮。", "Runtime status, language, and quick-button options."));
+            text.Get("设置", "Settings"),
+            text.Get(
+                "运行状态、语言、快捷按钮与恢复选项。",
+                "Runtime status, language, quick-button, and recovery options."));
 
         ImGui.TextColored(Gold, $"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
         ImGui.TextWrapped(parserStatus.Message);
@@ -1068,6 +1016,55 @@ public sealed class ControlCenterWindow : Window
         if (ImGui.Button(text.Get("打开完整设置", "Open full settings")))
         {
             openAdvancedSettings();
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("恢复", "Recovery"));
+        ImGui.TextWrapped(text.Get(
+            "恢复出厂设置会停止 ACT 宿主、备份所有可变数据，并恢复两个系统插件和默认设置。",
+            "Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings."));
+        if (!confirmFactoryReset)
+        {
+            if (ImGui.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
+            {
+                confirmFactoryReset = true;
+            }
+        }
+        else
+        {
+            ImGui.TextWrapped(text.Get(
+                "按确认继续。此前状态仍可从备份目录恢复。",
+                "Press confirm to continue. The previous state remains recoverable from the backup directory."));
+            if (ImGui.Button(text.Get("确认恢复", "Confirm factory reset")))
+            {
+                confirmFactoryReset = false;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        factoryResetResult = await factoryReset().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error(ex, "Factory reset failed.");
+                        factoryResetResult = $"{text.Get("恢复出厂设置失败", "Factory reset failed")}: {ex.Message}";
+                    }
+                });
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button(text.Get("取消", "Cancel")))
+            {
+                confirmFactoryReset = false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(factoryResetResult))
+        {
+            ImGui.TextWrapped(
+                $"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {factoryResetResult}");
         }
         return changed;
     }

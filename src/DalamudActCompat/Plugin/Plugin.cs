@@ -111,6 +111,7 @@ public sealed class Plugin : IDalamudPlugin
             partyList.Count > 1 &&
             partyList.Any(member => member.CurrentHP > 0);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
+        var configurationMigrated = configuration.ApplyMigrations();
         configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
             configuration.Meter.SortMode);
         logger = new PluginLogger(log);
@@ -118,6 +119,10 @@ public sealed class Plugin : IDalamudPlugin
         if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
         {
             configuration.LogDirectory = paths.CombatLogDirectory;
+        }
+        if (configurationMigrated)
+        {
+            pluginInterface.SavePluginConfig(configuration);
         }
 
         packageInstaller = new ActPluginPackageInstaller(paths);
@@ -226,6 +231,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration,
             text,
             jobIcons,
+            logoTexture,
             SaveConfiguration);
         factoryResetService = new FactoryResetService(
             parserEngine,
@@ -240,7 +246,8 @@ public sealed class Plugin : IDalamudPlugin
             InstallBundledPluginsAsync,
             ConfigureBundledPluginPermissions,
             logger,
-            text);
+            text,
+            logoTexture);
         advancedSettingsWindow = new SettingsWindow(
             configuration,
             parserEngine,
@@ -297,6 +304,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenHtmlOverlay,
             CloseHtmlOverlay,
             DeleteHtmlOverlay,
+            FactoryResetAsync,
             stateStore.ResetCurrent,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(

@@ -8,7 +8,9 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    public int Version { get; set; } = 1;
+    private const int CurrentVersion = 2;
+
+    public int Version { get; set; } = CurrentVersion;
 
     public bool EnableParsing { get; set; }
 
@@ -54,8 +56,27 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public Dictionary<string, Dictionary<ActCapability, bool>> ActPluginPermissions { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
+    public bool ApplyMigrations()
+    {
+        var changed = false;
+        if (Meter is null)
+        {
+            Meter = new MeterSettings();
+            changed = true;
+        }
+        if (Version < 2)
+        {
+            changed |= Meter.MigrateLegacyLocalPlayerColor();
+            Version = 2;
+            changed = true;
+        }
+
+        return changed;
+    }
+
     public void ResetToDefaults(string defaultLogDirectory)
     {
+        Version = CurrentVersion;
         EnableParsing = false;
         AutoStartParser = false;
         DebugMode = false;

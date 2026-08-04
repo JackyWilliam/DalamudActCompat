@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text.Json;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
@@ -30,6 +31,7 @@ public sealed class EncounterWindow : Window
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
     private readonly JobIconTextureSet jobIcons;
+    private readonly ISharedImmediateTexture logoTexture;
     private readonly Action saveConfiguration;
     private HistoryPage selectedPage;
     private Guid? selectedRecentId;
@@ -38,6 +40,7 @@ public sealed class EncounterWindow : Window
     private string rawJson = string.Empty;
     private string loadError = string.Empty;
     private bool showRawJson;
+    private bool outerFrameStylePushed;
 
     public EncounterWindow(
         EncounterStateStore stateStore,
@@ -45,6 +48,7 @@ public sealed class EncounterWindow : Window
         PluginConfiguration configuration,
         UiText text,
         JobIconTextureSet jobIcons,
+        ISharedImmediateTexture logoTexture,
         Action saveConfiguration)
         : base("战斗记录###DalamudActCompatHistory")
     {
@@ -53,6 +57,7 @@ public sealed class EncounterWindow : Window
         this.configuration = configuration;
         this.text = text;
         this.jobIcons = jobIcons;
+        this.logoTexture = logoTexture;
         this.saveConfiguration = saveConfiguration;
         Size = new Vector2(980, 620);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -61,6 +66,9 @@ public sealed class EncounterWindow : Window
             MinimumSize = new Vector2(780, 480),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+        ShowCloseButton = false;
+        RespectCloseHotkey = false;
+        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
     }
 
     public void OpenRecent()
@@ -75,30 +83,68 @@ public sealed class EncounterWindow : Window
         IsOpen = true;
     }
 
+    public override void PreDraw()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        outerFrameStylePushed = true;
+    }
+
+    public override void PostDraw()
+    {
+        if (!outerFrameStylePushed)
+        {
+            return;
+        }
+
+        ImGui.PopStyleColor();
+        ImGui.PopStyleVar(2);
+        outerFrameStylePushed = false;
+    }
+
     public override void Draw()
     {
         WindowName = text.Get("战斗记录###DalamudActCompatHistory", "Combat History###DalamudActCompatHistory");
         PushTheme();
         try
         {
-            ImGui.TextColored(Gold, text.Get("战斗记录", "Combat History"));
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get("近期战斗与逐场日志使用同一个详情视图", "Recent encounters and log files share one detail view"));
-            ImGui.Spacing();
-            PageButton(HistoryPage.Recent, text.Get("近期战斗", "Recent encounters"));
-            ImGui.SameLine();
-            PageButton(HistoryPage.LogFiles, text.Get("日志文件", "Log files"));
-            ImGui.Separator();
-            ImGui.Spacing();
+            var pageLabel = selectedPage == HistoryPage.Recent
+                ? text.Get("近期战斗", "Recent encounters")
+                : text.Get("日志文件", "Log files");
+            if (BrandedWindowChrome.Draw(
+                    logoTexture,
+                    text.Get("战斗记录", "Combat History"),
+                    pageLabel,
+                    IceBlue,
+                    ControlCenterWindow.FormatVersionLabel(typeof(EncounterWindow).Assembly.GetName().Version),
+                    "combat-history"))
+            {
+                IsOpen = false;
+            }
 
-            if (selectedPage == HistoryPage.Recent)
+            if (ImGui.BeginChild("combat-history-content", new Vector2(-1, -1), true))
             {
-                DrawRecentPage();
+                ImGui.TextDisabled(text.Get(
+                    "近期战斗与逐场日志使用同一个详情视图",
+                    "Recent encounters and log files share one detail view"));
+                ImGui.Spacing();
+                PageButton(HistoryPage.Recent, text.Get("近期战斗", "Recent encounters"));
+                ImGui.SameLine();
+                PageButton(HistoryPage.LogFiles, text.Get("日志文件", "Log files"));
+                ImGui.Separator();
+                ImGui.Spacing();
+
+                if (selectedPage == HistoryPage.Recent)
+                {
+                    DrawRecentPage();
+                }
+                else
+                {
+                    DrawLogFilesPage();
+                }
             }
-            else
-            {
-                DrawLogFilesPage();
-            }
+            ImGui.EndChild();
         }
         finally
         {

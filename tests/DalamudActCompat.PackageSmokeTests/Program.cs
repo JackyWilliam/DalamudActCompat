@@ -49,6 +49,7 @@ try
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
+    ValidateCombatEventScoping();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
@@ -441,6 +442,42 @@ static void ValidateActCallbackCircuitBreaker()
 
 static void ValidateMeterRows()
 {
+    var defaultColor = new MeterSettings().LocalPlayerColor;
+    var requestedDefault = new System.Numerics.Vector4(
+        0x8B / 255f,
+        0x57 / 255f,
+        0x33 / 255f,
+        0x73 / 255f);
+    Assert(
+        System.Numerics.Vector4.DistanceSquared(defaultColor, requestedDefault) < 0.000001f,
+        "The multiplayer local-player highlight is not #8B573373 by default.");
+
+    var legacyConfiguration = new PluginConfiguration
+    {
+        Version = 1,
+        Meter = new MeterSettings
+        {
+            LocalPlayerColor = new System.Numerics.Vector4(0.25f, 0.42f, 0.55f, 0.45f),
+        },
+    };
+    Assert(
+        legacyConfiguration.ApplyMigrations() &&
+        legacyConfiguration.Version == 2 &&
+        System.Numerics.Vector4.DistanceSquared(
+            legacyConfiguration.Meter.LocalPlayerColor,
+            requestedDefault) < 0.000001f,
+        "The previous multiplayer default highlight was not migrated.");
+    var customColor = new System.Numerics.Vector4(0.1f, 0.2f, 0.3f, 0.4f);
+    var customizedConfiguration = new PluginConfiguration
+    {
+        Version = 1,
+        Meter = new MeterSettings { LocalPlayerColor = customColor },
+    };
+    customizedConfiguration.ApplyMigrations();
+    Assert(
+        customizedConfiguration.Meter.LocalPlayerColor == customColor,
+        "The default-color migration overwrote a user-customized highlight.");
+
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
         Guid.NewGuid(),
@@ -775,7 +812,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 2)) == "v0.3.5.2",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 3)) == "v0.3.5.3",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -804,6 +841,32 @@ static void ValidateControlCenterPresentation()
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.ExtDps) == 1_250 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Hps, DpsMetric.EncDps) == 1_000,
         "Combat History no longer follows the Combat Meter DPS metric and DPS/HPS sort mode.");
+
+    var projectRoot = FindProjectRoot();
+    var controlCenterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var historySource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Encounters", "EncounterWindow.cs"));
+    var thirdPartySource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "ThirdPartyPluginNoticeWindow.cs"));
+    Assert(
+        controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
+        typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)),
+        "The home/settings labels or guarded factory-reset action are missing from the new settings UI.");
+    Assert(
+        historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
+        historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
+        "Combat History does not use the rounded branded settings-window frame.");
+    Assert(
+        thirdPartySource.Contains("Size = new Vector2(1200, 650);", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("\"third-party-plugin-cards\"", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("ImGuiTableFlags.SizingStretchSame", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal),
+        "The update and third-party notice is not a landscape, three-column branded window.");
 }
 
 static void ValidateChinese755Opcodes()
@@ -1192,6 +1255,45 @@ static void ValidatePlayerIdentityResolution()
     Assert(
         ActPlayerIdentityResolver.Resolve(identities, "Summon") is null,
         "Unknown pets or NPCs must not resolve as players.");
+}
+
+static void ValidateCombatEventScoping()
+{
+    ActPlayerIdentity[] identities =
+    [
+        new("Local Player", "Alpha", "PLD", true, false),
+        new("Party Member", "Beta", "WHM", false, false),
+    ];
+
+    Assert(
+        SelfHostedActRuntime.IsTrackedCombatantEvent(
+            "Local Player@Alpha",
+            "Training Dummy",
+            identities),
+        "A local-player combat event was rejected by encounter scoping.");
+    Assert(
+        SelfHostedActRuntime.IsTrackedCombatantEvent(
+            "Enemy",
+            "Party Member@Beta",
+            identities),
+        "An event targeting a party member was rejected by encounter scoping.");
+    Assert(
+        !SelfHostedActRuntime.IsTrackedCombatantEvent(
+            "Nearby Stranger",
+            "Training Dummy",
+            identities),
+        "A nearby stranger can still extend the local ACT encounter.");
+
+    var runtimeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    Assert(
+        runtimeSource.Contains("ConditionFlag.BoundByDuty", StringComparison.Ordinal) &&
+        runtimeSource.Contains("lastRelevantCombatAction", StringComparison.Ordinal) &&
+        runtimeSource.Contains("ActGlobals.oFormActMain.EndCombat(true)", StringComparison.Ordinal),
+        "Open-world combat does not end independently while duty encounters remain protected.");
 }
 
 static void ValidateDalamudGameStateBridge()
@@ -2036,6 +2138,12 @@ static void ValidateActEncounterMapping()
 
 static void ValidateChineseCombatChatParsing()
 {
+    Assert(
+        ChineseCombatChatParser.TryExtractActor(
+            "附近玩家发动了技能。",
+            out var announcedActor) &&
+        announcedActor == "附近玩家",
+        "Chinese split combat chat did not update its announced actor before the damage line.");
     Assert(
         ChineseCombatChatParser.TryParse(
             "埃斯蒂尼安丿发动攻击 \uE06F 木人受到了3714点伤害。",
