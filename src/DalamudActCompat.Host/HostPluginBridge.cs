@@ -116,6 +116,14 @@ public static class HostPluginBridge
         return administrator;
     }
 
+    public static bool SkipTriggernometryPostNamazuAdministratorNotice()
+    {
+        Console.WriteLine(
+            "Triggernometry/PostNamazu legacy ACT administrator notice suppressed; " +
+            "the real Windows token and broker capability checks remain unchanged.");
+        return true;
+    }
+
     public static bool IsExpectedTriggernometryCompatibilityNotice(string? message)
         => !string.IsNullOrWhiteSpace(message) &&
            message.Contains("鲶鱼精邮差扩展", StringComparison.Ordinal) &&
@@ -664,6 +672,14 @@ public static class HostPluginBridge
     public static Process? StartTriggernometryProcess(ProcessStartInfo startInfo)
     {
         Demand("triggernometry", "LaunchExternalProcess");
+        if (ShouldSkipTriggernometryPlaceholderProcess(startInfo))
+        {
+            Console.WriteLine(
+                "Triggernometry placeholder LaunchProcess test skipped; " +
+                "use the live-values test to open the configured target.");
+            return null;
+        }
+
         return Process.Start(PrepareTriggernometryStartInfo(startInfo));
     }
 
@@ -691,6 +707,10 @@ public static class HostPluginBridge
         startInfo.CreateNoWindow = false;
         return startInfo;
     }
+
+    private static bool ShouldSkipTriggernometryPlaceholderProcess(ProcessStartInfo startInfo)
+        => string.Equals(startInfo.FileName?.Trim(), "test", StringComparison.OrdinalIgnoreCase) &&
+           string.IsNullOrWhiteSpace(startInfo.Arguments);
 
     private static bool IsWebAddress(string? value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
