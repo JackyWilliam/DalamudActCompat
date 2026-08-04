@@ -166,6 +166,9 @@ internal sealed class DutyEncounterAccumulator
         private long totalDamage;
         private long totalHealing;
         private int deaths;
+        private int damageHits;
+        private int criticalHits;
+        private int criticalDirectHits;
 
         public void Add(Combatant combatant)
         {
@@ -185,6 +188,9 @@ internal sealed class DutyEncounterAccumulator
             totalDamage += combatant.TotalDamage;
             totalHealing += combatant.TotalHealing;
             deaths += combatant.Deaths;
+            damageHits += combatant.DamageHits;
+            criticalHits += combatant.CriticalHits;
+            criticalDirectHits += combatant.CriticalDirectHits;
         }
 
         public CombatantTotals Clone()
@@ -197,6 +203,9 @@ internal sealed class DutyEncounterAccumulator
                 totalDamage = totalDamage,
                 totalHealing = totalHealing,
                 deaths = deaths,
+                damageHits = damageHits,
+                criticalHits = criticalHits,
+                criticalDirectHits = criticalDirectHits,
             };
 
         public Combatant ToCombatant(double durationSeconds)
@@ -212,7 +221,10 @@ internal sealed class DutyEncounterAccumulator
                 deaths,
                 rate,
                 rate,
-                rate);
+                rate,
+                damageHits,
+                criticalHits,
+                criticalDirectHits);
         }
     }
 }

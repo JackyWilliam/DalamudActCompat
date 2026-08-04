@@ -26,7 +26,10 @@ internal sealed record HostCombatantDto(
     int Deaths,
     double Dps = 0,
     double EncDps = 0,
-    double ExtDps = 0);
+    double ExtDps = 0,
+    int DamageHits = 0,
+    int CriticalHits = 0,
+    int CriticalDirectHits = 0);
 
 internal static class HostIpcMapper
 {
@@ -43,7 +46,10 @@ internal static class HostIpcMapper
                 combatant.Deaths,
                 combatant.Dps,
                 combatant.EncDps,
-                combatant.ExtDps))
+                combatant.ExtDps,
+                combatant.DamageHits,
+                combatant.CriticalHits,
+                combatant.CriticalDirectHits))
             .ToArray();
 
         var jobSummaries = combatants

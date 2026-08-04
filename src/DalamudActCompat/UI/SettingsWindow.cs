@@ -198,7 +198,7 @@ public sealed class SettingsWindow : Window
             applyOverlayWindowSettings(SelfHostedActRuntime.CactbotOverlayName);
         }
 
-        ImGui.TextUnformatted(text.Get("OverlayPlugin HTML 悬浮窗", "OverlayPlugin HTML overlays"));
+        ImGui.TextUnformatted(text.Get("HTML 悬浮窗", "HTML overlays"));
         var templates = getOverlayTemplates();
         if (templates.Count == 0)
         {
@@ -366,8 +366,8 @@ public sealed class SettingsWindow : Window
             }
         }
         ImGui.TextDisabled(text.Get(
-            "每行固定显示当前 DPS/HPS、伤害占比和死亡数；以下是单人详情附加字段。",
-            "Every row always shows DPS/HPS, damage percent, and deaths; the following are optional single-player details."));
+            "每行固定显示当前 DPS/HPS、伤害占比、暴击率、直暴率和死亡数；以下是单人详情附加字段。",
+            "Every row always shows DPS/HPS, damage percent, critical rate, critical-direct rate, and deaths; the following are optional single-player details."));
         changed |= Checkbox(text.Get("单人总伤害", "Single-player damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
         changed |= Checkbox(text.Get("单人附加 HPS", "Single-player extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
         changed |= Checkbox(text.Get("单人治疗量", "Single-player healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);

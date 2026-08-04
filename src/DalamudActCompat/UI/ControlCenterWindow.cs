@@ -41,6 +41,8 @@ public sealed class ControlCenterWindow : Window
     private static readonly string VersionLabel = BuildVersionLabel();
     private const int OpenAnimationMilliseconds = 180;
     private const int CloseAnimationMilliseconds = 160;
+    private const int ResetConfirmationMilliseconds = 10_000;
+    private const string ResetEncounterPopupId = "重置当前战斗###DalamudActCompatResetEncounter";
 
     private readonly PluginConfiguration configuration;
     private readonly IParserEngine parserEngine;
@@ -71,6 +73,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Action<string> closeHtmlOverlay;
     private readonly Action<string> deleteHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
+    private readonly Action resetCurrentEncounter;
     private Page selectedPage;
     private ParserStatus parserStatus;
     private string? selectedCreatedOverlay;
@@ -79,6 +82,7 @@ public sealed class ControlCenterWindow : Window
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
+    private long resetEncounterConfirmationExpiresAt;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -109,6 +113,7 @@ public sealed class ControlCenterWindow : Window
         Action<string> openHtmlOverlay,
         Action<string> closeHtmlOverlay,
         Action<string> deleteHtmlOverlay,
+        Action resetCurrentEncounter,
         Action<string> applyOverlayWindowSettings)
         : base("ACT 控制中心###DalamudActCompatControlCenter")
     {
@@ -140,6 +145,7 @@ public sealed class ControlCenterWindow : Window
         this.openHtmlOverlay = openHtmlOverlay;
         this.closeHtmlOverlay = closeHtmlOverlay;
         this.deleteHtmlOverlay = deleteHtmlOverlay;
+        this.resetCurrentEncounter = resetCurrentEncounter;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -196,6 +202,9 @@ public sealed class ControlCenterWindow : Window
             _ => 1,
         };
         ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Clamp(alpha, 0.01f, 1));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         visibilityStylePushed = true;
     }
 
@@ -203,7 +212,8 @@ public sealed class ControlCenterWindow : Window
     {
         if (visibilityStylePushed)
         {
-            ImGui.PopStyleVar();
+            ImGui.PopStyleColor();
+            ImGui.PopStyleVar(3);
             visibilityStylePushed = false;
         }
     }
@@ -231,14 +241,6 @@ public sealed class ControlCenterWindow : Window
         try
         {
             DrawWindowChrome();
-            var sidebarWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.20f, 158, 188);
-            if (ImGui.BeginChild("control-center-sidebar", new Vector2(sidebarWidth, -1), true))
-            {
-                DrawSidebar();
-            }
-            ImGui.EndChild();
-
-            ImGui.SameLine();
             if (ImGui.BeginChild("control-center-content", new Vector2(-1, -1), true))
             {
                 DrawPageTabs();
@@ -288,13 +290,64 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawWindowChrome()
     {
-        const float height = 28;
-        const float closeWidth = 32;
+        const float height = 40;
+        const float closeWidth = 34;
+        const float horizontalPadding = 8;
+        const float logoSize = 28;
         var start = ImGui.GetCursorPos();
+        var screenStart = ImGui.GetCursorScreenPos();
         var availableWidth = ImGui.GetContentRegionAvail().X;
+        var screenEnd = screenStart + new Vector2(availableWidth, height);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(
+            screenStart,
+            screenEnd,
+            ImGui.GetColorU32(NavyRaised),
+            9,
+            ImDrawFlags.RoundCornersTop);
+
+        var logoTop = screenStart.Y + ((height - logoSize) * 0.5f);
+        var logoLeft = screenStart.X + horizontalPadding;
+        drawList.AddImage(
+            logoTexture.GetWrapOrEmpty().Handle,
+            new Vector2(logoLeft, logoTop),
+            new Vector2(logoLeft + logoSize, logoTop + logoSize));
+
+        var textTop = screenStart.Y + ((height - ImGui.GetTextLineHeight()) * 0.5f);
+        var title = "Dalamud ACT Compat";
+        var titleLeft = logoLeft + logoSize + 9;
+        drawList.AddText(
+            new Vector2(titleLeft, textTop),
+            ImGui.GetColorU32(Vector4.One),
+            title);
+        drawList.AddText(
+            new Vector2(titleLeft + ImGui.CalcTextSize(title).X + 9, textTop),
+            ImGui.GetColorU32(new Vector4(0.68f, 0.72f, 0.77f, 1)),
+            text.Get("设置", "Settings"));
+
+        var stateLabel = $"● {LocalizeState(parserStatus.State)}";
+        var stateSize = ImGui.CalcTextSize(stateLabel);
+        var stateColor = parserStatus.State == ParserState.Running
+            ? IceBlue
+            : new Vector4(0.70f, 0.72f, 0.76f, 1);
+        drawList.AddText(
+            new Vector2(
+                screenStart.X + ((availableWidth - stateSize.X) * 0.5f),
+                textTop),
+            ImGui.GetColorU32(stateColor),
+            stateLabel);
+
+        var versionSize = ImGui.CalcTextSize(VersionLabel);
+        drawList.AddText(
+            new Vector2(
+                screenStart.X + availableWidth - closeWidth - versionSize.X - 12,
+                textTop),
+            ImGui.GetColorU32(new Vector4(0.62f, 0.66f, 0.71f, 1)),
+            VersionLabel);
+
         ImGui.InvisibleButton(
             "control-center-drag-handle",
-            new Vector2(Math.Max(1, availableWidth - closeWidth - 6), height));
+            new Vector2(Math.Max(1, availableWidth - closeWidth), height));
         if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
         {
             ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
@@ -309,43 +362,7 @@ public sealed class ControlCenterWindow : Window
             HideAnimated();
         }
         ImGui.PopStyleColor(3);
-        ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 3));
-    }
-
-    private void DrawSidebar()
-    {
-        var wrap = logoTexture.GetWrapOrEmpty();
-        var logoSize = Math.Clamp(ImGui.GetContentRegionAvail().X - 44, 92, 132);
-        ImGui.SetCursorPosX((ImGui.GetWindowWidth() - logoSize) * 0.5f);
-        ImGui.Image(wrap.Handle, new Vector2(logoSize, logoSize));
-        ImGui.Spacing();
-
-        CenteredText("Dalamud ACT Compat");
-        ImGui.TextDisabled(text.Get("游戏内 ACT 工作台", "In-game ACT workspace"));
-        ImGui.Spacing();
-
-        if (ImGui.BeginChild("parser-state-card", new Vector2(-1, 76), true))
-        {
-            ImGui.TextDisabled(text.Get("解析状态", "Parser status"));
-            var stateColor = parserStatus.State == ParserState.Running
-                ? IceBlue
-                : new Vector4(0.70f, 0.72f, 0.76f, 1);
-            ImGui.TextColored(stateColor, $"● {LocalizeState(parserStatus.State)}");
-            if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
-            {
-                ImGui.TextDisabled(TrimText(parserStatus.Detail, 26));
-            }
-        }
-        ImGui.EndChild();
-
-        var footerY = ImGui.GetWindowHeight() - ImGui.GetTextLineHeightWithSpacing() - 12;
-        if (ImGui.GetCursorPosY() < footerY)
-        {
-            ImGui.SetCursorPosY(footerY);
-        }
-        ImGui.SetCursorPosX(Math.Max(8, (ImGui.GetWindowWidth() - ImGui.CalcTextSize(VersionLabel).X) * 0.5f));
-        ImGui.TextDisabled(VersionLabel);
-
+        ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));
     }
 
     private void DrawPageTabs()
@@ -456,7 +473,7 @@ public sealed class ControlCenterWindow : Window
     {
         DrawPageHeader(
             text.Get("战斗统计", "Combat Meter"),
-            text.Get("仅调整内置战斗统计的显示，不影响 Cactbot 或 HTML Overlay。", "These options affect only the built-in Combat Meter, not Cactbot or HTML overlays."));
+            text.Get("仅调整内置战斗统计的显示，不影响 Cactbot 或 HTML 悬浮窗。", "These options affect only the built-in Combat Meter, not Cactbot or HTML overlays."));
 
         var changed = false;
         var visible = configuration.Meter.IsVisible;
@@ -559,10 +576,22 @@ public sealed class ControlCenterWindow : Window
             }
 
             ImGui.TextDisabled(text.Get(
-                "每名玩家固定显示当前 DPS/HPS、占比和死亡数。",
-                "Every player always shows current DPS/HPS, percentage, and deaths."));
+                "每名玩家固定显示当前 DPS/HPS、占比、暴击率、直暴率和死亡数。",
+                "Every player always shows current DPS/HPS, percentage, critical rate, critical-direct rate, and deaths."));
+
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+            if (ImGui.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
+            {
+                resetEncounterConfirmationExpiresAt =
+                    Environment.TickCount64 + ResetConfirmationMilliseconds;
+                ImGui.OpenPopup(ResetEncounterPopupId);
+            }
+            ImGui.PopStyleColor(3);
         }
         ImGui.EndChild();
+        DrawResetEncounterConfirmation();
 
         ImGui.Spacing();
         if (ImGui.BeginChild("single-player-meter-controls", new Vector2(-1, 88), true))
@@ -582,11 +611,67 @@ public sealed class ControlCenterWindow : Window
         return changed;
     }
 
+    private void DrawResetEncounterConfirmation()
+    {
+        ImGui.SetNextWindowSize(new Vector2(430, 0), ImGuiCond.Appearing);
+        if (!ImGui.BeginPopupModal(
+                ResetEncounterPopupId,
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        if (IsResetConfirmationExpired(resetEncounterConfirmationExpiresAt, now))
+        {
+            resetEncounterConfirmationExpiresAt = 0;
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            return;
+        }
+
+        var secondsRemaining = Math.Max(
+            0,
+            (int)Math.Ceiling((resetEncounterConfirmationExpiresAt - now) / 1000.0));
+        ImGui.TextWrapped(text.Get(
+            "这会清空当前战斗统计，但不会删除已经保存的历史记录。确认后才能执行。",
+            "This clears the current encounter but does not delete saved history. It runs only after confirmation."));
+        ImGui.TextDisabled(text.Get(
+            $"确认窗口将在 {secondsRemaining} 秒后自动关闭。",
+            $"This confirmation closes automatically in {secondsRemaining} seconds."));
+        ImGui.Spacing();
+
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
+        var confirmed = ImGui.Button(text.Get("确认重置", "Confirm reset"));
+        ImGui.PopStyleColor(3);
+        ImGui.SameLine();
+        var cancelled = ImGui.Button(text.Get("取消", "Cancel"));
+
+        if (confirmed)
+        {
+            resetCurrentEncounter();
+            resetEncounterConfirmationExpiresAt = 0;
+            ImGui.CloseCurrentPopup();
+        }
+        else if (cancelled)
+        {
+            resetEncounterConfirmationExpiresAt = 0;
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndPopup();
+    }
+
+    internal static bool IsResetConfirmationExpired(long expiresAt, long now)
+        => expiresAt > 0 && now >= expiresAt;
+
     private bool DrawOverlays()
     {
         DrawPageHeader(
             text.Get("悬浮窗", "Overlays"),
-            text.Get("Cactbot 与 HTML Overlay 保持原来的 WebView2 窗口，这里只负责管理。", "Cactbot and HTML overlays keep their existing WebView2 windows; this page only manages them."));
+            text.Get("Cactbot 与 HTML 悬浮窗保持原来的 WebView2 窗口，这里只负责管理。", "Cactbot and HTML overlays keep their existing WebView2 windows; this page only manages them."));
 
         var changed = false;
         configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
@@ -617,11 +702,17 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, "HTML Overlay");
+        ImGui.TextColored(Gold, text.Get("HTML 悬浮窗", "HTML overlays"));
+        changed |= DrawCreatedHtmlOverlays();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(IceBlue, text.Get("从模板创建", "Create from template"));
         var templates = getOverlayTemplates();
         if (templates.Count == 0)
         {
-            ImGui.TextDisabled(text.Get("启动解析器后可选择 Overlay 模板。", "Start the parser to select an overlay template."));
+            ImGui.TextDisabled(text.Get("启动解析器后可选择悬浮窗模板。", "Start the parser to select an overlay template."));
         }
         else
         {
@@ -650,8 +741,8 @@ public sealed class ControlCenterWindow : Window
                 configuration.SelectedOverlayTemplate,
                 out var selectedSettings);
             if (ImGui.Button(selectedSettings?.IsVisible == true
-                    ? text.Get("关闭所选 HTML Overlay", "Close selected HTML overlay")
-                    : text.Get("打开所选 HTML Overlay", "Open selected HTML overlay")))
+                    ? text.Get("关闭所选 HTML 悬浮窗", "Close selected HTML overlay")
+                    : text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
             {
                 if (selectedSettings?.IsVisible == true)
                 {
@@ -668,17 +759,20 @@ public sealed class ControlCenterWindow : Window
             }
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("已创建的悬浮窗", "Created overlays"));
+        return changed;
+    }
+
+    private bool DrawCreatedHtmlOverlays()
+    {
+        var changed = false;
+        ImGui.TextColored(IceBlue, text.Get("已创建的悬浮窗", "Created overlays"));
         var createdNames = configuration.OverlayWindows.Keys
             .Where(name => !string.Equals(name, SelfHostedActRuntime.CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
             .OrderBy(name => name)
             .ToArray();
         if (createdNames.Length == 0)
         {
-            ImGui.TextDisabled(text.Get("还没有创建 HTML Overlay。", "No HTML overlays have been created yet."));
+            ImGui.TextDisabled(text.Get("还没有创建 HTML 悬浮窗。", "No HTML overlays have been created yet."));
         }
         else
         {
@@ -1033,15 +1127,6 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
     }
 
-    private static void CenteredText(string value)
-    {
-        ImGui.SetCursorPosX(Math.Max(8, (ImGui.GetWindowWidth() - ImGui.CalcTextSize(value).X) * 0.5f));
-        ImGui.TextUnformatted(value);
-    }
-
-    private static string TrimText(string value, int maximumLength)
-        => value.Length <= maximumLength ? value : $"{value[..Math.Max(1, maximumLength - 1)]}…";
-
     private static string BuildVersionLabel()
     {
         var version = typeof(ControlCenterWindow).Assembly.GetName().Version;
@@ -1141,126 +1226,160 @@ public sealed class ControlCenterWindow : Window
             "Estimate your current EncDPS percentile from public FFLogs ranking samples. The colored number is prefixed with '~' and is not an official live-log score."));
 
         var changed = false;
-        var enabled = configuration.Fflogs.Enabled;
-        if (ImGui.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
+        if (ImGui.BeginTable(
+                "fflogs-api-refresh-card",
+                1,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
-            configuration.Fflogs.Enabled = enabled;
-            fflogsEstimateService.NotifyCredentialsChanged();
-            changed = true;
-            if (enabled)
+            ImGui.TableNextColumn();
+            ImGui.TextColored(IceBlue, text.Get(
+                "API 凭据与数据刷新",
+                "API credentials and data refresh"));
+            ImGui.TextDisabled(text.Get(
+                "负责验证 FFLogs API 凭据并刷新估算数据。",
+                "Validates the FFLogs API credentials and refreshes estimate data."));
+
+            var enabled = configuration.Fflogs.Enabled;
+            if (ImGui.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
+            {
+                configuration.Fflogs.Enabled = enabled;
+                fflogsEstimateService.NotifyCredentialsChanged();
+                changed = true;
+                if (enabled)
+                {
+                    fflogsEstimateService.RequestRefresh(getCurrentEncounter());
+                }
+            }
+
+            if (ImGui.CollapsingHeader(text.Get(
+                    "如何创建 FFLogs API Client",
+                    "How to create an FFLogs API client")))
+            {
+                ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+                if (ImGui.BeginChild("fflogs-client-guide", new Vector2(-1, 150), true))
+                {
+                    ImGui.TextWrapped(text.Get(
+                        "1. 登录 FFLogs 网站。\n" +
+                        "2. 点击 Create Client。\n" +
+                        "3. 输入一个名称。\n" +
+                        "4. 输入一个网址；如果不知道填什么，请填写 https://example.com。\n" +
+                        "5. 点击创建。\n" +
+                        "6. 在下方找到 Client ID 和 Client Secret，并分别填入插件对应位置。",
+                        "1. Sign in to FFLogs.\n" +
+                        "2. Click Create Client.\n" +
+                        "3. Enter a name.\n" +
+                        "4. Enter a URL; use https://example.com if you do not have one.\n" +
+                        "5. Create the client.\n" +
+                        "6. Copy the Client ID and Client Secret shown below into the matching plugin fields."));
+                }
+                ImGui.EndChild();
+                ImGui.PopStyleColor();
+            }
+
+            var clientId = configuration.Fflogs.ClientId;
+            if (ImGui.InputText("Client ID", ref clientId, 128))
+            {
+                configuration.Fflogs.ClientId = clientId.Trim();
+                fflogsEstimateService.NotifyCredentialsChanged();
+                changed = true;
+            }
+
+            var clientSecret = configuration.Fflogs.ClientSecret;
+            if (ImGui.InputText("Client Secret", ref clientSecret, 256, ImGuiInputTextFlags.Password))
+            {
+                configuration.Fflogs.ClientSecret = clientSecret.Trim();
+                fflogsEstimateService.NotifyCredentialsChanged();
+                changed = true;
+            }
+
+            ImGui.TextDisabled(text.Get(
+                "使用免费的 FFLogs API Client；密钥保存在本机插件配置中，可随时撤销；不会上传玩家 ID。",
+                "Uses a free FFLogs API client. The secret is stored locally and can be revoked; player IDs are never uploaded."));
+            if (ImGui.Button(text.Get("创建 / 管理 API Client", "Create / manage API client")))
+            {
+                OpenUrl("https://www.fflogs.com/api/clients/");
+            }
+            ImGui.SameLine();
+            if (ImGui.Button(text.Get("测试并刷新", "Test and refresh")))
             {
                 fflogsEstimateService.RequestRefresh(getCurrentEncounter());
             }
-        }
 
-        if (ImGui.CollapsingHeader(text.Get(
-                "如何创建 FFLogs API Client",
-                "How to create an FFLogs API client")))
-        {
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-            if (ImGui.BeginChild("fflogs-client-guide", new Vector2(-1, 150), true))
+            var status = fflogsEstimateService.Status;
+            ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
+            var statusDetail = status.State is
+                FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched
+                ? status.Message
+                : string.Empty;
+            var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 2.4f;
+            if (ImGui.BeginChild(
+                    "fflogs-status-detail",
+                    new Vector2(-1, statusDetailHeight),
+                    false,
+                    ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
             {
-                ImGui.TextWrapped(text.Get(
-                    "1. 登录 FFLogs 网站。\n" +
-                    "2. 点击 Create Client。\n" +
-                    "3. 输入一个名称。\n" +
-                    "4. 输入一个网址；如果不知道填什么，请填写 https://example.com。\n" +
-                    "5. 点击创建。\n" +
-                    "6. 在下方找到 Client ID 和 Client Secret，并分别填入插件对应位置。",
-                    "1. Sign in to FFLogs.\n" +
-                    "2. Click Create Client.\n" +
-                    "3. Enter a name.\n" +
-                    "4. Enter a URL; use https://example.com if you do not have one.\n" +
-                    "5. Create the client.\n" +
-                    "6. Copy the Client ID and Client Secret shown below into the matching plugin fields."));
+                if (!string.IsNullOrWhiteSpace(statusDetail))
+                {
+                    ImGui.TextWrapped(statusDetail);
+                }
             }
             ImGui.EndChild();
-            ImGui.PopStyleColor();
+            ImGui.EndTable();
         }
 
-        var clientId = configuration.Fflogs.ClientId;
-        if (ImGui.InputText("Client ID", ref clientId, 128))
-        {
-            configuration.Fflogs.ClientId = clientId.Trim();
-            fflogsEstimateService.NotifyCredentialsChanged();
-            changed = true;
-        }
-
-        var clientSecret = configuration.Fflogs.ClientSecret;
-        if (ImGui.InputText("Client Secret", ref clientSecret, 256, ImGuiInputTextFlags.Password))
-        {
-            configuration.Fflogs.ClientSecret = clientSecret.Trim();
-            fflogsEstimateService.NotifyCredentialsChanged();
-            changed = true;
-        }
-
-        ImGui.TextDisabled(text.Get(
-            "使用免费的 FFLogs API Client；密钥保存在本机插件配置中，可随时撤销；不会上传玩家 ID。",
-            "Uses a free FFLogs API client. The secret is stored locally and can be revoked; player IDs are never uploaded."));
-        if (ImGui.Button(text.Get("创建 / 管理 API Client", "Create / manage API client")))
-        {
-            OpenUrl("https://www.fflogs.com/api/clients/");
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("测试并刷新", "Test and refresh")))
-        {
-            fflogsEstimateService.RequestRefresh(getCurrentEncounter());
-        }
-
-        var status = fflogsEstimateService.Status;
-        ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
-        var statusDetail = status.State is
-            FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched
-            ? status.Message
-            : string.Empty;
-        var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 2.4f;
-        if (ImGui.BeginChild(
-                "fflogs-status-detail",
-                new Vector2(-1, statusDetailHeight),
-                false,
-                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
-        {
-            if (!string.IsNullOrWhiteSpace(statusDetail))
-            {
-                ImGui.TextWrapped(statusDetail);
-            }
-        }
-        ImGui.EndChild();
-
+        ImGui.Spacing();
         var encounter = getCurrentEncounter();
-        if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))
+        if (ImGui.BeginTable(
+                "fflogs-encounter-binding-card",
+                1,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
-            configuration.Fflogs.EncounterMappings ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            if (!string.Equals(fflogsEncounterInputKey, encounter.EnemyName, StringComparison.Ordinal))
-            {
-                fflogsEncounterInputKey = encounter.EnemyName;
-                fflogsEncounterIdInput = configuration.Fflogs.EncounterMappings.TryGetValue(encounter.EnemyName, out var mappedId)
-                    ? mappedId
-                    : 0;
-            }
+            ImGui.TableNextColumn();
+            ImGui.TextColored(IceBlue, text.Get("当前战斗绑定", "Current encounter binding"));
+            ImGui.TextDisabled(text.Get(
+                "仅在自动匹配失败时，手动把当前首领绑定到 FFLogs Encounter ID。",
+                "Only bind the current boss to an FFLogs encounter ID when automatic matching fails."));
 
-            ImGui.Spacing();
-            ImGui.TextDisabled($"{text.Get("当前首领", "Current boss")}: {encounter.EnemyName}");
-            if (ImGui.InputInt(text.Get("FFLogs Encounter ID", "FFLogs encounter ID"), ref fflogsEncounterIdInput))
+            if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))
             {
-                fflogsEncounterIdInput = Math.Max(0, fflogsEncounterIdInput);
+                configuration.Fflogs.EncounterMappings ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                if (!string.Equals(fflogsEncounterInputKey, encounter.EnemyName, StringComparison.Ordinal))
+                {
+                    fflogsEncounterInputKey = encounter.EnemyName;
+                    fflogsEncounterIdInput = configuration.Fflogs.EncounterMappings.TryGetValue(encounter.EnemyName, out var mappedId)
+                        ? mappedId
+                        : 0;
+                }
+
+                ImGui.TextDisabled($"{text.Get("当前首领", "Current boss")}: {encounter.EnemyName}");
+                if (ImGui.InputInt(text.Get("FFLogs Encounter ID", "FFLogs encounter ID"), ref fflogsEncounterIdInput))
+                {
+                    fflogsEncounterIdInput = Math.Max(0, fflogsEncounterIdInput);
+                }
+                if (ImGui.Button(text.Get("绑定当前战斗", "Bind current encounter")) && fflogsEncounterIdInput > 0)
+                {
+                    configuration.Fflogs.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput;
+                    fflogsEstimateService.RequestRefresh(encounter);
+                    changed = true;
+                }
+                ImGui.SameLine();
+                if (ImGui.Button(text.Get("清除绑定", "Clear binding")) &&
+                    configuration.Fflogs.EncounterMappings.Remove(encounter.EnemyName))
+                {
+                    fflogsEncounterIdInput = 0;
+                    changed = true;
+                }
             }
-            if (ImGui.Button(text.Get("绑定当前战斗", "Bind current encounter")) && fflogsEncounterIdInput > 0)
+            else
             {
-                configuration.Fflogs.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput;
-                fflogsEstimateService.RequestRefresh(encounter);
-                changed = true;
-            }
-            ImGui.SameLine();
-            if (ImGui.Button(text.Get("清除绑定", "Clear binding")) &&
-                configuration.Fflogs.EncounterMappings.Remove(encounter.EnemyName))
-            {
-                fflogsEncounterIdInput = 0;
-                changed = true;
+                ImGui.TextDisabled(text.Get(
+                    "当前没有可绑定的战斗。开始战斗后，这里会显示首领名称。",
+                    "There is no encounter to bind. The boss name appears here after combat starts."));
             }
             ImGui.TextDisabled(text.Get(
                 "自动匹配失败时，可从 FFLogs 对应首领页面 URL 中填写 Encounter ID。",
                 "If automatic matching fails, enter the encounter ID from the matching FFLogs boss page URL."));
+            ImGui.EndTable();
         }
 
         return changed;

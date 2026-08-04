@@ -18,7 +18,10 @@ public static class ActEncounterMapper
                 combatant.Deaths,
                 NormalizeRate(combatant.Dps),
                 NormalizeRate(combatant.EncDps),
-                NormalizeRate(combatant.ExtDps)))
+                NormalizeRate(combatant.ExtDps),
+                Math.Max(0, combatant.DamageHits),
+                Math.Max(0, combatant.CriticalHits),
+                Math.Max(0, combatant.CriticalDirectHits)))
             .ToArray();
         var jobs = combatants
             .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))

@@ -1,7 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Models;
-using DalamudActCompat.Core.State;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
@@ -18,7 +17,6 @@ public sealed class MeterWindow : Window
     private static readonly Vector4 IceBlue = new(0.38f, 0.72f, 0.90f, 1);
 
     private readonly MeterService meterService;
-    private readonly EncounterStateStore stateStore;
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
@@ -32,7 +30,6 @@ public sealed class MeterWindow : Window
 
     public MeterWindow(
         MeterService meterService,
-        EncounterStateStore stateStore,
         FflogsEstimateService fflogsEstimateService,
         PluginConfiguration configuration,
         UiText text,
@@ -42,7 +39,6 @@ public sealed class MeterWindow : Window
         : base("战斗统计###DalamudActCompatMeter")
     {
         this.meterService = meterService;
-        this.stateStore = stateStore;
         this.fflogsEstimateService = fflogsEstimateService;
         this.configuration = configuration;
         this.text = text;
@@ -381,11 +377,6 @@ public sealed class MeterWindow : Window
 
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get("排序", "Sort"));
-        ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("清空当前战斗", "Clear encounter")))
-        {
-            stateStore.ResetCurrent();
-        }
     }
 
     private void DrawCompactControls(MeterSettings settings)
@@ -530,6 +521,12 @@ public sealed class MeterWindow : Window
                 $"{row.DamagePercent:N1}%",
                 new Vector4(0.72f, 0.78f, 0.84f, 1));
             DrawRightColumn(
+                FormatHitRate(text.Get("暴击", "CRIT"), row.CriticalHitPercent),
+                new Vector4(0.82f, 0.68f, 0.92f, 1));
+            DrawRightColumn(
+                FormatHitRate(text.Get("直暴", "CDH"), row.CriticalDirectHitPercent),
+                new Vector4(0.95f, 0.62f, 0.45f, 1));
+            DrawRightColumn(
                 $"{PrimaryRateLabel(sortMode, settings)} {primary:N0}",
                 PrimaryRateColor(row.IsLocalPlayer));
             if (estimate is not null)
@@ -607,6 +604,8 @@ public sealed class MeterWindow : Window
             parts.Add($"{text.Get("伤害", "DMG")} {row.TotalDamage:N0}");
         }
         parts.Add($"{row.DamagePercent:N1}%");
+        parts.Add(FormatHitRate(text.Get("暴击", "CRIT"), row.CriticalHitPercent));
+        parts.Add(FormatHitRate(text.Get("直暴", "CDH"), row.CriticalDirectHitPercent));
         if (settings.ShowHps && MeterSortModeOptions.Normalize(settings.SortMode) != MeterSortMode.Hps)
         {
             parts.Add($"HPS {row.Hps:N0}");
@@ -618,6 +617,11 @@ public sealed class MeterWindow : Window
         parts.Add($"{text.Get("死亡", "KO")} {row.Deaths}");
         return string.Join("  ·  ", parts);
     }
+
+    internal static string FormatHitRate(string label, double? rate)
+        => rate is { } value && double.IsFinite(value)
+            ? $"{label} {Math.Clamp(value, 0, 100):N1}%"
+            : $"{label} --";
 
     internal static float CalculateCombatantRowHeight(
         bool compactSingle,

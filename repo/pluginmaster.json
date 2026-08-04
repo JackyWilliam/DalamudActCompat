@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.5.1",
+    "AssemblyVersion":  "0.3.5.2",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.1/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.2/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.1/DalamudActCompat.zip",
-    "LastUpdate":  1785846093667,
-    "Changelog":  "修复 Triggernometry PictoACT 自动注册与新版 OverlayPlugin 实体反射报错；新增多人模式控件面板和 HTML 悬浮窗删除功能。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.2/DalamudActCompat.zip",
+    "LastUpdate":  1785849139325,
+    "Changelog":  "战斗统计新增暴击率与直暴率；重构圆角设置窗口并统一页面高亮；分离 FFLogs 模块、常驻显示三方作者与网址，并为战斗重置增加二次确认。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

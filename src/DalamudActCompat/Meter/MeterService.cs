@@ -57,6 +57,8 @@ public sealed class MeterService
             combatant.TotalDamage,
             combatant.TotalHealing,
             combatant.TotalDamage * 100.0 / totalDamage,
+            CalculateHitRate(combatant.CriticalHits, combatant.DamageHits),
+            CalculateHitRate(combatant.CriticalDirectHits, combatant.DamageHits),
             combatant.Deaths));
 
         return MeterSortModeOptions.Normalize(settings.SortMode) switch
@@ -74,6 +76,11 @@ public sealed class MeterService
             DpsMetric.EncDps when combatant.EncDps > 0 => combatant.EncDps,
             _ => combatant.TotalDamage / encounterDuration,
         };
+
+    internal static double? CalculateHitRate(int matchingHits, int damageHits)
+        => damageHits > 0
+            ? Math.Clamp(matchingHits, 0, damageHits) * 100.0 / damageHits
+            : null;
 }
 
 public sealed record CombatantRow(
@@ -86,4 +93,6 @@ public sealed record CombatantRow(
     long TotalDamage,
     long TotalHealing,
     double DamagePercent,
+    double? CriticalHitPercent,
+    double? CriticalDirectHitPercent,
     int Deaths);

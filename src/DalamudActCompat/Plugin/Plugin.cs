@@ -213,7 +213,6 @@ public sealed class Plugin : IDalamudPlugin
         var zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
         meterWindow = new MeterWindow(
             meterService,
-            stateStore,
             fflogsEstimateService,
             configuration,
             text,
@@ -236,6 +235,7 @@ public sealed class Plugin : IDalamudPlugin
             SaveConfiguration);
         cactbotInstaller = new CactbotPackageInstaller(paths);
         thirdPartyPluginNoticeWindow = new ThirdPartyPluginNoticeWindow(
+            bundledPluginManager.GetDisclosures,
             bundledPluginManager.GetPendingDisclosures,
             InstallBundledPluginsAsync,
             ConfigureBundledPluginPermissions,
@@ -297,6 +297,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenHtmlOverlay,
             CloseHtmlOverlay,
             DeleteHtmlOverlay,
+            stateStore.ResetCurrent,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
             configuration,
@@ -602,13 +603,6 @@ public sealed class Plugin : IDalamudPlugin
                     .WaitAsync(0)
                     .ConfigureAwait(false))
             {
-                if (openWindow)
-                {
-                    await services.Framework
-                        .RunOnFrameworkThread(thirdPartyPluginNoticeWindow.OpenNotice)
-                        .ConfigureAwait(false);
-                }
-
                 return;
             }
 
@@ -617,7 +611,7 @@ public sealed class Plugin : IDalamudPlugin
                 cancellationToken.ThrowIfCancellationRequested();
                 await services.Framework
                     .RunOnFrameworkThread(
-                        () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(openWindow))
+                        thirdPartyPluginNoticeWindow.BeginUpdateCheck)
                     .ConfigureAwait(false);
                 var check = await bundledPluginUpdateChecker
                     .CheckAsync(
@@ -650,7 +644,10 @@ public sealed class Plugin : IDalamudPlugin
                     .RunOnFrameworkThread(
                         () => thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
                             message,
-                            openWindow))
+                            ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
+                                pendingOnline.Length,
+                                failed: false,
+                                userInitiated: openWindow)))
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -668,7 +665,10 @@ public sealed class Plugin : IDalamudPlugin
                     .RunOnFrameworkThread(
                         () => thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
                             $"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}",
-                            openWindow))
+                            ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
+                                pendingCount: 0,
+                                failed: true,
+                                userInitiated: openWindow)))
                     .ConfigureAwait(false);
             }
             finally

@@ -13,17 +13,20 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
     private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getPending;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install;
     private readonly Action<bool> configureFullPermissions;
     private readonly PluginLogger logger;
     private readonly UiText text;
+    private IReadOnlyList<BundledActPluginDescriptor> disclosures = [];
     private IReadOnlyList<BundledActPluginDescriptor> pending = [];
     private Task? installTask;
     private string result = string.Empty;
     private bool showPermissionChoice;
 
     public ThirdPartyPluginNoticeWindow(
+        Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures,
         Func<IReadOnlyList<BundledActPluginDescriptor>> getPending,
         Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install,
         Action<bool> configureFullPermissions,
@@ -31,6 +34,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         UiText text)
         : base("内置第三方 DLL 告知###DalamudActCompatThirdPartyDllNotice")
     {
+        this.getDisclosures = getDisclosures;
         this.getPending = getPending;
         this.install = install;
         this.configureFullPermissions = configureFullPermissions;
@@ -76,15 +80,26 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             ImGui.PopStyleColor();
 
             ImGui.Spacing();
-            if (pending.Count == 0 && !showPermissionChoice)
+            if (disclosures.Count == 0)
             {
                 DrawEmptyState();
             }
             else
             {
-                foreach (var plugin in pending)
+                if (pending.Count == 0)
                 {
-                    DrawPluginCard(plugin);
+                    ImGui.TextColored(IceBlue, text.Get(
+                        "当前声明已确认；作者和来源信息仍会长期显示。",
+                        "The current notices are acknowledged; author and source details remain visible."));
+                    ImGui.Spacing();
+                }
+
+                var pendingIds = pending
+                    .Select(static plugin => plugin.Id)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var plugin in disclosures)
+                {
+                    DrawPluginCard(plugin, pendingIds.Contains(plugin.Id));
                     ImGui.Spacing();
                 }
             }
@@ -145,26 +160,28 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         IsOpen = true;
     }
 
-    public void BeginUpdateCheck(bool openWindow)
+    public void BeginUpdateCheck()
     {
         result = text.Get(
             "正在检查三项 DLL 的作者上游版本……",
             "Checking the author sources for all three DLLs...");
-        if (openWindow)
+    }
+
+    public void CompleteUpdateCheck(string message, bool showWindow)
+    {
+        result = message;
+        Refresh(openWhenPending: false);
+        if (showWindow)
         {
             IsOpen = true;
         }
     }
 
-    public void CompleteUpdateCheck(string message, bool openWindow)
-    {
-        result = message;
-        Refresh(openWhenPending: true);
-        if (openWindow)
-        {
-            IsOpen = true;
-        }
-    }
+    internal static bool ShouldOpenUpdateResult(
+        int pendingCount,
+        bool failed,
+        bool userInitiated)
+        => pendingCount > 0 || (failed && userInitiated);
 
     private void CompleteInstallWhenReady()
     {
@@ -195,6 +212,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
     private void Refresh(bool openWhenPending)
     {
+        disclosures = getDisclosures();
         pending = getPending();
         if (openWhenPending && pending.Count > 0)
         {
@@ -202,7 +220,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         }
     }
 
-    private void DrawPluginCard(BundledActPluginDescriptor plugin)
+    private void DrawPluginCard(BundledActPluginDescriptor plugin, bool requiresAcknowledgement)
     {
         ImGui.PushID($"third-party-card-{plugin.Id}");
         ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
@@ -212,9 +230,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             ImGui.SameLine();
             ImGui.TextColored(IceBlue, $"v{plugin.Version}");
             ImGui.SameLine();
-            ImGui.TextDisabled(plugin.IsOnlineUpdate
-                ? text.Get("作者上游更新", "Author upstream update")
-                : text.Get("安装包内版本", "Bundled package version"));
+            ImGui.TextColored(
+                requiresAcknowledgement ? Gold : new Vector4(0.66f, 0.70f, 0.75f, 1),
+                requiresAcknowledgement
+                    ? plugin.IsOnlineUpdate
+                        ? text.Get("待确认作者上游更新", "Author update awaiting acknowledgement")
+                        : text.Get("待确认安装包内版本", "Bundled version awaiting acknowledgement")
+                    : text.Get("当前声明已确认", "Current notice acknowledged"));
 
             DrawMetadata(text.Get("DLL 作者", "DLL author"), plugin.Author);
             if (!string.Equals(plugin.Author, plugin.Maintainer, StringComparison.Ordinal))
