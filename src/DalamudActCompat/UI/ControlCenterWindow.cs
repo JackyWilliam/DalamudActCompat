@@ -69,6 +69,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
     private readonly Action<string> openHtmlOverlay;
     private readonly Action<string> closeHtmlOverlay;
+    private readonly Action<string> deleteHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
     private Page selectedPage;
     private ParserStatus parserStatus;
@@ -107,6 +108,7 @@ public sealed class ControlCenterWindow : Window
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
         Action<string> openHtmlOverlay,
         Action<string> closeHtmlOverlay,
+        Action<string> deleteHtmlOverlay,
         Action<string> applyOverlayWindowSettings)
         : base("ACT 控制中心###DalamudActCompatControlCenter")
     {
@@ -137,6 +139,7 @@ public sealed class ControlCenterWindow : Window
         this.getOverlayTemplates = getOverlayTemplates;
         this.openHtmlOverlay = openHtmlOverlay;
         this.closeHtmlOverlay = closeHtmlOverlay;
+        this.deleteHtmlOverlay = deleteHtmlOverlay;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -481,66 +484,100 @@ public sealed class ControlCenterWindow : Window
             changed = true;
         }
 
-        var dpsMetric = configuration.Meter.DpsMetric;
-        if (ImGui.BeginCombo(text.Get("DPS 口径", "DPS metric"), DpsMetricLabel(dpsMetric)))
-        {
-            foreach (var metric in Enum.GetValues<DpsMetric>())
-            {
-                if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
-                {
-                    configuration.Meter.DpsMetric = metric;
-                    changed = true;
-                }
-            }
-            ImGui.EndCombo();
-        }
-
-        changed |= DrawPlayerIdentityControls();
-        changed |= DrawFflogsSettings();
-
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("显示列", "Columns"));
-        changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
-        ImGui.SameLine();
-        changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
-        if (configuration.Meter.ShowJob)
+        if (ImGui.BeginChild("multiplayer-meter-controls", new Vector2(-1, 270), true))
         {
-            var jobStyle = configuration.Meter.JobDisplayStyle;
-            ImGui.SetNextItemWidth(190);
+            ImGui.TextColored(IceBlue, text.Get("多人模式控件", "Multiplayer controls"));
+            ImGui.TextDisabled(text.Get(
+                "多人模式始终保持单行；排序仅支持 DPS 与 HPS。",
+                "Multiplayer mode always stays on one row; sorting supports only DPS and HPS."));
+
+            var sortMode = MeterSortModeOptions.Normalize(configuration.Meter.SortMode);
             if (ImGui.BeginCombo(
-                    text.Get("职业显示方式", "Job display"),
-                    JobDisplayFormatter.Label(jobStyle, text)))
+                    text.Get("排序 / 主要数据", "Sort / primary metric"),
+                    sortMode == MeterSortMode.Hps ? "HPS" : "DPS"))
             {
-                foreach (var style in Enum.GetValues<JobDisplayStyle>())
+                foreach (var mode in MeterSortModeOptions.Supported)
                 {
                     if (ImGui.Selectable(
-                            JobDisplayFormatter.Label(style, text),
-                            style == jobStyle))
+                            mode == MeterSortMode.Hps ? "HPS" : "DPS",
+                            mode == sortMode))
                     {
-                        configuration.Meter.JobDisplayStyle = style;
+                        configuration.Meter.SortMode = mode;
                         changed = true;
                     }
                 }
                 ImGui.EndCombo();
             }
-        }
-        ImGui.TextDisabled(text.Get(
-            "每行固定显示当前 DPS/HPS、伤害占比和死亡数；以下是单人详情附加字段。",
-            "Every row always shows DPS/HPS, damage percent, and deaths; the following are optional single-player details."));
-        changed |= Checkbox(text.Get("单人总伤害", "Single-player damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
-        ImGui.SameLine();
-        changed |= Checkbox(text.Get("单人附加 HPS", "Single-player extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-        ImGui.SameLine();
-        changed |= Checkbox(text.Get("单人治疗量", "Single-player healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
 
-        var localPlayerColor = configuration.Meter.LocalPlayerColor;
-        if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
-        {
-            configuration.Meter.LocalPlayerColor = localPlayerColor;
-            changed = true;
+            var dpsMetric = configuration.Meter.DpsMetric;
+            if (ImGui.BeginCombo(text.Get("DPS 口径", "DPS metric"), DpsMetricLabel(dpsMetric)))
+            {
+                foreach (var metric in Enum.GetValues<DpsMetric>())
+                {
+                    if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
+                    {
+                        configuration.Meter.DpsMetric = metric;
+                        changed = true;
+                    }
+                }
+                ImGui.EndCombo();
+            }
+
+            changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+            if (configuration.Meter.ShowJob)
+            {
+                var jobStyle = configuration.Meter.JobDisplayStyle;
+                ImGui.SetNextItemWidth(190);
+                if (ImGui.BeginCombo(
+                        text.Get("职业显示方式", "Job display"),
+                        JobDisplayFormatter.Label(jobStyle, text)))
+                {
+                    foreach (var style in Enum.GetValues<JobDisplayStyle>())
+                    {
+                        if (ImGui.Selectable(
+                                JobDisplayFormatter.Label(style, text),
+                                style == jobStyle))
+                        {
+                            configuration.Meter.JobDisplayStyle = style;
+                            changed = true;
+                        }
+                    }
+                    ImGui.EndCombo();
+                }
+            }
+
+            var localPlayerColor = configuration.Meter.LocalPlayerColor;
+            if (ImGui.ColorEdit4(text.Get("自己的高亮颜色", "Your highlight color"), ref localPlayerColor))
+            {
+                configuration.Meter.LocalPlayerColor = localPlayerColor;
+                changed = true;
+            }
+
+            ImGui.TextDisabled(text.Get(
+                "每名玩家固定显示当前 DPS/HPS、占比和死亡数。",
+                "Every player always shows current DPS/HPS, percentage, and deaths."));
         }
+        ImGui.EndChild();
+
+        ImGui.Spacing();
+        if (ImGui.BeginChild("single-player-meter-controls", new Vector2(-1, 88), true))
+        {
+            ImGui.TextColored(Gold, text.Get("单人模式附加字段", "Single-player extra fields"));
+            changed |= Checkbox(text.Get("总伤害", "Damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("附加 HPS", "Extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("治疗量", "Healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
+        }
+        ImGui.EndChild();
+
+        changed |= DrawPlayerIdentityControls();
+        changed |= DrawFflogsSettings();
 
         return changed;
     }
@@ -552,6 +589,8 @@ public sealed class ControlCenterWindow : Window
             text.Get("Cactbot 与 HTML Overlay 保持原来的 WebView2 窗口，这里只负责管理。", "Cactbot and HTML overlays keep their existing WebView2 windows; this page only manages them."));
 
         var changed = false;
+        configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase);
         ImGui.TextColored(Gold, "Cactbot Raidboss");
         ImGui.TextDisabled(isCactbotInstalled()
             ? text.Get("资源已安装", "Assets installed")
@@ -607,13 +646,14 @@ public sealed class ControlCenterWindow : Window
                 ImGui.EndCombo();
             }
 
-            var selectedSettings = configuration.GetOverlayWindowSettings(
-                configuration.SelectedOverlayTemplate);
-            if (ImGui.Button(selectedSettings.IsVisible
+            configuration.OverlayWindows.TryGetValue(
+                configuration.SelectedOverlayTemplate,
+                out var selectedSettings);
+            if (ImGui.Button(selectedSettings?.IsVisible == true
                     ? text.Get("关闭所选 HTML Overlay", "Close selected HTML overlay")
                     : text.Get("打开所选 HTML Overlay", "Open selected HTML overlay")))
             {
-                if (selectedSettings.IsVisible)
+                if (selectedSettings?.IsVisible == true)
                 {
                     closeHtmlOverlay(configuration.SelectedOverlayTemplate);
                 }
@@ -622,14 +662,16 @@ public sealed class ControlCenterWindow : Window
                     openHtmlOverlay(configuration.SelectedOverlayTemplate);
                 }
             }
-            changed |= DrawOverlayWindowSettings(configuration.SelectedOverlayTemplate);
+            if (selectedSettings is not null)
+            {
+                changed |= DrawOverlayWindowSettings(configuration.SelectedOverlayTemplate);
+            }
         }
 
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("已创建的悬浮窗", "Created overlays"));
-        configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(StringComparer.OrdinalIgnoreCase);
         var createdNames = configuration.OverlayWindows.Keys
             .Where(name => !string.Equals(name, SelfHostedActRuntime.CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
             .OrderBy(name => name)
@@ -667,7 +709,29 @@ public sealed class ControlCenterWindow : Window
                         openHtmlOverlay(selectedCreatedOverlay);
                     }
                 }
-                changed |= DrawOverlayWindowSettings(selectedCreatedOverlay);
+                ImGui.SameLine();
+                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
+                ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
+                ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
+                var deleteSelected = ImGui.Button(text.Get("删除悬浮窗", "Delete overlay"));
+                ImGui.PopStyleColor(3);
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(text.Get(
+                        "关闭悬浮窗并删除它保存的位置、大小与显示设置；之后仍可从模板重新创建。",
+                        "Close the overlay and delete its saved position, size, and display settings; it can be recreated from the template."));
+                }
+
+                if (deleteSelected)
+                {
+                    var deletedName = selectedCreatedOverlay;
+                    deleteHtmlOverlay(deletedName);
+                    selectedCreatedOverlay = null;
+                }
+                else
+                {
+                    changed |= DrawOverlayWindowSettings(selectedCreatedOverlay);
+                }
             }
         }
 

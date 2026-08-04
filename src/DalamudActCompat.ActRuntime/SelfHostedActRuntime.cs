@@ -224,6 +224,27 @@ public sealed class SelfHostedActRuntime : IDisposable
         return true;
     }
 
+    public bool DeleteHtmlOverlay(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) ||
+            string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (htmlOverlays.TryRemove(name, out var window))
+        {
+            window.Dispose();
+            return true;
+        }
+
+        return overlayTemplates.Any(
+            candidate => string.Equals(
+                candidate.Name,
+                name,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
 

@@ -691,6 +691,17 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 "Triggernometry could not compile and execute a C# action that references its " +
                 $"own assembly.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
+                output.Contains(
+                    "Triggernometry PictoACT callback registered through the game-side drawing broker.",
+                    StringComparison.Ordinal),
+                "Triggernometry did not register PictoACT automatically during normal startup." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                !output.Contains("ICombatantMemory", StringComparison.Ordinal) &&
+                !errors.Contains("ICombatantMemory", StringComparison.Ordinal),
+                "Triggernometry still probed the obsolete OverlayPlugin combatant-memory shape." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
                 output.Contains("Legacy plugin 'postnamazu' loaded out-of-process.", StringComparison.Ordinal),
                 $"PostNamazu did not load out-of-process.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
@@ -884,7 +895,7 @@ async Task PrepareLegacySmokeConfigurationAsync()
               </Trigger>
               <Trigger Enabled="true" Id="51997209-fb1d-4c07-80d5-d6542feeeacb" Name="C# self-reference regression" RegularExpression="ACTCOMPAT_SCRIPT_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;BridgeNamazu.InitializeModules(() =&gt; BridgeNamazu.RegisterAnnotatedMethods());&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT _me callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">

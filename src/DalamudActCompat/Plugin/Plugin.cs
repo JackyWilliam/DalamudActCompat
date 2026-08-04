@@ -296,6 +296,7 @@ public sealed class Plugin : IDalamudPlugin
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
             CloseHtmlOverlay,
+            DeleteHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
             configuration,
@@ -860,6 +861,24 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         SaveConfiguration();
+    }
+
+    private void DeleteHtmlOverlay(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) ||
+            string.Equals(
+                name,
+                SelfHostedActRuntime.CactbotOverlayName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            logger.Warning("The Cactbot overlay is managed separately and cannot be deleted.");
+            return;
+        }
+
+        _ = actRuntime.DeleteHtmlOverlay(name);
+        configuration.OverlayWindows?.Remove(name);
+        SaveConfiguration();
+        logger.Information($"Deleted HTML overlay '{name}' and its saved window layout.");
     }
 
     private void ChoosePluginDirectory(Action continueWith)

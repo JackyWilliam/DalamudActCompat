@@ -740,7 +740,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 0)) == "v0.3.5.0",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 1)) == "v0.3.5.1",
         "The ACT control center no longer displays the full four-part assembly version.");
 
     var combatant = new Combatant(
@@ -1212,6 +1212,23 @@ static void ValidateDalamudGameStateBridge()
 
 static void ValidateHtmlOverlayDefaults()
 {
+    Assert(
+        typeof(SelfHostedActRuntime).GetMethod(
+            nameof(SelfHostedActRuntime.DeleteHtmlOverlay),
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(string)],
+            null)?.ReturnType == typeof(bool),
+        "The HTML overlay runtime no longer exposes explicit window deletion.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "deleteHtmlOverlay" &&
+                parameter.ParameterType == typeof(Action<string>)),
+        "The control center no longer exposes the created-overlay delete action.");
+
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
     Assert(settings.IsClickThrough, "HTML overlays must be click-through by default.");
