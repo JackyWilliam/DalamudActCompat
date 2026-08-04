@@ -16,6 +16,14 @@ namespace DalamudActCompat.UI;
 
 public sealed class ControlCenterWindow : Window
 {
+    private enum VisibilityTransition
+    {
+        Closed,
+        Opening,
+        Open,
+        Closing,
+    }
+
     private enum Page
     {
         Overview,
@@ -31,6 +39,8 @@ public sealed class ControlCenterWindow : Window
     private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
     private static readonly string VersionLabel = BuildVersionLabel();
+    private const int OpenAnimationMilliseconds = 180;
+    private const int CloseAnimationMilliseconds = 160;
 
     private readonly PluginConfiguration configuration;
     private readonly IParserEngine parserEngine;
@@ -60,6 +70,9 @@ public sealed class ControlCenterWindow : Window
     private string? selectedCreatedOverlay;
     private string? fflogsEncounterInputKey;
     private int fflogsEncounterIdInput;
+    private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
+    private long visibilityTransitionStartedAt;
+    private bool visibilityStylePushed;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -119,10 +132,79 @@ public sealed class ControlCenterWindow : Window
             MinimumSize = new Vector2(760, 520),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+        ShowCloseButton = false;
+        RespectCloseHotkey = false;
+        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
+    }
+
+    public void ShowAnimated()
+    {
+        IsOpen = true;
+        visibilityTransition = VisibilityTransition.Opening;
+        visibilityTransitionStartedAt = Environment.TickCount64;
+    }
+
+    public void HideAnimated()
+    {
+        if (!IsOpen || visibilityTransition == VisibilityTransition.Closing)
+        {
+            return;
+        }
+
+        saveConfiguration();
+        visibilityTransition = VisibilityTransition.Closing;
+        visibilityTransitionStartedAt = Environment.TickCount64;
+    }
+
+    public void ToggleAnimated()
+    {
+        if (IsOpen && visibilityTransition != VisibilityTransition.Closing)
+        {
+            HideAnimated();
+        }
+        else
+        {
+            ShowAnimated();
+        }
+    }
+
+    public override void PreDraw()
+    {
+        var alpha = visibilityTransition switch
+        {
+            VisibilityTransition.Opening => EaseInOut(TransitionProgress(OpenAnimationMilliseconds)),
+            VisibilityTransition.Closing => 1 - EaseInOut(TransitionProgress(CloseAnimationMilliseconds)),
+            VisibilityTransition.Closed => 0,
+            _ => 1,
+        };
+        ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Clamp(alpha, 0.01f, 1));
+        visibilityStylePushed = true;
+    }
+
+    public override void PostDraw()
+    {
+        if (visibilityStylePushed)
+        {
+            ImGui.PopStyleVar();
+            visibilityStylePushed = false;
+        }
     }
 
     public override void Draw()
     {
+        if (visibilityTransition == VisibilityTransition.Opening &&
+            TransitionProgress(OpenAnimationMilliseconds) >= 1)
+        {
+            visibilityTransition = VisibilityTransition.Open;
+        }
+        else if (visibilityTransition == VisibilityTransition.Closing &&
+                 TransitionProgress(CloseAnimationMilliseconds) >= 1)
+        {
+            visibilityTransition = VisibilityTransition.Closed;
+            IsOpen = false;
+            return;
+        }
+
         WindowName = text.Get(
             "ACT 控制中心###DalamudActCompatControlCenter",
             "ACT Control Center###DalamudActCompatControlCenter");
@@ -130,6 +212,7 @@ public sealed class ControlCenterWindow : Window
         PushTheme();
         try
         {
+            DrawWindowChrome();
             var sidebarWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.20f, 158, 188);
             if (ImGui.BeginChild("control-center-sidebar", new Vector2(sidebarWidth, -1), true))
             {
@@ -171,6 +254,45 @@ public sealed class ControlCenterWindow : Window
     public override void OnClose() => saveConfiguration();
 
     public void Detach() => parserEngine.StatusChanged -= OnParserStatusChanged;
+
+    internal static float EaseInOut(float progress)
+    {
+        var value = Math.Clamp(progress, 0, 1);
+        return value * value * (3 - (2 * value));
+    }
+
+    private float TransitionProgress(int durationMilliseconds)
+        => Math.Clamp(
+            (Environment.TickCount64 - visibilityTransitionStartedAt) /
+            (float)durationMilliseconds,
+            0,
+            1);
+
+    private void DrawWindowChrome()
+    {
+        const float height = 28;
+        const float closeWidth = 32;
+        var start = ImGui.GetCursorPos();
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        ImGui.InvisibleButton(
+            "control-center-drag-handle",
+            new Vector2(Math.Max(1, availableWidth - closeWidth - 6), height));
+        if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        {
+            ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
+        }
+
+        ImGui.SetCursorPos(new Vector2(start.X + availableWidth - closeWidth, start.Y));
+        ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
+        if (ImGui.Button("×##close-control-center", new Vector2(closeWidth, height)))
+        {
+            HideAnimated();
+        }
+        ImGui.PopStyleColor(3);
+        ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 3));
+    }
 
     private void DrawSidebar()
     {

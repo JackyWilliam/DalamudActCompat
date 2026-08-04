@@ -1,8 +1,10 @@
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Core.Interfaces;
+using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Infrastructure.Logging;
+using Dalamud.Plugin.Services;
 
 namespace DalamudActCompat.Parser;
 
@@ -13,13 +15,20 @@ public sealed class IinactAdapter : IParserEngine
     private readonly EncounterStateStore stateStore;
     private readonly EncounterService encounterService;
     private readonly string logDirectory;
+    private readonly IFramework framework;
+    private readonly Func<bool> isBoundByDuty;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
     private readonly object syncRoot = new();
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
+    private readonly object dutySessionLock = new();
+    private readonly DutyEncounterAccumulator dutySession = new();
+    private readonly HashSet<Guid> finalizedDutySegmentIds = [];
+    private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
+    private volatile bool wasBoundByDuty;
     private bool disposed;
 
     public IinactAdapter(
@@ -28,6 +37,8 @@ public sealed class IinactAdapter : IParserEngine
         EncounterStateStore stateStore,
         EncounterService encounterService,
         string logDirectory,
+        IFramework framework,
+        Func<bool> isBoundByDuty,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
         Func<IReadOnlyList<RuntimePluginSpec>> customPlugins)
@@ -37,10 +48,14 @@ public sealed class IinactAdapter : IParserEngine
         this.stateStore = stateStore;
         this.encounterService = encounterService;
         this.logDirectory = logDirectory;
+        this.framework = framework;
+        this.isBoundByDuty = isBoundByDuty;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
         actRuntime.EncounterChanged += OnEncounterChanged;
+        framework.Update += OnFrameworkUpdate;
+        wasBoundByDuty = isBoundByDuty();
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -166,6 +181,7 @@ public sealed class IinactAdapter : IParserEngine
 
     private void StopCore(bool updateStatus)
     {
+        FinalizeDutySession(DateTimeOffset.UtcNow);
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
@@ -213,6 +229,7 @@ public sealed class IinactAdapter : IParserEngine
             {
                 SetStatus(ParserState.Stopped, "Parser disposed.");
                 actRuntime.EncounterChanged -= OnEncounterChanged;
+                framework.Update -= OnFrameworkUpdate;
                 actRuntime.Dispose();
             }
         }
@@ -225,6 +242,50 @@ public sealed class IinactAdapter : IParserEngine
     private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)
     {
         var encounter = ActEncounterMapper.Map(snapshot);
+        var boundByDuty = isBoundByDuty();
+        if (boundByDuty)
+        {
+            Encounter dutyEncounter;
+            lock (dutySessionLock)
+            {
+                wasBoundByDuty = true;
+                dutyEncounter = dutySession.Update(encounter, finished, DateTimeOffset.UtcNow);
+            }
+            stateStore.Replace(dutyEncounter, stateStore.GetSnapshot().Recent);
+            return;
+        }
+
+        lock (dutySessionLock)
+        {
+            if (finalizedDutySegmentIds.Contains(snapshot.Id))
+            {
+                return;
+            }
+        }
+
+        if (wasBoundByDuty)
+        {
+            var sameDutyZone = false;
+            lock (dutySessionLock)
+            {
+                sameDutyZone = dutySession.HasData &&
+                               string.Equals(
+                                   dutySession.ZoneName,
+                                   encounter.ZoneName,
+                                   StringComparison.OrdinalIgnoreCase);
+                if (sameDutyZone)
+                {
+                    _ = dutySession.Update(encounter, finished, DateTimeOffset.UtcNow);
+                }
+            }
+
+            FinalizeDutySession(DateTimeOffset.UtcNow);
+            if (sameDutyZone)
+            {
+                return;
+            }
+        }
+
         if (!finished)
         {
             stateStore.Replace(encounter, stateStore.GetSnapshot().Recent);
@@ -233,6 +294,52 @@ public sealed class IinactAdapter : IParserEngine
 
         stateStore.Replace(encounter, stateStore.GetSnapshot().Recent);
         _ = encounterService.AddFinishedEncounterAsync(encounter, CancellationToken.None);
+    }
+
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        var boundByDuty = isBoundByDuty();
+        if (boundByDuty)
+        {
+            wasBoundByDuty = true;
+            return;
+        }
+
+        if (wasBoundByDuty)
+        {
+            FinalizeDutySession(DateTimeOffset.UtcNow);
+        }
+    }
+
+    private void FinalizeDutySession(DateTimeOffset endTime)
+    {
+        Encounter? completed;
+        lock (dutySessionLock)
+        {
+            wasBoundByDuty = false;
+            foreach (var segmentId in dutySession.SegmentIds)
+            {
+                if (!finalizedDutySegmentIds.Add(segmentId))
+                {
+                    continue;
+                }
+
+                finalizedDutySegmentOrder.Enqueue(segmentId);
+                while (finalizedDutySegmentOrder.Count > 256)
+                {
+                    finalizedDutySegmentIds.Remove(finalizedDutySegmentOrder.Dequeue());
+                }
+            }
+            completed = dutySession.Complete(endTime);
+        }
+
+        if (completed is null)
+        {
+            return;
+        }
+
+        stateStore.Replace(completed, stateStore.GetSnapshot().Recent);
+        _ = encounterService.AddFinishedEncounterAsync(completed, CancellationToken.None);
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)

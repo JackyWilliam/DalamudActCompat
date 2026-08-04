@@ -14,6 +14,7 @@ public sealed class MeterWindow : Window
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
+    private static readonly Vector4 LocalRateBright = new(1.0f, 0.94f, 0.42f, 1);
     private static readonly Vector4 IceBlue = new(0.38f, 0.72f, 0.90f, 1);
 
     private readonly MeterService meterService;
@@ -22,6 +23,7 @@ public sealed class MeterWindow : Window
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
     private readonly JobIconTextureSet jobIcons;
+    private readonly Func<string, string> localizeZoneName;
     private readonly Action saveConfiguration;
     private bool isDragging;
     private Vector2 dragOffset;
@@ -35,6 +37,7 @@ public sealed class MeterWindow : Window
         PluginConfiguration configuration,
         UiText text,
         JobIconTextureSet jobIcons,
+        Func<string, string> localizeZoneName,
         Action saveConfiguration)
         : base("战斗统计###DalamudActCompatMeter")
     {
@@ -44,6 +47,7 @@ public sealed class MeterWindow : Window
         this.configuration = configuration;
         this.text = text;
         this.jobIcons = jobIcons;
+        this.localizeZoneName = localizeZoneName;
         this.saveConfiguration = saveConfiguration;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
@@ -148,9 +152,16 @@ public sealed class MeterWindow : Window
             DrawCompactDragHandle(settings);
         }
 
-        if (!settings.IsLocked && !singleCombatant)
+        if (!settings.IsLocked)
         {
-            DrawControls(settings);
+            if (singleCombatant)
+            {
+                DrawCompactControls(settings);
+            }
+            else
+            {
+                DrawControls(settings);
+            }
         }
 
         if (rows.Count == 0)
@@ -195,7 +206,7 @@ public sealed class MeterWindow : Window
     {
         var scale = Math.Clamp(fontScale, 0.75f, 1.8f);
         var width = Math.Clamp(currentSize.X, 320, 440);
-        var height = MathF.Ceiling((showHeader ? 104 : 78) * scale);
+        var height = MathF.Ceiling((showHeader ? 118 : 102) * scale);
         return new Vector2(width, height);
     }
 
@@ -254,8 +265,11 @@ public sealed class MeterWindow : Window
             ? new Vector4(0.38f, 0.78f, 0.66f, 1)
             : new Vector4(0.66f, 0.69f, 0.74f, 1);
         drawList.AddText(start + new Vector2(10, 6), ImGui.GetColorU32(stateColor), encounter.IsActive ? "●" : "○");
-        drawList.AddText(start + new Vector2(28, 6), ImGui.GetColorU32(Gold), encounter.EnemyName);
-        var subtitle = $"{encounter.ZoneName}  ·  {FormatDuration(encounter.Duration)}  ·  " +
+        drawList.AddText(
+            start + new Vector2(28, 6),
+            ImGui.GetColorU32(Gold),
+            LocalizeEncounterTitle(encounter));
+        var subtitle = $"{localizeZoneName(encounter.ZoneName)}  ·  {FormatDuration(encounter.Duration)}  ·  " +
                        (encounter.IsActive ? text.Get("战斗中", "Running") : text.Get("已结束", "Ended"));
         drawList.AddText(start + new Vector2(28, 24), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), subtitle);
     }
@@ -287,8 +301,16 @@ public sealed class MeterWindow : Window
         drawList.AddText(
             start + new Vector2(25, 3),
             ImGui.GetColorU32(Gold),
-            TrimToWidth(encounter.EnemyName, width - durationSize.X - 48));
+            TrimToWidth(LocalizeEncounterTitle(encounter), width - durationSize.X - 48));
     }
+
+    private string LocalizeEncounterTitle(Encounter encounter)
+        => string.Equals(
+            encounter.EnemyName,
+            encounter.ZoneName,
+            StringComparison.OrdinalIgnoreCase)
+            ? localizeZoneName(encounter.EnemyName)
+            : encounter.EnemyName;
 
     private void DrawCompactDragHandle(MeterSettings settings)
     {
@@ -336,20 +358,7 @@ public sealed class MeterWindow : Window
     private void DrawControls(MeterSettings settings)
     {
         ImGui.SetNextItemWidth(130);
-        if (ImGui.BeginCombo("##meter-sort", SortModeLabel(settings.SortMode)))
-        {
-            foreach (var mode in MeterSortModeOptions.Supported)
-            {
-                if (ImGui.Selectable(
-                        SortModeLabel(mode),
-                        MeterSortModeOptions.Normalize(settings.SortMode) == mode))
-                {
-                    settings.SortMode = mode;
-                    saveConfiguration();
-                }
-            }
-            ImGui.EndCombo();
-        }
+        DrawSortModeCombo(settings, "##meter-sort");
 
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get("排序", "Sort"));
@@ -357,6 +366,32 @@ public sealed class MeterWindow : Window
         if (ImGui.SmallButton(text.Get("清空当前战斗", "Clear encounter")))
         {
             stateStore.ResetCurrent();
+        }
+    }
+
+    private void DrawCompactControls(MeterSettings settings)
+    {
+        ImGui.SetNextItemWidth(92);
+        DrawSortModeCombo(settings, "##meter-single-sort");
+        ImGui.SameLine();
+        ImGui.TextDisabled(text.Get("主列", "Primary"));
+    }
+
+    private void DrawSortModeCombo(MeterSettings settings, string id)
+    {
+        if (ImGui.BeginCombo(id, SortModeLabel(settings.SortMode, settings)))
+        {
+            foreach (var mode in MeterSortModeOptions.Supported)
+            {
+                if (ImGui.Selectable(
+                        SortModeLabel(mode, settings),
+                        MeterSortModeOptions.Normalize(settings.SortMode) == mode))
+                {
+                    settings.SortMode = mode;
+                    saveConfiguration();
+                }
+            }
+            ImGui.EndCombo();
         }
     }
 
@@ -477,7 +512,7 @@ public sealed class MeterWindow : Window
                 new Vector4(0.72f, 0.78f, 0.84f, 1));
             DrawRightColumn(
                 $"{PrimaryRateLabel(sortMode, settings)} {primary:N0}",
-                row.IsLocalPlayer ? Gold : IceBlue);
+                PrimaryRateColor(row.IsLocalPlayer));
             if (estimate is not null)
             {
                 DrawRightColumn($"~{estimate.Score}", estimate.Color);
@@ -501,21 +536,33 @@ public sealed class MeterWindow : Window
         var firstLineY = start.Y + 5;
         var secondLineY = start.Y + rowHeight * 0.53f;
         var singleX = DrawJob(start.X + 8, firstLineY);
-        var primaryText =
-            $"{(estimate is null ? string.Empty : $"~{estimate.Score}  ")}" +
-            $"{PrimaryRateLabel(sortMode, settings)}  {primary:N0}";
+        var primaryText = $"{PrimaryRateLabel(sortMode, settings)}  {primary:N0}";
         var primarySize = ImGui.CalcTextSize(primaryText);
+        var estimateText = estimate is null ? string.Empty : $"~{estimate.Score}";
+        var estimateSize = ImGui.CalcTextSize(estimateText);
         var rightX = end.X - primarySize.X - 9;
+        var estimateX = rightX - (estimate is null ? 0 : estimateSize.X + 10);
         var availableSingleNameWidth = Math.Max(40, rightX - singleX - 10);
+        if (estimate is not null)
+        {
+            availableSingleNameWidth = Math.Max(40, estimateX - singleX - 10);
+        }
         drawList.AddText(
             new Vector2(singleX, firstLineY),
             ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
             TrimToWidth(displayName, availableSingleNameWidth));
+        if (estimate is not null)
+        {
+            drawList.AddText(
+                new Vector2(estimateX, firstLineY),
+                ImGui.GetColorU32(estimate.Color),
+                estimateText);
+        }
         if (!string.IsNullOrEmpty(primaryText))
         {
             drawList.AddText(
                 new Vector2(rightX, firstLineY),
-                ImGui.GetColorU32(estimate?.Color ?? (row.IsLocalPlayer ? Gold : IceBlue)),
+                ImGui.GetColorU32(PrimaryRateColor(row.IsLocalPlayer)),
                 primaryText);
         }
 
@@ -569,8 +616,13 @@ public sealed class MeterWindow : Window
         _ => row.Dps,
     };
 
-    private static string SortModeLabel(MeterSortMode mode)
-        => MeterSortModeOptions.Normalize(mode) == MeterSortMode.Hps ? "HPS" : "DPS";
+    private static string SortModeLabel(MeterSortMode mode, MeterSettings settings)
+        => MeterSortModeOptions.Normalize(mode) == MeterSortMode.Hps
+            ? "HPS"
+            : PrimaryRateLabel(MeterSortMode.Dps, settings);
+
+    internal static Vector4 PrimaryRateColor(bool isLocalPlayer)
+        => isLocalPlayer ? LocalRateBright : IceBlue;
 
     private static Vector4 JobColor(string job)
     {
@@ -613,7 +665,7 @@ public sealed class MeterWindow : Window
             ? "HPS"
             : settings.DpsMetric switch
             {
-                DpsMetric.EncDps => "EncDPS",
+                DpsMetric.EncDps => "eDPS",
                 DpsMetric.ExtDps => "ExtDPS",
                 _ => "DPS",
             };

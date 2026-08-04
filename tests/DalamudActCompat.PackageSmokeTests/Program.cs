@@ -55,6 +55,8 @@ try
     ValidateChinese755Opcodes();
     ValidateMeterRows();
     ValidateCompactMeterLayout();
+    ValidateDutyEncounterAggregation();
+    ValidateControlCenterPresentation();
     ValidateFflogsEstimateCurve();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
@@ -510,6 +512,56 @@ static void ValidateCompactMeterLayout()
     Assert(
         iconSize is >= 20 and <= 24 && iconSize <= multiRowHeight - 4,
         "Job icons were not normalized to the one-line Meter slot.");
+
+    var rateLabelMethod = typeof(MeterWindow).GetMethod(
+                              "PrimaryRateLabel",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Meter primary-rate label helper was not found.");
+    var settings = new MeterSettings { DpsMetric = DpsMetric.EncDps };
+    Assert(
+        Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS"),
+        "The ACT Meter still labels encounter DPS as EncDPS instead of eDPS.");
+
+    var sortLabelMethod = typeof(MeterWindow).GetMethod(
+                              "SortModeLabel",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Meter sort-mode label helper was not found.");
+    Assert(
+        Equals(sortLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS") &&
+        Equals(sortLabelMethod.Invoke(null, [MeterSortMode.Hps, settings]), "HPS"),
+        "The compact Meter control no longer exposes both DPS and HPS modes.");
+
+    var rateColorMethod = typeof(MeterWindow).GetMethod(
+                              "PrimaryRateColor",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Meter primary-rate color helper was not found.");
+    var ownRateColor = (System.Numerics.Vector4)rateColorMethod.Invoke(null, [true])!;
+    var otherRateColor = (System.Numerics.Vector4)rateColorMethod.Invoke(null, [false])!;
+    Assert(
+        ownRateColor.X + ownRateColor.Y + ownRateColor.Z >
+        otherRateColor.X + otherRateColor.Y + otherRateColor.Z,
+        "The local player's DPS/HPS value is not brighter than party values.");
+
+    var localizerType = typeof(MeterWindow).Assembly.GetType(
+                            "DalamudActCompat.Meter.ZoneNameLocalizer")
+                        ?? throw new InvalidOperationException(
+                            "Meter zone-name localizer was not found.");
+    var resolveZoneName = localizerType.GetMethod(
+                              "Resolve",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Meter zone-name resolver was not found.");
+    var zoneNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Middle La Noscea"] = "中拉诺西亚",
+    };
+    Assert(
+        Equals(resolveZoneName.Invoke(null, ["Middle La Noscea", zoneNames]), "中拉诺西亚") &&
+        Equals(resolveZoneName.Invoke(null, ["Unknown Zone", zoneNames]), "Unknown Zone"),
+        "Meter zone names no longer localize with a safe ACT-name fallback.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -540,6 +592,96 @@ static void ValidateFflogsEstimateCurve()
     Assert(
         legendary != pink && pink != orange,
         "FFLogs estimate color thresholds collapsed distinct ranking tiers.");
+}
+
+static void ValidateDutyEncounterAggregation()
+{
+    var start = new DateTimeOffset(2026, 8, 4, 12, 0, 0, TimeSpan.Zero);
+    var accumulator = new DutyEncounterAccumulator();
+    var first = CreateDutySegment(
+        Guid.NewGuid(),
+        start,
+        start.AddMinutes(2),
+        "测试副本",
+        "Boss A",
+        damage: 100,
+        healing: 20,
+        deaths: 1);
+    var afterFirst = accumulator.Update(first, finished: true, start.AddMinutes(2));
+    Assert(
+        afterFirst.IsActive && afterFirst.TotalDamage == 100,
+        "A completed boss incorrectly ended or reset the active duty session.");
+
+    var secondId = Guid.NewGuid();
+    var secondActive = CreateDutySegment(
+        secondId,
+        start.AddMinutes(4),
+        endTime: null,
+        "测试副本",
+        "Boss B",
+        damage: 50,
+        healing: 10,
+        deaths: 0);
+    var combinedActive = accumulator.Update(secondActive, finished: false, start.AddMinutes(5));
+    Assert(
+        combinedActive.Id == afterFirst.Id &&
+        combinedActive.TotalDamage == 150 &&
+        combinedActive.EnemyName == "测试副本",
+        "The next boss did not continue the same duty-wide ACT encounter.");
+
+    var secondFinished = secondActive with
+    {
+        EndTime = start.AddMinutes(6),
+        Combatants =
+        [
+            secondActive.Combatants[0] with
+            {
+                TotalDamage = 80,
+                TotalHealing = 15,
+            },
+        ],
+    };
+    _ = accumulator.Update(secondFinished, finished: true, start.AddMinutes(6));
+    var completed = accumulator.Complete(start.AddMinutes(7))
+                    ?? throw new InvalidOperationException(
+                        "Leaving the duty produced no completed ACT encounter.");
+    Assert(
+        !completed.IsActive &&
+        completed.TotalDamage == 180 &&
+        completed.TotalHealing == 35 &&
+        completed.TotalDeaths == 1,
+        "Leaving the duty did not finalize the accumulated boss totals exactly once.");
+}
+
+static Encounter CreateDutySegment(
+    Guid id,
+    DateTimeOffset start,
+    DateTimeOffset? endTime,
+    string zone,
+    string enemy,
+    long damage,
+    long healing,
+    int deaths)
+    => new(
+        id,
+        start,
+        endTime,
+        zone,
+        enemy,
+        [new Combatant("local", "Player", "PLD", true, damage, healing, deaths)],
+        Array.Empty<DamageEvent>(),
+        Array.Empty<HealEvent>(),
+        Array.Empty<DeathEvent>(),
+        Array.Empty<ActionSummary>(),
+        Array.Empty<JobSummary>());
+
+static void ValidateControlCenterPresentation()
+{
+    Assert(
+        ControlCenterWindow.EaseInOut(0) == 0 &&
+        Math.Abs(ControlCenterWindow.EaseInOut(0.5f) - 0.5f) < 0.001f &&
+        ControlCenterWindow.EaseInOut(1) == 1,
+        "The ACT control center visibility transition is not a bounded ease-in-out curve.");
 }
 
 static void ValidateChinese755Opcodes()
@@ -1036,6 +1178,31 @@ static void ValidateHtmlOverlayDefaults()
         layoutScript?.Contains("#popup-text-info", StringComparison.Ordinal) == true &&
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
         "The Cactbot responsive layout no longer protects info text from clipping.");
+    var editIndicatorScript = formType.GetField(
+                                  "OverlayEditIndicatorScript",
+                                  BindingFlags.Static | BindingFlags.NonPublic)
+                              ?.GetRawConstantValue() as string;
+    Assert(
+        editIndicatorScript?.Contains(
+            "data-dalamud-act-compat-editing='true'",
+            StringComparison.Ordinal) == true &&
+        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal),
+        "Transparent HTML overlays no longer expose a visible edit-mode boundary.");
+    var isTransientWebViewFailure = formType.GetMethod(
+                                        "IsTransientWebViewInitializationFailure",
+                                        BindingFlags.Static | BindingFlags.NonPublic)
+                                    ?? throw new InvalidOperationException(
+                                        "WebView2 transient initialization detector was not found.");
+    Assert(
+        isTransientWebViewFailure.Invoke(
+            null,
+            [new System.Runtime.InteropServices.COMException(
+                "The operation was aborted.",
+                unchecked((int)0x80004004))]) as bool? == true &&
+        isTransientWebViewFailure.Invoke(
+            null,
+            [new InvalidOperationException("permanent")]) as bool? == false,
+        "Cactbot WebView2 startup no longer retries only the transient E_ABORT failure.");
 
     var interactionType = formType.GetNestedType(
                               "OverlayInteraction",

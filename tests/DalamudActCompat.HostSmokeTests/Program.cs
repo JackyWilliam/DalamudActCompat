@@ -33,6 +33,7 @@ await ValidateHostCrashBreaksOnlyPipeAsync();
 await ValidateAbruptClientDisconnectAsync();
 await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
+ValidateTriggernometryCompatibilityNoticeFilter();
 if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
@@ -120,6 +121,18 @@ void ValidateLargePostNamazuCopyReturnsQuickly()
         clipboardCompletion.Task.Result > 2_000_000,
         "PostNamazu 100k-line background clipboard payload was unexpectedly truncated.");
     Environment.SetEnvironmentVariable("ACTCOMPAT_ENABLE_TEST_HOOKS", null);
+}
+
+void ValidateTriggernometryCompatibilityNoticeFilter()
+{
+    Assert(
+        HostPluginBridge.IsExpectedTriggernometryCompatibilityNotice(
+            "[鲶鱼精邮差扩展] 警告：ACT 未以管理员权限运行。如果遇到游戏崩溃，请尝试右键 ACT 程序 - 属性 - 兼容性，开启管理员身份运行。"),
+        "Triggernometry's known compatibility-only administrator notice was not recognized.");
+    Assert(
+        !HostPluginBridge.IsExpectedTriggernometryCompatibilityNotice(
+            "脚本启动失败：此操作需要管理员权限。"),
+        "A real administrator-related failure was incorrectly suppressed.");
 }
 
 async Task ValidateSequenceRegressionTerminatesHostAsync()
