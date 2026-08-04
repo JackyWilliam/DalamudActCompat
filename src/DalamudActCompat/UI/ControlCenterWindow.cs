@@ -321,26 +321,14 @@ public sealed class ControlCenterWindow : Window
             (Page.Extensions, text.Get("扩展", "Extensions")),
             (Page.Diagnostics, text.Get("设置", "Settings")),
         };
-        var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var tabWidth = Math.Max(86, (ImGui.GetContentRegionAvail().X - (spacing * (tabs.Length - 1))) / tabs.Length);
-        for (var index = 0; index < tabs.Length; index++)
+        var currentIndex = Array.FindIndex(tabs, tab => tab.Page == selectedPage);
+        var nextIndex = BrandedWindowChrome.DrawNavigationRail(
+            "control-center-navigation",
+            tabs.Select(tab => tab.Label).ToArray(),
+            currentIndex);
+        if (nextIndex != currentIndex)
         {
-            if (index > 0)
-            {
-                ImGui.SameLine();
-            }
-
-            var tab = tabs[index];
-            var selected = selectedPage == tab.Page;
-            ImGui.PushStyleColor(
-                ImGuiCol.Button,
-                selected ? new Vector4(0.11f, 0.25f, 0.34f, 1) : new Vector4(0.055f, 0.075f, 0.10f, 1));
-            ImGui.PushStyleColor(ImGuiCol.Text, selected ? IceBlue : new Vector4(0.78f, 0.82f, 0.87f, 1));
-            if (ImGui.Button($"{tab.Label}##top-nav-{tab.Page}", new Vector2(tabWidth, 38)))
-            {
-                selectedPage = tab.Page;
-            }
-            ImGui.PopStyleColor(2);
+            selectedPage = tabs[nextIndex].Page;
         }
     }
     private bool DrawOverview()

@@ -129,9 +129,17 @@ public sealed class EncounterWindow : Window
                     "近期战斗与逐场日志使用同一个详情视图",
                     "Recent encounters and log files share one detail view"));
                 ImGui.Spacing();
-                PageButton(HistoryPage.Recent, text.Get("近期战斗", "Recent encounters"));
-                ImGui.SameLine();
-                PageButton(HistoryPage.LogFiles, text.Get("日志文件", "Log files"));
+                var pages = new[]
+                {
+                    text.Get("近期战斗", "Recent encounters"),
+                    text.Get("日志文件", "Log files"),
+                };
+                var nextPage = BrandedWindowChrome.DrawNavigationRail(
+                    "combat-history-navigation",
+                    pages,
+                    (int)selectedPage,
+                    34);
+                selectedPage = (HistoryPage)nextPage;
                 ImGui.Separator();
                 ImGui.Spacing();
 
@@ -382,18 +390,6 @@ public sealed class EncounterWindow : Window
             $"{text.Get("事件", "Events")}: {encounter.DamageEvents.Count} {text.Get("伤害", "damage")}, " +
             $"{encounter.HealEvents.Count} {text.Get("治疗", "healing")}, " +
             $"{encounter.DeathEvents.Count} {text.Get("死亡", "deaths")}");
-    }
-
-    private void PageButton(HistoryPage page, string label)
-    {
-        var selected = selectedPage == page;
-        ImGui.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(0.11f, 0.25f, 0.34f, 1) : new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Text, selected ? IceBlue : new Vector4(0.84f, 0.87f, 0.91f, 1));
-        if (ImGui.Button($"{label}##history-page-{page}", new Vector2(150, 34)))
-        {
-            selectedPage = page;
-        }
-        ImGui.PopStyleColor(2);
     }
 
     private bool DrawEncounterListCard(Encounter encounter, bool selected)
