@@ -38,6 +38,34 @@ public static class LegacyAssemblyRewriter
         return outer;
     }
 
+    public static void RegisterTriggernometryPictoAct(AssemblyLoadContext loadContext)
+    {
+        const string moduleTypeName =
+            "Triggernometry.PluginBridges.BridgeNamazu.Modules.PictoACTModule";
+        var implementation = loadContext.Assemblies.FirstOrDefault(
+            assembly => assembly.GetType(moduleTypeName, throwOnError: false) is not null)
+            ?? throw new TypeLoadException(
+                $"Loaded Triggernometry implementation does not contain {moduleTypeName}.");
+        var moduleType = implementation.GetType(moduleTypeName, throwOnError: true)!;
+        var module = Activator.CreateInstance(moduleType)
+                     ?? throw new InvalidOperationException(
+                         $"Could not create Triggernometry module {moduleTypeName}.");
+        var registerCallback = moduleType.BaseType?.GetMethod(
+                                   "RegisterCallback",
+                                   BindingFlags.Instance | BindingFlags.Public,
+                                   null,
+                                   [typeof(string), typeof(Action<string>)],
+                                   null)
+                               ?? throw new MissingMethodException(
+                                   moduleType.BaseType?.FullName,
+                                   "RegisterCallback");
+        registerCallback.Invoke(
+            module,
+            ["PictoACT", new Action<string>(HostPluginBridge.SendPostNamazuPictoAct)]);
+        Console.WriteLine(
+            "Triggernometry PictoACT callback registered through the game-side drawing broker.");
+    }
+
     private static Assembly LoadPatchedTriggernometryImplementation(
         MemoryStream patched,
         AssemblyLoadContext loadContext)
@@ -521,6 +549,46 @@ public static class LegacyAssemblyRewriter
             loadInstance: false,
             loadParameters: true);
 
+        // Triggernometry first probes OverlayPlugin's private combatant-memory shape before
+        // falling back to FFXIV_ACT_Plugin. Current OverlayPlugin no longer exposes the old
+        // reflection contract to the external Host, while the Host already supplies a complete
+        // read-only FFXIV_ACT_Plugin repository from the game-side entity snapshot. Route every
+        // combatant lookup directly to that stable repository and avoid the obsolete probe.
+        var bridgeFfxiv = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeFFXIV");
+        var combatants = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.PluginBridges.ModuleCombatants");
+        var combatantsInitializer = combatants.Methods.Single(method =>
+            method.Name == "Initialize" && method.Parameters.Count == 0);
+        ReplaceWithReturn(combatantsInitializer);
+        ReplaceWithBridge(
+            combatants.Methods.Single(method =>
+                method.Name == "InternalGetEntities" && method.Parameters.Count == 0),
+            bridgeFfxiv.Methods.Single(method =>
+                method.Name == "InternalGetEntities" && method.Parameters.Count == 0),
+            loadInstance: false,
+            loadParameters: false);
+        ReplaceWithBridge(
+            combatants.Methods.Single(method =>
+                method.Name == "InternalGetEntityByID" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.UInt32),
+            bridgeFfxiv.Methods.Single(method =>
+                method.Name == "InternalGetEntityByID" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.UInt32),
+            loadInstance: false,
+            loadParameters: true);
+        ReplaceWithBridge(
+            combatants.Methods.Single(method =>
+                method.Name == "InternalGetMyself" && method.Parameters.Count == 0),
+            bridgeFfxiv.Methods.Single(method =>
+                method.Name == "InternalGetMyself" && method.Parameters.Count == 0),
+            loadInstance: false,
+            loadParameters: false);
+
         var enqueueCount = 0;
         var abortCount = 0;
         var processStartCount = 0;
@@ -774,6 +842,12 @@ public static class LegacyAssemblyRewriter
 
         processor.Append(processor.Create(OpCodes.Call, bridge));
         processor.Append(processor.Create(OpCodes.Ret));
+    }
+
+    private static void ReplaceWithReturn(MethodDefinition method)
+    {
+        method.Body = new Mono.Cecil.Cil.MethodBody(method);
+        method.Body.GetILProcessor().Append(Instruction.Create(OpCodes.Ret));
     }
 
     private static void InsertBooleanGuard(

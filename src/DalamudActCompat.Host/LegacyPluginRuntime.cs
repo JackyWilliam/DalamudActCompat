@@ -762,6 +762,7 @@ internal sealed class LegacyPluginHandle : IDisposable
 
                 if (id == "triggernometry")
                 {
+                    LegacyAssemblyRewriter.RegisterTriggernometryPictoAct(loadContext);
                     Console.WriteLine(DescribeTriggernometryState(instance));
                 }
 
