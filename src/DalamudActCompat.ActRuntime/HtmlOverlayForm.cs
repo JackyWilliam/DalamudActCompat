@@ -103,6 +103,11 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     public void Show()
     {
+        if (settings is not null)
+        {
+            settings.IsVisible = true;
+        }
+
         if (uiThread is null)
         {
             uiThread = new Thread(Run)
@@ -114,11 +119,19 @@ internal sealed class HtmlOverlayForm : IDisposable
             uiThread.Start();
             if (!ready.Wait(TimeSpan.FromSeconds(10)))
             {
+                if (settings is not null)
+                {
+                    settings.IsVisible = false;
+                }
                 throw new TimeoutException($"{title} did not create its UI thread within 10 seconds.");
             }
 
             if (startupFailure is not null)
             {
+                if (settings is not null)
+                {
+                    settings.IsVisible = false;
+                }
                 throw new InvalidOperationException($"{title} could not be created.", startupFailure);
             }
 
@@ -127,22 +140,61 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         if (form is null)
         {
+            if (settings is not null)
+            {
+                settings.IsVisible = false;
+            }
             throw new InvalidOperationException($"{title} is no longer available.");
+        }
+
+        try
+        {
+            form.BeginInvoke(() =>
+            {
+                form.Show();
+                visible = true;
+                if (settings is not null)
+                {
+                    settings.IsVisible = true;
+                }
+                form.WindowState = FormWindowState.Normal;
+                if (overlayMode)
+                {
+                    ApplyOverlaySettings();
+                }
+                else
+                {
+                    form.Activate();
+                }
+            });
+        }
+        catch
+        {
+            if (settings is not null)
+            {
+                settings.IsVisible = false;
+            }
+            throw;
+        }
+    }
+
+    public void Hide()
+    {
+        visible = false;
+        if (settings is not null)
+        {
+            settings.IsVisible = false;
+        }
+
+        if (form is null)
+        {
+            return;
         }
 
         form.BeginInvoke(() =>
         {
-            form.Show();
-            visible = true;
-            form.WindowState = FormWindowState.Normal;
-            if (overlayMode)
-            {
-                ApplyOverlaySettings();
-            }
-            else
-            {
-                form.Activate();
-            }
+            StopEditMonitor();
+            form.Hide();
         });
     }
 
@@ -197,6 +249,11 @@ internal sealed class HtmlOverlayForm : IDisposable
             form.Shown += async (_, _) =>
             {
                 visible = true;
+                if (settings is not null)
+                {
+                    settings.IsVisible = true;
+                }
+                ready.Set();
                 if (overlayMode)
                 {
                     ApplyOverlaySettings();
@@ -204,7 +261,6 @@ internal sealed class HtmlOverlayForm : IDisposable
 
                 await InitializeWebViewAsync();
             };
-            ready.Set();
             Application.Run(form);
         }
         catch (Exception ex)
@@ -216,6 +272,10 @@ internal sealed class HtmlOverlayForm : IDisposable
         finally
         {
             visible = false;
+            if (settings is not null)
+            {
+                settings.IsVisible = false;
+            }
             StopEditMonitor();
             if (webView is not null)
             {
@@ -649,6 +709,10 @@ internal sealed class HtmlOverlayForm : IDisposable
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
     {
         visible = false;
+        if (settings is not null)
+        {
+            settings.IsVisible = false;
+        }
         StopEditMonitor();
         if (disposing)
         {

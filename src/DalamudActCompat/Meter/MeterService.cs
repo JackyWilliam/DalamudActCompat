@@ -59,11 +59,9 @@ public sealed class MeterService
             combatant.TotalDamage * 100.0 / totalDamage,
             combatant.Deaths));
 
-        return settings.SortMode switch
+        return MeterSortModeOptions.Normalize(settings.SortMode) switch
         {
             MeterSortMode.Hps => rows.OrderByDescending(static row => row.Hps).ToArray(),
-            MeterSortMode.Damage => rows.OrderByDescending(static row => row.TotalDamage).ToArray(),
-            MeterSortMode.Deaths => rows.OrderByDescending(static row => row.Deaths).ToArray(),
             _ => rows.OrderByDescending(static row => row.Dps).ToArray(),
         };
     }

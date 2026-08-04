@@ -207,6 +207,23 @@ public sealed class SelfHostedActRuntime : IDisposable
         return true;
     }
 
+    public bool HideHtmlOverlay(string name)
+    {
+        var settings = getOverlayWindowSettings(name);
+        settings.IsVisible = false;
+        if (!htmlOverlays.TryGetValue(name, out var window))
+        {
+            return overlayTemplates.Any(
+                candidate => string.Equals(
+                    candidate.Name,
+                    name,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        window.Hide();
+        return true;
+    }
+
     public IReadOnlyList<string> LoadedCustomPluginIds
         => customPlugins.Select(plugin => plugin.Id).ToArray();
 

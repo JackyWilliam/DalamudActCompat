@@ -6,8 +6,19 @@ public enum MeterSortMode
 {
     Dps,
     Hps,
+    // Retained so existing JSON values remain readable; normalized to DPS at runtime.
     Damage,
+    // Retained so existing JSON values remain readable; normalized to DPS at runtime.
     Deaths,
+}
+
+public static class MeterSortModeOptions
+{
+    public static IReadOnlyList<MeterSortMode> Supported { get; } =
+        [MeterSortMode.Dps, MeterSortMode.Hps];
+
+    public static MeterSortMode Normalize(MeterSortMode mode)
+        => mode == MeterSortMode.Hps ? MeterSortMode.Hps : MeterSortMode.Dps;
 }
 
 public enum DpsMetric
@@ -22,6 +33,15 @@ public enum PlayerIdentityMode
     Original,
     Job,
     Anonymous,
+}
+
+public enum JobDisplayStyle
+{
+    Abbreviation,
+    ChineseAbbreviation,
+    MinimalIcon,
+    ClassicIcon,
+    FlatIcon,
 }
 
 public sealed class MeterSettings
@@ -52,17 +72,13 @@ public sealed class MeterSettings
 
     public bool ShowJob { get; set; } = true;
 
-    public bool ShowDps { get; set; } = true;
+    public JobDisplayStyle JobDisplayStyle { get; set; } = JobDisplayStyle.Abbreviation;
 
     public bool ShowDamage { get; set; } = true;
-
-    public bool ShowDamagePercent { get; set; } = true;
 
     public bool ShowHps { get; set; } = true;
 
     public bool ShowHealing { get; set; } = true;
-
-    public bool ShowDeaths { get; set; } = true;
 
     public Vector4 LocalPlayerColor { get; set; } = new(0.25f, 0.42f, 0.55f, 0.45f);
 }

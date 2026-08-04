@@ -98,6 +98,8 @@ public sealed class Plugin : IDalamudPlugin
             partyList.Count > 1 &&
             partyList.Any(member => member.CurrentHP > 0);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
+        configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
+            configuration.Meter.SortMode);
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
@@ -189,12 +191,16 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(assetDirectory, "act-logo.jpg"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
+        var jobIcons = new JobIconTextureSet(
+            textureProvider,
+            Path.Combine(assetDirectory, "JobIcons"));
         meterWindow = new MeterWindow(
             meterService,
             stateStore,
             fflogsEstimateService,
             configuration,
             text,
+            jobIcons,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
         encounterWindow = new EncounterWindow(stateStore, paths, configuration, text);
@@ -227,6 +233,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenCactbotSettings,
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
+            CloseHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration,
             () => StartBundledPluginUpdateCheck(openWindow: true));
@@ -258,6 +265,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenCactbotSettings,
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
+            CloseHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
             configuration,
@@ -758,15 +766,33 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenHtmlOverlay(string name)
     {
-        if (actRuntime.ShowHtmlOverlay(name))
+        try
         {
-            configuration.SelectedOverlayTemplate = name;
-            SaveConfiguration();
+            if (actRuntime.ShowHtmlOverlay(name))
+            {
+                configuration.SelectedOverlayTemplate = name;
+                SaveConfiguration();
+                return;
+            }
+
+            logger.Warning(
+                $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, $"HTML overlay '{name}' could not be opened.");
+        }
+    }
+
+    private void CloseHtmlOverlay(string name)
+    {
+        if (!actRuntime.HideHtmlOverlay(name))
+        {
+            logger.Warning($"HTML overlay '{name}' is not available to close.");
             return;
         }
 
-        logger.Warning(
-            $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
+        SaveConfiguration();
     }
 
     private void ChoosePluginDirectory(Action continueWith)

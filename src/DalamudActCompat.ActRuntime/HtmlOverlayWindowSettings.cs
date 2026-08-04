@@ -2,6 +2,10 @@ namespace DalamudActCompat.ActRuntime;
 
 public sealed class HtmlOverlayWindowSettings
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
+    public bool IsVisible { get; internal set; }
+
     public bool IsClickThrough { get; set; } = true;
 
     public bool IsLocked { get; set; } = true;

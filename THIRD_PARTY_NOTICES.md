@@ -56,3 +56,20 @@ are displayed for attribution and verification; the notice does not open them.
 SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
 runtime author-source update check. SharpCompress is distributed under the MIT
 license: <https://github.com/adamhathcock/sharpcompress>.
+
+The release archive also contains 96 FINAL FANTASY XIV class/job icon PNGs,
+used non-commercially as combat-meter UI indicators.
+
+- Source/reference and attribution:
+  <https://ffxiv.gamerescape.com/wiki/Dictionary_of_Icons#Disciple_of_War.2FMagic_Class_Icons>
+- FINAL FANTASY XIV Materials Usage License:
+  <https://support.na.square-enix.com/rule.php?id=5382&la=1&tag=authc>
+- Gamer Escape site terms:
+  <https://gamerescape.com/tos/>
+- Copyright: © SQUARE ENIX
+
+These icon assets remain Square Enix material and are not licensed under this
+project's GPL-3.0 license. Their use is subject to the current FINAL FANTASY XIV
+Materials Usage License, including its non-commercial-use, attribution,
+no-material-alteration, and removal-request conditions. Gamer Escape's wiki
+license does not grant rights to third-party Square Enix material.

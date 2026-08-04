@@ -53,6 +53,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openCactbotSettings;
     private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
     private readonly Action<string> openHtmlOverlay;
+    private readonly Action<string> closeHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
     private Page selectedPage;
     private ParserStatus parserStatus;
@@ -82,6 +83,7 @@ public sealed class ControlCenterWindow : Window
         Action openCactbotSettings,
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
         Action<string> openHtmlOverlay,
+        Action<string> closeHtmlOverlay,
         Action<string> applyOverlayWindowSettings)
         : base("ACT 控制中心###DalamudActCompatControlCenter")
     {
@@ -106,6 +108,7 @@ public sealed class ControlCenterWindow : Window
         this.openCactbotSettings = openCactbotSettings;
         this.getOverlayTemplates = getOverlayTemplates;
         this.openHtmlOverlay = openHtmlOverlay;
+        this.closeHtmlOverlay = closeHtmlOverlay;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -349,16 +352,35 @@ public sealed class ControlCenterWindow : Window
         changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
         ImGui.SameLine();
         changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+        if (configuration.Meter.ShowJob)
+        {
+            var jobStyle = configuration.Meter.JobDisplayStyle;
+            ImGui.SetNextItemWidth(190);
+            if (ImGui.BeginCombo(
+                    text.Get("职业显示方式", "Job display"),
+                    JobDisplayFormatter.Label(jobStyle, text)))
+            {
+                foreach (var style in Enum.GetValues<JobDisplayStyle>())
+                {
+                    if (ImGui.Selectable(
+                            JobDisplayFormatter.Label(style, text),
+                            style == jobStyle))
+                    {
+                        configuration.Meter.JobDisplayStyle = style;
+                        changed = true;
+                    }
+                }
+                ImGui.EndCombo();
+            }
+        }
+        ImGui.TextDisabled(text.Get(
+            "每行固定显示当前 DPS/HPS、伤害占比和死亡数；以下是单人详情附加字段。",
+            "Every row always shows DPS/HPS, damage percent, and deaths; the following are optional single-player details."));
+        changed |= Checkbox(text.Get("单人总伤害", "Single-player damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
         ImGui.SameLine();
-        changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
-        changed |= Checkbox(text.Get("伤害", "Damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
+        changed |= Checkbox(text.Get("单人附加 HPS", "Single-player extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
         ImGui.SameLine();
-        changed |= Checkbox(text.Get("伤害占比", "Damage percent"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
-        ImGui.SameLine();
-        changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-        changed |= Checkbox(text.Get("治疗量", "Healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
-        ImGui.SameLine();
-        changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
+        changed |= Checkbox(text.Get("单人治疗量", "Single-player healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
 
         var localPlayerColor = configuration.Meter.LocalPlayerColor;
         if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
@@ -432,9 +454,20 @@ public sealed class ControlCenterWindow : Window
                 ImGui.EndCombo();
             }
 
-            if (ImGui.Button(text.Get("打开所选 HTML Overlay", "Open selected HTML overlay")))
+            var selectedSettings = configuration.GetOverlayWindowSettings(
+                configuration.SelectedOverlayTemplate);
+            if (ImGui.Button(selectedSettings.IsVisible
+                    ? text.Get("关闭所选 HTML Overlay", "Close selected HTML overlay")
+                    : text.Get("打开所选 HTML Overlay", "Open selected HTML overlay")))
             {
-                openHtmlOverlay(configuration.SelectedOverlayTemplate);
+                if (selectedSettings.IsVisible)
+                {
+                    closeHtmlOverlay(configuration.SelectedOverlayTemplate);
+                }
+                else
+                {
+                    openHtmlOverlay(configuration.SelectedOverlayTemplate);
+                }
             }
             changed |= DrawOverlayWindowSettings(configuration.SelectedOverlayTemplate);
         }
@@ -466,9 +499,20 @@ public sealed class ControlCenterWindow : Window
             if (!string.IsNullOrWhiteSpace(selectedCreatedOverlay) && configuration.OverlayWindows.ContainsKey(selectedCreatedOverlay))
             {
                 ImGui.Spacing();
-                if (ImGui.Button(text.Get("重新打开", "Reopen")))
+                var createdSettings = configuration.GetOverlayWindowSettings(
+                    selectedCreatedOverlay);
+                if (ImGui.Button(createdSettings.IsVisible
+                        ? text.Get("关闭", "Close")
+                        : text.Get("打开", "Open")))
                 {
-                    openHtmlOverlay(selectedCreatedOverlay);
+                    if (createdSettings.IsVisible)
+                    {
+                        closeHtmlOverlay(selectedCreatedOverlay);
+                    }
+                    else
+                    {
+                        openHtmlOverlay(selectedCreatedOverlay);
+                    }
                 }
                 changed |= DrawOverlayWindowSettings(selectedCreatedOverlay);
             }

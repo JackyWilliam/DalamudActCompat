@@ -21,9 +21,12 @@ public sealed class MeterWindow : Window
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
+    private readonly JobIconTextureSet jobIcons;
     private readonly Action saveConfiguration;
     private bool isDragging;
     private Vector2 dragOffset;
+    private bool singleCombatantLayoutActive;
+    private Vector2? sizeBeforeSingleCombatantLayout;
 
     public MeterWindow(
         MeterService meterService,
@@ -31,6 +34,7 @@ public sealed class MeterWindow : Window
         FflogsEstimateService fflogsEstimateService,
         PluginConfiguration configuration,
         UiText text,
+        JobIconTextureSet jobIcons,
         Action saveConfiguration)
         : base("战斗统计###DalamudActCompatMeter")
     {
@@ -39,6 +43,7 @@ public sealed class MeterWindow : Window
         this.fflogsEstimateService = fflogsEstimateService;
         this.configuration = configuration;
         this.text = text;
+        this.jobIcons = jobIcons;
         this.saveConfiguration = saveConfiguration;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
@@ -46,7 +51,7 @@ public sealed class MeterWindow : Window
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(380, 170),
+            MinimumSize = new Vector2(320, 90),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
     }
@@ -67,6 +72,17 @@ public sealed class MeterWindow : Window
     public override void PreDraw()
     {
         var settings = configuration.Meter;
+        var singleCombatant = meterService.GetRows().Count == 1;
+        SizeConstraints = new WindowSizeConstraints
+        {
+            MinimumSize = singleCombatant
+                ? CalculateSingleCombatantWindowSize(
+                    new Vector2(320, 0),
+                    settings.ShowHeader,
+                    settings.FontScale)
+                : new Vector2(380, 170),
+            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
+        };
         Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
         if (settings.IsLocked)
         {
@@ -107,26 +123,36 @@ public sealed class MeterWindow : Window
 
         if (snapshot.Current is null)
         {
+            UpdateSingleCombatantLayout(false, settings);
             DrawEmptyState(settings);
             return;
         }
 
         var encounter = snapshot.Current;
+        var rows = meterService.GetRows();
+        var singleCombatant = rows.Count == 1;
+        UpdateSingleCombatantLayout(singleCombatant, settings);
         if (settings.ShowHeader)
         {
-            DrawEncounterHeader(encounter, settings);
+            if (singleCombatant)
+            {
+                DrawSingleCombatantHeader(encounter, settings);
+            }
+            else
+            {
+                DrawEncounterHeader(encounter, settings);
+            }
         }
         else if (!settings.IsLocked)
         {
             DrawCompactDragHandle(settings);
         }
 
-        if (!settings.IsLocked)
+        if (!settings.IsLocked && !singleCombatant)
         {
             DrawControls(settings);
         }
 
-        var rows = meterService.GetRows();
         if (rows.Count == 0)
         {
             ImGui.TextDisabled(text.Get("等待玩家数据…", "Waiting for player data…"));
@@ -134,14 +160,71 @@ public sealed class MeterWindow : Window
         }
 
         var maximumScore = Math.Max(1, rows.Max(row => Score(row, settings.SortMode)));
+        if (singleCombatant)
+        {
+            DrawCombatantRow(
+                rows[0],
+                1,
+                maximumScore,
+                encounter,
+                settings,
+                compactSingle: true);
+            return;
+        }
+
         if (ImGui.BeginChild("meter-rows", new Vector2(-1, -1), false))
         {
             for (var index = 0; index < rows.Count; index++)
             {
-                DrawCombatantRow(rows[index], index + 1, maximumScore, encounter, settings);
+                DrawCombatantRow(
+                    rows[index],
+                    index + 1,
+                    maximumScore,
+                    encounter,
+                    settings,
+                    compactSingle: false);
             }
         }
         ImGui.EndChild();
+    }
+
+    internal static Vector2 CalculateSingleCombatantWindowSize(
+        Vector2 currentSize,
+        bool showHeader,
+        float fontScale)
+    {
+        var scale = Math.Clamp(fontScale, 0.75f, 1.8f);
+        var width = Math.Clamp(currentSize.X, 320, 440);
+        var height = MathF.Ceiling((showHeader ? 104 : 78) * scale);
+        return new Vector2(width, height);
+    }
+
+    private void UpdateSingleCombatantLayout(
+        bool singleCombatant,
+        MeterSettings settings)
+    {
+        if (singleCombatant && !singleCombatantLayoutActive)
+        {
+            sizeBeforeSingleCombatantLayout = ImGui.GetWindowSize();
+            ImGui.SetWindowSize(
+                CalculateSingleCombatantWindowSize(
+                    sizeBeforeSingleCombatantLayout.Value,
+                    settings.ShowHeader,
+                    settings.FontScale),
+                ImGuiCond.Always);
+        }
+        else if (!singleCombatant && singleCombatantLayoutActive &&
+                 sizeBeforeSingleCombatantLayout is { } previousSize)
+        {
+            ImGui.SetWindowSize(
+                new Vector2(
+                    Math.Max(previousSize.X, 380),
+                    Math.Max(previousSize.Y, 170)),
+                ImGuiCond.Always);
+            sizeBeforeSingleCombatantLayout = null;
+        }
+
+        singleCombatantLayoutActive = singleCombatant;
     }
 
     private void DrawEmptyState(MeterSettings settings)
@@ -175,6 +258,36 @@ public sealed class MeterWindow : Window
         var subtitle = $"{encounter.ZoneName}  ·  {FormatDuration(encounter.Duration)}  ·  " +
                        (encounter.IsActive ? text.Get("战斗中", "Running") : text.Get("已结束", "Ended"));
         drawList.AddText(start + new Vector2(28, 24), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), subtitle);
+    }
+
+    private void DrawSingleCombatantHeader(Encounter encounter, MeterSettings settings)
+    {
+        const float headerHeight = 24;
+        var width = ImGui.GetContentRegionAvail().X;
+        var start = ImGui.GetCursorScreenPos();
+        ImGui.InvisibleButton("meter-single-header-drag", new Vector2(width, headerHeight));
+        HandleHeaderDrag(settings);
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(
+            start,
+            start + new Vector2(width, headerHeight),
+            ImGui.GetColorU32(NavyRaised),
+            5);
+        var stateColor = encounter.IsActive
+            ? new Vector4(0.38f, 0.78f, 0.66f, 1)
+            : new Vector4(0.66f, 0.69f, 0.74f, 1);
+        drawList.AddText(start + new Vector2(8, 3), ImGui.GetColorU32(stateColor), encounter.IsActive ? "●" : "○");
+        var duration = FormatDuration(encounter.Duration);
+        var durationSize = ImGui.CalcTextSize(duration);
+        drawList.AddText(
+            new Vector2(start.X + width - durationSize.X - 8, start.Y + 3),
+            ImGui.GetColorU32(IceBlue),
+            duration);
+        drawList.AddText(
+            start + new Vector2(25, 3),
+            ImGui.GetColorU32(Gold),
+            TrimToWidth(encounter.EnemyName, width - durationSize.X - 48));
     }
 
     private void DrawCompactDragHandle(MeterSettings settings)
@@ -225,9 +338,11 @@ public sealed class MeterWindow : Window
         ImGui.SetNextItemWidth(130);
         if (ImGui.BeginCombo("##meter-sort", SortModeLabel(settings.SortMode)))
         {
-            foreach (var mode in Enum.GetValues<MeterSortMode>())
+            foreach (var mode in MeterSortModeOptions.Supported)
             {
-                if (ImGui.Selectable(SortModeLabel(mode), settings.SortMode == mode))
+                if (ImGui.Selectable(
+                        SortModeLabel(mode),
+                        MeterSortModeOptions.Normalize(settings.SortMode) == mode))
                 {
                     settings.SortMode = mode;
                     saveConfiguration();
@@ -250,9 +365,12 @@ public sealed class MeterWindow : Window
         int rank,
         double maximumScore,
         Encounter encounter,
-        MeterSettings settings)
+        MeterSettings settings,
+        bool compactSingle)
     {
-        var rowHeight = Math.Max(42, ImGui.GetTextLineHeightWithSpacing() * 2.25f);
+        var rowHeight = CalculateCombatantRowHeight(
+            compactSingle,
+            ImGui.GetTextLineHeightWithSpacing());
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         var end = start + new Vector2(width, rowHeight);
@@ -262,8 +380,9 @@ public sealed class MeterWindow : Window
         var hovered = ImGui.IsItemHovered();
         drawList.AddRectFilled(start, end, ImGui.GetColorU32(hovered ? NavyHover : NavyRaised), 5);
 
+        var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         var jobColor = JobColor(row.Job);
-        var ratio = (float)Math.Clamp(Score(row, settings.SortMode) / maximumScore, 0, 1);
+        var ratio = (float)Math.Clamp(Score(row, sortMode) / maximumScore, 0, 1);
         var configuredLocalColor = settings.LocalPlayerColor;
         var barColor = row.IsLocalPlayer
             ? new Vector4(
@@ -283,39 +402,115 @@ public sealed class MeterWindow : Window
             drawList.AddRect(start, end, ImGui.GetColorU32(borderColor), 5, ImDrawFlags.None, 1.5f);
         }
 
-        var firstLineY = start.Y + 5;
-        var secondLineY = start.Y + rowHeight * 0.53f;
-        var x = start.X + 8;
-        drawList.AddText(new Vector2(x, firstLineY), ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)), $"{rank,2}");
-        x += 25;
-
-        if (settings.ShowJob)
-        {
-            var badgeSize = new Vector2(35, ImGui.GetTextLineHeight() + 4);
-            drawList.AddRectFilled(new Vector2(x, firstLineY - 1), new Vector2(x, firstLineY - 1) + badgeSize, ImGui.GetColorU32(new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f)), 4);
-            var job = JobIconText(row.Job);
-            var jobSize = ImGui.CalcTextSize(job);
-            drawList.AddText(new Vector2(x + (badgeSize.X - jobSize.X) * 0.5f, firstLineY + 1), ImGui.GetColorU32(Vector4.One), job);
-            x += badgeSize.X + 8;
-        }
-
-        var estimate = row.IsLocalPlayer && settings.SortMode != MeterSortMode.Hps
+        var estimate = row.IsLocalPlayer && sortMode != MeterSortMode.Hps
             ? fflogsEstimateService.GetEstimate(encounter)
             : null;
-        var primary = settings.SortMode == MeterSortMode.Hps ? row.Hps : row.Dps;
-        var showPrimary = settings.SortMode == MeterSortMode.Hps ? settings.ShowHps : settings.ShowDps;
-        var primaryText = showPrimary
-            ? $"{(estimate is null ? string.Empty : $"~{estimate.Score}  ")}{PrimaryRateLabel(settings)}  {primary:N0}"
-            : string.Empty;
-        var primarySize = ImGui.CalcTextSize(primaryText);
-        var rightX = end.X - primarySize.X - 9;
-        var availableNameWidth = Math.Max(40, rightX - x - 10);
+        var primary = sortMode == MeterSortMode.Hps ? row.Hps : row.Dps;
         var combatant = encounter.Combatants.FirstOrDefault(item =>
             string.Equals(item.Id, row.Id, StringComparison.OrdinalIgnoreCase));
         var displayName = combatant is null
             ? row.Name
             : PlayerIdentityFormatter.Format(combatant, encounter.Combatants, settings, text);
-        drawList.AddText(new Vector2(x, firstLineY), ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One), TrimToWidth(displayName, availableNameWidth));
+
+        float DrawJob(float currentX, float textY)
+        {
+            if (!settings.ShowJob)
+            {
+                return currentX;
+            }
+
+            var texture = jobIcons.Get(settings.JobDisplayStyle, row.Job);
+            if (texture is not null)
+            {
+                var iconSize = CalculateJobIconSize(rowHeight, ImGui.GetTextLineHeight());
+                var iconTop = start.Y + (rowHeight - iconSize) * 0.5f;
+                var wrap = texture.GetWrapOrEmpty();
+                drawList.AddImage(
+                    wrap.Handle,
+                    new Vector2(currentX, iconTop),
+                    new Vector2(currentX + iconSize, iconTop + iconSize));
+                return currentX + iconSize + 7;
+            }
+
+            var job = JobDisplayFormatter.FormatText(row.Job, settings.JobDisplayStyle);
+            var jobSize = ImGui.CalcTextSize(job);
+            var badgeSize = new Vector2(
+                Math.Max(compactSingle ? 31 : 35, jobSize.X + 10),
+                ImGui.GetTextLineHeight() + (compactSingle ? 2 : 4));
+            drawList.AddRectFilled(
+                new Vector2(currentX, textY - 1),
+                new Vector2(currentX, textY - 1) + badgeSize,
+                ImGui.GetColorU32(new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f)),
+                4);
+            drawList.AddText(
+                new Vector2(currentX + (badgeSize.X - jobSize.X) * 0.5f, textY + 1),
+                ImGui.GetColorU32(Vector4.One),
+                job);
+            return currentX + badgeSize.X + 8;
+        }
+
+        if (!compactSingle)
+        {
+            var lineY = start.Y + (rowHeight - ImGui.GetTextLineHeight()) * 0.5f;
+            var x = start.X + 8;
+            drawList.AddText(
+                new Vector2(x, lineY),
+                ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)),
+                $"{rank,2}");
+            x += 25;
+            x = DrawJob(x, lineY);
+
+            var right = end.X - 9;
+            void DrawRightColumn(string value, Vector4 color, float gap = 12)
+            {
+                var size = ImGui.CalcTextSize(value);
+                right -= size.X;
+                drawList.AddText(new Vector2(right, lineY), ImGui.GetColorU32(color), value);
+                right -= gap;
+            }
+
+            DrawRightColumn(
+                text.Get($"死亡 {row.Deaths}", $"KO {row.Deaths}"),
+                new Vector4(0.78f, 0.80f, 0.84f, 1));
+            DrawRightColumn(
+                $"{row.DamagePercent:N1}%",
+                new Vector4(0.72f, 0.78f, 0.84f, 1));
+            DrawRightColumn(
+                $"{PrimaryRateLabel(sortMode, settings)} {primary:N0}",
+                row.IsLocalPlayer ? Gold : IceBlue);
+            if (estimate is not null)
+            {
+                DrawRightColumn($"~{estimate.Score}", estimate.Color);
+            }
+
+            var availableNameWidth = Math.Max(20, right - x - 6);
+            drawList.AddText(
+                new Vector2(x, lineY),
+                ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+                TrimToWidth(displayName, availableNameWidth));
+
+            if (estimate is not null && hovered)
+            {
+                ImGui.SetTooltip(text.Get(
+                    $"FFLogs 公开排名样本估算：{estimate.Score}（非官方实时成绩）",
+                    $"FFLogs public-ranking estimate: {estimate.Score} (not an official live parse)"));
+            }
+            return;
+        }
+
+        var firstLineY = start.Y + 5;
+        var secondLineY = start.Y + rowHeight * 0.53f;
+        var singleX = DrawJob(start.X + 8, firstLineY);
+        var primaryText =
+            $"{(estimate is null ? string.Empty : $"~{estimate.Score}  ")}" +
+            $"{PrimaryRateLabel(sortMode, settings)}  {primary:N0}";
+        var primarySize = ImGui.CalcTextSize(primaryText);
+        var rightX = end.X - primarySize.X - 9;
+        var availableSingleNameWidth = Math.Max(40, rightX - singleX - 10);
+        drawList.AddText(
+            new Vector2(singleX, firstLineY),
+            ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+            TrimToWidth(displayName, availableSingleNameWidth));
         if (!string.IsNullOrEmpty(primaryText))
         {
             drawList.AddText(
@@ -332,8 +527,10 @@ public sealed class MeterWindow : Window
         }
 
         var secondary = BuildSecondaryText(row, settings);
-        drawList.AddText(new Vector2(x, secondLineY), ImGui.GetColorU32(new Vector4(0.70f, 0.73f, 0.78f, 1)), TrimToWidth(secondary, end.X - x - 9));
-        ImGui.Spacing();
+        drawList.AddText(
+            new Vector2(singleX, secondLineY),
+            ImGui.GetColorU32(new Vector4(0.70f, 0.73f, 0.78f, 1)),
+            TrimToWidth(secondary, end.X - singleX - 9));
     }
 
     private string BuildSecondaryText(CombatantRow row, MeterSettings settings)
@@ -343,11 +540,8 @@ public sealed class MeterWindow : Window
         {
             parts.Add($"{text.Get("伤害", "DMG")} {row.TotalDamage:N0}");
         }
-        if (settings.ShowDamagePercent)
-        {
-            parts.Add($"{row.DamagePercent:N1}%");
-        }
-        if (settings.ShowHps && settings.SortMode != MeterSortMode.Hps)
+        parts.Add($"{row.DamagePercent:N1}%");
+        if (settings.ShowHps && MeterSortModeOptions.Normalize(settings.SortMode) != MeterSortMode.Hps)
         {
             parts.Add($"HPS {row.Hps:N0}");
         }
@@ -355,28 +549,28 @@ public sealed class MeterWindow : Window
         {
             parts.Add($"{text.Get("治疗", "HEAL")} {row.TotalHealing:N0}");
         }
-        if (settings.ShowDeaths)
-        {
-            parts.Add($"{text.Get("死亡", "KO")} {row.Deaths}");
-        }
+        parts.Add($"{text.Get("死亡", "KO")} {row.Deaths}");
         return string.Join("  ·  ", parts);
     }
+
+    internal static float CalculateCombatantRowHeight(
+        bool compactSingle,
+        float textLineHeightWithSpacing)
+        => compactSingle
+            ? Math.Max(36, textLineHeightWithSpacing * 1.95f)
+            : Math.Max(28, textLineHeightWithSpacing + 8);
+
+    internal static float CalculateJobIconSize(float rowHeight, float textLineHeight)
+        => Math.Min(rowHeight - 4, Math.Max(22, textLineHeight + 4));
 
     private static double Score(CombatantRow row, MeterSortMode mode) => mode switch
     {
         MeterSortMode.Hps => row.Hps,
-        MeterSortMode.Damage => row.TotalDamage,
-        MeterSortMode.Deaths => row.Deaths,
         _ => row.Dps,
     };
 
-    private string SortModeLabel(MeterSortMode mode) => mode switch
-    {
-        MeterSortMode.Hps => "HPS",
-        MeterSortMode.Damage => text.Get("总伤害", "Damage"),
-        MeterSortMode.Deaths => text.Get("死亡", "Deaths"),
-        _ => "DPS",
-    };
+    private static string SortModeLabel(MeterSortMode mode)
+        => MeterSortModeOptions.Normalize(mode) == MeterSortMode.Hps ? "HPS" : "DPS";
 
     private static Vector4 JobColor(string job)
     {
@@ -414,8 +608,8 @@ public sealed class MeterWindow : Window
     private static string FormatDuration(TimeSpan duration)
         => $"{(int)duration.TotalMinutes:00}:{duration.Seconds:00}";
 
-    private static string PrimaryRateLabel(MeterSettings settings)
-        => settings.SortMode == MeterSortMode.Hps
+    private static string PrimaryRateLabel(MeterSortMode sortMode, MeterSettings settings)
+        => sortMode == MeterSortMode.Hps
             ? "HPS"
             : settings.DpsMetric switch
             {
@@ -423,9 +617,6 @@ public sealed class MeterWindow : Window
                 DpsMetric.ExtDps => "ExtDPS",
                 _ => "DPS",
             };
-
-    private static string JobIconText(string job)
-        => string.IsNullOrWhiteSpace(job) ? "?" : job[..Math.Min(3, job.Length)].ToUpperInvariant();
 
     private readonly struct FontScaleScope : IDisposable
     {

@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.1.0",
+    [string] $ExpectedAssemblyVersion = "0.3.2.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -75,6 +75,33 @@ if ($missingUiAssets.Count -gt 0) {
 }
 
 Write-Host "Validated UI assets: $($requiredUiAssets.Count)"
+
+$jobIconRoot = Join-Path $validationDir "Assets/JobIcons"
+$jobCodes = @(
+    "ACN", "ARC", "AST", "BRD", "BST", "BLM", "BLU", "CNJ",
+    "DNC", "DRK", "DRG", "GLA", "GNB", "LNC", "MCH", "MRD",
+    "MNK", "NIN", "PLD", "PCT", "PGL", "RPR", "RDM", "ROG",
+    "SGE", "SAM", "SCH", "SMN", "THM", "VPR", "WAR", "WHM"
+)
+foreach ($style in @("Minimal", "Classic", "Flat")) {
+    $styleDirectory = Join-Path $jobIconRoot $style
+    $iconCount = if (Test-Path $styleDirectory) {
+        @(Get-ChildItem $styleDirectory -File -Filter "*.png").Count
+    } else {
+        0
+    }
+    if ($iconCount -ne 32) {
+        throw "Plugin ZIP contains $iconCount $style job icons instead of 32."
+    }
+    $missingJobIcons = @($jobCodes | Where-Object {
+        -not (Test-Path (Join-Path $styleDirectory "$_.png"))
+    })
+    if ($missingJobIcons.Count -gt 0) {
+        throw "Plugin ZIP is missing $style job icons: $($missingJobIcons -join ', ')"
+    }
+}
+
+Write-Host "Validated job icons: 96"
 
 if ($RequireCompatibilityHost) {
     $hostExePath = Join-Path $validationDir "host/DalamudActCompat.Host.exe"

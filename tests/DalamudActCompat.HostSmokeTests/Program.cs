@@ -414,6 +414,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                                 "ReadLocalConfiguration",
                                 "TextToSpeech",
                                 "Clipboard",
+                                "HighRiskScript",
                             ],
                             ["postnamazu"] =
                             [
@@ -495,6 +496,25 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     CancellationToken.None);
             }
 
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.5000000+08:00|0000|ACTCOMPAT_SCRIPT_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await WaitForProcessOutputAsync(
+                host,
+                "ACTCOMPAT_SCRIPT_REFERENCE_OK",
+                TimeSpan.FromSeconds(15));
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -588,6 +608,10 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     StringComparison.Ordinal),
                 $"Triggernometry did not load out-of-process." +
                 $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains("ACTCOMPAT_SCRIPT_REFERENCE_OK", StringComparison.Ordinal),
+                "Triggernometry could not compile and execute a C# action that references its " +
+                $"own assembly.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
                 output.Contains("Legacy plugin 'postnamazu' loaded out-of-process.", StringComparison.Ordinal),
                 $"PostNamazu did not load out-of-process.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
@@ -704,6 +728,11 @@ async Task PrepareLegacySmokeConfigurationAsync()
               <Trigger Enabled="true" Id="7a268e31-303b-46f7-9a12-188638097b61" Name="Network equivalent closed loop" RegularExpression="ACTCOMPAT_SMOKE_LINE" Source="FFXIVNetwork">
                 <Actions>
                   <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_NETWORK_MATCH" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="51997209-fb1d-4c07-80d5-d6542feeeacb" Name="C# self-reference regression" RegularExpression="ACTCOMPAT_SCRIPT_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="0b595eff-da67-45ce-ab7c-1e4f7477d6d2" Name="Combat start closed loop" RegularExpression="^OnCombatStart$" Source="ACT">
@@ -867,6 +896,42 @@ async Task<(Process Host, HostTestPipe Pipe, string Session)> StartConnectedHost
     return processLogs.TryGetValue(process.Id, out var log)
         ? log.Snapshot()
         : (string.Empty, string.Empty);
+}
+
+async Task WaitForProcessOutputAsync(
+    Process process,
+    string expected,
+    TimeSpan timeout)
+{
+    var deadline = DateTime.UtcNow + timeout;
+    while (DateTime.UtcNow < deadline)
+    {
+        var (output, error) = processLogs.TryGetValue(process.Id, out var log)
+            ? log.Snapshot()
+            : (string.Empty, string.Empty);
+        if (output.Contains(expected, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (process.HasExited)
+        {
+            throw new InvalidOperationException(
+                $"Host exited before emitting '{expected}'.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{output}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{error}");
+        }
+
+        await Task.Delay(50);
+    }
+
+    var (finalOutput, finalError) = processLogs.TryGetValue(process.Id, out var finalLog)
+        ? finalLog.Snapshot()
+        : (string.Empty, string.Empty);
+    throw new TimeoutException(
+        $"Host did not emit '{expected}' within {timeout.TotalSeconds:N0} seconds." +
+        $"{Environment.NewLine}stdout:{Environment.NewLine}{finalOutput}" +
+        $"{Environment.NewLine}stderr:{Environment.NewLine}{finalError}");
 }
 
 async Task<HostEnvelope> ReadWithTimeoutAsync(HostTestPipe pipe)

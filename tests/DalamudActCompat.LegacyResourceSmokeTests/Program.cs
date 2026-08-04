@@ -61,6 +61,13 @@ try
             "The patched TriggernometryPlugin implementation was not preloaded.");
     }
 
+    if (string.IsNullOrWhiteSpace(implementation.Location) ||
+        !File.Exists(implementation.Location))
+    {
+        throw new InvalidOperationException(
+            "The patched Triggernometry implementation must be file-backed so Roslyn can reference it.");
+    }
+
     if (implementation.GetManifestResourceNames()
         .Count(name => name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase)) < 10)
     {
@@ -91,6 +98,7 @@ try
             "LogLineQueuerMass",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!,
         nameof(LegacyResourceCompatibility.EnqueueTriggerEventBounded));
+    AssertTriggernometrySelfTestScriptCompiles(implementation);
 
     var proxyType = assembly.GetType("TriggernometryProxy.ProxyPlugin", throwOnError: true)!;
     _ = Activator.CreateInstance(proxyType)
@@ -161,6 +169,97 @@ static void AssertCallsNativeBridge(MethodInfo method, string expectedMethod)
     throw new InvalidOperationException(
         $"{method.DeclaringType?.FullName}.{method.Name} was not redirected to " +
         $"{nameof(NativePostNamazuBridge)}.{expectedMethod}.");
+}
+
+static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
+{
+    var scriptOptionsType = AppDomain.CurrentDomain.GetAssemblies()
+        .Single(assembly => string.Equals(
+            assembly.GetName().Name,
+            "Microsoft.CodeAnalysis.Scripting",
+            StringComparison.OrdinalIgnoreCase))
+        .GetType("Microsoft.CodeAnalysis.Scripting.ScriptOptions", throwOnError: true)!;
+    var options = scriptOptionsType
+                      .GetProperty("Default", BindingFlags.Public | BindingFlags.Static)!
+                      .GetValue(null)
+                  ?? throw new InvalidOperationException("Roslyn default ScriptOptions were unavailable.");
+    var addAssemblyReference = implementation
+        .GetType("Triggernometry.Core.Scripting.ScriptOptionsExtensions", throwOnError: true)!
+        .GetMethod(
+            "AddMetadataReferenceFromAssembly",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new MissingMethodException(
+            "Triggernometry.Core.Scripting.ScriptOptionsExtensions",
+            "AddMetadataReferenceFromAssembly");
+    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+    {
+        options = addAssemblyReference.Invoke(null, [options, assembly])
+                  ?? throw new InvalidOperationException(
+                      $"Roslyn rejected metadata reference {assembly.FullName}.");
+    }
+
+    const string selfTestScript =
+        """
+        using System.Windows.Forms;
+        using Triggernometry.PluginBridges.BridgeNamazu;
+
+        if (BridgeNamazu.NamazuPlugin != null && !BridgeNamazu.NamazuPlugin.IsActionEnabled("command"))
+        {
+            Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, "SelfTest_NamazuCommandDisabled", 1);
+            MessageBox.Show("PostNamazu command module is disabled.");
+        }
+        """;
+    var csharpScriptType = AppDomain.CurrentDomain.GetAssemblies()
+        .Single(assembly => string.Equals(
+            assembly.GetName().Name,
+            "Microsoft.CodeAnalysis.CSharp.Scripting",
+            StringComparison.OrdinalIgnoreCase))
+        .GetType("Microsoft.CodeAnalysis.CSharp.Scripting.CSharpScript", throwOnError: true)!;
+    var create = csharpScriptType
+        .GetMethods(BindingFlags.Public | BindingFlags.Static)
+        .Single(method =>
+            method.Name == "Create" &&
+            method.IsGenericMethodDefinition &&
+            method.GetParameters() is
+            [
+                { ParameterType: var sourceType },
+                _,
+                _,
+                _,
+            ] &&
+            sourceType == typeof(string));
+    var script = create.MakeGenericMethod(typeof(object)).Invoke(
+                     null,
+                     [selfTestScript, options, null, null])
+                 ?? throw new InvalidOperationException("Roslyn did not create the SelfTest script.");
+    var compilation = script.GetType()
+                          .GetMethod("GetCompilation", BindingFlags.Public | BindingFlags.Instance)!
+                          .Invoke(script, null)
+                      ?? throw new InvalidOperationException("Roslyn did not expose the SelfTest compilation.");
+    var getDiagnostics = compilation.GetType()
+        .GetMethod(
+            "GetDiagnostics",
+            BindingFlags.Public | BindingFlags.Instance,
+            binder: null,
+            [typeof(CancellationToken)],
+            modifiers: null)
+        ?? throw new MissingMethodException(compilation.GetType().FullName, "GetDiagnostics");
+    var diagnostics = (System.Collections.IEnumerable)(getDiagnostics.Invoke(
+        compilation,
+        [CancellationToken.None]) ?? Array.Empty<object>());
+    var errors = diagnostics.Cast<object>()
+        .Where(diagnostic => string.Equals(
+            diagnostic.GetType().GetProperty("Severity")?.GetValue(diagnostic)?.ToString(),
+            "Error",
+            StringComparison.Ordinal))
+        .Select(static diagnostic => diagnostic.ToString())
+        .ToArray();
+    if (errors.Length > 0)
+    {
+        throw new InvalidOperationException(
+            "Triggernometry SelfTest script did not compile:" + Environment.NewLine +
+            string.Join(Environment.NewLine, errors));
+    }
 }
 
 static void AssertCallsCompatibilityMethod(MethodInfo method, string expectedMethod)
