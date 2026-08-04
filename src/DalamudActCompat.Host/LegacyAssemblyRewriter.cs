@@ -483,6 +483,10 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.StartTriggernometryProcess),
                 [typeof(System.Diagnostics.ProcessStartInfo)])!);
+        var skipStartupUpdateCheck = module.ImportReference(
+            bridgeType.GetMethod(
+                nameof(HostPluginBridge.SkipTriggernometryStartupUpdateCheck),
+                [typeof(object), typeof(bool)])!);
         var adminMethod = module.Types
             .SelectMany(EnumerateTypes)
             .SelectMany(type => type.Methods)
@@ -548,6 +552,61 @@ public static class LegacyAssemblyRewriter
             pictoAct,
             loadInstance: false,
             loadParameters: true);
+
+        var triggernometryInitializer = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.Core.RealPlugin")
+            .Methods
+            .Single(method =>
+                method.Name == "InitPlugin" &&
+                method.Parameters.Count == 2);
+        var startupUpdateChecks = triggernometryInitializer.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin" &&
+                called.Name == "CheckForUpdates" &&
+                called.Parameters.Count == 1 &&
+                called.Parameters[0].ParameterType.MetadataType == MetadataType.Boolean)
+            .ToArray();
+        if (startupUpdateChecks.Length != 1)
+        {
+            throw new InvalidOperationException(
+                "Unexpected Triggernometry startup update-check shape: " +
+                $"calls={startupUpdateChecks.Length}.");
+        }
+
+        startupUpdateChecks[0].OpCode = OpCodes.Call;
+        startupUpdateChecks[0].Operand = skipStartupUpdateCheck;
+
+        var realPlugin = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.Core.RealPlugin");
+        var handleVersionUpdate = realPlugin.Methods.Single(method =>
+            method.Name == "HandleVersionUpdate" &&
+            method.Parameters.Count == 0);
+        var saveCurrentConfig = realPlugin.Methods.Single(method =>
+            method.Name == "SaveCurrentConfig" &&
+            method.Parameters.Count == 0);
+        var pluginVersionWrites = handleVersionUpdate.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "Triggernometry.Core.Configuration" &&
+                called.Name == "set_PluginVersion" &&
+                called.Parameters.Count == 1)
+            .ToArray();
+        if (pluginVersionWrites.Length != 1)
+        {
+            throw new InvalidOperationException(
+                "Unexpected Triggernometry version-state shape: " +
+                $"writes={pluginVersionWrites.Length}.");
+        }
+
+        var versionIl = handleVersionUpdate.Body.GetILProcessor();
+        var loadThisForSave = versionIl.Create(OpCodes.Ldarg_0);
+        versionIl.InsertAfter(pluginVersionWrites[0], loadThisForSave);
+        versionIl.InsertAfter(
+            loadThisForSave,
+            versionIl.Create(OpCodes.Call, saveCurrentConfig));
 
         // Triggernometry first probes OverlayPlugin's private combatant-memory shape before
         // falling back to FFXIV_ACT_Plugin. Current OverlayPlugin no longer exposes the old

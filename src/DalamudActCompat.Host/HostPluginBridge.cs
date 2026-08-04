@@ -639,7 +639,9 @@ public static class HostPluginBridge
     public static Process? StartTriggernometryProcess(string fileName)
     {
         Demand("triggernometry", "LaunchExternalProcess");
-        return Process.Start(fileName);
+        return IsWebAddress(fileName)
+            ? Process.Start(PrepareTriggernometryStartInfo(new ProcessStartInfo(fileName)))
+            : Process.Start(fileName);
     }
 
     public static Process? StartTriggernometryProcess(
@@ -647,14 +649,52 @@ public static class HostPluginBridge
         string arguments)
     {
         Demand("triggernometry", "LaunchExternalProcess");
-        return Process.Start(fileName, arguments);
+        if (!IsWebAddress(fileName))
+        {
+            return Process.Start(fileName, arguments);
+        }
+
+        var startInfo = new ProcessStartInfo(fileName)
+        {
+            Arguments = arguments,
+        };
+        return Process.Start(PrepareTriggernometryStartInfo(startInfo));
     }
 
     public static Process? StartTriggernometryProcess(ProcessStartInfo startInfo)
     {
         Demand("triggernometry", "LaunchExternalProcess");
-        return Process.Start(startInfo);
+        return Process.Start(PrepareTriggernometryStartInfo(startInfo));
     }
+
+    public static void SkipTriggernometryStartupUpdateCheck(
+        object plugin,
+        bool isManual)
+    {
+        _ = plugin;
+        _ = isManual;
+        Console.WriteLine(
+            "Triggernometry startup update check delegated to the managed bundled-plugin updater.");
+    }
+
+    private static ProcessStartInfo PrepareTriggernometryStartInfo(ProcessStartInfo startInfo)
+    {
+        if (!IsWebAddress(startInfo.FileName))
+        {
+            return startInfo;
+        }
+
+        startInfo.UseShellExecute = true;
+        startInfo.RedirectStandardInput = false;
+        startInfo.RedirectStandardOutput = false;
+        startInfo.RedirectStandardError = false;
+        startInfo.CreateNoWindow = false;
+        return startInfo;
+    }
+
+    private static bool IsWebAddress(string? value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+           (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static Thread CreateClipboardThread()
     {

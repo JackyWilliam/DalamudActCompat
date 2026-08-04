@@ -55,8 +55,8 @@ public sealed class ControlCenterWindow : Window
     private readonly Action<bool> setMeterVisible;
     private readonly Action openMeter;
     private readonly Action openHistory;
-    private readonly Action openStatus;
-    private readonly Action openAdvancedSettings;
+    private readonly Func<bool> isStatusVisible;
+    private readonly Action<bool> setStatusVisible;
     private readonly Action selectPluginPackage;
     private readonly Action openPluginDirectory;
     private readonly Action openBundledPluginNotice;
@@ -99,8 +99,8 @@ public sealed class ControlCenterWindow : Window
         Action<bool> setMeterVisible,
         Action openMeter,
         Action openHistory,
-        Action openStatus,
-        Action openAdvancedSettings,
+        Func<bool> isStatusVisible,
+        Action<bool> setStatusVisible,
         Action selectPluginPackage,
         Action openPluginDirectory,
         Action openBundledPluginNotice,
@@ -132,8 +132,8 @@ public sealed class ControlCenterWindow : Window
         this.setMeterVisible = setMeterVisible;
         this.openMeter = openMeter;
         this.openHistory = openHistory;
-        this.openStatus = openStatus;
-        this.openAdvancedSettings = openAdvancedSettings;
+        this.isStatusVisible = isStatusVisible;
+        this.setStatusVisible = setStatusVisible;
         this.selectPluginPackage = selectPluginPackage;
         this.openPluginDirectory = openPluginDirectory;
         this.openBundledPluginNotice = openBundledPluginNotice;
@@ -246,13 +246,10 @@ public sealed class ControlCenterWindow : Window
         try
         {
             DrawWindowChrome();
-            if (ImGui.BeginChild("control-center-content", new Vector2(-1, -1), true))
+            DrawPageTabs();
+            ImGui.Spacing();
+            if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, -1), true))
             {
-                DrawPageTabs();
-                ImGui.Spacing();
-                ImGui.Separator();
-                ImGui.Spacing();
-
                 var changed = selectedPage switch
                 {
                     Page.Overview => DrawOverview(),
@@ -335,71 +332,75 @@ public sealed class ControlCenterWindow : Window
     {
         DrawPageHeader(
             text.Get("概览", "Overview"),
-            text.Get("常用状态和入口集中在这里。", "Status and common actions in one place."));
+            text.Get("常用状态和入口集中在这里。", "Status and common actions in one place."),
+            showDivider: false);
 
-        ImGui.TextColored(Gold, text.Get("解析器", "Parser"));
-        ImGui.TextUnformatted(LocalizeState(parserStatus.State));
-        ImGui.TextWrapped(parserStatus.Message);
-        if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
+        var parserCardHeight = string.IsNullOrWhiteSpace(parserStatus.Detail) ? 108 : 142;
+        if (BrandedWindowChrome.BeginGoldCard("overview-parser-card", parserCardHeight))
         {
-            ImGui.TextDisabled(parserStatus.Detail);
+            ImGui.TextColored(Gold, text.Get("解析器", "Parser"));
+            ImGui.TextColored(IceBlue, LocalizeState(parserStatus.State));
+            ImGui.TextWrapped(parserStatus.Message);
+            if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
+            {
+                ImGui.TextDisabled(parserStatus.Detail);
+            }
         }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
-        var meterVisible = configuration.Meter.IsVisible;
-        if (meterVisible)
-        {
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
-            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
-        }
-        if (ImGui.Button(
-                meterVisible
-                    ? text.Get("关闭战斗统计", "Close Combat Meter")
-                    : text.Get("打开战斗统计", "Open Combat Meter"),
-                new Vector2(150, 36)))
-        {
-            setMeterVisible(!meterVisible);
-        }
-        if (meterVisible)
-        {
-            ImGui.PopStyleColor(4);
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
-        {
-            openHistory();
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("运行状态", "Runtime status"), new Vector2(150, 36)))
-        {
-            openStatus();
-        }
+        BrandedWindowChrome.EndGoldCard();
 
         ImGui.Spacing();
-        ImGui.Separator();
+        if (BrandedWindowChrome.BeginGoldCard("overview-quick-actions-card", 90))
+        {
+            ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
+            var meterVisible = configuration.Meter.IsVisible;
+            if (meterVisible)
+            {
+                PushOpenWindowButtonStyle();
+            }
+            if (ImGui.Button(
+                    meterVisible
+                        ? text.Get("关闭战斗统计", "Close Combat Meter")
+                        : text.Get("打开战斗统计", "Open Combat Meter"),
+                    new Vector2(150, 36)))
+            {
+                setMeterVisible(!meterVisible);
+            }
+            if (meterVisible)
+            {
+                ImGui.PopStyleColor(4);
+            }
+            ImGui.SameLine();
+            if (ImGui.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
+            {
+                openHistory();
+            }
+            ImGui.SameLine();
+            DrawStatusWindowToggleButton(new Vector2(150, 36));
+        }
+        BrandedWindowChrome.EndGoldCard();
+
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("基础设置", "General"));
         var changed = false;
-        changed |= Checkbox(
-            text.Get("启用解析", "Enable parsing"),
-            configuration.EnableParsing,
-            value => configuration.EnableParsing = value);
-        changed |= Checkbox(
-            text.Get("自动启动解析器", "Auto start parser"),
-            configuration.AutoStartParser,
-            value => configuration.AutoStartParser = value);
-        changed |= Checkbox(
-            text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
-            configuration.ShowLauncherButton,
-            value => configuration.ShowLauncherButton = value);
-        ImGui.TextDisabled(text.Get(
-            "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
-            "Quick button: left settings, right Combat Meter, hold middle mouse to move."));
+        if (BrandedWindowChrome.BeginGoldCard("overview-general-card", 142))
+        {
+            ImGui.TextColored(Gold, text.Get("基础设置", "General"));
+            changed |= Checkbox(
+                text.Get("启用解析", "Enable parsing"),
+                configuration.EnableParsing,
+                value => configuration.EnableParsing = value);
+            changed |= Checkbox(
+                text.Get("自动启动解析器", "Auto start parser"),
+                configuration.AutoStartParser,
+                value => configuration.AutoStartParser = value);
+            changed |= Checkbox(
+                text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
+                configuration.ShowLauncherButton,
+                value => configuration.ShowLauncherButton = value);
+            ImGui.TextDisabled(text.Get(
+                "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
+                "Quick button: left settings, right Combat Meter, hold middle mouse to move."));
+        }
+        BrandedWindowChrome.EndGoldCard();
         return changed;
     }
 
@@ -941,10 +942,7 @@ public sealed class ControlCenterWindow : Window
             RestartParser();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("详细运行状态", "Detailed runtime status")))
-        {
-            openStatus();
-        }
+        DrawStatusWindowToggleButton(Vector2.Zero, detailedLabel: true);
         ImGui.SameLine();
         if (ImGui.Button(text.Get("打开日志文件夹", "Open log folder")))
         {
@@ -996,14 +994,6 @@ public sealed class ControlCenterWindow : Window
         {
             configuration.HistoryLimit = historyLimit;
             changed = true;
-        }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        if (ImGui.Button(text.Get("打开完整设置", "Open full settings")))
-        {
-            openAdvancedSettings();
         }
 
         ImGui.Spacing();
@@ -1103,13 +1093,50 @@ public sealed class ControlCenterWindow : Window
         });
     }
 
-    private void DrawPageHeader(string title, string description)
+    private void DrawPageHeader(string title, string description, bool showDivider = true)
     {
         ImGui.TextColored(Gold, title);
         ImGui.TextDisabled(description);
         ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        if (showDivider)
+        {
+            ImGui.Separator();
+            ImGui.Spacing();
+        }
+    }
+
+    private void DrawStatusWindowToggleButton(Vector2 size, bool detailedLabel = false)
+    {
+        var visible = isStatusVisible();
+        if (visible)
+        {
+            PushOpenWindowButtonStyle();
+        }
+
+        var label = detailedLabel
+            ? visible
+                ? text.Get("关闭详细运行状态", "Close detailed runtime status")
+                : text.Get("详细运行状态", "Detailed runtime status")
+            : visible
+                ? text.Get("关闭运行状态", "Close Runtime status")
+                : text.Get("运行状态", "Runtime status");
+        if (ImGui.Button(label, size))
+        {
+            setStatusVisible(!visible);
+        }
+
+        if (visible)
+        {
+            ImGui.PopStyleColor(4);
+        }
+    }
+
+    private static void PushOpenWindowButtonStyle()
+    {
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
     }
 
     private static string BuildVersionLabel()

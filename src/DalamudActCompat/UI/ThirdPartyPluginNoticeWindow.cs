@@ -9,6 +9,7 @@ namespace DalamudActCompat.UI;
 
 public sealed class ThirdPartyPluginNoticeWindow : Window
 {
+    private const string PermissionPopupId = "扩展完整功能###DalamudActCompatFullPermissions";
     private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
@@ -26,6 +27,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private Task? installTask;
     private string result = string.Empty;
     private bool showPermissionChoice;
+    private bool permissionPopupRequested;
+    private bool updateCheckInProgress;
     private bool outerFrameStylePushed;
 
     public ThirdPartyPluginNoticeWindow(
@@ -103,6 +106,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 IsOpen = false;
             }
 
+            DrawPermissionChoiceModal();
+            DrawUpdateStatusBanner();
+
             if (ImGui.BeginChild("third-party-notice-content", new Vector2(-1, -1), true))
             {
                 ImGui.TextColored(Gold, text.Get("第三方扩展来源声明", "Third-party extension sources"));
@@ -163,10 +169,6 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                         "正在安装 / 更新扩展，请稍候……",
                         "Installing / updating extensions..."));
                 }
-                else if (showPermissionChoice)
-                {
-                    DrawPermissionChoice();
-                }
                 else if (pending.Count > 0)
                 {
                     ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
@@ -194,11 +196,6 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                         "Choosing later keeps pending DLLs disabled."));
                 }
 
-                if (!string.IsNullOrWhiteSpace(result))
-                {
-                    ImGui.Spacing();
-                    ImGui.TextWrapped(result);
-                }
             }
             ImGui.EndChild();
         }
@@ -214,15 +211,22 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         IsOpen = true;
     }
 
-    public void BeginUpdateCheck()
+    public void BeginUpdateCheck(bool showWindow)
     {
+        updateCheckInProgress = true;
         result = text.Get(
             "正在检查三项 DLL 的作者上游版本……",
             "Checking the author sources for all three DLLs...");
+        if (showWindow)
+        {
+            Refresh(openWhenPending: false);
+            IsOpen = true;
+        }
     }
 
     public void CompleteUpdateCheck(string message, bool showWindow)
     {
+        updateCheckInProgress = false;
         result = message;
         Refresh(openWhenPending: false);
         if (showWindow)
@@ -250,8 +254,11 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             result = text.Get(
                 "内置 DLL 已安装/更新，告知记录已保存。",
                 "Bundled DLLs were installed/updated and the notice acknowledgement was saved.");
+            updateCheckInProgress = false;
             Refresh(openWhenPending: false);
             showPermissionChoice = true;
+            permissionPopupRequested = true;
+            IsOpen = true;
         }
         catch (Exception ex)
         {
@@ -347,34 +354,91 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         ImGui.PopStyleColor();
     }
 
-    private void DrawPermissionChoice()
+    private void DrawPermissionChoiceModal()
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-        if (ImGui.BeginChild("third-party-permission-choice", new Vector2(-1, 188), true))
+        if (!showPermissionChoice)
         {
-            ImGui.TextColored(Gold, text.Get("是否启用扩展的完整功能？", "Enable full extension functionality?"));
-            ImGui.TextWrapped(text.Get(
-                "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry 与鲶鱼精邮差功能因此不可用。你可以现在一次性启用三项随包扩展已声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
-                "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry and PostNamazu features will remain unavailable. You can enable every declared capability for the three bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
-
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-            if (ImGui.Button(text.Get("启用完整功能", "Enable full functionality"), new Vector2(170, 36)))
-            {
-                configureFullPermissions(true);
-                showPermissionChoice = false;
-                IsOpen = false;
-            }
-            ImGui.PopStyleColor();
-            ImGui.SameLine();
-            if (ImGui.Button(text.Get("保持安全默认", "Keep safe defaults"), new Vector2(160, 36)))
-            {
-                configureFullPermissions(false);
-                showPermissionChoice = false;
-                IsOpen = false;
-            }
+            return;
         }
-        ImGui.EndChild();
+
+        if (permissionPopupRequested)
+        {
+            ImGui.OpenPopup(PermissionPopupId);
+            permissionPopupRequested = false;
+        }
+
+        const float popupWidth = 650;
+        var parentPosition = ImGui.GetWindowPos();
+        var parentSize = ImGui.GetWindowSize();
+        ImGui.SetNextWindowPos(
+            new Vector2(
+                parentPosition.X + Math.Max(16, (parentSize.X - popupWidth) * 0.5f),
+                parentPosition.Y + 72),
+            ImGuiCond.Appearing);
+        ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
+        ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
+        if (!ImGui.BeginPopupModal(
+                PermissionPopupId,
+                ImGuiWindowFlags.AlwaysAutoResize |
+                ImGuiWindowFlags.NoResize |
+                ImGuiWindowFlags.NoMove))
+        {
+            ImGui.PopStyleColor(3);
+            ImGui.PopStyleVar(2);
+            return;
+        }
+
+        ImGui.TextColored(Gold, text.Get("是否启用扩展的完整功能？", "Enable full extension functionality?"));
+        ImGui.TextWrapped(text.Get(
+            "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry 与鲶鱼精邮差功能因此不可用。你可以现在一次性启用三项随包扩展已声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
+            "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry and PostNamazu features will remain unavailable. You can enable every declared capability for the three bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
+        ImGui.Spacing();
+
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        var enableFull = ImGui.Button(
+            text.Get("启用完整功能", "Enable full functionality"),
+            new Vector2(170, 36));
         ImGui.PopStyleColor();
+        ImGui.SameLine();
+        var keepSafe = ImGui.Button(
+            text.Get("保持安全默认", "Keep safe defaults"),
+            new Vector2(160, 36));
+
+        if (enableFull || keepSafe)
+        {
+            configureFullPermissions(enableFull);
+            showPermissionChoice = false;
+            ImGui.CloseCurrentPopup();
+            IsOpen = false;
+        }
+
+        ImGui.EndPopup();
+        ImGui.PopStyleColor(3);
+        ImGui.PopStyleVar(2);
+    }
+
+    private void DrawUpdateStatusBanner()
+    {
+        if (string.IsNullOrWhiteSpace(result))
+        {
+            return;
+        }
+
+        if (BrandedWindowChrome.BeginGoldCard("third-party-update-status", 72))
+        {
+            ImGui.TextColored(
+                updateCheckInProgress ? Gold : IceBlue,
+                updateCheckInProgress
+                    ? text.Get("正在检查更新", "Checking for updates")
+                    : text.Get("检查结果", "Check result"));
+            ImGui.TextWrapped(result);
+        }
+        BrandedWindowChrome.EndGoldCard();
+        ImGui.Spacing();
     }
 
     private void OpenUrl(string url)

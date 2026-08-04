@@ -11,6 +11,8 @@ internal static class BrandedWindowChrome
     private static readonly Vector4 NavigationSelected = new(0.14f, 0.34f, 0.46f, 0.30f);
     private static readonly Vector4 NavigationText = new(0.74f, 0.79f, 0.84f, 1);
     private static readonly Vector4 NavigationAccent = new(0.42f, 0.78f, 0.96f, 1);
+    private static readonly Vector4 GoldCardBorder = new(0.78f, 0.66f, 0.36f, 0.82f);
+    private static readonly Vector4 GoldCardBackground = new(0.055f, 0.075f, 0.10f, 0.96f);
     private static readonly Dictionary<string, float> NavigationIndicatorPositions = new(StringComparer.Ordinal);
 
     public static bool Draw(
@@ -183,5 +185,20 @@ internal static class BrandedWindowChrome
         var progress = 1 - MathF.Exp(-response * deltaTime);
         var next = current + ((target - current) * progress);
         return Math.Abs(target - next) < 0.001f ? target : next;
+    }
+
+    public static bool BeginGoldCard(string id, float height)
+    {
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
+        ImGui.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
+        return ImGui.BeginChild(id, new Vector2(-1, height), true);
+    }
+
+    public static void EndGoldCard()
+    {
+        ImGui.EndChild();
+        ImGui.PopStyleVar();
+        ImGui.PopStyleColor(2);
     }
 }

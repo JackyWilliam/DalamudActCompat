@@ -123,26 +123,25 @@ public sealed class EncounterWindow : Window
                 IsOpen = false;
             }
 
-            if (ImGui.BeginChild("combat-history-content", new Vector2(-1, -1), true))
+            ImGui.TextDisabled(text.Get(
+                "近期战斗与逐场日志使用同一个详情视图",
+                "Recent encounters and log files share one detail view"));
+            ImGui.Spacing();
+            var pages = new[]
             {
-                ImGui.TextDisabled(text.Get(
-                    "近期战斗与逐场日志使用同一个详情视图",
-                    "Recent encounters and log files share one detail view"));
-                ImGui.Spacing();
-                var pages = new[]
-                {
-                    text.Get("近期战斗", "Recent encounters"),
-                    text.Get("日志文件", "Log files"),
-                };
-                var nextPage = BrandedWindowChrome.DrawNavigationRail(
-                    "combat-history-navigation",
-                    pages,
-                    (int)selectedPage,
-                    34);
-                selectedPage = (HistoryPage)nextPage;
-                ImGui.Separator();
-                ImGui.Spacing();
+                text.Get("近期战斗", "Recent encounters"),
+                text.Get("日志文件", "Log files"),
+            };
+            var nextPage = BrandedWindowChrome.DrawNavigationRail(
+                "combat-history-navigation",
+                pages,
+                (int)selectedPage,
+                34);
+            selectedPage = (HistoryPage)nextPage;
+            ImGui.Spacing();
 
+            if (ImGui.BeginChild("combat-history-page-content", new Vector2(-1, -1), true))
+            {
                 if (selectedPage == HistoryPage.Recent)
                 {
                     DrawRecentPage();
