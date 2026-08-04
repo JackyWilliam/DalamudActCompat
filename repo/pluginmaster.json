@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.5.3",
+    "AssemblyVersion":  "0.3.5.4",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.3/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.4/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.3/DalamudActCompat.zip",
-    "LastUpdate":  1785852050311,
-    "Changelog":  "修复野外战斗被附近玩家持续续期；多人自己的默认高亮改为 #8B573373；近期战斗与三方更新窗口同步新版圆角外框，三方声明改为横向三列；主页与设置导航重新命名并补充恢复出厂设置；控制中心与战斗历史统一使用带滑动选区的导航轨道，与操作按钮明确区分。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.4/DalamudActCompat.zip",
+    "LastUpdate":  1785853787266,
+    "Changelog":  "固定控制中心和战斗历史导航；主页统一金色描边卡片；完整功能权限选择改为置顶模态框；运行状态按钮支持开关并重做 ACT 兼容状态窗口；手动检查更新立即显示反馈；修复 Triggernometry 重复更新通知和网页链接调用；新版功能覆盖完成后移除旧设置呼出入口。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

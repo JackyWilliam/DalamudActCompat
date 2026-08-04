@@ -34,6 +34,7 @@ await ValidateAbruptClientDisconnectAsync();
 await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidateTriggernometryCompatibilityNoticeFilter();
+ValidateTriggernometryWebAddressLaunchUsesShell();
 if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
@@ -133,6 +134,46 @@ void ValidateTriggernometryCompatibilityNoticeFilter()
         !HostPluginBridge.IsExpectedTriggernometryCompatibilityNotice(
             "脚本启动失败：此操作需要管理员权限。"),
         "A real administrator-related failure was incorrectly suppressed.");
+}
+
+void ValidateTriggernometryWebAddressLaunchUsesShell()
+{
+    var prepare = typeof(HostPluginBridge).GetMethod(
+                      "PrepareTriggernometryStartInfo",
+                      BindingFlags.Static | BindingFlags.NonPublic)
+                  ?? throw new MissingMethodException(
+                      typeof(HostPluginBridge).FullName,
+                      "PrepareTriggernometryStartInfo");
+    var webStartInfo = new ProcessStartInfo(
+        "https://space.bilibili.com/83429972/channel/collectiondetail?sid=2967544")
+    {
+        UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        CreateNoWindow = true,
+    };
+    var normalizedWeb = (ProcessStartInfo?)prepare.Invoke(null, [webStartInfo])
+                        ?? throw new InvalidOperationException(
+                            "Triggernometry web launch normalization returned null.");
+    Assert(
+        normalizedWeb.UseShellExecute &&
+        !normalizedWeb.RedirectStandardInput &&
+        !normalizedWeb.RedirectStandardOutput &&
+        !normalizedWeb.RedirectStandardError &&
+        !normalizedWeb.CreateNoWindow,
+        "Triggernometry web actions are not routed through the Windows browser shell.");
+
+    var executableStartInfo = new ProcessStartInfo("notepad.exe")
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    var normalizedExecutable = (ProcessStartInfo?)prepare.Invoke(null, [executableStartInfo]);
+    Assert(
+        ReferenceEquals(executableStartInfo, normalizedExecutable) &&
+        !executableStartInfo.UseShellExecute &&
+        executableStartInfo.CreateNoWindow,
+        "Triggernometry executable actions were unexpectedly changed by URL normalization.");
 }
 
 async Task ValidateSequenceRegressionTerminatesHostAsync()
@@ -447,6 +488,18 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
             Assert(
                 health.State == "plugins.ready",
                 $"Legacy plugin runtime did not become ready: {health.Detail}");
+            var persistedConfiguration = new System.Xml.XmlDocument();
+            persistedConfiguration.Load(Path.Combine(
+                configRoot!,
+                "Config",
+                "Triggernometry.config.xml"));
+            var persistedRoot = persistedConfiguration.DocumentElement
+                                ?? throw new InvalidDataException(
+                                    "Triggernometry persisted configuration has no root element.");
+            Assert(
+                persistedRoot.GetAttribute("PreviousNotifiedPluginVersion") == "2.1.2.1" &&
+                persistedRoot.GetAttribute("PluginVersion") == "2.1.2.1",
+                "Triggernometry did not persist its acknowledged version state during startup.");
             var hasFoxTts = File.Exists(Path.Combine(
                 pluginRoot!,
                 "act.foxtts",
@@ -687,6 +740,12 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 $"Triggernometry did not load out-of-process." +
                 $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
+                output.Contains(
+                    "Triggernometry startup update check delegated to the managed bundled-plugin updater.",
+                    StringComparison.Ordinal),
+                "Triggernometry still ran its competing startup self-update check." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
                 output.Contains("ACTCOMPAT_SCRIPT_REFERENCE_OK", StringComparison.Ordinal),
                 "Triggernometry could not compile and execute a C# action that references its " +
                 $"own assembly.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
@@ -880,7 +939,7 @@ async Task PrepareLegacySmokeConfigurationAsync()
         "Triggernometry.config.xml");
     const string configuration = """
         <?xml version="1.0" encoding="utf-8"?>
-        <Configuration DebugLevel="Verbose" LogNormalEvents="true" FfxivLogNetwork="true" ShowWelcome="false" WarnAdmin="true" UpdateNotifications="No" StartupTriggerType="Trigger" StartupTriggerId="00000000-0000-0000-0000-000000000000" TtsMethod="ACT" StartEndpointOnLaunch="false" AutosaveEnabled="false" Language="English (en)" PreviousNotifiedPluginVersion="2.1.1.2" PluginVersion="2.1.1.2">
+        <Configuration DebugLevel="Verbose" LogNormalEvents="true" FfxivLogNetwork="true" ShowWelcome="false" WarnAdmin="true" UpdateNotifications="Yes" UpdateCheckMethod="External" UpdateExternalChannelUrl="http://127.0.0.1:1/should-not-run.xml" StartupTriggerType="Trigger" StartupTriggerId="00000000-0000-0000-0000-000000000000" TtsMethod="ACT" StartEndpointOnLaunch="false" AutosaveEnabled="false" Language="English (en)" PreviousNotifiedPluginVersion="2.1.1.2" PluginVersion="2.1.1.2">
           <Root Id="5eef94df-0eaf-41c7-9364-73857a7825e8" Enabled="true" Name="Host smoke">
             <Triggers>
               <Trigger Enabled="true" Id="7bddbd49-ec9e-47ea-b6a3-2613cd86128c" Name="Standard log closed loop" RegularExpression="ACTCOMPAT_SMOKE_LINE" Source="Log">

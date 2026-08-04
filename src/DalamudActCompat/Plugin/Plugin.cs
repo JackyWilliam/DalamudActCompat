@@ -272,6 +272,7 @@ public sealed class Plugin : IDalamudPlugin
         statusWindow = new StatusWindow(
             parserEngine,
             text,
+            logoTexture,
             () => hostSupervisor.Snapshot,
             RestartHostFromUi,
             StopHostFromUi);
@@ -287,8 +288,8 @@ public sealed class Plugin : IDalamudPlugin
             SetMeterVisible,
             () => SetMeterVisible(true),
             encounterWindow.OpenRecent,
-            () => statusWindow.IsOpen = true,
-            () => advancedSettingsWindow.IsOpen = true,
+            () => statusWindow.IsOpen,
+            value => statusWindow.IsOpen = value,
             SelectPluginPackage,
             OpenPluginDirectory,
             thirdPartyPluginNoticeWindow.OpenNotice,
@@ -607,20 +608,54 @@ public sealed class Plugin : IDalamudPlugin
         _ = Task.Run(async () =>
         {
             var cancellationToken = bundledUpdateCancellation.Token;
+            if (openWindow)
+            {
+                await services.Framework
+                    .RunOnFrameworkThread(
+                        () =>
+                        {
+                            thirdPartyPluginNoticeWindow.BeginUpdateCheck(showWindow: true);
+                            services.NotificationManager.AddNotification(new()
+                            {
+                                Title = text.Get("扩展更新", "Extension updates"),
+                                Content = text.Get(
+                                    "正在检查三项 DLL 的作者上游版本。",
+                                    "Checking the author sources for all three DLLs."),
+                            });
+                        })
+                    .ConfigureAwait(false);
+            }
+
             if (!await bundledUpdateCheckLock
                     .WaitAsync(0)
                     .ConfigureAwait(false))
             {
+                if (openWindow)
+                {
+                    await services.Framework
+                        .RunOnFrameworkThread(
+                            () => services.NotificationManager.AddNotification(new()
+                            {
+                                Title = text.Get("扩展更新", "Extension updates"),
+                                Content = text.Get(
+                                    "更新检查已经在进行中。",
+                                    "An update check is already in progress."),
+                            }))
+                        .ConfigureAwait(false);
+                }
                 return;
             }
 
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await services.Framework
-                    .RunOnFrameworkThread(
-                        thirdPartyPluginNoticeWindow.BeginUpdateCheck)
-                    .ConfigureAwait(false);
+                if (!openWindow)
+                {
+                    await services.Framework
+                        .RunOnFrameworkThread(
+                            () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(showWindow: false))
+                        .ConfigureAwait(false);
+                }
                 var check = await bundledPluginUpdateChecker
                     .CheckAsync(
                         bundledPluginManager.Plugins,
@@ -650,12 +685,23 @@ public sealed class Plugin : IDalamudPlugin
                     pendingOnline.Length);
                 await services.Framework
                     .RunOnFrameworkThread(
-                        () => thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
-                            message,
-                            ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
-                                pendingOnline.Length,
-                                failed: false,
-                                userInitiated: openWindow)))
+                        () =>
+                        {
+                            thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
+                                message,
+                                ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
+                                    pendingOnline.Length,
+                                    failed: false,
+                                    userInitiated: openWindow));
+                            if (openWindow)
+                            {
+                                services.NotificationManager.AddNotification(new()
+                                {
+                                    Title = text.Get("扩展更新", "Extension updates"),
+                                    Content = message,
+                                });
+                            }
+                        })
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -671,12 +717,24 @@ public sealed class Plugin : IDalamudPlugin
                 logger.Error(ex, "Bundled ACT plugin online update check failed.");
                 await services.Framework
                     .RunOnFrameworkThread(
-                        () => thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
-                            $"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}",
-                            ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
-                                pendingCount: 0,
-                                failed: true,
-                                userInitiated: openWindow)))
+                        () =>
+                        {
+                            var message = $"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}";
+                            thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
+                                message,
+                                ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
+                                    pendingCount: 0,
+                                    failed: true,
+                                    userInitiated: openWindow));
+                            if (openWindow)
+                            {
+                                services.NotificationManager.AddNotification(new()
+                                {
+                                    Title = text.Get("扩展更新失败", "Extension update check failed"),
+                                    Content = message,
+                                });
+                            }
+                        })
                     .ConfigureAwait(false);
             }
             finally

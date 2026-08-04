@@ -5,6 +5,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Xml;
 using Advanced_Combat_Tracker;
@@ -812,7 +813,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 3)) == "v0.3.5.3",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 4)) == "v0.3.5.4",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -849,6 +850,12 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "Encounters", "EncounterWindow.cs"));
     var thirdPartySource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "ThirdPartyPluginNoticeWindow.cs"));
+    var statusSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "StatusWindow.cs"));
+    var settingsSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
+    var pluginSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
@@ -856,6 +863,20 @@ static void ValidateControlCenterPresentation()
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)),
         "The home/settings labels or guarded factory-reset action are missing from the new settings UI.");
+    var navigationIndex = controlCenterSource.IndexOf(
+        "DrawPageTabs();",
+        StringComparison.Ordinal);
+    var scrollContentIndex = controlCenterSource.IndexOf(
+        "control-center-page-content",
+        StringComparison.Ordinal);
+    Assert(
+        navigationIndex >= 0 &&
+        scrollContentIndex > navigationIndex &&
+        controlCenterSource.Contains("overview-parser-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("overview-quick-actions-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("overview-general-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("关闭运行状态", StringComparison.Ordinal),
+        "The fixed navigation, gold overview cards, or runtime-status toggle is missing.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
@@ -875,12 +896,52 @@ static void ValidateControlCenterPresentation()
         animatedIndicator > 0 && animatedIndicator < 1 &&
         BrandedWindowChrome.AdvanceNavigationIndicator(0.9999f, 1, 1f / 60f) == 1,
         "The navigation indicator no longer eases toward its selected page.");
+    var historyNavigationIndex = historySource.IndexOf(
+        "combat-history-navigation",
+        StringComparison.Ordinal);
+    var historyContentIndex = historySource.IndexOf(
+        "combat-history-page-content",
+        StringComparison.Ordinal);
+    Assert(
+        historyNavigationIndex >= 0 && historyContentIndex > historyNavigationIndex,
+        "Combat History navigation is no longer fixed above its scrolling page content.");
     Assert(
         thirdPartySource.Contains("Size = new Vector2(1200, 650);", StringComparison.Ordinal) &&
         thirdPartySource.Contains("\"third-party-plugin-cards\"", StringComparison.Ordinal) &&
         thirdPartySource.Contains("ImGuiTableFlags.SizingStretchSame", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal),
-        "The update and third-party notice is not a landscape, three-column branded window.");
+        thirdPartySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DrawPermissionChoiceModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
+        pluginSource.Contains("BeginUpdateCheck(showWindow: true)", StringComparison.Ordinal) &&
+        pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
+        pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
+        "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");
+    Assert(
+        statusSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        statusSource.Contains("runtime-status-content", StringComparison.Ordinal) &&
+        statusSource.Contains("BeginGoldCard", StringComparison.Ordinal) &&
+        statusSource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
+        "The ACT compatibility status window does not use the new rounded branded card design.");
+
+    var configurationPathPattern = new Regex(
+        @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
+        RegexOptions.CultureInvariant);
+    var legacyConfigurationPaths = configurationPathPattern
+        .Matches(settingsSource)
+        .Select(match => match.Value)
+        .ToHashSet(StringComparer.Ordinal);
+    var controlCenterConfigurationPaths = configurationPathPattern
+        .Matches(controlCenterSource)
+        .Select(match => match.Value)
+        .ToHashSet(StringComparer.Ordinal);
+    var missingLegacyPaths = legacyConfigurationPaths
+        .Except(controlCenterConfigurationPaths, StringComparer.Ordinal)
+        .Order(StringComparer.Ordinal)
+        .ToArray();
+    Assert(
+        missingLegacyPaths.Length == 0,
+        $"The new control center lost legacy setting paths: {string.Join(", ", missingLegacyPaths)}");
 }
 
 static void ValidateChinese755Opcodes()
