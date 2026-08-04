@@ -110,6 +110,11 @@ public static class HostPluginBridge
         return administrator;
     }
 
+    public static bool IsExpectedTriggernometryCompatibilityNotice(string? message)
+        => !string.IsNullOrWhiteSpace(message) &&
+           message.Contains("鲶鱼精邮差扩展", StringComparison.Ordinal) &&
+           message.Contains("ACT 未以管理员权限运行", StringComparison.Ordinal);
+
     public static void EnqueueTriggerEventBounded<T>(Queue<T> queue, T item)
     {
         const int capacity = 8192;

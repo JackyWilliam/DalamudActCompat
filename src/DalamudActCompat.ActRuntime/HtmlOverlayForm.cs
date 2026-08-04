@@ -47,6 +47,38 @@ internal sealed class HtmlOverlayForm : IDisposable
             install();
         })();
         """;
+    internal const string OverlayEditIndicatorScript =
+        """
+        (() => {
+          const install = () => {
+            if (document.getElementById('dalamud-act-compat-edit-indicator'))
+              return;
+            const style = document.createElement('style');
+            style.id = 'dalamud-act-compat-edit-indicator';
+            style.textContent = `
+              html[data-dalamud-act-compat-editing='true'] body::after {
+                content: 'ACT Overlay · 编辑模式';
+                position: fixed;
+                inset: 0;
+                box-sizing: border-box;
+                border: 2px solid rgba(232, 196, 91, 0.96);
+                padding: 5px 8px;
+                color: #f7dfa0;
+                background: rgba(14, 22, 34, 0.10);
+                font: 13px/1.4 sans-serif;
+                text-shadow: 0 1px 3px #000;
+                pointer-events: none;
+                z-index: 2147483647;
+              }
+            `;
+            (document.head || document.documentElement).appendChild(style);
+          };
+          if (document.readyState === 'loading')
+            document.addEventListener('DOMContentLoaded', install, { once: true });
+          else
+            install();
+        })();
+        """;
 
     private readonly Uri pageUri;
     private readonly string userDataDirectory;
@@ -319,12 +351,30 @@ internal sealed class HtmlOverlayForm : IDisposable
 
             NativeLibrary.Load(loaderPath);
             Directory.CreateDirectory(userDataDirectory);
-            var options = new CoreWebView2EnvironmentOptions(
-                "--autoplay-policy=no-user-gesture-required");
-            var environment = await CoreWebView2Environment.CreateAsync(
-                userDataFolder: userDataDirectory,
-                options: options);
-            await webView.EnsureCoreWebView2Async(environment);
+            const int maximumAttempts = 3;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    var options = new CoreWebView2EnvironmentOptions(
+                        "--autoplay-policy=no-user-gesture-required");
+                    var environment = await CoreWebView2Environment.CreateAsync(
+                        userDataFolder: userDataDirectory,
+                        options: options);
+                    await webView.EnsureCoreWebView2Async(environment);
+                    break;
+                }
+                catch (Exception ex) when (
+                    attempt < maximumAttempts && IsTransientWebViewInitializationFailure(ex))
+                {
+                    log.Warning(
+                        ex,
+                        $"HTML overlay WebView2 initialization was interrupted for {title}; " +
+                        $"retrying ({attempt}/{maximumAttempts - 1}).");
+                    await Task.Delay(TimeSpan.FromMilliseconds(400 * attempt));
+                }
+            }
+
             var core = webView.CoreWebView2
                 ?? throw new InvalidOperationException("WebView2 initialized without a CoreWebView2 instance.");
             core.ProcessFailed += OnProcessFailed;
@@ -345,6 +395,11 @@ internal sealed class HtmlOverlayForm : IDisposable
             if (overlayMode && settings is not null)
             {
                 webView.ZoomFactor = Math.Clamp(settings.ZoomFactor, 0.25f, 5.0f);
+            }
+            if (overlayMode)
+            {
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    OverlayEditIndicatorScript);
             }
             if (IsCactbotRaidbossPage(pageUri))
             {
@@ -367,6 +422,11 @@ internal sealed class HtmlOverlayForm : IDisposable
                 MessageBoxIcon.Error);
         }
     }
+
+    internal static bool IsTransientWebViewInitializationFailure(Exception exception)
+        => exception is COMException { HResult: unchecked((int)0x80004004) } ||
+           exception.InnerException is not null &&
+           IsTransientWebViewInitializationFailure(exception.InnerException);
 
     private async void OnNavigationCompleted(
         object? sender,
@@ -672,11 +732,15 @@ internal sealed class HtmlOverlayForm : IDisposable
         try
         {
             var isLocked = !overlayMode || settings?.IsLocked != false;
+            var isEditing = overlayMode && settings?.IsEditing == true;
             await core.ExecuteScriptAsync(
                 "document.documentElement.dataset.dalamudActCompatLocked = " +
                 $"'{isLocked.ToString().ToLowerInvariant()}';" +
+                "document.documentElement.dataset.dalamudActCompatEditing = " +
+                $"'{isEditing.ToString().ToLowerInvariant()}';" +
                 "document.dispatchEvent(new CustomEvent('onOverlayStateUpdate', " +
-                $"{{ detail: {{ isLocked: {isLocked.ToString().ToLowerInvariant()} }} }}));");
+                $"{{ detail: {{ isLocked: {isLocked.ToString().ToLowerInvariant()}, " +
+                $"isEditing: {isEditing.ToString().ToLowerInvariant()} }} }}));");
         }
         catch (Exception) when (disposing)
         {

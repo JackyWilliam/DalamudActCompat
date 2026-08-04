@@ -171,6 +171,8 @@ public sealed class Plugin : IDalamudPlugin
             stateStore,
             encounterService,
             paths.CombatLogDirectory,
+            framework,
+            () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins));
@@ -194,6 +196,7 @@ public sealed class Plugin : IDalamudPlugin
         var jobIcons = new JobIconTextureSet(
             textureProvider,
             Path.Combine(assetDirectory, "JobIcons"));
+        var zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
         meterWindow = new MeterWindow(
             meterService,
             stateStore,
@@ -201,6 +204,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration,
             text,
             jobIcons,
+            zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
         encounterWindow = new EncounterWindow(stateStore, paths, configuration, text);
@@ -271,7 +275,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration,
             launcherTexture,
             text,
-            () => settingsWindow.IsOpen = true,
+            settingsWindow.ToggleAnimated,
             ToggleMeter,
             SaveConfiguration)
         {
@@ -356,10 +360,10 @@ public sealed class Plugin : IDalamudPlugin
         fileDialogManager.Draw();
     }
 
-    private void OpenConfigUi() => settingsWindow.IsOpen = true;
+    private void OpenConfigUi() => settingsWindow.ShowAnimated();
 
     private void OpenMainUi()
-        => settingsWindow.IsOpen = true;
+        => settingsWindow.ShowAnimated();
 
     private void ToggleMeter()
     {
@@ -392,7 +396,7 @@ public sealed class Plugin : IDalamudPlugin
                 statusWindow.IsOpen = true;
                 break;
             case "settings":
-                settingsWindow.IsOpen = true;
+                settingsWindow.ShowAnimated();
                 break;
             case "cactbot":
                 if (!actRuntime.ShowCactbotOverlay())
@@ -445,7 +449,7 @@ public sealed class Plugin : IDalamudPlugin
                 stateStore.ResetCurrent();
                 break;
             case "factory-reset":
-                settingsWindow.IsOpen = true;
+                settingsWindow.ShowAnimated();
                 break;
             case "install":
                 InstallActPlugin(remainder);
@@ -455,7 +459,7 @@ public sealed class Plugin : IDalamudPlugin
                 meterWindow.IsOpen = true;
                 break;
             default:
-                settingsWindow.IsOpen = true;
+                settingsWindow.ShowAnimated();
                 break;
         }
     }

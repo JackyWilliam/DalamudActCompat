@@ -1003,6 +1003,20 @@ internal sealed class LegacyPluginHandle : IDisposable
                     continue;
                 }
 
+                if (HostPluginBridge.IsExpectedTriggernometryCompatibilityNotice(message))
+                {
+                    lock (pair.Value)
+                    {
+                        if (pair.Value is System.Collections.IList list &&
+                            !list.IsReadOnly &&
+                            !list.IsFixedSize)
+                        {
+                            list.Remove(entry);
+                        }
+                    }
+                    continue;
+                }
+
                 var timestampValue = entryType.GetProperty("Timestamp")?.GetValue(entry);
                 var timestamp = timestampValue is DateTime dateTime
                     ? new DateTimeOffset(dateTime)
