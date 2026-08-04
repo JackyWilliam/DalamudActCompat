@@ -858,9 +858,23 @@ static void ValidateControlCenterPresentation()
         "The home/settings labels or guarded factory-reset action are missing from the new settings UI.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
-        "Combat History does not use the rounded branded settings-window frame.");
+        "Combat History does not use the rounded branded frame and shared navigation rail.");
+    var chromeSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "BrandedWindowChrome.cs"));
+    Assert(
+        controlCenterSource.Contains("control-center-navigation", StringComparison.Ordinal) &&
+        chromeSource.Contains("DrawNavigationRail", StringComparison.Ordinal) &&
+        chromeSource.Contains("NavigationIndicatorPositions", StringComparison.Ordinal) &&
+        chromeSource.Contains("AdvanceNavigationIndicator", StringComparison.Ordinal),
+        "Page-level navigation does not share the animated navigation rail design.");
+    var animatedIndicator = BrandedWindowChrome.AdvanceNavigationIndicator(0, 1, 1f / 60f);
+    Assert(
+        animatedIndicator > 0 && animatedIndicator < 1 &&
+        BrandedWindowChrome.AdvanceNavigationIndicator(0.9999f, 1, 1f / 60f) == 1,
+        "The navigation indicator no longer eases toward its selected page.");
     Assert(
         thirdPartySource.Contains("Size = new Vector2(1200, 650);", StringComparison.Ordinal) &&
         thirdPartySource.Contains("\"third-party-plugin-cards\"", StringComparison.Ordinal) &&
