@@ -33,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
+    private readonly UiText text;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
     private readonly SelfHostedActRuntime actRuntime;
@@ -198,7 +199,7 @@ public sealed class Plugin : IDalamudPlugin
 
         _ = new OverlayManager(new OverlayEventBus());
 
-        var text = new UiText(configuration);
+        text = new UiText(configuration);
         var assetDirectory = Path.Combine(
             pluginInterface.AssemblyLocation.Directory!.FullName,
             "Assets");
@@ -220,7 +221,13 @@ public sealed class Plugin : IDalamudPlugin
             zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
-        encounterWindow = new EncounterWindow(stateStore, paths, configuration, text);
+        encounterWindow = new EncounterWindow(
+            stateStore,
+            paths,
+            configuration,
+            text,
+            jobIcons,
+            SaveConfiguration);
         factoryResetService = new FactoryResetService(
             parserEngine,
             paths,
@@ -231,6 +238,7 @@ public sealed class Plugin : IDalamudPlugin
         thirdPartyPluginNoticeWindow = new ThirdPartyPluginNoticeWindow(
             bundledPluginManager.GetPendingDisclosures,
             InstallBundledPluginsAsync,
+            ConfigureBundledPluginPermissions,
             logger,
             text);
         advancedSettingsWindow = new SettingsWindow(
@@ -274,6 +282,11 @@ public sealed class Plugin : IDalamudPlugin
             encounterWindow.OpenRecent,
             () => statusWindow.IsOpen = true,
             () => advancedSettingsWindow.IsOpen = true,
+            SelectPluginPackage,
+            OpenPluginDirectory,
+            thirdPartyPluginNoticeWindow.OpenNotice,
+            () => StartBundledPluginUpdateCheck(openWindow: true),
+            OpenLogDirectory,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
             () => cactbotInstaller.IsInstalled,
@@ -689,7 +702,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         fileDialogManager.OpenFileDialog(
-            "Select ACT plugin package",
+            text.Get("选择 ACT 扩展 DLL 或 ZIP", "Select ACT plugin DLL or ZIP"),
             "ACT plugin{.dll,.zip}",
             (success, selectedPath) =>
             {
@@ -748,6 +761,41 @@ public sealed class Plugin : IDalamudPlugin
         {
             logger.Error(ex, "Failed to open the ACT plugin directory.");
         }
+    }
+
+    private void OpenLogDirectory()
+    {
+        try
+        {
+            Directory.CreateDirectory(paths.LogDirectory);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.LogDirectory)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Failed to open the log directory.");
+        }
+    }
+
+    private void ConfigureBundledPluginPermissions(bool enableFullFunctionality)
+    {
+        if (!enableFullFunctionality)
+        {
+            logger.Information("Bundled ACT plugin permissions kept at safe defaults by user choice.");
+            return;
+        }
+
+        foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.All)
+        {
+            foreach (var capability in capabilities)
+            {
+                configuration.SetActCapability(pluginId, capability, true);
+            }
+        }
+        SaveConfiguration();
+        logger.Information("All declared capabilities were enabled for bundled ACT plugins by user choice.");
     }
 
     private void OpenActPluginConfiguration(string pluginId)
