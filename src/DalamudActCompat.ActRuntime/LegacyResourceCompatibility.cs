@@ -11,6 +11,7 @@ using System.Resources;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Windows.Forms;
 using Dalamud.Interface.ImGuiNotification;
@@ -535,7 +536,51 @@ public static class LegacyResourceCompatibility
         deflate.CopyTo(implementation);
         implementation.Position = 0;
         using var patched = RewriteLegacyResources(implementation);
-        return loadContext.LoadFromStream(patched);
+        return LoadPatchedTriggernometryImplementation(patched, loadContext);
+    }
+
+    private static Assembly LoadPatchedTriggernometryImplementation(
+        MemoryStream patched,
+        AssemblyLoadContext loadContext)
+    {
+        var image = patched.ToArray();
+        var hash = Convert.ToHexString(SHA256.HashData(image));
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            "triggernometry");
+        Directory.CreateDirectory(cacheDirectory);
+        var assemblyPath = Path.Combine(
+            cacheDirectory,
+            $"TriggernometryPlugin-{hash}.dll");
+
+        if (!File.Exists(assemblyPath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, assemblyPath);
+                }
+                catch (IOException) when (File.Exists(assemblyPath))
+                {
+                    // Another process finished writing the same content-addressed image.
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        return loadContext.LoadFromAssemblyPath(assemblyPath);
     }
 
     private static MemoryStream RewriteLegacyResources(Stream implementation)

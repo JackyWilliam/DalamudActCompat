@@ -29,6 +29,7 @@ public sealed class SettingsWindow : Window
     private readonly Action openCactbotSettings;
     private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
     private readonly Action<string> openHtmlOverlay;
+    private readonly Action<string> closeHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
     private readonly Action<string> openPluginConfiguration;
     private readonly Action openBundledPluginNotice;
@@ -53,6 +54,7 @@ public sealed class SettingsWindow : Window
         Action openCactbotSettings,
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
         Action<string> openHtmlOverlay,
+        Action<string> closeHtmlOverlay,
         Action<string> applyOverlayWindowSettings,
         Action<string> openPluginConfiguration,
         Action openBundledPluginNotice)
@@ -74,6 +76,7 @@ public sealed class SettingsWindow : Window
         this.openCactbotSettings = openCactbotSettings;
         this.getOverlayTemplates = getOverlayTemplates;
         this.openHtmlOverlay = openHtmlOverlay;
+        this.closeHtmlOverlay = closeHtmlOverlay;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         this.openPluginConfiguration = openPluginConfiguration;
         this.openBundledPluginNotice = openBundledPluginNotice;
@@ -235,9 +238,20 @@ public sealed class SettingsWindow : Window
                 ImGui.EndCombo();
             }
 
-            if (ImGui.Button(text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
+            var selectedSettings = configuration.GetOverlayWindowSettings(
+                configuration.SelectedOverlayTemplate);
+            if (ImGui.Button(selectedSettings.IsVisible
+                    ? text.Get("关闭所选 HTML 悬浮窗", "Close selected HTML overlay")
+                    : text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
             {
-                openHtmlOverlay(configuration.SelectedOverlayTemplate);
+                if (selectedSettings.IsVisible)
+                {
+                    closeHtmlOverlay(configuration.SelectedOverlayTemplate);
+                }
+                else
+                {
+                    openHtmlOverlay(configuration.SelectedOverlayTemplate);
+                }
             }
 
             var overlayWindowChanged = DrawHtmlOverlaySettings(

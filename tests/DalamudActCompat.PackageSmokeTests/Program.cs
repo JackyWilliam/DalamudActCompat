@@ -54,6 +54,7 @@ try
     ValidateParserDependencyVersions();
     ValidateChinese755Opcodes();
     ValidateMeterRows();
+    ValidateCompactMeterLayout();
     ValidateFflogsEstimateCurve();
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
@@ -440,6 +441,25 @@ static void ValidateMeterRows()
     Assert(
         encounter.Combatants[0].Name == "Tank@Alpha",
         "Display-only player ID masking mutated the encounter data.");
+}
+
+static void ValidateCompactMeterLayout()
+{
+    var method = typeof(MeterWindow).GetMethod(
+                     "CalculateSingleCombatantWindowSize",
+                     BindingFlags.Static | BindingFlags.NonPublic)
+                 ?? throw new InvalidOperationException(
+                     "Single-combatant Meter layout helper was not found.");
+    var compact = (System.Numerics.Vector2)(method.Invoke(
+        null,
+        [new System.Numerics.Vector2(500, 420), true, 1.0f])
+        ?? throw new InvalidOperationException("Compact Meter layout returned no size."));
+    Assert(
+        compact.X is >= 320 and <= 440,
+        "Single-combatant Meter width is not compact or readable.");
+    Assert(
+        compact.Y is >= 90 and <= 120,
+        "Single-combatant Meter kept the oversized multi-player height.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -924,6 +944,7 @@ static void ValidateDalamudGameStateBridge()
 static void ValidateHtmlOverlayDefaults()
 {
     var settings = new HtmlOverlayWindowSettings();
+    Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
     Assert(settings.IsClickThrough, "HTML overlays must be click-through by default.");
     Assert(settings.IsLocked, "HTML overlays must be locked by default.");
     Assert(!settings.IsEditing, "HTML overlays must not start in editing mode.");

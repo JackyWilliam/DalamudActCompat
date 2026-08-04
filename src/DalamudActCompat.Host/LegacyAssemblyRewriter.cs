@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Resources;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
+using System.Security.Cryptography;
 using System.Windows.Forms;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -32,8 +33,52 @@ public static class LegacyAssemblyRewriter
         deflate.CopyTo(implementation);
         implementation.Position = 0;
         using var patched = RewriteTriggernometryImplementation(implementation);
-        _ = loadContext.LoadFromStream(patched);
+        _ = LoadPatchedTriggernometryImplementation(patched, loadContext);
         return outer;
+    }
+
+    private static Assembly LoadPatchedTriggernometryImplementation(
+        MemoryStream patched,
+        AssemblyLoadContext loadContext)
+    {
+        var image = patched.ToArray();
+        var hash = Convert.ToHexString(SHA256.HashData(image));
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            "triggernometry");
+        Directory.CreateDirectory(cacheDirectory);
+        var assemblyPath = Path.Combine(
+            cacheDirectory,
+            $"TriggernometryPlugin-{hash}.dll");
+
+        if (!File.Exists(assemblyPath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, assemblyPath);
+                }
+                catch (IOException) when (File.Exists(assemblyPath))
+                {
+                    // Another Host finished writing the same content-addressed image.
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        return loadContext.LoadFromAssemblyPath(assemblyPath);
     }
 
     public static Assembly LoadPostNamazu(

@@ -53,6 +53,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openCactbotSettings;
     private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
     private readonly Action<string> openHtmlOverlay;
+    private readonly Action<string> closeHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
     private Page selectedPage;
     private ParserStatus parserStatus;
@@ -82,6 +83,7 @@ public sealed class ControlCenterWindow : Window
         Action openCactbotSettings,
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
         Action<string> openHtmlOverlay,
+        Action<string> closeHtmlOverlay,
         Action<string> applyOverlayWindowSettings)
         : base("ACT 控制中心###DalamudActCompatControlCenter")
     {
@@ -106,6 +108,7 @@ public sealed class ControlCenterWindow : Window
         this.openCactbotSettings = openCactbotSettings;
         this.getOverlayTemplates = getOverlayTemplates;
         this.openHtmlOverlay = openHtmlOverlay;
+        this.closeHtmlOverlay = closeHtmlOverlay;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         parserStatus = parserEngine.Status;
         parserEngine.StatusChanged += OnParserStatusChanged;
@@ -432,9 +435,20 @@ public sealed class ControlCenterWindow : Window
                 ImGui.EndCombo();
             }
 
-            if (ImGui.Button(text.Get("打开所选 HTML Overlay", "Open selected HTML overlay")))
+            var selectedSettings = configuration.GetOverlayWindowSettings(
+                configuration.SelectedOverlayTemplate);
+            if (ImGui.Button(selectedSettings.IsVisible
+                    ? text.Get("关闭所选 HTML Overlay", "Close selected HTML overlay")
+                    : text.Get("打开所选 HTML Overlay", "Open selected HTML overlay")))
             {
-                openHtmlOverlay(configuration.SelectedOverlayTemplate);
+                if (selectedSettings.IsVisible)
+                {
+                    closeHtmlOverlay(configuration.SelectedOverlayTemplate);
+                }
+                else
+                {
+                    openHtmlOverlay(configuration.SelectedOverlayTemplate);
+                }
             }
             changed |= DrawOverlayWindowSettings(configuration.SelectedOverlayTemplate);
         }
@@ -466,9 +480,20 @@ public sealed class ControlCenterWindow : Window
             if (!string.IsNullOrWhiteSpace(selectedCreatedOverlay) && configuration.OverlayWindows.ContainsKey(selectedCreatedOverlay))
             {
                 ImGui.Spacing();
-                if (ImGui.Button(text.Get("重新打开", "Reopen")))
+                var createdSettings = configuration.GetOverlayWindowSettings(
+                    selectedCreatedOverlay);
+                if (ImGui.Button(createdSettings.IsVisible
+                        ? text.Get("关闭", "Close")
+                        : text.Get("打开", "Open")))
                 {
-                    openHtmlOverlay(selectedCreatedOverlay);
+                    if (createdSettings.IsVisible)
+                    {
+                        closeHtmlOverlay(selectedCreatedOverlay);
+                    }
+                    else
+                    {
+                        openHtmlOverlay(selectedCreatedOverlay);
+                    }
                 }
                 changed |= DrawOverlayWindowSettings(selectedCreatedOverlay);
             }

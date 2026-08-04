@@ -227,6 +227,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenCactbotSettings,
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
+            CloseHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration,
             () => StartBundledPluginUpdateCheck(openWindow: true));
@@ -258,6 +259,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenCactbotSettings,
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
+            CloseHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
             configuration,
@@ -758,15 +760,33 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenHtmlOverlay(string name)
     {
-        if (actRuntime.ShowHtmlOverlay(name))
+        try
         {
-            configuration.SelectedOverlayTemplate = name;
-            SaveConfiguration();
+            if (actRuntime.ShowHtmlOverlay(name))
+            {
+                configuration.SelectedOverlayTemplate = name;
+                SaveConfiguration();
+                return;
+            }
+
+            logger.Warning(
+                $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, $"HTML overlay '{name}' could not be opened.");
+        }
+    }
+
+    private void CloseHtmlOverlay(string name)
+    {
+        if (!actRuntime.HideHtmlOverlay(name))
+        {
+            logger.Warning($"HTML overlay '{name}' is not available to close.");
             return;
         }
 
-        logger.Warning(
-            $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
+        SaveConfiguration();
     }
 
     private void ChoosePluginDirectory(Action continueWith)
