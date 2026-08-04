@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.0"
+        description: "Release tag, for example v0.1.0.1"
         required: true
-        default: "v0.1.0"
+        default: "v0.1.0.1"
 
 permissions:
   contents: write
@@ -63,10 +63,16 @@ jobs:
           TAG_NAME: ${{ inputs.tag }}
         run: |
           $version = $env:TAG_NAME.TrimStart("v")
+          $parts = $version.Split(".")
+          if ($parts.Count -notin 3, 4 -or
+              $parts.Where({ $_ -notmatch '^\d+$' }).Count -ne 0) {
+            throw "Release version must contain three or four numeric parts: $version"
+          }
+          $assemblyVersion = if ($parts.Count -eq 3) { "$version.0" } else { $version }
           ./tools/collect-release.ps1 `
             -Configuration Release `
             -OutputDirectory artifacts/release `
-            -ExpectedAssemblyVersion "$version.0"
+            -ExpectedAssemblyVersion $assemblyVersion
 
       - name: Create GitHub release
         shell: pwsh

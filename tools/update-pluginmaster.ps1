@@ -14,6 +14,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$versionParts = $Version.Split(".")
+if ($versionParts.Count -notin 3, 4 -or
+    $versionParts.Where({ $_ -notmatch '^\d+$' }).Count -ne 0) {
+    throw "Version must contain three or four numeric parts: $Version"
+}
+$assemblyVersion = if ($versionParts.Count -eq 3) { "$Version.0" } else { $Version }
+
 if (-not (Test-Path $PluginMasterPath)) {
     throw "PluginMaster file not found: $PluginMasterPath"
 }
@@ -22,7 +29,7 @@ $downloadUrl = "$SourceRepository/releases/download/v$Version/DalamudActCompat.z
 $entries = Get-Content $PluginMasterPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $entry = @($entries)[0]
 
-$entry.AssemblyVersion = "$Version.0"
+$entry.AssemblyVersion = $assemblyVersion
 $entry.DownloadLinkInstall = $downloadUrl
 $entry.DownloadLinkUpdate = $downloadUrl
 $entry.LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

@@ -341,7 +341,10 @@ public static class LegacyAssemblyRewriter
 
     private static void PatchLegacyJavaScriptSerializer(ModuleDefinition module)
     {
+        const string legacyTypeName =
+            "System.Web.Script.Serialization.JavaScriptSerializer";
         var bridgeType = typeof(LegacyJavaScriptSerializer);
+        var bridgeTypeReference = module.ImportReference(bridgeType);
         var constructor = module.ImportReference(bridgeType.GetConstructor(Type.EmptyTypes)!);
         var serialize = module.ImportReference(bridgeType.GetMethod(
             nameof(LegacyJavaScriptSerializer.Serialize),
@@ -362,8 +365,7 @@ public static class LegacyAssemblyRewriter
                      .SelectMany(method => method.Body.Instructions))
         {
             if (instruction.Operand is not MethodReference called ||
-                called.DeclaringType.FullName !=
-                "System.Web.Script.Serialization.JavaScriptSerializer")
+                called.DeclaringType.FullName != legacyTypeName)
             {
                 continue;
             }
@@ -390,6 +392,28 @@ public static class LegacyAssemblyRewriter
         {
             throw new InvalidOperationException(
                 $"Expected 24 Triggernometry JavaScriptSerializer calls, patched {patched}.");
+        }
+
+        var legacyTypeReferences = module.GetTypeReferences()
+            .Where(reference => reference.FullName == legacyTypeName)
+            .ToArray();
+        if (legacyTypeReferences.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"Expected one Triggernometry JavaScriptSerializer type reference, found {legacyTypeReferences.Length}.");
+        }
+
+        foreach (var reference in legacyTypeReferences)
+        {
+            reference.Namespace = bridgeTypeReference.Namespace;
+            reference.Name = bridgeTypeReference.Name;
+            reference.Scope = bridgeTypeReference.Scope;
+        }
+
+        if (module.GetTypeReferences().Any(reference => reference.FullName == legacyTypeName))
+        {
+            throw new InvalidOperationException(
+                "Triggernometry still contains a JavaScriptSerializer type reference after patching.");
         }
 
         var systemWeb = module.AssemblyReferences.SingleOrDefault(reference =>
