@@ -834,7 +834,7 @@ async Task PrepareLegacySmokeConfigurationAsync()
               </Trigger>
               <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_HOST_PICTO&#xD;&#xA;t: 5&#xD;&#xA;Pos: &lt;1.25, 2.5, -3.75&gt;&#xD;&#xA;Scale: 5, 5, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.65" />
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_HOST_PICTO&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_env[ACTCOMPAT_HOST_PICTO_POS]}&#xD;&#xA;Scale: 5, 5, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.65" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="80d5ffc0-d534-4fcb-95a7-1ee3b72519b0" Name="Mark expression callback closed loop" RegularExpression="ACTCOMPAT_MARK_LINE" Source="Log">
@@ -952,6 +952,7 @@ async Task<(Process Host, HostTestPipe Pipe, string Session)> StartConnectedHost
         RedirectStandardOutput = true,
         RedirectStandardError = true,
     };
+    startInfo.Environment["ACTCOMPAT_HOST_PICTO_POS"] = "<1.25, 2.5, -3.75>";
     startInfo.ArgumentList.Add("--pipe");
     startInfo.ArgumentList.Add(pipeName);
     startInfo.ArgumentList.Add("--session");

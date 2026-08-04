@@ -79,6 +79,7 @@ try
 
     AssertSystemWebExtensionsWasReplaced(implementation);
     AssertLegacyJavaScriptSerializerCompatibility();
+    AssertIndexMemberParserCanExecute(implementation);
     AssertPostNamazuSemanticPayloads();
 
     var administratorCheck = implementation
@@ -163,6 +164,36 @@ static void AssertSystemWebExtensionsWasReplaced(Assembly implementation)
             "Patched Triggernometry still references System.Web.Extensions.");
     }
 
+    var legacyTypeReferences = definition.MainModule.GetTypeReferences()
+        .Where(reference =>
+            reference.FullName ==
+            "System.Web.Script.Serialization.JavaScriptSerializer")
+        .ToArray();
+    if (legacyTypeReferences.Length > 0)
+    {
+        throw new InvalidOperationException(
+            "Patched Triggernometry still contains JavaScriptSerializer type references: " +
+            string.Join(", ", legacyTypeReferences.Select(reference => reference.Scope)));
+    }
+
+    var indexMemberParser = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type =>
+            type.FullName ==
+            "Triggernometry.Expressions.String.Parsers.IndexMemberParser")
+        .Methods
+        .Single(method => method.Name == "TryParse");
+    var serializerLocal = indexMemberParser.Body.Variables
+        .Single(variable =>
+            variable.VariableType.FullName ==
+            typeof(LegacyJavaScriptSerializer).FullName);
+    if (serializerLocal.VariableType.Scope is not AssemblyNameReference scope ||
+        scope.Name != typeof(LegacyJavaScriptSerializer).Assembly.GetName().Name)
+    {
+        throw new InvalidOperationException(
+            $"IndexMemberParser serializer local is bound to {serializerLocal.VariableType.Scope}.");
+    }
+
     var replacementCalls = 0;
     foreach (var method in definition.MainModule.Types
                  .SelectMany(EnumerateCecilTypes)
@@ -195,6 +226,32 @@ static void AssertSystemWebExtensionsWasReplaced(Assembly implementation)
     {
         throw new InvalidOperationException(
             $"Expected 24 Triggernometry JavaScriptSerializer bridge calls, found {replacementCalls}.");
+    }
+}
+
+static void AssertIndexMemberParserCanExecute(Assembly implementation)
+{
+    var parser = implementation
+        .GetType(
+            "Triggernometry.Expressions.String.Parsers.IndexMemberParser",
+            throwOnError: true)!
+        .GetMethod(
+            "TryParse",
+            BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException("IndexMemberParser.TryParse was not found.");
+    var contextType = implementation.GetType(
+        "Triggernometry.Core.Context",
+        throwOnError: true)!;
+    var unbound = contextType
+        .GetProperty(
+            "Unbound",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!
+        .GetValue(null);
+    var result = parser.Invoke(null, ["ACTCOMPAT_UNKNOWN.member", unbound]);
+    if (result is not null)
+    {
+        throw new InvalidOperationException(
+            $"Unknown IndexMemberParser expression unexpectedly returned '{result}'.");
     }
 }
 
