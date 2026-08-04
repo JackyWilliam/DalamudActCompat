@@ -56,6 +56,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
     private readonly ActHostSupervisor hostSupervisor;
     private readonly PictoActOverlayService pictoActOverlay;
+    private readonly IObjectTable objectTable;
+    private readonly IPartyList partyList;
+    private readonly IPlayerState playerState;
     private readonly Channel<HostCommandInvocation> hostCommandQueue =
         Channel.CreateBounded<HostCommandInvocation>(new BoundedChannelOptions(64)
         {
@@ -66,6 +69,8 @@ public sealed class Plugin : IDalamudPlugin
         });
     private readonly CancellationTokenSource hostCommandCancellation = new();
     private readonly Task hostCommandWorker;
+    private DateTimeOffset nextHostEntitySnapshotAt;
+    private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -81,8 +86,12 @@ public sealed class Plugin : IDalamudPlugin
         IGameGui gameGui,
         INotificationManager notificationManager,
         IPartyList partyList,
+        IObjectTable objectTable,
         ITextureProvider textureProvider)
     {
+        this.objectTable = objectTable;
+        this.partyList = partyList;
+        this.playerState = playerState;
         services = new PluginServices(
             pluginInterface,
             commandManager,
@@ -168,6 +177,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.RawLogLineReceived += OnRawLogLineForHost;
         actRuntime.ZoneChanged += OnZoneChangedForHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;
+        framework.Update += OnFrameworkUpdateForHost;
         parserEngine = new ParserEngine(new IinactAdapter(
             actRuntime,
             logger,
@@ -325,6 +335,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
+        services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
 
         SaveConfiguration();
@@ -924,6 +935,34 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
         => hostSupervisor.PublishEncounter(finished);
+
+    private void OnFrameworkUpdateForHost(IFramework _)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now < nextHostEntitySnapshotAt)
+        {
+            return;
+        }
+
+        nextHostEntitySnapshotAt = now.AddMilliseconds(500);
+        try
+        {
+            hostSupervisor.PublishFfxivEntities(FfxivEntitySnapshotBuilder.Build(
+                objectTable,
+                partyList,
+                services.ClientState,
+                playerState,
+                now));
+        }
+        catch (Exception ex)
+        {
+            if (now >= nextHostEntitySnapshotFailureLogAt)
+            {
+                nextHostEntitySnapshotFailureLogAt = now.AddSeconds(10);
+                logger.Error(ex, "Game-side FFXIV entity snapshot failed.");
+            }
+        }
+    }
 
     private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)
     {

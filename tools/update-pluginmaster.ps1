@@ -9,6 +9,9 @@ param(
     [string] $PluginMasterPath = "repo/pluginmaster.json",
 
     [Parameter(Mandatory = $false)]
+    [string] $IconUrl = "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg",
+
+    [Parameter(Mandatory = $false)]
     [string] $Changelog = "Development build update."
 )
 
@@ -34,6 +37,7 @@ $entry.DownloadLinkInstall = $downloadUrl
 $entry.DownloadLinkUpdate = $downloadUrl
 $entry.LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $entry.Changelog = $Changelog
+$entry | Add-Member -NotePropertyName IconUrl -NotePropertyValue $IconUrl -Force
 
 $json = $entry | ConvertTo-Json -Depth 10
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

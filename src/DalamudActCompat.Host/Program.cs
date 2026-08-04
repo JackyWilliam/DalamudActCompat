@@ -338,6 +338,13 @@ internal static class Program
                                 $"Game-side TTS request was rejected; source={ttsRequest.Source}.");
                         }
                         break;
+                    case HostMessageTypes.FfxivEntities:
+                        var entitySnapshot =
+                            envelope.Payload.Deserialize<HostFfxivEntitySnapshot>()
+                            ?? throw new InvalidDataException(
+                                "Game-side FFXIV entity snapshot is invalid.");
+                        HostPluginBridge.ApplyFfxivEntitySnapshot(entitySnapshot);
+                        break;
                     case HostMessageTypes.Snapshot:
                         // Phase-two bridge receives ordered events here. Plugin
                         // execution will move behind this boundary incrementally.

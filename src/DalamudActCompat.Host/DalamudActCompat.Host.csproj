@@ -21,5 +21,9 @@
       <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <Reference Include="FFXIV_ACT_Plugin.Common">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Common.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 </Project>

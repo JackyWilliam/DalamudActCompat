@@ -369,6 +369,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
     {
         var assemblyPath = Path.Combine(AppContext.BaseDirectory, "FFXIV_ACT_Plugin.dll");
         ffxivBridge = new FFXIV_ACT_Plugin.FFXIV_ACT_Plugin();
+        ffxivBridge.GetType()
+            .GetProperty(
+                "DataRepository",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(ffxivBridge, HostPluginBridge.FfxivRepository);
         actMain!.FfxivPlugin = ffxivBridge;
         var tab = new TabPage("FFXIV_ACT_Plugin");
         var status = new Label { Text = "External event bridge" };
@@ -378,7 +383,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
             "postnamazu",
             "FFXIV_ACT_Plugin discovery",
             "success",
-            "Official plugin type identity is present as an event-only external facade.");
+            "Official plugin type identity is present with a read-only game-side entity repository.");
     }
 
     private void TryLoad(string id, string assemblyName, string entryType)

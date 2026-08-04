@@ -34,6 +34,7 @@ public static class HostMessageTypes
     public const string ZoneChanged = "event.zone";
     public const string CombatStarted = "event.combat.start";
     public const string CombatEnded = "event.combat.end";
+    public const string FfxivEntities = "state.ffxiv.entities";
     public const string Snapshot = "snapshot";
     public const string Shutdown = "shutdown";
     public const string ShutdownAck = "shutdown.ack";
@@ -130,6 +131,53 @@ public sealed record HostZoneEvent(
 public sealed record HostCombatEvent(
     bool InCombat,
     DateTimeOffset Timestamp);
+
+public sealed record HostFfxivEntitySnapshot(
+    uint TerritoryId,
+    uint CurrentPlayerId,
+    DateTimeOffset Timestamp,
+    IReadOnlyList<HostFfxivCombatant> Combatants);
+
+public sealed record HostFfxivCombatant(
+    uint Id,
+    uint OwnerId,
+    byte Type,
+    int Job,
+    int Level,
+    string Name,
+    uint CurrentHp,
+    uint MaxHp,
+    uint CurrentMp,
+    uint MaxMp,
+    uint CurrentCp,
+    uint MaxCp,
+    uint CurrentGp,
+    uint MaxGp,
+    bool IsCasting,
+    uint CastId,
+    uint CastTargetId,
+    float CastTime,
+    float MaxCastTime,
+    float PosX,
+    float PosY,
+    float PosZ,
+    float Heading,
+    uint CurrentWorldId,
+    uint WorldId,
+    string WorldName,
+    uint BNpcNameId,
+    uint BNpcId,
+    uint TargetId,
+    byte EffectiveDistance,
+    int PartyType,
+    long Address,
+    IReadOnlyList<HostFfxivStatus> Statuses);
+
+public sealed record HostFfxivStatus(
+    ushort Id,
+    ushort Param,
+    float RemainingTime,
+    uint SourceId);
 
 public sealed record HostCommandRequest(
     string PluginId,
