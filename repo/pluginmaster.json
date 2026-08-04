@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.4.2",
+    "AssemblyVersion":  "0.3.4.3",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.4.2/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.4.3/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.4.2/DalamudActCompat.zip",
-    "LastUpdate":  1785838687019,
-    "Changelog":  "修复 Triggernometry 的游戏实体快照桥，使 _me ID、坐标、头顶标点、地面标点和插件自有绘图可正常工作；无首领名时显示战斗状态，并补充卫月安装器远程 Logo。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.4.3/DalamudActCompat.zip",
+    "LastUpdate":  1785840161692,
+    "Changelog":  "修复 Triggernometry 实体坐标的 Y/Z 轴映射，使本地地面标点落在玩家脚下并恢复插件自有圆形绘图；第三方 DLL 告知保留作者、许可证和网址，移除分发许可及关联暗示。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

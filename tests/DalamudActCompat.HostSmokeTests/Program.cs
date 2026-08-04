@@ -555,7 +555,8 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 CancellationToken.None);
             await ReadAndCompleteExpectedPostNamazuAsync(
                 "postnamazu.pictoact",
-                "Tag: ACTCOMPAT_HOST_PICTO");
+                "Tag: ACTCOMPAT_HOST_PICTO",
+                "Pos: 1.25, -3.75, 2.5");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -649,7 +650,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 CancellationToken.None);
             await ReadAndCompleteExpectedPostNamazuAsync(
                 "postnamazu.place",
-                "\"X\":1.25");
+                "\"X\":1.25,\"Y\":2.5,\"Z\":-3.75");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
@@ -770,7 +771,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
 
             async Task ReadAndCompleteExpectedPostNamazuAsync(
                 string expectedAction,
-                string expectedPayloadFragment)
+                params string[] expectedPayloadFragments)
             {
                 var envelope = await ReadTriggerCommandAsync(pipe);
                 var request = envelope.Payload.Deserialize<HostCommandRequest>()
@@ -780,8 +781,10 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     request.PluginId == "postnamazu" &&
                     request.Command == expectedAction &&
                     request.Arguments.TryGetValue("payload", out var payload) &&
-                    payload.Contains(expectedPayloadFragment, StringComparison.Ordinal),
-                    $"Expected PostNamazu semantic action '{expectedAction}'.");
+                    expectedPayloadFragments.All(fragment =>
+                        payload.Contains(fragment, StringComparison.Ordinal)),
+                    $"Expected PostNamazu semantic action '{expectedAction}' with payload " +
+                    $"fragments [{string.Join(", ", expectedPayloadFragments)}].");
                 Assert(
                     !string.IsNullOrWhiteSpace(envelope.CorrelationId),
                     "PostNamazu semantic request had no correlation identifier.");

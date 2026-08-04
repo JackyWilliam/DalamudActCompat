@@ -93,8 +93,10 @@ internal sealed class FfxivDataRepository : IDataRepository
             CastDurationCurrent = source.CastTime,
             CastDurationMax = source.MaxCastTime,
             PosX = source.PosX,
-            PosY = source.PosY,
-            PosZ = source.PosZ,
+            // FFXIV_ACT_Plugin exposes X/Y as the ground plane and Z as height,
+            // while Dalamud's Vector3 uses X/Z as the ground plane and Y as height.
+            PosY = source.PosZ,
+            PosZ = source.PosY,
             Heading = source.Heading,
             CurrentWorldID = source.CurrentWorldId,
             WorldID = source.WorldId,

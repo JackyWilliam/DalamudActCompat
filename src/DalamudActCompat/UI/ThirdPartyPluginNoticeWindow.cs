@@ -37,8 +37,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
         CompleteInstallWhenReady();
         ImGui.TextWrapped(text.Get(
-            "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL，并在启动时主动检查作者上游。它们不是本项目作者编写的；本项目已取得随包分发许可。首次安装、本插件每次更新及发现上游 DLL 更新后，都会在安装或更新前展示本告知。",
-            "Dalamud ACT Compat bundles the third-party ACT DLLs below and checks their author sources at startup. They are not authored by this project, and redistribution permission has been obtained. This notice is shown before installation on first use, after every Dalamud ACT Compat update, and when a newer upstream DLL is found."));
+            "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL，并在启动时检查其公开上游。它们不由本项目开发，也不代表原作者或维护者与本项目存在合作、认可或联系。首次安装、本插件每次更新及发现上游 DLL 更新后，都会在安装或更新前展示本告知。",
+            "Dalamud ACT Compat bundles the third-party ACT DLLs below and checks their public upstream sources at startup. They are not authored by this project, and no collaboration, endorsement, or affiliation with their authors or maintainers is implied. This notice is shown before installation on first use, after every Dalamud ACT Compat update, and when a newer upstream DLL is found."));
         ImGui.TextWrapped(text.Get(
             "网址仅用于说明 DLL 的作者项目、源码和实际下载来源；本窗口不会自动打开网页。",
             "The URLs identify the author project, source, and actual DLL download location. This window does not open a web page."));
@@ -61,7 +61,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 ImGui.TextWrapped($"{text.Get("版权", "Copyright")}: {plugin.Copyright}");
             }
 
-            ImGui.TextWrapped($"{text.Get("许可/授权", "License/permission")}: {plugin.License}");
+            ImGui.TextWrapped($"{text.Get("许可证", "License")}: {plugin.License}");
             DrawUrl(text.Get("项目网址", "Project URL"), plugin.ProjectUrl);
             DrawUrl(text.Get("源码网址", "Source URL"), plugin.SourceUrl);
             DrawUrl(text.Get("DLL 下载网址", "DLL download URL"), plugin.DownloadUrl);
