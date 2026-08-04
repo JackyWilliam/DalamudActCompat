@@ -6,20 +6,28 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Reflection;
+using System.Runtime.Loader;
 using System.Windows.Forms;
 using DalamudActCompat.Host;
 using DalamudActCompat.Protocol;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
 
-if (args.Length is not (1 or 3))
+if (args.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
-        "Pass Host.exe and optionally <plugin-root> <config-root>.");
+        "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>.");
 }
 
 var hostExecutable = Path.GetFullPath(args[0]);
 var processLogs = new ConcurrentDictionary<int, ProcessLog>();
 var pluginRoot = args.Length == 3 ? Path.GetFullPath(args[1]) : null;
 var configRoot = args.Length == 3 ? Path.GetFullPath(args[2]) : null;
+var triggernometryAssembly = args.Length == 2
+    ? Path.GetFullPath(args[1])
+    : pluginRoot is null
+        ? null
+        : Path.Combine(pluginRoot, "triggernometry", "Triggernometry.dll");
 var postNamazuSmokePort = 0;
 if (!File.Exists(hostExecutable))
 {
@@ -35,12 +43,29 @@ await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidateTriggernometryCompatibilityNoticeFilter();
 ValidateTriggernometryWebAddressLaunchUsesShell();
+ValidateTriggernometryPlaceholderProcessTestIsSkipped();
+if (triggernometryAssembly is not null)
+{
+    ValidateTriggernometryAssemblyRewrite(triggernometryAssembly);
+}
 if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
 }
-Console.WriteLine(
-    "Host handshake, sequence/deadline validation, bounded IPC, command denial, crash isolation, disconnect, 100k-line PostNamazu copy, and real Triggernometry log/network/zone/combat/TTS/_me entity/mark/waymark/PictoACT closed-loop tests passed.");
+var completion =
+    "Host handshake, sequence/deadline validation, bounded IPC, command denial, " +
+    "crash isolation, disconnect, and 100k-line PostNamazu copy tests passed.";
+if (triggernometryAssembly is not null)
+{
+    completion += " The real Triggernometry assembly rewrite test passed.";
+}
+if (pluginRoot is not null)
+{
+    completion +=
+        " Real Triggernometry log/network/zone/combat/TTS/_me entity/mark/waymark/" +
+        "PictoACT closed-loop tests passed.";
+}
+Console.WriteLine(completion);
 
 void ValidateLargePostNamazuCopyReturnsQuickly()
 {
@@ -174,6 +199,53 @@ void ValidateTriggernometryWebAddressLaunchUsesShell()
         !executableStartInfo.UseShellExecute &&
         executableStartInfo.CreateNoWindow,
         "Triggernometry executable actions were unexpectedly changed by URL normalization.");
+}
+
+void ValidateTriggernometryPlaceholderProcessTestIsSkipped()
+{
+    var shouldSkip = typeof(HostPluginBridge).GetMethod(
+                         "ShouldSkipTriggernometryPlaceholderProcess",
+                         BindingFlags.Static | BindingFlags.NonPublic)
+                     ?? throw new MissingMethodException(
+                         typeof(HostPluginBridge).FullName,
+                         "ShouldSkipTriggernometryPlaceholderProcess");
+    Assert(
+        (bool)shouldSkip.Invoke(null, [new ProcessStartInfo("test")])!,
+        "Triggernometry's conventional placeholder process target was not skipped.");
+    Assert(
+        !(bool)shouldSkip.Invoke(
+            null,
+            [new ProcessStartInfo("test") { Arguments = "real-argument" }])!,
+        "A process target with real arguments was mistaken for a placeholder test.");
+    Assert(
+        !(bool)shouldSkip.Invoke(
+            null,
+            [new ProcessStartInfo(
+                "https://space.bilibili.com/83429972/channel/collectiondetail?sid=2967544")])!,
+        "A real web target was mistaken for a placeholder test.");
+}
+
+void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
+{
+    if (!File.Exists(assemblyPath))
+    {
+        throw new FileNotFoundException(
+            "The Triggernometry assembly for patch validation was not found.",
+            assemblyPath);
+    }
+
+    var loadContext = new AssemblyLoadContext(
+        $"Triggernometry patch smoke {Guid.NewGuid():N}",
+        isCollectible: true);
+    try
+    {
+        _ = LegacyAssemblyRewriter.LoadTriggernometry(assemblyPath, loadContext);
+        ValidateTriggernometryLaunchProcessPatch();
+    }
+    finally
+    {
+        loadContext.Unload();
+    }
 }
 
 async Task ValidateSequenceRegressionTerminatesHostAsync()
@@ -488,6 +560,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
             Assert(
                 health.State == "plugins.ready",
                 $"Legacy plugin runtime did not become ready: {health.Detail}");
+            ValidateTriggernometryLaunchProcessPatch();
             var persistedConfiguration = new System.Xml.XmlDocument();
             persistedConfiguration.Load(Path.Combine(
                 configRoot!,
@@ -884,6 +957,82 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 $"stderr:{Environment.NewLine}{errors}",
                 ex);
         }
+    }
+}
+
+void ValidateTriggernometryLaunchProcessPatch()
+{
+    var patchDirectory = Path.Combine(
+        Path.GetTempPath(),
+        "DalamudActCompat",
+        "triggernometry");
+    var patchedAssembly = new DirectoryInfo(patchDirectory)
+                              .EnumerateFiles("TriggernometryPlugin-*.dll")
+                              .OrderByDescending(file => file.LastWriteTimeUtc)
+                              .FirstOrDefault()
+                          ?? throw new FileNotFoundException(
+                              "No patched Triggernometry implementation was produced.",
+                              patchDirectory);
+    using var definition = AssemblyDefinition.ReadAssembly(patchedAssembly.FullName);
+    var launchMethod = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type =>
+            type.FullName == "Triggernometry.Core.Actions.ActionLaunchProcess")
+        .Methods
+        .Single(method =>
+            method.Name == "ExecuteImplementation" &&
+            method.Parameters.Count == 1);
+    var bridgeCalls = launchMethod.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+        called.Name == nameof(HostPluginBridge.StartTriggernometryProcess) &&
+        called.Parameters.Count == 1 &&
+        called.Parameters[0].ParameterType.FullName == typeof(ProcessStartInfo).FullName);
+    var legacyInstanceStarts = launchMethod.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == typeof(Process).FullName &&
+        called.Name == nameof(Process.Start) &&
+        called.HasThis &&
+        called.Parameters.Count == 0);
+    var hasNullGuard = launchMethod.Body.Instructions.Any(instruction =>
+        instruction.OpCode.Code is Code.Brfalse or Code.Brfalse_S &&
+        instruction.Operand is Instruction target &&
+        target.OpCode.Code == Code.Ret);
+    Assert(
+        bridgeCalls == 1 && legacyInstanceStarts == 0 && hasNullGuard,
+        "Triggernometry LaunchProcess did not route its instance Start path through " +
+        $"the guarded Host bridge: bridge={bridgeCalls}, legacy={legacyInstanceStarts}, " +
+        $"nullGuard={hasNullGuard}.");
+
+    var bridgeNamazuInitializer = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type =>
+            type.FullName == "Triggernometry.PluginBridges.BridgeNamazu.BridgeNamazu")
+        .Methods
+        .Single(method => method.IsConstructor && method.IsStatic);
+    var noticeBridgeCalls = bridgeNamazuInitializer.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+        called.Name == nameof(
+            HostPluginBridge.SkipTriggernometryPostNamazuAdministratorNotice));
+    var realAdministratorChecks = bridgeNamazuInitializer.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin" &&
+        called.Name == "IsAdmin" &&
+        called.Parameters.Count == 0);
+    Assert(
+        noticeBridgeCalls == 1 && realAdministratorChecks == 0,
+        "The specific Triggernometry/PostNamazu legacy administrator notice was not " +
+        $"isolated from the real token check: bridge={noticeBridgeCalls}, " +
+        $"realChecks={realAdministratorChecks}.");
+}
+
+IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)
+{
+    yield return type;
+    foreach (var nested in type.NestedTypes.SelectMany(EnumerateCecilTypes))
+    {
+        yield return nested;
     }
 }
 

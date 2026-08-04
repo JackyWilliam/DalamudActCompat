@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.5.4",
+    "AssemblyVersion":  "0.3.5.5",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.4/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.5/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.4/DalamudActCompat.zip",
-    "LastUpdate":  1785853787266,
-    "Changelog":  "固定控制中心和战斗历史导航；主页统一金色描边卡片；完整功能权限选择改为置顶模态框；运行状态按钮支持开关并重做 ACT 兼容状态窗口；手动检查更新立即显示反馈；修复 Triggernometry 重复更新通知和网页链接调用；新版功能覆盖完成后移除旧设置呼出入口。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.5/DalamudActCompat.zip",
+    "LastUpdate":  1785856728285,
+    "Changelog":  "修复 Triggernometry LaunchProcess 实例启动未经过兼容桥的问题，网页动作使用系统默认浏览器；占位值进程测试不再产生虚假的 test 文件错误；仅抑制鲶鱼精邮差扩展针对旧 ACT 注入路径的提权提示，真实 Windows 令牌和高风险权限判断保持不变。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

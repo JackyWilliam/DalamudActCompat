@@ -487,6 +487,10 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.SkipTriggernometryStartupUpdateCheck),
                 [typeof(object), typeof(bool)])!);
+        var skipPostNamazuAdministratorNotice = module.ImportReference(
+            bridgeType.GetMethod(
+                nameof(HostPluginBridge.SkipTriggernometryPostNamazuAdministratorNotice),
+                Type.EmptyTypes)!);
         var adminMethod = module.Types
             .SelectMany(EnumerateTypes)
             .SelectMany(type => type.Methods)
@@ -553,6 +557,40 @@ public static class LegacyAssemblyRewriter
             loadInstance: false,
             loadParameters: true);
 
+        var bridgeNamazuInitializer = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type =>
+                type.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.BridgeNamazu")
+            .Methods
+            .Single(method => method.IsConstructor && method.IsStatic);
+        var postNamazuAdminChecks = bridgeNamazuInitializer.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin" &&
+                called.Name == "IsAdmin" &&
+                called.Parameters.Count == 0 &&
+                called.ReturnType.MetadataType == MetadataType.Boolean)
+            .ToArray();
+        var postNamazuAdministratorWarnings = bridgeNamazuInitializer.Body.Instructions
+            .Where(instruction =>
+                instruction.OpCode.Code == Code.Ldstr &&
+                instruction.Operand is string message &&
+                message.Contains("鲶鱼精邮差扩展", StringComparison.Ordinal) &&
+                message.Contains("ACT 未以管理员权限运行", StringComparison.Ordinal))
+            .ToArray();
+        if (postNamazuAdminChecks.Length != 1 ||
+            postNamazuAdministratorWarnings.Length != 1)
+        {
+            throw new InvalidOperationException(
+                "Unexpected Triggernometry/PostNamazu administrator notice shape: " +
+                $"checks={postNamazuAdminChecks.Length}, " +
+                $"warnings={postNamazuAdministratorWarnings.Length}.");
+        }
+
+        postNamazuAdminChecks[0].OpCode = OpCodes.Call;
+        postNamazuAdminChecks[0].Operand = skipPostNamazuAdministratorNotice;
+
         var triggernometryInitializer = module.Types
             .SelectMany(EnumerateTypes)
             .Single(type => type.FullName == "Triggernometry.Core.RealPlugin")
@@ -607,6 +645,67 @@ public static class LegacyAssemblyRewriter
         versionIl.InsertAfter(
             loadThisForSave,
             versionIl.Create(OpCodes.Call, saveCurrentConfig));
+
+        var launchProcess = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type =>
+                type.FullName == "Triggernometry.Core.Actions.ActionLaunchProcess")
+            .Methods
+            .Single(method =>
+                method.Name == "ExecuteImplementation" &&
+                method.Parameters.Count == 1);
+        var instanceProcessStarts = launchProcess.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(System.Diagnostics.Process).FullName &&
+                called.Name == nameof(System.Diagnostics.Process.Start) &&
+                called.HasThis &&
+                called.Parameters.Count == 0)
+            .ToArray();
+        if (instanceProcessStarts.Length != 1 ||
+            launchProcess.Body.Variables.Count < 3 ||
+            launchProcess.Body.Variables[1].VariableType.FullName !=
+                typeof(System.Diagnostics.Process).FullName ||
+            launchProcess.Body.Variables[2].VariableType.FullName !=
+                typeof(System.Diagnostics.ProcessStartInfo).FullName)
+        {
+            throw new InvalidOperationException(
+                "Unexpected Triggernometry LaunchProcess shape: " +
+                $"instanceStarts={instanceProcessStarts.Length}, " +
+                $"variables={launchProcess.Body.Variables.Count}.");
+        }
+
+        var instanceStart = instanceProcessStarts[0];
+        var processLoadForStart = instanceStart.Previous;
+        var setStartInfo = processLoadForStart?.Previous;
+        var startInfoLoad = setStartInfo?.Previous;
+        var processLoadForSet = startInfoLoad?.Previous;
+        var discardStartResult = instanceStart.Next;
+        var returnInstruction = launchProcess.Body.Instructions.Single(instruction =>
+            instruction.OpCode.Code == Code.Ret);
+        if (processLoadForSet?.OpCode.Code != Code.Ldloc_1 ||
+            startInfoLoad?.OpCode.Code != Code.Ldloc_2 ||
+            setStartInfo?.Operand is not MethodReference setStartInfoCall ||
+            setStartInfoCall.DeclaringType.FullName !=
+                typeof(System.Diagnostics.Process).FullName ||
+            setStartInfoCall.Name != "set_StartInfo" ||
+            processLoadForStart?.OpCode.Code != Code.Ldloc_1 ||
+            discardStartResult?.OpCode.Code != Code.Pop)
+        {
+            throw new InvalidOperationException(
+                "Unexpected Triggernometry LaunchProcess instruction sequence.");
+        }
+
+        processLoadForSet.OpCode = OpCodes.Nop;
+        processLoadForSet.Operand = null;
+        setStartInfo.OpCode = OpCodes.Call;
+        setStartInfo.Operand = startProcessByInfo;
+        processLoadForStart.OpCode = OpCodes.Stloc_1;
+        processLoadForStart.Operand = null;
+        instanceStart.OpCode = OpCodes.Ldloc_1;
+        instanceStart.Operand = null;
+        discardStartResult.OpCode = OpCodes.Brfalse;
+        discardStartResult.Operand = returnInstruction;
 
         // Triggernometry first probes OverlayPlugin's private combatant-memory shape before
         // falling back to FFXIV_ACT_Plugin. Current OverlayPlugin no longer exposes the old
