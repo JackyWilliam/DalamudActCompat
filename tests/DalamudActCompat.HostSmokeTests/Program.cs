@@ -42,6 +42,7 @@ await ValidateAbruptClientDisconnectAsync();
 await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
+ValidatePostNamazuMarkPayloadNormalization();
 ValidatePostNamazuQueueBreakAllCompatibility();
 ValidatePostNamazu1366And1367SurfaceCompatibility();
 ValidateOverlayPluginCompatibilityTypeName();
@@ -233,6 +234,35 @@ void ValidatePostNamazuQueueBreakAllCompatibility()
     Assert(
         queueIds.Count == 0,
         "PostNamazu stop=all did not preserve the original clear-all queue behavior.");
+}
+
+void ValidatePostNamazuMarkPayloadNormalization()
+{
+    const string triggernometryPayload =
+        "{\"ActorID\":\"0x10021EE7\",\"MarkType\":\"attack1\",\"LocalOnly\":true}";
+    var normalized = HostPluginBridge.NormalizePostNamazuMarkPayload(triggernometryPayload);
+    using var document = JsonDocument.Parse(normalized);
+    Assert(
+        document.RootElement.GetProperty("ActorID").GetUInt32() == 0x10021EE7,
+        "Triggernometry's hexadecimal entity ID was not normalized for PostNamazu UInt32 deserialization.");
+
+    const string numericPayload =
+        "{\"ActorID\":3758096384,\"MarkType\":\"attack1\",\"LocalOnly\":true}";
+    Assert(
+        HostPluginBridge.NormalizePostNamazuMarkPayload(numericPayload) == numericPayload,
+        "An already numeric PostNamazu ActorID payload was unexpectedly rewritten.");
+
+    try
+    {
+        _ = HostPluginBridge.NormalizePostNamazuMarkPayload(
+            "{\"ActorID\":\"0xNOT_HEX\",\"MarkType\":\"attack1\"}");
+        throw new InvalidOperationException(
+            "An invalid hexadecimal PostNamazu ActorID was accepted.");
+    }
+    catch (InvalidDataException)
+    {
+        // Expected: malformed ActorIDs must fail closed before entering the native runtime.
+    }
 }
 
 void ValidateOverlayPluginCompatibilityTypeName()

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -292,6 +293,48 @@ public static class HostPluginBridge
         {
             throw new InvalidOperationException("Game command broker queue rejected the request.");
         }
+    }
+
+    public static string NormalizePostNamazuMarkPayload(string payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        JObject root;
+        try
+        {
+            root = JObject.Parse(payload);
+        }
+        catch (Newtonsoft.Json.JsonException exception)
+        {
+            throw new InvalidDataException(
+                "PostNamazu mark payload is not valid JSON.",
+                exception);
+        }
+
+        var actorToken = root.GetValue("ActorID", StringComparison.OrdinalIgnoreCase);
+        if (actorToken?.Type != JTokenType.String)
+        {
+            return payload;
+        }
+
+        var actorText = actorToken.Value<string>()?.Trim();
+        if (actorText is null ||
+            !actorText.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            return payload;
+        }
+
+        if (!uint.TryParse(
+                actorText.AsSpan(2),
+                NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture,
+                out var actorId))
+        {
+            throw new InvalidDataException(
+                $"PostNamazu ActorID '{actorText}' is not a valid UInt32 hexadecimal value.");
+        }
+
+        actorToken.Replace(new JValue(actorId));
+        return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 
     public static void SendPostNamazuMark(string payload)

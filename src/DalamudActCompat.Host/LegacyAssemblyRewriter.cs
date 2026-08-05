@@ -132,6 +132,8 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuCommand))!);
         var nativeRuntimeAllowed = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNativeRuntimeAllowed))!);
+        var normalizeMarkPayload = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.NormalizePostNamazuMarkPayload))!);
         var mark = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuMark))!);
         var waymark = module.ImportReference(
@@ -243,7 +245,11 @@ public static class LegacyAssemblyRewriter
                     method.Parameters.Count == 1 &&
                     method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
                 {
-                    WrapWithNativeRuntimeFallback(method, nativeRuntimeAllowed, mark);
+                    WrapWithNativeRuntimeFallback(
+                        method,
+                        nativeRuntimeAllowed,
+                        normalizeMarkPayload,
+                        mark);
                     markPatched = true;
                     continue;
                 }
@@ -1453,6 +1459,7 @@ public static class LegacyAssemblyRewriter
     private static void WrapWithNativeRuntimeFallback(
         MethodDefinition original,
         MethodReference nativeRuntimeAllowed,
+        MethodReference nativePayloadNormalizer,
         MethodReference fallbackBridge)
     {
         if (original.IsAbstract || original.HasGenericParameters ||
@@ -1533,6 +1540,7 @@ public static class LegacyAssemblyRewriter
         foreach (var parameter in wrapper.Parameters)
         {
             processor.Append(processor.Create(OpCodes.Ldarg, parameter));
+            processor.Append(processor.Create(OpCodes.Call, nativePayloadNormalizer));
         }
         processor.Append(processor.Create(OpCodes.Call, original));
         processor.Append(processor.Create(OpCodes.Ret));
@@ -1549,15 +1557,20 @@ public static class LegacyAssemblyRewriter
             called.FullName == nativeRuntimeAllowed.FullName);
         var originalCallCount = wrapper.Body.Instructions.Count(instruction =>
             instruction.Operand is MethodReference called && called == original);
+        var normalizerCallCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == nativePayloadNormalizer.FullName);
         var fallbackCallCount = wrapper.Body.Instructions.Count(instruction =>
             instruction.Operand is MethodReference called &&
             called.FullName == fallbackBridge.FullName);
-        if (nativeGateCount != 1 || originalCallCount != 1 || fallbackCallCount != 1 ||
+        if (nativeGateCount != 1 || originalCallCount != 1 || normalizerCallCount != 1 ||
+            fallbackCallCount != 1 ||
             original.CustomAttributes.Count != 0 || wrapper.CustomAttributes.Count == 0)
         {
             throw new InvalidOperationException(
                 $"PostNamazu native action wrapper validation failed for {wrapper.FullName}: " +
                 $"gate={nativeGateCount}, original={originalCallCount}, " +
+                $"normalizer={normalizerCallCount}, " +
                 $"fallback={fallbackCallCount}, attributes={wrapper.CustomAttributes.Count}.");
         }
     }

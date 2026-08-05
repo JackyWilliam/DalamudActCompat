@@ -518,15 +518,15 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
             StringComparison.Ordinal));
     if (actorIdMark is null ||
         !actorIdMark.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": ${_me.id}",
+            "\"ActorID\": \"0x${_me.id}\"",
             StringComparison.Ordinal) ||
-        markActions.Any(action => action.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": \"0x",
-            StringComparison.Ordinal)) ||
+        markActions.Count(action => action.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": \"0x${_me.id}\"",
+            StringComparison.Ordinal)) != 1 ||
         clearMarks != 3)
     {
         throw new InvalidOperationException(
-            "Triggernometry export must pass PostNamazu ActorID and E0000000 clear values as UInt32 JSON numbers.");
+            "Triggernometry export must pass its hexadecimal entity ID with a 0x prefix and clear values as UInt32 JSON numbers.");
     }
 
     var scriptActions = document.SelectNodes("//Action[@ActionType='ExecuteScript']")
