@@ -44,6 +44,7 @@ ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
 ValidatePostNamazuQueueBreakAllCompatibility();
 ValidatePostNamazu1366And1367SurfaceCompatibility();
+ValidateOverlayPluginCompatibilityTypeName();
 ValidateTriggernometryCompatibilityNoticeFilter();
 ValidateTriggernometryWebAddressLaunchUsesShell();
 ValidateTriggernometryPlaceholderProcessTestIsSkipped();
@@ -232,6 +233,17 @@ void ValidatePostNamazuQueueBreakAllCompatibility()
     Assert(
         queueIds.Count == 0,
         "PostNamazu stop=all did not preserve the original clear-all queue behavior.");
+}
+
+void ValidateOverlayPluginCompatibilityTypeName()
+{
+    var facadeType = typeof(HostPluginBridge).Assembly.GetType("OverlayPlugin")
+                     ?? throw new TypeLoadException(
+                         "The ACT OverlayPlugin compatibility identity must be named exactly OverlayPlugin.");
+    Assert(
+        facadeType.FullName == "OverlayPlugin" &&
+        typeof(Advanced_Combat_Tracker.IActPluginV1).IsAssignableFrom(facadeType),
+        $"ACT OverlayPlugin compatibility identity was '{facadeType.FullName}'.");
 }
 
 void ValidatePostNamazu1366And1367SurfaceCompatibility()

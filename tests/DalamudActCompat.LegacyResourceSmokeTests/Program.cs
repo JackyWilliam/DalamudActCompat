@@ -81,6 +81,7 @@ try
     AssertLegacyJavaScriptSerializerCompatibility();
     AssertIndexMemberParserCanExecute(implementation);
     AssertPostNamazuSemanticPayloads();
+    AssertPostNamazuSemanticCallSafety();
 
     var administratorCheck = implementation
         .GetType("Triggernometry.Core.RealPlugin", throwOnError: true)!
@@ -355,6 +356,67 @@ static void AssertPostNamazuSemanticPayloads()
         preset.Markers[1].Active || PostNamazuSemanticActions.ParseKeyCode("65") != 65)
     {
         throw new InvalidOperationException("PostNamazu preset/sendkey compatibility failed.");
+    }
+}
+
+static void AssertPostNamazuSemanticCallSafety()
+{
+    using var assembly = AssemblyDefinition.ReadAssembly(
+        typeof(NativePostNamazuBridge).Assembly.Location);
+    var bridge = assembly.MainModule.Types.Single(type =>
+        type.FullName == typeof(NativePostNamazuBridge).FullName);
+    string[] semanticMethods =
+    [
+        "ApplyMark",
+        "ApplyWaymarks",
+        "ApplyPublicWaymark",
+        "ApplyPreset",
+        "SendCommandAsync",
+        "SendKeyCode",
+    ];
+
+    foreach (var methodName in semanticMethods)
+    {
+        var methods = bridge.Methods
+            .Where(method => method.Name == methodName && method.HasBody)
+            .ToArray();
+        if (methods.Length == 0)
+        {
+            throw new MissingMethodException(bridge.FullName, methodName);
+        }
+
+        foreach (var method in methods)
+        {
+            foreach (var instruction in method.Body.Instructions)
+            {
+                if (instruction.OpCode == Mono.Cecil.Cil.OpCodes.Calli)
+                {
+                    throw new InvalidOperationException(
+                        $"Semantic PostNamazu action {method.FullName} contains an indirect native call.");
+                }
+
+                if (instruction.Operand is MethodReference called &&
+                    called.DeclaringType.FullName == bridge.FullName &&
+                    called.Name is "Call" or "GetNativeCall")
+                {
+                    throw new InvalidOperationException(
+                        $"Semantic PostNamazu action {method.FullName} reaches unsafe native helper " +
+                        $"{called.Name}.");
+                }
+            }
+        }
+    }
+
+    var publicWaymark = bridge.Methods.Single(method =>
+        method.Name == "ApplyPublicWaymark" && method.HasBody);
+    if (!publicWaymark.Body.Instructions.Any(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName ==
+            "FFXIVClientStructs.FFXIV.Client.Game.GameMain" &&
+            called.Name == "ExecuteCommand"))
+    {
+        throw new InvalidOperationException(
+            "Public waymarks are not routed through GameMain.ExecuteCommand.");
     }
 }
 

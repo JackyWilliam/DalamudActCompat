@@ -130,6 +130,8 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.UsePostNamazuOverlayAdapter))!);
         var command = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuCommand))!);
+        var nativeRuntimeAllowed = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNativeRuntimeAllowed))!);
         var mark = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuMark))!);
         var waymark = module.ImportReference(
@@ -161,7 +163,7 @@ public static class LegacyAssemblyRewriter
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
         {
-            foreach (var method in type.Methods.Where(method => method.HasBody))
+            foreach (var method in type.Methods.Where(method => method.HasBody).ToArray())
             {
                 if (type.FullName == "PostNamazu.Common.PluginIntegrationManager" &&
                     method.Name == "InitializeOverlayIntegration" &&
@@ -241,7 +243,7 @@ public static class LegacyAssemblyRewriter
                     method.Parameters.Count == 1 &&
                     method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
                 {
-                    ReplaceWithBridge(method, mark, loadInstance: false, loadParameters: true);
+                    WrapWithNativeRuntimeFallback(method, nativeRuntimeAllowed, mark);
                     markPatched = true;
                     continue;
                 }
@@ -1446,6 +1448,118 @@ public static class LegacyAssemblyRewriter
 
         processor.Append(processor.Create(OpCodes.Call, bridge));
         processor.Append(processor.Create(OpCodes.Ret));
+    }
+
+    private static void WrapWithNativeRuntimeFallback(
+        MethodDefinition original,
+        MethodReference nativeRuntimeAllowed,
+        MethodReference fallbackBridge)
+    {
+        if (original.IsAbstract || original.HasGenericParameters ||
+            original.ReturnType.MetadataType != MetadataType.Void)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported PostNamazu native action shape: {original.FullName}.");
+        }
+
+        var type = original.DeclaringType;
+        var module = original.Module;
+        var originalName = original.Name;
+        var originalAttributes = original.Attributes;
+        var originalImplAttributes = original.ImplAttributes;
+        var originalSemanticsAttributes = original.SemanticsAttributes;
+
+        original.Name = $"{originalName}__DalamudActCompatNative";
+        original.Attributes =
+            (original.Attributes & ~Mono.Cecil.MethodAttributes.MemberAccessMask &
+             ~Mono.Cecil.MethodAttributes.Abstract & ~Mono.Cecil.MethodAttributes.Virtual &
+             ~Mono.Cecil.MethodAttributes.NewSlot) |
+            Mono.Cecil.MethodAttributes.Private;
+        original.SemanticsAttributes = Mono.Cecil.MethodSemanticsAttributes.None;
+
+        var wrapper = new MethodDefinition(
+            originalName,
+            originalAttributes,
+            module.ImportReference(original.ReturnType))
+        {
+            ImplAttributes = originalImplAttributes,
+            SemanticsAttributes = originalSemanticsAttributes,
+            CallingConvention = original.CallingConvention,
+        };
+        foreach (var parameter in original.Parameters)
+        {
+            var wrapperParameter = new ParameterDefinition(
+                parameter.Name,
+                parameter.Attributes,
+                module.ImportReference(parameter.ParameterType));
+            if (parameter.HasConstant)
+            {
+                wrapperParameter.Constant = parameter.Constant;
+            }
+            wrapper.Parameters.Add(wrapperParameter);
+        }
+        foreach (var attribute in original.CustomAttributes.ToArray())
+        {
+            original.CustomAttributes.Remove(attribute);
+            wrapper.CustomAttributes.Add(attribute);
+        }
+
+        type.Methods.Add(wrapper);
+        foreach (var caller in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(candidate => candidate.Methods)
+                     .Where(candidate => candidate.HasBody && candidate != wrapper))
+        {
+            foreach (var instruction in caller.Body.Instructions)
+            {
+                if (instruction.Operand is MethodReference called &&
+                    called.Module == module &&
+                    called.MetadataToken == original.MetadataToken)
+                {
+                    instruction.Operand = wrapper;
+                }
+            }
+        }
+
+        wrapper.Body = new Mono.Cecil.Cil.MethodBody(wrapper);
+        var processor = wrapper.Body.GetILProcessor();
+        var fallback = processor.Create(OpCodes.Nop);
+        processor.Append(processor.Create(OpCodes.Call, nativeRuntimeAllowed));
+        processor.Append(processor.Create(OpCodes.Brfalse, fallback));
+        if (!original.IsStatic)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg_0));
+        }
+        foreach (var parameter in wrapper.Parameters)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg, parameter));
+        }
+        processor.Append(processor.Create(OpCodes.Call, original));
+        processor.Append(processor.Create(OpCodes.Ret));
+        processor.Append(fallback);
+        foreach (var parameter in wrapper.Parameters)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg, parameter));
+        }
+        processor.Append(processor.Create(OpCodes.Call, fallbackBridge));
+        processor.Append(processor.Create(OpCodes.Ret));
+
+        var nativeGateCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == nativeRuntimeAllowed.FullName);
+        var originalCallCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called && called == original);
+        var fallbackCallCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == fallbackBridge.FullName);
+        if (nativeGateCount != 1 || originalCallCount != 1 || fallbackCallCount != 1 ||
+            original.CustomAttributes.Count != 0 || wrapper.CustomAttributes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"PostNamazu native action wrapper validation failed for {wrapper.FullName}: " +
+                $"gate={nativeGateCount}, original={originalCallCount}, " +
+                $"fallback={fallbackCallCount}, attributes={wrapper.CustomAttributes.Count}.");
+        }
     }
 
     private static void ReplaceWithReturn(MethodDefinition method)

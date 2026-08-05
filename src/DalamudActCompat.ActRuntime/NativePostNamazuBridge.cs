@@ -21,11 +21,9 @@ public static class NativePostNamazuBridge
     private static readonly Dictionary<int, Func<nint, ulong[], ulong>> NativeCalls = [];
     private static IFramework? framework;
     private static IPluginLog? log;
-    private static ISigScanner? sigScanner;
     private static Func<string, uint?>? actorIdResolver;
     private static PostNamazuEventSource? overlayEventSource;
     private static IReadOnlyList<CompatibilityStageResult> stages = [];
-    private static nint publicMarkFunction;
     private static PostNamazuWaymarkSnapshot[]? savedWaymarks;
 
     public static IReadOnlyList<CompatibilityStageResult> Stages
@@ -42,14 +40,12 @@ public static class NativePostNamazuBridge
     internal static void Configure(
         IFramework frameworkService,
         IPluginLog pluginLog,
-        ISigScanner scanner,
+        ISigScanner _,
         Func<string, uint?> resolveActorId)
     {
         framework = frameworkService;
         log = pluginLog;
-        sigScanner = scanner;
         actorIdResolver = resolveActorId;
-        publicMarkFunction = nint.Zero;
         savedWaymarks = null;
     }
 
@@ -444,6 +440,13 @@ public static class NativePostNamazuBridge
 
     private static unsafe void ApplyMark(PostNamazuMarkAction request)
     {
+        if (!request.LocalOnly)
+        {
+            throw new InvalidOperationException(
+                "Public head markers must use the original PostNamazu native runtime. " +
+                "The restricted semantic bridge only supports local-only head markers.");
+        }
+
         var actorId = ResolveActorId(request);
         var controller = MarkingController.Instance();
         if (controller is null)
@@ -452,15 +455,6 @@ public static class NativePostNamazuBridge
         }
 
         controller->Markers[request.MarkerIndex] = (GameObjectId)(ulong)actorId;
-        if (request.LocalOnly)
-        {
-            return;
-        }
-
-        var function = ResolvePublicMarkFunction();
-        _ = GetNativeCall(3)(
-            function,
-            [unchecked((ulong)(nint)controller), unchecked((ulong)request.MarkerIndex), actorId]);
     }
 
     internal static bool RequiresNativeGameMemory(PostNamazuWaymarkAction request)
@@ -505,7 +499,14 @@ public static class NativePostNamazuBridge
                 savedWaymarks = null;
                 return;
             case PostNamazuWaymarkOperation.Publicize:
-                foreach (var marker in ReadCurrentWaymarks(controller))
+                var currentWaymarks = ReadCurrentWaymarks(controller);
+                if (currentWaymarks.All(marker => !marker.Active))
+                {
+                    _ = GameMain.ExecuteCommand(313);
+                    return;
+                }
+
+                foreach (var marker in currentWaymarks)
                 {
                     ApplyPublicWaymark(marker.Index, marker.Active, marker.Position);
                 }
@@ -515,6 +516,13 @@ public static class NativePostNamazuBridge
             default:
                 throw new InvalidDataException(
                     $"Unknown PostNamazu waymark operation {request.Operation}.");
+        }
+
+        if (!request.LocalOnly && request.Updates.Count == 8 &&
+            request.Updates.All(update => !update.Active))
+        {
+            _ = GameMain.ExecuteCommand(313);
+            return;
         }
 
         foreach (var update in request.Updates)
@@ -639,42 +647,6 @@ public static class NativePostNamazuBridge
                    ?? throw new InvalidDataException("PostNamazu actor name is missing.");
         return actorIdResolver?.Invoke(name)
                ?? throw new InvalidOperationException($"Could not find FFXIV actor '{name}'.");
-    }
-
-    private static nint ResolvePublicMarkFunction()
-    {
-        lock (SyncRoot)
-        {
-            if (publicMarkFunction != nint.Zero)
-            {
-                return publicMarkFunction;
-            }
-
-            var scanner = sigScanner
-                          ?? throw new InvalidOperationException(
-                              "The Dalamud signature scanner is not configured.");
-            try
-            {
-                var call = scanner.ScanText(
-                    "E8 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B CB 48 89 86");
-                publicMarkFunction = ResolveRelativeCall(call);
-            }
-            catch
-            {
-                publicMarkFunction = scanner.ScanText(
-                    "48 89 5C 24 ?? 57 48 83 EC ?? 48 8B 0D ?? ?? ?? ?? 49 8B D8 8B FA E8 ?? ?? ?? ?? 48 85 C0");
-            }
-
-            log?.Information(
-                $"PostNamazu public marking function resolved at 0x{publicMarkFunction:X}.");
-            return publicMarkFunction;
-        }
-    }
-
-    private static nint ResolveRelativeCall(nint instruction)
-    {
-        var displacement = Marshal.ReadInt32(instruction + 1);
-        return instruction + 5 + displacement;
     }
 
     [DllImport("user32.dll")]

@@ -1,10 +1,11 @@
 using Advanced_Combat_Tracker;
 
-namespace DalamudActCompat.Host;
-
-internal sealed class OverlayPluginCompatibilityFacade : IActPluginV1
+// Triggernometry's widely distributed self-check compares pluginObj.ToString()
+// with the literal "OverlayPlugin". Keep this compatibility type in the global
+// namespace so the check sees the same identity as the legacy ACT plugin.
+internal sealed class OverlayPlugin : IActPluginV1
 {
-    public OverlayPluginCompatibilityContainer Container { get; } = new();
+    public CompatibilityContainer Container { get; } = new();
 
     public void InitPlugin(TabPage pluginScreenSpace, Label pluginStatusText)
     {
@@ -16,11 +17,11 @@ internal sealed class OverlayPluginCompatibilityFacade : IActPluginV1
     public void DeInitPlugin()
     {
     }
-}
 
-internal sealed class OverlayPluginCompatibilityContainer
-{
-    public T Resolve<T>()
-        => throw new NotSupportedException(
-            $"OverlayPlugin service {typeof(T).FullName} is game-side; use the compatibility broker.");
+    internal sealed class CompatibilityContainer
+    {
+        public T Resolve<T>()
+            => throw new NotSupportedException(
+                $"OverlayPlugin service {typeof(T).FullName} is game-side; use the compatibility broker.");
+    }
 }

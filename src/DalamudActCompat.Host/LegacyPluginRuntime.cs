@@ -393,7 +393,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private void RegisterOverlayPluginIdentity()
     {
         var assemblyPath = Path.Combine(AppContext.BaseDirectory, "OverlayPlugin.dll");
-        var facade = new OverlayPluginCompatibilityFacade();
+        var facade = new global::OverlayPlugin();
         var tab = new TabPage("OverlayPlugin");
         var status = new Label
         {

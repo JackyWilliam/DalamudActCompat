@@ -70,7 +70,7 @@ public static class HostPluginBridge
         Console.WriteLine($"game process registered for ACT compatibility: pid={processId}");
     }
 
-    internal static bool IsPostNamazuNativeRuntimeAllowed()
+    public static bool IsPostNamazuNativeRuntimeAllowed()
         => IsAllowed("postnamazu", "GameCommand") &&
            IsAllowed("postnamazu", "NativeGameMemory");
 
