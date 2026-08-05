@@ -1976,6 +1976,12 @@ static void ValidateLegacyResourceRuntimeDependencies()
             "SharpCompress.dll",
             StringComparison.OrdinalIgnoreCase)),
         "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
+    Assert(
+        FindArchiveEntry(archive, "host/dnlib.dll") is not null,
+        "The mixed-mode GreyMagic compatibility rewriter is missing from the Host package.");
+    Assert(
+        FindArchiveEntry(archive, "LICENSES/dnlib-MIT.txt") is not null,
+        "The dnlib MIT license is missing from the release package.");
 
     foreach (var style in new[] { "Minimal", "Classic", "Flat" })
     {

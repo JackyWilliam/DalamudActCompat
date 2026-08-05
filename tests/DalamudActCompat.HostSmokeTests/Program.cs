@@ -855,6 +855,70 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     {
                         new HostLogEvent(
                             DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.6250000+08:00|0000|ACTCOMPAT_OVERLAY_HANDLER_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            var overlayEnvelope = await ReadTriggerCommandAsync(pipe);
+            var overlayRequest = overlayEnvelope.Payload.Deserialize<HostCommandRequest>()
+                                 ?? throw new InvalidDataException(
+                                     "Triggernometry sent an invalid OverlayPlugin request.");
+            Assert(
+                overlayRequest.PluginId == "triggernometry" &&
+                overlayRequest.Command == "triggernometry.overlay" &&
+                overlayRequest.Arguments.TryGetValue("payload", out var overlayPayload) &&
+                overlayPayload.Contains("\"call\":\"getLanguage\"", StringComparison.Ordinal),
+                "Triggernometry OverlayPlugin handler call did not retain its JSON semantics.");
+            Assert(
+                !string.IsNullOrWhiteSpace(overlayEnvelope.CorrelationId),
+                "Triggernometry OverlayPlugin request had no correlation identifier.");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.CommandResult,
+                    HostMessagePriority.Control,
+                    new HostCommandResult(
+                        true,
+                        "completed",
+                        "{\"language\":\"ACTCOMPAT_OVERLAY_OK\"}"),
+                    overlayEnvelope.CorrelationId),
+                CancellationToken.None);
+            await WaitForProcessOutputAsync(
+                host,
+                "ACTCOMPAT_OVERLAY_HANDLER_OK:ACTCOMPAT_OVERLAY_OK",
+                TimeSpan.FromSeconds(15));
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.7000000+08:00|0000|ACTCOMPAT_PLUGIN_ORDER_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await WaitForProcessOutputAsync(
+                host,
+                "ACTCOMPAT_PLUGIN_ORDER:FFXIV_ACT_Plugin.dll>OverlayPlugin.dll>Triggernometry.dll>PostNamazu.dll>ACT.FoxTTS.dll",
+                TimeSpan.FromSeconds(15));
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
                             "00|2026-07-31T00:00:00.7500000+08:00|0000|ACTCOMPAT_PICTO_LINE|",
                             false),
                     }),
@@ -1060,6 +1124,37 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     "Triggernometry PictoACT callback registered through the game-side drawing broker.",
                     StringComparison.Ordinal),
                 "Triggernometry did not register PictoACT automatically during normal startup." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "OverlayPlugin compatibility identity registered before Triggernometry.",
+                    StringComparison.Ordinal),
+                "OverlayPlugin compatibility identity was not registered in ACT plugin order." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "PostNamazu GreyMagic EventWaitHandle ACL compatibility shim loaded.",
+                    StringComparison.Ordinal),
+                "PostNamazu GreyMagic compatibility shim was not loaded." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "ACTCOMPAT_OVERLAY_HANDLER_OK:ACTCOMPAT_OVERLAY_OK",
+                    StringComparison.Ordinal),
+                "Triggernometry OverlayPlugin handler response did not close the Host IPC loop." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "ACTCOMPAT_PLUGIN_ORDER:FFXIV_ACT_Plugin.dll>OverlayPlugin.dll>Triggernometry.dll>PostNamazu.dll>ACT.FoxTTS.dll",
+                    StringComparison.Ordinal),
+                "ACT plugin list order did not match Triggernometry's required first three entries." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                !output.Contains("OverlayPlugin not found", StringComparison.OrdinalIgnoreCase) &&
+                !errors.Contains("OverlayPlugin not found", StringComparison.OrdinalIgnoreCase) &&
+                !output.Contains("ReflectionNotFoundException", StringComparison.Ordinal) &&
+                !errors.Contains("ReflectionNotFoundException", StringComparison.Ordinal),
+                "Triggernometry still reported the removed in-process OverlayPlugin reflection path." +
                 $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
                 !output.Contains("ICombatantMemory", StringComparison.Ordinal) &&
@@ -1364,6 +1459,16 @@ async Task PrepareLegacySmokeConfigurationAsync()
               <Trigger Enabled="true" Id="51997209-fb1d-4c07-80d5-d6542feeeacb" Name="C# self-reference regression" RegularExpression="ACTCOMPAT_SCRIPT_LINE" Source="Log">
                 <Actions>
                   <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="1751009c-1494-44f1-9708-37af4d4dc618" Name="OverlayPlugin handler IPC closed loop" RegularExpression="ACTCOMPAT_OVERLAY_HANDLER_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using Newtonsoft.Json.Linq;&#xD;&#xA;using Triggernometry.PluginBridges;&#xD;&#xA;&#xD;&#xA;var response = ModuleEvents.CallOverlayHandler(JObject.Parse(&quot;{\&quot;call\&quot;:\&quot;getLanguage\&quot;}&quot;));&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_OVERLAY_HANDLER_OK:&quot; + response[&quot;language&quot;]);" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="d97e5f16-f275-44d9-be68-c46e646e5a42" Name="Required ACT plugin order closed loop" RegularExpression="ACTCOMPAT_PLUGIN_ORDER_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Linq;&#xD;&#xA;using Advanced_Combat_Tracker;&#xD;&#xA;&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_PLUGIN_ORDER:&quot; + string.Join(&quot;&gt;&quot;, ActGlobals.oFormActMain.ActPlugins.Select(plugin =&gt; plugin.pluginFile.Name)));" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT _me callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">

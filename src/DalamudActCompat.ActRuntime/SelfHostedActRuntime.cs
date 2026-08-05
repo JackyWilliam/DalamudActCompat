@@ -5,9 +5,11 @@ using Dalamud.Plugin.Services;
 using System.Collections.Concurrent;
 using System.Drawing;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Forms;
+using Newtonsoft.Json.Linq;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -632,6 +634,78 @@ public sealed class SelfHostedActRuntime : IDisposable
         overlay = null;
         httpClient?.Dispose();
         httpClient = null;
+    }
+
+    public async Task<string?> CallOverlayHandlerAsync(
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        if (payload.Length > 65_536)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(payload),
+                "OverlayPlugin handler payload exceeds 65536 characters.");
+        }
+
+        var request = JObject.Parse(payload);
+        if (request["call"]?.Type != JTokenType.String ||
+            string.IsNullOrWhiteSpace(request.Value<string>("call")))
+        {
+            throw new InvalidDataException(
+                "OverlayPlugin handler payload must contain a non-empty call name.");
+        }
+
+        return await framework
+            .RunOnFrameworkThread(() =>
+            {
+                if (!IsOverlayRunning ||
+                    ActGlobals.oFormActMain.OverlayPluginContainer is not
+                        RainbowMage.OverlayPlugin.TinyIoCContainer container)
+                {
+                    throw new InvalidOperationException(
+                        "The real game-side OverlayPlugin dispatcher is not running.");
+                }
+
+                var dispatcherType = typeof(RainbowMage.OverlayPlugin.PluginMain)
+                                         .Assembly
+                                         .GetType(
+                                             "RainbowMage.OverlayPlugin.EventDispatcher",
+                                             throwOnError: true)!
+                                     ?? throw new TypeLoadException(
+                                         "RainbowMage.OverlayPlugin.EventDispatcher");
+                var resolve = container.GetType()
+                                  .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                                  .Single(method =>
+                                      method.Name == "Resolve" &&
+                                      method.IsGenericMethodDefinition &&
+                                      method.GetGenericArguments().Length == 1 &&
+                                      method.GetParameters().Length == 0)
+                                  .MakeGenericMethod(dispatcherType);
+                var dispatcher = resolve.Invoke(container, null)
+                                 ?? throw new InvalidOperationException(
+                                     "OverlayPlugin EventDispatcher resolution returned null.");
+                var callHandler = dispatcherType.GetMethod(
+                                      "CallHandler",
+                                      BindingFlags.Instance | BindingFlags.Public,
+                                      binder: null,
+                                      [typeof(JObject)],
+                                      modifiers: null)
+                                  ?? throw new MissingMethodException(
+                                      dispatcherType.FullName,
+                                      "CallHandler");
+                var response = callHandler.Invoke(dispatcher, [request]) as JToken;
+                var serialized = response?.ToString(Newtonsoft.Json.Formatting.None);
+                if (serialized is not null && Encoding.UTF8.GetByteCount(serialized) > 900_000)
+                {
+                    throw new InvalidOperationException(
+                        "OverlayPlugin handler response exceeds the bounded IPC frame.");
+                }
+
+                return serialized;
+            })
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private void RegisterExternalPostNamazuAdapter(

@@ -24,6 +24,7 @@
     <Content Include="../../vendor/IINACT/OverlayPlugin.Core/LICENSE.txt" Link="LICENSES/OverlayPlugin.Core-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Common/LICENSE.txt" Link="LICENSES/OverlayPlugin.Common-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/machina/LICENSE.md" Link="LICENSES/Machina-LICENSE.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/ThirdParty/dnlib-LICENSE.txt" Link="LICENSES/dnlib-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/BundledActPlugins/**/*"
              Link="BundledActPlugins/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />

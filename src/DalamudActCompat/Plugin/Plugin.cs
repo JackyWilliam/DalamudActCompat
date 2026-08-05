@@ -1174,6 +1174,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            string? resultDetail = null;
             switch (invocation.Request.Command)
             {
                 case "tts":
@@ -1203,6 +1204,34 @@ public sealed class Plugin : IDalamudPlugin
                     // Authorization remains game-side, while the actual FoxTTS callback
                     // stays in the disposable external Host. A blocked/native TTS provider
                     // can therefore be recovered by killing the Host without freezing FFXIV.
+                    break;
+                case "triggernometry.overlay":
+                    if (!string.Equals(
+                            invocation.Request.PluginId,
+                            "triggernometry",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Only Triggernometry may request the OverlayPlugin handler broker.");
+                    }
+
+                    if (!configuration.IsActCapabilityAllowed(
+                            "triggernometry",
+                            ActCapability.HighRiskScript))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Triggernometry OverlayPlugin handler capability is denied.");
+                    }
+
+                    if (!invocation.Request.Arguments.TryGetValue("payload", out var overlayPayload))
+                    {
+                        throw new InvalidDataException(
+                            "Triggernometry OverlayPlugin payload is missing.");
+                    }
+
+                    resultDetail = await actRuntime
+                        .CallOverlayHandlerAsync(overlayPayload, timeout.Token)
+                        .ConfigureAwait(false);
                     break;
                 case "postnamazu.chat":
                     if (!string.Equals(
@@ -1302,7 +1331,7 @@ public sealed class Plugin : IDalamudPlugin
                 invocation.CorrelationId,
                 true,
                 "completed",
-                null);
+                resultDetail);
         }
         catch (Exception ex)
         {

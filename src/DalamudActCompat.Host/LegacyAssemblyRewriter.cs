@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Resources;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Windows.Forms;
 using DalamudActCompat.Protocol;
@@ -116,6 +117,7 @@ public static class LegacyAssemblyRewriter
     {
         using var input = File.OpenRead(assemblyPath);
         using var definition = AssemblyDefinition.ReadAssembly(input);
+        PreloadPostNamazuGreyMagicCompatibility(definition, loadContext);
         var module = definition.MainModule;
         var bridgeType = typeof(HostPluginBridge);
         var setClipboard = module.ImportReference(
@@ -339,6 +341,184 @@ public static class LegacyAssemblyRewriter
         return loadContext.LoadFromStream(output);
     }
 
+    private static void PreloadPostNamazuGreyMagicCompatibility(
+        AssemblyDefinition postNamazu,
+        AssemblyLoadContext loadContext)
+    {
+        const string resourceName = "costura64.greymagic.dll";
+        if (loadContext.Assemblies.Any(assembly => string.Equals(
+                assembly.GetName().Name,
+                "GreyMagic",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                "GreyMagic was loaded before the PostNamazu .NET compatibility shim.");
+        }
+
+        var resource = postNamazu.MainModule.Resources
+                           .OfType<EmbeddedResource>()
+                           .SingleOrDefault(candidate => string.Equals(
+                               candidate.Name,
+                               resourceName,
+                               StringComparison.OrdinalIgnoreCase))
+                       ?? throw new MissingManifestResourceException(resourceName);
+        using var resourceInput = resource.GetResourceStream();
+        using var originalImage = new MemoryStream();
+        resourceInput.CopyTo(originalImage);
+        var originalBytes = originalImage.ToArray();
+        using var originalDefinition = AssemblyDefinition.ReadAssembly(
+            new MemoryStream(originalBytes, writable: false));
+        var originalAttributes = originalDefinition.MainModule.Attributes;
+        var originalNativeMethods = CountNativeMethods(originalDefinition.MainModule);
+        if ((originalAttributes & ModuleAttributes.ILOnly) != 0 ||
+            originalNativeMethods == 0)
+        {
+            throw new InvalidOperationException(
+                "PostNamazu GreyMagic is no longer the expected mixed-mode native image.");
+        }
+
+        using var definition = dnlib.DotNet.ModuleDefMD.Load(originalBytes);
+        var replacement = typeof(EventWaitHandleAcl).GetMethod(
+                              nameof(EventWaitHandleAcl.Create),
+                              BindingFlags.Static | BindingFlags.Public,
+                              binder: null,
+                              [
+                                  typeof(bool),
+                                  typeof(EventResetMode),
+                                  typeof(string),
+                                  typeof(bool).MakeByRefType(),
+                                  typeof(EventWaitHandleSecurity),
+                              ],
+                              modifiers: null)
+                          ?? throw new MissingMethodException(
+                              typeof(EventWaitHandleAcl).FullName,
+                              nameof(EventWaitHandleAcl.Create));
+        var replacementReference = new dnlib.DotNet.Importer(definition).Import(replacement);
+        var patched = 0;
+        foreach (var instruction in definition.GetTypes()
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody)
+                     .SelectMany(method => method.Body.Instructions))
+        {
+            if (instruction.Operand is not dnlib.DotNet.IMethod called ||
+                called.Name.String != ".ctor" ||
+                called.DeclaringType.FullName != typeof(EventWaitHandle).FullName ||
+                called.MethodSig?.Params.Count != 5 ||
+                called.MethodSig.Params[0].FullName != typeof(bool).FullName ||
+                called.MethodSig.Params[1].FullName != typeof(EventResetMode).FullName ||
+                called.MethodSig.Params[2].FullName != typeof(string).FullName ||
+                called.MethodSig.Params[3].FullName != "System.Boolean&" ||
+                called.MethodSig.Params[4].FullName != typeof(EventWaitHandleSecurity).FullName)
+            {
+                continue;
+            }
+
+            instruction.OpCode = dnlib.DotNet.Emit.OpCodes.Call;
+            instruction.Operand = replacementReference;
+            patched++;
+        }
+
+        if (patched != 1 || definition.GetTypes()
+                .SelectMany(type => type.Methods)
+                .Where(method => method.HasBody)
+                .SelectMany(method => method.Body.Instructions)
+                .Any(instruction =>
+                    instruction.Operand is dnlib.DotNet.IMethod called &&
+                    called.Name.String == ".ctor" &&
+                    called.DeclaringType.FullName == typeof(EventWaitHandle).FullName &&
+                    called.MethodSig?.Params.Count == 5))
+        {
+            throw new InvalidOperationException(
+                $"Unexpected PostNamazu GreyMagic EventWaitHandle shape: patched={patched}.");
+        }
+
+        using var output = new MemoryStream();
+        definition.NativeWrite(
+            output,
+            new dnlib.DotNet.Writer.NativeModuleWriterOptions(
+                definition,
+                optimizeImageSize: true));
+        var image = output.ToArray();
+        using (var validation = AssemblyDefinition.ReadAssembly(
+                   new MemoryStream(image, writable: false)))
+        {
+            var validationCalls = validation.MainModule.Types
+                .SelectMany(EnumerateTypes)
+                .SelectMany(type => type.Methods)
+                .Where(method => method.HasBody)
+                .SelectMany(method => method.Body.Instructions)
+                .Select(instruction => instruction.Operand)
+                .OfType<MethodReference>()
+                .ToArray();
+            var legacyCalls = validationCalls.Count(called =>
+                called.Name == ".ctor" &&
+                called.DeclaringType.FullName == typeof(EventWaitHandle).FullName &&
+                called.Parameters.Count == 5);
+            var replacementCalls = validationCalls.Count(called =>
+                called.Name == nameof(EventWaitHandleAcl.Create) &&
+                called.DeclaringType.FullName == typeof(EventWaitHandleAcl).FullName &&
+                called.Parameters.Count == 5);
+            var rewrittenNativeMethods = CountNativeMethods(validation.MainModule);
+            if (legacyCalls != 0 || replacementCalls != 1 ||
+                validation.MainModule.Attributes != originalAttributes ||
+                rewrittenNativeMethods != originalNativeMethods)
+            {
+                throw new InvalidOperationException(
+                    "PostNamazu GreyMagic native-image validation failed: " +
+                    $"legacy={legacyCalls}, replacement={replacementCalls}, " +
+                    $"attributes={validation.MainModule.Attributes}/{originalAttributes}, " +
+                    $"native={rewrittenNativeMethods}/{originalNativeMethods}.");
+            }
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(image));
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            "postnamazu-greymagic");
+        Directory.CreateDirectory(cacheDirectory);
+        var assemblyPath = Path.Combine(cacheDirectory, $"GreyMagic-{hash}.dll");
+        if (!File.Exists(assemblyPath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, assemblyPath);
+                }
+                catch (IOException) when (File.Exists(assemblyPath))
+                {
+                    // Another Host finished writing the same content-addressed image.
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        _ = loadContext.LoadFromAssemblyPath(assemblyPath);
+        Console.WriteLine(
+            "PostNamazu GreyMagic EventWaitHandle ACL compatibility shim loaded.");
+    }
+
+    private static int CountNativeMethods(ModuleDefinition module)
+        => module.Types
+            .SelectMany(EnumerateTypes)
+            .SelectMany(type => type.Methods)
+            .Count(method =>
+                method.RVA != 0 &&
+                (!method.HasBody ||
+                 (method.ImplAttributes & Mono.Cecil.MethodImplAttributes.CodeTypeMask) !=
+                 Mono.Cecil.MethodImplAttributes.IL));
+
     private static MemoryStream RewriteTriggernometryImplementation(Stream implementation)
     {
         using var definition = AssemblyDefinition.ReadAssembly(implementation);
@@ -511,6 +691,10 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.CheckTriggernometryPostNamazuAdministratorRequirement),
                 Type.EmptyTypes)!);
+        var callOverlayHandler = module.ImportReference(
+            bridgeType.GetMethod(
+                nameof(HostPluginBridge.CallTriggernometryOverlayHandler),
+                [typeof(object)])!);
         var adminMethod = module.Types
             .SelectMany(EnumerateTypes)
             .SelectMany(type => type.Methods)
@@ -766,6 +950,36 @@ public static class LegacyAssemblyRewriter
                 method.Name == "InternalGetMyself" && method.Parameters.Count == 0),
             loadInstance: false,
             loadParameters: false);
+
+        // Triggernometry's legacy reflection contract expects OverlayPlugin.Core to run in
+        // the same ACT process. In this architecture the real dispatcher intentionally stays
+        // in FFXIV, so keep the public Triggernometry API and broker each handler call over the
+        // bounded, permission-checked Host IPC channel.
+        var moduleEvents = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.PluginBridges.ModuleEvents");
+        var moduleEventsInitializer = moduleEvents.Methods.Single(method =>
+            method.Name == "Initialize" && method.Parameters.Count == 0);
+        var moduleEventsReady = moduleEvents.Fields.Single(field =>
+            field.Name == "Ready" &&
+            field.FieldType.MetadataType == MetadataType.Boolean &&
+            field.IsStatic);
+        moduleEventsInitializer.Body.ExceptionHandlers.Clear();
+        moduleEventsInitializer.Body.Variables.Clear();
+        moduleEventsInitializer.Body.Instructions.Clear();
+        moduleEventsInitializer.Body.InitLocals = false;
+        var moduleEventsIl = moduleEventsInitializer.Body.GetILProcessor();
+        moduleEventsIl.Append(moduleEventsIl.Create(OpCodes.Ldc_I4_1));
+        moduleEventsIl.Append(moduleEventsIl.Create(OpCodes.Stsfld, moduleEventsReady));
+        moduleEventsIl.Append(moduleEventsIl.Create(OpCodes.Ret));
+        ReplaceWithBridge(
+            moduleEvents.Methods.Single(method =>
+                method.Name == "CallOverlayHandler" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.Object),
+            callOverlayHandler,
+            loadInstance: false,
+            loadParameters: true);
 
         var enqueueCount = 0;
         var abortCount = 0;

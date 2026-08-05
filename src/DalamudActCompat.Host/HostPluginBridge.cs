@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Advanced_Combat_Tracker;
 using DalamudActCompat.Protocol;
+using Newtonsoft.Json.Linq;
 
 namespace DalamudActCompat.Host;
 
@@ -29,6 +30,8 @@ public static class HostPluginBridge
         new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, PendingTtsAuthorization> PendingTts =
         new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, PendingOverlayCall> PendingOverlayCalls =
+        new(StringComparer.Ordinal);
     private static readonly FfxivDataRepository FfxivRepositoryInstance = new();
     private static readonly object TriggerZoneListenerLock = new();
     private static readonly object PostNamazuQueueLock = new();
@@ -38,6 +41,7 @@ public static class HostPluginBridge
     private static Action<string>? clipboardWriterForTests;
     private static long triggerEventDrops;
     private static int pendingTtsCount;
+    private static int pendingOverlayCallCount;
 
     internal static void Configure(
         Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> messageSender)
@@ -422,6 +426,97 @@ public static class HostPluginBridge
         }
     }
 
+    public static JToken? CallTriggernometryOverlayHandler(object request)
+    {
+        Demand("triggernometry", "HighRiskScript");
+        ArgumentNullException.ThrowIfNull(request);
+        if (request is not JObject payload)
+        {
+            throw new ArgumentException(
+                "Triggernometry OverlayPlugin calls must contain a JSON object.",
+                nameof(request));
+        }
+
+        var serialized = payload.ToString(Newtonsoft.Json.Formatting.None);
+        if (serialized.Length is 0 or > 65_536)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Triggernometry OverlayPlugin payload must contain at most 65536 characters.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var expired in PendingOverlayCalls
+                     .Where(pair => pair.Value.Deadline <= now)
+                     .Select(pair => pair.Key))
+        {
+            if (PendingOverlayCalls.TryRemove(expired, out var pending))
+            {
+                Interlocked.Decrement(ref pendingOverlayCallCount);
+                pending.Completion.TrySetException(
+                    new TimeoutException("The game-side OverlayPlugin call expired."));
+            }
+        }
+
+        if (Interlocked.Increment(ref pendingOverlayCallCount) > 32)
+        {
+            Interlocked.Decrement(ref pendingOverlayCallCount);
+            throw new InvalidOperationException(
+                "The bounded Triggernometry OverlayPlugin call queue is full.");
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var deadline = now.AddSeconds(2);
+        var completion = new TaskCompletionSource<HostCommandResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!PendingOverlayCalls.TryAdd(
+                correlationId,
+                new PendingOverlayCall(completion, deadline)))
+        {
+            Interlocked.Decrement(ref pendingOverlayCallCount);
+            throw new InvalidOperationException(
+                "Could not reserve a Triggernometry OverlayPlugin request.");
+        }
+
+        try
+        {
+            if (sender?.Invoke(
+                    HostMessageTypes.CommandRequest,
+                    HostMessagePriority.Control,
+                    new HostCommandRequest(
+                        "triggernometry",
+                        "triggernometry.overlay",
+                        new Dictionary<string, string> { ["payload"] = serialized }),
+                    correlationId,
+                    deadline) != true)
+            {
+                throw new InvalidOperationException(
+                    "Triggernometry OverlayPlugin broker queue rejected the request.");
+            }
+
+            var result = completion.Task
+                .WaitAsync(TimeSpan.FromSeconds(2))
+                .GetAwaiter()
+                .GetResult();
+            if (!result.Success)
+            {
+                throw new InvalidOperationException(
+                    $"Game-side OverlayPlugin rejected the call: {result.Detail ?? result.Status}");
+            }
+
+            return string.IsNullOrWhiteSpace(result.Detail)
+                ? null
+                : JToken.Parse(result.Detail);
+        }
+        finally
+        {
+            if (PendingOverlayCalls.TryRemove(correlationId, out _))
+            {
+                Interlocked.Decrement(ref pendingOverlayCallCount);
+            }
+        }
+    }
+
     private static async Task RunPostNamazuQueueAsync(
         object module,
         IReadOnlyList<PostNamazuQueueAction> actions)
@@ -519,8 +614,19 @@ public static class HostPluginBridge
         string? correlationId,
         HostCommandResult result)
     {
-        if (string.IsNullOrWhiteSpace(correlationId) ||
-            !PendingTts.TryRemove(correlationId, out var pending))
+        if (string.IsNullOrWhiteSpace(correlationId))
+        {
+            return;
+        }
+
+        if (PendingOverlayCalls.TryRemove(correlationId, out var overlayCall))
+        {
+            Interlocked.Decrement(ref pendingOverlayCallCount);
+            overlayCall.Completion.TrySetResult(result);
+            return;
+        }
+
+        if (!PendingTts.TryRemove(correlationId, out var pending))
         {
             return;
         }
@@ -1011,6 +1117,10 @@ public static class HostPluginBridge
 
     private sealed record PendingTtsAuthorization(
         string Text,
+        DateTimeOffset Deadline);
+
+    private sealed record PendingOverlayCall(
+        TaskCompletionSource<HostCommandResult> Completion,
         DateTimeOffset Deadline);
 
     private sealed record PostNamazuQueueAction(string? C, string? P, int D);

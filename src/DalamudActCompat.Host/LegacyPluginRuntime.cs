@@ -168,6 +168,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         SetStage("postnamazu", "Log system", "success", "Bounded IPC log batches route through FormActMain.");
 
         RegisterFfxivPluginIdentity();
+        RegisterOverlayPluginIdentity();
         TryLoad(
             "triggernometry",
             "Triggernometry.dll",
@@ -387,6 +388,30 @@ internal sealed class LegacyPluginRuntime : IDisposable
             "FFXIV_ACT_Plugin discovery",
             "success",
             "Official plugin type identity is present with a read-only game-side entity repository.");
+    }
+
+    private void RegisterOverlayPluginIdentity()
+    {
+        var assemblyPath = Path.Combine(AppContext.BaseDirectory, "OverlayPlugin.dll");
+        var facade = new OverlayPluginCompatibilityFacade();
+        var tab = new TabPage("OverlayPlugin");
+        var status = new Label
+        {
+            Text = "Game-side OverlayPlugin event dispatcher bridge",
+        };
+        var overlayPluginData = new ActPluginData(
+            new FileInfo(assemblyPath),
+            facade,
+            tab,
+            status);
+        ActGlobals.oFormActMain.ActPlugins.Add(overlayPluginData);
+        SetStage(
+            "triggernometry",
+            "OverlayPlugin discovery",
+            "success",
+            "OverlayPlugin compatibility identity is second in ACT plugin order and calls the real game-side event dispatcher through bounded IPC.");
+        Console.WriteLine(
+            "OverlayPlugin compatibility identity registered before Triggernometry.");
     }
 
     private void TryLoad(string id, string assemblyName, string entryType)

@@ -124,6 +124,7 @@ if ($RequireCompatibilityHost) {
         "DalamudActCompat.HostAssets.DalamudActCompat.Protocol.dll",
         "DalamudActCompat.HostAssets.Advanced Combat Tracker.dll",
         "DalamudActCompat.HostAssets.FFXIV_ACT_Plugin.dll",
+        "DalamudActCompat.HostAssets.dnlib.dll",
         "DalamudActCompat.HostAssets.Mono.Cecil.dll",
         "DalamudActCompat.HostAssets.System.Speech.dll"
     )
