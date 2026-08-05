@@ -16,7 +16,7 @@
     "DownloadLinkTesting":  null,
     "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.6/DalamudActCompat.zip",
     "LastUpdate":  1785915283592,
-    "Changelog":  "补齐 Triggernometry 全部 29 类动作与 BridgeNamazu 公共面审计；鲶鱼精邮差保留 7 个动作模块、15 个命令别名、原生完整权限与通用队列；权限组保存后单次重启 Host 即时生效。",
+    "Changelog":  "完整补齐 Triggernometry 29 类动作与 PostNamazu 1.3.6.7 兼容；权限保存后单次重启 Host 即时生效。修复国服 0x107、.NET 10 原生附加、插件顺序、公开标点崩溃、十六进制 ActorID，以及 PictoACT 无 Tag/基础图形；增强 Cactbot 文字层与诊断（原生悬浮窗需使用无边框窗口）。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
