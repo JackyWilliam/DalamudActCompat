@@ -48,6 +48,10 @@
     </ItemGroup>
     <MakeDir Directories="$(OutputPath)host" />
     <Copy SourceFiles="@(CompatibilityHostFiles)" DestinationFolder="$(OutputPath)host" SkipUnchangedFiles="true" />
+    <ItemGroup Condition="'$(Configuration)' == 'Release'">
+      <ReleaseDebugSymbols Include="$(OutputPath)**/*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(ReleaseDebugSymbols)" Condition="'$(Configuration)' == 'Release'" />
   </Target>
 
   <Target Name="EmbedCompatibilityHost"

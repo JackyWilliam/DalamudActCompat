@@ -52,9 +52,11 @@ jobs:
             throw "Dalamud development files were not found."
           }
           $dalamud = $dalamud.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
-          dotnet build DalamudActCompat.slnx `
+          dotnet build src/DalamudActCompat/DalamudActCompat.csproj `
             --configuration Release `
             --no-restore `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
             "-p:DalamudLibPath=$dalamud"
 
       - name: Collect plugin artifact

@@ -49,6 +49,49 @@ if (Test-Path $validationDir) {
 New-Item -ItemType Directory -Force -Path $validationDir | Out-Null
 Expand-Archive -Path $destination -DestinationPath $validationDir -Force
 
+$packagedFiles = @(Get-ChildItem -LiteralPath $validationDir -Recurse -File)
+$debugSymbols = @($packagedFiles | Where-Object { $_.Extension -ieq ".pdb" })
+if ($debugSymbols.Count -gt 0) {
+    $relativeDebugSymbols = @($debugSymbols | ForEach-Object {
+        [IO.Path]::GetRelativePath($validationDir, $_.FullName)
+    })
+    throw "Plugin ZIP contains debug symbols that can disclose local build paths: $($relativeDebugSymbols -join ', ')"
+}
+
+$personalConfigurationNames = @(
+    "Advanced Combat Tracker.config.xml",
+    "ACT.FoxTTS.config.xml",
+    "FFXIV_ACT_Plugin.config.xml",
+    "PostNamazu.config.json",
+    "Triggernometry.config.xml"
+)
+$personalConfigurationFiles = @($packagedFiles | Where-Object {
+    $_.Name -in $personalConfigurationNames
+})
+if ($personalConfigurationFiles.Count -gt 0) {
+    $relativePersonalConfigurationFiles = @($personalConfigurationFiles | ForEach-Object {
+        [IO.Path]::GetRelativePath($validationDir, $_.FullName)
+    })
+    throw "Plugin ZIP contains user-specific configuration files: $($relativePersonalConfigurationFiles -join ', ')"
+}
+
+$forbiddenLocalPaths = @(
+    [IO.Path]::GetFullPath($projectRoot.Path).TrimEnd([IO.Path]::DirectorySeparatorChar),
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile).TrimEnd([IO.Path]::DirectorySeparatorChar)
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+foreach ($packagedFile in $packagedFiles) {
+    $contents = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($packagedFile.FullName))
+    foreach ($forbiddenLocalPath in $forbiddenLocalPaths) {
+        if ($contents.IndexOf($forbiddenLocalPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $relativePackagedFile = [IO.Path]::GetRelativePath($validationDir, $packagedFile.FullName)
+            throw "Plugin ZIP contains local path '$forbiddenLocalPath' in $relativePackagedFile."
+        }
+    }
+}
+
+Write-Host "Validated release privacy: no debug symbols, user configurations, or local build paths."
+
 $manifestPath = Join-Path $validationDir "DalamudActCompat.json"
 if (-not (Test-Path $manifestPath)) {
     throw "Plugin ZIP does not contain DalamudActCompat.json."
