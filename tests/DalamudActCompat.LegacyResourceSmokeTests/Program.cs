@@ -25,6 +25,7 @@ if (!overlayTemplates.Any(template => template.Name == "Kagerou") ||
     throw new InvalidOperationException(
         "OverlayPlugin built-in HTML templates were not exposed by the runtime.");
 }
+AssertActorCastExtraRotationCompatibility();
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
 AssemblyLoadContext.Default.Resolving += ResolveDependency;
@@ -290,6 +291,39 @@ static void AssertLegacyJavaScriptSerializerCompatibility()
     }
 }
 
+static void AssertActorCastExtraRotationCompatibility()
+{
+    var packetType = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly.GetType(
+                         "RainbowMage.OverlayPlugin.NetworkProcessors.LineActorCastExtra+ActorCastExtraPacket",
+                         throwOnError: true)!
+                     ?? throw new InvalidOperationException(
+                         "OverlayPlugin ActorCastExtra packet formatter was not found.");
+    var convert = packetType.GetMethod(
+                      "ConvertRotation",
+                      BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                  ?? throw new MissingMethodException(packetType.FullName, "ConvertRotation");
+
+    var regional = Convert.ToDouble(convert.Invoke(null, [1.25f]));
+    var global = Convert.ToDouble(convert.Invoke(null, [(ushort)0]));
+    if (Math.Abs(regional - 1.25d) > 0.0001d ||
+        Math.Abs(global + Math.PI) > 0.0001d)
+    {
+        throw new InvalidOperationException(
+            "OverlayPlugin ActorCastExtra rotation conversion lost CN/KR/TW or global compatibility.");
+    }
+
+    try
+    {
+        _ = convert.Invoke(null, [(byte)1]);
+        throw new InvalidOperationException(
+            "OverlayPlugin ActorCastExtra accepted an unknown rotation field type.");
+    }
+    catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException)
+    {
+        // Expected: unknown packet layouts must fail closed instead of emitting corrupt 0x107 logs.
+    }
+}
+
 static void AssertPostNamazuSemanticPayloads()
 {
     var mark = PostNamazuSemanticActions.ParseMark(
@@ -469,6 +503,32 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
 
     var document = new XmlDocument();
     document.Load(fullPath);
+    var markActions = document.SelectNodes(
+                              "//Action[@ActionType='NamedCallback' and @NamedCallbackName='mark']")
+                          ?.Cast<XmlElement>()
+                          .ToArray()
+                      ?? [];
+    var actorIdMark = markActions.SingleOrDefault(action =>
+        action.ParentNode?.ParentNode is XmlElement trigger &&
+        trigger.GetAttribute("Name").StartsWith("04 ", StringComparison.Ordinal) &&
+        action.GetAttribute("OrderNumber") == "1");
+    var clearMarks = markActions.Count(action =>
+        action.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": 3758096384",
+            StringComparison.Ordinal));
+    if (actorIdMark is null ||
+        !actorIdMark.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": ${_me.id}",
+            StringComparison.Ordinal) ||
+        markActions.Any(action => action.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": \"0x",
+            StringComparison.Ordinal)) ||
+        clearMarks != 3)
+    {
+        throw new InvalidOperationException(
+            "Triggernometry export must pass PostNamazu ActorID and E0000000 clear values as UInt32 JSON numbers.");
+    }
+
     var scriptActions = document.SelectNodes("//Action[@ActionType='ExecuteScript']")
                             ?.Cast<XmlElement>()
                             .ToArray()
