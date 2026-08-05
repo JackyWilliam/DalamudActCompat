@@ -28,6 +28,10 @@ internal sealed class HtmlOverlayForm : IDisposable
             const style = document.createElement('style');
             style.id = 'dalamud-act-compat-cactbot-layout';
             style.textContent = `
+              #popup-text-container {
+                z-index: 2147483646 !important;
+                pointer-events: none !important;
+              }
               @media (max-height: 220px) {
                 #popup-text-info {
                   top: max(0px, calc(100vh - 2.5em)) !important;

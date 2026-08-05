@@ -196,26 +196,82 @@ finally
 
 static void ValidatePictoActOverlayCommands()
 {
+    var beforeParse = DateTimeOffset.UtcNow;
     var commands = PictoActOverlayService.Parse(
         "Omen: Circle\nTag: ACTCOMPAT_SMOKE\nt: 5\nPos: <1.25, 2.5, -3.75>\n" +
         "Scale: 5, 5, 1\nColor: 0.2, 1, 0.3, 0.65\n---\n" +
-        "Action: Remove\nTag: ACTCOMPAT_OLD");
+        "Omen: Rect\nDelay: 2.5\nt: 5\nPos: 1, 2, 3\n" +
+        "Angle: 0 + pi/2\nScale: 2.5, 28, 1\n---\n" +
+        "Omen: Fan90\nt: 5\nPos: 1, 2, 3\nAngle: 90\u00b0\nScale: 12\n---\n" +
+        "Action: Remove\nRegex: ^Auto$\n---\n" +
+        "Action: Remove");
     Assert(
-        commands.Count == 2 &&
+        commands.Count == 5 &&
         commands[0] is
         {
             Tag: "ACTCOMPAT_SMOKE",
             Remove: false,
-            Circle:
+            Shape:
             {
-                Radius: 5,
+                Kind: PictoActShapeKind.Circle,
+                PrimaryScale: 5,
                 Position.X: 1.25f,
                 Position.Y: -3.75f,
                 Position.Z: 2.5f,
             },
         } &&
-        commands[1] is { Tag: "ACTCOMPAT_OLD", Remove: true, Circle: null },
-        "Game-side PictoACT circle create/remove parsing failed.");
+        commands[1] is
+        {
+            Tag: null,
+            Remove: false,
+            Shape:
+            {
+                Kind: PictoActShapeKind.Rectangle,
+                PrimaryScale: 2.5f,
+                SecondaryScale: 28,
+                Color: { X: 1, Y: 1, Z: 1, W: 1 },
+            },
+        } &&
+        commands[1].Shape!.StartsAt >= beforeParse.AddSeconds(2.4) &&
+        MathF.Abs(commands[1].Shape!.Angle - MathF.PI / 2) < 0.0001f &&
+        commands[2] is
+        {
+            Tag: null,
+            Remove: false,
+            Shape:
+            {
+                Kind: PictoActShapeKind.Fan,
+                PrimaryScale: 12,
+            },
+        } &&
+        MathF.Abs(commands[2].Shape!.FanRadians - MathF.PI / 2) < 0.0001f &&
+        MathF.Abs(commands[2].Shape!.Angle - MathF.PI / 2) < 0.0001f &&
+        commands[3] is { Tag: null, Regex: not null, Remove: true, Shape: null } &&
+        commands[4] is { Tag: null, Regex: null, Remove: true, Shape: null },
+        "Game-side PictoACT base-shape, Auto-tag, delay, or remove parsing failed.");
+
+    var overlay = new PictoActOverlayService(null!);
+    overlay.Apply(
+        "Omen: Circle\nt: 5\nPos: 1, 2, 3\nScale: 3\n---\n" +
+        "Omen: Circle\nt: 5\nPos: 1, 2, 3\nScale: 5");
+    Assert(
+        overlay.ShapeCount == 2,
+        "PictoACT Auto-tag creates unexpectedly replaced one another.");
+    overlay.Apply(
+        "Omen: Circle\nTag: ACTCOMPAT_REPLACE\nt: 5\nPos: 1, 2, 3\nScale: 3");
+    overlay.Apply(
+        "Omen: Circle\nTag: ACTCOMPAT_REPLACE\nt: 5\nPos: 1, 2, 3\nScale: 5");
+    Assert(
+        overlay.ShapeCount == 3,
+        "PictoACT explicit-tag replacement no longer preserves one shape per tag.");
+    overlay.Apply("Action: Remove\nRegex: ^Auto$");
+    Assert(
+        overlay.ShapeCount == 1,
+        "PictoACT Regex removal did not remove all matching Auto-tag shapes.");
+    overlay.Apply("Action: Remove");
+    Assert(
+        overlay.ShapeCount == 0,
+        "PictoACT unfiltered removal did not clear every shape.");
 }
 
 static void ValidatePluginRepositoryMetadata()
@@ -1590,9 +1646,11 @@ static void ValidateHtmlOverlayDefaults()
                            BindingFlags.Static | BindingFlags.NonPublic)
                        ?.GetRawConstantValue() as string;
     Assert(
-        layoutScript?.Contains("#popup-text-info", StringComparison.Ordinal) == true &&
+        layoutScript?.Contains("#popup-text-container", StringComparison.Ordinal) == true &&
+        layoutScript.Contains("z-index: 2147483646", StringComparison.Ordinal) &&
+        layoutScript.Contains("#popup-text-info", StringComparison.Ordinal) &&
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
-        "The Cactbot responsive layout no longer protects info text from clipping.");
+        "The Cactbot responsive layout no longer protects alert text visibility.");
     var editIndicatorScript = formType.GetField(
                                   "OverlayEditIndicatorScript",
                                   BindingFlags.Static | BindingFlags.NonPublic)
