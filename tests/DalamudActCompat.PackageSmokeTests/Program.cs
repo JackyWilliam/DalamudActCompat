@@ -1644,13 +1644,29 @@ static void ValidateHtmlOverlayDefaults()
     var layoutScript = formType.GetField(
                            "CactbotResponsiveAlertLayoutScript",
                            BindingFlags.Static | BindingFlags.NonPublic)
-                       ?.GetRawConstantValue() as string;
+                       ?.GetRawConstantValue() as string
+                       ?? throw new InvalidOperationException(
+                           "Cactbot responsive alert layout script was not found.");
     Assert(
-        layoutScript?.Contains("#popup-text-container", StringComparison.Ordinal) == true &&
+        layoutScript.Contains("#popup-text-container", StringComparison.Ordinal) &&
         layoutScript.Contains("z-index: 2147483646", StringComparison.Ordinal) &&
+        layoutScript.Contains(
+            "#container:not(.hide-alerts).dalamud-act-compat-alert-repair",
+            StringComparison.Ordinal) &&
+        layoutScript.Contains("new MutationObserver", StringComparison.Ordinal) &&
+        layoutScript.Contains("window.chrome?.webview?.postMessage", StringComparison.Ordinal) &&
+        layoutScript.Contains("alertsDisabled", StringComparison.Ordinal) &&
         layoutScript.Contains("#popup-text-info", StringComparison.Ordinal) &&
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
-        "The Cactbot responsive layout no longer protects alert text visibility.");
+        "The Cactbot layout no longer repairs and reports unexpectedly invisible alert text.");
+    Assert(
+        !layoutScript.Contains(
+            ".hide-alerts #popup-text-container { display: block",
+            StringComparison.Ordinal) &&
+        !layoutScript.Contains(
+            "#container.hide-alerts.dalamud-act-compat-alert-repair",
+            StringComparison.Ordinal),
+        "The Cactbot visibility repair can override a user's explicit disabled-alert setting.");
     var editIndicatorScript = formType.GetField(
                                   "OverlayEditIndicatorScript",
                                   BindingFlags.Static | BindingFlags.NonPublic)

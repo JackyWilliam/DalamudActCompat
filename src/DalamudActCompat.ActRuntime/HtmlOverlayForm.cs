@@ -13,10 +13,15 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const nint WsExTransparent = 0x00000020;
     private const nint WsExLayered = 0x00080000;
     private const nint WsExNoActivate = 0x08000000;
+    private const nint HwndTopMost = -1;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
     private const int VirtualKeyLeftButton = 0x01;
     private const int ResizeGripSize = 16;
     private const int MinimumOverlayWidth = 120;
     private const int MinimumOverlayHeight = 80;
+    private const string CactbotRenderMessagePrefix = "dalamud-act-compat:cactbot-render:";
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
     private static nint interactionOwner;
     internal const string CactbotResponsiveAlertLayoutScript =
@@ -32,6 +37,23 @@ internal sealed class HtmlOverlayForm : IDisposable
                 z-index: 2147483646 !important;
                 pointer-events: none !important;
               }
+              #container:not(.hide-alerts).dalamud-act-compat-alert-repair #popup-text-container {
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                position: fixed !important;
+                inset: 0 !important;
+                width: 100vw !important;
+                height: 100vh !important;
+                overflow: visible !important;
+              }
+              #container:not(.hide-alerts).dalamud-act-compat-alert-repair #popup-text-container .text,
+              #container:not(.hide-alerts).dalamud-act-compat-alert-repair #popup-text-container .holder,
+              #container:not(.hide-alerts).dalamud-act-compat-alert-repair #popup-text-container .holder > * {
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
               @media (max-height: 220px) {
                 #popup-text-info {
                   top: max(0px, calc(100vh - 2.5em)) !important;
@@ -44,6 +66,77 @@ internal sealed class HtmlOverlayForm : IDisposable
               }
             `;
             (document.head || document.documentElement).appendChild(style);
+
+            const report = (detail) => {
+              try {
+                window.chrome?.webview?.postMessage(
+                  'dalamud-act-compat:cactbot-render:' + JSON.stringify(detail));
+              } catch (_) {
+              }
+            };
+            const stateOf = (element) => {
+              if (!element)
+                return null;
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return {
+                display: style.display,
+                visibility: style.visibility,
+                opacity: style.opacity,
+                left: Math.round(rect.left),
+                top: Math.round(rect.top),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+              };
+            };
+            const isVisible = (state) => state &&
+              state.display !== 'none' &&
+              state.visibility !== 'hidden' &&
+              Number(state.opacity) > 0 &&
+              state.width > 0 &&
+              state.height > 0;
+            let reportedHealthyAlert = false;
+            const inspectAlert = (alert) => requestAnimationFrame(() => {
+              const container = document.getElementById('container');
+              const popup = document.getElementById('popup-text-container');
+              if (!container || !popup || !alert)
+                return;
+
+              const alertsDisabled = container.classList.contains('hide-alerts');
+              const before = {
+                popup: stateOf(popup),
+                alert: stateOf(alert),
+              };
+              const needsRepair = !alertsDisabled &&
+                (!isVisible(before.popup) || !isVisible(before.alert));
+              if (needsRepair)
+                container.classList.add('dalamud-act-compat-alert-repair');
+
+              const detail = {
+                alertsDisabled,
+                repaired: needsRepair,
+                text: (alert.textContent || '').trim(),
+                before,
+                after: needsRepair ? {
+                  popup: stateOf(popup),
+                  alert: stateOf(alert),
+                } : before,
+              };
+              if (needsRepair || !reportedHealthyAlert) {
+                report(detail);
+                reportedHealthyAlert = true;
+              }
+            });
+            for (const holder of document.querySelectorAll('#popup-text-container .holder')) {
+              new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                  for (const node of mutation.addedNodes) {
+                    if (node instanceof HTMLElement)
+                      inspectAlert(node);
+                  }
+                }
+              }).observe(holder, { childList: true });
+            }
           };
           if (document.readyState === 'loading')
             document.addEventListener('DOMContentLoaded', install, { once: true });
@@ -319,6 +412,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 if (webView.CoreWebView2 is not null)
                 {
                     webView.CoreWebView2.ProcessFailed -= OnProcessFailed;
+                    webView.CoreWebView2.WebMessageReceived -= OnBrowserWebMessage;
                 }
                 if (consoleEventReceiver is not null)
                 {
@@ -407,6 +501,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             }
             if (IsCactbotRaidbossPage(pageUri))
             {
+                core.WebMessageReceived += OnBrowserWebMessage;
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     CactbotResponsiveAlertLayoutScript);
             }
@@ -471,6 +566,46 @@ internal sealed class HtmlOverlayForm : IDisposable
         object? sender,
         CoreWebView2DevToolsProtocolEventReceivedEventArgs args)
         => log.Error($"{title} browser exception: {args.ParameterObjectAsJson}");
+
+    private void OnBrowserWebMessage(
+        object? sender,
+        CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        string message;
+        try
+        {
+            message = args.TryGetWebMessageAsString();
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        if (!message.StartsWith(CactbotRenderMessagePrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var windowState = form is null
+            ? "window=missing"
+            : $"windowVisible={form.Visible}, topMost={form.TopMost}, " +
+              $"bounds={form.Left},{form.Top},{form.ClientSize.Width},{form.ClientSize.Height}";
+        log.Information(
+            $"Cactbot alert render state: {message[CactbotRenderMessagePrefix.Length..]}; " +
+            windowState);
+
+        if (overlayMode && settings?.IsVisible == true && form?.Visible == true)
+        {
+            SetWindowPos(
+                form.Handle,
+                HwndTopMost,
+                0,
+                0,
+                0,
+                0,
+                SwpNoSize | SwpNoMove | SwpNoActivate);
+        }
+    }
 
     internal static OverlayInteraction GetOverlayInteraction(
         Size clientSize,
@@ -814,6 +949,17 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
     private static extern nint SetWindowLongPtr(nint windowHandle, int index, nint newLong);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        nint windowHandle,
+        nint insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int virtualKey);
