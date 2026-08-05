@@ -875,41 +875,12 @@ public static class LegacyAssemblyRewriter
 
     private static void ValidatePostNamazuPublicSurface(ModuleDefinition module)
     {
-        string[] expectedModules =
-        [
-            "PostNamazu.Actions.Command",
-            "PostNamazu.Actions.Mark",
-            "PostNamazu.Actions.NormalCommand",
-            "PostNamazu.Actions.Preset",
-            "PostNamazu.Actions.Queue",
-            "PostNamazu.Actions.SendKey",
-            "PostNamazu.Actions.WayMark",
-        ];
         var types = module.Types.SelectMany(EnumerateTypes).ToArray();
         var actionModules = types
             .Where(type => type.BaseType?.FullName == "PostNamazu.Actions.NamazuModule")
             .Select(type => type.FullName)
             .ToArray();
-        AssertExactSurface("PostNamazu action modules", actionModules, expectedModules);
 
-        string[] expectedCommands =
-        [
-            "PostNamazu.Actions.Command.DoTextCommand:command",
-            "PostNamazu.Actions.Command.DoTextCommand:DoTextCommand",
-            "PostNamazu.Actions.Mark.DoMarking:mark",
-            "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:normalcommand",
-            "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:DoNormalTextCommand",
-            "PostNamazu.Actions.Preset.DoInsertPreset:preset",
-            "PostNamazu.Actions.Preset.DoInsertPreset:DoInsertPreset",
-            "PostNamazu.Actions.Queue.DoQueue:queue",
-            "PostNamazu.Actions.Queue.DoQueue:DoQueueActions",
-            "PostNamazu.Actions.Queue.BreakQueue:stop",
-            "PostNamazu.Actions.Queue.BreakQueue:break",
-            "PostNamazu.Actions.Queue.BreakQueue:BreakQueueActions",
-            "PostNamazu.Actions.SendKey.DoSendKey:sendkey",
-            "PostNamazu.Actions.WayMark.DoWaymarks:place",
-            "PostNamazu.Actions.WayMark.DoWaymarks:DoWaymarks",
-        ];
         var commands = types
             .SelectMany(type => type.Methods.Select(method => (type, method)))
             .SelectMany(pair => pair.method.CustomAttributes
@@ -919,7 +890,7 @@ public static class LegacyAssemblyRewriter
                     $"{pair.type.FullName}.{pair.method.Name}:" +
                     attribute.ConstructorArguments.Single().Value))
             .ToArray();
-        AssertExactSurface("PostNamazu command aliases", commands, expectedCommands);
+        ValidatePostNamazuActionSurface(actionModules, commands);
 
         var attach = types.Single(type => type.FullName == "PostNamazu.PostNamazu")
             .Methods.Single(method => method.Name == "Attach" && method.Parameters.Count == 0);
@@ -951,6 +922,62 @@ public static class LegacyAssemblyRewriter
                 $"memory={startsOriginalMemory}, monitor={startsOriginalMonitor}, " +
                 $"rawRejected={rawEntryPointWasRejected}.");
         }
+    }
+
+    private static void ValidatePostNamazuActionSurface(
+        IEnumerable<string> actionModules,
+        IEnumerable<string> commands)
+    {
+        string[] current =
+        [
+            "PostNamazu.Actions.Command",
+            "PostNamazu.Actions.Mark",
+            "PostNamazu.Actions.Preset",
+            "PostNamazu.Actions.Queue",
+            "PostNamazu.Actions.SendKey",
+            "PostNamazu.Actions.WayMark",
+        ];
+        var legacy = current
+            .Append("PostNamazu.Actions.NormalCommand")
+            .ToArray();
+        var actualModules = actionModules.ToHashSet(StringComparer.Ordinal);
+        string normalCommandOwner;
+        if (actualModules.SetEquals(current))
+        {
+            normalCommandOwner = "PostNamazu.Actions.Command";
+        }
+        else if (actualModules.SetEquals(legacy))
+        {
+            normalCommandOwner = "PostNamazu.Actions.NormalCommand";
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "PostNamazu action modules changed; " +
+                $"actual=[{string.Join(",", actualModules.Order(StringComparer.Ordinal))}], " +
+                $"accepted=[{string.Join(",", current.Order(StringComparer.Ordinal))}] or " +
+                $"[{string.Join(",", legacy.Order(StringComparer.Ordinal))}].");
+        }
+
+        string[] expectedCommands =
+        [
+            "PostNamazu.Actions.Command.DoTextCommand:command",
+            "PostNamazu.Actions.Command.DoTextCommand:DoTextCommand",
+            "PostNamazu.Actions.Mark.DoMarking:mark",
+            $"{normalCommandOwner}.DoNormalTextCommand:normalcommand",
+            $"{normalCommandOwner}.DoNormalTextCommand:DoNormalTextCommand",
+            "PostNamazu.Actions.Preset.DoInsertPreset:preset",
+            "PostNamazu.Actions.Preset.DoInsertPreset:DoInsertPreset",
+            "PostNamazu.Actions.Queue.DoQueue:queue",
+            "PostNamazu.Actions.Queue.DoQueue:DoQueueActions",
+            "PostNamazu.Actions.Queue.BreakQueue:stop",
+            "PostNamazu.Actions.Queue.BreakQueue:break",
+            "PostNamazu.Actions.Queue.BreakQueue:BreakQueueActions",
+            "PostNamazu.Actions.SendKey.DoSendKey:sendkey",
+            "PostNamazu.Actions.WayMark.DoWaymarks:place",
+            "PostNamazu.Actions.WayMark.DoWaymarks:DoWaymarks",
+        ];
+        AssertExactSurface("PostNamazu command aliases", commands, expectedCommands);
     }
 
     private static void ValidateTriggernometryPublicSurface(ModuleDefinition module)

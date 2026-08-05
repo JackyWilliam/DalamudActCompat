@@ -43,6 +43,7 @@ await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
 ValidatePostNamazuQueueBreakAllCompatibility();
+ValidatePostNamazu1366And1367SurfaceCompatibility();
 ValidateTriggernometryCompatibilityNoticeFilter();
 ValidateTriggernometryWebAddressLaunchUsesShell();
 ValidateTriggernometryPlaceholderProcessTestIsSkipped();
@@ -231,6 +232,92 @@ void ValidatePostNamazuQueueBreakAllCompatibility()
     Assert(
         queueIds.Count == 0,
         "PostNamazu stop=all did not preserve the original clear-all queue behavior.");
+}
+
+void ValidatePostNamazu1366And1367SurfaceCompatibility()
+{
+    var rewriter = typeof(HostPluginBridge).Assembly.GetType(
+                       "DalamudActCompat.Host.LegacyAssemblyRewriter")
+                   ?? throw new TypeLoadException(
+                       "DalamudActCompat.Host.LegacyAssemblyRewriter");
+    var validate = rewriter.GetMethod(
+                       "ValidatePostNamazuActionSurface",
+                       BindingFlags.Static | BindingFlags.NonPublic)
+                   ?? throw new MissingMethodException(
+                       rewriter.FullName,
+                       "ValidatePostNamazuActionSurface");
+    string[] currentModules =
+    [
+        "PostNamazu.Actions.Command",
+        "PostNamazu.Actions.Mark",
+        "PostNamazu.Actions.Preset",
+        "PostNamazu.Actions.Queue",
+        "PostNamazu.Actions.SendKey",
+        "PostNamazu.Actions.WayMark",
+    ];
+    string[] legacyModules =
+    [
+        .. currentModules,
+        "PostNamazu.Actions.NormalCommand",
+    ];
+    string[] commonCommands =
+    [
+        "PostNamazu.Actions.Command.DoTextCommand:command",
+        "PostNamazu.Actions.Command.DoTextCommand:DoTextCommand",
+        "PostNamazu.Actions.Mark.DoMarking:mark",
+        "PostNamazu.Actions.Preset.DoInsertPreset:preset",
+        "PostNamazu.Actions.Preset.DoInsertPreset:DoInsertPreset",
+        "PostNamazu.Actions.Queue.DoQueue:queue",
+        "PostNamazu.Actions.Queue.DoQueue:DoQueueActions",
+        "PostNamazu.Actions.Queue.BreakQueue:stop",
+        "PostNamazu.Actions.Queue.BreakQueue:break",
+        "PostNamazu.Actions.Queue.BreakQueue:BreakQueueActions",
+        "PostNamazu.Actions.SendKey.DoSendKey:sendkey",
+        "PostNamazu.Actions.WayMark.DoWaymarks:place",
+        "PostNamazu.Actions.WayMark.DoWaymarks:DoWaymarks",
+    ];
+    string[] currentCommands =
+    [
+        .. commonCommands,
+        "PostNamazu.Actions.Command.DoNormalTextCommand:normalcommand",
+        "PostNamazu.Actions.Command.DoNormalTextCommand:DoNormalTextCommand",
+    ];
+    string[] legacyCommands =
+    [
+        .. commonCommands,
+        "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:normalcommand",
+        "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:DoNormalTextCommand",
+    ];
+
+    Invoke(currentModules, currentCommands);
+    Invoke(legacyModules, legacyCommands);
+
+    var mixedSurfaceRejected = false;
+    try
+    {
+        Invoke(currentModules, legacyCommands);
+    }
+    catch (InvalidOperationException)
+    {
+        mixedSurfaceRejected = true;
+    }
+
+    Assert(
+        mixedSurfaceRejected,
+        "PostNamazu surface validation accepted mismatched 1.3.6.6/1.3.6.7 command owners.");
+
+    void Invoke(string[] modules, string[] commands)
+    {
+        try
+        {
+            validate.Invoke(null, [modules, commands]);
+        }
+        catch (TargetInvocationException exception)
+            when (exception.InnerException is InvalidOperationException inner)
+        {
+            throw inner;
+        }
+    }
 }
 
 void ValidateTriggernometryCompatibilityNoticeFilter()
