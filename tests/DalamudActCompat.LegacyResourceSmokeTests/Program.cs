@@ -1,13 +1,14 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Xml;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Protocol;
 using Mono.Cecil;
 
-if (args.Length is < 1 or > 2)
+if (args.Length is < 1 or > 3)
 {
     throw new ArgumentException(
-        "Pass the path to an installed Triggernometry.dll and optionally PostNamazu.dll.");
+        "Pass Triggernometry.dll, optionally PostNamazu.dll, and optionally a Triggernometry export XML.");
 }
 
 var assemblyPath = Path.GetFullPath(args[0]);
@@ -106,13 +107,17 @@ try
             "LogLineQueuerMass",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!,
         nameof(LegacyResourceCompatibility.EnqueueTriggerEventBounded));
-    AssertTriggernometrySelfTestScriptCompiles(implementation);
+    AssertTriggernometryScriptCompiles(implementation);
+    if (args.Length == 3)
+    {
+        AssertTriggernometryExportScriptsCompile(implementation, args[2]);
+    }
 
     var proxyType = assembly.GetType("TriggernometryProxy.ProxyPlugin", throwOnError: true)!;
     _ = Activator.CreateInstance(proxyType)
         ?? throw new InvalidOperationException("Triggernometry proxy could not be constructed.");
 
-    if (args.Length == 2)
+    if (args.Length >= 2)
     {
         var postNamazuPath = Path.GetFullPath(args[1]);
         var postNamazu = LegacyResourceCompatibility.LoadPostNamazuWithClipboardCompatibility(
@@ -454,7 +459,48 @@ static void AssertCallsNativeBridge(MethodInfo method, string expectedMethod)
         $"{nameof(NativePostNamazuBridge)}.{expectedMethod}.");
 }
 
-static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
+static void AssertTriggernometryExportScriptsCompile(Assembly implementation, string exportPath)
+{
+    var fullPath = Path.GetFullPath(exportPath);
+    if (!File.Exists(fullPath))
+    {
+        throw new FileNotFoundException("Triggernometry export XML was not found.", fullPath);
+    }
+
+    var document = new XmlDocument();
+    document.Load(fullPath);
+    var scriptActions = document.SelectNodes("//Action[@ActionType='ExecuteScript']")
+                            ?.Cast<XmlElement>()
+                            .ToArray()
+                        ?? [];
+    if (scriptActions.Length == 0)
+    {
+        throw new InvalidOperationException(
+            "Triggernometry export XML does not contain any ExecuteScript actions.");
+    }
+
+    foreach (var action in scriptActions)
+    {
+        var triggerName = (action.ParentNode?.ParentNode as XmlElement)
+            ?.GetAttribute("Name");
+        var source = action.GetAttribute("ExecScriptExpression");
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            throw new InvalidOperationException(
+                $"Triggernometry trigger '{triggerName}' has an empty ExecuteScript action.");
+        }
+
+        AssertTriggernometryScriptCompiles(
+            implementation,
+            source,
+            $"Triggernometry export script '{triggerName}'");
+    }
+}
+
+static void AssertTriggernometryScriptCompiles(
+    Assembly implementation,
+    string? sourceOverride = null,
+    string description = "Triggernometry SelfTest script")
 {
     var scriptOptionsType = AppDomain.CurrentDomain.GetAssemblies()
         .Single(assembly => string.Equals(
@@ -492,6 +538,7 @@ static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
             MessageBox.Show("PostNamazu command module is disabled.");
         }
         """;
+    var source = sourceOverride ?? selfTestScript;
     var csharpScriptType = AppDomain.CurrentDomain.GetAssemblies()
         .Single(assembly => string.Equals(
             assembly.GetName().Name,
@@ -513,8 +560,8 @@ static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
             sourceType == typeof(string));
     var script = create.MakeGenericMethod(typeof(object)).Invoke(
                      null,
-                     [selfTestScript, options, null, null])
-                 ?? throw new InvalidOperationException("Roslyn did not create the SelfTest script.");
+                     [source, options, null, null])
+                 ?? throw new InvalidOperationException($"Roslyn did not create {description}.");
     var compilation = script.GetType()
                           .GetMethod("GetCompilation", BindingFlags.Public | BindingFlags.Instance)!
                           .Invoke(script, null)
@@ -540,7 +587,7 @@ static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
     if (errors.Length > 0)
     {
         throw new InvalidOperationException(
-            "Triggernometry SelfTest script did not compile:" + Environment.NewLine +
+            $"{description} did not compile:" + Environment.NewLine +
             string.Join(Environment.NewLine, errors));
     }
 }

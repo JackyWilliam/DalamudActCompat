@@ -335,6 +335,9 @@ void ValidatePostNamazu1366And1367SurfaceCompatibility()
 void ValidateTriggernometryCompatibilityNoticeFilter()
 {
     Assert(
+        HostPluginBridge.CheckTriggernometryPostNamazuAdministratorRequirement(),
+        "Triggernometry's PostNamazu compatibility-only administrator notice was not suppressed.");
+    Assert(
         HostPluginBridge.IsExpectedTriggernometryCompatibilityNotice(
             "[鲶鱼精邮差扩展] 警告：ACT 未以管理员权限运行。如果遇到游戏崩溃，请尝试右键 ACT 程序 - 属性 - 兼容性，开启管理员身份运行。"),
         "Triggernometry's known compatibility-only administrator notice was not recognized.");

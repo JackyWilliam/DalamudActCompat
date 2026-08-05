@@ -141,12 +141,14 @@ public static class HostPluginBridge
             Console.WriteLine(
                 "Triggernometry/PostNamazu native attachment is disabled; " +
                 "the legacy ACT administrator notice does not apply to semantic bridge mode.");
-            return true;
         }
 
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity)
-            .IsInRole(WindowsBuiltInRole.Administrator);
+        // BridgeNamazu only uses this result to emit the legacy "run ACT as administrator"
+        // compatibility notice. It is not an authorization decision. The external Host keeps
+        // the real Windows token for Triggernometry's global security policy, and PostNamazu
+        // native actions are still independently permission-gated and fail closed when process
+        // access is unavailable.
+        return true;
     }
 
     public static bool IsExpectedTriggernometryCompatibilityNotice(string? message)
