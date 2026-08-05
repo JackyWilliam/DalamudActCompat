@@ -410,33 +410,58 @@ public static class LegacyResourceCompatibility
         CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NetworkRequest);
         ArgumentNullException.ThrowIfNull(listener);
         var originalPrefixes = listener.Prefixes.Cast<string>().ToArray();
-        if (OperatingSystem.IsWindows() && !IsCurrentProcessElevated())
+        var useLoopback = ShouldUsePostNamazuLoopbackFallback(originalPrefixes);
+        if (useLoopback)
         {
-            var compatiblePrefixes = originalPrefixes
-                .Select(prefix => prefix
-                    .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
-                    .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-            if (!compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
-            {
-                listener.Prefixes.Clear();
-                foreach (var prefix in compatiblePrefixes)
-                {
-                    listener.Prefixes.Add(prefix);
-                }
-            }
+            _ = TryUsePostNamazuLoopbackPrefixes(listener, originalPrefixes);
         }
 
         try
         {
             listener.Start();
-            compatibilityLog?.Information(
-                $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+            if (useLoopback)
+            {
+                compatibilityLog?.Warning(
+                    "PostNamazu HTTP wildcard binding was denied by Windows URL ACL; " +
+                    "the listener visibly fell back to loopback-only mode.");
+            }
         }
         catch (Exception ex)
         {
             compatibilityLog?.Error(ex, "PostNamazu HTTP listener failed to start.");
             throw;
+        }
+
+        compatibilityLog?.Information(
+            $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+    }
+
+    private static bool ShouldUsePostNamazuLoopbackFallback(
+        IReadOnlyList<string> originalPrefixes)
+    {
+        if (!OperatingSystem.IsWindows() ||
+            !originalPrefixes.Any(prefix =>
+                prefix.Contains("http://*:", StringComparison.OrdinalIgnoreCase) ||
+                prefix.Contains("http://+:", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        using var probe = new HttpListener();
+        foreach (var prefix in originalPrefixes)
+        {
+            probe.Prefixes.Add(prefix);
+        }
+
+        try
+        {
+            probe.Start();
+            probe.Stop();
+            return false;
+        }
+        catch (HttpListenerException ex) when (ex.ErrorCode == 5)
+        {
+            return true;
         }
     }
 
@@ -445,11 +470,27 @@ public static class LegacyResourceCompatibility
         // HttpListener.Stop performs the shutdown; Thread.Abort is unavailable on modern .NET.
     }
 
-    private static bool IsCurrentProcessElevated()
+    private static bool TryUsePostNamazuLoopbackPrefixes(
+        HttpListener listener,
+        IReadOnlyList<string> originalPrefixes)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity)
-            .IsInRole(WindowsBuiltInRole.Administrator);
+        var compatiblePrefixes = originalPrefixes
+            .Select(prefix => prefix
+                .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
+                .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        listener.Prefixes.Clear();
+        foreach (var prefix in compatiblePrefixes)
+        {
+            listener.Prefixes.Add(prefix);
+        }
+
+        return true;
     }
 
     public static bool CheckTriggernometryAdministratorCapability(bool warnIfNotAdmin)

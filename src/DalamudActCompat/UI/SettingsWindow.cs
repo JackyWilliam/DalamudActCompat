@@ -18,6 +18,7 @@ public sealed class SettingsWindow : Window
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
     private readonly Action saveConfiguration;
+    private readonly Action applyPermissionChanges;
     private readonly Func<Task<string>> factoryReset;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action selectPluginPackage;
@@ -43,6 +44,7 @@ public sealed class SettingsWindow : Window
         PluginPaths paths,
         PluginLogger logger,
         Action saveConfiguration,
+        Action applyPermissionChanges,
         Func<Task<string>> factoryReset,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action selectPluginPackage,
@@ -65,6 +67,7 @@ public sealed class SettingsWindow : Window
         this.paths = paths;
         this.logger = logger;
         this.saveConfiguration = saveConfiguration;
+        this.applyPermissionChanges = applyPermissionChanges;
         this.factoryReset = factoryReset;
         this.discoverPlugins = discoverPlugins;
         this.selectPluginPackage = selectPluginPackage;
@@ -265,23 +268,25 @@ public sealed class SettingsWindow : Window
 
         ImGui.TextUnformatted(text.Get("可选 ACT 扩展（与 Cactbot 本体分开）", "Optional ACT extensions (separate from Cactbot)"));
         DrawCompatibilityTarget("CactbotSelf / MoreLogLine", text.Get("国服额外日志扩展；实验性兼容。", "CN extra-log extension; experimental compatibility."), "https://github.com/tssailzz8/cacbotSelf");
-        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；传统 UI/逻辑运行于独立 Host，游戏内仅保留白名单语义命令桥。", "Legacy UI and logic run in the independent Host; only a whitelisted semantic command bridge remains in-game."), "https://github.com/Natsukage/PostNamazu");
+        DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；完整保留 7 个动作模块、15 个命令别名、HTTP、Triggernometry 与 OverlayPlugin 集成。启用完整权限后，原版进程附加、签名扫描和原生调用也会恢复。", "PostNamazu retains all 7 action modules, 15 command aliases, HTTP, Triggernometry, and OverlayPlugin integration. With full permissions enabled, the original process attachment, signature scanning, and native calls are also restored."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
-        DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML；日志/战斗生命周期/TTS API 已接入。", "DLL and translation XML supported; log/combat/TTS APIs wired."), "https://github.com/MnFeN/Triggernometry");
+        DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML、全部 29 种动作，以及日志/网络/区域/战斗/TTS/实体接口；其内置 BridgeNamazu 高级模块在鲶鱼精完整权限下使用原版原生运行时。", "Supports the DLL and translation XML, all 29 action types, and log/network/zone/combat/TTS/entity APIs. Its built-in advanced BridgeNamazu modules use the original native runtime when PostNamazu has full permissions."), "https://github.com/MnFeN/Triggernometry");
 
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
         ImGui.TextWrapped(text.Get(
-            "高风险能力默认关闭。权限按插件与动作类别保存，撤销后立即对兼容桥生效；" +
+            "高风险能力默认关闭。权限按插件与动作类别保存；权限组保存后会自动重启 Host 一次，使完整功能立即生效；" +
             "完整限制第三方 DLL 的直接系统调用仍需独立受限进程。",
             "High-risk capabilities are denied by default. Grants are stored per plugin and category " +
-            "and can be revoked; fully constraining direct OS calls still requires a restricted process."));
-        changed |= DrawPluginPermissions(
+            "and the Host restarts once after a permission group is saved so the complete feature set takes effect immediately; " +
+            "fully constraining direct OS calls still requires a restricted process."));
+        var permissionsChanged = DrawPluginPermissions(
             "postnamazu",
             BundledActPluginCapabilities.PostNamazu);
-        changed |= DrawPluginPermissions(
+        permissionsChanged |= DrawPluginPermissions(
             "triggernometry",
             BundledActPluginCapabilities.Triggernometry);
+        changed |= permissionsChanged;
 
         ImGui.Separator();
         ImGui.TextUnformatted($"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
@@ -431,6 +436,11 @@ public sealed class SettingsWindow : Window
         if (changed)
         {
             saveConfiguration();
+        }
+
+        if (permissionsChanged)
+        {
+            applyPermissionChanges();
         }
     }
 

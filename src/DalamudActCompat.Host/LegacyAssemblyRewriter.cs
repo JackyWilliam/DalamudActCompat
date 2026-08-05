@@ -124,49 +124,43 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.GetClipboardText))!);
         var copyPostNamazuLog = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.CopyPostNamazuLog))!);
-        var attach = module.ImportReference(
-            bridgeType.GetMethod(nameof(HostPluginBridge.AttachPostNamazu))!);
         var overlayAdapter = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.UsePostNamazuOverlayAdapter))!);
-        var skipMonitor = module.ImportReference(
-            bridgeType.GetMethod(nameof(HostPluginBridge.SkipLegacyProcessMonitoring))!);
         var command = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuCommand))!);
         var mark = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuMark))!);
         var waymark = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuWaymark))!);
+        var preset = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuPreset))!);
+        var sendKey = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuKey))!);
+        var queue = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuQueue))!);
+        var breakQueue = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.BreakPostNamazuQueue))!);
         var networkAllowed = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNetworkAllowed))!);
         var startHttpListener = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.StartPostNamazuHttpListener))!);
         var skipHttpThreadAbort = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SkipPostNamazuThreadAbort))!);
-        var unsupported = module.ImportReference(
-            bridgeType.GetMethods().Single(method =>
-                method.Name == nameof(HostPluginBridge.UnsupportedNativeOperation) &&
-                !method.IsGenericMethod));
-        var unsupportedGeneric = module.ImportReference(
-            bridgeType.GetMethods().Single(method =>
-                method.Name == nameof(HostPluginBridge.UnsupportedNativeOperation) &&
-                method.IsGenericMethod));
         var copyLogPatched = false;
         var overlayAdapterPatched = false;
         var httpListenerPatched = false;
         var httpThreadAbortPatched = false;
         var markPatched = false;
         var waymarkPatched = false;
+        var presetPatched = false;
+        var sendKeyPatched = false;
+        var queuePatched = false;
+        var breakQueuePatched = false;
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
         {
             foreach (var method in type.Methods.Where(method => method.HasBody))
             {
-                if (type.FullName == "PostNamazu.PostNamazu" && method.Name == "Attach")
-                {
-                    ReplaceWithBridge(method, attach, loadInstance: true, loadParameters: false);
-                    continue;
-                }
-
                 if (type.FullName == "PostNamazu.Common.PluginIntegrationManager" &&
                     method.Name == "InitializeOverlayIntegration" &&
                     method.Parameters.Count == 0)
@@ -197,13 +191,6 @@ public static class LegacyAssemblyRewriter
                     il.Append(il.Create(OpCodes.Call, copyPostNamazuLog));
                     il.Append(il.Create(OpCodes.Ret));
                     copyLogPatched = true;
-                    continue;
-                }
-
-                if (type.FullName == "PostNamazu.Common.ProcessManager" &&
-                    method.Name == "StartProcessMonitoring")
-                {
-                    ReplaceWithBridge(method, skipMonitor, loadInstance: true, loadParameters: false);
                     continue;
                 }
 
@@ -267,15 +254,43 @@ public static class LegacyAssemblyRewriter
                     continue;
                 }
 
-                if ((type.FullName == "PostNamazu.PostNamazu" &&
-                     method.Name is "Call" or "DirectCall" or "ExecuteInFrameLock") ||
-                    (type.FullName == "PostNamazu.Actions.NamazuModule" &&
-                     method.Name == "ExecuteWithLock"))
+                if (type.FullName == "PostNamazu.Actions.Preset" &&
+                    method.Name == "DoInsertPreset" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
                 {
-                    var target = method.ReturnType.MetadataType == MetadataType.Void
-                        ? unsupported
-                        : MakeGenericMethod(unsupportedGeneric, [method.ReturnType]);
-                    ReplaceWithBridge(method, target, loadInstance: false, loadParameters: false);
+                    ReplaceWithBridge(method, preset, loadInstance: false, loadParameters: true);
+                    presetPatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.SendKey" &&
+                    method.Name == "DoSendKey" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, sendKey, loadInstance: false, loadParameters: true);
+                    sendKeyPatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.Queue" &&
+                    method.Name == "DoQueue" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, queue, loadInstance: true, loadParameters: true);
+                    queuePatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.Queue" &&
+                    method.Name == "BreakQueue" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, breakQueue, loadInstance: false, loadParameters: true);
+                    breakQueuePatched = true;
                     continue;
                 }
 
@@ -305,14 +320,18 @@ public static class LegacyAssemblyRewriter
         }
 
         if (!copyLogPatched || !overlayAdapterPatched || !httpListenerPatched ||
-            !httpThreadAbortPatched || !markPatched || !waymarkPatched)
+            !httpThreadAbortPatched || !markPatched || !waymarkPatched ||
+            !presetPatched || !sendKeyPatched || !queuePatched || !breakQueuePatched)
         {
             throw new InvalidOperationException(
                 "PostNamazu compatibility shape changed; " +
                 $"copyLog={copyLogPatched}, overlayAdapter={overlayAdapterPatched}, " +
                 $"httpListener={httpListenerPatched}, httpStop={httpThreadAbortPatched}, " +
-                $"mark={markPatched}, waymark={waymarkPatched}.");
+                $"mark={markPatched}, waymark={waymarkPatched}, preset={presetPatched}, " +
+                $"sendKey={sendKeyPatched}, queue={queuePatched}, breakQueue={breakQueuePatched}.");
         }
+
+        ValidatePostNamazuPublicSurface(module);
 
         using var output = new MemoryStream();
         definition.Write(output);
@@ -361,6 +380,7 @@ public static class LegacyAssemblyRewriter
         RedirectResourceManagerCalls(module);
         PatchLegacyJavaScriptSerializer(module);
         PatchTriggernometryCompatibility(module);
+        ValidateTriggernometryPublicSurface(module);
         var patched = new MemoryStream();
         definition.Write(patched);
         patched.Position = 0;
@@ -487,9 +507,9 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.SkipTriggernometryStartupUpdateCheck),
                 [typeof(object), typeof(bool)])!);
-        var skipPostNamazuAdministratorNotice = module.ImportReference(
+        var checkPostNamazuAdministratorRequirement = module.ImportReference(
             bridgeType.GetMethod(
-                nameof(HostPluginBridge.SkipTriggernometryPostNamazuAdministratorNotice),
+                nameof(HostPluginBridge.CheckTriggernometryPostNamazuAdministratorRequirement),
                 Type.EmptyTypes)!);
         var adminMethod = module.Types
             .SelectMany(EnumerateTypes)
@@ -589,7 +609,7 @@ public static class LegacyAssemblyRewriter
         }
 
         postNamazuAdminChecks[0].OpCode = OpCodes.Call;
-        postNamazuAdminChecks[0].Operand = skipPostNamazuAdministratorNotice;
+        postNamazuAdminChecks[0].Operand = checkPostNamazuAdministratorRequirement;
 
         var triggernometryInitializer = module.Types
             .SelectMany(EnumerateTypes)
@@ -851,6 +871,191 @@ public static class LegacyAssemblyRewriter
             dependency.Position = 0;
             loadContext.LoadFromStream(dependency);
         }
+    }
+
+    private static void ValidatePostNamazuPublicSurface(ModuleDefinition module)
+    {
+        string[] expectedModules =
+        [
+            "PostNamazu.Actions.Command",
+            "PostNamazu.Actions.Mark",
+            "PostNamazu.Actions.NormalCommand",
+            "PostNamazu.Actions.Preset",
+            "PostNamazu.Actions.Queue",
+            "PostNamazu.Actions.SendKey",
+            "PostNamazu.Actions.WayMark",
+        ];
+        var types = module.Types.SelectMany(EnumerateTypes).ToArray();
+        var actionModules = types
+            .Where(type => type.BaseType?.FullName == "PostNamazu.Actions.NamazuModule")
+            .Select(type => type.FullName)
+            .ToArray();
+        AssertExactSurface("PostNamazu action modules", actionModules, expectedModules);
+
+        string[] expectedCommands =
+        [
+            "PostNamazu.Actions.Command.DoTextCommand:command",
+            "PostNamazu.Actions.Command.DoTextCommand:DoTextCommand",
+            "PostNamazu.Actions.Mark.DoMarking:mark",
+            "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:normalcommand",
+            "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:DoNormalTextCommand",
+            "PostNamazu.Actions.Preset.DoInsertPreset:preset",
+            "PostNamazu.Actions.Preset.DoInsertPreset:DoInsertPreset",
+            "PostNamazu.Actions.Queue.DoQueue:queue",
+            "PostNamazu.Actions.Queue.DoQueue:DoQueueActions",
+            "PostNamazu.Actions.Queue.BreakQueue:stop",
+            "PostNamazu.Actions.Queue.BreakQueue:break",
+            "PostNamazu.Actions.Queue.BreakQueue:BreakQueueActions",
+            "PostNamazu.Actions.SendKey.DoSendKey:sendkey",
+            "PostNamazu.Actions.WayMark.DoWaymarks:place",
+            "PostNamazu.Actions.WayMark.DoWaymarks:DoWaymarks",
+        ];
+        var commands = types
+            .SelectMany(type => type.Methods.Select(method => (type, method)))
+            .SelectMany(pair => pair.method.CustomAttributes
+                .Where(attribute =>
+                    attribute.AttributeType.FullName == "PostNamazu.Attributes.CommandAttribute")
+                .Select(attribute =>
+                    $"{pair.type.FullName}.{pair.method.Name}:" +
+                    attribute.ConstructorArguments.Single().Value))
+            .ToArray();
+        AssertExactSurface("PostNamazu command aliases", commands, expectedCommands);
+
+        var attach = types.Single(type => type.FullName == "PostNamazu.PostNamazu")
+            .Methods.Single(method => method.Name == "Attach" && method.Parameters.Count == 0);
+        var startsOriginalMemory = attach.Body.Instructions.Any(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == "GreyMagic.ExternalProcessMemory" &&
+            called.Name == ".ctor");
+        var processMonitor = types
+            .Single(type => type.FullName == "PostNamazu.Common.ProcessManager")
+            .Methods.Single(method =>
+                method.Name == "StartProcessMonitoring" && method.Parameters.Count == 0);
+        var startsOriginalMonitor = processMonitor.Body.Instructions.Any(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == typeof(BackgroundWorker).FullName &&
+            called.Name == nameof(BackgroundWorker.RunWorkerAsync));
+        var rawEntryPoints = types.Single(type => type.FullName == "PostNamazu.PostNamazu")
+            .Methods.Where(method =>
+                method.Name is "Call" or "DirectCall" or "ExecuteInFrameLock")
+            .ToArray();
+        var rawEntryPointWasRejected = rawEntryPoints.Any(method =>
+            method.Body.Instructions.Any(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+                called.Name.Contains("Unsupported", StringComparison.Ordinal)));
+        if (!startsOriginalMemory || !startsOriginalMonitor || rawEntryPointWasRejected)
+        {
+            throw new InvalidOperationException(
+                "PostNamazu original native runtime was truncated: " +
+                $"memory={startsOriginalMemory}, monitor={startsOriginalMonitor}, " +
+                $"rawRejected={rawEntryPointWasRejected}.");
+        }
+    }
+
+    private static void ValidateTriggernometryPublicSurface(ModuleDefinition module)
+    {
+        var types = module.Types.SelectMany(EnumerateTypes).ToArray();
+        string[] expectedActions =
+        [
+            "ActionActInteraction", "ActionBeep", "ActionDiscordWebhook",
+            "ActionDiskOperation", "ActionExecuteScript", "ActionFolderOperation",
+            "ActionJsonRequest", "ActionKeypress", "ActionLaunchProcess",
+            "ActionLiveSplitControl", "ActionLogMessage", "ActionLoop",
+            "ActionMessageBox", "ActionMouse", "ActionMutex", "ActionNamedCallback",
+            "ActionObsControl", "ActionOverlayImage", "ActionOverlayText",
+            "ActionPlaceholder", "ActionPlaySound", "ActionPlaySpeech",
+            "ActionRepository", "ActionTriggerOperation", "ActionVariableDict",
+            "ActionVariableList", "ActionVariableScalar", "ActionVariableTable",
+            "ActionWindowMessage",
+        ];
+        var actionClasses = types
+            .Where(type =>
+                type.Namespace == "Triggernometry.Core.Actions" &&
+                !type.IsNested &&
+                type.BaseType?.FullName == "Triggernometry.Core.ActionBase")
+            .Select(type => type.Name)
+            .ToArray();
+        AssertExactSurface("Triggernometry action classes", actionClasses, expectedActions);
+
+        string[] expectedModules =
+        [
+            "AbilityRangeCheckModule", "CameraModule", "EntityModule",
+            "EnvironmentEffectModule", "ExecuteCommandModule", "InstanceAfkTimerModule",
+            "MovementModule", "PictoACTModule", "QuitInstanceModule",
+            "ShowTextGimmickHintModule", "UseActionModule", "VfxModule",
+        ];
+        var moduleClasses = types
+            .Where(type =>
+                type.Namespace == "Triggernometry.PluginBridges.BridgeNamazu.Modules" &&
+                !type.IsNested &&
+                type.BaseType?.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.Modules.ModuleBase")
+            .Select(type => type.Name)
+            .ToArray();
+        AssertExactSurface("Triggernometry BridgeNamazu modules", moduleClasses, expectedModules);
+
+        string[] expectedCallbacks =
+        [
+            "DisableAbilityRangeCheck", "SetCameraParams", "InvokeOnMultipleEntities",
+            "SetDefaultPos", "SetPos", "SetModelRelPos", "Teleport",
+            "SetDefaultHeading", "SetHeading", "Target", "SetModelStatus",
+            "SetObjectScale", "ObjectScaling", "SetOpacity", "SetStatusLoopVfx",
+            "Redraw", "SetHighlightColor", "RemoveStatus", "EObjAnimation",
+            "PlayActionTimeline", "MapEffect", "ChangeWeather", "Exec", "StatusOff",
+            "ExecTgt", "ExecPos", "TeleportDive", "DisableInstanceAfkTimer",
+            "SetMoveSpeedMultiplier", "SetJumpHeightMultiplier", "PictoACT",
+            "QuitInstance", "Hint", "Warn", "UseAction", "UseActionLocation",
+            "LockOn", "Channeling", "CastVfx", "ActorVfx", "Omen", "StaticVfx",
+        ];
+        var callbacks = moduleClasses
+            .Select(name => types.Single(type =>
+                type.FullName ==
+                $"Triggernometry.PluginBridges.BridgeNamazu.Modules.{name}"))
+            .SelectMany(type => type.Methods)
+            .SelectMany(method => method.CustomAttributes
+                .Where(attribute =>
+                    attribute.AttributeType.FullName ==
+                    "Triggernometry.PluginBridges.BridgeNamazu.Modules.CallbackMethodAttribute")
+                .Select(attribute => attribute.ConstructorArguments[0].Value?.ToString() ?? string.Empty))
+            .ToArray();
+        AssertExactSurface("Triggernometry BridgeNamazu callbacks", callbacks, expectedCallbacks);
+
+        string[] expectedScriptingMethods = ["MouseToWorld", "IsMouseInSight"];
+        var scriptingMethods = moduleClasses
+            .Select(name => types.Single(type =>
+                type.FullName ==
+                $"Triggernometry.PluginBridges.BridgeNamazu.Modules.{name}"))
+            .SelectMany(type => type.Methods)
+            .SelectMany(method => method.CustomAttributes
+                .Where(attribute =>
+                    attribute.AttributeType.FullName ==
+                    "Triggernometry.PluginBridges.BridgeNamazu.Modules.ScriptingMethodAttribute")
+                .Select(_ => method.Name))
+            .ToArray();
+        AssertExactSurface(
+            "Triggernometry BridgeNamazu scripting methods",
+            scriptingMethods,
+            expectedScriptingMethods);
+    }
+
+    private static void AssertExactSurface(
+        string label,
+        IEnumerable<string> actual,
+        IEnumerable<string> expected)
+    {
+        var actualSet = actual.ToHashSet(StringComparer.Ordinal);
+        var expectedSet = expected.ToHashSet(StringComparer.Ordinal);
+        var missing = expectedSet.Except(actualSet).Order(StringComparer.Ordinal).ToArray();
+        var extra = actualSet.Except(expectedSet).Order(StringComparer.Ordinal).ToArray();
+        if (missing.Length == 0 && extra.Length == 0)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{label} changed; missing=[{string.Join(",", missing)}], " +
+            $"extra=[{string.Join(",", extra)}].");
     }
 
     private static object DeserializeLegacyPayload(byte[] payload)

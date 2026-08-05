@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.5.5",
+    "AssemblyVersion":  "0.3.5.6",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.5/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.6/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.5/DalamudActCompat.zip",
-    "LastUpdate":  1785856728285,
-    "Changelog":  "修复 Triggernometry LaunchProcess 实例启动未经过兼容桥的问题，网页动作使用系统默认浏览器；占位值进程测试不再产生虚假的 test 文件错误；仅抑制鲶鱼精邮差扩展针对旧 ACT 注入路径的提权提示，真实 Windows 令牌和高风险权限判断保持不变。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.5.6/DalamudActCompat.zip",
+    "LastUpdate":  1785915283592,
+    "Changelog":  "补齐 Triggernometry 全部 29 类动作与 BridgeNamazu 公共面审计；鲶鱼精邮差保留 7 个动作模块、15 个命令别名、原生完整权限与通用队列；权限组保存后单次重启 Host 即时生效。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

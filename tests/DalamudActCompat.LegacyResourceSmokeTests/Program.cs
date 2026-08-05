@@ -289,6 +289,7 @@ static void AssertPostNamazuSemanticPayloads()
     var mark = PostNamazuSemanticActions.ParseMark(
         "{\"ActorID\":0xE0000000,\"MarkType\":\"attack8\",\"LocalOnly\":true}");
     if (mark.ActorId != PostNamazuSemanticActions.ClearActorId ||
+        mark.ActorName is not null ||
         mark.MarkerIndex != 16 ||
         !mark.LocalOnly)
     {
@@ -298,7 +299,8 @@ static void AssertPostNamazuSemanticPayloads()
 
     var waymarks = PostNamazuSemanticActions.ParseWaymarks(
         "{\"LocalOnly\":true,\"A\":{\"X\":1.25,\"Y\":2.5,\"Z\":-3.75,\"Active\":true},\"B\":{}}");
-    if (!waymarks.LocalOnly || waymarks.ClearAll || waymarks.Updates.Count != 2 ||
+    if (waymarks.Operation != PostNamazuWaymarkOperation.Apply ||
+        !waymarks.LocalOnly || waymarks.Updates.Count != 2 ||
         !waymarks.Updates[0].Active || waymarks.Updates[1].Active ||
         waymarks.Updates[0].Position.X != 1.25f ||
         waymarks.Updates[0].Position.Y != 2.5f ||
@@ -307,9 +309,52 @@ static void AssertPostNamazuSemanticPayloads()
         throw new InvalidOperationException("PostNamazu waymark JSON compatibility failed.");
     }
 
-    if (!PostNamazuSemanticActions.ParseWaymarks("clear").ClearAll)
+    if (NativePostNamazuBridge.RequiresNativeGameMemory(waymarks) ||
+        NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("clear")) ||
+        NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("reset")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks(
+                "{\"LocalOnly\":false,\"A\":{\"X\":1,\"Y\":2,\"Z\":3,\"Active\":true}}")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("save")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("load")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("public")))
     {
-        throw new InvalidOperationException("PostNamazu clear command compatibility failed.");
+        throw new InvalidOperationException(
+            "PostNamazu local/native waymark permission compatibility failed.");
+    }
+
+    if (PostNamazuSemanticActions.ParseWaymarks("clear").Operation !=
+        PostNamazuWaymarkOperation.ClearLocal ||
+        PostNamazuSemanticActions.ParseWaymarks("public").Operation !=
+        PostNamazuWaymarkOperation.Publicize ||
+        PostNamazuSemanticActions.ParseWaymarks("save").Operation !=
+        PostNamazuWaymarkOperation.Save ||
+        PostNamazuSemanticActions.ParseWaymarks("restore").Operation !=
+        PostNamazuWaymarkOperation.Load)
+    {
+        throw new InvalidOperationException("PostNamazu waymark command compatibility failed.");
+    }
+
+    var byName = PostNamazuSemanticActions.ParseMark(
+        "{\"Name\":\"Actor Name\",\"MarkType\":\"circle\"}");
+    if (byName.ActorId is not null || byName.ActorName != "Actor Name" ||
+        byName.MarkerIndex != 11 || byName.LocalOnly)
+    {
+        throw new InvalidOperationException("PostNamazu name-based marking compatibility failed.");
+    }
+
+    var preset = PostNamazuSemanticActions.ParsePreset(
+        "{\"Name\":\"Slot 30\",\"MapID\":777,\"A\":{\"X\":1.25,\"Y\":2.5,\"Z\":-3.75,\"Active\":true}}");
+    if (preset.Slot != 30 || preset.MapId != 777 || preset.Markers.Count != 8 ||
+        !preset.Markers[0].Active || preset.Markers[0].Position.Z != -3.75f ||
+        preset.Markers[1].Active || PostNamazuSemanticActions.ParseKeyCode("65") != 65)
+    {
+        throw new InvalidOperationException("PostNamazu preset/sendkey compatibility failed.");
     }
 }
 

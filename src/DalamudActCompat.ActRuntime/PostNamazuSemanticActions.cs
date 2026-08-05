@@ -43,30 +43,63 @@ internal static class PostNamazuSemanticActions
     internal static PostNamazuMarkAction ParseMark(string payload)
     {
         var root = ParseObject(payload);
-        var actorToken = root.GetValue("ActorID", StringComparison.OrdinalIgnoreCase)
-                         ?? throw new InvalidDataException(
-                             "PostNamazu mark payload requires ActorID; name-only marking is not brokered.");
+        var actorToken = root.GetValue("ActorID", StringComparison.OrdinalIgnoreCase);
+        var actorName = root.GetValue("Name", StringComparison.OrdinalIgnoreCase)
+            ?.Value<string>()
+            ?.Trim();
+        if (actorToken is null && string.IsNullOrWhiteSpace(actorName))
+        {
+            throw new InvalidDataException(
+                "PostNamazu mark payload requires ActorID or Name.");
+        }
+
         var markerToken = root.GetValue("MarkType", StringComparison.OrdinalIgnoreCase)
                           ?? throw new InvalidDataException(
                               "PostNamazu mark payload requires MarkType.");
-        var actorId = ParseActorId(actorToken);
+        uint? actorId = actorToken is null ? null : ParseActorId(actorToken);
         var markerIndex = ParseMarkerIndex(markerToken);
         var localOnly = root.GetValue("LocalOnly", StringComparison.OrdinalIgnoreCase)
                             ?.Value<bool?>() ?? false;
-        return new PostNamazuMarkAction(actorId, markerIndex, localOnly);
+        return new PostNamazuMarkAction(actorId, actorName, markerIndex, localOnly);
     }
 
     internal static PostNamazuWaymarkAction ParseWaymarks(string payload)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
-        if (string.Equals(payload.Trim(), "clear", StringComparison.OrdinalIgnoreCase))
+        var command = payload.Trim();
+        if (string.Equals(command, "clear", StringComparison.OrdinalIgnoreCase))
         {
-            return new PostNamazuWaymarkAction(false, true, []);
+            return new PostNamazuWaymarkAction(
+                PostNamazuWaymarkOperation.ClearLocal,
+                true,
+                []);
+        }
+
+        if (string.Equals(command, "save", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(command, "backup", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PostNamazuWaymarkAction(PostNamazuWaymarkOperation.Save, true, []);
+        }
+
+        if (string.Equals(command, "load", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(command, "restore", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PostNamazuWaymarkAction(PostNamazuWaymarkOperation.Load, true, []);
+        }
+
+        if (string.Equals(command, "reset", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PostNamazuWaymarkAction(PostNamazuWaymarkOperation.Reset, true, []);
+        }
+
+        if (string.Equals(command, "public", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PostNamazuWaymarkAction(PostNamazuWaymarkOperation.Publicize, false, []);
         }
 
         var root = ParseObject(payload);
         var localOnly = root.GetValue("LocalOnly", StringComparison.OrdinalIgnoreCase)
-                            ?.Value<bool?>() ?? false;
+                            ?.Value<bool?>() ?? true;
         var updates = new List<PostNamazuWaymarkUpdate>();
         foreach (var (name, index) in FieldMarkerNames)
         {
@@ -99,7 +132,59 @@ internal static class PostNamazuSemanticActions
                 "PostNamazu waymark payload contains no A-D or One-Four marker updates.");
         }
 
-        return new PostNamazuWaymarkAction(localOnly, false, updates);
+        return new PostNamazuWaymarkAction(
+            PostNamazuWaymarkOperation.Apply,
+            localOnly,
+            updates);
+    }
+
+    internal static PostNamazuPresetAction ParsePreset(string payload)
+    {
+        var root = ParseObject(payload);
+        var slotName = root.GetValue("Name", StringComparison.OrdinalIgnoreCase)
+            ?.Value<string>()
+            ?.Trim();
+        var slot = 1;
+        if (!string.IsNullOrWhiteSpace(slotName) &&
+            slotName.StartsWith("Slot", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(slotName[4..].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) &&
+            parsed is >= 1 and <= 30)
+        {
+            slot = parsed;
+        }
+
+        var mapIdToken = root.GetValue("MapID", StringComparison.OrdinalIgnoreCase);
+        var mapId = mapIdToken?.Value<ushort?>() ?? 0;
+        var markers = new List<PostNamazuPresetMarker>(FieldMarkerNames.Length);
+        foreach (var (name, index) in FieldMarkerNames)
+        {
+            var token = root.GetValue(name, StringComparison.OrdinalIgnoreCase);
+            if (token is not JObject marker)
+            {
+                markers.Add(new PostNamazuPresetMarker(index, false, Vector3.Zero));
+                continue;
+            }
+
+            var active = marker.GetValue("Active", StringComparison.OrdinalIgnoreCase)
+                             ?.Value<bool?>() ?? false;
+            var position = active
+                ? new Vector3(
+                    ParseCoordinate(marker, "X"),
+                    ParseCoordinate(marker, "Y"),
+                    ParseCoordinate(marker, "Z"))
+                : Vector3.Zero;
+            markers.Add(new PostNamazuPresetMarker(index, active, position));
+        }
+
+        return new PostNamazuPresetAction(slot, mapId, markers);
+    }
+
+    internal static int ParseKeyCode(string payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        return int.TryParse(payload.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var keyCode)
+            ? keyCode
+            : throw new InvalidDataException("PostNamazu sendkey payload is not a valid key code.");
     }
 
     private static JObject ParseObject(string payload)
@@ -187,11 +272,32 @@ internal static class PostNamazuSemanticActions
     internal const uint ClearActorId = InvalidActorId;
 }
 
-internal sealed record PostNamazuMarkAction(uint ActorId, int MarkerIndex, bool LocalOnly);
+internal sealed record PostNamazuMarkAction(
+    uint? ActorId,
+    string? ActorName,
+    int MarkerIndex,
+    bool LocalOnly);
+
+internal enum PostNamazuWaymarkOperation
+{
+    Apply,
+    ClearLocal,
+    Save,
+    Load,
+    Reset,
+    Publicize,
+}
 
 internal sealed record PostNamazuWaymarkAction(
+    PostNamazuWaymarkOperation Operation,
     bool LocalOnly,
-    bool ClearAll,
     IReadOnlyList<PostNamazuWaymarkUpdate> Updates);
 
 internal sealed record PostNamazuWaymarkUpdate(int Index, bool Active, Vector3 Position);
+
+internal sealed record PostNamazuPresetAction(
+    int Slot,
+    ushort MapId,
+    IReadOnlyList<PostNamazuPresetMarker> Markers);
+
+internal sealed record PostNamazuPresetMarker(int Index, bool Active, Vector3 Position);

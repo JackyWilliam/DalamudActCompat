@@ -77,7 +77,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         IFramework framework,
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
+        ISigScanner sigScanner,
         INotificationManager notificationManager,
+        Func<string, uint?> resolveActorId,
         Func<bool> localDeathWhilePartyContinues,
         Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
         Func<bool> debugMode,
@@ -96,7 +98,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
         this.getOverlayWindowSettings = getOverlayWindowSettings;
         this.debugMode = debugMode;
-        NativePostNamazuBridge.Configure(framework, log);
+        NativePostNamazuBridge.Configure(framework, log, sigScanner, resolveActorId);
         LegacyResourceCompatibility.Configure(log, notificationManager);
         CompatibilityPermissionBroker.Configure(
             permissionCheck,
@@ -278,7 +280,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
 
-    public event Action<DateTimeOffset, string, bool>? RawLogLineReceived;
+    public event Action<DateTimeOffset, string, string, bool>? RawLogLineReceived;
 
     public event Action<uint, string>? ZoneChanged;
 
@@ -312,7 +314,6 @@ public sealed class SelfHostedActRuntime : IDisposable
                 log.Warning("External ACT Host rejected a game-side TTS request.");
             }
         };
-        ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
         ActGlobals.oFormActMain.AfterCombatAction += OnAfterCombatAction;
         ActGlobals.oFormActMain.AfterCombatEnd += OnAfterCombatEnd;
 
@@ -335,6 +336,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                 chatGui,
                 framework,
                 condition);
+            // IINACT registers its formatter in the wrapper constructor. Subscribe after it
+            // so the external ACT Host receives both the raw pipe line and ACT's legacy line.
+            ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
             parser.Subscription.ZoneChanged += OnZoneChangedForHost;
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
@@ -799,6 +803,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         RawLogLineReceived?.Invoke(
             new DateTimeOffset(logInfo.detectedTime),
             logInfo.originalLogLine,
+            logInfo.logLine,
             isImport);
         if (isImport)
         {

@@ -19,6 +19,7 @@ using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
+using DalamudActCompat.Infrastructure.Processes;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
@@ -813,7 +814,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 5)) == "v0.3.5.5",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 6)) == "v0.3.5.6",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -856,6 +857,13 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var hostSupervisorSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Infrastructure",
+        "Processes",
+        "ActHostSupervisor.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
@@ -923,6 +931,31 @@ static void ValidateControlCenterPresentation()
         statusSource.Contains("BeginGoldCard", StringComparison.Ordinal) &&
         statusSource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "The ACT compatibility status window does not use the new rounded branded card design.");
+    Assert(
+        typeof(ActHostSupervisor).GetMethod(nameof(ActHostSupervisor.RestartAsync))?.ReturnType ==
+        typeof(Task<bool>) &&
+        Regex.Matches(
+            controlCenterSource,
+            Regex.Escape("applyPermissionChanges();"),
+            RegexOptions.CultureInvariant).Count == 1 &&
+        Regex.Matches(
+            settingsSource,
+            Regex.Escape("applyPermissionChanges();"),
+            RegexOptions.CultureInvariant).Count == 1 &&
+        controlCenterSource.Contains(
+            "changed |= permissionsChanged;",
+            StringComparison.Ordinal) &&
+        settingsSource.Contains(
+            "changed |= permissionsChanged;",
+            StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            pluginSource,
+            @"SaveConfiguration\(\);\s+ApplyActPermissionChanges\(\);",
+            RegexOptions.CultureInvariant) &&
+        hostSupervisorSource.Contains(
+            "public async Task<bool> RestartAsync",
+            StringComparison.Ordinal),
+        "ACT permission groups are not saved before exactly one Host restart callback.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
