@@ -121,7 +121,8 @@ public sealed record HostHealth(
 public sealed record HostLogEvent(
     DateTimeOffset Timestamp,
     string Line,
-    bool IsImport);
+    bool IsImport,
+    string? ActLine = null);
 
 public sealed record HostZoneEvent(
     uint TerritoryId,

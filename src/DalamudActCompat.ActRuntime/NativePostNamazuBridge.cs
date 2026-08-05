@@ -1,9 +1,11 @@
 using Advanced_Combat_Tracker;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.System.String;
+using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using System.Collections;
 using System.Diagnostics;
 using System.Reflection;
@@ -19,8 +21,10 @@ public static class NativePostNamazuBridge
     private static readonly Dictionary<int, Func<nint, ulong[], ulong>> NativeCalls = [];
     private static IFramework? framework;
     private static IPluginLog? log;
+    private static Func<string, uint?>? actorIdResolver;
     private static PostNamazuEventSource? overlayEventSource;
     private static IReadOnlyList<CompatibilityStageResult> stages = [];
+    private static PostNamazuWaymarkSnapshot[]? savedWaymarks;
 
     public static IReadOnlyList<CompatibilityStageResult> Stages
     {
@@ -33,10 +37,16 @@ public static class NativePostNamazuBridge
         }
     }
 
-    internal static void Configure(IFramework frameworkService, IPluginLog pluginLog)
+    internal static void Configure(
+        IFramework frameworkService,
+        IPluginLog pluginLog,
+        ISigScanner _,
+        Func<string, uint?> resolveActorId)
     {
         framework = frameworkService;
         log = pluginLog;
+        actorIdResolver = resolveActorId;
+        savedWaymarks = null;
     }
 
     internal static string Start(object plugin)
@@ -149,7 +159,7 @@ public static class NativePostNamazuBridge
             results,
             "命令发送测试",
             CompatibilityStageState.NotTested,
-            "未自动发送有副作用的游戏命令；需由用户触发白名单无害测试。");
+            "未自动发送有副作用的游戏命令；需由用户手动触发对应功能测试。");
         AddStage(
             results,
             "卸载测试",
@@ -385,11 +395,12 @@ public static class NativePostNamazuBridge
         var request = PostNamazuSemanticActions.ParseMark(payload);
         if (!request.LocalOnly)
         {
-            throw new NotSupportedException(
-                "ActorID-based public target marking is not available through the safe game-side broker; use LocalOnly=true.");
+            CompatibilityPermissionBroker.Demand(
+                "postnamazu",
+                ActCapability.NativeGameMemory);
         }
 
-        return RunOnFrameworkThreadAsync(() => ApplyLocalMark(request), cancellationToken);
+        return RunOnFrameworkThreadAsync(() => ApplyMark(request), cancellationToken);
     }
 
     public static Task SendWaymarksAsync(
@@ -398,19 +409,66 @@ public static class NativePostNamazuBridge
     {
         CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.GameCommand);
         var request = PostNamazuSemanticActions.ParseWaymarks(payload);
+        if (RequiresNativeGameMemory(request))
+        {
+            CompatibilityPermissionBroker.Demand(
+                "postnamazu",
+                ActCapability.NativeGameMemory);
+        }
+
         return RunOnFrameworkThreadAsync(() => ApplyWaymarks(request), cancellationToken);
     }
 
-    private static unsafe void ApplyLocalMark(PostNamazuMarkAction request)
+    public static Task SendPresetAsync(
+        string payload,
+        CancellationToken cancellationToken)
     {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.GameCommand);
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.NativeGameMemory);
+        var request = PostNamazuSemanticActions.ParsePreset(payload);
+        return RunOnFrameworkThreadAsync(() => ApplyPreset(request), cancellationToken);
+    }
+
+    public static Task SendKeyAsync(
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        CompatibilityPermissionBroker.Demand("postnamazu", ActCapability.GameCommand);
+        var keyCode = PostNamazuSemanticActions.ParseKeyCode(payload);
+        return RunOnFrameworkThreadAsync(() => SendKeyCode(keyCode), cancellationToken);
+    }
+
+    private static unsafe void ApplyMark(PostNamazuMarkAction request)
+    {
+        if (!request.LocalOnly)
+        {
+            throw new InvalidOperationException(
+                "Public head markers must use the original PostNamazu native runtime. " +
+                "The restricted semantic bridge only supports local-only head markers.");
+        }
+
+        var actorId = ResolveActorId(request);
         var controller = MarkingController.Instance();
         if (controller is null)
         {
             throw new InvalidOperationException("FFXIV MarkingController is unavailable.");
         }
 
-        controller->Markers[request.MarkerIndex] = (GameObjectId)(ulong)request.ActorId;
+        controller->Markers[request.MarkerIndex] = (GameObjectId)(ulong)actorId;
     }
+
+    internal static bool RequiresNativeGameMemory(PostNamazuWaymarkAction request)
+        => request.Operation switch
+        {
+            PostNamazuWaymarkOperation.Apply => !request.LocalOnly,
+            PostNamazuWaymarkOperation.Save or
+                PostNamazuWaymarkOperation.Load or
+                PostNamazuWaymarkOperation.Publicize => true,
+            PostNamazuWaymarkOperation.ClearLocal or
+                PostNamazuWaymarkOperation.Reset => false,
+            _ => throw new InvalidDataException(
+                $"Unknown PostNamazu waymark operation {request.Operation}."),
+        };
 
     private static unsafe void ApplyWaymarks(PostNamazuWaymarkAction request)
     {
@@ -420,9 +478,50 @@ public static class NativePostNamazuBridge
             throw new InvalidOperationException("FFXIV MarkingController is unavailable.");
         }
 
-        if (request.ClearAll)
+        switch (request.Operation)
         {
-            EnsureWaymarkResult(controller->ClearFieldMarkers(), "clear all field markers");
+            case PostNamazuWaymarkOperation.ClearLocal:
+                for (var index = 0; index < 8; index++)
+                {
+                    controller->FieldMarkers[index] = default;
+                }
+                return;
+            case PostNamazuWaymarkOperation.Save:
+                savedWaymarks = ReadCurrentWaymarks(controller);
+                return;
+            case PostNamazuWaymarkOperation.Load:
+                if (savedWaymarks is not null)
+                {
+                    WriteLocalWaymarks(controller, savedWaymarks);
+                }
+                return;
+            case PostNamazuWaymarkOperation.Reset:
+                savedWaymarks = null;
+                return;
+            case PostNamazuWaymarkOperation.Publicize:
+                var currentWaymarks = ReadCurrentWaymarks(controller);
+                if (currentWaymarks.All(marker => !marker.Active))
+                {
+                    _ = GameMain.ExecuteCommand(313);
+                    return;
+                }
+
+                foreach (var marker in currentWaymarks)
+                {
+                    ApplyPublicWaymark(marker.Index, marker.Active, marker.Position);
+                }
+                return;
+            case PostNamazuWaymarkOperation.Apply:
+                break;
+            default:
+                throw new InvalidDataException(
+                    $"Unknown PostNamazu waymark operation {request.Operation}.");
+        }
+
+        if (!request.LocalOnly && request.Updates.Count == 8 &&
+            request.Updates.All(update => !update.Active))
+        {
+            _ = GameMain.ExecuteCommand(313);
             return;
         }
 
@@ -439,36 +538,119 @@ public static class NativePostNamazuBridge
                 continue;
             }
 
-            var position = update.Position;
-            var result = update.Active
-                ? controller->PlaceFieldMarker((uint)update.Index, &position)
-                : controller->ClearFieldMarker((uint)update.Index);
-            EnsureWaymarkResult(
-                result,
-                update.Active
-                    ? $"place field marker {update.Index}"
-                    : $"clear field marker {update.Index}");
+            ApplyPublicWaymark(update.Index, update.Active, update.Position);
         }
     }
 
-    private static void EnsureWaymarkResult(byte result, string operation)
+    private static unsafe PostNamazuWaymarkSnapshot[] ReadCurrentWaymarks(
+        MarkingController* controller)
     {
-        if (result == 0)
+        var result = new PostNamazuWaymarkSnapshot[8];
+        for (var index = 0; index < result.Length; index++)
         {
-            return;
+            ref var marker = ref controller->FieldMarkers[index];
+            result[index] = new PostNamazuWaymarkSnapshot(
+                index,
+                marker.Active,
+                marker.Position);
         }
 
-        var reason = result switch
-        {
-            1 => "invalid marker index",
-            2 => "operation lock (actions were sent too quickly)",
-            3 => "all markers are pending",
-            4 => "field markers cannot be changed in combat",
-            5 => "field markers are not allowed in this territory",
-            _ => $"unknown game result {result}",
-        };
-        throw new InvalidOperationException($"Could not {operation}: {reason}.");
+        return result;
     }
+
+    private static unsafe void WriteLocalWaymarks(
+        MarkingController* controller,
+        IReadOnlyList<PostNamazuWaymarkSnapshot> markers)
+    {
+        foreach (var update in markers)
+        {
+            ref var marker = ref controller->FieldMarkers[update.Index];
+            marker.Position = update.Position;
+            marker.X = checked((int)(update.Position.X * 1000));
+            marker.Y = checked((int)(update.Position.Y * 1000));
+            marker.Z = checked((int)(update.Position.Z * 1000));
+            marker.Active = update.Active;
+        }
+    }
+
+    private static unsafe void ApplyPublicWaymark(int index, bool active, System.Numerics.Vector3 position)
+    {
+        _ = active
+            ? GameMain.ExecuteCommand(
+                317,
+                index,
+                unchecked((int)(position.X * 1000)),
+                unchecked((int)(position.Y * 1000)),
+                unchecked((int)(position.Z * 1000)))
+            : GameMain.ExecuteCommand(318, index);
+    }
+
+    private static unsafe void ApplyPreset(PostNamazuPresetAction request)
+    {
+        var module = FieldMarkerModule.Instance();
+        if (module is null)
+        {
+            throw new InvalidOperationException("FFXIV FieldMarkerModule is unavailable.");
+        }
+
+        var mapId = request.MapId;
+        if (mapId is 0 or > 2000)
+        {
+            var gameMain = GameMain.Instance();
+            mapId = gameMain is null ? (ushort)0 : gameMain->CurrentContentFinderConditionId;
+        }
+
+        if (mapId == 0)
+        {
+            throw new InvalidOperationException(
+                "PostNamazu preset and current ContentFinderCondition ID are both invalid.");
+        }
+
+        ref var preset = ref module->Presets[request.Slot - 1];
+        preset.ActiveMarkers = 0;
+        foreach (var marker in request.Markers)
+        {
+            preset.Markers[marker.Index] = new GamePresetPoint
+            {
+                X = marker.Active ? unchecked((int)(marker.Position.X * 1000)) : 0,
+                Y = marker.Active ? unchecked((int)(marker.Position.Y * 1000)) : 0,
+                Z = marker.Active ? unchecked((int)(marker.Position.Z * 1000)) : 0,
+            };
+            preset.SetMarkerActive(marker.Index, marker.Active);
+        }
+
+        preset.ContentFinderConditionId = mapId;
+        preset.Timestamp = unchecked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    }
+
+    private static void SendKeyCode(int keyCode)
+    {
+        using var process = Process.GetCurrentProcess();
+        var window = process.MainWindowHandle;
+        if (window == nint.Zero)
+        {
+            throw new InvalidOperationException("FFXIV main window is unavailable.");
+        }
+
+        _ = SendMessage(window, 0x0100, keyCode, 0);
+        _ = SendMessage(window, 0x0101, keyCode, 0);
+    }
+
+    private static uint ResolveActorId(PostNamazuMarkAction request)
+    {
+        if (request.ActorId is { } actorId)
+        {
+            return actorId;
+        }
+
+        var name = request.ActorName
+                   ?? throw new InvalidDataException("PostNamazu actor name is missing.");
+        return actorIdResolver?.Invoke(name)
+               ?? throw new InvalidOperationException($"Could not find FFXIV actor '{name}'.");
+    }
+
+    [DllImport("user32.dll")]
+    private static extern nint SendMessage(nint window, uint message, nint wParam, nint lParam);
 
     private static async Task RunOnFrameworkThreadAsync(
         Action action,
@@ -636,4 +818,9 @@ public static class NativePostNamazuBridge
             return nativeCall;
         }
     }
+
+    private sealed record PostNamazuWaymarkSnapshot(
+        int Index,
+        bool Active,
+        System.Numerics.Vector3 Position);
 }

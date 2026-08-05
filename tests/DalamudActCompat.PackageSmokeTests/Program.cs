@@ -19,6 +19,7 @@ using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
+using DalamudActCompat.Infrastructure.Processes;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
@@ -195,26 +196,82 @@ finally
 
 static void ValidatePictoActOverlayCommands()
 {
+    var beforeParse = DateTimeOffset.UtcNow;
     var commands = PictoActOverlayService.Parse(
         "Omen: Circle\nTag: ACTCOMPAT_SMOKE\nt: 5\nPos: <1.25, 2.5, -3.75>\n" +
         "Scale: 5, 5, 1\nColor: 0.2, 1, 0.3, 0.65\n---\n" +
-        "Action: Remove\nTag: ACTCOMPAT_OLD");
+        "Omen: Rect\nDelay: 2.5\nt: 5\nPos: 1, 2, 3\n" +
+        "Angle: 0 + pi/2\nScale: 2.5, 28, 1\n---\n" +
+        "Omen: Fan90\nt: 5\nPos: 1, 2, 3\nAngle: 90\u00b0\nScale: 12\n---\n" +
+        "Action: Remove\nRegex: ^Auto$\n---\n" +
+        "Action: Remove");
     Assert(
-        commands.Count == 2 &&
+        commands.Count == 5 &&
         commands[0] is
         {
             Tag: "ACTCOMPAT_SMOKE",
             Remove: false,
-            Circle:
+            Shape:
             {
-                Radius: 5,
+                Kind: PictoActShapeKind.Circle,
+                PrimaryScale: 5,
                 Position.X: 1.25f,
                 Position.Y: -3.75f,
                 Position.Z: 2.5f,
             },
         } &&
-        commands[1] is { Tag: "ACTCOMPAT_OLD", Remove: true, Circle: null },
-        "Game-side PictoACT circle create/remove parsing failed.");
+        commands[1] is
+        {
+            Tag: null,
+            Remove: false,
+            Shape:
+            {
+                Kind: PictoActShapeKind.Rectangle,
+                PrimaryScale: 2.5f,
+                SecondaryScale: 28,
+                Color: { X: 1, Y: 1, Z: 1, W: 1 },
+            },
+        } &&
+        commands[1].Shape!.StartsAt >= beforeParse.AddSeconds(2.4) &&
+        MathF.Abs(commands[1].Shape!.Angle - MathF.PI / 2) < 0.0001f &&
+        commands[2] is
+        {
+            Tag: null,
+            Remove: false,
+            Shape:
+            {
+                Kind: PictoActShapeKind.Fan,
+                PrimaryScale: 12,
+            },
+        } &&
+        MathF.Abs(commands[2].Shape!.FanRadians - MathF.PI / 2) < 0.0001f &&
+        MathF.Abs(commands[2].Shape!.Angle - MathF.PI / 2) < 0.0001f &&
+        commands[3] is { Tag: null, Regex: not null, Remove: true, Shape: null } &&
+        commands[4] is { Tag: null, Regex: null, Remove: true, Shape: null },
+        "Game-side PictoACT base-shape, Auto-tag, delay, or remove parsing failed.");
+
+    var overlay = new PictoActOverlayService(null!);
+    overlay.Apply(
+        "Omen: Circle\nt: 5\nPos: 1, 2, 3\nScale: 3\n---\n" +
+        "Omen: Circle\nt: 5\nPos: 1, 2, 3\nScale: 5");
+    Assert(
+        overlay.ShapeCount == 2,
+        "PictoACT Auto-tag creates unexpectedly replaced one another.");
+    overlay.Apply(
+        "Omen: Circle\nTag: ACTCOMPAT_REPLACE\nt: 5\nPos: 1, 2, 3\nScale: 3");
+    overlay.Apply(
+        "Omen: Circle\nTag: ACTCOMPAT_REPLACE\nt: 5\nPos: 1, 2, 3\nScale: 5");
+    Assert(
+        overlay.ShapeCount == 3,
+        "PictoACT explicit-tag replacement no longer preserves one shape per tag.");
+    overlay.Apply("Action: Remove\nRegex: ^Auto$");
+    Assert(
+        overlay.ShapeCount == 1,
+        "PictoACT Regex removal did not remove all matching Auto-tag shapes.");
+    overlay.Apply("Action: Remove");
+    Assert(
+        overlay.ShapeCount == 0,
+        "PictoACT unfiltered removal did not clear every shape.");
 }
 
 static void ValidatePluginRepositoryMetadata()
@@ -813,7 +870,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 5)) == "v0.3.5.5",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 6)) == "v0.3.5.6",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -856,6 +913,13 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var hostSupervisorSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Infrastructure",
+        "Processes",
+        "ActHostSupervisor.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
@@ -923,6 +987,31 @@ static void ValidateControlCenterPresentation()
         statusSource.Contains("BeginGoldCard", StringComparison.Ordinal) &&
         statusSource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "The ACT compatibility status window does not use the new rounded branded card design.");
+    Assert(
+        typeof(ActHostSupervisor).GetMethod(nameof(ActHostSupervisor.RestartAsync))?.ReturnType ==
+        typeof(Task<bool>) &&
+        Regex.Matches(
+            controlCenterSource,
+            Regex.Escape("applyPermissionChanges();"),
+            RegexOptions.CultureInvariant).Count == 1 &&
+        Regex.Matches(
+            settingsSource,
+            Regex.Escape("applyPermissionChanges();"),
+            RegexOptions.CultureInvariant).Count == 1 &&
+        controlCenterSource.Contains(
+            "changed |= permissionsChanged;",
+            StringComparison.Ordinal) &&
+        settingsSource.Contains(
+            "changed |= permissionsChanged;",
+            StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            pluginSource,
+            @"SaveConfiguration\(\);\s+ApplyActPermissionChanges\(\);",
+            RegexOptions.CultureInvariant) &&
+        hostSupervisorSource.Contains(
+            "public async Task<bool> RestartAsync",
+            StringComparison.Ordinal),
+        "ACT permission groups are not saved before exactly one Host restart callback.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
@@ -1555,11 +1644,29 @@ static void ValidateHtmlOverlayDefaults()
     var layoutScript = formType.GetField(
                            "CactbotResponsiveAlertLayoutScript",
                            BindingFlags.Static | BindingFlags.NonPublic)
-                       ?.GetRawConstantValue() as string;
+                       ?.GetRawConstantValue() as string
+                       ?? throw new InvalidOperationException(
+                           "Cactbot responsive alert layout script was not found.");
     Assert(
-        layoutScript?.Contains("#popup-text-info", StringComparison.Ordinal) == true &&
+        layoutScript.Contains("#popup-text-container", StringComparison.Ordinal) &&
+        layoutScript.Contains("z-index: 2147483646", StringComparison.Ordinal) &&
+        layoutScript.Contains(
+            "#container:not(.hide-alerts).dalamud-act-compat-alert-repair",
+            StringComparison.Ordinal) &&
+        layoutScript.Contains("new MutationObserver", StringComparison.Ordinal) &&
+        layoutScript.Contains("window.chrome?.webview?.postMessage", StringComparison.Ordinal) &&
+        layoutScript.Contains("alertsDisabled", StringComparison.Ordinal) &&
+        layoutScript.Contains("#popup-text-info", StringComparison.Ordinal) &&
         layoutScript.Contains("max-height: 220px", StringComparison.Ordinal),
-        "The Cactbot responsive layout no longer protects info text from clipping.");
+        "The Cactbot layout no longer repairs and reports unexpectedly invisible alert text.");
+    Assert(
+        !layoutScript.Contains(
+            ".hide-alerts #popup-text-container { display: block",
+            StringComparison.Ordinal) &&
+        !layoutScript.Contains(
+            "#container.hide-alerts.dalamud-act-compat-alert-repair",
+            StringComparison.Ordinal),
+        "The Cactbot visibility repair can override a user's explicit disabled-alert setting.");
     var editIndicatorScript = formType.GetField(
                                   "OverlayEditIndicatorScript",
                                   BindingFlags.Static | BindingFlags.NonPublic)
@@ -1943,6 +2050,12 @@ static void ValidateLegacyResourceRuntimeDependencies()
             "SharpCompress.dll",
             StringComparison.OrdinalIgnoreCase)),
         "The runtime ACT.FoxTTS 7z reader is missing from the release package.");
+    Assert(
+        FindArchiveEntry(archive, "host/dnlib.dll") is not null,
+        "The mixed-mode GreyMagic compatibility rewriter is missing from the Host package.");
+    Assert(
+        FindArchiveEntry(archive, "LICENSES/dnlib-MIT.txt") is not null,
+        "The dnlib MIT license is missing from the release package.");
 
     foreach (var style in new[] { "Minimal", "Classic", "Flat" })
     {

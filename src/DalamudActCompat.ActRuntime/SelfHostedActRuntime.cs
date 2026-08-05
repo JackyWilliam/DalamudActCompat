@@ -5,9 +5,11 @@ using Dalamud.Plugin.Services;
 using System.Collections.Concurrent;
 using System.Drawing;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Forms;
+using Newtonsoft.Json.Linq;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -77,7 +79,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         IFramework framework,
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
+        ISigScanner sigScanner,
         INotificationManager notificationManager,
+        Func<string, uint?> resolveActorId,
         Func<bool> localDeathWhilePartyContinues,
         Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
         Func<bool> debugMode,
@@ -96,7 +100,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
         this.getOverlayWindowSettings = getOverlayWindowSettings;
         this.debugMode = debugMode;
-        NativePostNamazuBridge.Configure(framework, log);
+        NativePostNamazuBridge.Configure(framework, log, sigScanner, resolveActorId);
         LegacyResourceCompatibility.Configure(log, notificationManager);
         CompatibilityPermissionBroker.Configure(
             permissionCheck,
@@ -278,7 +282,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
 
-    public event Action<DateTimeOffset, string, bool>? RawLogLineReceived;
+    public event Action<DateTimeOffset, string, string, bool>? RawLogLineReceived;
 
     public event Action<uint, string>? ZoneChanged;
 
@@ -312,7 +316,6 @@ public sealed class SelfHostedActRuntime : IDisposable
                 log.Warning("External ACT Host rejected a game-side TTS request.");
             }
         };
-        ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
         ActGlobals.oFormActMain.AfterCombatAction += OnAfterCombatAction;
         ActGlobals.oFormActMain.AfterCombatEnd += OnAfterCombatEnd;
 
@@ -335,6 +338,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                 chatGui,
                 framework,
                 condition);
+            // IINACT registers its formatter in the wrapper constructor. Subscribe after it
+            // so the external ACT Host receives both the raw pipe line and ACT's legacy line.
+            ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
             parser.Subscription.ZoneChanged += OnZoneChangedForHost;
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
@@ -630,6 +636,78 @@ public sealed class SelfHostedActRuntime : IDisposable
         httpClient = null;
     }
 
+    public async Task<string?> CallOverlayHandlerAsync(
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        if (payload.Length > 65_536)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(payload),
+                "OverlayPlugin handler payload exceeds 65536 characters.");
+        }
+
+        var request = JObject.Parse(payload);
+        if (request["call"]?.Type != JTokenType.String ||
+            string.IsNullOrWhiteSpace(request.Value<string>("call")))
+        {
+            throw new InvalidDataException(
+                "OverlayPlugin handler payload must contain a non-empty call name.");
+        }
+
+        return await framework
+            .RunOnFrameworkThread(() =>
+            {
+                if (!IsOverlayRunning ||
+                    ActGlobals.oFormActMain.OverlayPluginContainer is not
+                        RainbowMage.OverlayPlugin.TinyIoCContainer container)
+                {
+                    throw new InvalidOperationException(
+                        "The real game-side OverlayPlugin dispatcher is not running.");
+                }
+
+                var dispatcherType = typeof(RainbowMage.OverlayPlugin.PluginMain)
+                                         .Assembly
+                                         .GetType(
+                                             "RainbowMage.OverlayPlugin.EventDispatcher",
+                                             throwOnError: true)!
+                                     ?? throw new TypeLoadException(
+                                         "RainbowMage.OverlayPlugin.EventDispatcher");
+                var resolve = container.GetType()
+                                  .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                                  .Single(method =>
+                                      method.Name == "Resolve" &&
+                                      method.IsGenericMethodDefinition &&
+                                      method.GetGenericArguments().Length == 1 &&
+                                      method.GetParameters().Length == 0)
+                                  .MakeGenericMethod(dispatcherType);
+                var dispatcher = resolve.Invoke(container, null)
+                                 ?? throw new InvalidOperationException(
+                                     "OverlayPlugin EventDispatcher resolution returned null.");
+                var callHandler = dispatcherType.GetMethod(
+                                      "CallHandler",
+                                      BindingFlags.Instance | BindingFlags.Public,
+                                      binder: null,
+                                      [typeof(JObject)],
+                                      modifiers: null)
+                                  ?? throw new MissingMethodException(
+                                      dispatcherType.FullName,
+                                      "CallHandler");
+                var response = callHandler.Invoke(dispatcher, [request]) as JToken;
+                var serialized = response?.ToString(Newtonsoft.Json.Formatting.None);
+                if (serialized is not null && Encoding.UTF8.GetByteCount(serialized) > 900_000)
+                {
+                    throw new InvalidOperationException(
+                        "OverlayPlugin handler response exceeds the bounded IPC frame.");
+                }
+
+                return serialized;
+            })
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private void RegisterExternalPostNamazuAdapter(
         RainbowMage.OverlayPlugin.TinyIoCContainer container)
     {
@@ -799,6 +877,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         RawLogLineReceived?.Invoke(
             new DateTimeOffset(logInfo.detectedTime),
             logInfo.originalLogLine,
+            logInfo.logLine,
             isImport);
         if (isImport)
         {

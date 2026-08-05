@@ -206,8 +206,8 @@ public sealed class StatusWindow : Window
         DrawCard("runtime-safety-card", text.Get("安全边界", "Safety boundary"), 138, () =>
         {
             ImGui.TextWrapped(text.Get(
-                "所有已安装的传统 ACT 插件均由独立 Host 加载；游戏进程只保留数据采集、状态界面和白名单语义命令桥。Host 仍是普通用户权限的完整信任进程，操作系统级沙箱属于后续加固。",
-                "All installed legacy ACT plugins load in the independent Host. Only data collection, status UI, and the whitelisted semantic command bridge remain in-game. The Host is still a full-trust standard-user process; OS sandboxing is future hardening."));
+                "所有已安装的传统 ACT 插件均由独立 Host 加载。普通权限使用语义桥；用户明确启用鲶鱼精完整权限后，Host 会把准确的游戏进程交给原版原生运行时，以保留签名扫描、高级模块和全部已注册动作。Host 仍是普通用户权限的完整信任进程。",
+                "All installed legacy ACT plugins load in the independent Host. Normal permissions use semantic bridges; after the user explicitly grants full PostNamazu permissions, the Host exposes the exact game process to the original native runtime so signature scanning, advanced modules, and every registered action remain available. The Host remains a full-trust standard-user process."));
         });
     }
 

@@ -57,6 +57,12 @@ SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
 runtime author-source update check. SharpCompress is distributed under the MIT
 license: <https://github.com/adamhathcock/sharpcompress>.
 
+dnlib 4.5.0 is used inside the isolated Compatibility Host to preserve
+PostNamazu's mixed-mode GreyMagic native image while replacing one obsolete
+.NET Framework method reference. dnlib is distributed under the MIT license:
+<https://github.com/0xd4d/dnlib>. Its license text is included under
+`LICENSES/dnlib-MIT.txt`.
+
 The release archive also contains 96 FINAL FANTASY XIV class/job icon PNGs,
 used non-commercially as combat-meter UI indicators.
 

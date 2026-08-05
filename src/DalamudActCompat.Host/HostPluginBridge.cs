@@ -1,14 +1,18 @@
 using System.Collections.Concurrent;
 using System.Collections;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Advanced_Combat_Tracker;
 using DalamudActCompat.Protocol;
+using Newtonsoft.Json.Linq;
 
 namespace DalamudActCompat.Host;
 
@@ -27,13 +31,18 @@ public static class HostPluginBridge
         new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, PendingTtsAuthorization> PendingTts =
         new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, PendingOverlayCall> PendingOverlayCalls =
+        new(StringComparer.Ordinal);
     private static readonly FfxivDataRepository FfxivRepositoryInstance = new();
     private static readonly object TriggerZoneListenerLock = new();
+    private static readonly object PostNamazuQueueLock = new();
+    private static readonly List<string> PostNamazuQueueIds = [];
     private static WeakReference<object>? triggerZoneListener;
     private static Action<string>? ttsWriter;
     private static Action<string>? clipboardWriterForTests;
     private static long triggerEventDrops;
     private static int pendingTtsCount;
+    private static int pendingOverlayCallCount;
 
     internal static void Configure(
         Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> messageSender)
@@ -55,6 +64,16 @@ public static class HostPluginBridge
     }
 
     internal static FfxivDataRepository FfxivRepository => FfxivRepositoryInstance;
+
+    internal static void ConfigureGameProcess(int processId)
+    {
+        FfxivRepositoryInstance.SetGameProcessId(processId);
+        Console.WriteLine($"game process registered for ACT compatibility: pid={processId}");
+    }
+
+    public static bool IsPostNamazuNativeRuntimeAllowed()
+        => IsAllowed("postnamazu", "GameCommand") &&
+           IsAllowed("postnamazu", "NativeGameMemory");
 
     internal static void ApplyFfxivEntitySnapshot(HostFfxivEntitySnapshot snapshot)
         => FfxivRepositoryInstance.Apply(snapshot);
@@ -116,11 +135,20 @@ public static class HostPluginBridge
         return administrator;
     }
 
-    public static bool SkipTriggernometryPostNamazuAdministratorNotice()
+    public static bool CheckTriggernometryPostNamazuAdministratorRequirement()
     {
-        Console.WriteLine(
-            "Triggernometry/PostNamazu legacy ACT administrator notice suppressed; " +
-            "the real Windows token and broker capability checks remain unchanged.");
+        if (!IsPostNamazuNativeRuntimeAllowed())
+        {
+            Console.WriteLine(
+                "Triggernometry/PostNamazu native attachment is disabled; " +
+                "the legacy ACT administrator notice does not apply to semantic bridge mode.");
+        }
+
+        // BridgeNamazu only uses this result to emit the legacy "run ACT as administrator"
+        // compatibility notice. It is not an authorization decision. The external Host keeps
+        // the real Windows token for Triggernometry's global security policy, and PostNamazu
+        // native actions are still independently permission-gated and fail closed when process
+        // access is unavailable.
         return true;
     }
 
@@ -213,26 +241,6 @@ public static class HostPluginBridge
         }
     }
 
-    public static void AttachPostNamazu(object plugin)
-    {
-        var state = plugin.GetType().GetProperty(
-            "State",
-            System.Reflection.BindingFlags.Instance |
-            System.Reflection.BindingFlags.Public |
-            System.Reflection.BindingFlags.NonPublic);
-        if (state?.PropertyType.IsEnum == true)
-        {
-            state.SetValue(plugin, Enum.Parse(state.PropertyType, "Ready"));
-        }
-
-        plugin.GetType().GetMethod(
-                "LogACT",
-                System.Reflection.BindingFlags.Instance |
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.NonPublic)
-            ?.Invoke(plugin, ["AttachedExternalHost"]);
-    }
-
     public static void UsePostNamazuOverlayAdapter(object integrationManager)
     {
         ArgumentNullException.ThrowIfNull(integrationManager);
@@ -261,18 +269,14 @@ public static class HostPluginBridge
             "PostNamazu selected the cross-process game-side OverlayPlugin adapter.");
     }
 
-    public static void SkipLegacyProcessMonitoring(object _)
-    {
-    }
-
     public static void SendPostNamazuCommand(string command)
     {
         Demand("postnamazu", "GameCommand");
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
-        if (!command.StartsWith('/') || command.StartsWith("//", StringComparison.Ordinal))
+        if (!command.StartsWith('/'))
         {
             throw new ArgumentException(
-                "PostNamazu command must be a single slash-prefixed semantic command.",
+                "PostNamazu command must begin with '/'.",
                 nameof(command));
         }
 
@@ -291,6 +295,48 @@ public static class HostPluginBridge
         }
     }
 
+    public static string NormalizePostNamazuMarkPayload(string payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        JObject root;
+        try
+        {
+            root = JObject.Parse(payload);
+        }
+        catch (Newtonsoft.Json.JsonException exception)
+        {
+            throw new InvalidDataException(
+                "PostNamazu mark payload is not valid JSON.",
+                exception);
+        }
+
+        var actorToken = root.GetValue("ActorID", StringComparison.OrdinalIgnoreCase);
+        if (actorToken?.Type != JTokenType.String)
+        {
+            return payload;
+        }
+
+        var actorText = actorToken.Value<string>()?.Trim();
+        if (actorText is null ||
+            !actorText.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            return payload;
+        }
+
+        if (!uint.TryParse(
+                actorText.AsSpan(2),
+                NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture,
+                out var actorId))
+        {
+            throw new InvalidDataException(
+                $"PostNamazu ActorID '{actorText}' is not a valid UInt32 hexadecimal value.");
+        }
+
+        actorToken.Replace(new JValue(actorId));
+        return root.ToString(Newtonsoft.Json.Formatting.None);
+    }
+
     public static void SendPostNamazuMark(string payload)
         => SendPostNamazuSemanticAction("postnamazu.mark", payload);
 
@@ -299,6 +345,42 @@ public static class HostPluginBridge
 
     public static void SendPostNamazuPictoAct(string payload)
         => SendPostNamazuSemanticAction("postnamazu.pictoact", payload);
+
+    public static void SendPostNamazuPreset(string payload)
+        => SendPostNamazuSemanticAction("postnamazu.preset", payload);
+
+    public static void SendPostNamazuKey(string payload)
+        => SendPostNamazuSemanticAction("postnamazu.sendkey", payload);
+
+    public static void SendPostNamazuQueue(object module, string payload)
+    {
+        Demand("postnamazu", "GameCommand");
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        var actions = JsonSerializer.Deserialize<PostNamazuQueueAction[]>(
+                          payload,
+                          new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                      ?? throw new InvalidDataException(
+                          "PostNamazu queue payload did not contain an action array.");
+        _ = Task.Run(() => RunPostNamazuQueueAsync(module, actions));
+    }
+
+    public static void BreakPostNamazuQueue(string pattern)
+    {
+        Demand("postnamazu", "GameCommand");
+        ArgumentException.ThrowIfNullOrWhiteSpace(pattern);
+        lock (PostNamazuQueueLock)
+        {
+            if (string.Equals(pattern, "all", StringComparison.OrdinalIgnoreCase))
+            {
+                PostNamazuQueueIds.Clear();
+                return;
+            }
+
+            var expression = new Regex($"^{pattern}$", RegexOptions.CultureInvariant);
+            PostNamazuQueueIds.RemoveAll(expression.IsMatch);
+        }
+    }
 
     public static void SendTts(string text)
     {
@@ -389,12 +471,207 @@ public static class HostPluginBridge
         }
     }
 
+    public static JToken? CallTriggernometryOverlayHandler(object request)
+    {
+        Demand("triggernometry", "HighRiskScript");
+        ArgumentNullException.ThrowIfNull(request);
+        if (request is not JObject payload)
+        {
+            throw new ArgumentException(
+                "Triggernometry OverlayPlugin calls must contain a JSON object.",
+                nameof(request));
+        }
+
+        var serialized = payload.ToString(Newtonsoft.Json.Formatting.None);
+        if (serialized.Length is 0 or > 65_536)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Triggernometry OverlayPlugin payload must contain at most 65536 characters.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var expired in PendingOverlayCalls
+                     .Where(pair => pair.Value.Deadline <= now)
+                     .Select(pair => pair.Key))
+        {
+            if (PendingOverlayCalls.TryRemove(expired, out var pending))
+            {
+                Interlocked.Decrement(ref pendingOverlayCallCount);
+                pending.Completion.TrySetException(
+                    new TimeoutException("The game-side OverlayPlugin call expired."));
+            }
+        }
+
+        if (Interlocked.Increment(ref pendingOverlayCallCount) > 32)
+        {
+            Interlocked.Decrement(ref pendingOverlayCallCount);
+            throw new InvalidOperationException(
+                "The bounded Triggernometry OverlayPlugin call queue is full.");
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var deadline = now.AddSeconds(2);
+        var completion = new TaskCompletionSource<HostCommandResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!PendingOverlayCalls.TryAdd(
+                correlationId,
+                new PendingOverlayCall(completion, deadline)))
+        {
+            Interlocked.Decrement(ref pendingOverlayCallCount);
+            throw new InvalidOperationException(
+                "Could not reserve a Triggernometry OverlayPlugin request.");
+        }
+
+        try
+        {
+            if (sender?.Invoke(
+                    HostMessageTypes.CommandRequest,
+                    HostMessagePriority.Control,
+                    new HostCommandRequest(
+                        "triggernometry",
+                        "triggernometry.overlay",
+                        new Dictionary<string, string> { ["payload"] = serialized }),
+                    correlationId,
+                    deadline) != true)
+            {
+                throw new InvalidOperationException(
+                    "Triggernometry OverlayPlugin broker queue rejected the request.");
+            }
+
+            var result = completion.Task
+                .WaitAsync(TimeSpan.FromSeconds(2))
+                .GetAwaiter()
+                .GetResult();
+            if (!result.Success)
+            {
+                throw new InvalidOperationException(
+                    $"Game-side OverlayPlugin rejected the call: {result.Detail ?? result.Status}");
+            }
+
+            return string.IsNullOrWhiteSpace(result.Detail)
+                ? null
+                : JToken.Parse(result.Detail);
+        }
+        finally
+        {
+            if (PendingOverlayCalls.TryRemove(correlationId, out _))
+            {
+                Interlocked.Decrement(ref pendingOverlayCallCount);
+            }
+        }
+    }
+
+    private static async Task RunPostNamazuQueueAsync(
+        object module,
+        IReadOnlyList<PostNamazuQueueAction> actions)
+    {
+        var queueId = string.Empty;
+        try
+        {
+            foreach (var action in actions)
+            {
+                if (action.D < 0)
+                {
+                    throw new InvalidDataException(
+                        "PostNamazu queue delay cannot be negative.");
+                }
+
+                await Task.Delay(action.D).ConfigureAwait(false);
+                lock (PostNamazuQueueLock)
+                {
+                    if (queueId.Length > 0 && !PostNamazuQueueIds.Contains(queueId))
+                    {
+                        return;
+                    }
+                }
+
+                var command = action.C?.Trim()
+                              ?? throw new InvalidDataException(
+                                  "PostNamazu queue action has no command.");
+                var actionPayload = action.P ?? string.Empty;
+                if (command.Equals("qid", StringComparison.OrdinalIgnoreCase))
+                {
+                    lock (PostNamazuQueueLock)
+                    {
+                        if (queueId.Length > 0)
+                        {
+                            PostNamazuQueueIds.Remove(queueId);
+                        }
+
+                        queueId = actionPayload;
+                        if (queueId.Length > 0)
+                        {
+                            PostNamazuQueueIds.Add(queueId);
+                        }
+                    }
+                    continue;
+                }
+
+                DispatchPostNamazuRegisteredAction(module, command, actionPayload);
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportException("postnamazu", "Queue action", ex);
+        }
+        finally
+        {
+            if (queueId.Length > 0)
+            {
+                lock (PostNamazuQueueLock)
+                {
+                    PostNamazuQueueIds.Remove(queueId);
+                }
+            }
+        }
+    }
+
+    private static void DispatchPostNamazuRegisteredAction(
+        object module,
+        string command,
+        string payload)
+    {
+        const BindingFlags flags =
+            BindingFlags.Static | BindingFlags.Instance |
+            BindingFlags.Public | BindingFlags.NonPublic;
+        var moduleBase = module.GetType().BaseType
+                         ?? throw new MissingMemberException(
+                             module.GetType().FullName,
+                             "NamazuModule base type");
+        var plugin = moduleBase.GetProperty("PostNamazu", flags)?.GetValue(null)
+                     ?? throw new MissingMemberException(
+                         moduleBase.FullName,
+                         "PostNamazu");
+        var doAction = plugin.GetType().GetMethod(
+                           "DoAction",
+                           flags,
+                           binder: null,
+                           [typeof(string), typeof(string)],
+                           modifiers: null)
+                       ?? throw new MissingMethodException(
+                           plugin.GetType().FullName,
+                           "DoAction");
+        doAction.Invoke(plugin, [command, payload]);
+    }
+
     internal static void CompleteCommand(
         string? correlationId,
         HostCommandResult result)
     {
-        if (string.IsNullOrWhiteSpace(correlationId) ||
-            !PendingTts.TryRemove(correlationId, out var pending))
+        if (string.IsNullOrWhiteSpace(correlationId))
+        {
+            return;
+        }
+
+        if (PendingOverlayCalls.TryRemove(correlationId, out var overlayCall))
+        {
+            Interlocked.Decrement(ref pendingOverlayCallCount);
+            overlayCall.Completion.TrySetResult(result);
+            return;
+        }
+
+        if (!PendingTts.TryRemove(correlationId, out var pending))
         {
             return;
         }
@@ -477,16 +754,6 @@ public static class HostPluginBridge
             ReportException("triggernometry", "ZoneChanged adapter", ex);
         }
     }
-
-    public static void UnsupportedNativeOperation()
-        => throw new NotSupportedException(
-            "Direct PostNamazu native memory/function access is unavailable in the external Host. " +
-            "Use a semantic, whitelisted game bridge command.");
-
-    public static T UnsupportedNativeOperation<T>()
-        where T : struct
-        => throw new NotSupportedException(
-            "Direct PostNamazu native memory/function access is unavailable in the external Host.");
 
     public static bool ReportException(
         string pluginId,
@@ -590,38 +857,59 @@ public static class HostPluginBridge
         Demand("postnamazu", "NetworkRequest");
         ArgumentNullException.ThrowIfNull(listener);
         var originalPrefixes = listener.Prefixes.Cast<string>().ToArray();
-        var useLoopback = OperatingSystem.IsWindows() && !IsCurrentProcessElevated();
+        var useLoopback = ShouldUsePostNamazuLoopbackFallback(originalPrefixes);
         if (useLoopback)
         {
-            var compatiblePrefixes = originalPrefixes
-                .Select(prefix => prefix
-                    .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
-                    .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-            if (!compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
-            {
-                listener.Prefixes.Clear();
-                foreach (var prefix in compatiblePrefixes)
-                {
-                    listener.Prefixes.Add(prefix);
-                }
-
-                Console.WriteLine(
-                    "PostNamazu HTTP listener uses loopback compatibility mode for standard-user Windows sessions.");
-            }
+            _ = TryUsePostNamazuLoopbackPrefixes(listener, originalPrefixes);
         }
 
         try
         {
             listener.Start();
-            Console.WriteLine(
-                $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+            if (useLoopback)
+            {
+                Console.WriteLine(
+                    "PostNamazu HTTP wildcard binding was denied by Windows URL ACL; " +
+                    "the listener visibly fell back to loopback-only mode.");
+            }
         }
         catch (Exception ex)
         {
             ReportException("postnamazu", "HTTP listener startup", ex);
             Console.Error.WriteLine($"PostNamazu HTTP listener failed to start: {ex}");
             throw;
+        }
+
+        Console.WriteLine(
+            $"PostNamazu HTTP listener started: {string.Join(",", listener.Prefixes.Cast<string>())}");
+    }
+
+    private static bool ShouldUsePostNamazuLoopbackFallback(
+        IReadOnlyList<string> originalPrefixes)
+    {
+        if (!OperatingSystem.IsWindows() ||
+            !originalPrefixes.Any(prefix =>
+                prefix.Contains("http://*:", StringComparison.OrdinalIgnoreCase) ||
+                prefix.Contains("http://+:", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        using var probe = new HttpListener();
+        foreach (var prefix in originalPrefixes)
+        {
+            probe.Prefixes.Add(prefix);
+        }
+
+        try
+        {
+            probe.Start();
+            probe.Stop();
+            return false;
+        }
+        catch (HttpListenerException ex) when (ex.ErrorCode == 5)
+        {
+            return true;
         }
     }
 
@@ -634,11 +922,27 @@ public static class HostPluginBridge
     public static bool IsTriggernometryNetworkAllowed()
         => AuditDecision("triggernometry", "NetworkRequest");
 
-    private static bool IsCurrentProcessElevated()
+    private static bool TryUsePostNamazuLoopbackPrefixes(
+        HttpListener listener,
+        IReadOnlyList<string> originalPrefixes)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity)
-            .IsInRole(WindowsBuiltInRole.Administrator);
+        var compatiblePrefixes = originalPrefixes
+            .Select(prefix => prefix
+                .Replace("http://*:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
+                .Replace("http://+:", "http://127.0.0.1:", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (compatiblePrefixes.SequenceEqual(originalPrefixes, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        listener.Prefixes.Clear();
+        foreach (var prefix in compatiblePrefixes)
+        {
+            listener.Prefixes.Add(prefix);
+        }
+
+        return true;
     }
 
     public static bool IsTriggernometryHighRiskScriptAllowed()
@@ -859,6 +1163,13 @@ public static class HostPluginBridge
     private sealed record PendingTtsAuthorization(
         string Text,
         DateTimeOffset Deadline);
+
+    private sealed record PendingOverlayCall(
+        TaskCompletionSource<HostCommandResult> Completion,
+        DateTimeOffset Deadline);
+
+    private sealed record PostNamazuQueueAction(string? C, string? P, int D);
+
 }
 
 internal sealed class ConsoleActLogger : IActLogger

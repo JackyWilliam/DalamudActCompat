@@ -52,6 +52,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
     private readonly Action saveConfiguration;
+    private readonly Action applyPermissionChanges;
     private readonly Action<bool> setMeterVisible;
     private readonly Action openMeter;
     private readonly Action openHistory;
@@ -96,6 +97,7 @@ public sealed class ControlCenterWindow : Window
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
         Action saveConfiguration,
+        Action applyPermissionChanges,
         Action<bool> setMeterVisible,
         Action openMeter,
         Action openHistory,
@@ -129,6 +131,7 @@ public sealed class ControlCenterWindow : Window
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
         this.saveConfiguration = saveConfiguration;
+        this.applyPermissionChanges = applyPermissionChanges;
         this.setMeterVisible = setMeterVisible;
         this.openMeter = openMeter;
         this.openHistory = openHistory;
@@ -250,12 +253,13 @@ public sealed class ControlCenterWindow : Window
             ImGui.Spacing();
             if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, -1), true))
             {
+                var permissionsChanged = false;
                 var changed = selectedPage switch
                 {
                     Page.Overview => DrawOverview(),
                     Page.Meter => DrawMeter(),
                     Page.Overlays => DrawOverlays(),
-                    Page.Extensions => DrawExtensions(),
+                    Page.Extensions => DrawExtensions(out permissionsChanged),
                     Page.Diagnostics => DrawDiagnostics(),
                     _ => false,
                 };
@@ -263,6 +267,11 @@ public sealed class ControlCenterWindow : Window
                 if (changed)
                 {
                     saveConfiguration();
+                }
+
+                if (permissionsChanged)
+                {
+                    applyPermissionChanges();
                 }
             }
             ImGui.EndChild();
@@ -767,7 +776,7 @@ public sealed class ControlCenterWindow : Window
         return changed;
     }
 
-    private bool DrawExtensions()
+    private bool DrawExtensions(out bool permissionsChanged)
     {
         DrawPageHeader(
             text.Get("扩展", "Extensions"),
@@ -829,16 +838,17 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
         ImGui.TextWrapped(text.Get(
-            "高风险能力默认关闭，授权按扩展和能力分别保存；撤销后立即对兼容桥生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
-            "High-risk capabilities are denied by default. Grants are stored per extension and capability and take effect immediately when revoked. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
-        changed |= DrawPluginPermissions(
+            "高风险能力默认关闭，授权按扩展和能力分别保存；权限组保存后会自动重启 Host 一次，使完整功能立即生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
+            "High-risk capabilities are denied by default. Grants are stored per extension and capability; after a permission group is saved, the Host restarts once so the complete feature set takes effect immediately. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
+        permissionsChanged = DrawPluginPermissions(
             "postnamazu",
             text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
             BundledActPluginCapabilities.PostNamazu);
-        changed |= DrawPluginPermissions(
+        permissionsChanged |= DrawPluginPermissions(
             "triggernometry",
             "Triggernometry",
             BundledActPluginCapabilities.Triggernometry);
+        changed |= permissionsChanged;
         return changed;
     }
 

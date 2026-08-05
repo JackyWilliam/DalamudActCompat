@@ -84,6 +84,7 @@ public sealed class Plugin : IDalamudPlugin
         IFramework framework,
         ICondition condition,
         IGameInteropProvider gameInteropProvider,
+        ISigScanner sigScanner,
         IGameGui gameGui,
         INotificationManager notificationManager,
         IPartyList partyList,
@@ -165,7 +166,16 @@ public sealed class Plugin : IDalamudPlugin
             framework,
             condition,
             gameInteropProvider,
+            sigScanner,
             notificationManager,
+            name => objectTable
+                .FirstOrDefault(gameObject =>
+                    gameObject.EntityId != 0 &&
+                    string.Equals(
+                        gameObject.Name.TextValue,
+                        name,
+                        StringComparison.OrdinalIgnoreCase))
+                ?.EntityId,
             localDeathWhilePartyContinues,
             configuration.GetOverlayWindowSettings,
             () => configuration.DebugMode,
@@ -254,6 +264,7 @@ public sealed class Plugin : IDalamudPlugin
             paths,
             logger,
             SaveConfiguration,
+            ApplyActPermissionChanges,
             FactoryResetAsync,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
@@ -285,6 +296,7 @@ public sealed class Plugin : IDalamudPlugin
             () => stateStore.GetSnapshot().Current,
             logoTexture,
             SaveConfiguration,
+            ApplyActPermissionChanges,
             SetMeterVisible,
             () => SetMeterVisible(true),
             encounterWindow.OpenRecent,
@@ -862,6 +874,7 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
         SaveConfiguration();
+        ApplyActPermissionChanges();
         logger.Information("All declared capabilities were enabled for bundled ACT plugins by user choice.");
     }
 
@@ -999,6 +1012,26 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
+    private void ApplyActPermissionChanges()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
+                {
+                    logger.Information(
+                        "ACT Host restarted once after the permission group was saved.");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "ACT Host permission refresh failed.");
+            }
+        });
+    }
+
     private void StopHostFromUi()
     {
         _ = Task.Run(async () =>
@@ -1060,8 +1093,12 @@ public sealed class Plugin : IDalamudPlugin
         await hostSupervisor.DisposeAsync().ConfigureAwait(false);
     }
 
-    private void OnRawLogLineForHost(DateTimeOffset timestamp, string line, bool isImport)
-        => hostSupervisor.PublishLog(timestamp, line, isImport);
+    private void OnRawLogLineForHost(
+        DateTimeOffset timestamp,
+        string rawLine,
+        string actLine,
+        bool isImport)
+        => hostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
         => hostSupervisor.PublishZone(territoryId, zoneName);
@@ -1137,6 +1174,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            string? resultDetail = null;
             switch (invocation.Request.Command)
             {
                 case "tts":
@@ -1166,6 +1204,34 @@ public sealed class Plugin : IDalamudPlugin
                     // Authorization remains game-side, while the actual FoxTTS callback
                     // stays in the disposable external Host. A blocked/native TTS provider
                     // can therefore be recovered by killing the Host without freezing FFXIV.
+                    break;
+                case "triggernometry.overlay":
+                    if (!string.Equals(
+                            invocation.Request.PluginId,
+                            "triggernometry",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Only Triggernometry may request the OverlayPlugin handler broker.");
+                    }
+
+                    if (!configuration.IsActCapabilityAllowed(
+                            "triggernometry",
+                            ActCapability.HighRiskScript))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Triggernometry OverlayPlugin handler capability is denied.");
+                    }
+
+                    if (!invocation.Request.Arguments.TryGetValue("payload", out var overlayPayload))
+                    {
+                        throw new InvalidDataException(
+                            "Triggernometry OverlayPlugin payload is missing.");
+                    }
+
+                    resultDetail = await actRuntime
+                        .CallOverlayHandlerAsync(overlayPayload, timeout.Token)
+                        .ConfigureAwait(false);
                     break;
                 case "postnamazu.chat":
                     if (!string.Equals(
@@ -1198,6 +1264,8 @@ public sealed class Plugin : IDalamudPlugin
                 case "postnamazu.mark":
                 case "postnamazu.place":
                 case "postnamazu.pictoact":
+                case "postnamazu.preset":
+                case "postnamazu.sendkey":
                     if (!string.Equals(
                             invocation.Request.PluginId,
                             "postnamazu",
@@ -1232,9 +1300,21 @@ public sealed class Plugin : IDalamudPlugin
                             .SendWaymarksAsync(payload, timeout.Token)
                             .ConfigureAwait(false);
                     }
-                    else
+                    else if (invocation.Request.Command == "postnamazu.pictoact")
                     {
                         pictoActOverlay.Apply(payload);
+                    }
+                    else if (invocation.Request.Command == "postnamazu.preset")
+                    {
+                        await NativePostNamazuBridge
+                            .SendPresetAsync(payload, timeout.Token)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await NativePostNamazuBridge
+                            .SendKeyAsync(payload, timeout.Token)
+                            .ConfigureAwait(false);
                     }
 
                     break;
@@ -1251,7 +1331,7 @@ public sealed class Plugin : IDalamudPlugin
                 invocation.CorrelationId,
                 true,
                 "completed",
-                null);
+                resultDetail);
         }
         catch (Exception ex)
         {
@@ -1267,33 +1347,10 @@ public sealed class Plugin : IDalamudPlugin
     private static void ValidatePostNamazuCommand(string command)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
-        if (command.Length > 500 || command.Contains('\r') || command.Contains('\n'))
+        if (!command.StartsWith('/'))
         {
             throw new InvalidDataException(
-                "PostNamazu commands must be a single line of at most 500 characters.");
-        }
-
-        if (!command.StartsWith('/') || command.StartsWith("//", StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                "PostNamazu commands must use one slash-prefixed semantic command.");
-        }
-
-        var verb = command.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
-        string[] allowed =
-        [
-            "/e",
-            "/echo",
-            "/p",
-            "/party",
-            "/mk",
-            "/marking",
-            "/waymark",
-        ];
-        if (!allowed.Contains(verb, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException(
-                $"PostNamazu command verb '{verb}' is outside the game-side whitelist.");
+                "PostNamazu commands must begin with '/'.");
         }
     }
 

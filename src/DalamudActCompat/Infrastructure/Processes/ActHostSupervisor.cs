@@ -119,7 +119,45 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
     }
 
-    public void PublishLog(DateTimeOffset timestamp, string line, bool isImport)
+    public async Task<bool> RestartAsync(CancellationToken cancellationToken)
+    {
+        await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (manuallyStopped)
+            {
+                return false;
+            }
+
+            manuallyStopped = true;
+            state = HostSupervisorState.Stopping;
+            logFlushTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            await ipc.StopAsync(cancellationToken).ConfigureAwait(false);
+            await process.StopAsync(cancellationToken).ConfigureAwait(false);
+            ClearPendingLogs();
+            state = HostSupervisorState.Stopped;
+
+            manuallyStopped = false;
+            await StartUnlockedAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            manuallyStopped = false;
+            state = HostSupervisorState.Faulted;
+            throw;
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
+    public void PublishLog(
+        DateTimeOffset timestamp,
+        string rawLine,
+        string actLine,
+        bool isImport)
     {
         if (state != HostSupervisorState.Running || isImport)
         {
@@ -133,7 +171,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             Interlocked.Increment(ref droppedPendingLogs);
         }
 
-        pendingLogs.Enqueue(new HostLogEvent(timestamp, line, isImport));
+        pendingLogs.Enqueue(new HostLogEvent(timestamp, rawLine, isImport, actLine));
         Interlocked.Increment(ref pendingLogCount);
     }
 
@@ -278,12 +316,13 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             var characters = 0;
             while (batch.Count < MaximumLogBatchItems &&
                    pendingLogs.TryPeek(out var next) &&
-                   (batch.Count == 0 || characters + next.Line.Length <= MaximumLogBatchCharacters) &&
+                   (batch.Count == 0 ||
+                    characters + next.Line.Length + (next.ActLine?.Length ?? 0) <= MaximumLogBatchCharacters) &&
                    pendingLogs.TryDequeue(out next))
             {
                 Interlocked.Decrement(ref pendingLogCount);
                 batch.Add(next);
-                characters += next.Line.Length;
+                characters += next.Line.Length + (next.ActLine?.Length ?? 0);
             }
 
             if (batch.Count == 0)

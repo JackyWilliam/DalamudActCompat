@@ -164,6 +164,17 @@ internal static class Program
                 switch (envelope.Type)
                 {
                     case HostMessageTypes.Hello:
+                        var hello = envelope.Payload.Deserialize<HostHello>()
+                                    ?? throw new InvalidDataException(
+                                        "Host hello payload is invalid.");
+                        if (string.Equals(
+                                hello.Role,
+                                "game-bridge",
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            HostPluginBridge.ConfigureGameProcess(hello.ProcessId);
+                        }
+
                         await EnqueueControlAsync(
                             outbound,
                             HostEnvelope.Create(
@@ -243,7 +254,7 @@ internal static class Program
                                 new HostCommandResult(
                                     false,
                                     "denied",
-                                    "Host 不允许任意游戏命令；只有游戏内白名单 Broker 可执行语义命令。"),
+                                    "Host 拒绝未经插件注册表与权限校验的直接命令包；已注册的插件动作使用各自兼容入口。"),
                                 envelope.CorrelationId),
                             shutdown.Token).ConfigureAwait(false);
                         break;

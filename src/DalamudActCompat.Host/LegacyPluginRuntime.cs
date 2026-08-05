@@ -52,8 +52,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
         SetStage(
             "postnamazu",
             "Game process recognition",
-            "not-implemented",
-            "Raw game Process/memory handles are intentionally not exposed to the external Host; supported actions use the semantic broker.");
+            "brokered",
+            "The semantic bridge never mistakes the Host for FFXIV. With GameCommand and NativeGameMemory granted, the original PostNamazu runtime receives the exact game process from the handshake.");
         SetStage("postnamazu", "Command bridge", "pending", "Waiting for PostNamazu initialization.");
         SetStage("postnamazu", "Log system", "pending", "Waiting for ACT event host.");
         SetStage("postnamazu", "Command send test", "not-tested", "Requires an explicit in-game test.");
@@ -168,6 +168,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         SetStage("postnamazu", "Log system", "success", "Bounded IPC log batches route through FormActMain.");
 
         RegisterFfxivPluginIdentity();
+        RegisterOverlayPluginIdentity();
         TryLoad(
             "triggernometry",
             "Triggernometry.dll",
@@ -215,7 +216,10 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
         foreach (var log in logs)
         {
-            target.ParseRawLogLine(log.IsImport, log.Timestamp.LocalDateTime, log.Line);
+            target.ParseRawLogLine(
+                log.IsImport,
+                log.Timestamp.LocalDateTime,
+                string.IsNullOrEmpty(log.ActLine) ? log.Line : log.ActLine);
             Interlocked.Increment(ref acceptedLogLines);
         }
     }
@@ -386,6 +390,30 @@ internal sealed class LegacyPluginRuntime : IDisposable
             "Official plugin type identity is present with a read-only game-side entity repository.");
     }
 
+    private void RegisterOverlayPluginIdentity()
+    {
+        var assemblyPath = Path.Combine(AppContext.BaseDirectory, "OverlayPlugin.dll");
+        var facade = new global::OverlayPlugin();
+        var tab = new TabPage("OverlayPlugin");
+        var status = new Label
+        {
+            Text = "Game-side OverlayPlugin event dispatcher bridge",
+        };
+        var overlayPluginData = new ActPluginData(
+            new FileInfo(assemblyPath),
+            facade,
+            tab,
+            status);
+        ActGlobals.oFormActMain.ActPlugins.Add(overlayPluginData);
+        SetStage(
+            "triggernometry",
+            "OverlayPlugin discovery",
+            "success",
+            "OverlayPlugin compatibility identity is second in ACT plugin order and calls the real game-side event dispatcher through bounded IPC.");
+        Console.WriteLine(
+            "OverlayPlugin compatibility identity registered before Triggernometry.");
+    }
+
     private void TryLoad(string id, string assemblyName, string entryType)
         => TryLoadPath(
             id,
@@ -431,7 +459,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     id,
                     "Command bridge",
                     "success",
-                    "Clipboard and whitelisted semantic commands route through the game-side broker.");
+                    "All seven action modules remain registered: semantic actions use the game-side broker, while normalcommand and advanced native paths activate with full permissions.");
                 SetStage(
                     id,
                     "OverlayPlugin discovery",
@@ -768,9 +796,8 @@ internal sealed class LegacyPluginHandle : IDisposable
 
                 if (id == "postnamazu")
                 {
-                    HostPluginBridge.AttachPostNamazu(instance);
                     status.Text =
-                        "External Host active; clipboard and semantic command broker available.";
+                        "External Host active; semantic bridge available. Full native runtime follows the game process when explicitly permitted.";
                 }
 
                 if (id == "act.foxtts")

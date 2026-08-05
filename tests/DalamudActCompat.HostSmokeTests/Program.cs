@@ -41,6 +41,11 @@ await ValidateHostCrashBreaksOnlyPipeAsync();
 await ValidateAbruptClientDisconnectAsync();
 await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
+ValidatePostNamazuNativeProcessPermissionGate();
+ValidatePostNamazuMarkPayloadNormalization();
+ValidatePostNamazuQueueBreakAllCompatibility();
+ValidatePostNamazu1366And1367SurfaceCompatibility();
+ValidateOverlayPluginCompatibilityTypeName();
 ValidateTriggernometryCompatibilityNoticeFilter();
 ValidateTriggernometryWebAddressLaunchUsesShell();
 ValidateTriggernometryPlaceholderProcessTestIsSkipped();
@@ -62,8 +67,9 @@ if (triggernometryAssembly is not null)
 if (pluginRoot is not null)
 {
     completion +=
-        " Real Triggernometry log/network/zone/combat/TTS/_me entity/mark/waymark/" +
-        "PictoACT closed-loop tests passed.";
+        " Real Triggernometry log/network/zone/combat/TTS/_me entity and ACT-legacy " +
+        "log paths, plus PostNamazu mark/waymark/preset/sendkey/original queue/PictoACT " +
+        "closed-loop tests passed.";
 }
 Console.WriteLine(completion);
 
@@ -149,8 +155,218 @@ void ValidateLargePostNamazuCopyReturnsQuickly()
     Environment.SetEnvironmentVariable("ACTCOMPAT_ENABLE_TEST_HOOKS", null);
 }
 
+void ValidatePostNamazuNativeProcessPermissionGate()
+{
+    var configurePermissions = typeof(HostPluginBridge).GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   typeof(HostPluginBridge).FullName,
+                                   "ConfigurePermissions");
+    var configureGameProcess = typeof(HostPluginBridge).GetMethod(
+                                   "ConfigureGameProcess",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   typeof(HostPluginBridge).FullName,
+                                   "ConfigureGameProcess");
+    var repositoryProperty = typeof(HostPluginBridge).GetProperty(
+                                 "FfxivRepository",
+                                 BindingFlags.Static | BindingFlags.NonPublic)
+                             ?? throw new MissingMemberException(
+                                 typeof(HostPluginBridge).FullName,
+                                 "FfxivRepository");
+    var repository = repositoryProperty.GetValue(null)
+                     ?? throw new InvalidOperationException(
+                         "Host FFXIV repository is unavailable.");
+    var getProcess = repository.GetType().GetMethod("GetCurrentFFXIVProcess")
+                     ?? throw new MissingMethodException(
+                         repository.GetType().FullName,
+                         "GetCurrentFFXIVProcess");
+
+    configureGameProcess.Invoke(null, [Environment.ProcessId]);
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["postnamazu"] = ["GameCommand", "NativeGameMemory"],
+                },
+                ["postnamazu"]),
+        ]);
+    var allowed = (Process?)getProcess.Invoke(repository, null);
+    Assert(
+        allowed?.Id == Environment.ProcessId,
+        "PostNamazu full permission did not expose the exact game process to its original runtime.");
+
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["postnamazu"] = ["GameCommand"],
+                },
+                ["postnamazu"]),
+        ]);
+    Assert(
+        getProcess.Invoke(repository, null) is null,
+        "PostNamazu native process remained visible after NativeGameMemory permission was revoked.");
+}
+
+void ValidatePostNamazuQueueBreakAllCompatibility()
+{
+    var queueIds = (List<string>?)typeof(HostPluginBridge)
+                       .GetField(
+                           "PostNamazuQueueIds",
+                           BindingFlags.Static | BindingFlags.NonPublic)
+                       ?.GetValue(null)
+                   ?? throw new MissingFieldException(
+                       typeof(HostPluginBridge).FullName,
+                       "PostNamazuQueueIds");
+    lock (queueIds)
+    {
+        queueIds.Clear();
+        queueIds.AddRange(["ACTCOMPAT_QUEUE_ONE", "ACTCOMPAT_QUEUE_TWO"]);
+    }
+
+    HostPluginBridge.BreakPostNamazuQueue("ALL");
+    Assert(
+        queueIds.Count == 0,
+        "PostNamazu stop=all did not preserve the original clear-all queue behavior.");
+}
+
+void ValidatePostNamazuMarkPayloadNormalization()
+{
+    const string triggernometryPayload =
+        "{\"ActorID\":\"0x10021EE7\",\"MarkType\":\"attack1\",\"LocalOnly\":true}";
+    var normalized = HostPluginBridge.NormalizePostNamazuMarkPayload(triggernometryPayload);
+    using var document = JsonDocument.Parse(normalized);
+    Assert(
+        document.RootElement.GetProperty("ActorID").GetUInt32() == 0x10021EE7,
+        "Triggernometry's hexadecimal entity ID was not normalized for PostNamazu UInt32 deserialization.");
+
+    const string numericPayload =
+        "{\"ActorID\":3758096384,\"MarkType\":\"attack1\",\"LocalOnly\":true}";
+    Assert(
+        HostPluginBridge.NormalizePostNamazuMarkPayload(numericPayload) == numericPayload,
+        "An already numeric PostNamazu ActorID payload was unexpectedly rewritten.");
+
+    try
+    {
+        _ = HostPluginBridge.NormalizePostNamazuMarkPayload(
+            "{\"ActorID\":\"0xNOT_HEX\",\"MarkType\":\"attack1\"}");
+        throw new InvalidOperationException(
+            "An invalid hexadecimal PostNamazu ActorID was accepted.");
+    }
+    catch (InvalidDataException)
+    {
+        // Expected: malformed ActorIDs must fail closed before entering the native runtime.
+    }
+}
+
+void ValidateOverlayPluginCompatibilityTypeName()
+{
+    var facadeType = typeof(HostPluginBridge).Assembly.GetType("OverlayPlugin")
+                     ?? throw new TypeLoadException(
+                         "The ACT OverlayPlugin compatibility identity must be named exactly OverlayPlugin.");
+    Assert(
+        facadeType.FullName == "OverlayPlugin" &&
+        typeof(Advanced_Combat_Tracker.IActPluginV1).IsAssignableFrom(facadeType),
+        $"ACT OverlayPlugin compatibility identity was '{facadeType.FullName}'.");
+}
+
+void ValidatePostNamazu1366And1367SurfaceCompatibility()
+{
+    var rewriter = typeof(HostPluginBridge).Assembly.GetType(
+                       "DalamudActCompat.Host.LegacyAssemblyRewriter")
+                   ?? throw new TypeLoadException(
+                       "DalamudActCompat.Host.LegacyAssemblyRewriter");
+    var validate = rewriter.GetMethod(
+                       "ValidatePostNamazuActionSurface",
+                       BindingFlags.Static | BindingFlags.NonPublic)
+                   ?? throw new MissingMethodException(
+                       rewriter.FullName,
+                       "ValidatePostNamazuActionSurface");
+    string[] currentModules =
+    [
+        "PostNamazu.Actions.Command",
+        "PostNamazu.Actions.Mark",
+        "PostNamazu.Actions.Preset",
+        "PostNamazu.Actions.Queue",
+        "PostNamazu.Actions.SendKey",
+        "PostNamazu.Actions.WayMark",
+    ];
+    string[] legacyModules =
+    [
+        .. currentModules,
+        "PostNamazu.Actions.NormalCommand",
+    ];
+    string[] commonCommands =
+    [
+        "PostNamazu.Actions.Command.DoTextCommand:command",
+        "PostNamazu.Actions.Command.DoTextCommand:DoTextCommand",
+        "PostNamazu.Actions.Mark.DoMarking:mark",
+        "PostNamazu.Actions.Preset.DoInsertPreset:preset",
+        "PostNamazu.Actions.Preset.DoInsertPreset:DoInsertPreset",
+        "PostNamazu.Actions.Queue.DoQueue:queue",
+        "PostNamazu.Actions.Queue.DoQueue:DoQueueActions",
+        "PostNamazu.Actions.Queue.BreakQueue:stop",
+        "PostNamazu.Actions.Queue.BreakQueue:break",
+        "PostNamazu.Actions.Queue.BreakQueue:BreakQueueActions",
+        "PostNamazu.Actions.SendKey.DoSendKey:sendkey",
+        "PostNamazu.Actions.WayMark.DoWaymarks:place",
+        "PostNamazu.Actions.WayMark.DoWaymarks:DoWaymarks",
+    ];
+    string[] currentCommands =
+    [
+        .. commonCommands,
+        "PostNamazu.Actions.Command.DoNormalTextCommand:normalcommand",
+        "PostNamazu.Actions.Command.DoNormalTextCommand:DoNormalTextCommand",
+    ];
+    string[] legacyCommands =
+    [
+        .. commonCommands,
+        "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:normalcommand",
+        "PostNamazu.Actions.NormalCommand.DoNormalTextCommand:DoNormalTextCommand",
+    ];
+
+    Invoke(currentModules, currentCommands);
+    Invoke(legacyModules, legacyCommands);
+
+    var mixedSurfaceRejected = false;
+    try
+    {
+        Invoke(currentModules, legacyCommands);
+    }
+    catch (InvalidOperationException)
+    {
+        mixedSurfaceRejected = true;
+    }
+
+    Assert(
+        mixedSurfaceRejected,
+        "PostNamazu surface validation accepted mismatched 1.3.6.6/1.3.6.7 command owners.");
+
+    void Invoke(string[] modules, string[] commands)
+    {
+        try
+        {
+            validate.Invoke(null, [modules, commands]);
+        }
+        catch (TargetInvocationException exception)
+            when (exception.InnerException is InvalidOperationException inner)
+        {
+            throw inner;
+        }
+    }
+}
+
 void ValidateTriggernometryCompatibilityNoticeFilter()
 {
+    Assert(
+        HostPluginBridge.CheckTriggernometryPostNamazuAdministratorRequirement(),
+        "Triggernometry's PostNamazu compatibility-only administrator notice was not suppressed.");
     Assert(
         HostPluginBridge.IsExpectedTriggernometryCompatibilityNotice(
             "[鲶鱼精邮差扩展] 警告：ACT 未以管理员权限运行。如果遇到游戏崩溃，请尝试右键 ACT 程序 - 属性 - 兼容性，开启管理员身份运行。"),
@@ -606,10 +822,15 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                             DateTimeOffset.UtcNow,
                             "00|2026-07-31T00:00:00.0000000+08:00|0000|ACTCOMPAT_SMOKE_LINE|",
                             false),
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.1000000+08:00|0038||echo test <se.10>|",
+                            false,
+                            "2026-07-31 00:00:00.100 00:0038::echo test <se.10>"),
                     }),
                 CancellationToken.None);
             var ttsRequests = new List<(string CorrelationId, HostCommandRequest Request)>();
-            while (ttsRequests.Count < 2)
+            while (ttsRequests.Count < 3)
             {
                 var requestEnvelope = await ReadTriggerCommandAsync(pipe);
                 var request = requestEnvelope.Payload.Deserialize<HostCommandRequest>()
@@ -628,8 +849,12 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 .Select(item => item.Request.Arguments["text"])
                 .ToHashSet(StringComparer.Ordinal);
             Assert(
-                ttsTexts.SetEquals(["ACTCOMPAT_LOG_MATCH", "ACTCOMPAT_NETWORK_MATCH"]),
-                "Triggernometry did not complete both standard-log and FFXIV-network-equivalent regex/TTS paths.");
+                ttsTexts.SetEquals([
+                    "ACTCOMPAT_LOG_MATCH",
+                    "ACTCOMPAT_NETWORK_MATCH",
+                    "ACTCOMPAT_LEGACY_ECHO_MATCH",
+                ]),
+                "Triggernometry did not complete standard-log, ACT-legacy-log, and FFXIV-network-equivalent regex/TTS paths.");
             var clientSequence = 5L;
             foreach (var request in ttsRequests)
             {
@@ -675,13 +900,79 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     {
                         new HostLogEvent(
                             DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.6250000+08:00|0000|ACTCOMPAT_OVERLAY_HANDLER_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            var overlayEnvelope = await ReadTriggerCommandAsync(pipe);
+            var overlayRequest = overlayEnvelope.Payload.Deserialize<HostCommandRequest>()
+                                 ?? throw new InvalidDataException(
+                                     "Triggernometry sent an invalid OverlayPlugin request.");
+            Assert(
+                overlayRequest.PluginId == "triggernometry" &&
+                overlayRequest.Command == "triggernometry.overlay" &&
+                overlayRequest.Arguments.TryGetValue("payload", out var overlayPayload) &&
+                overlayPayload.Contains("\"call\":\"getLanguage\"", StringComparison.Ordinal),
+                "Triggernometry OverlayPlugin handler call did not retain its JSON semantics.");
+            Assert(
+                !string.IsNullOrWhiteSpace(overlayEnvelope.CorrelationId),
+                "Triggernometry OverlayPlugin request had no correlation identifier.");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.CommandResult,
+                    HostMessagePriority.Control,
+                    new HostCommandResult(
+                        true,
+                        "completed",
+                        "{\"language\":\"ACTCOMPAT_OVERLAY_OK\"}"),
+                    overlayEnvelope.CorrelationId),
+                CancellationToken.None);
+            await WaitForProcessOutputAsync(
+                host,
+                "ACTCOMPAT_OVERLAY_HANDLER_OK:ACTCOMPAT_OVERLAY_OK",
+                TimeSpan.FromSeconds(15));
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.7000000+08:00|0000|ACTCOMPAT_PLUGIN_ORDER_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await WaitForProcessOutputAsync(
+                host,
+                "ACTCOMPAT_PLUGIN_ORDER:FFXIV_ACT_Plugin.dll>OverlayPlugin.dll>Triggernometry.dll>PostNamazu.dll>ACT.FoxTTS.dll",
+                TimeSpan.FromSeconds(15));
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
                             "00|2026-07-31T00:00:00.7500000+08:00|0000|ACTCOMPAT_PICTO_LINE|",
                             false),
                     }),
                 CancellationToken.None);
             await ReadAndCompleteExpectedPostNamazuAsync(
                 "postnamazu.pictoact",
-                "Tag: ACTCOMPAT_HOST_PICTO",
+                "Omen: Rect",
+                "Delay: 2.5",
+                "Angle: 0 + pi/2",
                 "Pos: 1.25, -3.75, 2.5");
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
@@ -782,6 +1073,59 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 HostEnvelope.Create(
                     session,
                     clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:02.0000000+08:00|0000|ACTCOMPAT_PRESET_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedPostNamazuAsync(
+                "postnamazu.preset",
+                "\"Name\":\"Slot 30\"",
+                "\"MapID\":777");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:02.2500000+08:00|0000|ACTCOMPAT_SENDKEY_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedPostNamazuAsync(
+                "postnamazu.sendkey",
+                "65");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:02.5000000+08:00|0000|ACTCOMPAT_QUEUE_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedPostNamazuCommandAsync("//e ACTCOMPAT_QUEUE");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
                     HostMessageTypes.PluginInvoke,
                     HostMessagePriority.Control,
                     new HostPluginInvocation(
@@ -829,6 +1173,37 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 "Triggernometry did not register PictoACT automatically during normal startup." +
                 $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
+                output.Contains(
+                    "OverlayPlugin compatibility identity registered before Triggernometry.",
+                    StringComparison.Ordinal),
+                "OverlayPlugin compatibility identity was not registered in ACT plugin order." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "PostNamazu GreyMagic EventWaitHandle ACL compatibility shim loaded.",
+                    StringComparison.Ordinal),
+                "PostNamazu GreyMagic compatibility shim was not loaded." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "ACTCOMPAT_OVERLAY_HANDLER_OK:ACTCOMPAT_OVERLAY_OK",
+                    StringComparison.Ordinal),
+                "Triggernometry OverlayPlugin handler response did not close the Host IPC loop." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                output.Contains(
+                    "ACTCOMPAT_PLUGIN_ORDER:FFXIV_ACT_Plugin.dll>OverlayPlugin.dll>Triggernometry.dll>PostNamazu.dll>ACT.FoxTTS.dll",
+                    StringComparison.Ordinal),
+                "ACT plugin list order did not match Triggernometry's required first three entries." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
+                !output.Contains("OverlayPlugin not found", StringComparison.OrdinalIgnoreCase) &&
+                !errors.Contains("OverlayPlugin not found", StringComparison.OrdinalIgnoreCase) &&
+                !output.Contains("ReflectionNotFoundException", StringComparison.Ordinal) &&
+                !errors.Contains("ReflectionNotFoundException", StringComparison.Ordinal),
+                "Triggernometry still reported the removed in-process OverlayPlugin reflection path." +
+                $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
+            Assert(
                 !output.Contains("ICombatantMemory", StringComparison.Ordinal) &&
                 !errors.Contains("ICombatantMemory", StringComparison.Ordinal),
                 "Triggernometry still probed the obsolete OverlayPlugin combatant-memory shape." +
@@ -838,16 +1213,14 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 $"PostNamazu did not load out-of-process.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
                 output.Contains(
-                    "PostNamazu HTTP listener uses loopback compatibility mode",
+                    "PostNamazu HTTP listener started:",
                     StringComparison.Ordinal) &&
-                output.Contains(
-                    $"PostNamazu HTTP listener started: http://127.0.0.1:{postNamazuSmokePort}/",
-                    StringComparison.Ordinal),
-                $"PostNamazu did not start a standard-user loopback listener." +
+                output.Contains($":{postNamazuSmokePort}/", StringComparison.Ordinal),
+                $"PostNamazu did not start its configured HTTP listener." +
                 $"{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
                 output.Split("test TTS output suppressed:", StringSplitOptions.None).Length - 1 ==
-                6,
+                7,
                 "Authorized Triggernometry TTS requests did not reach the isolated Host output " +
                 $"provider.{Environment.NewLine}{output}{Environment.NewLine}{errors}");
             Assert(
@@ -942,6 +1315,30 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                         envelope.CorrelationId),
                     CancellationToken.None);
             }
+
+            async Task ReadAndCompleteExpectedPostNamazuCommandAsync(string expectedText)
+            {
+                var envelope = await ReadTriggerCommandAsync(pipe);
+                var request = envelope.Payload.Deserialize<HostCommandRequest>()
+                              ?? throw new InvalidDataException(
+                                  "PostNamazu sent an invalid command request.");
+                Assert(
+                    request.PluginId == "postnamazu" &&
+                    request.Command == "postnamazu.chat" &&
+                    request.Arguments.TryGetValue("text", out var text) &&
+                    text == expectedText,
+                    $"Expected queued PostNamazu command '{expectedText}'.");
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.CommandResult,
+                        HostMessagePriority.Control,
+                        new HostCommandResult(true, "completed", "smoke"),
+                        envelope.CorrelationId),
+                    CancellationToken.None);
+            }
         }
         catch (Exception ex)
         {
@@ -1014,7 +1411,7 @@ void ValidateTriggernometryLaunchProcessPatch()
         instruction.Operand is MethodReference called &&
         called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
         called.Name == nameof(
-            HostPluginBridge.SkipTriggernometryPostNamazuAdministratorNotice));
+            HostPluginBridge.CheckTriggernometryPostNamazuAdministratorRequirement));
     var realAdministratorChecks = bridgeNamazuInitializer.Body.Instructions.Count(instruction =>
         instruction.Operand is MethodReference called &&
         called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin" &&
@@ -1022,8 +1419,8 @@ void ValidateTriggernometryLaunchProcessPatch()
         called.Parameters.Count == 0);
     Assert(
         noticeBridgeCalls == 1 && realAdministratorChecks == 0,
-        "The specific Triggernometry/PostNamazu legacy administrator notice was not " +
-        $"isolated from the real token check: bridge={noticeBridgeCalls}, " +
+        "The Triggernometry/PostNamazu administrator notice did not route through " +
+        $"the native-runtime-aware token check: bridge={noticeBridgeCalls}, " +
         $"realChecks={realAdministratorChecks}.");
 }
 
@@ -1101,14 +1498,29 @@ async Task PrepareLegacySmokeConfigurationAsync()
                   <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_NETWORK_MATCH" />
                 </Actions>
               </Trigger>
+              <Trigger Enabled="true" Id="8f111f41-1aa4-45cc-a426-88c991842a21" Name="ACT legacy echo line closed loop" RegularExpression="^.{15}\S+ 00:0038::echo test &lt;se\.10&gt;$" Source="Log">
+                <Actions>
+                  <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_LEGACY_ECHO_MATCH" />
+                </Actions>
+              </Trigger>
               <Trigger Enabled="true" Id="51997209-fb1d-4c07-80d5-d6542feeeacb" Name="C# self-reference regression" RegularExpression="ACTCOMPAT_SCRIPT_LINE" Source="Log">
                 <Actions>
                   <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
                 </Actions>
               </Trigger>
+              <Trigger Enabled="true" Id="1751009c-1494-44f1-9708-37af4d4dc618" Name="OverlayPlugin handler IPC closed loop" RegularExpression="ACTCOMPAT_OVERLAY_HANDLER_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using Newtonsoft.Json.Linq;&#xD;&#xA;using Triggernometry.PluginBridges;&#xD;&#xA;&#xD;&#xA;var response = ModuleEvents.CallOverlayHandler(JObject.Parse(&quot;{\&quot;call\&quot;:\&quot;getLanguage\&quot;}&quot;));&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_OVERLAY_HANDLER_OK:&quot; + response[&quot;language&quot;]);" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="d97e5f16-f275-44d9-be68-c46e646e5a42" Name="Required ACT plugin order closed loop" RegularExpression="ACTCOMPAT_PLUGIN_ORDER_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Linq;&#xD;&#xA;using Advanced_Combat_Tracker;&#xD;&#xA;&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_PLUGIN_ORDER:&quot; + string.Join(&quot;&gt;&quot;, ActGlobals.oFormActMain.ActPlugins.Select(plugin =&gt; plugin.pluginFile.Name)));" />
+                </Actions>
+              </Trigger>
               <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT _me callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_HOST_PICTO&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Scale: 5, 5, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.65" />
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Rect&#xD;&#xA;Delay: 2.5&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Angle: 0 + pi/2&#xD;&#xA;Scale: 2.5, 28, 1" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="80d5ffc0-d534-4fcb-95a7-1ee3b72519b0" Name="Mark _me expression callback closed loop" RegularExpression="ACTCOMPAT_MARK_LINE" Source="Log">
@@ -1119,6 +1531,21 @@ async Task PrepareLegacySmokeConfigurationAsync()
               <Trigger Enabled="true" Id="a9c32bf3-3346-40e9-878e-1cbb944247c8" Name="Waymark _me expression callback closed loop" RegularExpression="ACTCOMPAT_PLACE_LINE" Source="Log">
                 <Actions>
                   <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="place" NamedCallbackParam="{&quot;LocalOnly&quot;:true,&quot;A&quot;:{&quot;X&quot;:${_me.x},&quot;Y&quot;:${_me.z},&quot;Z&quot;:${_me.y},&quot;Active&quot;:true}}" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="2d40782b-ee43-43fc-b41c-dff46fdc8761" Name="Preset callback closed loop" RegularExpression="ACTCOMPAT_PRESET_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="preset" NamedCallbackParam="{&quot;Name&quot;:&quot;Slot 30&quot;,&quot;MapID&quot;:777,&quot;A&quot;:{&quot;X&quot;:1.25,&quot;Y&quot;:2.5,&quot;Z&quot;:-3.75,&quot;Active&quot;:true}}" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="cb7e1d82-04fd-4a93-866e-7f1f5f538d71" Name="SendKey callback closed loop" RegularExpression="ACTCOMPAT_SENDKEY_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="sendkey" NamedCallbackParam="65" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="4e30f383-db3f-480a-b7ec-d0ff20918cdd" Name="Queue callback closed loop" RegularExpression="ACTCOMPAT_QUEUE_LINE" Source="Log">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="queue" NamedCallbackParam="[{&quot;C&quot;:&quot;qid&quot;,&quot;P&quot;:&quot;ACTCOMPAT_QUEUE_ID&quot;,&quot;D&quot;:0},{&quot;C&quot;:&quot;command&quot;,&quot;P&quot;:&quot;//e ACTCOMPAT_QUEUE&quot;,&quot;D&quot;:0}]" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="0b595eff-da67-45ce-ab7c-1e4f7477d6d2" Name="Combat start closed loop" RegularExpression="^OnCombatStart$" Source="ACT">

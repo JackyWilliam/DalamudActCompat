@@ -1,13 +1,14 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Xml;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Protocol;
 using Mono.Cecil;
 
-if (args.Length is < 1 or > 2)
+if (args.Length is < 1 or > 3)
 {
     throw new ArgumentException(
-        "Pass the path to an installed Triggernometry.dll and optionally PostNamazu.dll.");
+        "Pass Triggernometry.dll, optionally PostNamazu.dll, and optionally a Triggernometry export XML.");
 }
 
 var assemblyPath = Path.GetFullPath(args[0]);
@@ -24,6 +25,7 @@ if (!overlayTemplates.Any(template => template.Name == "Kagerou") ||
     throw new InvalidOperationException(
         "OverlayPlugin built-in HTML templates were not exposed by the runtime.");
 }
+AssertActorCastExtraRotationCompatibility();
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
 AssemblyLoadContext.Default.Resolving += ResolveDependency;
@@ -81,6 +83,7 @@ try
     AssertLegacyJavaScriptSerializerCompatibility();
     AssertIndexMemberParserCanExecute(implementation);
     AssertPostNamazuSemanticPayloads();
+    AssertPostNamazuSemanticCallSafety();
 
     var administratorCheck = implementation
         .GetType("Triggernometry.Core.RealPlugin", throwOnError: true)!
@@ -105,13 +108,17 @@ try
             "LogLineQueuerMass",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!,
         nameof(LegacyResourceCompatibility.EnqueueTriggerEventBounded));
-    AssertTriggernometrySelfTestScriptCompiles(implementation);
+    AssertTriggernometryScriptCompiles(implementation);
+    if (args.Length == 3)
+    {
+        AssertTriggernometryExportScriptsCompile(implementation, args[2]);
+    }
 
     var proxyType = assembly.GetType("TriggernometryProxy.ProxyPlugin", throwOnError: true)!;
     _ = Activator.CreateInstance(proxyType)
         ?? throw new InvalidOperationException("Triggernometry proxy could not be constructed.");
 
-    if (args.Length == 2)
+    if (args.Length >= 2)
     {
         var postNamazuPath = Path.GetFullPath(args[1]);
         var postNamazu = LegacyResourceCompatibility.LoadPostNamazuWithClipboardCompatibility(
@@ -284,11 +291,45 @@ static void AssertLegacyJavaScriptSerializerCompatibility()
     }
 }
 
+static void AssertActorCastExtraRotationCompatibility()
+{
+    var packetType = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly.GetType(
+                         "RainbowMage.OverlayPlugin.NetworkProcessors.LineActorCastExtra+ActorCastExtraPacket",
+                         throwOnError: true)!
+                     ?? throw new InvalidOperationException(
+                         "OverlayPlugin ActorCastExtra packet formatter was not found.");
+    var convert = packetType.GetMethod(
+                      "ConvertRotation",
+                      BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                  ?? throw new MissingMethodException(packetType.FullName, "ConvertRotation");
+
+    var regional = Convert.ToDouble(convert.Invoke(null, [1.25f]));
+    var global = Convert.ToDouble(convert.Invoke(null, [(ushort)0]));
+    if (Math.Abs(regional - 1.25d) > 0.0001d ||
+        Math.Abs(global + Math.PI) > 0.0001d)
+    {
+        throw new InvalidOperationException(
+            "OverlayPlugin ActorCastExtra rotation conversion lost CN/KR/TW or global compatibility.");
+    }
+
+    try
+    {
+        _ = convert.Invoke(null, [(byte)1]);
+        throw new InvalidOperationException(
+            "OverlayPlugin ActorCastExtra accepted an unknown rotation field type.");
+    }
+    catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException)
+    {
+        // Expected: unknown packet layouts must fail closed instead of emitting corrupt 0x107 logs.
+    }
+}
+
 static void AssertPostNamazuSemanticPayloads()
 {
     var mark = PostNamazuSemanticActions.ParseMark(
         "{\"ActorID\":0xE0000000,\"MarkType\":\"attack8\",\"LocalOnly\":true}");
     if (mark.ActorId != PostNamazuSemanticActions.ClearActorId ||
+        mark.ActorName is not null ||
         mark.MarkerIndex != 16 ||
         !mark.LocalOnly)
     {
@@ -298,7 +339,8 @@ static void AssertPostNamazuSemanticPayloads()
 
     var waymarks = PostNamazuSemanticActions.ParseWaymarks(
         "{\"LocalOnly\":true,\"A\":{\"X\":1.25,\"Y\":2.5,\"Z\":-3.75,\"Active\":true},\"B\":{}}");
-    if (!waymarks.LocalOnly || waymarks.ClearAll || waymarks.Updates.Count != 2 ||
+    if (waymarks.Operation != PostNamazuWaymarkOperation.Apply ||
+        !waymarks.LocalOnly || waymarks.Updates.Count != 2 ||
         !waymarks.Updates[0].Active || waymarks.Updates[1].Active ||
         waymarks.Updates[0].Position.X != 1.25f ||
         waymarks.Updates[0].Position.Y != 2.5f ||
@@ -307,9 +349,113 @@ static void AssertPostNamazuSemanticPayloads()
         throw new InvalidOperationException("PostNamazu waymark JSON compatibility failed.");
     }
 
-    if (!PostNamazuSemanticActions.ParseWaymarks("clear").ClearAll)
+    if (NativePostNamazuBridge.RequiresNativeGameMemory(waymarks) ||
+        NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("clear")) ||
+        NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("reset")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks(
+                "{\"LocalOnly\":false,\"A\":{\"X\":1,\"Y\":2,\"Z\":3,\"Active\":true}}")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("save")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("load")) ||
+        !NativePostNamazuBridge.RequiresNativeGameMemory(
+            PostNamazuSemanticActions.ParseWaymarks("public")))
     {
-        throw new InvalidOperationException("PostNamazu clear command compatibility failed.");
+        throw new InvalidOperationException(
+            "PostNamazu local/native waymark permission compatibility failed.");
+    }
+
+    if (PostNamazuSemanticActions.ParseWaymarks("clear").Operation !=
+        PostNamazuWaymarkOperation.ClearLocal ||
+        PostNamazuSemanticActions.ParseWaymarks("public").Operation !=
+        PostNamazuWaymarkOperation.Publicize ||
+        PostNamazuSemanticActions.ParseWaymarks("save").Operation !=
+        PostNamazuWaymarkOperation.Save ||
+        PostNamazuSemanticActions.ParseWaymarks("restore").Operation !=
+        PostNamazuWaymarkOperation.Load)
+    {
+        throw new InvalidOperationException("PostNamazu waymark command compatibility failed.");
+    }
+
+    var byName = PostNamazuSemanticActions.ParseMark(
+        "{\"Name\":\"Actor Name\",\"MarkType\":\"circle\"}");
+    if (byName.ActorId is not null || byName.ActorName != "Actor Name" ||
+        byName.MarkerIndex != 11 || byName.LocalOnly)
+    {
+        throw new InvalidOperationException("PostNamazu name-based marking compatibility failed.");
+    }
+
+    var preset = PostNamazuSemanticActions.ParsePreset(
+        "{\"Name\":\"Slot 30\",\"MapID\":777,\"A\":{\"X\":1.25,\"Y\":2.5,\"Z\":-3.75,\"Active\":true}}");
+    if (preset.Slot != 30 || preset.MapId != 777 || preset.Markers.Count != 8 ||
+        !preset.Markers[0].Active || preset.Markers[0].Position.Z != -3.75f ||
+        preset.Markers[1].Active || PostNamazuSemanticActions.ParseKeyCode("65") != 65)
+    {
+        throw new InvalidOperationException("PostNamazu preset/sendkey compatibility failed.");
+    }
+}
+
+static void AssertPostNamazuSemanticCallSafety()
+{
+    using var assembly = AssemblyDefinition.ReadAssembly(
+        typeof(NativePostNamazuBridge).Assembly.Location);
+    var bridge = assembly.MainModule.Types.Single(type =>
+        type.FullName == typeof(NativePostNamazuBridge).FullName);
+    string[] semanticMethods =
+    [
+        "ApplyMark",
+        "ApplyWaymarks",
+        "ApplyPublicWaymark",
+        "ApplyPreset",
+        "SendCommandAsync",
+        "SendKeyCode",
+    ];
+
+    foreach (var methodName in semanticMethods)
+    {
+        var methods = bridge.Methods
+            .Where(method => method.Name == methodName && method.HasBody)
+            .ToArray();
+        if (methods.Length == 0)
+        {
+            throw new MissingMethodException(bridge.FullName, methodName);
+        }
+
+        foreach (var method in methods)
+        {
+            foreach (var instruction in method.Body.Instructions)
+            {
+                if (instruction.OpCode == Mono.Cecil.Cil.OpCodes.Calli)
+                {
+                    throw new InvalidOperationException(
+                        $"Semantic PostNamazu action {method.FullName} contains an indirect native call.");
+                }
+
+                if (instruction.Operand is MethodReference called &&
+                    called.DeclaringType.FullName == bridge.FullName &&
+                    called.Name is "Call" or "GetNativeCall")
+                {
+                    throw new InvalidOperationException(
+                        $"Semantic PostNamazu action {method.FullName} reaches unsafe native helper " +
+                        $"{called.Name}.");
+                }
+            }
+        }
+    }
+
+    var publicWaymark = bridge.Methods.Single(method =>
+        method.Name == "ApplyPublicWaymark" && method.HasBody);
+    if (!publicWaymark.Body.Instructions.Any(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName ==
+            "FFXIVClientStructs.FFXIV.Client.Game.GameMain" &&
+            called.Name == "ExecuteCommand"))
+    {
+        throw new InvalidOperationException(
+            "Public waymarks are not routed through GameMain.ExecuteCommand.");
     }
 }
 
@@ -347,7 +493,74 @@ static void AssertCallsNativeBridge(MethodInfo method, string expectedMethod)
         $"{nameof(NativePostNamazuBridge)}.{expectedMethod}.");
 }
 
-static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
+static void AssertTriggernometryExportScriptsCompile(Assembly implementation, string exportPath)
+{
+    var fullPath = Path.GetFullPath(exportPath);
+    if (!File.Exists(fullPath))
+    {
+        throw new FileNotFoundException("Triggernometry export XML was not found.", fullPath);
+    }
+
+    var document = new XmlDocument();
+    document.Load(fullPath);
+    var markActions = document.SelectNodes(
+                              "//Action[@ActionType='NamedCallback' and @NamedCallbackName='mark']")
+                          ?.Cast<XmlElement>()
+                          .ToArray()
+                      ?? [];
+    var actorIdMark = markActions.SingleOrDefault(action =>
+        action.ParentNode?.ParentNode is XmlElement trigger &&
+        trigger.GetAttribute("Name").StartsWith("04 ", StringComparison.Ordinal) &&
+        action.GetAttribute("OrderNumber") == "1");
+    var clearMarks = markActions.Count(action =>
+        action.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": 3758096384",
+            StringComparison.Ordinal));
+    if (actorIdMark is null ||
+        !actorIdMark.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": \"0x${_me.id}\"",
+            StringComparison.Ordinal) ||
+        markActions.Count(action => action.GetAttribute("NamedCallbackParam").Contains(
+            "\"ActorID\": \"0x${_me.id}\"",
+            StringComparison.Ordinal)) != 1 ||
+        clearMarks != 3)
+    {
+        throw new InvalidOperationException(
+            "Triggernometry export must pass its hexadecimal entity ID with a 0x prefix and clear values as UInt32 JSON numbers.");
+    }
+
+    var scriptActions = document.SelectNodes("//Action[@ActionType='ExecuteScript']")
+                            ?.Cast<XmlElement>()
+                            .ToArray()
+                        ?? [];
+    if (scriptActions.Length == 0)
+    {
+        throw new InvalidOperationException(
+            "Triggernometry export XML does not contain any ExecuteScript actions.");
+    }
+
+    foreach (var action in scriptActions)
+    {
+        var triggerName = (action.ParentNode?.ParentNode as XmlElement)
+            ?.GetAttribute("Name");
+        var source = action.GetAttribute("ExecScriptExpression");
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            throw new InvalidOperationException(
+                $"Triggernometry trigger '{triggerName}' has an empty ExecuteScript action.");
+        }
+
+        AssertTriggernometryScriptCompiles(
+            implementation,
+            source,
+            $"Triggernometry export script '{triggerName}'");
+    }
+}
+
+static void AssertTriggernometryScriptCompiles(
+    Assembly implementation,
+    string? sourceOverride = null,
+    string description = "Triggernometry SelfTest script")
 {
     var scriptOptionsType = AppDomain.CurrentDomain.GetAssemblies()
         .Single(assembly => string.Equals(
@@ -385,6 +598,7 @@ static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
             MessageBox.Show("PostNamazu command module is disabled.");
         }
         """;
+    var source = sourceOverride ?? selfTestScript;
     var csharpScriptType = AppDomain.CurrentDomain.GetAssemblies()
         .Single(assembly => string.Equals(
             assembly.GetName().Name,
@@ -406,8 +620,8 @@ static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
             sourceType == typeof(string));
     var script = create.MakeGenericMethod(typeof(object)).Invoke(
                      null,
-                     [selfTestScript, options, null, null])
-                 ?? throw new InvalidOperationException("Roslyn did not create the SelfTest script.");
+                     [source, options, null, null])
+                 ?? throw new InvalidOperationException($"Roslyn did not create {description}.");
     var compilation = script.GetType()
                           .GetMethod("GetCompilation", BindingFlags.Public | BindingFlags.Instance)!
                           .Invoke(script, null)
@@ -433,7 +647,7 @@ static void AssertTriggernometrySelfTestScriptCompiles(Assembly implementation)
     if (errors.Length > 0)
     {
         throw new InvalidOperationException(
-            "Triggernometry SelfTest script did not compile:" + Environment.NewLine +
+            $"{description} did not compile:" + Environment.NewLine +
             string.Join(Environment.NewLine, errors));
     }
 }

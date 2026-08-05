@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Resources;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Windows.Forms;
 using DalamudActCompat.Protocol;
@@ -116,6 +117,7 @@ public static class LegacyAssemblyRewriter
     {
         using var input = File.OpenRead(assemblyPath);
         using var definition = AssemblyDefinition.ReadAssembly(input);
+        PreloadPostNamazuGreyMagicCompatibility(definition, loadContext);
         var module = definition.MainModule;
         var bridgeType = typeof(HostPluginBridge);
         var setClipboard = module.ImportReference(
@@ -124,49 +126,47 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.GetClipboardText))!);
         var copyPostNamazuLog = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.CopyPostNamazuLog))!);
-        var attach = module.ImportReference(
-            bridgeType.GetMethod(nameof(HostPluginBridge.AttachPostNamazu))!);
         var overlayAdapter = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.UsePostNamazuOverlayAdapter))!);
-        var skipMonitor = module.ImportReference(
-            bridgeType.GetMethod(nameof(HostPluginBridge.SkipLegacyProcessMonitoring))!);
         var command = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuCommand))!);
+        var nativeRuntimeAllowed = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNativeRuntimeAllowed))!);
+        var normalizeMarkPayload = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.NormalizePostNamazuMarkPayload))!);
         var mark = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuMark))!);
         var waymark = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuWaymark))!);
+        var preset = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuPreset))!);
+        var sendKey = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuKey))!);
+        var queue = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuQueue))!);
+        var breakQueue = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.BreakPostNamazuQueue))!);
         var networkAllowed = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.IsPostNamazuNetworkAllowed))!);
         var startHttpListener = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.StartPostNamazuHttpListener))!);
         var skipHttpThreadAbort = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SkipPostNamazuThreadAbort))!);
-        var unsupported = module.ImportReference(
-            bridgeType.GetMethods().Single(method =>
-                method.Name == nameof(HostPluginBridge.UnsupportedNativeOperation) &&
-                !method.IsGenericMethod));
-        var unsupportedGeneric = module.ImportReference(
-            bridgeType.GetMethods().Single(method =>
-                method.Name == nameof(HostPluginBridge.UnsupportedNativeOperation) &&
-                method.IsGenericMethod));
         var copyLogPatched = false;
         var overlayAdapterPatched = false;
         var httpListenerPatched = false;
         var httpThreadAbortPatched = false;
         var markPatched = false;
         var waymarkPatched = false;
+        var presetPatched = false;
+        var sendKeyPatched = false;
+        var queuePatched = false;
+        var breakQueuePatched = false;
 
         foreach (var type in module.Types.SelectMany(EnumerateTypes))
         {
-            foreach (var method in type.Methods.Where(method => method.HasBody))
+            foreach (var method in type.Methods.Where(method => method.HasBody).ToArray())
             {
-                if (type.FullName == "PostNamazu.PostNamazu" && method.Name == "Attach")
-                {
-                    ReplaceWithBridge(method, attach, loadInstance: true, loadParameters: false);
-                    continue;
-                }
-
                 if (type.FullName == "PostNamazu.Common.PluginIntegrationManager" &&
                     method.Name == "InitializeOverlayIntegration" &&
                     method.Parameters.Count == 0)
@@ -197,13 +197,6 @@ public static class LegacyAssemblyRewriter
                     il.Append(il.Create(OpCodes.Call, copyPostNamazuLog));
                     il.Append(il.Create(OpCodes.Ret));
                     copyLogPatched = true;
-                    continue;
-                }
-
-                if (type.FullName == "PostNamazu.Common.ProcessManager" &&
-                    method.Name == "StartProcessMonitoring")
-                {
-                    ReplaceWithBridge(method, skipMonitor, loadInstance: true, loadParameters: false);
                     continue;
                 }
 
@@ -252,7 +245,11 @@ public static class LegacyAssemblyRewriter
                     method.Parameters.Count == 1 &&
                     method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
                 {
-                    ReplaceWithBridge(method, mark, loadInstance: false, loadParameters: true);
+                    WrapWithNativeRuntimeFallback(
+                        method,
+                        nativeRuntimeAllowed,
+                        normalizeMarkPayload,
+                        mark);
                     markPatched = true;
                     continue;
                 }
@@ -267,15 +264,43 @@ public static class LegacyAssemblyRewriter
                     continue;
                 }
 
-                if ((type.FullName == "PostNamazu.PostNamazu" &&
-                     method.Name is "Call" or "DirectCall" or "ExecuteInFrameLock") ||
-                    (type.FullName == "PostNamazu.Actions.NamazuModule" &&
-                     method.Name == "ExecuteWithLock"))
+                if (type.FullName == "PostNamazu.Actions.Preset" &&
+                    method.Name == "DoInsertPreset" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
                 {
-                    var target = method.ReturnType.MetadataType == MetadataType.Void
-                        ? unsupported
-                        : MakeGenericMethod(unsupportedGeneric, [method.ReturnType]);
-                    ReplaceWithBridge(method, target, loadInstance: false, loadParameters: false);
+                    ReplaceWithBridge(method, preset, loadInstance: false, loadParameters: true);
+                    presetPatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.SendKey" &&
+                    method.Name == "DoSendKey" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, sendKey, loadInstance: false, loadParameters: true);
+                    sendKeyPatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.Queue" &&
+                    method.Name == "DoQueue" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, queue, loadInstance: true, loadParameters: true);
+                    queuePatched = true;
+                    continue;
+                }
+
+                if (type.FullName == "PostNamazu.Actions.Queue" &&
+                    method.Name == "BreakQueue" &&
+                    method.Parameters.Count == 1 &&
+                    method.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+                {
+                    ReplaceWithBridge(method, breakQueue, loadInstance: false, loadParameters: true);
+                    breakQueuePatched = true;
                     continue;
                 }
 
@@ -305,20 +330,202 @@ public static class LegacyAssemblyRewriter
         }
 
         if (!copyLogPatched || !overlayAdapterPatched || !httpListenerPatched ||
-            !httpThreadAbortPatched || !markPatched || !waymarkPatched)
+            !httpThreadAbortPatched || !markPatched || !waymarkPatched ||
+            !presetPatched || !sendKeyPatched || !queuePatched || !breakQueuePatched)
         {
             throw new InvalidOperationException(
                 "PostNamazu compatibility shape changed; " +
                 $"copyLog={copyLogPatched}, overlayAdapter={overlayAdapterPatched}, " +
                 $"httpListener={httpListenerPatched}, httpStop={httpThreadAbortPatched}, " +
-                $"mark={markPatched}, waymark={waymarkPatched}.");
+                $"mark={markPatched}, waymark={waymarkPatched}, preset={presetPatched}, " +
+                $"sendKey={sendKeyPatched}, queue={queuePatched}, breakQueue={breakQueuePatched}.");
         }
+
+        ValidatePostNamazuPublicSurface(module);
 
         using var output = new MemoryStream();
         definition.Write(output);
         output.Position = 0;
         return loadContext.LoadFromStream(output);
     }
+
+    private static void PreloadPostNamazuGreyMagicCompatibility(
+        AssemblyDefinition postNamazu,
+        AssemblyLoadContext loadContext)
+    {
+        const string resourceName = "costura64.greymagic.dll";
+        if (loadContext.Assemblies.Any(assembly => string.Equals(
+                assembly.GetName().Name,
+                "GreyMagic",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                "GreyMagic was loaded before the PostNamazu .NET compatibility shim.");
+        }
+
+        var resource = postNamazu.MainModule.Resources
+                           .OfType<EmbeddedResource>()
+                           .SingleOrDefault(candidate => string.Equals(
+                               candidate.Name,
+                               resourceName,
+                               StringComparison.OrdinalIgnoreCase))
+                       ?? throw new MissingManifestResourceException(resourceName);
+        using var resourceInput = resource.GetResourceStream();
+        using var originalImage = new MemoryStream();
+        resourceInput.CopyTo(originalImage);
+        var originalBytes = originalImage.ToArray();
+        using var originalDefinition = AssemblyDefinition.ReadAssembly(
+            new MemoryStream(originalBytes, writable: false));
+        var originalAttributes = originalDefinition.MainModule.Attributes;
+        var originalNativeMethods = CountNativeMethods(originalDefinition.MainModule);
+        if ((originalAttributes & ModuleAttributes.ILOnly) != 0 ||
+            originalNativeMethods == 0)
+        {
+            throw new InvalidOperationException(
+                "PostNamazu GreyMagic is no longer the expected mixed-mode native image.");
+        }
+
+        using var definition = dnlib.DotNet.ModuleDefMD.Load(originalBytes);
+        var replacement = typeof(EventWaitHandleAcl).GetMethod(
+                              nameof(EventWaitHandleAcl.Create),
+                              BindingFlags.Static | BindingFlags.Public,
+                              binder: null,
+                              [
+                                  typeof(bool),
+                                  typeof(EventResetMode),
+                                  typeof(string),
+                                  typeof(bool).MakeByRefType(),
+                                  typeof(EventWaitHandleSecurity),
+                              ],
+                              modifiers: null)
+                          ?? throw new MissingMethodException(
+                              typeof(EventWaitHandleAcl).FullName,
+                              nameof(EventWaitHandleAcl.Create));
+        var replacementReference = new dnlib.DotNet.Importer(definition).Import(replacement);
+        var patched = 0;
+        foreach (var instruction in definition.GetTypes()
+                     .SelectMany(type => type.Methods)
+                     .Where(method => method.HasBody)
+                     .SelectMany(method => method.Body.Instructions))
+        {
+            if (instruction.Operand is not dnlib.DotNet.IMethod called ||
+                called.Name.String != ".ctor" ||
+                called.DeclaringType.FullName != typeof(EventWaitHandle).FullName ||
+                called.MethodSig?.Params.Count != 5 ||
+                called.MethodSig.Params[0].FullName != typeof(bool).FullName ||
+                called.MethodSig.Params[1].FullName != typeof(EventResetMode).FullName ||
+                called.MethodSig.Params[2].FullName != typeof(string).FullName ||
+                called.MethodSig.Params[3].FullName != "System.Boolean&" ||
+                called.MethodSig.Params[4].FullName != typeof(EventWaitHandleSecurity).FullName)
+            {
+                continue;
+            }
+
+            instruction.OpCode = dnlib.DotNet.Emit.OpCodes.Call;
+            instruction.Operand = replacementReference;
+            patched++;
+        }
+
+        if (patched != 1 || definition.GetTypes()
+                .SelectMany(type => type.Methods)
+                .Where(method => method.HasBody)
+                .SelectMany(method => method.Body.Instructions)
+                .Any(instruction =>
+                    instruction.Operand is dnlib.DotNet.IMethod called &&
+                    called.Name.String == ".ctor" &&
+                    called.DeclaringType.FullName == typeof(EventWaitHandle).FullName &&
+                    called.MethodSig?.Params.Count == 5))
+        {
+            throw new InvalidOperationException(
+                $"Unexpected PostNamazu GreyMagic EventWaitHandle shape: patched={patched}.");
+        }
+
+        using var output = new MemoryStream();
+        definition.NativeWrite(
+            output,
+            new dnlib.DotNet.Writer.NativeModuleWriterOptions(
+                definition,
+                optimizeImageSize: true));
+        var image = output.ToArray();
+        using (var validation = AssemblyDefinition.ReadAssembly(
+                   new MemoryStream(image, writable: false)))
+        {
+            var validationCalls = validation.MainModule.Types
+                .SelectMany(EnumerateTypes)
+                .SelectMany(type => type.Methods)
+                .Where(method => method.HasBody)
+                .SelectMany(method => method.Body.Instructions)
+                .Select(instruction => instruction.Operand)
+                .OfType<MethodReference>()
+                .ToArray();
+            var legacyCalls = validationCalls.Count(called =>
+                called.Name == ".ctor" &&
+                called.DeclaringType.FullName == typeof(EventWaitHandle).FullName &&
+                called.Parameters.Count == 5);
+            var replacementCalls = validationCalls.Count(called =>
+                called.Name == nameof(EventWaitHandleAcl.Create) &&
+                called.DeclaringType.FullName == typeof(EventWaitHandleAcl).FullName &&
+                called.Parameters.Count == 5);
+            var rewrittenNativeMethods = CountNativeMethods(validation.MainModule);
+            if (legacyCalls != 0 || replacementCalls != 1 ||
+                validation.MainModule.Attributes != originalAttributes ||
+                rewrittenNativeMethods != originalNativeMethods)
+            {
+                throw new InvalidOperationException(
+                    "PostNamazu GreyMagic native-image validation failed: " +
+                    $"legacy={legacyCalls}, replacement={replacementCalls}, " +
+                    $"attributes={validation.MainModule.Attributes}/{originalAttributes}, " +
+                    $"native={rewrittenNativeMethods}/{originalNativeMethods}.");
+            }
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(image));
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            "postnamazu-greymagic");
+        Directory.CreateDirectory(cacheDirectory);
+        var assemblyPath = Path.Combine(cacheDirectory, $"GreyMagic-{hash}.dll");
+        if (!File.Exists(assemblyPath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, assemblyPath);
+                }
+                catch (IOException) when (File.Exists(assemblyPath))
+                {
+                    // Another Host finished writing the same content-addressed image.
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        _ = loadContext.LoadFromAssemblyPath(assemblyPath);
+        Console.WriteLine(
+            "PostNamazu GreyMagic EventWaitHandle ACL compatibility shim loaded.");
+    }
+
+    private static int CountNativeMethods(ModuleDefinition module)
+        => module.Types
+            .SelectMany(EnumerateTypes)
+            .SelectMany(type => type.Methods)
+            .Count(method =>
+                method.RVA != 0 &&
+                (!method.HasBody ||
+                 (method.ImplAttributes & Mono.Cecil.MethodImplAttributes.CodeTypeMask) !=
+                 Mono.Cecil.MethodImplAttributes.IL));
 
     private static MemoryStream RewriteTriggernometryImplementation(Stream implementation)
     {
@@ -361,6 +568,7 @@ public static class LegacyAssemblyRewriter
         RedirectResourceManagerCalls(module);
         PatchLegacyJavaScriptSerializer(module);
         PatchTriggernometryCompatibility(module);
+        ValidateTriggernometryPublicSurface(module);
         var patched = new MemoryStream();
         definition.Write(patched);
         patched.Position = 0;
@@ -487,10 +695,14 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.SkipTriggernometryStartupUpdateCheck),
                 [typeof(object), typeof(bool)])!);
-        var skipPostNamazuAdministratorNotice = module.ImportReference(
+        var checkPostNamazuAdministratorRequirement = module.ImportReference(
             bridgeType.GetMethod(
-                nameof(HostPluginBridge.SkipTriggernometryPostNamazuAdministratorNotice),
+                nameof(HostPluginBridge.CheckTriggernometryPostNamazuAdministratorRequirement),
                 Type.EmptyTypes)!);
+        var callOverlayHandler = module.ImportReference(
+            bridgeType.GetMethod(
+                nameof(HostPluginBridge.CallTriggernometryOverlayHandler),
+                [typeof(object)])!);
         var adminMethod = module.Types
             .SelectMany(EnumerateTypes)
             .SelectMany(type => type.Methods)
@@ -589,7 +801,7 @@ public static class LegacyAssemblyRewriter
         }
 
         postNamazuAdminChecks[0].OpCode = OpCodes.Call;
-        postNamazuAdminChecks[0].Operand = skipPostNamazuAdministratorNotice;
+        postNamazuAdminChecks[0].Operand = checkPostNamazuAdministratorRequirement;
 
         var triggernometryInitializer = module.Types
             .SelectMany(EnumerateTypes)
@@ -747,6 +959,36 @@ public static class LegacyAssemblyRewriter
             loadInstance: false,
             loadParameters: false);
 
+        // Triggernometry's legacy reflection contract expects OverlayPlugin.Core to run in
+        // the same ACT process. In this architecture the real dispatcher intentionally stays
+        // in FFXIV, so keep the public Triggernometry API and broker each handler call over the
+        // bounded, permission-checked Host IPC channel.
+        var moduleEvents = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.PluginBridges.ModuleEvents");
+        var moduleEventsInitializer = moduleEvents.Methods.Single(method =>
+            method.Name == "Initialize" && method.Parameters.Count == 0);
+        var moduleEventsReady = moduleEvents.Fields.Single(field =>
+            field.Name == "Ready" &&
+            field.FieldType.MetadataType == MetadataType.Boolean &&
+            field.IsStatic);
+        moduleEventsInitializer.Body.ExceptionHandlers.Clear();
+        moduleEventsInitializer.Body.Variables.Clear();
+        moduleEventsInitializer.Body.Instructions.Clear();
+        moduleEventsInitializer.Body.InitLocals = false;
+        var moduleEventsIl = moduleEventsInitializer.Body.GetILProcessor();
+        moduleEventsIl.Append(moduleEventsIl.Create(OpCodes.Ldc_I4_1));
+        moduleEventsIl.Append(moduleEventsIl.Create(OpCodes.Stsfld, moduleEventsReady));
+        moduleEventsIl.Append(moduleEventsIl.Create(OpCodes.Ret));
+        ReplaceWithBridge(
+            moduleEvents.Methods.Single(method =>
+                method.Name == "CallOverlayHandler" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.Object),
+            callOverlayHandler,
+            loadInstance: false,
+            loadParameters: true);
+
         var enqueueCount = 0;
         var abortCount = 0;
         var processStartCount = 0;
@@ -851,6 +1093,218 @@ public static class LegacyAssemblyRewriter
             dependency.Position = 0;
             loadContext.LoadFromStream(dependency);
         }
+    }
+
+    private static void ValidatePostNamazuPublicSurface(ModuleDefinition module)
+    {
+        var types = module.Types.SelectMany(EnumerateTypes).ToArray();
+        var actionModules = types
+            .Where(type => type.BaseType?.FullName == "PostNamazu.Actions.NamazuModule")
+            .Select(type => type.FullName)
+            .ToArray();
+
+        var commands = types
+            .SelectMany(type => type.Methods.Select(method => (type, method)))
+            .SelectMany(pair => pair.method.CustomAttributes
+                .Where(attribute =>
+                    attribute.AttributeType.FullName == "PostNamazu.Attributes.CommandAttribute")
+                .Select(attribute =>
+                    $"{pair.type.FullName}.{pair.method.Name}:" +
+                    attribute.ConstructorArguments.Single().Value))
+            .ToArray();
+        ValidatePostNamazuActionSurface(actionModules, commands);
+
+        var attach = types.Single(type => type.FullName == "PostNamazu.PostNamazu")
+            .Methods.Single(method => method.Name == "Attach" && method.Parameters.Count == 0);
+        var startsOriginalMemory = attach.Body.Instructions.Any(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == "GreyMagic.ExternalProcessMemory" &&
+            called.Name == ".ctor");
+        var processMonitor = types
+            .Single(type => type.FullName == "PostNamazu.Common.ProcessManager")
+            .Methods.Single(method =>
+                method.Name == "StartProcessMonitoring" && method.Parameters.Count == 0);
+        var startsOriginalMonitor = processMonitor.Body.Instructions.Any(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == typeof(BackgroundWorker).FullName &&
+            called.Name == nameof(BackgroundWorker.RunWorkerAsync));
+        var rawEntryPoints = types.Single(type => type.FullName == "PostNamazu.PostNamazu")
+            .Methods.Where(method =>
+                method.Name is "Call" or "DirectCall" or "ExecuteInFrameLock")
+            .ToArray();
+        var rawEntryPointWasRejected = rawEntryPoints.Any(method =>
+            method.Body.Instructions.Any(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+                called.Name.Contains("Unsupported", StringComparison.Ordinal)));
+        if (!startsOriginalMemory || !startsOriginalMonitor || rawEntryPointWasRejected)
+        {
+            throw new InvalidOperationException(
+                "PostNamazu original native runtime was truncated: " +
+                $"memory={startsOriginalMemory}, monitor={startsOriginalMonitor}, " +
+                $"rawRejected={rawEntryPointWasRejected}.");
+        }
+    }
+
+    private static void ValidatePostNamazuActionSurface(
+        IEnumerable<string> actionModules,
+        IEnumerable<string> commands)
+    {
+        string[] current =
+        [
+            "PostNamazu.Actions.Command",
+            "PostNamazu.Actions.Mark",
+            "PostNamazu.Actions.Preset",
+            "PostNamazu.Actions.Queue",
+            "PostNamazu.Actions.SendKey",
+            "PostNamazu.Actions.WayMark",
+        ];
+        var legacy = current
+            .Append("PostNamazu.Actions.NormalCommand")
+            .ToArray();
+        var actualModules = actionModules.ToHashSet(StringComparer.Ordinal);
+        string normalCommandOwner;
+        if (actualModules.SetEquals(current))
+        {
+            normalCommandOwner = "PostNamazu.Actions.Command";
+        }
+        else if (actualModules.SetEquals(legacy))
+        {
+            normalCommandOwner = "PostNamazu.Actions.NormalCommand";
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "PostNamazu action modules changed; " +
+                $"actual=[{string.Join(",", actualModules.Order(StringComparer.Ordinal))}], " +
+                $"accepted=[{string.Join(",", current.Order(StringComparer.Ordinal))}] or " +
+                $"[{string.Join(",", legacy.Order(StringComparer.Ordinal))}].");
+        }
+
+        string[] expectedCommands =
+        [
+            "PostNamazu.Actions.Command.DoTextCommand:command",
+            "PostNamazu.Actions.Command.DoTextCommand:DoTextCommand",
+            "PostNamazu.Actions.Mark.DoMarking:mark",
+            $"{normalCommandOwner}.DoNormalTextCommand:normalcommand",
+            $"{normalCommandOwner}.DoNormalTextCommand:DoNormalTextCommand",
+            "PostNamazu.Actions.Preset.DoInsertPreset:preset",
+            "PostNamazu.Actions.Preset.DoInsertPreset:DoInsertPreset",
+            "PostNamazu.Actions.Queue.DoQueue:queue",
+            "PostNamazu.Actions.Queue.DoQueue:DoQueueActions",
+            "PostNamazu.Actions.Queue.BreakQueue:stop",
+            "PostNamazu.Actions.Queue.BreakQueue:break",
+            "PostNamazu.Actions.Queue.BreakQueue:BreakQueueActions",
+            "PostNamazu.Actions.SendKey.DoSendKey:sendkey",
+            "PostNamazu.Actions.WayMark.DoWaymarks:place",
+            "PostNamazu.Actions.WayMark.DoWaymarks:DoWaymarks",
+        ];
+        AssertExactSurface("PostNamazu command aliases", commands, expectedCommands);
+    }
+
+    private static void ValidateTriggernometryPublicSurface(ModuleDefinition module)
+    {
+        var types = module.Types.SelectMany(EnumerateTypes).ToArray();
+        string[] expectedActions =
+        [
+            "ActionActInteraction", "ActionBeep", "ActionDiscordWebhook",
+            "ActionDiskOperation", "ActionExecuteScript", "ActionFolderOperation",
+            "ActionJsonRequest", "ActionKeypress", "ActionLaunchProcess",
+            "ActionLiveSplitControl", "ActionLogMessage", "ActionLoop",
+            "ActionMessageBox", "ActionMouse", "ActionMutex", "ActionNamedCallback",
+            "ActionObsControl", "ActionOverlayImage", "ActionOverlayText",
+            "ActionPlaceholder", "ActionPlaySound", "ActionPlaySpeech",
+            "ActionRepository", "ActionTriggerOperation", "ActionVariableDict",
+            "ActionVariableList", "ActionVariableScalar", "ActionVariableTable",
+            "ActionWindowMessage",
+        ];
+        var actionClasses = types
+            .Where(type =>
+                type.Namespace == "Triggernometry.Core.Actions" &&
+                !type.IsNested &&
+                type.BaseType?.FullName == "Triggernometry.Core.ActionBase")
+            .Select(type => type.Name)
+            .ToArray();
+        AssertExactSurface("Triggernometry action classes", actionClasses, expectedActions);
+
+        string[] expectedModules =
+        [
+            "AbilityRangeCheckModule", "CameraModule", "EntityModule",
+            "EnvironmentEffectModule", "ExecuteCommandModule", "InstanceAfkTimerModule",
+            "MovementModule", "PictoACTModule", "QuitInstanceModule",
+            "ShowTextGimmickHintModule", "UseActionModule", "VfxModule",
+        ];
+        var moduleClasses = types
+            .Where(type =>
+                type.Namespace == "Triggernometry.PluginBridges.BridgeNamazu.Modules" &&
+                !type.IsNested &&
+                type.BaseType?.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.Modules.ModuleBase")
+            .Select(type => type.Name)
+            .ToArray();
+        AssertExactSurface("Triggernometry BridgeNamazu modules", moduleClasses, expectedModules);
+
+        string[] expectedCallbacks =
+        [
+            "DisableAbilityRangeCheck", "SetCameraParams", "InvokeOnMultipleEntities",
+            "SetDefaultPos", "SetPos", "SetModelRelPos", "Teleport",
+            "SetDefaultHeading", "SetHeading", "Target", "SetModelStatus",
+            "SetObjectScale", "ObjectScaling", "SetOpacity", "SetStatusLoopVfx",
+            "Redraw", "SetHighlightColor", "RemoveStatus", "EObjAnimation",
+            "PlayActionTimeline", "MapEffect", "ChangeWeather", "Exec", "StatusOff",
+            "ExecTgt", "ExecPos", "TeleportDive", "DisableInstanceAfkTimer",
+            "SetMoveSpeedMultiplier", "SetJumpHeightMultiplier", "PictoACT",
+            "QuitInstance", "Hint", "Warn", "UseAction", "UseActionLocation",
+            "LockOn", "Channeling", "CastVfx", "ActorVfx", "Omen", "StaticVfx",
+        ];
+        var callbacks = moduleClasses
+            .Select(name => types.Single(type =>
+                type.FullName ==
+                $"Triggernometry.PluginBridges.BridgeNamazu.Modules.{name}"))
+            .SelectMany(type => type.Methods)
+            .SelectMany(method => method.CustomAttributes
+                .Where(attribute =>
+                    attribute.AttributeType.FullName ==
+                    "Triggernometry.PluginBridges.BridgeNamazu.Modules.CallbackMethodAttribute")
+                .Select(attribute => attribute.ConstructorArguments[0].Value?.ToString() ?? string.Empty))
+            .ToArray();
+        AssertExactSurface("Triggernometry BridgeNamazu callbacks", callbacks, expectedCallbacks);
+
+        string[] expectedScriptingMethods = ["MouseToWorld", "IsMouseInSight"];
+        var scriptingMethods = moduleClasses
+            .Select(name => types.Single(type =>
+                type.FullName ==
+                $"Triggernometry.PluginBridges.BridgeNamazu.Modules.{name}"))
+            .SelectMany(type => type.Methods)
+            .SelectMany(method => method.CustomAttributes
+                .Where(attribute =>
+                    attribute.AttributeType.FullName ==
+                    "Triggernometry.PluginBridges.BridgeNamazu.Modules.ScriptingMethodAttribute")
+                .Select(_ => method.Name))
+            .ToArray();
+        AssertExactSurface(
+            "Triggernometry BridgeNamazu scripting methods",
+            scriptingMethods,
+            expectedScriptingMethods);
+    }
+
+    private static void AssertExactSurface(
+        string label,
+        IEnumerable<string> actual,
+        IEnumerable<string> expected)
+    {
+        var actualSet = actual.ToHashSet(StringComparer.Ordinal);
+        var expectedSet = expected.ToHashSet(StringComparer.Ordinal);
+        var missing = expectedSet.Except(actualSet).Order(StringComparer.Ordinal).ToArray();
+        var extra = actualSet.Except(expectedSet).Order(StringComparer.Ordinal).ToArray();
+        if (missing.Length == 0 && extra.Length == 0)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{label} changed; missing=[{string.Join(",", missing)}], " +
+            $"extra=[{string.Join(",", extra)}].");
     }
 
     private static object DeserializeLegacyPayload(byte[] payload)
@@ -1000,6 +1454,125 @@ public static class LegacyAssemblyRewriter
 
         processor.Append(processor.Create(OpCodes.Call, bridge));
         processor.Append(processor.Create(OpCodes.Ret));
+    }
+
+    private static void WrapWithNativeRuntimeFallback(
+        MethodDefinition original,
+        MethodReference nativeRuntimeAllowed,
+        MethodReference nativePayloadNormalizer,
+        MethodReference fallbackBridge)
+    {
+        if (original.IsAbstract || original.HasGenericParameters ||
+            original.ReturnType.MetadataType != MetadataType.Void)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported PostNamazu native action shape: {original.FullName}.");
+        }
+
+        var type = original.DeclaringType;
+        var module = original.Module;
+        var originalName = original.Name;
+        var originalAttributes = original.Attributes;
+        var originalImplAttributes = original.ImplAttributes;
+        var originalSemanticsAttributes = original.SemanticsAttributes;
+
+        original.Name = $"{originalName}__DalamudActCompatNative";
+        original.Attributes =
+            (original.Attributes & ~Mono.Cecil.MethodAttributes.MemberAccessMask &
+             ~Mono.Cecil.MethodAttributes.Abstract & ~Mono.Cecil.MethodAttributes.Virtual &
+             ~Mono.Cecil.MethodAttributes.NewSlot) |
+            Mono.Cecil.MethodAttributes.Private;
+        original.SemanticsAttributes = Mono.Cecil.MethodSemanticsAttributes.None;
+
+        var wrapper = new MethodDefinition(
+            originalName,
+            originalAttributes,
+            module.ImportReference(original.ReturnType))
+        {
+            ImplAttributes = originalImplAttributes,
+            SemanticsAttributes = originalSemanticsAttributes,
+            CallingConvention = original.CallingConvention,
+        };
+        foreach (var parameter in original.Parameters)
+        {
+            var wrapperParameter = new ParameterDefinition(
+                parameter.Name,
+                parameter.Attributes,
+                module.ImportReference(parameter.ParameterType));
+            if (parameter.HasConstant)
+            {
+                wrapperParameter.Constant = parameter.Constant;
+            }
+            wrapper.Parameters.Add(wrapperParameter);
+        }
+        foreach (var attribute in original.CustomAttributes.ToArray())
+        {
+            original.CustomAttributes.Remove(attribute);
+            wrapper.CustomAttributes.Add(attribute);
+        }
+
+        type.Methods.Add(wrapper);
+        foreach (var caller in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(candidate => candidate.Methods)
+                     .Where(candidate => candidate.HasBody && candidate != wrapper))
+        {
+            foreach (var instruction in caller.Body.Instructions)
+            {
+                if (instruction.Operand is MethodReference called &&
+                    called.Module == module &&
+                    called.MetadataToken == original.MetadataToken)
+                {
+                    instruction.Operand = wrapper;
+                }
+            }
+        }
+
+        wrapper.Body = new Mono.Cecil.Cil.MethodBody(wrapper);
+        var processor = wrapper.Body.GetILProcessor();
+        var fallback = processor.Create(OpCodes.Nop);
+        processor.Append(processor.Create(OpCodes.Call, nativeRuntimeAllowed));
+        processor.Append(processor.Create(OpCodes.Brfalse, fallback));
+        if (!original.IsStatic)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg_0));
+        }
+        foreach (var parameter in wrapper.Parameters)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg, parameter));
+            processor.Append(processor.Create(OpCodes.Call, nativePayloadNormalizer));
+        }
+        processor.Append(processor.Create(OpCodes.Call, original));
+        processor.Append(processor.Create(OpCodes.Ret));
+        processor.Append(fallback);
+        foreach (var parameter in wrapper.Parameters)
+        {
+            processor.Append(processor.Create(OpCodes.Ldarg, parameter));
+        }
+        processor.Append(processor.Create(OpCodes.Call, fallbackBridge));
+        processor.Append(processor.Create(OpCodes.Ret));
+
+        var nativeGateCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == nativeRuntimeAllowed.FullName);
+        var originalCallCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called && called == original);
+        var normalizerCallCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == nativePayloadNormalizer.FullName);
+        var fallbackCallCount = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == fallbackBridge.FullName);
+        if (nativeGateCount != 1 || originalCallCount != 1 || normalizerCallCount != 1 ||
+            fallbackCallCount != 1 ||
+            original.CustomAttributes.Count != 0 || wrapper.CustomAttributes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"PostNamazu native action wrapper validation failed for {wrapper.FullName}: " +
+                $"gate={nativeGateCount}, original={originalCallCount}, " +
+                $"normalizer={normalizerCallCount}, " +
+                $"fallback={fallbackCallCount}, attributes={wrapper.CustomAttributes.Count}.");
+        }
     }
 
     private static void ReplaceWithReturn(MethodDefinition method)

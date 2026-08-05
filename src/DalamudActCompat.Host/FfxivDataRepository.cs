@@ -12,6 +12,28 @@ internal sealed class FfxivDataRepository : IDataRepository
     private HostFfxivEntitySnapshot snapshot = new(0, 0, DateTimeOffset.MinValue, []);
     private ReadOnlyCollection<Combatant> combatants =
         Array.AsReadOnly(Array.Empty<Combatant>());
+    private int gameProcessId;
+    private Process? gameProcess;
+
+    public void SetGameProcessId(int processId)
+    {
+        if (processId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(processId));
+        }
+
+        lock (syncRoot)
+        {
+            if (gameProcessId == processId)
+            {
+                return;
+            }
+
+            gameProcess?.Dispose();
+            gameProcess = null;
+            gameProcessId = processId;
+        }
+    }
 
     public void Apply(HostFfxivEntitySnapshot next)
     {
@@ -29,7 +51,49 @@ internal sealed class FfxivDataRepository : IDataRepository
 
     public Language GetSelectedLanguageID() => Language.Chinese;
 
-    public Process GetCurrentFFXIVProcess() => null!;
+    public Process GetCurrentFFXIVProcess()
+    {
+        if (!HostPluginBridge.IsPostNamazuNativeRuntimeAllowed())
+        {
+            return null!;
+        }
+
+        lock (syncRoot)
+        {
+            if (gameProcessId <= 0)
+            {
+                return null!;
+            }
+
+            if (gameProcess is not null)
+            {
+                try
+                {
+                    if (!gameProcess.HasExited)
+                    {
+                        return gameProcess;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Recreate the Process facade below.
+                }
+
+                gameProcess.Dispose();
+                gameProcess = null;
+            }
+
+            try
+            {
+                gameProcess = Process.GetProcessById(gameProcessId);
+                return gameProcess;
+            }
+            catch (ArgumentException)
+            {
+                return null!;
+            }
+        }
+    }
 
     public IDictionary<uint, string> GetResourceDictionary(ResourceType resourceType)
         => new Dictionary<uint, string>();
