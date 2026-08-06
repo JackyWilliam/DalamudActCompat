@@ -910,7 +910,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 9)) == "v0.3.6.9",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 10)) == "v0.3.6.10",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -2047,11 +2047,34 @@ static void ValidateHtmlOverlayDefaults()
                 new System.Drawing.Point(250, 100),
             ]) is System.Drawing.PointF { X: 125, Y: 50 },
         "HTML overlay proxy clicks no longer map to browser viewport coordinates.");
+    var calculateInputProxyRectangles = formType.GetMethod(
+                                            "CalculateInputProxyRectangles",
+                                            BindingFlags.Static | BindingFlags.NonPublic)
+                                        ?? throw new InvalidOperationException(
+                                            "HTML overlay dynamic input-region mapper was not found.");
+    var mappedInputRectangles = calculateInputProxyRectangles.Invoke(
+        null,
+        [
+            new System.Drawing.Size(400, 200),
+            new System.Drawing.SizeF(200, 100),
+            new[] { new System.Drawing.RectangleF(50, 20, 100, 40) },
+        ]) as System.Drawing.Rectangle[];
+    Assert(
+        mappedInputRectangles is [{ X: 98, Y: 38, Width: 204, Height: 84 }],
+        "HTML overlay visible browser regions no longer map to the input proxy with safe padding.");
+    var inputRegionScript = formType.GetField(
+                                "OverlayInputRegionScript",
+                                BindingFlags.Static | BindingFlags.NonPublic)
+                            ?.GetRawConstantValue() as string;
     Assert(
         htmlOverlayFormSource.Contains("Opacity = 0.01", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Show(form)", StringComparison.Ordinal) &&
-        htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal),
-        "The transparent HTML overlay no longer has a hit-testable browser input proxy.");
+        htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("inputProxy.Region = nextRegion", StringComparison.Ordinal) &&
+        inputRegionScript?.Contains("ResizeObserver", StringComparison.Ordinal) == true &&
+        inputRegionScript.Contains("MutationObserver", StringComparison.Ordinal) &&
+        inputRegionScript.Contains("dalamud-act-compat:input-regions:", StringComparison.Ordinal),
+        "The transparent HTML overlay no longer has a content-shaped dynamic input proxy.");
     var shieldType = typeof(MeterService).Assembly.GetType(
                          "DalamudActCompat.UI.OverlayEditShield",
                          throwOnError: true)
@@ -2091,8 +2114,19 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         <!doctype html>
         <html>
         <body style="margin:0;background:transparent">
-          <button id="probe" style="position:absolute;left:40px;top:40px;width:120px;height:50px"
-                  onclick="document.documentElement.dataset.clicked='true'">Click</button>
+          <div id="panel" style="position:absolute;left:20px;top:20px;width:200px;height:100px;
+                                 background:rgba(20,30,40,.9)">
+            <button id="probe" style="position:absolute;left:20px;top:20px;width:120px;height:50px"
+                    onclick="document.documentElement.dataset.clicked='true'">Click</button>
+          </div>
+          <script>
+            window.collapseProbe = () => {
+              const panel = document.getElementById('panel');
+              panel.style.width = '60px';
+              panel.style.height = '30px';
+              document.getElementById('probe').style.display = 'none';
+            };
+          </script>
         </body>
         </html>
         """);
@@ -2129,23 +2163,31 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                    ?? throw new InvalidOperationException("HTML overlay input smoke form was not created.");
     var webViewField = formType.GetField("webView", BindingFlags.Instance | BindingFlags.NonPublic)
                        ?? throw new InvalidOperationException("HTML overlay WebView field was not found.");
+    var formField = formType.GetField("form", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?? throw new InvalidOperationException("HTML overlay host form field was not found.");
     var proxyField = formType.GetField("inputProxy", BindingFlags.Instance | BindingFlags.NonPublic)
                      ?? throw new InvalidOperationException("HTML overlay input proxy field was not found.");
     var show = formType.GetMethod("Show", BindingFlags.Instance | BindingFlags.Public)
                ?? throw new InvalidOperationException("HTML overlay show method was not found.");
+    var applySettings = formType.GetMethod("ApplySettings", BindingFlags.Instance | BindingFlags.Public)
+                        ?? throw new InvalidOperationException(
+                            "HTML overlay ApplySettings method was not found.");
 
     NativeInputProbe.GetCursorPos(out var originalCursor);
     try
     {
         show.Invoke(instance, null);
         Control? webView = null;
+        Form? hostForm = null;
         Form? proxy = null;
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (DateTime.UtcNow < deadline)
         {
             webView = webViewField.GetValue(instance) as Control;
+            hostForm = formField.GetValue(instance) as Form;
             proxy = proxyField.GetValue(instance) as Form;
-            if (webView?.IsHandleCreated == true && proxy?.IsHandleCreated == true &&
+            if (webView?.IsHandleCreated == true && hostForm?.IsHandleCreated == true &&
+                proxy?.IsHandleCreated == true &&
                 await ExecuteBrowserScriptAsync(webView, "document.readyState") == "\"complete\"")
             {
                 break;
@@ -2154,9 +2196,38 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
             await Task.Delay(100);
         }
 
-        Assert(webView is not null && proxy is not null, "The live HTML input smoke did not create its windows.");
+        Assert(
+            webView is not null && hostForm is not null && proxy is not null,
+            "The live HTML input smoke did not create its windows.");
         var liveWebView = webView!;
+        var liveHostForm = hostForm!;
         var liveProxy = proxy!;
+        var proxyHandle = await InvokeControlAsync(liveProxy, () => liveProxy.Handle);
+        var hostHandle = await InvokeControlAsync(liveHostForm, () => liveHostForm.Handle);
+        var initialRegionReady = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var contentWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(100, 65));
+            var blankWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(280, 160));
+            initialRegionReady = contentWindow == proxyHandle &&
+                                 blankWindow != proxyHandle &&
+                                 blankWindow != hostHandle;
+            if (initialRegionReady)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            initialRegionReady,
+            "The live HTML input proxy did not exclude transparent space outside visible content.");
         var clickPoint = await InvokeControlAsync(
             liveProxy,
             () => liveProxy.PointToScreen(new System.Drawing.Point(100, 65)));
@@ -2181,12 +2252,92 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(clicked, "A physical proxy click did not reach the live WebView2 button.");
+
+        await ExecuteBrowserScriptAsync(liveWebView, "window.collapseProbe(); true");
+        var collapsedRegionReady = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var collapsedContentWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(40, 30));
+            var releasedWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(100, 65));
+            collapsedRegionReady = collapsedContentWindow == proxyHandle &&
+                                   releasedWindow != proxyHandle &&
+                                   releasedWindow != hostHandle;
+            if (collapsedRegionReady)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            collapsedRegionReady,
+            "The live HTML input proxy did not shrink after the visible page content collapsed.");
+
+        settings.SetEditing(true);
+        applySettings.Invoke(instance, null);
+        var editingUsesFullRegion = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            editingUsesFullRegion =
+                await WindowAtProxyPointAsync(liveProxy, new System.Drawing.Point(280, 160)) ==
+                proxyHandle;
+            if (editingUsesFullRegion)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            editingUsesFullRegion,
+            "HTML overlay editing mode did not restore the full drag and resize region.");
+
+        settings.SetEditing(false);
+        applySettings.Invoke(instance, null);
+        var lockedRestoresContentRegion = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var lockedWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(100, 65));
+            lockedRestoresContentRegion = lockedWindow != proxyHandle &&
+                                          lockedWindow != hostHandle;
+            if (lockedRestoresContentRegion)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            lockedRestoresContentRegion,
+            "HTML overlay locking did not restore the collapsed content-shaped input region.");
     }
     finally
     {
         NativeInputProbe.SetCursorPos(originalCursor.X, originalCursor.Y);
         ((IDisposable)instance).Dispose();
     }
+}
+
+static async Task<nint> WindowAtProxyPointAsync(Form proxy, System.Drawing.Point clientPoint)
+{
+    var screenPoint = await InvokeControlAsync(proxy, () => proxy.PointToScreen(clientPoint));
+    return NativeInputProbe.WindowFromPoint(new NativeInputProbe.Point
+    {
+        X = screenPoint.X,
+        Y = screenPoint.Y,
+    });
 }
 
 static Task<T> InvokeControlAsync<T>(Control control, Func<T> action)
@@ -2964,6 +3115,9 @@ internal static class NativeInputProbe
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern nint WindowFromPoint(Point point);
 
     [DllImport("user32.dll", EntryPoint = "mouse_event")]
     public static extern void MouseEvent(

@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.9",
+    "AssemblyVersion":  "0.3.6.10",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.9/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.10/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.9/DalamudActCompat.zip",
-    "LastUpdate":  1786013599023,
-    "Changelog":  "修复透明色键与窗口式 WebView2 组合导致关闭穿透后仍无法命中网页的问题；交互态使用透明输入代理接住物理鼠标，并将点击准确投递给浏览器。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.10/DalamudActCompat.zip",
+    "LastUpdate":  1786015371605,
+    "Changelog":  "HTML 悬浮窗输入代理改为跟随网页实际可见内容动态塑形；Kagerou 收缩后透明空白区域不再占用鼠标，编辑时仍保留整框拖动与缩放。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

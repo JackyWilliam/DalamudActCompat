@@ -24,7 +24,9 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const int DragThreshold = 6;
     private const int MinimumOverlayWidth = 120;
     private const int MinimumOverlayHeight = 80;
+    private const int MaximumBrowserInputRegions = 2048;
     private const string CactbotRenderMessagePrefix = "dalamud-act-compat:cactbot-render:";
+    private const string InputRegionMessagePrefix = "dalamud-act-compat:input-regions:";
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
     private static nint interactionOwner;
     internal const string CactbotResponsiveAlertLayoutScript =
@@ -195,6 +197,209 @@ internal sealed class HtmlOverlayForm : IDisposable
             install();
         })();
         """;
+    internal const string OverlayInputRegionScript =
+        """
+        (() => {
+          const install = () => {
+            if (window.__dalamudActCompatInputRegionsInstalled)
+              return;
+            window.__dalamudActCompatInputRegionsInstalled = true;
+
+            const prefix = 'dalamud-act-compat:input-regions:';
+            const maximumRegions = 2048;
+            let scheduled = false;
+            let lastPayload = '';
+
+            const hasVisibleColor = (value) => {
+              if (!value || value === 'transparent')
+                return false;
+              if (value.startsWith('rgba')) {
+                const match = value.match(/,\s*([0-9.]+)\s*\)$/);
+                if (match)
+                  return Number(match[1]) > 0.01;
+              }
+              const slashAlpha = value.match(/\/\s*([0-9.]+)%?\s*\)$/);
+              if (slashAlpha) {
+                const alpha = Number(slashAlpha[1]);
+                return value.includes('%') ? alpha > 1 : alpha > 0.01;
+              }
+              return true;
+            };
+
+            const addRect = (rectangles, rect) => {
+              const left = Math.max(0, rect.left);
+              const top = Math.max(0, rect.top);
+              const right = Math.min(window.innerWidth, rect.right);
+              const bottom = Math.min(window.innerHeight, rect.bottom);
+              if (right - left < 0.5 || bottom - top < 0.5)
+                return;
+              const round = (value) => Math.round(value * 100) / 100;
+              rectangles.push([
+                round(left),
+                round(top),
+                round(right - left),
+                round(bottom - top),
+              ]);
+            };
+
+            const isRendered = (element, style) => {
+              if (style.display === 'none' || style.visibility === 'hidden' ||
+                  style.visibility === 'collapse' || Number(style.opacity) <= 0.01)
+                return false;
+              if (typeof element.checkVisibility === 'function') {
+                try {
+                  if (!element.checkVisibility({
+                    checkOpacity: true,
+                    checkVisibilityCSS: true,
+                  }))
+                    return false;
+                } catch (_) {
+                }
+              }
+              return element.getClientRects().length > 0;
+            };
+
+            const paintsBox = (element, style) => {
+              const tag = element.tagName.toLowerCase();
+              if (['img', 'canvas', 'svg', 'video', 'iframe', 'input', 'button',
+                   'select', 'textarea', 'meter', 'progress'].includes(tag))
+                return true;
+              if (hasVisibleColor(style.backgroundColor) || style.backgroundImage !== 'none' ||
+                  style.boxShadow !== 'none' || style.filter !== 'none')
+                return true;
+              if (parseFloat(style.outlineWidth) > 0 && style.outlineStyle !== 'none' &&
+                  hasVisibleColor(style.outlineColor))
+                return true;
+              for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+                if (parseFloat(style[`border${side}Width`]) > 0 &&
+                    style[`border${side}Style`] !== 'none' &&
+                    hasVisibleColor(style[`border${side}Color`]))
+                  return true;
+              }
+              return element.matches(
+                       'a[href],button,input,select,textarea,[contenteditable="true"],' +
+                       '[onclick],[role="button"],[role="link"],[tabindex]:not([tabindex="-1"])') ||
+                     (style.pointerEvents !== 'none' && style.cursor === 'pointer');
+            };
+
+            const collectRegions = () => {
+              const rectangles = [];
+              for (const element of document.querySelectorAll('*')) {
+                const style = getComputedStyle(element);
+                if (!isRendered(element, style))
+                  continue;
+
+                if (paintsBox(element, style)) {
+                  for (const rect of element.getClientRects())
+                    addRect(rectangles, rect);
+                }
+
+                if (hasVisibleColor(style.color)) {
+                  for (const node of element.childNodes) {
+                    if (node.nodeType !== Node.TEXT_NODE || !(node.textContent || '').trim())
+                      continue;
+                    const range = document.createRange();
+                    range.selectNodeContents(node);
+                    for (const rect of range.getClientRects())
+                      addRect(rectangles, rect);
+                    range.detach();
+                  }
+                }
+              }
+
+              rectangles.sort((left, right) =>
+                right[2] * right[3] - left[2] * left[3]);
+              const regions = [];
+              for (const rect of rectangles) {
+                const contained = regions.some((outer) =>
+                  rect[0] >= outer[0] - 0.5 && rect[1] >= outer[1] - 0.5 &&
+                  rect[0] + rect[2] <= outer[0] + outer[2] + 0.5 &&
+                  rect[1] + rect[3] <= outer[1] + outer[3] + 0.5);
+                if (!contained)
+                  regions.push(rect);
+                if (regions.length >= maximumRegions)
+                  break;
+              }
+              return regions;
+            };
+
+            const report = () => {
+              scheduled = false;
+              const payload = JSON.stringify({
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+                rectangles: collectRegions(),
+              });
+              if (payload === lastPayload)
+                return;
+              lastPayload = payload;
+              try {
+                window.chrome?.webview?.postMessage(prefix + payload);
+              } catch (_) {
+              }
+            };
+
+            const schedule = () => {
+              if (scheduled)
+                return;
+              scheduled = true;
+              requestAnimationFrame(report);
+            };
+
+            const observed = new WeakSet();
+            const resizeObserver = new ResizeObserver(schedule);
+            const observeTree = (root) => {
+              if (!(root instanceof Element))
+                return;
+              if (!observed.has(root)) {
+                observed.add(root);
+                resizeObserver.observe(root);
+              }
+              for (const element of root.querySelectorAll('*')) {
+                if (!observed.has(element)) {
+                  observed.add(element);
+                  resizeObserver.observe(element);
+                }
+              }
+            };
+            const unobserveTree = (root) => {
+              if (!(root instanceof Element))
+                return;
+              if (observed.delete(root))
+                resizeObserver.unobserve(root);
+              for (const element of root.querySelectorAll('*')) {
+                if (observed.delete(element))
+                  resizeObserver.unobserve(element);
+              }
+            };
+            observeTree(document.documentElement);
+            new MutationObserver((mutations) => {
+              for (const mutation of mutations) {
+                for (const node of mutation.addedNodes)
+                  observeTree(node);
+                for (const node of mutation.removedNodes)
+                  unobserveTree(node);
+              }
+              schedule();
+            }).observe(document.documentElement, {
+              attributes: true,
+              childList: true,
+              characterData: true,
+              subtree: true,
+            });
+            window.addEventListener('resize', schedule);
+            window.addEventListener('scroll', schedule, true);
+            window.addEventListener('load', schedule, true);
+            document.fonts?.ready?.then(schedule).catch(() => {});
+            window.setInterval(schedule, 1000);
+            schedule();
+          };
+          if (document.readyState === 'loading')
+            document.addEventListener('DOMContentLoaded', install, { once: true });
+          else
+            install();
+        })();
+        """;
 
     private readonly Uri pageUri;
     private readonly string userDataDirectory;
@@ -209,6 +414,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private Form? form;
     private Form? inputProxy;
     private WebView2? webView;
+    private BrowserInputRegion? browserInputRegion;
     private CoreWebView2DevToolsProtocolEventReceiver? consoleEventReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? exceptionEventReceiver;
     private System.Windows.Forms.Timer? editMonitor;
@@ -455,6 +661,9 @@ internal sealed class HtmlOverlayForm : IDisposable
             if (inputProxy is not null)
             {
                 inputProxy.MouseClick -= OnInputProxyMouseClick;
+                var inputRegion = inputProxy.Region;
+                inputProxy.Region = null;
+                inputRegion?.Dispose();
                 inputProxy.Dispose();
             }
             webView?.Dispose();
@@ -462,6 +671,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             inputProxy = null;
             webView = null;
             form = null;
+            browserInputRegion = null;
         }
     }
 
@@ -530,12 +740,14 @@ internal sealed class HtmlOverlayForm : IDisposable
             }
             if (overlayMode)
             {
+                core.WebMessageReceived += OnBrowserWebMessage;
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     OverlayEditIndicatorScript);
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    OverlayInputRegionScript);
             }
             if (IsCactbotRaidbossPage(pageUri))
             {
-                core.WebMessageReceived += OnBrowserWebMessage;
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     CactbotResponsiveAlertLayoutScript);
             }
@@ -615,6 +827,12 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
+        if (message.StartsWith(InputRegionMessagePrefix, StringComparison.Ordinal))
+        {
+            UpdateBrowserInputRegion(message[InputRegionMessagePrefix.Length..]);
+            return;
+        }
+
         if (!message.StartsWith(CactbotRenderMessagePrefix, StringComparison.Ordinal))
         {
             return;
@@ -639,6 +857,62 @@ internal sealed class HtmlOverlayForm : IDisposable
                 0,
                 SwpNoSize | SwpNoMove | SwpNoActivate);
         }
+    }
+
+    private void UpdateBrowserInputRegion(string json)
+    {
+        if (json.Length > 262_144)
+        {
+            log.Warning($"Ignored an oversized browser input-region update from {title}.");
+            return;
+        }
+
+        BrowserInputRegionPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<BrowserInputRegionPayload>(json);
+        }
+        catch (JsonException ex)
+        {
+            log.Warning(ex, $"Ignored an invalid browser input-region update from {title}.");
+            return;
+        }
+
+        if (payload is null || !float.IsFinite(payload.ViewportWidth) ||
+            !float.IsFinite(payload.ViewportHeight) ||
+            payload.ViewportWidth <= 0 || payload.ViewportHeight <= 0 ||
+            payload.ViewportWidth > 100_000 || payload.ViewportHeight > 100_000 ||
+            payload.Rectangles is null ||
+            payload.Rectangles.Length > MaximumBrowserInputRegions)
+        {
+            return;
+        }
+
+        var rectangles = new List<RectangleF>(payload.Rectangles.Length);
+        foreach (var values in payload.Rectangles)
+        {
+            if (values is not { Length: 4 } || values.Any(value => !float.IsFinite(value)))
+            {
+                continue;
+            }
+
+            var left = Math.Clamp(values[0], 0, payload.ViewportWidth);
+            var top = Math.Clamp(values[1], 0, payload.ViewportHeight);
+            var right = Math.Clamp(values[0] + values[2], 0, payload.ViewportWidth);
+            var bottom = Math.Clamp(values[1] + values[3], 0, payload.ViewportHeight);
+            if (right <= left || bottom <= top)
+            {
+                continue;
+            }
+
+            rectangles.Add(RectangleF.FromLTRB(left, top, right, bottom));
+        }
+
+        browserInputRegion = new BrowserInputRegion(
+            new SizeF(payload.ViewportWidth, payload.ViewportHeight),
+            rectangles.ToArray());
+        ApplyInputProxyRegion();
+        log.Debug($"{title} browser input region updated: {rectangles.Count} rectangles.");
     }
 
     internal static OverlayInteraction GetOverlayInteraction(
@@ -726,6 +1000,48 @@ internal sealed class HtmlOverlayForm : IDisposable
                 Math.Max(0, viewportSize.Height - 1)));
     }
 
+    internal static Rectangle[] CalculateInputProxyRectangles(
+        Size proxySize,
+        SizeF viewportSize,
+        IReadOnlyList<RectangleF> browserRectangles)
+    {
+        if (proxySize.Width <= 0 || proxySize.Height <= 0 ||
+            viewportSize.Width <= 0 || viewportSize.Height <= 0)
+        {
+            return [];
+        }
+
+        const int padding = 2;
+        var scaleX = proxySize.Width / viewportSize.Width;
+        var scaleY = proxySize.Height / viewportSize.Height;
+        var rectangles = new List<Rectangle>(browserRectangles.Count);
+        foreach (var browserRectangle in browserRectangles)
+        {
+            var left = Math.Clamp(
+                (int)Math.Floor(browserRectangle.Left * scaleX) - padding,
+                0,
+                proxySize.Width);
+            var top = Math.Clamp(
+                (int)Math.Floor(browserRectangle.Top * scaleY) - padding,
+                0,
+                proxySize.Height);
+            var right = Math.Clamp(
+                (int)Math.Ceiling(browserRectangle.Right * scaleX) + padding,
+                0,
+                proxySize.Width);
+            var bottom = Math.Clamp(
+                (int)Math.Ceiling(browserRectangle.Bottom * scaleY) + padding,
+                0,
+                proxySize.Height);
+            if (right > left && bottom > top)
+            {
+                rectangles.Add(Rectangle.FromLTRB(left, top, right, bottom));
+            }
+        }
+
+        return rectangles.ToArray();
+    }
+
     private Form CreateInputProxy()
     {
         var proxy = new InputProxyForm
@@ -750,6 +1066,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
 
         inputProxy.Bounds = form.Bounds;
+        ApplyInputProxyRegion();
         if (!form.Visible || settings.IsClickThrough)
         {
             inputProxy.Hide();
@@ -769,6 +1086,32 @@ internal sealed class HtmlOverlayForm : IDisposable
             form.Width,
             form.Height,
             SwpNoActivate);
+    }
+
+    private void ApplyInputProxyRegion()
+    {
+        if (inputProxy is null || settings is null)
+        {
+            return;
+        }
+
+        Region? nextRegion = null;
+        if (!settings.IsEditing && browserInputRegion is not null)
+        {
+            nextRegion = new Region();
+            nextRegion.MakeEmpty();
+            foreach (var rectangle in CalculateInputProxyRectangles(
+                         inputProxy.ClientSize,
+                         browserInputRegion.ViewportSize,
+                         browserInputRegion.Rectangles))
+            {
+                nextRegion.Union(rectangle);
+            }
+        }
+
+        var previousRegion = inputProxy.Region;
+        inputProxy.Region = nextRegion;
+        previousRegion?.Dispose();
     }
 
     private async void OnInputProxyMouseClick(object? sender, MouseEventArgs args)
@@ -1146,6 +1489,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         if (overlayMode && inputProxy is not null && form is not null)
         {
             inputProxy.Bounds = form.Bounds;
+            ApplyInputProxyRegion();
         }
 
         if (!overlayMode || settings is null || form is null || applyingSettings ||
@@ -1247,6 +1591,20 @@ internal sealed class HtmlOverlayForm : IDisposable
         Move,
         Resize,
     }
+
+    private sealed class BrowserInputRegionPayload
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("viewportWidth")]
+        public float ViewportWidth { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("viewportHeight")]
+        public float ViewportHeight { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("rectangles")]
+        public float[][]? Rectangles { get; init; }
+    }
+
+    private sealed record BrowserInputRegion(SizeF ViewportSize, RectangleF[] Rectangles);
 
     private sealed class OverlayHostForm : Form
     {
