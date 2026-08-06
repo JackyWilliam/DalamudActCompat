@@ -7,9 +7,17 @@ using System.Numerics;
 
 namespace DalamudActCompat.UI;
 
+public enum FoxTtsProChoice
+{
+    EnablePro,
+    KeepCurrent,
+    NeverRemind,
+}
+
 public sealed class ThirdPartyPluginNoticeWindow : Window
 {
     private const string PermissionPopupId = "扩展完整功能###DalamudActCompatFullPermissions";
+    private const string TtsProPopupId = "FoxTTS Pro 设置###DalamudActCompatFoxTtsPro";
     private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
@@ -19,6 +27,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getPending;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install;
     private readonly Action<bool> configureFullPermissions;
+    private readonly Func<bool> shouldOfferTtsPro;
+    private readonly Action<FoxTtsProChoice> completeSetup;
     private readonly PluginLogger logger;
     private readonly UiText text;
     private readonly ISharedImmediateTexture logoTexture;
@@ -28,6 +38,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private string result = string.Empty;
     private bool showPermissionChoice;
     private bool permissionPopupRequested;
+    private bool showTtsProChoice;
+    private bool ttsProPopupRequested;
     private bool updateCheckInProgress;
     private bool outerFrameStylePushed;
 
@@ -36,6 +48,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         Func<IReadOnlyList<BundledActPluginDescriptor>> getPending,
         Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install,
         Action<bool> configureFullPermissions,
+        Func<bool> shouldOfferTtsPro,
+        Action<FoxTtsProChoice> completeSetup,
         PluginLogger logger,
         UiText text,
         ISharedImmediateTexture logoTexture)
@@ -45,6 +59,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         this.getPending = getPending;
         this.install = install;
         this.configureFullPermissions = configureFullPermissions;
+        this.shouldOfferTtsPro = shouldOfferTtsPro;
+        this.completeSetup = completeSetup;
         this.logger = logger;
         this.text = text;
         this.logoTexture = logoTexture;
@@ -101,12 +117,14 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     pending.Count > 0 ? Gold : IceBlue,
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
-                    "third-party-notice"))
+                    "third-party-notice") &&
+                CanDismiss(showPermissionChoice || showTtsProChoice))
             {
                 IsOpen = false;
             }
 
             DrawPermissionChoiceModal();
+            DrawTtsProChoiceModal();
             DrawUpdateStatusBanner();
 
             if (ImGui.BeginChild("third-party-notice-content", new Vector2(-1, -1), true))
@@ -211,6 +229,11 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         IsOpen = true;
     }
 
+    public void OpenWhenPending()
+    {
+        Refresh(openWhenPending: true);
+    }
+
     public void BeginUpdateCheck(bool showWindow)
     {
         updateCheckInProgress = true;
@@ -240,6 +263,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         bool failed,
         bool userInitiated)
         => pendingCount > 0 || (failed && userInitiated);
+
+    internal static bool CanDismiss(bool permissionChoicePending)
+        => !permissionChoicePending;
 
     private void CompleteInstallWhenReady()
     {
@@ -396,22 +422,115 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         ImGui.TextWrapped(text.Get(
             "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry 与鲶鱼精邮差功能因此不可用。你可以现在一次性启用三项随包扩展已声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
             "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry and PostNamazu features will remain unavailable. You can enable every declared capability for the three bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
+        ImGui.TextColored(IceBlue, text.Get(
+            "请选择“同意完整权限”或“不同意并保持安全模式”；作出选择前此窗口无法关闭。",
+            "Choose either full permissions or safe mode; this window cannot close until you make a choice."));
         ImGui.Spacing();
 
         ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
         var enableFull = ImGui.Button(
-            text.Get("启用完整功能", "Enable full functionality"),
-            new Vector2(170, 36));
+            text.Get("同意并启用完整权限", "Accept full permissions"),
+            new Vector2(190, 36));
         ImGui.PopStyleColor();
         ImGui.SameLine();
         var keepSafe = ImGui.Button(
-            text.Get("保持安全默认", "Keep safe defaults"),
-            new Vector2(160, 36));
+            text.Get("不同意完整权限，保持安全模式", "Decline full permissions; keep safe mode"),
+            new Vector2(240, 36));
 
         if (enableFull || keepSafe)
         {
             configureFullPermissions(enableFull);
             showPermissionChoice = false;
+            ImGui.CloseCurrentPopup();
+            if (shouldOfferTtsPro())
+            {
+                showTtsProChoice = true;
+                ttsProPopupRequested = true;
+                IsOpen = true;
+            }
+            else
+            {
+                completeSetup(FoxTtsProChoice.KeepCurrent);
+                IsOpen = false;
+            }
+        }
+
+        ImGui.EndPopup();
+        ImGui.PopStyleColor(3);
+        ImGui.PopStyleVar(2);
+    }
+
+    private void DrawTtsProChoiceModal()
+    {
+        if (!showTtsProChoice)
+        {
+            return;
+        }
+
+        if (ttsProPopupRequested)
+        {
+            ImGui.OpenPopup(TtsProPopupId);
+            ttsProPopupRequested = false;
+        }
+
+        const float popupWidth = 650;
+        var parentPosition = ImGui.GetWindowPos();
+        var parentSize = ImGui.GetWindowSize();
+        ImGui.SetNextWindowPos(
+            new Vector2(
+                parentPosition.X + Math.Max(16, (parentSize.X - popupWidth) * 0.5f),
+                parentPosition.Y + 72),
+            ImGuiCond.Appearing);
+        ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
+        ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
+        if (!ImGui.BeginPopupModal(
+                TtsProPopupId,
+                ImGuiWindowFlags.AlwaysAutoResize |
+                ImGuiWindowFlags.NoResize |
+                ImGuiWindowFlags.NoMove))
+        {
+            ImGui.PopStyleColor(3);
+            ImGui.PopStyleVar(2);
+            return;
+        }
+
+        ImGui.TextColored(Gold, text.Get(
+            "是否将 FoxTTS 改为 Cafe TTS Pro？",
+            "Switch FoxTTS to Cafe TTS Pro?"));
+        ImGui.TextWrapped(text.Get(
+            "本插件的默认语音链路以 Cafe TTS Pro 为目标。改用 Pro 后，Cactbot 与 Triggernometry 产生的播报文字会交给 Cafe TTS Pro，避免文字正常显示、语音却仍送往旧引擎或没有声音。这里只修改 FoxTTS 的语音引擎，不会覆盖其他 FoxTTS 设置。",
+            "This plugin's default speech path targets Cafe TTS Pro. Switching lets Cactbot and Triggernometry speech use Cafe TTS Pro instead of an older engine that may display text but remain silent. Only the FoxTTS engine selection is changed; other FoxTTS settings are preserved."));
+        ImGui.TextDisabled(text.Get(
+            "“本次不更改”会在下次插件更新时再询问；“不再提醒”会永久保留当前引擎且停止询问。",
+            "Keep current asks again after the next plugin update; never remind preserves the current engine and stops future prompts."));
+        ImGui.Spacing();
+
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        var enablePro = ImGui.Button(
+            text.Get("更改为 Pro", "Switch to Pro"),
+            new Vector2(150, 36));
+        ImGui.PopStyleColor();
+        ImGui.SameLine();
+        var keepCurrent = ImGui.Button(
+            text.Get("本次不更改", "Keep current"),
+            new Vector2(150, 36));
+        ImGui.SameLine();
+        var neverRemind = ImGui.Button(
+            text.Get("不再提醒", "Never remind"),
+            new Vector2(150, 36));
+
+        if (enablePro || keepCurrent || neverRemind)
+        {
+            completeSetup(enablePro
+                ? FoxTtsProChoice.EnablePro
+                : neverRemind
+                    ? FoxTtsProChoice.NeverRemind
+                    : FoxTtsProChoice.KeepCurrent);
+            showTtsProChoice = false;
             ImGui.CloseCurrentPopup();
             IsOpen = false;
         }

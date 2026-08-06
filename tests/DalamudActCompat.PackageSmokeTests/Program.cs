@@ -883,6 +883,49 @@ static void ValidateControlCenterPresentation()
         ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: true) &&
         !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: false),
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
+    Assert(
+        ThirdPartyPluginNoticeWindow.CanDismiss(permissionChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.CanDismiss(permissionChoicePending: true),
+        "The bundled DLL permission choice can be dismissed before the user explicitly accepts or declines full permissions.");
+    Assert(
+        Plugin.ShouldAutoConfigureInitialBundledSetup(null) &&
+        Plugin.ShouldAutoConfigureInitialBundledSetup(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)) &&
+        !Plugin.ShouldAutoConfigureInitialBundledSetup(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["foxtts"] = "acknowledged",
+            }),
+        "Initial bundled setup either misses automatic parser configuration or overrides an existing user's settings.");
+    Assert(
+        Plugin.ShouldEnableBundledCapability(
+            enableFullFunctionality: false,
+            ActCapability.TextToSpeech) &&
+        !Plugin.ShouldEnableBundledCapability(
+            enableFullFunctionality: false,
+            ActCapability.NetworkRequest) &&
+        Plugin.ShouldEnableBundledCapability(
+            enableFullFunctionality: true,
+            ActCapability.NetworkRequest),
+        "Declining full permissions does not restore safe defaults after a previous release granted them.");
+    Assert(
+        Plugin.ShouldOfferFoxTtsPro(suppressPrompt: false, isPro: false) &&
+        !Plugin.ShouldOfferFoxTtsPro(suppressPrompt: false, isPro: true) &&
+        !Plugin.ShouldOfferFoxTtsPro(suppressPrompt: true, isPro: false),
+        "The Cafe TTS Pro prompt ignores the current engine or the user's never-remind choice.");
+    var ttsPromptConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(new PluginConfiguration
+        {
+            SuppressFoxTtsProPrompt = true,
+        })) ?? throw new InvalidOperationException(
+            "The FoxTTS prompt configuration did not deserialize.");
+    Assert(
+        ttsPromptConfiguration.SuppressFoxTtsProPrompt,
+        "The FoxTTS never-remind choice is not persisted across plugin updates.");
+    ttsPromptConfiguration.ResetToDefaults(Path.GetTempPath());
+    Assert(
+        !ttsPromptConfiguration.SuppressFoxTtsProPrompt,
+        "Factory reset does not restore the FoxTTS prompt default.");
 
     var combatant = new Combatant(
         "local",
@@ -976,8 +1019,16 @@ static void ValidateControlCenterPresentation()
         thirdPartySource.Contains("ImGuiTableFlags.SizingStretchSame", StringComparison.Ordinal) &&
         thirdPartySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         thirdPartySource.Contains("DrawPermissionChoiceModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DrawTtsProChoiceModal", StringComparison.Ordinal) &&
         thirdPartySource.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("不同意完整权限，保持安全模式", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("是否将 FoxTTS 改为 Cafe TTS Pro？", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("本次不更改", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("不再提醒", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
+        pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenWhenPending();", StringComparison.Ordinal) &&
+        pluginSource.Contains("configuration.EnableParsing = true;", StringComparison.Ordinal) &&
+        pluginSource.Contains("configuration.AutoStartParser = true;", StringComparison.Ordinal) &&
         pluginSource.Contains("BeginUpdateCheck(showWindow: true)", StringComparison.Ordinal) &&
         pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
         pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
@@ -988,6 +1039,20 @@ static void ValidateControlCenterPresentation()
         statusSource.Contains("BeginGoldCard", StringComparison.Ordinal) &&
         statusSource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "The ACT compatibility status window does not use the new rounded branded card design.");
+    var configurePermissionsIndex = pluginSource.IndexOf(
+        "private void ConfigureBundledPluginPermissions",
+        StringComparison.Ordinal);
+    var permissionSaveIndex = pluginSource.IndexOf(
+        "SaveConfiguration();",
+        configurePermissionsIndex,
+        StringComparison.Ordinal);
+    var completeBundledSetupIndex = pluginSource.IndexOf(
+        "private void CompleteBundledPluginSetup",
+        StringComparison.Ordinal);
+    var finalPermissionRestartIndex = pluginSource.IndexOf(
+        "ApplyActPermissionChanges();",
+        completeBundledSetupIndex,
+        StringComparison.Ordinal);
     Assert(
         typeof(ActHostSupervisor).GetMethod(nameof(ActHostSupervisor.RestartAsync))?.ReturnType ==
         typeof(Task<bool>) &&
@@ -1005,14 +1070,18 @@ static void ValidateControlCenterPresentation()
         settingsSource.Contains(
             "changed |= permissionsChanged;",
             StringComparison.Ordinal) &&
-        Regex.IsMatch(
+        configurePermissionsIndex >= 0 &&
+        permissionSaveIndex > configurePermissionsIndex &&
+        completeBundledSetupIndex > permissionSaveIndex &&
+        finalPermissionRestartIndex > completeBundledSetupIndex &&
+        Regex.Matches(
             pluginSource,
-            @"SaveConfiguration\(\);\s+ApplyActPermissionChanges\(\);",
-            RegexOptions.CultureInvariant) &&
+            Regex.Escape("ApplyActPermissionChanges();"),
+            RegexOptions.CultureInvariant).Count == 1 &&
         hostSupervisorSource.Contains(
             "public async Task<bool> RestartAsync",
             StringComparison.Ordinal),
-        "ACT permission groups are not saved before exactly one Host restart callback.");
+        "ACT permissions or the optional FoxTTS choice are not saved before exactly one final Host restart callback.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",

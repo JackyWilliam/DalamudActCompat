@@ -111,6 +111,26 @@ void ValidateFoxTtsDefaultConfiguration()
         {
             throw new InvalidOperationException("Existing FoxTTS engine selection was not preserved.");
         }
+
+        if (FoxTtsConfigurationDefaults.IsPro(temporaryRoot))
+        {
+            throw new InvalidOperationException("FoxTTS SAPI5 was incorrectly detected as Cafe TTS Pro.");
+        }
+        if (!FoxTtsConfigurationDefaults.SetPro(temporaryRoot) ||
+            !FoxTtsConfigurationDefaults.IsPro(temporaryRoot))
+        {
+            throw new InvalidOperationException("An existing FoxTTS engine was not switched to Cafe TTS Pro.");
+        }
+        if (FoxTtsConfigurationDefaults.SetPro(temporaryRoot))
+        {
+            throw new InvalidOperationException("Cafe TTS Pro was rewritten even though it was already selected.");
+        }
+
+        document = XDocument.Load(configurationPath);
+        if (document.Descendants("PluginIntegration").SingleOrDefault()?.Value != "Auto")
+        {
+            throw new InvalidOperationException("Switching FoxTTS engines overwrote unrelated settings.");
+        }
     }
     finally
     {

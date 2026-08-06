@@ -20,6 +20,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public bool AutoCheckBundledPluginUpdates { get; set; } = true;
 
+    public bool SuppressFoxTtsProPrompt { get; set; }
+
     public int HistoryLimit { get; set; } = 20;
 
     public string LogDirectory { get; set; } = string.Empty;
@@ -83,6 +85,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         AutoStartParser = false;
         DebugMode = false;
         AutoCheckBundledPluginUpdates = true;
+        SuppressFoxTtsProPrompt = false;
         HistoryLimit = 20;
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
@@ -115,12 +118,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
             return explicitDecision;
         }
 
-        return capability is
+        return IsActCapabilityAllowedByDefault(capability);
+    }
+
+    internal static bool IsActCapabilityAllowedByDefault(ActCapability capability)
+        => capability is
             ActCapability.ReadCombatLogs or
             ActCapability.ReadLocalConfiguration or
             ActCapability.TextToSpeech or
             ActCapability.Clipboard;
-    }
 
     public void SetActCapability(string pluginId, ActCapability capability, bool allowed)
     {
