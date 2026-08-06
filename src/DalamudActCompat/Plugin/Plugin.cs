@@ -178,6 +178,7 @@ public sealed class Plugin : IDalamudPlugin
                 ?.EntityId,
             localDeathWhilePartyContinues,
             configuration.GetOverlayWindowSettings,
+            configuration.GetOverlayWindowSettingsSnapshot,
             () => configuration.DebugMode,
             configuration.IsActCapabilityAllowed);
         actRuntime.ConfigureExternalPluginBridges(
@@ -970,6 +971,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             if (actRuntime.ShowHtmlOverlay(name))
             {
+                configuration.GetOverlayWindowSettings(name).OpenOnStartup = true;
                 if (actRuntime.OverlayTemplates.Any(template => string.Equals(
                         template.Name,
                         name,
@@ -998,6 +1000,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        configuration.GetOverlayWindowSettings(name).OpenOnStartup = false;
         SaveConfiguration();
     }
 

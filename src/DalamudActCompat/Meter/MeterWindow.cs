@@ -25,8 +25,6 @@ public sealed class MeterWindow : Window
     private readonly Action saveConfiguration;
     private bool isDragging;
     private Vector2 dragOffset;
-    private bool singleCombatantLayoutActive;
-    private Vector2? sizeBeforeSingleCombatantLayout;
 
     public MeterWindow(
         MeterService meterService,
@@ -72,15 +70,9 @@ public sealed class MeterWindow : Window
     public override void PreDraw()
     {
         var settings = configuration.Meter;
-        var singleCombatant = meterService.GetRows().Count == 1;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = singleCombatant
-                ? CalculateSingleCombatantWindowSize(
-                    new Vector2(320, 0),
-                    settings.ShowHeader,
-                    settings.FontScale)
-                : new Vector2(380, 170),
+            MinimumSize = new Vector2(380, 170),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
         Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
@@ -123,25 +115,15 @@ public sealed class MeterWindow : Window
 
         if (snapshot.Current is null)
         {
-            UpdateSingleCombatantLayout(false, settings);
             DrawEmptyState(settings);
             return;
         }
 
         var encounter = snapshot.Current;
         var rows = meterService.GetRows();
-        var singleCombatant = rows.Count == 1;
-        UpdateSingleCombatantLayout(singleCombatant, settings);
         if (settings.ShowHeader)
         {
-            if (singleCombatant)
-            {
-                DrawSingleCombatantHeader(encounter, settings);
-            }
-            else
-            {
-                DrawEncounterHeader(encounter, settings);
-            }
+            DrawEncounterHeader(encounter, settings);
         }
         else if (!settings.IsLocked)
         {
@@ -150,14 +132,7 @@ public sealed class MeterWindow : Window
 
         if (!settings.IsLocked)
         {
-            if (singleCombatant)
-            {
-                DrawCompactControls(settings);
-            }
-            else
-            {
-                DrawControls(settings);
-            }
+            DrawControls(settings);
         }
 
         if (rows.Count == 0)
@@ -167,18 +142,6 @@ public sealed class MeterWindow : Window
         }
 
         var maximumScore = Math.Max(1, rows.Max(row => Score(row, settings.SortMode)));
-        if (singleCombatant)
-        {
-            DrawCombatantRow(
-                rows[0],
-                1,
-                maximumScore,
-                encounter,
-                settings,
-                compactSingle: true);
-            return;
-        }
-
         if (ImGui.BeginChild("meter-rows", new Vector2(-1, -1), false))
         {
             for (var index = 0; index < rows.Count; index++)
@@ -188,50 +151,10 @@ public sealed class MeterWindow : Window
                     index + 1,
                     maximumScore,
                     encounter,
-                    settings,
-                    compactSingle: false);
+                    settings);
             }
         }
         ImGui.EndChild();
-    }
-
-    internal static Vector2 CalculateSingleCombatantWindowSize(
-        Vector2 currentSize,
-        bool showHeader,
-        float fontScale)
-    {
-        var scale = Math.Clamp(fontScale, 0.75f, 1.8f);
-        var width = Math.Clamp(currentSize.X, 320, 440);
-        var height = MathF.Ceiling((showHeader ? 118 : 102) * scale);
-        return new Vector2(width, height);
-    }
-
-    private void UpdateSingleCombatantLayout(
-        bool singleCombatant,
-        MeterSettings settings)
-    {
-        if (singleCombatant && !singleCombatantLayoutActive)
-        {
-            sizeBeforeSingleCombatantLayout = ImGui.GetWindowSize();
-            ImGui.SetWindowSize(
-                CalculateSingleCombatantWindowSize(
-                    sizeBeforeSingleCombatantLayout.Value,
-                    settings.ShowHeader,
-                    settings.FontScale),
-                ImGuiCond.Always);
-        }
-        else if (!singleCombatant && singleCombatantLayoutActive &&
-                 sizeBeforeSingleCombatantLayout is { } previousSize)
-        {
-            ImGui.SetWindowSize(
-                new Vector2(
-                    Math.Max(previousSize.X, 380),
-                    Math.Max(previousSize.Y, 170)),
-                ImGuiCond.Always);
-            sizeBeforeSingleCombatantLayout = null;
-        }
-
-        singleCombatantLayoutActive = singleCombatant;
     }
 
     private void DrawEmptyState(MeterSettings settings)
@@ -274,36 +197,6 @@ public sealed class MeterWindow : Window
                             : text.Get("已结束", "Ended"));
         }
         drawList.AddText(start + new Vector2(28, 24), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), subtitle);
-    }
-
-    private void DrawSingleCombatantHeader(Encounter encounter, MeterSettings settings)
-    {
-        const float headerHeight = 24;
-        var width = ImGui.GetContentRegionAvail().X;
-        var start = ImGui.GetCursorScreenPos();
-        ImGui.InvisibleButton("meter-single-header-drag", new Vector2(width, headerHeight));
-        HandleHeaderDrag(settings);
-
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(
-            start,
-            start + new Vector2(width, headerHeight),
-            ImGui.GetColorU32(NavyRaised),
-            5);
-        var stateColor = encounter.IsActive
-            ? new Vector4(0.38f, 0.78f, 0.66f, 1)
-            : new Vector4(0.66f, 0.69f, 0.74f, 1);
-        drawList.AddText(start + new Vector2(8, 3), ImGui.GetColorU32(stateColor), encounter.IsActive ? "●" : "○");
-        var duration = FormatDuration(encounter.Duration);
-        var durationSize = ImGui.CalcTextSize(duration);
-        drawList.AddText(
-            new Vector2(start.X + width - durationSize.X - 8, start.Y + 3),
-            ImGui.GetColorU32(IceBlue),
-            duration);
-        drawList.AddText(
-            start + new Vector2(25, 3),
-            ImGui.GetColorU32(Gold),
-            TrimToWidth(LocalizeEncounterTitle(encounter), width - durationSize.X - 48));
     }
 
     private string LocalizeEncounterTitle(Encounter encounter)
@@ -379,14 +272,6 @@ public sealed class MeterWindow : Window
         ImGui.TextDisabled(text.Get("排序", "Sort"));
     }
 
-    private void DrawCompactControls(MeterSettings settings)
-    {
-        ImGui.SetNextItemWidth(92);
-        DrawSortModeCombo(settings, "##meter-single-sort");
-        ImGui.SameLine();
-        ImGui.TextDisabled(text.Get("主列", "Primary"));
-    }
-
     private void DrawSortModeCombo(MeterSettings settings, string id)
     {
         if (ImGui.BeginCombo(id, SortModeLabel(settings.SortMode, settings)))
@@ -410,12 +295,9 @@ public sealed class MeterWindow : Window
         int rank,
         double maximumScore,
         Encounter encounter,
-        MeterSettings settings,
-        bool compactSingle)
+        MeterSettings settings)
     {
-        var rowHeight = CalculateCombatantRowHeight(
-            compactSingle,
-            ImGui.GetTextLineHeightWithSpacing());
+        var rowHeight = CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing());
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         var end = start + new Vector2(width, rowHeight);
@@ -480,8 +362,8 @@ public sealed class MeterWindow : Window
             var job = JobDisplayFormatter.FormatText(row.Job, settings.JobDisplayStyle);
             var jobSize = ImGui.CalcTextSize(job);
             var badgeSize = new Vector2(
-                Math.Max(compactSingle ? 31 : 35, jobSize.X + 10),
-                ImGui.GetTextLineHeight() + (compactSingle ? 2 : 4));
+                Math.Max(35, jobSize.X + 10),
+                ImGui.GetTextLineHeight() + 4);
             drawList.AddRectFilled(
                 new Vector2(currentX, textY - 1),
                 new Vector2(currentX, textY - 1) + badgeSize,
@@ -494,93 +376,49 @@ public sealed class MeterWindow : Window
             return currentX + badgeSize.X + 8;
         }
 
-        if (!compactSingle)
-        {
-            var lineY = start.Y + (rowHeight - ImGui.GetTextLineHeight()) * 0.5f;
-            var x = start.X + 8;
-            drawList.AddText(
-                new Vector2(x, lineY),
-                ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)),
-                $"{rank,2}");
-            x += 25;
-            x = DrawJob(x, lineY);
-
-            var right = end.X - 9;
-            void DrawRightColumn(string value, Vector4 color, float gap = 12)
-            {
-                var size = ImGui.CalcTextSize(value);
-                right -= size.X;
-                drawList.AddText(new Vector2(right, lineY), ImGui.GetColorU32(color), value);
-                right -= gap;
-            }
-
-            DrawRightColumn(
-                text.Get($"死亡 {row.Deaths}", $"KO {row.Deaths}"),
-                new Vector4(0.78f, 0.80f, 0.84f, 1));
-            DrawRightColumn(
-                $"{row.DamagePercent:N1}%",
-                new Vector4(0.72f, 0.78f, 0.84f, 1));
-            DrawRightColumn(
-                FormatHitRate(text.Get("暴击", "CRIT"), row.CriticalHitPercent),
-                new Vector4(0.82f, 0.68f, 0.92f, 1));
-            DrawRightColumn(
-                FormatHitRate(text.Get("直暴", "CDH"), row.CriticalDirectHitPercent),
-                new Vector4(0.95f, 0.62f, 0.45f, 1));
-            DrawRightColumn(
-                $"{PrimaryRateLabel(sortMode, settings)} {primary:N0}",
-                PrimaryRateColor(row.IsLocalPlayer));
-            if (estimate is not null)
-            {
-                DrawRightColumn($"~{estimate.Score}", estimate.Color);
-            }
-
-            var availableNameWidth = Math.Max(20, right - x - 6);
-            drawList.AddText(
-                new Vector2(x, lineY),
-                ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
-                TrimToWidth(displayName, availableNameWidth));
-
-            if (estimate is not null && hovered)
-            {
-                ImGui.SetTooltip(text.Get(
-                    $"FFLogs 公开排名样本估算：{estimate.Score}（非官方实时成绩）",
-                    $"FFLogs public-ranking estimate: {estimate.Score} (not an official live parse)"));
-            }
-            return;
-        }
-
-        var firstLineY = start.Y + 5;
-        var secondLineY = start.Y + rowHeight * 0.53f;
-        var singleX = DrawJob(start.X + 8, firstLineY);
-        var primaryText = $"{PrimaryRateLabel(sortMode, settings)}  {primary:N0}";
-        var primarySize = ImGui.CalcTextSize(primaryText);
-        var estimateText = estimate is null ? string.Empty : $"~{estimate.Score}";
-        var estimateSize = ImGui.CalcTextSize(estimateText);
-        var rightX = end.X - primarySize.X - 9;
-        var estimateX = rightX - (estimate is null ? 0 : estimateSize.X + 10);
-        var availableSingleNameWidth = Math.Max(40, rightX - singleX - 10);
-        if (estimate is not null)
-        {
-            availableSingleNameWidth = Math.Max(40, estimateX - singleX - 10);
-        }
+        var lineY = start.Y + (rowHeight - ImGui.GetTextLineHeight()) * 0.5f;
+        var x = start.X + 8;
         drawList.AddText(
-            new Vector2(singleX, firstLineY),
-            ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
-            TrimToWidth(displayName, availableSingleNameWidth));
+            new Vector2(x, lineY),
+            ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)),
+            $"{rank,2}");
+        x += 25;
+        x = DrawJob(x, lineY);
+
+        var right = end.X - 9;
+        void DrawRightColumn(string value, Vector4 color, float gap = 12)
+        {
+            var size = ImGui.CalcTextSize(value);
+            right -= size.X;
+            drawList.AddText(new Vector2(right, lineY), ImGui.GetColorU32(color), value);
+            right -= gap;
+        }
+
+        DrawRightColumn(
+            text.Get($"死亡 {row.Deaths}", $"KO {row.Deaths}"),
+            new Vector4(0.78f, 0.80f, 0.84f, 1));
+        DrawRightColumn(
+            $"{row.DamagePercent:N1}%",
+            new Vector4(0.72f, 0.78f, 0.84f, 1));
+        DrawRightColumn(
+            FormatHitRate(text.Get("暴击", "CRIT"), row.CriticalHitPercent),
+            new Vector4(0.82f, 0.68f, 0.92f, 1));
+        DrawRightColumn(
+            FormatHitRate(text.Get("直暴", "CDH"), row.CriticalDirectHitPercent),
+            new Vector4(0.95f, 0.62f, 0.45f, 1));
+        DrawRightColumn(
+            $"{PrimaryRateLabel(sortMode, settings)} {primary:N0}",
+            PrimaryRateColor(row.IsLocalPlayer));
         if (estimate is not null)
         {
-            drawList.AddText(
-                new Vector2(estimateX, firstLineY),
-                ImGui.GetColorU32(estimate.Color),
-                estimateText);
+            DrawRightColumn($"~{estimate.Score}", estimate.Color);
         }
-        if (!string.IsNullOrEmpty(primaryText))
-        {
-            drawList.AddText(
-                new Vector2(rightX, firstLineY),
-                ImGui.GetColorU32(PrimaryRateColor(row.IsLocalPlayer)),
-                primaryText);
-        }
+
+        var availableNameWidth = Math.Max(20, right - x - 6);
+        drawList.AddText(
+            new Vector2(x, lineY),
+            ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+            TrimToWidth(displayName, availableNameWidth));
 
         if (estimate is not null && hovered)
         {
@@ -588,34 +426,6 @@ public sealed class MeterWindow : Window
                 $"FFLogs 公开排名样本估算：{estimate.Score}（非官方实时成绩）",
                 $"FFLogs public-ranking estimate: {estimate.Score} (not an official live parse)"));
         }
-
-        var secondary = BuildSecondaryText(row, settings);
-        drawList.AddText(
-            new Vector2(singleX, secondLineY),
-            ImGui.GetColorU32(new Vector4(0.70f, 0.73f, 0.78f, 1)),
-            TrimToWidth(secondary, end.X - singleX - 9));
-    }
-
-    private string BuildSecondaryText(CombatantRow row, MeterSettings settings)
-    {
-        var parts = new List<string>();
-        if (settings.ShowDamage)
-        {
-            parts.Add($"{text.Get("伤害", "DMG")} {row.TotalDamage:N0}");
-        }
-        parts.Add($"{row.DamagePercent:N1}%");
-        parts.Add(FormatHitRate(text.Get("暴击", "CRIT"), row.CriticalHitPercent));
-        parts.Add(FormatHitRate(text.Get("直暴", "CDH"), row.CriticalDirectHitPercent));
-        if (settings.ShowHps && MeterSortModeOptions.Normalize(settings.SortMode) != MeterSortMode.Hps)
-        {
-            parts.Add($"HPS {row.Hps:N0}");
-        }
-        if (settings.ShowHealing)
-        {
-            parts.Add($"{text.Get("治疗", "HEAL")} {row.TotalHealing:N0}");
-        }
-        parts.Add($"{text.Get("死亡", "KO")} {row.Deaths}");
-        return string.Join("  ·  ", parts);
     }
 
     internal static string FormatHitRate(string label, double? rate)
@@ -623,12 +433,8 @@ public sealed class MeterWindow : Window
             ? $"{label} {Math.Clamp(value, 0, 100):N1}%"
             : $"{label} --";
 
-    internal static float CalculateCombatantRowHeight(
-        bool compactSingle,
-        float textLineHeightWithSpacing)
-        => compactSingle
-            ? Math.Max(36, textLineHeightWithSpacing * 1.95f)
-            : Math.Max(28, textLineHeightWithSpacing + 8);
+    internal static float CalculateCombatantRowHeight(float textLineHeightWithSpacing)
+        => Math.Max(28, textLineHeightWithSpacing + 8);
 
     internal static float CalculateJobIconSize(float rowHeight, float textLineHeight)
         => Math.Min(rowHeight - 4, Math.Max(22, textLineHeight + 4));

@@ -452,12 +452,12 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        if (ImGui.BeginChild("multiplayer-meter-controls", new Vector2(-1, 270), true))
+        if (ImGui.BeginChild("meter-display-controls", new Vector2(-1, 270), true))
         {
-            ImGui.TextColored(IceBlue, text.Get("多人模式控件", "Multiplayer controls"));
+            ImGui.TextColored(IceBlue, text.Get("战斗统计显示", "Combat Meter display"));
             ImGui.TextDisabled(text.Get(
-                "多人模式始终保持单行；排序仅支持 DPS 与 HPS。",
-                "Multiplayer mode always stays on one row; sorting supports only DPS and HPS."));
+                "每名玩家固定一行；排序仅支持 DPS 与 HPS。",
+                "Each player uses one row; sorting supports only DPS and HPS."));
 
             var sortMode = MeterSortModeOptions.Normalize(configuration.Meter.SortMode);
             if (ImGui.BeginCombo(
@@ -540,18 +540,6 @@ public sealed class ControlCenterWindow : Window
         }
         ImGui.EndChild();
         DrawResetEncounterConfirmation();
-
-        ImGui.Spacing();
-        if (ImGui.BeginChild("single-player-meter-controls", new Vector2(-1, 88), true))
-        {
-            ImGui.TextColored(Gold, text.Get("单人模式附加字段", "Single-player extra fields"));
-            changed |= Checkbox(text.Get("总伤害", "Damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("附加 HPS", "Extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("治疗量", "Healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
-        }
-        ImGui.EndChild();
 
         changed |= DrawPlayerIdentityControls();
         changed |= DrawFflogsSettings();
@@ -1456,7 +1444,8 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.Spacing();
-        var encounter = getCurrentEncounter();
+        var currentEncounter = getCurrentEncounter();
+        var encounter = currentEncounter?.FflogsRankingEncounter ?? currentEncounter;
         if (ImGui.BeginTable(
                 "fflogs-encounter-binding-card",
                 1,

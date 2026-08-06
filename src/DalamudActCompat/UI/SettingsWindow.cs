@@ -382,11 +382,8 @@ public sealed class SettingsWindow : Window
             }
         }
         ImGui.TextDisabled(text.Get(
-            "每行固定显示当前 DPS/HPS、伤害占比、暴击率、直暴率和死亡数；以下是单人详情附加字段。",
-            "Every row always shows DPS/HPS, damage percent, critical rate, critical-direct rate, and deaths; the following are optional single-player details."));
-        changed |= Checkbox(text.Get("单人总伤害", "Single-player damage"), configuration.Meter.ShowDamage, value => configuration.Meter.ShowDamage = value);
-        changed |= Checkbox(text.Get("单人附加 HPS", "Single-player extra HPS"), configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-        changed |= Checkbox(text.Get("单人治疗量", "Single-player healing"), configuration.Meter.ShowHealing, value => configuration.Meter.ShowHealing = value);
+            "每名玩家固定一行，显示当前 DPS/HPS、伤害占比、暴击率、直暴率和死亡数。",
+            "Each player uses one row showing current DPS/HPS, damage percentage, critical rate, critical-direct rate, and deaths."));
         var localPlayerColor = configuration.Meter.LocalPlayerColor;
         if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
         {

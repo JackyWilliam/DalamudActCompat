@@ -88,6 +88,7 @@ public sealed class FflogsEstimateService : IDisposable
 
     public FflogsEstimate? GetEstimate(Encounter encounter)
     {
+        encounter = encounter.FflogsRankingEncounter ?? encounter;
         var settings = getSettings();
         if (!CanUseApi(settings))
         {
@@ -142,6 +143,8 @@ public sealed class FflogsEstimateService : IDisposable
             QueueCatalogRefresh();
             return;
         }
+
+        encounter = encounter.FflogsRankingEncounter ?? encounter;
 
         var encounterId = TryResolveEncounterId(encounter.EnemyName, settings);
         var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
@@ -204,12 +207,13 @@ public sealed class FflogsEstimateService : IDisposable
 
     public static Vector4 ColorForPercentile(double percentile)
     {
-        if (percentile >= 100) return Rgb(229, 204, 128);
-        if (percentile >= 99) return Rgb(226, 104, 168);
-        if (percentile >= 95) return Rgb(255, 128, 0);
-        if (percentile >= 75) return Rgb(163, 53, 238);
-        if (percentile >= 50) return Rgb(0, 112, 255);
-        if (percentile >= 25) return Rgb(30, 255, 0);
+        var score = Math.Clamp((int)Math.Round(percentile), 0, 100);
+        if (score >= 100) return Rgb(229, 204, 128);
+        if (score >= 99) return Rgb(226, 104, 168);
+        if (score >= 95) return Rgb(255, 128, 0);
+        if (score >= 75) return Rgb(163, 53, 238);
+        if (score >= 50) return Rgb(0, 112, 255);
+        if (score >= 25) return Rgb(30, 255, 0);
         return Rgb(102, 102, 102);
     }
 

@@ -154,7 +154,12 @@ internal sealed class DutyEncounterAccumulator
             Array.Empty<HealEvent>(),
             Array.Empty<DeathEvent>(),
             Array.Empty<ActionSummary>(),
-            jobs);
+            jobs)
+        {
+            // Duty totals remain on the meter, while FFLogs comparisons must use one
+            // concrete boss segment instead of cumulative damage from the whole duty.
+            FflogsRankingEncounter = activeSegment ?? latestSegment,
+        };
     }
 
     private sealed class CombatantTotals
