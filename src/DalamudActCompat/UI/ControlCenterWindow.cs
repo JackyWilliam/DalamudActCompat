@@ -79,6 +79,10 @@ public sealed class ControlCenterWindow : Window
     private Page selectedPage;
     private ParserStatus parserStatus;
     private string? selectedCreatedOverlay;
+    private string customOverlayName = string.Empty;
+    private string customOverlayUrl = string.Empty;
+    private string? customOverlayFeedback;
+    private bool customOverlayFeedbackIsError;
     private string? fflogsEncounterInputKey;
     private int fflogsEncounterIdInput;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
@@ -650,6 +654,9 @@ public sealed class ControlCenterWindow : Window
         changed |= DrawCreatedHtmlOverlays();
 
         ImGui.Spacing();
+        changed |= DrawCustomHtmlOverlayCreator();
+
+        ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.TextColored(IceBlue, text.Get("从模板创建", "Create from template"));
@@ -734,6 +741,10 @@ public sealed class ControlCenterWindow : Window
                 ImGui.Spacing();
                 var createdSettings = configuration.GetOverlayWindowSettings(
                     selectedCreatedOverlay);
+                if (!string.IsNullOrWhiteSpace(createdSettings.SourceUrl))
+                {
+                    ImGui.TextWrapped(createdSettings.SourceUrl);
+                }
                 if (ImGui.Button(createdSettings.IsVisible
                         ? text.Get("关闭", "Close")
                         : text.Get("打开", "Open")))
@@ -756,8 +767,8 @@ public sealed class ControlCenterWindow : Window
                 if (ImGui.IsItemHovered())
                 {
                     ImGui.SetTooltip(text.Get(
-                        "关闭悬浮窗并删除它保存的位置、大小与显示设置；之后仍可从模板重新创建。",
-                        "Close the overlay and delete its saved position, size, and display settings; it can be recreated from the template."));
+                        "关闭悬浮窗并删除它保存的网址、位置、大小与显示设置。",
+                        "Close the overlay and delete its saved URL, position, size, and display settings."));
                 }
 
                 if (deleteSelected)
@@ -774,6 +785,84 @@ public sealed class ControlCenterWindow : Window
         }
 
         return changed;
+    }
+
+    private bool DrawCustomHtmlOverlayCreator()
+    {
+        var changed = false;
+        ImGui.TextColored(IceBlue, text.Get("从网址创建", "Create from URL"));
+        ImGui.SetNextItemWidth(280);
+        ImGui.InputText(
+            text.Get("名称###custom-overlay-name", "Name###custom-overlay-name"),
+            ref customOverlayName,
+            80);
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText(
+            text.Get("网址###custom-overlay-url", "URL###custom-overlay-url"),
+            ref customOverlayUrl,
+            2048);
+        ImGui.TextDisabled(text.Get(
+            "支持 http、https 与 file 地址；只添加你信任的悬浮窗页面。",
+            "Supports http, https, and file URLs. Only add overlay pages you trust."));
+
+        if (ImGui.Button(text.Get("创建并打开", "Create and open")))
+        {
+            var name = customOverlayName.Trim();
+            var templates = getOverlayTemplates();
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                SetCustomOverlayFeedback(text.Get("请输入悬浮窗名称。", "Enter an overlay name."), true);
+            }
+            else if (string.Equals(
+                         name,
+                         SelfHostedActRuntime.CactbotOverlayName,
+                         StringComparison.OrdinalIgnoreCase) ||
+                     templates.Any(template => string.Equals(
+                         template.Name,
+                         name,
+                         StringComparison.OrdinalIgnoreCase)) ||
+                     configuration.OverlayWindows.ContainsKey(name))
+            {
+                SetCustomOverlayFeedback(text.Get("该名称已被使用。", "That name is already in use."), true);
+            }
+            else if (!SelfHostedActRuntime.TryNormalizeCustomOverlayUri(
+                         customOverlayUrl,
+                         out var sourceUri))
+            {
+                SetCustomOverlayFeedback(
+                    text.Get("网址无效；请使用完整的 http、https 或 file 地址。", "Invalid URL. Use a complete http, https, or file URL."),
+                    true);
+            }
+            else
+            {
+                var settings = configuration.GetOverlayWindowSettings(name);
+                settings.SourceUrl = sourceUri.AbsoluteUri;
+                settings.SetEditing(true);
+                selectedCreatedOverlay = name;
+                openHtmlOverlay(name);
+                customOverlayName = string.Empty;
+                customOverlayUrl = string.Empty;
+                SetCustomOverlayFeedback(text.Get("悬浮窗已创建并进入编辑模式。", "Overlay created in edit mode."), false);
+                changed = true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(customOverlayFeedback))
+        {
+            ImGui.TextColored(
+                customOverlayFeedbackIsError
+                    ? new Vector4(0.96f, 0.42f, 0.38f, 1)
+                    : new Vector4(0.45f, 0.88f, 0.62f, 1),
+                customOverlayFeedback);
+        }
+
+        return changed;
+    }
+
+    private void SetCustomOverlayFeedback(string message, bool isError)
+    {
+        customOverlayFeedback = message;
+        customOverlayFeedbackIsError = isError;
     }
 
     private bool DrawExtensions(out bool permissionsChanged)
@@ -832,6 +921,19 @@ public sealed class ControlCenterWindow : Window
         {
             checkBundledPluginUpdates();
         }
+        var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
+        if (ImGui.Checkbox(
+                text.Get(
+                    "启动时自动检查第三方扩展更新",
+                    "Automatically check third-party extension updates on startup"),
+                ref autoCheckUpdates))
+        {
+            configuration.AutoCheckBundledPluginUpdates = autoCheckUpdates;
+            changed = true;
+        }
+        ImGui.TextDisabled(text.Get(
+            "关闭后仍可使用上方按钮手动检查；不会影响 Dalamud 自身的插件更新。",
+            "When disabled, the button above still checks manually; Dalamud's own plugin updates are unaffected."));
 
         ImGui.Spacing();
         ImGui.Separator();

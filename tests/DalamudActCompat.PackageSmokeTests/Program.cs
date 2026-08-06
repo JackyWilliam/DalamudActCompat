@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -1571,8 +1572,10 @@ static void ValidateHtmlOverlayDefaults()
         StringComparison.Ordinal);
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
-        controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal),
-        "Created HTML overlays are not listed above the template form or the Chinese label regressed.");
+        controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal),
+        "Created/custom HTML overlays are not listed above the template form or the trust warning regressed.");
     Assert(
         controlCenterSource.Contains(
             "private const int ResetConfirmationMilliseconds = 10_000;",
@@ -1612,6 +1615,7 @@ static void ValidateHtmlOverlayDefaults()
     Assert(settings.IsLocked, "HTML overlays must be locked by default.");
     Assert(!settings.IsEditing, "HTML overlays must not start in editing mode.");
     Assert(settings.ZoomFactor == 1.0f, "HTML overlay default zoom changed unexpectedly.");
+    Assert(string.IsNullOrEmpty(settings.SourceUrl), "Template overlays unexpectedly received a custom source URL.");
     settings.SetEditing(true);
     Assert(
         settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
@@ -1620,6 +1624,24 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
         "Finishing HTML overlay editing did not restore click-through and locking together.");
+
+    Assert(
+        SelfHostedActRuntime.TryBuildCustomOverlayUri(
+            "https://souma.diemoe.net/ff14-overlay-vue/#/teamWatch",
+            new Uri("ws://127.0.0.1:10501/ws"),
+            out var customOverlayUri) &&
+        customOverlayUri.AbsoluteUri.Contains(
+            "#/teamWatch?OVERLAY_WS=ws://127.0.0.1:10501/ws&HOST_PORT=ws://127.0.0.1:10501",
+            StringComparison.Ordinal),
+        "Hash-routed custom overlays did not receive usable OverlayPlugin WebSocket parameters.");
+    Assert(
+        !SelfHostedActRuntime.TryNormalizeCustomOverlayUri(
+            "javascript:alert(1)",
+            out _),
+        "Custom overlays accepted a non-http/file executable URL scheme.");
+    Assert(
+        new PluginConfiguration().AutoCheckBundledPluginUpdates,
+        "Existing users no longer retain the startup extension-update check by default.");
 
     var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
                        "DalamudActCompat.ActRuntime.HtmlOverlayForm")
@@ -1944,6 +1966,28 @@ static void ValidateCactbotSpokenAlertDefaults()
         existing["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "textOnly" &&
         existing["options"]["raidboss"]?["DefaultPlayerLabel"]?.Value<string>() == "name",
         "An explicit Cactbot output mode or player label was overwritten.");
+
+    var guardType = typeof(CactbotEventSource).Assembly.GetType(
+                        "RainbowMage.OverlayPlugin.EventSources.CactbotTtsDuplicateGuard",
+                        throwOnError: true)!;
+    var guard = Activator.CreateInstance(
+                    guardType,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    [TimeSpan.FromMilliseconds(500)],
+                    culture: null)
+                ?? throw new InvalidOperationException("Cactbot TTS duplicate guard was not created.");
+    var tryAccept = guardType.GetMethod(
+                        "TryAccept",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    ?? throw new InvalidOperationException("Cactbot TTS duplicate guard has no acceptance method.");
+    var start = Stopwatch.GetTimestamp();
+    Assert(
+        tryAccept.Invoke(guard, ["Stack marker", start]) as bool? == true &&
+        tryAccept.Invoke(guard, ["Stack marker", start + Stopwatch.Frequency / 10]) as bool? == false &&
+        tryAccept.Invoke(guard, ["Spread marker", start + Stopwatch.Frequency / 5]) as bool? == true &&
+        tryAccept.Invoke(guard, ["Stack marker", start + Stopwatch.Frequency]) as bool? == true,
+        "Two Cactbot windows no longer collapse the same simultaneous TTS request to one playback.");
 }
 
 static void ValidateOverlayInitialStateEvents()
@@ -2352,6 +2396,48 @@ static void ValidateChineseCombatChatParsing()
         "Chinese ability damage chat was not parsed.");
     Assert(inheritedActor == actor && target == "木人" && damage == 39870,
         "Chinese ability damage fields were mapped incorrectly.");
+
+    var context = new ChineseCombatChatContext();
+    var observedAt = DateTimeOffset.UtcNow;
+    Assert(
+        !context.TryParse(
+            "本地玩家发动了技能。",
+            observedAt,
+            out _,
+            out _,
+            out _),
+        "A split combat actor announcement was mistaken for a complete damage line.");
+    Assert(
+        !context.TryParse(
+            "本地玩家向附近玩家挥了挥手。",
+            observedAt.AddMilliseconds(50),
+            out _,
+            out _,
+            out _),
+        "A player emote was mistaken for combat damage.");
+    Assert(
+        !context.TryParse(
+            "  \uE06F 附近玩家受到了900点伤害。",
+            observedAt.AddMilliseconds(100),
+            out _,
+            out _,
+            out _),
+        "Damage after an unrelated emote inherited the local player's stale attacker context.");
+    Assert(
+        !context.TryParse(
+            "队友发动了技能。",
+            observedAt.AddSeconds(1),
+            out _,
+            out _,
+            out _) &&
+        context.TryParse(
+            "  \uE06F 木人受到了1200点伤害。",
+            observedAt.AddSeconds(1.1),
+            out var contextualActor,
+            out _,
+            out _) &&
+        contextualActor == "队友",
+        "Adjacent split combat lines no longer retain their legitimate attacker context.");
 }
 
 static string FindProjectRoot()

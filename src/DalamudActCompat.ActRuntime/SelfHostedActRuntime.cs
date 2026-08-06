@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using System.Collections.Concurrent;
 using System.Drawing;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -63,7 +64,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private DateTimeOffset lastRelevantCombatAction;
     private bool chatEncounterDirty;
     private bool chatEncounterPublished;
-    private string chatActor = string.Empty;
+    private readonly ChineseCombatChatContext chatParser = new();
     private string chatEnemy = string.Empty;
     private string chatZone = string.Empty;
     private bool activeEncounterPublished;
@@ -181,33 +182,63 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         var template = overlayTemplates.FirstOrDefault(
             candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (template is null || overlayWebSocketUri is null)
+        if (overlayWebSocketUri is null)
         {
             return false;
         }
 
-        if (!htmlOverlays.TryGetValue(template.Name, out var window))
+        var settings = getOverlayWindowSettings(name);
+        Uri pageUri;
+        Size clientSize;
+        string windowName;
+        string userDataDirectory;
+        if (template is not null)
         {
             var source = overlayTemplateSources.First(
                 candidate => string.Equals(candidate.Name, template.Name, StringComparison.OrdinalIgnoreCase));
-            var pageUri = BuildTemplateUri(source, new Uri(overlayWebSocketUri));
+            pageUri = BuildTemplateUri(source, new Uri(overlayWebSocketUri));
+            clientSize = new Size(template.Width, template.Height);
+            windowName = template.Name;
+            userDataDirectory = Path.Combine(
+                pluginInterface.ConfigDirectory.FullName,
+                "webview2",
+                SanitizePath(template.Name));
+        }
+        else if (TryBuildCustomOverlayUri(
+                     settings.SourceUrl,
+                     new Uri(overlayWebSocketUri),
+                     out pageUri))
+        {
+            clientSize = new Size(900, 500);
+            windowName = name;
+            userDataDirectory = Path.Combine(
+                pluginInterface.ConfigDirectory.FullName,
+                "webview2",
+                BuildCustomOverlayProfileName(name));
+        }
+        else
+        {
+            return false;
+        }
 
+        if (!htmlOverlays.TryGetValue(windowName, out var window))
+        {
             window = new HtmlOverlayForm(
                 pageUri,
-                Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2", SanitizePath(template.Name)),
+                userDataDirectory,
                 Path.Combine(
                     pluginInterface.AssemblyLocation.Directory!.FullName,
                     "WebView2Loader.dll"),
-                template.Name,
+                windowName,
                 true,
-                getOverlayWindowSettings(template.Name),
-                new Size(template.Width, template.Height),
+                settings,
+                clientSize,
                 debugMode(),
                 log);
-            if (!htmlOverlays.TryAdd(template.Name, window))
+            if (!htmlOverlays.TryAdd(windowName, window))
             {
                 window.Dispose();
-                window = htmlOverlays[template.Name];
+                window = htmlOverlays[windowName];
             }
         }
 
@@ -221,11 +252,11 @@ public sealed class SelfHostedActRuntime : IDisposable
         settings.IsVisible = false;
         if (!htmlOverlays.TryGetValue(name, out var window))
         {
-            return overlayTemplates.Any(
-                candidate => string.Equals(
-                    candidate.Name,
-                    name,
-                    StringComparison.OrdinalIgnoreCase));
+            return overlayTemplates.Any(candidate => string.Equals(
+                       candidate.Name,
+                       name,
+                       StringComparison.OrdinalIgnoreCase)) ||
+                   TryNormalizeCustomOverlayUri(settings.SourceUrl, out _);
         }
 
         window.Hide();
@@ -246,11 +277,13 @@ public sealed class SelfHostedActRuntime : IDisposable
             return true;
         }
 
-        return overlayTemplates.Any(
-            candidate => string.Equals(
-                candidate.Name,
-                name,
-                StringComparison.OrdinalIgnoreCase));
+        return overlayTemplates.Any(candidate => string.Equals(
+                   candidate.Name,
+                   name,
+                   StringComparison.OrdinalIgnoreCase)) ||
+               TryNormalizeCustomOverlayUri(
+                   getOverlayWindowSettings(name).SourceUrl,
+                   out _);
     }
 
     public IReadOnlyList<string> LoadedCustomPluginIds
@@ -556,8 +589,69 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         // OverlayPlugin templates historically consume raw OVERLAY_WS/HOST_PORT
         // values before URLSearchParams decoding, so preserve the unescaped value.
-        var separator = string.IsNullOrEmpty(pageUri.Query) ? "?" : "&";
+        var fragment = pageUri.Fragment;
+        var separator = !string.IsNullOrEmpty(fragment)
+            ? fragment.Contains('?') ? "&" : "?"
+            : string.IsNullOrEmpty(pageUri.Query) ? "?" : "&";
         return new Uri($"{pageUri.AbsoluteUri}{separator}{parameter}={value}");
+    }
+
+    internal static bool TryBuildCustomOverlayUri(
+        string sourceUrl,
+        Uri webSocketUri,
+        out Uri pageUri)
+    {
+        if (!TryNormalizeCustomOverlayUri(sourceUrl, out pageUri))
+        {
+            return false;
+        }
+
+        if (!HasOverlayParameter(pageUri, "OVERLAY_WS"))
+        {
+            pageUri = BuildOverlayUri(
+                pageUri,
+                "OVERLAY_WS",
+                webSocketUri.ToString());
+        }
+        if (!HasOverlayParameter(pageUri, "HOST_PORT"))
+        {
+            pageUri = BuildOverlayUri(
+                pageUri,
+                "HOST_PORT",
+                webSocketUri.GetComponents(
+                    UriComponents.SchemeAndServer,
+                    UriFormat.SafeUnescaped));
+        }
+
+        return true;
+    }
+
+    public static bool TryNormalizeCustomOverlayUri(string sourceUrl, out Uri uri)
+    {
+        if (!Uri.TryCreate(sourceUrl?.Trim(), UriKind.Absolute, out uri!) ||
+            (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(uri.Scheme, Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase)))
+        {
+            uri = null!;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasOverlayParameter(Uri uri, string parameter)
+    {
+        var marker = parameter + "=";
+        return uri.Query.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
+               uri.Fragment.Contains(marker, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildCustomOverlayProfileName(string name)
+    {
+        var hash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(name)))[..8];
+        return $"custom-{SanitizePath(name)}-{hash}";
     }
 
     private static string SanitizePath(string value)
@@ -894,13 +988,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         lock (encounterSync)
         {
             var message = fields[4];
-            if (ChineseCombatChatParser.TryExtractActor(message, out var announcedActor))
-            {
-                chatActor = announcedActor;
-            }
-            if (!ChineseCombatChatParser.TryParse(
+            var now = new DateTimeOffset(logInfo.detectedTime);
+            if (!chatParser.TryParse(
                     message,
-                    chatActor,
+                    now,
                     out var actor,
                     out var target,
                     out var damage))
@@ -908,16 +999,14 @@ public sealed class SelfHostedActRuntime : IDisposable
                 return;
             }
 
-            // Keep the parser's actor context even for nearby players, but only let the
+            // Keep split combat lines together for at most two seconds, but only let the
             // local player or party members create and extend this plugin's encounter.
-            chatActor = actor;
             var identities = gameStateProvider.Identities;
             if (ActPlayerIdentityResolver.Resolve(identities, actor) is null)
             {
                 return;
             }
 
-            var now = new DateTimeOffset(logInfo.detectedTime);
             if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
             {
                 if (chatEncounterPublished && !activeEncounterPublished)
@@ -1380,7 +1469,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatEncounterDirty = false;
         chatEncounterPublished = false;
         chatDamageTotals.Clear();
-        chatActor = string.Empty;
+        chatParser.Clear();
         chatEnemy = string.Empty;
         chatZone = string.Empty;
     }

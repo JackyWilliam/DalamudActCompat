@@ -44,3 +44,53 @@ public static class ChineseCombatChatParser
         return !string.IsNullOrWhiteSpace(actor);
     }
 }
+
+public sealed class ChineseCombatChatContext
+{
+    private static readonly TimeSpan ActorContextLifetime = TimeSpan.FromSeconds(2);
+    private string pendingActor = string.Empty;
+    private DateTimeOffset pendingActorObservedAt;
+
+    public bool TryParse(
+        string message,
+        DateTimeOffset observedAt,
+        out string actor,
+        out string target,
+        out long damage)
+    {
+        var hasActorAnnouncement = ChineseCombatChatParser.TryExtractActor(
+            message,
+            out var announcedActor);
+        if (hasActorAnnouncement)
+        {
+            pendingActor = announcedActor;
+            pendingActorObservedAt = observedAt;
+        }
+
+        var elapsed = observedAt - pendingActorObservedAt;
+        var inheritedActor = elapsed >= TimeSpan.Zero && elapsed <= ActorContextLifetime
+            ? pendingActor
+            : string.Empty;
+        if (ChineseCombatChatParser.TryParse(
+                message,
+                inheritedActor,
+                out actor,
+                out target,
+                out damage))
+        {
+            return true;
+        }
+
+        if (!hasActorAnnouncement)
+        {
+            Clear();
+        }
+        return false;
+    }
+
+    public void Clear()
+    {
+        pendingActor = string.Empty;
+        pendingActorObservedAt = default;
+    }
+}

@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using DalamudActCompat.Host;
 using DalamudActCompat.Protocol;
 using Mono.Cecil;
@@ -35,6 +36,7 @@ if (!File.Exists(hostExecutable))
 }
 
 await ValidateHandshakeCommandBoundaryAndShutdownAsync();
+ValidateFoxTtsDefaultConfiguration();
 await ValidateSequenceRegressionTerminatesHostAsync();
 await ValidateExpiredMessageIsDroppedAsync();
 await ValidateHostCrashBreaksOnlyPipeAsync();
@@ -72,6 +74,52 @@ if (pluginRoot is not null)
         "closed-loop tests passed.";
 }
 Console.WriteLine(completion);
+
+void ValidateFoxTtsDefaultConfiguration()
+{
+    var temporaryRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-FoxTts-{Guid.NewGuid():N}");
+    try
+    {
+        if (!FoxTtsConfigurationDefaults.Ensure(temporaryRoot))
+        {
+            throw new InvalidOperationException("FoxTTS default configuration was not created.");
+        }
+
+        var configurationPath = Path.Combine(
+            temporaryRoot,
+            "Config",
+            "ACT.FoxTTS.config.xml");
+        var document = XDocument.Load(configurationPath);
+        var engine = document.Descendants("TTSEngine").SingleOrDefault()?.Value;
+        if (!string.Equals(engine, FoxTtsConfigurationDefaults.DefaultEngine, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("FoxTTS did not default to Cafe TTS Pro.");
+        }
+
+        document.Descendants("TTSEngine").Single().Value = "ttsEngineSAPI5";
+        document.Save(configurationPath);
+        if (FoxTtsConfigurationDefaults.Ensure(temporaryRoot))
+        {
+            throw new InvalidOperationException("Existing FoxTTS configuration was overwritten.");
+        }
+
+        document = XDocument.Load(configurationPath);
+        engine = document.Descendants("TTSEngine").Single().Value;
+        if (!string.Equals(engine, "ttsEngineSAPI5", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Existing FoxTTS engine selection was not preserved.");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(temporaryRoot))
+        {
+            Directory.Delete(temporaryRoot, recursive: true);
+        }
+    }
+}
 
 void ValidateLargePostNamazuCopyReturnsQuickly()
 {

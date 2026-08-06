@@ -184,7 +184,7 @@ internal sealed class LoadedActPlugin : IDisposable
                 if (string.Equals(spec.Id, "act.foxtts", StringComparison.OrdinalIgnoreCase) &&
                     statusLabel.Text.StartsWith("Init Success", StringComparison.OrdinalIgnoreCase))
                 {
-                    removeTtsBridge = InstallFoxTtsBridge(instance, log);
+                    removeTtsBridge = InstallFoxTtsBridge(instance, log, configurationForm);
                 }
                 else if (string.Equals(
                              spec.Id,
@@ -341,7 +341,10 @@ internal sealed class LoadedActPlugin : IDisposable
         }
     }
 
-    internal static Action InstallFoxTtsBridge(object plugin, IPluginLog log)
+    internal static Action InstallFoxTtsBridge(
+        object plugin,
+        IPluginLog log,
+        Control? dispatcher = null)
     {
         var speak = plugin.GetType().GetMethod(
                         "Speak",
@@ -355,7 +358,7 @@ internal sealed class LoadedActPlugin : IDisposable
         FormActMain.PlayTtsDelegate bridge = message =>
         {
             log.Debug($"ACT.FoxTTS speech request: {message}");
-            _ = Task.Run(() =>
+            void Speak()
             {
                 try
                 {
@@ -370,7 +373,22 @@ internal sealed class LoadedActPlugin : IDisposable
                 {
                     log.Error(ex, "ACT.FoxTTS failed to speak a message.");
                 }
-            });
+            }
+
+            if (dispatcher is null)
+            {
+                _ = Task.Run(Speak);
+                return;
+            }
+
+            try
+            {
+                dispatcher.BeginInvoke((Action)Speak);
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "ACT.FoxTTS failed to queue a speech request on its UI thread.");
+            }
         };
         actMain.PlayTtsMethod = bridge;
         log.Information("ACT.FoxTTS connected to the ACT TTS dispatcher.");

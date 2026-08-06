@@ -168,6 +168,17 @@ public sealed class SettingsWindow : Window
             openBundledPluginNotice();
         }
 
+        var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
+        if (ImGui.Checkbox(
+                text.Get(
+                    "启动时自动检查第三方扩展更新",
+                    "Automatically check third-party extension updates on startup"),
+                ref autoCheckUpdates))
+        {
+            configuration.AutoCheckBundledPluginUpdates = autoCheckUpdates;
+            saveConfiguration();
+        }
+
         ImGui.TextDisabled(text.Get("安装或启停扩展后请重启解析器。", "Restart the parser after installing or changing plugins."));
         ImGui.Separator();
         ImGui.TextUnformatted("Cactbot（OverlayPlugin addon）");

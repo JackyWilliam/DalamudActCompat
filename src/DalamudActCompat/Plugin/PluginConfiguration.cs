@@ -18,6 +18,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public bool DebugMode { get; set; }
 
+    public bool AutoCheckBundledPluginUpdates { get; set; } = true;
+
     public int HistoryLimit { get; set; } = 20;
 
     public string LogDirectory { get; set; } = string.Empty;
@@ -80,6 +82,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         EnableParsing = false;
         AutoStartParser = false;
         DebugMode = false;
+        AutoCheckBundledPluginUpdates = true;
         HistoryLimit = 20;
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;

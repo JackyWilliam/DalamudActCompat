@@ -350,7 +350,10 @@ public sealed class Plugin : IDalamudPlugin
         EnsureBundledCactbot(pluginInterface.AssemblyLocation.Directory!.FullName);
         lifecycle.Start();
         _ = Task.Run(StartIndependentHostAsync);
-        StartBundledPluginUpdateCheck(openWindow: false);
+        if (configuration.AutoCheckBundledPluginUpdates)
+        {
+            StartBundledPluginUpdateCheck(openWindow: false);
+        }
     }
 
     public string Name => "Dalamud ACT Compat";
@@ -917,13 +920,19 @@ public sealed class Plugin : IDalamudPlugin
         {
             if (actRuntime.ShowHtmlOverlay(name))
             {
-                configuration.SelectedOverlayTemplate = name;
+                if (actRuntime.OverlayTemplates.Any(template => string.Equals(
+                        template.Name,
+                        name,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    configuration.SelectedOverlayTemplate = name;
+                }
                 SaveConfiguration();
                 return;
             }
 
             logger.Warning(
-                $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
+                $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template or saved custom URL.");
         }
         catch (Exception ex)
         {

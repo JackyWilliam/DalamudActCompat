@@ -15,6 +15,8 @@ public sealed class HtmlOverlayWindowSettings
 
     public float ZoomFactor { get; set; } = 1.0f;
 
+    public string SourceUrl { get; set; } = string.Empty;
+
     public int? Left { get; set; }
 
     public int? Top { get; set; }
