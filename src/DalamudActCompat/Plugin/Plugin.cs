@@ -601,21 +601,12 @@ public sealed class Plugin : IDalamudPlugin
     private async Task InstallBundledPluginsAsync(
         IReadOnlyList<BundledActPluginDescriptor> plugins)
     {
-        var configureInitialRuntime = ShouldAutoConfigureInitialBundledSetup(
-            configuration.BundledPluginDisclosureKeys);
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
         await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
         await bundledPluginManager
             .InstallAndAcknowledgeAsync(plugins, timeout.Token)
             .ConfigureAwait(false);
-        if (configureInitialRuntime)
-        {
-            configuration.EnableParsing = true;
-            configuration.AutoStartParser = true;
-            logger.Information(
-                "Enabled parsing and parser auto-start after the initial bundled ACT plugin setup.");
-        }
         SaveConfiguration();
         await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
         if (configuration.EnableParsing && configuration.AutoStartParser)
@@ -1077,10 +1068,6 @@ public sealed class Plugin : IDalamudPlugin
             }
         });
     }
-
-    internal static bool ShouldAutoConfigureInitialBundledSetup(
-        IReadOnlyDictionary<string, string>? disclosureKeys)
-        => disclosureKeys is not { Count: > 0 };
 
     private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)
     {

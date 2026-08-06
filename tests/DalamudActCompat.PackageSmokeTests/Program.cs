@@ -521,11 +521,13 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 2 &&
+        legacyConfiguration.Version == 3 &&
+        legacyConfiguration.EnableParsing &&
+        legacyConfiguration.AutoStartParser &&
         System.Numerics.Vector4.DistanceSquared(
             legacyConfiguration.Meter.LocalPlayerColor,
             requestedDefault) < 0.000001f,
-        "The previous multiplayer default highlight was not migrated.");
+        "The previous multiplayer default highlight or parser startup was not migrated.");
     var customColor = new System.Numerics.Vector4(0.1f, 0.2f, 0.3f, 0.4f);
     var customizedConfiguration = new PluginConfiguration
     {
@@ -536,6 +538,35 @@ static void ValidateMeterRows()
     Assert(
         customizedConfiguration.Meter.LocalPlayerColor == customColor,
         "The default-color migration overwrote a user-customized highlight.");
+    var parserMigration = new PluginConfiguration
+    {
+        Version = 2,
+        EnableParsing = false,
+        AutoStartParser = false,
+        BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["act.foxtts"] = "already-acknowledged",
+        },
+    };
+    Assert(
+        parserMigration.ApplyMigrations() &&
+        parserMigration.Version == 3 &&
+        parserMigration.EnableParsing &&
+        parserMigration.AutoStartParser,
+        "An existing user with prior third-party acknowledgements did not receive the one-time parser startup migration.");
+    parserMigration.EnableParsing = false;
+    parserMigration.AutoStartParser = false;
+    Assert(
+        !parserMigration.ApplyMigrations() &&
+        !parserMigration.EnableParsing &&
+        !parserMigration.AutoStartParser,
+        "A post-migration manual parser preference was overwritten.");
+    var newConfiguration = new PluginConfiguration();
+    Assert(
+        newConfiguration.Version == 3 &&
+        newConfiguration.EnableParsing &&
+        newConfiguration.AutoStartParser,
+        "A new installation does not start the parser independently of third-party confirmation.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -871,7 +902,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 3)) == "v0.3.6.3",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 4)) == "v0.3.6.4",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -883,20 +914,6 @@ static void ValidateControlCenterPresentation()
         ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: true) &&
         !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: false),
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
-    Assert(
-        ThirdPartyPluginNoticeWindow.CanDismiss(confirmationRequired: false) &&
-        !ThirdPartyPluginNoticeWindow.CanDismiss(confirmationRequired: true),
-        "The bundled DLL permission choice can be dismissed before the user explicitly accepts or declines full permissions.");
-    Assert(
-        Plugin.ShouldAutoConfigureInitialBundledSetup(null) &&
-        Plugin.ShouldAutoConfigureInitialBundledSetup(
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)) &&
-        !Plugin.ShouldAutoConfigureInitialBundledSetup(
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["foxtts"] = "acknowledged",
-            }),
-        "Initial bundled setup either misses automatic parser configuration or overrides an existing user's settings.");
     Assert(
         Plugin.ShouldEnableBundledCapability(
             enableFullFunctionality: false,
@@ -924,8 +941,10 @@ static void ValidateControlCenterPresentation()
         "The FoxTTS never-remind choice is not persisted across plugin updates.");
     ttsPromptConfiguration.ResetToDefaults(Path.GetTempPath());
     Assert(
-        !ttsPromptConfiguration.SuppressFoxTtsProPrompt,
-        "Factory reset does not restore the FoxTTS prompt default.");
+        !ttsPromptConfiguration.SuppressFoxTtsProPrompt &&
+        ttsPromptConfiguration.EnableParsing &&
+        ttsPromptConfiguration.AutoStartParser,
+        "Factory reset does not restore the FoxTTS prompt or independent parser startup defaults.");
 
     var combatant = new Combatant(
         "local",
@@ -957,6 +976,8 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var configurationSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Plugin", "PluginConfiguration.cs"));
     var hostSupervisorSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -1013,6 +1034,22 @@ static void ValidateControlCenterPresentation()
     Assert(
         historyNavigationIndex >= 0 && historyContentIndex > historyNavigationIndex,
         "Combat History navigation is no longer fixed above its scrolling page content.");
+    var permissionChoiceIndex = thirdPartySource.IndexOf(
+        "private void DrawPermissionChoiceModal",
+        StringComparison.Ordinal);
+    var ttsChoiceIndex = thirdPartySource.IndexOf(
+        "private void DrawTtsProChoiceModal",
+        StringComparison.Ordinal);
+    var updateStatusIndex = thirdPartySource.IndexOf(
+        "private void DrawUpdateStatusBanner",
+        StringComparison.Ordinal);
+    Assert(
+        permissionChoiceIndex >= 0 &&
+        ttsChoiceIndex > permissionChoiceIndex &&
+        updateStatusIndex > ttsChoiceIndex,
+        "The third-party permission or TTS prompt method could not be located.");
+    var permissionChoiceMethod = thirdPartySource[permissionChoiceIndex..ttsChoiceIndex];
+    var ttsChoiceMethod = thirdPartySource[ttsChoiceIndex..updateStatusIndex];
     Assert(
         thirdPartySource.Contains("Size = new Vector2(1200, 650);", StringComparison.Ordinal) &&
         thirdPartySource.Contains("\"third-party-plugin-cards\"", StringComparison.Ordinal) &&
@@ -1025,16 +1062,41 @@ static void ValidateControlCenterPresentation()
         thirdPartySource.Contains("是否将 FoxTTS 改为 Cafe TTS Pro？", StringComparison.Ordinal) &&
         thirdPartySource.Contains("本次不更改", StringComparison.Ordinal) &&
         thirdPartySource.Contains("不再提醒", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("showCloseButton: canDismiss", StringComparison.Ordinal) &&
+        permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
+        ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: true", StringComparison.Ordinal) &&
+        !thirdPartySource.Contains("showCloseButton: canDismiss", StringComparison.Ordinal) &&
         !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
         pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenWhenPending();", StringComparison.Ordinal) &&
-        pluginSource.Contains("configuration.EnableParsing = true;", StringComparison.Ordinal) &&
-        pluginSource.Contains("configuration.AutoStartParser = true;", StringComparison.Ordinal) &&
         pluginSource.Contains("BeginUpdateCheck(showWindow: true)", StringComparison.Ordinal) &&
         pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
         pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
         "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");
+    var installBundledPluginsIndex = pluginSource.IndexOf(
+        "private async Task InstallBundledPluginsAsync",
+        StringComparison.Ordinal);
+    var startBundledUpdateCheckIndex = pluginSource.IndexOf(
+        "private void StartBundledPluginUpdateCheck",
+        installBundledPluginsIndex,
+        StringComparison.Ordinal);
+    var bundledInstallMethod = pluginSource[
+        installBundledPluginsIndex..startBundledUpdateCheckIndex];
+    var configurationMigrationIndex = pluginSource.IndexOf(
+        "configuration.ApplyMigrations();",
+        StringComparison.Ordinal);
+    var lifecycleStartIndex = pluginSource.IndexOf(
+        "lifecycle.Start();",
+        StringComparison.Ordinal);
+    Assert(
+        configurationSource.Contains("public bool EnableParsing { get; set; } = true;", StringComparison.Ordinal) &&
+        configurationSource.Contains("public bool AutoStartParser { get; set; } = true;", StringComparison.Ordinal) &&
+        configurationMigrationIndex >= 0 &&
+        lifecycleStartIndex > configurationMigrationIndex &&
+        !bundledInstallMethod.Contains("configuration.EnableParsing =", StringComparison.Ordinal) &&
+        !bundledInstallMethod.Contains("configuration.AutoStartParser =", StringComparison.Ordinal),
+        "Parser startup remains coupled to third-party extension acknowledgement.");
     Assert(
         statusSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         statusSource.Contains("runtime-status-content", StringComparison.Ordinal) &&

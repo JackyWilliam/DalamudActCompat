@@ -107,11 +107,6 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         try
         {
             CompleteInstallWhenReady();
-            var confirmationRequired = pending.Count > 0 ||
-                                       installTask is not null ||
-                                       showPermissionChoice ||
-                                       showTtsProChoice;
-            var canDismiss = CanDismiss(confirmationRequired);
             var noticeState = pending.Count > 0
                 ? text.Get($"待确认 {pending.Count} 项", $"{pending.Count} pending")
                 : text.Get("声明已确认", "Notices acknowledged");
@@ -123,8 +118,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
                     "third-party-notice",
-                    showCloseButton: canDismiss) &&
-                canDismiss)
+                    showCloseButton: true))
             {
                 IsOpen = false;
             }
@@ -261,9 +255,6 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         bool failed,
         bool userInitiated)
         => pendingCount > 0 || (failed && userInitiated);
-
-    internal static bool CanDismiss(bool confirmationRequired)
-        => !confirmationRequired;
 
     private void CompleteInstallWhenReady()
     {
@@ -485,14 +476,22 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
         ImGui.PushStyleColor(ImGuiCol.Border, Gold);
         ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
+        var ttsPopupOpen = true;
         if (!ImGui.BeginPopupModal(
                 TtsProPopupId,
+                ref ttsPopupOpen,
                 ImGuiWindowFlags.AlwaysAutoResize |
                 ImGuiWindowFlags.NoResize |
                 ImGuiWindowFlags.NoMove))
         {
             ImGui.PopStyleColor(3);
             ImGui.PopStyleVar(2);
+            if (!ttsPopupOpen)
+            {
+                completeSetup(FoxTtsProChoice.KeepCurrent);
+                showTtsProChoice = false;
+                IsOpen = false;
+            }
             return;
         }
 

@@ -8,13 +8,13 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 2;
+    private const int CurrentVersion = 3;
 
     public int Version { get; set; } = CurrentVersion;
 
-    public bool EnableParsing { get; set; }
+    public bool EnableParsing { get; set; } = true;
 
-    public bool AutoStartParser { get; set; }
+    public bool AutoStartParser { get; set; } = true;
 
     public bool DebugMode { get; set; }
 
@@ -74,6 +74,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 2;
             changed = true;
         }
+        if (Version < 3)
+        {
+            EnableParsing = true;
+            AutoStartParser = true;
+            Version = 3;
+            changed = true;
+        }
 
         return changed;
     }
@@ -81,8 +88,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public void ResetToDefaults(string defaultLogDirectory)
     {
         Version = CurrentVersion;
-        EnableParsing = false;
-        AutoStartParser = false;
+        EnableParsing = true;
+        AutoStartParser = true;
         DebugMode = false;
         AutoCheckBundledPluginUpdates = true;
         SuppressFoxTtsProPrompt = false;
