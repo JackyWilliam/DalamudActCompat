@@ -3,6 +3,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows.Forms;
 
 namespace DalamudActCompat.ActRuntime;
@@ -206,6 +207,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private readonly ManualResetEventSlim ready = new();
     private Thread? uiThread;
     private Form? form;
+    private Form? inputProxy;
     private WebView2? webView;
     private CoreWebView2DevToolsProtocolEventReceiver? consoleEventReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? exceptionEventReceiver;
@@ -344,6 +346,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         form.BeginInvoke(() =>
         {
             StopEditMonitor();
+            inputProxy?.Hide();
             form.Hide();
         });
     }
@@ -393,6 +396,10 @@ internal sealed class HtmlOverlayForm : IDisposable
             };
             webView.NavigationCompleted += OnNavigationCompleted;
             form.Controls.Add(webView);
+            if (overlayMode)
+            {
+                inputProxy = CreateInputProxy();
+            }
             form.FormClosing += OnFormClosing;
             form.LocationChanged += OnOverlayBoundsChanged;
             form.SizeChanged += OnOverlayBoundsChanged;
@@ -445,8 +452,14 @@ internal sealed class HtmlOverlayForm : IDisposable
                 }
             }
 
+            if (inputProxy is not null)
+            {
+                inputProxy.MouseClick -= OnInputProxyMouseClick;
+                inputProxy.Dispose();
+            }
             webView?.Dispose();
             form?.Dispose();
+            inputProxy = null;
             webView = null;
             form = null;
         }
@@ -690,6 +703,151 @@ internal sealed class HtmlOverlayForm : IDisposable
             ? style | WsExTransparent | WsExNoActivate
             : style & ~(WsExTransparent | WsExNoActivate);
     }
+
+    internal static PointF CalculateBrowserInputPoint(
+        Size proxySize,
+        SizeF viewportSize,
+        Point proxyPoint)
+    {
+        if (proxySize.Width <= 0 || proxySize.Height <= 0 ||
+            viewportSize.Width <= 0 || viewportSize.Height <= 0)
+        {
+            return PointF.Empty;
+        }
+
+        return new PointF(
+            Math.Clamp(
+                proxyPoint.X * viewportSize.Width / proxySize.Width,
+                0,
+                Math.Max(0, viewportSize.Width - 1)),
+            Math.Clamp(
+                proxyPoint.Y * viewportSize.Height / proxySize.Height,
+                0,
+                Math.Max(0, viewportSize.Height - 1)));
+    }
+
+    private Form CreateInputProxy()
+    {
+        var proxy = new InputProxyForm
+        {
+            Text = $"{title} Input",
+            FormBorderStyle = FormBorderStyle.None,
+            ShowInTaskbar = false,
+            StartPosition = FormStartPosition.Manual,
+            TopMost = true,
+            BackColor = Color.Black,
+            Opacity = 0.01,
+        };
+        proxy.MouseClick += OnInputProxyMouseClick;
+        return proxy;
+    }
+
+    private void ApplyInputProxySettings()
+    {
+        if (inputProxy is null || form is null || settings is null)
+        {
+            return;
+        }
+
+        inputProxy.Bounds = form.Bounds;
+        if (!form.Visible || settings.IsClickThrough)
+        {
+            inputProxy.Hide();
+            return;
+        }
+
+        if (!inputProxy.Visible)
+        {
+            inputProxy.Show(form);
+        }
+
+        SetWindowPos(
+            inputProxy.Handle,
+            HwndTopMost,
+            form.Left,
+            form.Top,
+            form.Width,
+            form.Height,
+            SwpNoActivate);
+    }
+
+    private async void OnInputProxyMouseClick(object? sender, MouseEventArgs args)
+    {
+        if (args.Button != MouseButtons.Left || settings?.IsClickThrough != false ||
+            inputProxy is null || webView?.CoreWebView2 is not { } core ||
+            interaction != OverlayInteraction.None)
+        {
+            return;
+        }
+
+        try
+        {
+            var viewportJson = await core.ExecuteScriptAsync(
+                "[window.innerWidth, window.innerHeight]");
+            var viewport = JsonSerializer.Deserialize<float[]>(viewportJson);
+            if (viewport is not [> 0, > 0])
+            {
+                return;
+            }
+
+            var point = CalculateBrowserInputPoint(
+                inputProxy.ClientSize,
+                new SizeF(viewport[0], viewport[1]),
+                args.Location);
+            form?.Activate();
+            webView.Focus();
+            await DispatchBrowserMouseEventAsync(
+                core,
+                "mouseMoved",
+                point,
+                "none",
+                0,
+                0);
+            await DispatchBrowserMouseEventAsync(
+                core,
+                "mousePressed",
+                point,
+                "left",
+                1,
+                Math.Max(1, args.Clicks));
+            await DispatchBrowserMouseEventAsync(
+                core,
+                "mouseReleased",
+                point,
+                "left",
+                0,
+                Math.Max(1, args.Clicks));
+            log.Debug(
+                $"{title} forwarded input-proxy click to browser at " +
+                $"{point.X:0.##},{point.Y:0.##}.");
+        }
+        catch (Exception) when (disposing)
+        {
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, $"Failed to forward an input-proxy click to {title}.");
+        }
+    }
+
+    private static Task<string> DispatchBrowserMouseEventAsync(
+        CoreWebView2 core,
+        string type,
+        PointF point,
+        string button,
+        int buttons,
+        int clickCount)
+        => core.CallDevToolsProtocolMethodAsync(
+            "Input.dispatchMouseEvent",
+            JsonSerializer.Serialize(new
+            {
+                type,
+                x = point.X,
+                y = point.Y,
+                button,
+                buttons,
+                clickCount,
+            }));
 
     private void StartEditMonitor()
     {
@@ -939,6 +1097,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             {
                 StopEditMonitor();
             }
+            ApplyInputProxySettings();
             _ = NotifyOverlayStateAsync();
         }
         finally
@@ -984,6 +1143,11 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void OnOverlayBoundsChanged(object? sender, EventArgs args)
     {
+        if (overlayMode && inputProxy is not null && form is not null)
+        {
+            inputProxy.Bounds = form.Bounds;
+        }
+
         if (!overlayMode || settings is null || form is null || applyingSettings ||
             form.WindowState != FormWindowState.Normal)
         {
@@ -1004,6 +1168,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             settings.IsVisible = false;
         }
         StopEditMonitor();
+        inputProxy?.Hide();
         if (disposing)
         {
             return;
@@ -1020,7 +1185,11 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             try
             {
-                form.Invoke(form.Close);
+                form.Invoke(() =>
+                {
+                    inputProxy?.Close();
+                    form.Close();
+                });
             }
             catch (InvalidOperationException)
             {
@@ -1092,5 +1261,10 @@ internal sealed class HtmlOverlayForm : IDisposable
                 return parameters;
             }
         }
+    }
+
+    private sealed class InputProxyForm : Form
+    {
+        protected override bool ShowWithoutActivation => true;
     }
 }

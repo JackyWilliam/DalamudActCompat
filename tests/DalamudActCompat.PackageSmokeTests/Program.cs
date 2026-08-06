@@ -4,6 +4,7 @@ using System.Net;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -57,6 +58,13 @@ try
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
     ValidateHtmlOverlayDefaults();
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),
+            "1",
+            StringComparison.Ordinal))
+    {
+        await ValidateLiveHtmlOverlayInputAsync(testRoot);
+    }
     ValidateParserDependencyVersions();
     ValidatePluginRepositoryMetadata();
     ValidateChinese755Opcodes();
@@ -902,7 +910,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 8)) == "v0.3.6.8",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 9)) == "v0.3.6.9",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -2025,6 +2033,25 @@ static void ValidateHtmlOverlayDefaults()
             "SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged",
             StringComparison.Ordinal),
         "HTML overlay style changes are no longer flushed through SWP_FRAMECHANGED.");
+    var calculateBrowserInputPoint = formType.GetMethod(
+                                         "CalculateBrowserInputPoint",
+                                         BindingFlags.Static | BindingFlags.NonPublic)
+                                     ?? throw new InvalidOperationException(
+                                         "HTML overlay browser-input coordinate helper was not found.");
+    Assert(
+        calculateBrowserInputPoint.Invoke(
+            null,
+            [
+                new System.Drawing.Size(1000, 500),
+                new System.Drawing.SizeF(500, 250),
+                new System.Drawing.Point(250, 100),
+            ]) is System.Drawing.PointF { X: 125, Y: 50 },
+        "HTML overlay proxy clicks no longer map to browser viewport coordinates.");
+    Assert(
+        htmlOverlayFormSource.Contains("Opacity = 0.01", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("inputProxy.Show(form)", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal),
+        "The transparent HTML overlay no longer has a hit-testable browser input proxy.");
     var shieldType = typeof(MeterService).Assembly.GetType(
                          "DalamudActCompat.UI.OverlayEditShield",
                          throwOnError: true)
@@ -2041,6 +2068,181 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         isShieldRequired.Invoke(null, [true]) as bool? == true,
         "The transparent edit shield did not activate for a visible editing overlay.");
+}
+
+static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
+{
+    var projectRoot = FindProjectRoot();
+    var loaderPath = Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "bin",
+        "Release",
+        "net10.0-windows",
+        "win-x64",
+        "WebView2Loader.dll");
+    Assert(File.Exists(loaderPath), "The live WebView2 input smoke could not find WebView2Loader.dll.");
+
+    var pagePath = Path.Combine(testRoot, "html-overlay-input-smoke.html");
+    await File.WriteAllTextAsync(
+        pagePath,
+        """
+        <!doctype html>
+        <html>
+        <body style="margin:0;background:transparent">
+          <button id="probe" style="position:absolute;left:40px;top:40px;width:120px;height:50px"
+                  onclick="document.documentElement.dataset.clicked='true'">Click</button>
+        </body>
+        </html>
+        """);
+
+    var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
+                       "DalamudActCompat.ActRuntime.HtmlOverlayForm")
+                   ?? throw new InvalidOperationException("HTML overlay form was not found.");
+    var settings = new HtmlOverlayWindowSettings
+    {
+        IsClickThrough = false,
+        IsLocked = true,
+        Left = 80,
+        Top = 80,
+        Width = 320,
+        Height = 200,
+    };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var instance = Activator.CreateInstance(
+                       formType,
+                       BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                       binder: null,
+                       [
+                           new Uri(pagePath),
+                           Path.Combine(testRoot, "webview2-input-smoke"),
+                           loaderPath,
+                           "HTML Input Proxy Smoke",
+                           true,
+                           settings,
+                           new System.Drawing.Size(320, 200),
+                           false,
+                           log,
+                       ],
+                       culture: null)
+                   ?? throw new InvalidOperationException("HTML overlay input smoke form was not created.");
+    var webViewField = formType.GetField("webView", BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new InvalidOperationException("HTML overlay WebView field was not found.");
+    var proxyField = formType.GetField("inputProxy", BindingFlags.Instance | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException("HTML overlay input proxy field was not found.");
+    var show = formType.GetMethod("Show", BindingFlags.Instance | BindingFlags.Public)
+               ?? throw new InvalidOperationException("HTML overlay show method was not found.");
+
+    NativeInputProbe.GetCursorPos(out var originalCursor);
+    try
+    {
+        show.Invoke(instance, null);
+        Control? webView = null;
+        Form? proxy = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            webView = webViewField.GetValue(instance) as Control;
+            proxy = proxyField.GetValue(instance) as Form;
+            if (webView?.IsHandleCreated == true && proxy?.IsHandleCreated == true &&
+                await ExecuteBrowserScriptAsync(webView, "document.readyState") == "\"complete\"")
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(webView is not null && proxy is not null, "The live HTML input smoke did not create its windows.");
+        var liveWebView = webView!;
+        var liveProxy = proxy!;
+        var clickPoint = await InvokeControlAsync(
+            liveProxy,
+            () => liveProxy.PointToScreen(new System.Drawing.Point(100, 65)));
+        NativeInputProbe.SetCursorPos(clickPoint.X, clickPoint.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftUp, 0, 0, 0, UIntPtr.Zero);
+
+        var clicked = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            clicked = await ExecuteBrowserScriptAsync(
+                          liveWebView,
+                          "document.documentElement.dataset.clicked || ''") == "\"true\"";
+            if (clicked)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(clicked, "A physical proxy click did not reach the live WebView2 button.");
+    }
+    finally
+    {
+        NativeInputProbe.SetCursorPos(originalCursor.X, originalCursor.Y);
+        ((IDisposable)instance).Dispose();
+    }
+}
+
+static Task<T> InvokeControlAsync<T>(Control control, Func<T> action)
+{
+    var completion = new TaskCompletionSource<T>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    control.BeginInvoke(() =>
+    {
+        try
+        {
+            completion.SetResult(action());
+        }
+        catch (Exception ex)
+        {
+            completion.SetException(ex);
+        }
+    });
+    return completion.Task;
+}
+
+static Task<string> ExecuteBrowserScriptAsync(Control webView, string script)
+{
+    var completion = new TaskCompletionSource<string>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    webView.BeginInvoke(async () =>
+    {
+        try
+        {
+            var coreWebView = webView.GetType()
+                .GetProperty("CoreWebView2", BindingFlags.Instance | BindingFlags.Public)
+                ?.GetValue(webView);
+            if (coreWebView is null)
+            {
+                completion.SetResult(string.Empty);
+                return;
+            }
+
+            var executeScript = coreWebView.GetType().GetMethod(
+                                    "ExecuteScriptAsync",
+                                    BindingFlags.Instance | BindingFlags.Public,
+                                    binder: null,
+                                    [typeof(string)],
+                                    modifiers: null)
+                                ?? throw new InvalidOperationException(
+                                    "WebView2 ExecuteScriptAsync was not found.");
+            var result = executeScript.Invoke(coreWebView, [script]) as Task<string>
+                         ?? throw new InvalidOperationException(
+                             "WebView2 ExecuteScriptAsync did not return a string task.");
+            completion.SetResult(await result);
+        }
+        catch (Exception ex)
+        {
+            completion.SetException(ex);
+        }
+    });
+    return completion.Task;
 }
 
 static void ValidateActTtsDispatch()
@@ -2741,6 +2943,35 @@ public class NoOpPluginLogProxy : DispatchProxy
                 ? Activator.CreateInstance(returnType)
                 : null;
     }
+}
+
+internal static class NativeInputProbe
+{
+    public const uint LeftDown = 0x0002;
+    public const uint LeftUp = 0x0004;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll", EntryPoint = "mouse_event")]
+    public static extern void MouseEvent(
+        uint flags,
+        uint dx,
+        uint dy,
+        uint data,
+        UIntPtr extraInfo);
 }
 
 internal sealed class TestActLogger : IActLogger
