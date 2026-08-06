@@ -266,7 +266,7 @@ public sealed class Plugin : IDalamudPlugin
             paths,
             logger,
             SaveConfiguration,
-            ApplyActPermissionChanges,
+            () => ApplyActPermissionChanges(),
             FactoryResetAsync,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
@@ -298,7 +298,7 @@ public sealed class Plugin : IDalamudPlugin
             () => stateStore.GetSnapshot().Current,
             logoTexture,
             SaveConfiguration,
-            ApplyActPermissionChanges,
+            () => ApplyActPermissionChanges(),
             SetMeterVisible,
             () => SetMeterVisible(true),
             encounterWindow.OpenRecent,
@@ -928,36 +928,14 @@ public sealed class Plugin : IDalamudPlugin
 
     private void CompleteBundledPluginSetup(FoxTtsProChoice choice)
     {
-        if (choice == FoxTtsProChoice.EnablePro)
-        {
-            try
-            {
-                FoxTtsConfigurationDefaults.SetPro(paths.ConfigDirectory);
-                services.NotificationManager.AddNotification(new()
-                {
-                    Title = "ACT 兼容",
-                    Content = "FoxTTS 已切换为 Cafe TTS Pro；兼容 Host 正在应用设置。",
-                });
-                logger.Information("FoxTTS was switched to Cafe TTS Pro by user choice.");
-            }
-            catch (Exception ex)
-            {
-                logger.Error(ex, "Failed to switch FoxTTS to Cafe TTS Pro.");
-                services.NotificationManager.AddNotification(new()
-                {
-                    Title = "ACT 兼容",
-                    Content = $"FoxTTS 切换 Cafe TTS Pro 失败：{ex.GetBaseException().Message}",
-                });
-            }
-        }
-        else if (choice == FoxTtsProChoice.NeverRemind)
+        if (choice == FoxTtsProChoice.NeverRemind)
         {
             configuration.SuppressFoxTtsProPrompt = true;
             SaveConfiguration();
             logger.Information("Future FoxTTS Cafe TTS Pro prompts were disabled by user choice.");
         }
 
-        ApplyActPermissionChanges();
+        ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);
     }
 
     private void OpenActPluginConfiguration(string pluginId)
@@ -1104,13 +1082,36 @@ public sealed class Plugin : IDalamudPlugin
         IReadOnlyDictionary<string, string>? disclosureKeys)
         => disclosureKeys is not { Count: > 0 };
 
-    private void ApplyActPermissionChanges()
+    private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)
     {
         _ = Task.Run(async () =>
         {
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (switchFoxTtsToPro)
+                {
+                    await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        FoxTtsConfigurationDefaults.SetPro(paths.ConfigDirectory);
+                    }
+                    finally
+                    {
+                        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                    }
+
+                    logger.Information(
+                        "ACT Host stopped before FoxTTS was switched to Cafe TTS Pro, then started again.");
+                    await services.Framework.RunOnFrameworkThread(() =>
+                        services.NotificationManager.AddNotification(new()
+                        {
+                            Title = "ACT 兼容",
+                            Content = "FoxTTS 已切换为 Cafe TTS Pro，兼容 Host 已重新启动。",
+                        })).ConfigureAwait(false);
+                    return;
+                }
+
                 if (await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
                 {
                     logger.Information(
@@ -1119,7 +1120,20 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception ex)
             {
-                logger.Error(ex, "ACT Host permission refresh failed.");
+                logger.Error(
+                    ex,
+                    switchFoxTtsToPro
+                        ? "Failed to switch FoxTTS to Cafe TTS Pro and restart the ACT Host."
+                        : "ACT Host permission refresh failed.");
+                if (switchFoxTtsToPro)
+                {
+                    await services.Framework.RunOnFrameworkThread(() =>
+                        services.NotificationManager.AddNotification(new()
+                        {
+                            Title = "ACT 兼容",
+                            Content = $"FoxTTS 切换 Cafe TTS Pro 失败：{ex.GetBaseException().Message}",
+                        })).ConfigureAwait(false);
+                }
             }
         });
     }

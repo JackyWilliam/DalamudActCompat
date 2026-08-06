@@ -107,6 +107,11 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         try
         {
             CompleteInstallWhenReady();
+            var confirmationRequired = pending.Count > 0 ||
+                                       installTask is not null ||
+                                       showPermissionChoice ||
+                                       showTtsProChoice;
+            var canDismiss = CanDismiss(confirmationRequired);
             var noticeState = pending.Count > 0
                 ? text.Get($"待确认 {pending.Count} 项", $"{pending.Count} pending")
                 : text.Get("声明已确认", "Notices acknowledged");
@@ -117,8 +122,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     pending.Count > 0 ? Gold : IceBlue,
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
-                    "third-party-notice") &&
-                CanDismiss(showPermissionChoice || showTtsProChoice))
+                    "third-party-notice",
+                    showCloseButton: canDismiss) &&
+                canDismiss)
             {
                 IsOpen = false;
             }
@@ -201,17 +207,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ImGui.PopStyleColor();
 
                     ImGui.SameLine();
-                    if (ImGui.Button(text.Get(
-                            "稍后处理",
-                            "Later"),
-                            new Vector2(110, 36)))
-                    {
-                        IsOpen = false;
-                    }
-                    ImGui.SameLine();
                     ImGui.TextDisabled(text.Get(
-                        "稍后处理不会启用待安装的 DLL。",
-                        "Choosing later keeps pending DLLs disabled."));
+                        "必须确认来源并完成安装后才能继续权限设置。",
+                        "Acknowledge the sources and finish installation to continue to permissions."));
                 }
 
             }
@@ -264,8 +262,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         bool userInitiated)
         => pendingCount > 0 || (failed && userInitiated);
 
-    internal static bool CanDismiss(bool permissionChoicePending)
-        => !permissionChoicePending;
+    internal static bool CanDismiss(bool confirmationRequired)
+        => !confirmationRequired;
 
     private void CompleteInstallWhenReady()
     {

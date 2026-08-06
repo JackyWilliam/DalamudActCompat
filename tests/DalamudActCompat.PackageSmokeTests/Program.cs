@@ -871,7 +871,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 1)) == "v0.3.6.1",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 2)) == "v0.3.6.2",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -884,8 +884,8 @@ static void ValidateControlCenterPresentation()
         !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: false),
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
     Assert(
-        ThirdPartyPluginNoticeWindow.CanDismiss(permissionChoicePending: false) &&
-        !ThirdPartyPluginNoticeWindow.CanDismiss(permissionChoicePending: true),
+        ThirdPartyPluginNoticeWindow.CanDismiss(confirmationRequired: false) &&
+        !ThirdPartyPluginNoticeWindow.CanDismiss(confirmationRequired: true),
         "The bundled DLL permission choice can be dismissed before the user explicitly accepts or declines full permissions.");
     Assert(
         Plugin.ShouldAutoConfigureInitialBundledSetup(null) &&
@@ -1025,6 +1025,8 @@ static void ValidateControlCenterPresentation()
         thirdPartySource.Contains("是否将 FoxTTS 改为 Cafe TTS Pro？", StringComparison.Ordinal) &&
         thirdPartySource.Contains("本次不更改", StringComparison.Ordinal) &&
         thirdPartySource.Contains("不再提醒", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: canDismiss", StringComparison.Ordinal) &&
+        !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
         pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenWhenPending();", StringComparison.Ordinal) &&
         pluginSource.Contains("configuration.EnableParsing = true;", StringComparison.Ordinal) &&
@@ -1050,8 +1052,23 @@ static void ValidateControlCenterPresentation()
         "private void CompleteBundledPluginSetup",
         StringComparison.Ordinal);
     var finalPermissionRestartIndex = pluginSource.IndexOf(
-        "ApplyActPermissionChanges();",
+        "ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);",
         completeBundledSetupIndex,
+        StringComparison.Ordinal);
+    var permissionRefreshMethodIndex = pluginSource.IndexOf(
+        "private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)",
+        StringComparison.Ordinal);
+    var stopHostBeforeFoxTtsIndex = pluginSource.IndexOf(
+        "await hostSupervisor.StopAsync(timeout.Token)",
+        permissionRefreshMethodIndex,
+        StringComparison.Ordinal);
+    var setFoxTtsProIndex = pluginSource.IndexOf(
+        "FoxTtsConfigurationDefaults.SetPro(paths.ConfigDirectory);",
+        permissionRefreshMethodIndex,
+        StringComparison.Ordinal);
+    var startHostAfterFoxTtsIndex = pluginSource.IndexOf(
+        "await hostSupervisor.StartAsync(timeout.Token)",
+        setFoxTtsProIndex,
         StringComparison.Ordinal);
     Assert(
         typeof(ActHostSupervisor).GetMethod(nameof(ActHostSupervisor.RestartAsync))?.ReturnType ==
@@ -1076,12 +1093,16 @@ static void ValidateControlCenterPresentation()
         finalPermissionRestartIndex > completeBundledSetupIndex &&
         Regex.Matches(
             pluginSource,
-            Regex.Escape("ApplyActPermissionChanges();"),
+            Regex.Escape("ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);"),
             RegexOptions.CultureInvariant).Count == 1 &&
+        permissionRefreshMethodIndex > finalPermissionRestartIndex &&
+        stopHostBeforeFoxTtsIndex > permissionRefreshMethodIndex &&
+        setFoxTtsProIndex > stopHostBeforeFoxTtsIndex &&
+        startHostAfterFoxTtsIndex > setFoxTtsProIndex &&
         hostSupervisorSource.Contains(
             "public async Task<bool> RestartAsync",
             StringComparison.Ordinal),
-        "ACT permissions or the optional FoxTTS choice are not saved before exactly one final Host restart callback.");
+        "ACT permissions are not saved before the final Host refresh, or FoxTTS Pro is not written between Host stop and start.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
