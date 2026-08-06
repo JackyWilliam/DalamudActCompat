@@ -118,7 +118,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
                     "third-party-notice",
-                    showCloseButton: true))
+                    showCloseButton: !showPermissionChoice))
             {
                 IsOpen = false;
             }

@@ -902,7 +902,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 4)) == "v0.3.6.4",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 5)) == "v0.3.6.5",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1065,7 +1065,8 @@ static void ValidateControlCenterPresentation()
         permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
         !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
         ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("showCloseButton: true", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: !showPermissionChoice", StringComparison.Ordinal) &&
+        !thirdPartySource.Contains("showCloseButton: true", StringComparison.Ordinal) &&
         !thirdPartySource.Contains("showCloseButton: canDismiss", StringComparison.Ordinal) &&
         !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
