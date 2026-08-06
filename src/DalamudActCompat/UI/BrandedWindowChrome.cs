@@ -21,7 +21,8 @@ internal static class BrandedWindowChrome
         string centerLabel,
         Vector4 centerColor,
         string versionLabel,
-        string id)
+        string id,
+        bool showCloseButton = true)
     {
         const float height = 40;
         const float closeWidth = 34;
@@ -66,28 +67,33 @@ internal static class BrandedWindowChrome
             ImGui.GetColorU32(centerColor),
             centerLabel);
 
+        var trailingWidth = showCloseButton ? closeWidth : 0;
         var versionSize = ImGui.CalcTextSize(versionLabel);
         drawList.AddText(
             new Vector2(
-                screenStart.X + availableWidth - closeWidth - versionSize.X - 12,
+                screenStart.X + availableWidth - trailingWidth - versionSize.X - 12,
                 textTop),
             ImGui.GetColorU32(new Vector4(0.62f, 0.66f, 0.71f, 1)),
             versionLabel);
 
         ImGui.InvisibleButton(
             $"branded-window-drag-handle##{id}",
-            new Vector2(Math.Max(1, availableWidth - closeWidth), height));
+            new Vector2(Math.Max(1, availableWidth - trailingWidth), height));
         if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
         {
             ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
         }
 
-        ImGui.SetCursorPos(new Vector2(start.X + availableWidth - closeWidth, start.Y));
-        ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
-        var closeRequested = ImGui.Button($"×##close-{id}", new Vector2(closeWidth, height));
-        ImGui.PopStyleColor(3);
+        var closeRequested = false;
+        if (showCloseButton)
+        {
+            ImGui.SetCursorPos(new Vector2(start.X + availableWidth - closeWidth, start.Y));
+            ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
+            closeRequested = ImGui.Button($"×##close-{id}", new Vector2(closeWidth, height));
+            ImGui.PopStyleColor(3);
+        }
         ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));
         return closeRequested;
     }

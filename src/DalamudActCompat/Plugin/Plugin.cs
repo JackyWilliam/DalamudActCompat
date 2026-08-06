@@ -255,6 +255,8 @@ public sealed class Plugin : IDalamudPlugin
             bundledPluginManager.GetPendingDisclosures,
             InstallBundledPluginsAsync,
             ConfigureBundledPluginPermissions,
+            ShouldOfferFoxTtsPro,
+            CompleteBundledPluginSetup,
             logger,
             text,
             logoTexture);
@@ -264,7 +266,7 @@ public sealed class Plugin : IDalamudPlugin
             paths,
             logger,
             SaveConfiguration,
-            ApplyActPermissionChanges,
+            () => ApplyActPermissionChanges(),
             FactoryResetAsync,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
@@ -296,7 +298,7 @@ public sealed class Plugin : IDalamudPlugin
             () => stateStore.GetSnapshot().Current,
             logoTexture,
             SaveConfiguration,
-            ApplyActPermissionChanges,
+            () => ApplyActPermissionChanges(),
             SetMeterVisible,
             () => SetMeterVisible(true),
             encounterWindow.OpenRecent,
@@ -304,7 +306,7 @@ public sealed class Plugin : IDalamudPlugin
             value => statusWindow.IsOpen = value,
             SelectPluginPackage,
             OpenPluginDirectory,
-            thirdPartyPluginNoticeWindow.OpenNotice,
+            thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
@@ -337,6 +339,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
+        thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -350,7 +353,10 @@ public sealed class Plugin : IDalamudPlugin
         EnsureBundledCactbot(pluginInterface.AssemblyLocation.Directory!.FullName);
         lifecycle.Start();
         _ = Task.Run(StartIndependentHostAsync);
-        StartBundledPluginUpdateCheck(openWindow: false);
+        if (configuration.AutoCheckBundledPluginUpdates)
+        {
+            StartBundledPluginUpdateCheck(openWindow: false);
+        }
     }
 
     public string Name => "Dalamud ACT Compat";
@@ -626,7 +632,7 @@ public sealed class Plugin : IDalamudPlugin
                     .RunOnFrameworkThread(
                         () =>
                         {
-                            thirdPartyPluginNoticeWindow.BeginUpdateCheck(showWindow: true);
+                            thirdPartyPluginNoticeWindow.BeginUpdateCheck(userInitiated: true);
                             services.NotificationManager.AddNotification(new()
                             {
                                 Title = text.Get("扩展更新", "Extension updates"),
@@ -665,7 +671,7 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     await services.Framework
                         .RunOnFrameworkThread(
-                            () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(showWindow: false))
+                            () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(userInitiated: false))
                         .ConfigureAwait(false);
                 }
                 var check = await bundledPluginUpdateChecker
@@ -675,8 +681,10 @@ public sealed class Plugin : IDalamudPlugin
                     .ConfigureAwait(false);
                 var appliedUpdates = bundledPluginManager.ApplyOnlineUpdates(
                     check.Updates);
-                var pendingOnline = bundledPluginManager
+                var pendingDisclosures = bundledPluginManager
                     .GetPendingDisclosures()
+                    .ToArray();
+                var pendingOnline = pendingDisclosures
                     .Where(plugin => plugin.IsOnlineUpdate)
                     .ToArray();
                 if (appliedUpdates > 0 && pendingOnline.Length > 0)
@@ -702,9 +710,10 @@ public sealed class Plugin : IDalamudPlugin
                             thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
                                 message,
                                 ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
-                                    pendingOnline.Length,
+                                    pendingDisclosures.Length,
                                     failed: false,
-                                    userInitiated: openWindow));
+                                    userInitiated: openWindow),
+                                userInitiated: openWindow);
                             if (openWindow)
                             {
                                 services.NotificationManager.AddNotification(new()
@@ -732,12 +741,16 @@ public sealed class Plugin : IDalamudPlugin
                         () =>
                         {
                             var message = $"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}";
+                            var pendingCount = bundledPluginManager
+                                .GetPendingDisclosures()
+                                .Count;
                             thirdPartyPluginNoticeWindow.CompleteUpdateCheck(
                                 message,
                                 ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
-                                    pendingCount: 0,
+                                    pendingCount,
                                     failed: true,
-                                    userInitiated: openWindow));
+                                    userInitiated: openWindow),
+                                userInitiated: openWindow);
                             if (openWindow)
                             {
                                 services.NotificationManager.AddNotification(new()
@@ -860,22 +873,62 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ConfigureBundledPluginPermissions(bool enableFullFunctionality)
     {
-        if (!enableFullFunctionality)
-        {
-            logger.Information("Bundled ACT plugin permissions kept at safe defaults by user choice.");
-            return;
-        }
-
         foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.All)
         {
             foreach (var capability in capabilities)
             {
-                configuration.SetActCapability(pluginId, capability, true);
+                configuration.SetActCapability(
+                    pluginId,
+                    capability,
+                    ShouldEnableBundledCapability(enableFullFunctionality, capability));
             }
         }
         SaveConfiguration();
-        ApplyActPermissionChanges();
-        logger.Information("All declared capabilities were enabled for bundled ACT plugins by user choice.");
+        logger.Information(enableFullFunctionality
+            ? "All declared capabilities were enabled for bundled ACT plugins by user choice."
+            : "Bundled ACT plugin permissions were reset to safe defaults by user choice.");
+    }
+
+    internal static bool ShouldEnableBundledCapability(
+        bool enableFullFunctionality,
+        ActCapability capability)
+        => enableFullFunctionality ||
+           PluginConfiguration.IsActCapabilityAllowedByDefault(capability);
+
+    private bool ShouldOfferFoxTtsPro()
+    {
+        if (configuration.SuppressFoxTtsProPrompt)
+        {
+            return false;
+        }
+
+        try
+        {
+            return ShouldOfferFoxTtsPro(
+                suppressPrompt: false,
+                isPro: FoxTtsConfigurationDefaults.IsPro(paths.ConfigDirectory));
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(
+                $"Failed to inspect the FoxTTS engine selection; offering Cafe TTS Pro: {ex.GetBaseException().Message}");
+            return true;
+        }
+    }
+
+    internal static bool ShouldOfferFoxTtsPro(bool suppressPrompt, bool isPro)
+        => !suppressPrompt && !isPro;
+
+    private void CompleteBundledPluginSetup(FoxTtsProChoice choice)
+    {
+        if (choice == FoxTtsProChoice.NeverRemind)
+        {
+            configuration.SuppressFoxTtsProPrompt = true;
+            SaveConfiguration();
+            logger.Information("Future FoxTTS Cafe TTS Pro prompts were disabled by user choice.");
+        }
+
+        ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);
     }
 
     private void OpenActPluginConfiguration(string pluginId)
@@ -917,13 +970,19 @@ public sealed class Plugin : IDalamudPlugin
         {
             if (actRuntime.ShowHtmlOverlay(name))
             {
-                configuration.SelectedOverlayTemplate = name;
+                if (actRuntime.OverlayTemplates.Any(template => string.Equals(
+                        template.Name,
+                        name,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    configuration.SelectedOverlayTemplate = name;
+                }
                 SaveConfiguration();
                 return;
             }
 
             logger.Warning(
-                $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template.");
+                $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template or saved custom URL.");
         }
         catch (Exception ex)
         {
@@ -1012,13 +1071,36 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
-    private void ApplyActPermissionChanges()
+    private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)
     {
         _ = Task.Run(async () =>
         {
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (switchFoxTtsToPro)
+                {
+                    await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        FoxTtsConfigurationDefaults.SetPro(paths.ConfigDirectory);
+                    }
+                    finally
+                    {
+                        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                    }
+
+                    logger.Information(
+                        "ACT Host stopped before FoxTTS was switched to Cafe TTS Pro, then started again.");
+                    await services.Framework.RunOnFrameworkThread(() =>
+                        services.NotificationManager.AddNotification(new()
+                        {
+                            Title = "ACT 兼容",
+                            Content = "FoxTTS 已切换为 Cafe TTS Pro，兼容 Host 已重新启动。",
+                        })).ConfigureAwait(false);
+                    return;
+                }
+
                 if (await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
                 {
                     logger.Information(
@@ -1027,7 +1109,20 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception ex)
             {
-                logger.Error(ex, "ACT Host permission refresh failed.");
+                logger.Error(
+                    ex,
+                    switchFoxTtsToPro
+                        ? "Failed to switch FoxTTS to Cafe TTS Pro and restart the ACT Host."
+                        : "ACT Host permission refresh failed.");
+                if (switchFoxTtsToPro)
+                {
+                    await services.Framework.RunOnFrameworkThread(() =>
+                        services.NotificationManager.AddNotification(new()
+                        {
+                            Title = "ACT 兼容",
+                            Content = $"FoxTTS 切换 Cafe TTS Pro 失败：{ex.GetBaseException().Message}",
+                        })).ConfigureAwait(false);
+                }
             }
         });
     }

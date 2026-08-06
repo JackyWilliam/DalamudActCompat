@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.5.6",
+    [string] $ExpectedAssemblyVersion = "0.3.6.10",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -20,6 +20,26 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $pluginProject = Join-Path $projectRoot "src/DalamudActCompat"
 $outputPath = Join-Path $projectRoot $OutputDirectory
+
+function Get-ChildRelativePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $BasePath,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ChildPath
+    )
+
+    $baseFullPath = [IO.Path]::GetFullPath($BasePath).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $childFullPath = [IO.Path]::GetFullPath($ChildPath)
+    if (-not $childFullPath.StartsWith($baseFullPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is outside the release validation directory: $childFullPath"
+    }
+
+    return $childFullPath.Substring($baseFullPath.Length)
+}
 
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 
@@ -53,7 +73,7 @@ $packagedFiles = @(Get-ChildItem -LiteralPath $validationDir -Recurse -File)
 $debugSymbols = @($packagedFiles | Where-Object { $_.Extension -ieq ".pdb" })
 if ($debugSymbols.Count -gt 0) {
     $relativeDebugSymbols = @($debugSymbols | ForEach-Object {
-        [IO.Path]::GetRelativePath($validationDir, $_.FullName)
+        Get-ChildRelativePath -BasePath $validationDir -ChildPath $_.FullName
     })
     throw "Plugin ZIP contains debug symbols that can disclose local build paths: $($relativeDebugSymbols -join ', ')"
 }
@@ -70,7 +90,7 @@ $personalConfigurationFiles = @($packagedFiles | Where-Object {
 })
 if ($personalConfigurationFiles.Count -gt 0) {
     $relativePersonalConfigurationFiles = @($personalConfigurationFiles | ForEach-Object {
-        [IO.Path]::GetRelativePath($validationDir, $_.FullName)
+        Get-ChildRelativePath -BasePath $validationDir -ChildPath $_.FullName
     })
     throw "Plugin ZIP contains user-specific configuration files: $($relativePersonalConfigurationFiles -join ', ')"
 }
@@ -84,7 +104,7 @@ foreach ($packagedFile in $packagedFiles) {
     $contents = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($packagedFile.FullName))
     foreach ($forbiddenLocalPath in $forbiddenLocalPaths) {
         if ($contents.IndexOf($forbiddenLocalPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            $relativePackagedFile = [IO.Path]::GetRelativePath($validationDir, $packagedFile.FullName)
+            $relativePackagedFile = Get-ChildRelativePath -BasePath $validationDir -ChildPath $packagedFile.FullName
             throw "Plugin ZIP contains local path '$forbiddenLocalPath' in $relativePackagedFile."
         }
     }

@@ -8,15 +8,19 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 2;
+    private const int CurrentVersion = 3;
 
     public int Version { get; set; } = CurrentVersion;
 
-    public bool EnableParsing { get; set; }
+    public bool EnableParsing { get; set; } = true;
 
-    public bool AutoStartParser { get; set; }
+    public bool AutoStartParser { get; set; } = true;
 
     public bool DebugMode { get; set; }
+
+    public bool AutoCheckBundledPluginUpdates { get; set; } = true;
+
+    public bool SuppressFoxTtsProPrompt { get; set; }
 
     public int HistoryLimit { get; set; } = 20;
 
@@ -70,6 +74,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 2;
             changed = true;
         }
+        if (Version < 3)
+        {
+            EnableParsing = true;
+            AutoStartParser = true;
+            Version = 3;
+            changed = true;
+        }
 
         return changed;
     }
@@ -77,9 +88,11 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public void ResetToDefaults(string defaultLogDirectory)
     {
         Version = CurrentVersion;
-        EnableParsing = false;
-        AutoStartParser = false;
+        EnableParsing = true;
+        AutoStartParser = true;
         DebugMode = false;
+        AutoCheckBundledPluginUpdates = true;
+        SuppressFoxTtsProPrompt = false;
         HistoryLimit = 20;
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
@@ -112,12 +125,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
             return explicitDecision;
         }
 
-        return capability is
+        return IsActCapabilityAllowedByDefault(capability);
+    }
+
+    internal static bool IsActCapabilityAllowedByDefault(ActCapability capability)
+        => capability is
             ActCapability.ReadCombatLogs or
             ActCapability.ReadLocalConfiguration or
             ActCapability.TextToSpeech or
             ActCapability.Clipboard;
-    }
 
     public void SetActCapability(string pluginId, ActCapability capability, bool allowed)
     {

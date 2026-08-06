@@ -1,8 +1,10 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -56,6 +58,13 @@ try
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
     ValidateHtmlOverlayDefaults();
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),
+            "1",
+            StringComparison.Ordinal))
+    {
+        await ValidateLiveHtmlOverlayInputAsync(testRoot);
+    }
     ValidateParserDependencyVersions();
     ValidatePluginRepositoryMetadata();
     ValidateChinese755Opcodes();
@@ -520,11 +529,13 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 2 &&
+        legacyConfiguration.Version == 3 &&
+        legacyConfiguration.EnableParsing &&
+        legacyConfiguration.AutoStartParser &&
         System.Numerics.Vector4.DistanceSquared(
             legacyConfiguration.Meter.LocalPlayerColor,
             requestedDefault) < 0.000001f,
-        "The previous multiplayer default highlight was not migrated.");
+        "The previous multiplayer default highlight or parser startup was not migrated.");
     var customColor = new System.Numerics.Vector4(0.1f, 0.2f, 0.3f, 0.4f);
     var customizedConfiguration = new PluginConfiguration
     {
@@ -535,6 +546,35 @@ static void ValidateMeterRows()
     Assert(
         customizedConfiguration.Meter.LocalPlayerColor == customColor,
         "The default-color migration overwrote a user-customized highlight.");
+    var parserMigration = new PluginConfiguration
+    {
+        Version = 2,
+        EnableParsing = false,
+        AutoStartParser = false,
+        BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["act.foxtts"] = "already-acknowledged",
+        },
+    };
+    Assert(
+        parserMigration.ApplyMigrations() &&
+        parserMigration.Version == 3 &&
+        parserMigration.EnableParsing &&
+        parserMigration.AutoStartParser,
+        "An existing user with prior third-party acknowledgements did not receive the one-time parser startup migration.");
+    parserMigration.EnableParsing = false;
+    parserMigration.AutoStartParser = false;
+    Assert(
+        !parserMigration.ApplyMigrations() &&
+        !parserMigration.EnableParsing &&
+        !parserMigration.AutoStartParser,
+        "A post-migration manual parser preference was overwritten.");
+    var newConfiguration = new PluginConfiguration();
+    Assert(
+        newConfiguration.Version == 3 &&
+        newConfiguration.EnableParsing &&
+        newConfiguration.AutoStartParser,
+        "A new installation does not start the parser independently of third-party confirmation.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -870,7 +910,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 5, 6)) == "v0.3.5.6",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 10)) == "v0.3.6.10",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -882,6 +922,45 @@ static void ValidateControlCenterPresentation()
         ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: true) &&
         !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: false),
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
+    Assert(
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure) &&
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualUpdateCheck) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate),
+        "The required post-update third-party acknowledgement is not separated from manually opened DLL windows.");
+    Assert(
+        Plugin.ShouldEnableBundledCapability(
+            enableFullFunctionality: false,
+            ActCapability.TextToSpeech) &&
+        !Plugin.ShouldEnableBundledCapability(
+            enableFullFunctionality: false,
+            ActCapability.NetworkRequest) &&
+        Plugin.ShouldEnableBundledCapability(
+            enableFullFunctionality: true,
+            ActCapability.NetworkRequest),
+        "Declining full permissions does not restore safe defaults after a previous release granted them.");
+    Assert(
+        Plugin.ShouldOfferFoxTtsPro(suppressPrompt: false, isPro: false) &&
+        !Plugin.ShouldOfferFoxTtsPro(suppressPrompt: false, isPro: true) &&
+        !Plugin.ShouldOfferFoxTtsPro(suppressPrompt: true, isPro: false),
+        "The Cafe TTS Pro prompt ignores the current engine or the user's never-remind choice.");
+    var ttsPromptConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(new PluginConfiguration
+        {
+            SuppressFoxTtsProPrompt = true,
+        })) ?? throw new InvalidOperationException(
+            "The FoxTTS prompt configuration did not deserialize.");
+    Assert(
+        ttsPromptConfiguration.SuppressFoxTtsProPrompt,
+        "The FoxTTS never-remind choice is not persisted across plugin updates.");
+    ttsPromptConfiguration.ResetToDefaults(Path.GetTempPath());
+    Assert(
+        !ttsPromptConfiguration.SuppressFoxTtsProPrompt &&
+        ttsPromptConfiguration.EnableParsing &&
+        ttsPromptConfiguration.AutoStartParser,
+        "Factory reset does not restore the FoxTTS prompt or independent parser startup defaults.");
 
     var combatant = new Combatant(
         "local",
@@ -913,6 +992,8 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var configurationSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Plugin", "PluginConfiguration.cs"));
     var hostSupervisorSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -969,24 +1050,106 @@ static void ValidateControlCenterPresentation()
     Assert(
         historyNavigationIndex >= 0 && historyContentIndex > historyNavigationIndex,
         "Combat History navigation is no longer fixed above its scrolling page content.");
+    var permissionChoiceIndex = thirdPartySource.IndexOf(
+        "private void DrawPermissionChoiceModal",
+        StringComparison.Ordinal);
+    var ttsChoiceIndex = thirdPartySource.IndexOf(
+        "private void DrawTtsProChoiceModal",
+        StringComparison.Ordinal);
+    var updateStatusIndex = thirdPartySource.IndexOf(
+        "private void DrawUpdateStatusBanner",
+        StringComparison.Ordinal);
+    Assert(
+        permissionChoiceIndex >= 0 &&
+        ttsChoiceIndex > permissionChoiceIndex &&
+        updateStatusIndex > ttsChoiceIndex,
+        "The third-party permission or TTS prompt method could not be located.");
+    var permissionChoiceMethod = thirdPartySource[permissionChoiceIndex..ttsChoiceIndex];
+    var ttsChoiceMethod = thirdPartySource[ttsChoiceIndex..updateStatusIndex];
     Assert(
         thirdPartySource.Contains("Size = new Vector2(1200, 650);", StringComparison.Ordinal) &&
         thirdPartySource.Contains("\"third-party-plugin-cards\"", StringComparison.Ordinal) &&
         thirdPartySource.Contains("ImGuiTableFlags.SizingStretchSame", StringComparison.Ordinal) &&
         thirdPartySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         thirdPartySource.Contains("DrawPermissionChoiceModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DrawTtsProChoiceModal", StringComparison.Ordinal) &&
         thirdPartySource.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("不同意完整权限，保持安全模式", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("是否将 FoxTTS 改为 Cafe TTS Pro？", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("本次不更改", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("不再提醒", StringComparison.Ordinal) &&
+        permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
+        ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(openMode)", StringComparison.Ordinal) &&
+        !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
-        pluginSource.Contains("BeginUpdateCheck(showWindow: true)", StringComparison.Ordinal) &&
+        pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenManualDisclosure", StringComparison.Ordinal) &&
+        pluginSource.Contains("OpenRequiredAfterPluginUpdateWhenPending();", StringComparison.Ordinal) &&
+        pluginSource.Contains("BeginUpdateCheck(userInitiated: true)", StringComparison.Ordinal) &&
+        pluginSource.Contains("BeginUpdateCheck(userInitiated: false)", StringComparison.Ordinal) &&
+        pluginSource.Contains("userInitiated: openWindow);", StringComparison.Ordinal) &&
         pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
         pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
         "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");
+    var installBundledPluginsIndex = pluginSource.IndexOf(
+        "private async Task InstallBundledPluginsAsync",
+        StringComparison.Ordinal);
+    var startBundledUpdateCheckIndex = pluginSource.IndexOf(
+        "private void StartBundledPluginUpdateCheck",
+        installBundledPluginsIndex,
+        StringComparison.Ordinal);
+    var bundledInstallMethod = pluginSource[
+        installBundledPluginsIndex..startBundledUpdateCheckIndex];
+    var configurationMigrationIndex = pluginSource.IndexOf(
+        "configuration.ApplyMigrations();",
+        StringComparison.Ordinal);
+    var lifecycleStartIndex = pluginSource.IndexOf(
+        "lifecycle.Start();",
+        StringComparison.Ordinal);
+    Assert(
+        configurationSource.Contains("public bool EnableParsing { get; set; } = true;", StringComparison.Ordinal) &&
+        configurationSource.Contains("public bool AutoStartParser { get; set; } = true;", StringComparison.Ordinal) &&
+        configurationMigrationIndex >= 0 &&
+        lifecycleStartIndex > configurationMigrationIndex &&
+        !bundledInstallMethod.Contains("configuration.EnableParsing =", StringComparison.Ordinal) &&
+        !bundledInstallMethod.Contains("configuration.AutoStartParser =", StringComparison.Ordinal),
+        "Parser startup remains coupled to third-party extension acknowledgement.");
     Assert(
         statusSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         statusSource.Contains("runtime-status-content", StringComparison.Ordinal) &&
         statusSource.Contains("BeginGoldCard", StringComparison.Ordinal) &&
         statusSource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "The ACT compatibility status window does not use the new rounded branded card design.");
+    var configurePermissionsIndex = pluginSource.IndexOf(
+        "private void ConfigureBundledPluginPermissions",
+        StringComparison.Ordinal);
+    var permissionSaveIndex = pluginSource.IndexOf(
+        "SaveConfiguration();",
+        configurePermissionsIndex,
+        StringComparison.Ordinal);
+    var completeBundledSetupIndex = pluginSource.IndexOf(
+        "private void CompleteBundledPluginSetup",
+        StringComparison.Ordinal);
+    var finalPermissionRestartIndex = pluginSource.IndexOf(
+        "ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);",
+        completeBundledSetupIndex,
+        StringComparison.Ordinal);
+    var permissionRefreshMethodIndex = pluginSource.IndexOf(
+        "private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)",
+        StringComparison.Ordinal);
+    var stopHostBeforeFoxTtsIndex = pluginSource.IndexOf(
+        "await hostSupervisor.StopAsync(timeout.Token)",
+        permissionRefreshMethodIndex,
+        StringComparison.Ordinal);
+    var setFoxTtsProIndex = pluginSource.IndexOf(
+        "FoxTtsConfigurationDefaults.SetPro(paths.ConfigDirectory);",
+        permissionRefreshMethodIndex,
+        StringComparison.Ordinal);
+    var startHostAfterFoxTtsIndex = pluginSource.IndexOf(
+        "await hostSupervisor.StartAsync(timeout.Token)",
+        setFoxTtsProIndex,
+        StringComparison.Ordinal);
     Assert(
         typeof(ActHostSupervisor).GetMethod(nameof(ActHostSupervisor.RestartAsync))?.ReturnType ==
         typeof(Task<bool>) &&
@@ -1004,14 +1167,22 @@ static void ValidateControlCenterPresentation()
         settingsSource.Contains(
             "changed |= permissionsChanged;",
             StringComparison.Ordinal) &&
-        Regex.IsMatch(
+        configurePermissionsIndex >= 0 &&
+        permissionSaveIndex > configurePermissionsIndex &&
+        completeBundledSetupIndex > permissionSaveIndex &&
+        finalPermissionRestartIndex > completeBundledSetupIndex &&
+        Regex.Matches(
             pluginSource,
-            @"SaveConfiguration\(\);\s+ApplyActPermissionChanges\(\);",
-            RegexOptions.CultureInvariant) &&
+            Regex.Escape("ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);"),
+            RegexOptions.CultureInvariant).Count == 1 &&
+        permissionRefreshMethodIndex > finalPermissionRestartIndex &&
+        stopHostBeforeFoxTtsIndex > permissionRefreshMethodIndex &&
+        setFoxTtsProIndex > stopHostBeforeFoxTtsIndex &&
+        startHostAfterFoxTtsIndex > setFoxTtsProIndex &&
         hostSupervisorSource.Contains(
             "public async Task<bool> RestartAsync",
             StringComparison.Ordinal),
-        "ACT permission groups are not saved before exactly one Host restart callback.");
+        "ACT permissions are not saved before the final Host refresh, or FoxTTS Pro is not written between Host stop and start.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
@@ -1571,8 +1742,10 @@ static void ValidateHtmlOverlayDefaults()
         StringComparison.Ordinal);
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
-        controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal),
-        "Created HTML overlays are not listed above the template form or the Chinese label regressed.");
+        controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal),
+        "Created/custom HTML overlays are not listed above the template form or the trust warning regressed.");
     Assert(
         controlCenterSource.Contains(
             "private const int ResetConfirmationMilliseconds = 10_000;",
@@ -1612,14 +1785,33 @@ static void ValidateHtmlOverlayDefaults()
     Assert(settings.IsLocked, "HTML overlays must be locked by default.");
     Assert(!settings.IsEditing, "HTML overlays must not start in editing mode.");
     Assert(settings.ZoomFactor == 1.0f, "HTML overlay default zoom changed unexpectedly.");
+    Assert(string.IsNullOrEmpty(settings.SourceUrl), "Template overlays unexpectedly received a custom source URL.");
     settings.SetEditing(true);
     Assert(
         settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
         "HTML overlay editing mode did not disable click-through and locking together.");
     settings.SetEditing(false);
     Assert(
-        !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
-        "Finishing HTML overlay editing did not restore click-through and locking together.");
+        !settings.IsEditing && !settings.IsClickThrough && settings.IsLocked,
+        "Finishing HTML overlay editing did not lock the layout while preserving page input.");
+
+    Assert(
+        SelfHostedActRuntime.TryBuildCustomOverlayUri(
+            "https://souma.diemoe.net/ff14-overlay-vue/#/teamWatch",
+            new Uri("ws://127.0.0.1:10501/ws"),
+            out var customOverlayUri) &&
+        customOverlayUri.AbsoluteUri.Contains(
+            "#/teamWatch?OVERLAY_WS=ws://127.0.0.1:10501/ws&HOST_PORT=ws://127.0.0.1:10501",
+            StringComparison.Ordinal),
+        "Hash-routed custom overlays did not receive usable OverlayPlugin WebSocket parameters.");
+    Assert(
+        !SelfHostedActRuntime.TryNormalizeCustomOverlayUri(
+            "javascript:alert(1)",
+            out _),
+        "Custom overlays accepted a non-http/file executable URL scheme.");
+    Assert(
+        new PluginConfiguration().AutoCheckBundledPluginUpdates,
+        "Existing users no longer retain the startup extension-update check by default.");
 
     var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
                        "DalamudActCompat.ActRuntime.HtmlOverlayForm")
@@ -1675,8 +1867,10 @@ static void ValidateHtmlOverlayDefaults()
         editIndicatorScript?.Contains(
             "data-dalamud-act-compat-editing='true'",
             StringComparison.Ordinal) == true &&
-        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal),
-        "Transparent HTML overlays no longer expose a visible edit-mode boundary.");
+        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal) &&
+        editIndicatorScript.Contains("repeating-linear-gradient", StringComparison.Ordinal) &&
+        editIndicatorScript.Contains("cursor: nwse-resize", StringComparison.Ordinal),
+        "Transparent HTML overlays no longer expose a visible edit boundary and resize grip.");
     var isTransientWebViewFailure = formType.GetMethod(
                                         "IsTransientWebViewInitializationFailure",
                                         BindingFlags.Static | BindingFlags.NonPublic)
@@ -1716,9 +1910,9 @@ static void ValidateHtmlOverlayDefaults()
         Equals(
             getInteraction.Invoke(
                 null,
-                [new System.Drawing.Size(900, 320), new System.Drawing.Point(895, 315)]),
+                [new System.Drawing.Size(900, 320), new System.Drawing.Point(875, 295)]),
             resize),
-        "HTML overlay cursor polling no longer exposes a bottom-right resize target.");
+        "HTML overlay cursor polling no longer exposes an accessible bottom-right resize target.");
     var shouldBeginInteraction = formType.GetMethod(
                                      "ShouldBeginOverlayInteraction",
                                      BindingFlags.Static | BindingFlags.NonPublic)
@@ -1739,6 +1933,19 @@ static void ValidateHtmlOverlayDefaults()
             null,
             [true, true, true, false, false]) as bool? == false,
         "A click outside the overlay incorrectly began an interaction.");
+    var hasExceededDragThreshold = formType.GetMethod(
+                                       "HasExceededDragThreshold",
+                                       BindingFlags.Static | BindingFlags.NonPublic)
+                                   ?? throw new InvalidOperationException(
+                                       "HTML overlay drag threshold helper was not found.");
+    Assert(
+        hasExceededDragThreshold.Invoke(
+            null,
+            [new System.Drawing.Point(400, 300), new System.Drawing.Point(404, 304)]) as bool? == false &&
+        hasExceededDragThreshold.Invoke(
+            null,
+            [new System.Drawing.Point(400, 300), new System.Drawing.Point(406, 300)]) as bool? == true,
+        "HTML overlay clicks are no longer separated from intentional drag gestures.");
     var tryAcquireInteraction = formType.GetMethod(
                                     "TryAcquireInteraction",
                                     BindingFlags.Static | BindingFlags.NonPublic)
@@ -1789,12 +1996,85 @@ static void ValidateHtmlOverlayDefaults()
                                        "HTML overlay browser input routing helper was not found.");
     settings.SetEditing(true);
     Assert(
-        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == false,
-        "Windowed WebView2 still captures mouse input while editing an overlay.");
-    settings.IsLocked = true;
+        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
+        "Windowed WebView2 did not keep page clicks enabled while editing an overlay.");
+    settings.SetEditing(false);
     Assert(
         shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
-        "Windowed WebView2 did not resume page interaction after the overlay was locked.");
+        "Windowed WebView2 did not preserve page interaction after the overlay was locked.");
+    var calculateExtendedStyle = formType.GetMethod(
+                                     "CalculateOverlayExtendedStyle",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay extended-style helper was not found.");
+    var clickThroughStyle = (nint)calculateExtendedStyle.Invoke(
+        null,
+        [(nint)0x00000100, true])!;
+    Assert(
+        (clickThroughStyle & (nint)0x00080000) != nint.Zero &&
+        (clickThroughStyle & (nint)0x00000020) != nint.Zero &&
+        (clickThroughStyle & (nint)0x08000000) != nint.Zero,
+        "A click-through HTML overlay no longer remains layered, transparent, and non-activating.");
+    var interactiveStyle = (nint)calculateExtendedStyle.Invoke(
+        null,
+        [clickThroughStyle, false])!;
+    Assert(
+        (interactiveStyle & (nint)0x00080000) != nint.Zero &&
+        (interactiveStyle & (nint)0x00000020) == nint.Zero &&
+        (interactiveStyle & (nint)0x08000000) == nint.Zero,
+        "An interactive HTML overlay still passes clicks through or refuses activation.");
+    var htmlOverlayFormSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "HtmlOverlayForm.cs"));
+    Assert(
+        htmlOverlayFormSource.Contains(
+            "SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged",
+            StringComparison.Ordinal),
+        "HTML overlay style changes are no longer flushed through SWP_FRAMECHANGED.");
+    var calculateBrowserInputPoint = formType.GetMethod(
+                                         "CalculateBrowserInputPoint",
+                                         BindingFlags.Static | BindingFlags.NonPublic)
+                                     ?? throw new InvalidOperationException(
+                                         "HTML overlay browser-input coordinate helper was not found.");
+    Assert(
+        calculateBrowserInputPoint.Invoke(
+            null,
+            [
+                new System.Drawing.Size(1000, 500),
+                new System.Drawing.SizeF(500, 250),
+                new System.Drawing.Point(250, 100),
+            ]) is System.Drawing.PointF { X: 125, Y: 50 },
+        "HTML overlay proxy clicks no longer map to browser viewport coordinates.");
+    var calculateInputProxyRectangles = formType.GetMethod(
+                                            "CalculateInputProxyRectangles",
+                                            BindingFlags.Static | BindingFlags.NonPublic)
+                                        ?? throw new InvalidOperationException(
+                                            "HTML overlay dynamic input-region mapper was not found.");
+    var mappedInputRectangles = calculateInputProxyRectangles.Invoke(
+        null,
+        [
+            new System.Drawing.Size(400, 200),
+            new System.Drawing.SizeF(200, 100),
+            new[] { new System.Drawing.RectangleF(50, 20, 100, 40) },
+        ]) as System.Drawing.Rectangle[];
+    Assert(
+        mappedInputRectangles is [{ X: 98, Y: 38, Width: 204, Height: 84 }],
+        "HTML overlay visible browser regions no longer map to the input proxy with safe padding.");
+    var inputRegionScript = formType.GetField(
+                                "OverlayInputRegionScript",
+                                BindingFlags.Static | BindingFlags.NonPublic)
+                            ?.GetRawConstantValue() as string;
+    Assert(
+        htmlOverlayFormSource.Contains("Opacity = 0.01", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("inputProxy.Show(form)", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("inputProxy.Region = nextRegion", StringComparison.Ordinal) &&
+        inputRegionScript?.Contains("ResizeObserver", StringComparison.Ordinal) == true &&
+        inputRegionScript.Contains("MutationObserver", StringComparison.Ordinal) &&
+        inputRegionScript.Contains("dalamud-act-compat:input-regions:", StringComparison.Ordinal),
+        "The transparent HTML overlay no longer has a content-shaped dynamic input proxy.");
     var shieldType = typeof(MeterService).Assembly.GetType(
                          "DalamudActCompat.UI.OverlayEditShield",
                          throwOnError: true)
@@ -1811,6 +2091,309 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         isShieldRequired.Invoke(null, [true]) as bool? == true,
         "The transparent edit shield did not activate for a visible editing overlay.");
+}
+
+static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
+{
+    var projectRoot = FindProjectRoot();
+    var loaderPath = Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "bin",
+        "Release",
+        "net10.0-windows",
+        "win-x64",
+        "WebView2Loader.dll");
+    Assert(File.Exists(loaderPath), "The live WebView2 input smoke could not find WebView2Loader.dll.");
+
+    var pagePath = Path.Combine(testRoot, "html-overlay-input-smoke.html");
+    await File.WriteAllTextAsync(
+        pagePath,
+        """
+        <!doctype html>
+        <html>
+        <body style="margin:0;background:transparent">
+          <div id="panel" style="position:absolute;left:20px;top:20px;width:200px;height:100px;
+                                 background:rgba(20,30,40,.9)">
+            <button id="probe" style="position:absolute;left:20px;top:20px;width:120px;height:50px"
+                    onclick="document.documentElement.dataset.clicked='true'">Click</button>
+          </div>
+          <script>
+            window.collapseProbe = () => {
+              const panel = document.getElementById('panel');
+              panel.style.width = '60px';
+              panel.style.height = '30px';
+              document.getElementById('probe').style.display = 'none';
+            };
+          </script>
+        </body>
+        </html>
+        """);
+
+    var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
+                       "DalamudActCompat.ActRuntime.HtmlOverlayForm")
+                   ?? throw new InvalidOperationException("HTML overlay form was not found.");
+    var settings = new HtmlOverlayWindowSettings
+    {
+        IsClickThrough = false,
+        IsLocked = true,
+        Left = 80,
+        Top = 80,
+        Width = 320,
+        Height = 200,
+    };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var instance = Activator.CreateInstance(
+                       formType,
+                       BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                       binder: null,
+                       [
+                           new Uri(pagePath),
+                           Path.Combine(testRoot, "webview2-input-smoke"),
+                           loaderPath,
+                           "HTML Input Proxy Smoke",
+                           true,
+                           settings,
+                           new System.Drawing.Size(320, 200),
+                           false,
+                           log,
+                       ],
+                       culture: null)
+                   ?? throw new InvalidOperationException("HTML overlay input smoke form was not created.");
+    var webViewField = formType.GetField("webView", BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new InvalidOperationException("HTML overlay WebView field was not found.");
+    var formField = formType.GetField("form", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?? throw new InvalidOperationException("HTML overlay host form field was not found.");
+    var proxyField = formType.GetField("inputProxy", BindingFlags.Instance | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException("HTML overlay input proxy field was not found.");
+    var show = formType.GetMethod("Show", BindingFlags.Instance | BindingFlags.Public)
+               ?? throw new InvalidOperationException("HTML overlay show method was not found.");
+    var applySettings = formType.GetMethod("ApplySettings", BindingFlags.Instance | BindingFlags.Public)
+                        ?? throw new InvalidOperationException(
+                            "HTML overlay ApplySettings method was not found.");
+
+    NativeInputProbe.GetCursorPos(out var originalCursor);
+    try
+    {
+        show.Invoke(instance, null);
+        Control? webView = null;
+        Form? hostForm = null;
+        Form? proxy = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            webView = webViewField.GetValue(instance) as Control;
+            hostForm = formField.GetValue(instance) as Form;
+            proxy = proxyField.GetValue(instance) as Form;
+            if (webView?.IsHandleCreated == true && hostForm?.IsHandleCreated == true &&
+                proxy?.IsHandleCreated == true &&
+                await ExecuteBrowserScriptAsync(webView, "document.readyState") == "\"complete\"")
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            webView is not null && hostForm is not null && proxy is not null,
+            "The live HTML input smoke did not create its windows.");
+        var liveWebView = webView!;
+        var liveHostForm = hostForm!;
+        var liveProxy = proxy!;
+        var proxyHandle = await InvokeControlAsync(liveProxy, () => liveProxy.Handle);
+        var hostHandle = await InvokeControlAsync(liveHostForm, () => liveHostForm.Handle);
+        var initialRegionReady = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var contentWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(100, 65));
+            var blankWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(280, 160));
+            initialRegionReady = contentWindow == proxyHandle &&
+                                 blankWindow != proxyHandle &&
+                                 blankWindow != hostHandle;
+            if (initialRegionReady)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            initialRegionReady,
+            "The live HTML input proxy did not exclude transparent space outside visible content.");
+        var clickPoint = await InvokeControlAsync(
+            liveProxy,
+            () => liveProxy.PointToScreen(new System.Drawing.Point(100, 65)));
+        NativeInputProbe.SetCursorPos(clickPoint.X, clickPoint.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftUp, 0, 0, 0, UIntPtr.Zero);
+
+        var clicked = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            clicked = await ExecuteBrowserScriptAsync(
+                          liveWebView,
+                          "document.documentElement.dataset.clicked || ''") == "\"true\"";
+            if (clicked)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(clicked, "A physical proxy click did not reach the live WebView2 button.");
+
+        await ExecuteBrowserScriptAsync(liveWebView, "window.collapseProbe(); true");
+        var collapsedRegionReady = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var collapsedContentWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(40, 30));
+            var releasedWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(100, 65));
+            collapsedRegionReady = collapsedContentWindow == proxyHandle &&
+                                   releasedWindow != proxyHandle &&
+                                   releasedWindow != hostHandle;
+            if (collapsedRegionReady)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            collapsedRegionReady,
+            "The live HTML input proxy did not shrink after the visible page content collapsed.");
+
+        settings.SetEditing(true);
+        applySettings.Invoke(instance, null);
+        var editingUsesFullRegion = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            editingUsesFullRegion =
+                await WindowAtProxyPointAsync(liveProxy, new System.Drawing.Point(280, 160)) ==
+                proxyHandle;
+            if (editingUsesFullRegion)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            editingUsesFullRegion,
+            "HTML overlay editing mode did not restore the full drag and resize region.");
+
+        settings.SetEditing(false);
+        applySettings.Invoke(instance, null);
+        var lockedRestoresContentRegion = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var lockedWindow = await WindowAtProxyPointAsync(
+                liveProxy,
+                new System.Drawing.Point(100, 65));
+            lockedRestoresContentRegion = lockedWindow != proxyHandle &&
+                                          lockedWindow != hostHandle;
+            if (lockedRestoresContentRegion)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            lockedRestoresContentRegion,
+            "HTML overlay locking did not restore the collapsed content-shaped input region.");
+    }
+    finally
+    {
+        NativeInputProbe.SetCursorPos(originalCursor.X, originalCursor.Y);
+        ((IDisposable)instance).Dispose();
+    }
+}
+
+static async Task<nint> WindowAtProxyPointAsync(Form proxy, System.Drawing.Point clientPoint)
+{
+    var screenPoint = await InvokeControlAsync(proxy, () => proxy.PointToScreen(clientPoint));
+    return NativeInputProbe.WindowFromPoint(new NativeInputProbe.Point
+    {
+        X = screenPoint.X,
+        Y = screenPoint.Y,
+    });
+}
+
+static Task<T> InvokeControlAsync<T>(Control control, Func<T> action)
+{
+    var completion = new TaskCompletionSource<T>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    control.BeginInvoke(() =>
+    {
+        try
+        {
+            completion.SetResult(action());
+        }
+        catch (Exception ex)
+        {
+            completion.SetException(ex);
+        }
+    });
+    return completion.Task;
+}
+
+static Task<string> ExecuteBrowserScriptAsync(Control webView, string script)
+{
+    var completion = new TaskCompletionSource<string>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    webView.BeginInvoke(async () =>
+    {
+        try
+        {
+            var coreWebView = webView.GetType()
+                .GetProperty("CoreWebView2", BindingFlags.Instance | BindingFlags.Public)
+                ?.GetValue(webView);
+            if (coreWebView is null)
+            {
+                completion.SetResult(string.Empty);
+                return;
+            }
+
+            var executeScript = coreWebView.GetType().GetMethod(
+                                    "ExecuteScriptAsync",
+                                    BindingFlags.Instance | BindingFlags.Public,
+                                    binder: null,
+                                    [typeof(string)],
+                                    modifiers: null)
+                                ?? throw new InvalidOperationException(
+                                    "WebView2 ExecuteScriptAsync was not found.");
+            var result = executeScript.Invoke(coreWebView, [script]) as Task<string>
+                         ?? throw new InvalidOperationException(
+                             "WebView2 ExecuteScriptAsync did not return a string task.");
+            completion.SetResult(await result);
+        }
+        catch (Exception ex)
+        {
+            completion.SetException(ex);
+        }
+    });
+    return completion.Task;
 }
 
 static void ValidateActTtsDispatch()
@@ -1944,6 +2527,28 @@ static void ValidateCactbotSpokenAlertDefaults()
         existing["options"]["raidboss"]?["DefaultAlertOutput"]?.Value<string>() == "textOnly" &&
         existing["options"]["raidboss"]?["DefaultPlayerLabel"]?.Value<string>() == "name",
         "An explicit Cactbot output mode or player label was overwritten.");
+
+    var guardType = typeof(CactbotEventSource).Assembly.GetType(
+                        "RainbowMage.OverlayPlugin.EventSources.CactbotTtsDuplicateGuard",
+                        throwOnError: true)!;
+    var guard = Activator.CreateInstance(
+                    guardType,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    [TimeSpan.FromMilliseconds(500)],
+                    culture: null)
+                ?? throw new InvalidOperationException("Cactbot TTS duplicate guard was not created.");
+    var tryAccept = guardType.GetMethod(
+                        "TryAccept",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    ?? throw new InvalidOperationException("Cactbot TTS duplicate guard has no acceptance method.");
+    var start = Stopwatch.GetTimestamp();
+    Assert(
+        tryAccept.Invoke(guard, ["Stack marker", start]) as bool? == true &&
+        tryAccept.Invoke(guard, ["Stack marker", start + Stopwatch.Frequency / 10]) as bool? == false &&
+        tryAccept.Invoke(guard, ["Spread marker", start + Stopwatch.Frequency / 5]) as bool? == true &&
+        tryAccept.Invoke(guard, ["Stack marker", start + Stopwatch.Frequency]) as bool? == true,
+        "Two Cactbot windows no longer collapse the same simultaneous TTS request to one playback.");
 }
 
 static void ValidateOverlayInitialStateEvents()
@@ -2352,6 +2957,48 @@ static void ValidateChineseCombatChatParsing()
         "Chinese ability damage chat was not parsed.");
     Assert(inheritedActor == actor && target == "木人" && damage == 39870,
         "Chinese ability damage fields were mapped incorrectly.");
+
+    var context = new ChineseCombatChatContext();
+    var observedAt = DateTimeOffset.UtcNow;
+    Assert(
+        !context.TryParse(
+            "本地玩家发动了技能。",
+            observedAt,
+            out _,
+            out _,
+            out _),
+        "A split combat actor announcement was mistaken for a complete damage line.");
+    Assert(
+        !context.TryParse(
+            "本地玩家向附近玩家挥了挥手。",
+            observedAt.AddMilliseconds(50),
+            out _,
+            out _,
+            out _),
+        "A player emote was mistaken for combat damage.");
+    Assert(
+        !context.TryParse(
+            "  \uE06F 附近玩家受到了900点伤害。",
+            observedAt.AddMilliseconds(100),
+            out _,
+            out _,
+            out _),
+        "Damage after an unrelated emote inherited the local player's stale attacker context.");
+    Assert(
+        !context.TryParse(
+            "队友发动了技能。",
+            observedAt.AddSeconds(1),
+            out _,
+            out _,
+            out _) &&
+        context.TryParse(
+            "  \uE06F 木人受到了1200点伤害。",
+            observedAt.AddSeconds(1.1),
+            out var contextualActor,
+            out _,
+            out _) &&
+        contextualActor == "队友",
+        "Adjacent split combat lines no longer retain their legitimate attacker context.");
 }
 
 static string FindProjectRoot()
@@ -2447,6 +3094,38 @@ public class NoOpPluginLogProxy : DispatchProxy
                 ? Activator.CreateInstance(returnType)
                 : null;
     }
+}
+
+internal static class NativeInputProbe
+{
+    public const uint LeftDown = 0x0002;
+    public const uint LeftUp = 0x0004;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern nint WindowFromPoint(Point point);
+
+    [DllImport("user32.dll", EntryPoint = "mouse_event")]
+    public static extern void MouseEvent(
+        uint flags,
+        uint dx,
+        uint dy,
+        uint data,
+        UIntPtr extraInfo);
 }
 
 internal sealed class TestActLogger : IActLogger
