@@ -164,4 +164,10 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
         return settings;
     }
+
+    public IReadOnlyDictionary<string, HtmlOverlayWindowSettings> GetOverlayWindowSettingsSnapshot()
+        => new Dictionary<string, HtmlOverlayWindowSettings>(
+            OverlayWindows ?? new Dictionary<string, HtmlOverlayWindowSettings>(
+                StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
 }

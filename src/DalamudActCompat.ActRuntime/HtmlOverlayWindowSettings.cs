@@ -6,6 +6,8 @@ public sealed class HtmlOverlayWindowSettings
     [Newtonsoft.Json.JsonIgnore]
     public bool IsVisible { get; internal set; }
 
+    public bool OpenOnStartup { get; set; }
+
     public bool IsClickThrough { get; set; } = true;
 
     public bool IsLocked { get; set; } = true;

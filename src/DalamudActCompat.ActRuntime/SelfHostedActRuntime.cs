@@ -30,6 +30,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly INotificationManager notificationManager;
     private readonly Func<bool> localDeathWhilePartyContinues;
     private readonly Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings;
+    private readonly Func<IReadOnlyDictionary<string, HtmlOverlayWindowSettings>>
+        getOverlayWindowSettingsSnapshot;
     private readonly Func<bool> debugMode;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
@@ -87,6 +89,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         Func<string, uint?> resolveActorId,
         Func<bool> localDeathWhilePartyContinues,
         Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
+        Func<IReadOnlyDictionary<string, HtmlOverlayWindowSettings>> getOverlayWindowSettingsSnapshot,
         Func<bool> debugMode,
         Func<string, ActCapability, bool> permissionCheck)
     {
@@ -102,6 +105,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.notificationManager = notificationManager;
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
         this.getOverlayWindowSettings = getOverlayWindowSettings;
+        this.getOverlayWindowSettingsSnapshot = getOverlayWindowSettingsSnapshot;
         this.debugMode = debugMode;
         NativePostNamazuBridge.Configure(framework, log, sigScanner, resolveActorId);
         LegacyResourceCompatibility.Configure(log, notificationManager);
@@ -502,6 +506,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                         log);
                 }
             }
+
+            RestoreHtmlOverlays();
         }
         catch
         {
@@ -1374,6 +1380,41 @@ public sealed class SelfHostedActRuntime : IDisposable
             log.Error(ex, "Failed to publish ACT encounter snapshot.");
         }
     }
+
+    private void RestoreHtmlOverlays()
+    {
+        foreach (var name in SelectHtmlOverlaysToRestore(getOverlayWindowSettingsSnapshot()))
+        {
+            try
+            {
+                if (ShowHtmlOverlay(name))
+                {
+                    log.Information($"Restored HTML overlay '{name}' from its saved open state.");
+                }
+                else
+                {
+                    log.Warning(
+                        $"Saved HTML overlay '{name}' could not be restored. " +
+                        "Its template or custom URL is unavailable.");
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, $"Saved HTML overlay '{name}' could not be restored.");
+            }
+        }
+    }
+
+    internal static IReadOnlyList<string> SelectHtmlOverlaysToRestore(
+        IReadOnlyDictionary<string, HtmlOverlayWindowSettings> settings)
+        => settings
+            .Where(pair =>
+                pair.Value.OpenOnStartup &&
+                !string.IsNullOrWhiteSpace(pair.Key) &&
+                !string.Equals(pair.Key, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+            .Select(static pair => pair.Key)
+            .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private void CacheActiveEncounterIdentities(IReadOnlyList<ActPlayerIdentity> identities)
     {

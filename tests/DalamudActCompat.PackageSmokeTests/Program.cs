@@ -957,7 +957,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 10)) == "v0.3.6.10",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 11)) == "v0.3.6.11",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1828,6 +1828,7 @@ static void ValidateHtmlOverlayDefaults()
 
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
+    Assert(!settings.OpenOnStartup, "HTML overlays must not auto-open before the user opens them.");
     Assert(settings.IsClickThrough, "HTML overlays must be click-through by default.");
     Assert(settings.IsLocked, "HTML overlays must be locked by default.");
     Assert(!settings.IsEditing, "HTML overlays must not start in editing mode.");
@@ -1841,6 +1842,31 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         !settings.IsEditing && !settings.IsClickThrough && settings.IsLocked,
         "Finishing HTML overlay editing did not lock the layout while preserving page input.");
+
+    settings.OpenOnStartup = true;
+    var serializedOverlaySettings = Newtonsoft.Json.JsonConvert.SerializeObject(settings);
+    var restoredOverlaySettings = Newtonsoft.Json.JsonConvert.DeserializeObject<HtmlOverlayWindowSettings>(
+                                      serializedOverlaySettings)
+                                  ?? throw new InvalidOperationException(
+                                      "HTML overlay settings did not deserialize.");
+    Assert(
+        serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.OpenOnStartup), StringComparison.Ordinal) &&
+        !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsVisible), StringComparison.Ordinal) &&
+        restoredOverlaySettings.OpenOnStartup,
+        "The user-requested HTML overlay startup state was not persisted independently of runtime visibility.");
+    var overlaysToRestore = SelfHostedActRuntime.SelectHtmlOverlaysToRestore(
+        new Dictionary<string, HtmlOverlayWindowSettings>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Skills"] = restoredOverlaySettings,
+            ["Closed"] = new HtmlOverlayWindowSettings(),
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+        });
+    Assert(
+        overlaysToRestore.SequenceEqual(["Skills"]),
+        "HTML overlay startup restoration did not preserve only the user-open custom windows.");
 
     Assert(
         SelfHostedActRuntime.TryBuildCustomOverlayUri(
@@ -2059,17 +2085,21 @@ static void ValidateHtmlOverlayDefaults()
         [(nint)0x00000100, true])!;
     Assert(
         (clickThroughStyle & (nint)0x00080000) != nint.Zero &&
+        (clickThroughStyle & (nint)0x00000080) != nint.Zero &&
+        (clickThroughStyle & (nint)0x00040000) == nint.Zero &&
         (clickThroughStyle & (nint)0x00000020) != nint.Zero &&
         (clickThroughStyle & (nint)0x08000000) != nint.Zero,
-        "A click-through HTML overlay no longer remains layered, transparent, and non-activating.");
+        "A click-through HTML overlay no longer remains a hidden tool window that is layered, transparent, and non-activating.");
     var interactiveStyle = (nint)calculateExtendedStyle.Invoke(
         null,
         [clickThroughStyle, false])!;
     Assert(
         (interactiveStyle & (nint)0x00080000) != nint.Zero &&
+        (interactiveStyle & (nint)0x00000080) != nint.Zero &&
+        (interactiveStyle & (nint)0x00040000) == nint.Zero &&
         (interactiveStyle & (nint)0x00000020) == nint.Zero &&
         (interactiveStyle & (nint)0x08000000) == nint.Zero,
-        "An interactive HTML overlay still passes clicks through or refuses activation.");
+        "An interactive HTML overlay entered the task switcher, passed clicks through, or refused activation.");
     var htmlOverlayFormSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -2251,6 +2281,14 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         var liveProxy = proxy!;
         var proxyHandle = await InvokeControlAsync(liveProxy, () => liveProxy.Handle);
         var hostHandle = await InvokeControlAsync(liveHostForm, () => liveHostForm.Handle);
+        var hostStyle = NativeInputProbe.GetWindowLongPtr(hostHandle, NativeInputProbe.GwlExStyle);
+        var proxyStyle = NativeInputProbe.GetWindowLongPtr(proxyHandle, NativeInputProbe.GwlExStyle);
+        Assert(
+            (hostStyle & (nint)0x00000080) != nint.Zero &&
+            (hostStyle & (nint)0x00040000) == nint.Zero &&
+            (proxyStyle & (nint)0x00000080) != nint.Zero &&
+            (proxyStyle & (nint)0x00040000) == nint.Zero,
+            "The live HTML overlay host or input proxy is still eligible for Alt+Tab or Task View.");
         var initialRegionReady = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
@@ -3145,6 +3183,7 @@ public class NoOpPluginLogProxy : DispatchProxy
 
 internal static class NativeInputProbe
 {
+    public const int GwlExStyle = -20;
     public const uint LeftDown = 0x0002;
     public const uint LeftUp = 0x0004;
 
@@ -3165,6 +3204,9 @@ internal static class NativeInputProbe
 
     [DllImport("user32.dll")]
     public static extern nint WindowFromPoint(Point point);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    public static extern nint GetWindowLongPtr(nint windowHandle, int index);
 
     [DllImport("user32.dll", EntryPoint = "mouse_event")]
     public static extern void MouseEvent(

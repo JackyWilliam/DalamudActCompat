@@ -12,6 +12,8 @@ internal sealed class HtmlOverlayForm : IDisposable
 {
     private const int GwlExStyle = -20;
     private const nint WsExTransparent = 0x00000020;
+    private const nint WsExToolWindow = 0x00000080;
+    private const nint WsExAppWindow = 0x00040000;
     private const nint WsExLayered = 0x00080000;
     private const nint WsExNoActivate = 0x08000000;
     private const nint HwndTopMost = -1;
@@ -972,7 +974,9 @@ internal sealed class HtmlOverlayForm : IDisposable
         nint currentStyle,
         bool isClickThrough)
     {
-        var style = currentStyle | WsExLayered;
+        // A borderless ownerless overlay is otherwise eligible for Alt+Tab and Task View.
+        // Keep it an explicit tool window through every click-through style transition.
+        var style = (currentStyle | WsExLayered | WsExToolWindow) & ~WsExAppWindow;
         return isClickThrough
             ? style | WsExTransparent | WsExNoActivate
             : style & ~(WsExTransparent | WsExNoActivate);
@@ -1615,7 +1619,8 @@ internal sealed class HtmlOverlayForm : IDisposable
             get
             {
                 var parameters = base.CreateParams;
-                parameters.ExStyle |= unchecked((int)(WsExLayered | WsExNoActivate));
+                parameters.ExStyle |= unchecked((int)(WsExLayered | WsExNoActivate | WsExToolWindow));
+                parameters.ExStyle &= unchecked((int)~WsExAppWindow);
                 return parameters;
             }
         }
@@ -1624,5 +1629,16 @@ internal sealed class HtmlOverlayForm : IDisposable
     private sealed class InputProxyForm : Form
     {
         protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var parameters = base.CreateParams;
+                parameters.ExStyle |= unchecked((int)(WsExNoActivate | WsExToolWindow));
+                parameters.ExStyle &= unchecked((int)~WsExAppWindow);
+                return parameters;
+            }
+        }
     }
 }
