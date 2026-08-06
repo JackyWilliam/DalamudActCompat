@@ -306,7 +306,7 @@ public sealed class Plugin : IDalamudPlugin
             value => statusWindow.IsOpen = value,
             SelectPluginPackage,
             OpenPluginDirectory,
-            thirdPartyPluginNoticeWindow.OpenNotice,
+            thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
@@ -339,7 +339,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
-        thirdPartyPluginNoticeWindow.OpenWhenPending();
+        thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -632,7 +632,7 @@ public sealed class Plugin : IDalamudPlugin
                     .RunOnFrameworkThread(
                         () =>
                         {
-                            thirdPartyPluginNoticeWindow.BeginUpdateCheck(showWindow: true);
+                            thirdPartyPluginNoticeWindow.BeginUpdateCheck(userInitiated: true);
                             services.NotificationManager.AddNotification(new()
                             {
                                 Title = text.Get("扩展更新", "Extension updates"),
@@ -671,7 +671,7 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     await services.Framework
                         .RunOnFrameworkThread(
-                            () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(showWindow: false))
+                            () => thirdPartyPluginNoticeWindow.BeginUpdateCheck(userInitiated: false))
                         .ConfigureAwait(false);
                 }
                 var check = await bundledPluginUpdateChecker
@@ -712,7 +712,8 @@ public sealed class Plugin : IDalamudPlugin
                                 ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
                                     pendingDisclosures.Length,
                                     failed: false,
-                                    userInitiated: openWindow));
+                                    userInitiated: openWindow),
+                                userInitiated: openWindow);
                             if (openWindow)
                             {
                                 services.NotificationManager.AddNotification(new()
@@ -748,7 +749,8 @@ public sealed class Plugin : IDalamudPlugin
                                 ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(
                                     pendingCount,
                                     failed: true,
-                                    userInitiated: openWindow));
+                                    userInitiated: openWindow),
+                                userInitiated: openWindow);
                             if (openWindow)
                             {
                                 services.NotificationManager.AddNotification(new()

@@ -902,7 +902,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 5)) == "v0.3.6.5",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 6)) == "v0.3.6.6",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -914,6 +914,14 @@ static void ValidateControlCenterPresentation()
         ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: true) &&
         !ThirdPartyPluginNoticeWindow.ShouldOpenUpdateResult(0, failed: true, userInitiated: false),
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
+    Assert(
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure) &&
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualUpdateCheck) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate),
+        "The required post-update third-party acknowledgement is not separated from manually opened DLL windows.");
     Assert(
         Plugin.ShouldEnableBundledCapability(
             enableFullFunctionality: false,
@@ -1065,13 +1073,14 @@ static void ValidateControlCenterPresentation()
         permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
         !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
         ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("showCloseButton: !showPermissionChoice", StringComparison.Ordinal) &&
-        !thirdPartySource.Contains("showCloseButton: true", StringComparison.Ordinal) &&
-        !thirdPartySource.Contains("showCloseButton: canDismiss", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(openMode)", StringComparison.Ordinal) &&
         !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
-        pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenWhenPending();", StringComparison.Ordinal) &&
-        pluginSource.Contains("BeginUpdateCheck(showWindow: true)", StringComparison.Ordinal) &&
+        pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenManualDisclosure", StringComparison.Ordinal) &&
+        pluginSource.Contains("OpenRequiredAfterPluginUpdateWhenPending();", StringComparison.Ordinal) &&
+        pluginSource.Contains("BeginUpdateCheck(userInitiated: true)", StringComparison.Ordinal) &&
+        pluginSource.Contains("BeginUpdateCheck(userInitiated: false)", StringComparison.Ordinal) &&
+        pluginSource.Contains("userInitiated: openWindow);", StringComparison.Ordinal) &&
         pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
         pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
         "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");

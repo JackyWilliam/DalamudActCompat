@@ -14,6 +14,13 @@ public enum FoxTtsProChoice
     NeverRemind,
 }
 
+internal enum ThirdPartyNoticeOpenMode
+{
+    ManualDisclosure,
+    ManualUpdateCheck,
+    RequiredAfterPluginUpdate,
+}
+
 public sealed class ThirdPartyPluginNoticeWindow : Window
 {
     private const string PermissionPopupId = "扩展完整功能###DalamudActCompatFullPermissions";
@@ -42,6 +49,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private bool ttsProPopupRequested;
     private bool updateCheckInProgress;
     private bool outerFrameStylePushed;
+    private ThirdPartyNoticeOpenMode openMode = ThirdPartyNoticeOpenMode.ManualDisclosure;
 
     public ThirdPartyPluginNoticeWindow(
         Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures,
@@ -118,7 +126,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
                     "third-party-notice",
-                    showCloseButton: !showPermissionChoice))
+                    showCloseButton: ShouldShowCloseButton(openMode)))
             {
                 IsOpen = false;
             }
@@ -215,37 +223,50 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         }
     }
 
-    public void OpenNotice()
+    public void OpenManualDisclosure()
     {
+        openMode = ThirdPartyNoticeOpenMode.ManualDisclosure;
         Refresh(openWhenPending: false);
         IsOpen = true;
     }
 
-    public void OpenWhenPending()
+    public void OpenRequiredAfterPluginUpdateWhenPending()
     {
-        Refresh(openWhenPending: true);
+        Refresh(openWhenPending: false);
+        if (pending.Count > 0)
+        {
+            openMode = ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate;
+            IsOpen = true;
+        }
     }
 
-    public void BeginUpdateCheck(bool showWindow)
+    public void BeginUpdateCheck(bool userInitiated)
     {
         updateCheckInProgress = true;
         result = text.Get(
             "正在检查三项 DLL 的作者上游版本……",
             "Checking the author sources for all three DLLs...");
-        if (showWindow)
+        if (userInitiated)
         {
+            openMode = ThirdPartyNoticeOpenMode.ManualUpdateCheck;
             Refresh(openWhenPending: false);
             IsOpen = true;
         }
     }
 
-    public void CompleteUpdateCheck(string message, bool showWindow)
+    public void CompleteUpdateCheck(
+        string message,
+        bool showWindow,
+        bool userInitiated)
     {
         updateCheckInProgress = false;
         result = message;
         Refresh(openWhenPending: false);
         if (showWindow)
         {
+            openMode = userInitiated
+                ? ThirdPartyNoticeOpenMode.ManualUpdateCheck
+                : ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate;
             IsOpen = true;
         }
     }
@@ -255,6 +276,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         bool failed,
         bool userInitiated)
         => pendingCount > 0 || (failed && userInitiated);
+
+    internal static bool ShouldShowCloseButton(ThirdPartyNoticeOpenMode openMode)
+        => openMode is not ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate;
 
     private void CompleteInstallWhenReady()
     {
