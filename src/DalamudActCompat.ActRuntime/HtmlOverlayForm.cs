@@ -18,7 +18,8 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
     private const int VirtualKeyLeftButton = 0x01;
-    private const int ResizeGripSize = 16;
+    private const int ResizeGripSize = 36;
+    private const int DragThreshold = 6;
     private const int MinimumOverlayWidth = 120;
     private const int MinimumOverlayHeight = 80;
     private const string CactbotRenderMessagePrefix = "dalamud-act-compat:cactbot-render:";
@@ -167,6 +168,22 @@ internal sealed class HtmlOverlayForm : IDisposable
                 pointer-events: none;
                 z-index: 2147483647;
               }
+              html[data-dalamud-act-compat-editing='true'] body::before {
+                content: '';
+                position: fixed;
+                right: 4px;
+                bottom: 4px;
+                width: 28px;
+                height: 28px;
+                box-sizing: border-box;
+                background: repeating-linear-gradient(
+                  135deg,
+                  transparent 0 5px,
+                  rgba(247, 223, 160, 0.96) 5px 7px);
+                cursor: nwse-resize;
+                pointer-events: auto;
+                z-index: 2147483647;
+              }
             `;
             (document.head || document.documentElement).appendChild(style);
           };
@@ -192,6 +209,9 @@ internal sealed class HtmlOverlayForm : IDisposable
     private CoreWebView2DevToolsProtocolEventReceiver? consoleEventReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? exceptionEventReceiver;
     private System.Windows.Forms.Timer? editMonitor;
+    private OverlayInteraction pendingInteraction;
+    private Point pendingInteractionStartCursor;
+    private Rectangle pendingInteractionStartBounds;
     private OverlayInteraction interaction;
     private Point interactionStartCursor;
     private Rectangle interactionStartBounds;
@@ -629,6 +649,10 @@ internal sealed class HtmlOverlayForm : IDisposable
            !wasButtonDown &&
            cursorInside;
 
+    internal static bool HasExceededDragThreshold(Point startCursor, Point currentCursor)
+        => Math.Abs(currentCursor.X - startCursor.X) >= DragThreshold ||
+           Math.Abs(currentCursor.Y - startCursor.Y) >= DragThreshold;
+
     internal static Rectangle CalculateInteractionBounds(
         Rectangle startBounds,
         Point startCursor,
@@ -654,7 +678,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     }
 
     internal static bool ShouldEnableBrowserInput(HtmlOverlayWindowSettings settings)
-        => !settings.IsEditing;
+        => !settings.IsClickThrough;
 
     private void StartEditMonitor()
     {
@@ -685,6 +709,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         if (!GetCursorPos(out var nativeCursor))
         {
             EndOverlayInteraction();
+            ClearPendingInteraction();
             leftButtonWasDown = isButtonDown;
             return;
         }
@@ -713,32 +738,33 @@ internal sealed class HtmlOverlayForm : IDisposable
                 }
             }
         }
+        else if (pendingInteraction != OverlayInteraction.None)
+        {
+            if (!isButtonDown)
+            {
+                ClearPendingInteraction();
+            }
+            else if (pendingInteraction == OverlayInteraction.Resize ||
+                     HasExceededDragThreshold(pendingInteractionStartCursor, cursor))
+            {
+                BeginOverlayInteraction(form.Handle);
+            }
+        }
         else if (ShouldBeginOverlayInteraction(
                      settings.IsEditing,
                      form.Visible,
                      isButtonDown,
                      leftButtonWasDown,
-                     form.Bounds.Contains(cursor)) &&
-                 TryAcquireInteraction(form.Handle))
+                     form.Bounds.Contains(cursor)))
         {
-            interactionWindowHandle = form.Handle;
-            interaction = GetOverlayInteraction(
+            pendingInteraction = GetOverlayInteraction(
                 form.ClientSize,
                 form.PointToClient(cursor));
-            interactionStartCursor = cursor;
-            interactionStartBounds = form.Bounds;
-            SetCapture(form.Handle);
-            ownsMouseCapture = GetCapture() == form.Handle;
-            if (!ownsMouseCapture)
+            pendingInteractionStartCursor = cursor;
+            pendingInteractionStartBounds = form.Bounds;
+            if (pendingInteraction == OverlayInteraction.Resize)
             {
-                EndOverlayInteraction();
-            }
-            else
-            {
-                log.Debug(
-                    $"{title} edit interaction started: {interaction}; " +
-                    $"cursor={cursor.X},{cursor.Y}; " +
-                    $"bounds={form.Left},{form.Top},{form.Width},{form.Height}.");
+                BeginOverlayInteraction(form.Handle);
             }
         }
 
@@ -748,6 +774,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private void StopEditMonitor()
     {
         EndOverlayInteraction();
+        ClearPendingInteraction();
         if (editMonitor is null)
         {
             return;
@@ -757,6 +784,42 @@ internal sealed class HtmlOverlayForm : IDisposable
         editMonitor.Tick -= OnEditMonitorTick;
         editMonitor.Dispose();
         editMonitor = null;
+    }
+
+    private void BeginOverlayInteraction(nint windowHandle)
+    {
+        if (pendingInteraction == OverlayInteraction.None ||
+            !TryAcquireInteraction(windowHandle))
+        {
+            ClearPendingInteraction();
+            return;
+        }
+
+        interactionWindowHandle = windowHandle;
+        interaction = pendingInteraction;
+        interactionStartCursor = pendingInteractionStartCursor;
+        interactionStartBounds = pendingInteractionStartBounds;
+        ClearPendingInteraction();
+        SetCapture(windowHandle);
+        ownsMouseCapture = GetCapture() == windowHandle;
+        if (!ownsMouseCapture)
+        {
+            EndOverlayInteraction();
+            return;
+        }
+
+        log.Debug(
+            $"{title} edit interaction started: {interaction}; " +
+            $"cursor={interactionStartCursor.X},{interactionStartCursor.Y}; " +
+            $"bounds={interactionStartBounds.Left},{interactionStartBounds.Top}," +
+            $"{interactionStartBounds.Width},{interactionStartBounds.Height}.");
+    }
+
+    private void ClearPendingInteraction()
+    {
+        pendingInteraction = OverlayInteraction.None;
+        pendingInteractionStartCursor = Point.Empty;
+        pendingInteractionStartBounds = Rectangle.Empty;
     }
 
     internal static bool TryAcquireInteraction(nint windowHandle)
@@ -832,9 +895,9 @@ internal sealed class HtmlOverlayForm : IDisposable
             if (webView is not null)
             {
                 webView.ZoomFactor = Math.Clamp(settings.ZoomFactor, 0.25f, 5.0f);
-                // OverlayPlugin's Chromium renderer is off-screen, so its Form receives
-                // edit-mode mouse input directly. Windowed WebView2 owns a child HWND;
-                // disabling it only while editing restores the same host input routing.
+                // Native cursor polling owns drag and resize independently of WebView2.
+                // Keeping WebView2 enabled while editing lets a click without a drag
+                // continue to activate controls in the overlay page.
                 webView.Enabled = ShouldEnableBrowserInput(settings);
             }
 

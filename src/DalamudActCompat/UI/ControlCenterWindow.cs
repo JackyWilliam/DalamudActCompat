@@ -1166,7 +1166,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.PushID(name);
         ImGui.TextDisabled(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
         if (ImGui.Button(settings.IsEditing
-                ? text.Get("完成位置编辑", "Finish position editing")
+                ? text.Get("完成并操作网页", "Finish and interact with page")
                 : text.Get("编辑位置和大小", "Edit position and size")))
         {
             settings.SetEditing(!settings.IsEditing);
@@ -1178,8 +1178,12 @@ public sealed class ControlCenterWindow : Window
         changed |= Checkbox(text.Get("锁定", "Locked"), settings.IsLocked, value => settings.IsLocked = value);
         changed |= SliderFloat(text.Get("页面缩放", "Page zoom"), settings.ZoomFactor, 0.5f, 2, value => settings.ZoomFactor = value);
         ImGui.TextDisabled(settings.IsEditing
-            ? text.Get("现在可以拖动窗口，并从右下角调整大小。", "You can now drag the window and resize it from the bottom-right.")
-            : text.Get("位置编辑时会暂时关闭穿透与锁定。", "Position editing temporarily disables click-through and locking."));
+            ? text.Get(
+                "单击可操作网页；按住并拖动可移动，拖动右下角斜纹可缩放。",
+                "Click to use the page; hold and drag to move, or drag the striped bottom-right grip to resize.")
+            : text.Get(
+                "关闭穿透时可操作网页；打开穿透后，鼠标点击会传给游戏。",
+                "With click-through off, the page is interactive; when enabled, mouse clicks pass to the game."));
         ImGui.PopID();
 
         if (changed)

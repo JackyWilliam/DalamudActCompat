@@ -27,7 +27,15 @@ public sealed class HtmlOverlayWindowSettings
 
     public void SetEditing(bool editing)
     {
-        IsClickThrough = !editing;
-        IsLocked = !editing;
+        if (editing)
+        {
+            IsClickThrough = false;
+            IsLocked = false;
+            return;
+        }
+
+        // Keep browser input enabled after positioning. Users can explicitly
+        // enable click-through when they want mouse input to reach the game.
+        IsLocked = true;
     }
 }

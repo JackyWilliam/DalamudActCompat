@@ -532,7 +532,7 @@ public sealed class SettingsWindow : Window
         var editing = settings.IsEditing;
         if (ImGui.Button(
                 editing
-                    ? $"{text.Get("完成编辑悬浮窗", "Finish editing overlay")}###{name}-edit-mode"
+                    ? $"{text.Get("完成并操作网页", "Finish and interact with page")}###{name}-edit-mode"
                     : $"{text.Get("编辑位置和大小", "Edit position and size")}###{name}-edit-mode"))
         {
             settings.SetEditing(!editing);
@@ -542,9 +542,11 @@ public sealed class SettingsWindow : Window
         ImGui.SameLine();
         ImGui.TextDisabled(editing
             ? text.Get(
-                "现在按住悬浮窗任意位置可拖动，右下角可调整大小；编辑期间会启用完全透明的鼠标底层，网页和游戏操作暂时关闭。",
-                "Hold anywhere on the overlay to drag; resize from the bottom-right. A fully transparent mouse shield temporarily blocks page and game input while editing.")
-            : text.Get("按钮会同时解除鼠标穿透和位置锁定。", "The button disables click-through and locking together."));
+                "单击可操作网页按钮；按住并拖动可移动，拖动右下角斜纹可缩放。编辑期间游戏鼠标操作会暂时关闭。",
+                "Click page controls normally; hold and drag to move, or drag the striped bottom-right grip to resize. Game mouse input is temporarily blocked while editing.")
+            : text.Get(
+                "编辑按钮会关闭穿透并解除位置锁定；完成后保持关闭穿透，网页仍可操作。",
+                "Editing disables click-through and unlocks the layout; finishing keeps click-through off so the page remains interactive."));
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
             settings.IsClickThrough,
@@ -566,8 +568,8 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.TextDisabled(text.Get(
-            "悬浮窗始终无边框透明置顶；完成位置编辑后，锁定窗口但保持关闭穿透即可操作网页内容。",
-            "Overlays stay borderless, transparent, and topmost. After positioning, lock the window but leave click-through off to interact with the page."));
+            "悬浮窗始终无边框透明置顶；需要操作网页时关闭穿透，需要操作游戏时打开穿透。",
+            "Overlays stay borderless, transparent, and topmost. Turn click-through off for the page, or on to pass mouse input to the game."));
         return changed;
     }
 

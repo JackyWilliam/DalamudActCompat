@@ -902,7 +902,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 6)) == "v0.3.6.6",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 7)) == "v0.3.6.7",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1784,8 +1784,8 @@ static void ValidateHtmlOverlayDefaults()
         "HTML overlay editing mode did not disable click-through and locking together.");
     settings.SetEditing(false);
     Assert(
-        !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
-        "Finishing HTML overlay editing did not restore click-through and locking together.");
+        !settings.IsEditing && !settings.IsClickThrough && settings.IsLocked,
+        "Finishing HTML overlay editing did not lock the layout while preserving page input.");
 
     Assert(
         SelfHostedActRuntime.TryBuildCustomOverlayUri(
@@ -1859,8 +1859,10 @@ static void ValidateHtmlOverlayDefaults()
         editIndicatorScript?.Contains(
             "data-dalamud-act-compat-editing='true'",
             StringComparison.Ordinal) == true &&
-        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal),
-        "Transparent HTML overlays no longer expose a visible edit-mode boundary.");
+        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal) &&
+        editIndicatorScript.Contains("repeating-linear-gradient", StringComparison.Ordinal) &&
+        editIndicatorScript.Contains("cursor: nwse-resize", StringComparison.Ordinal),
+        "Transparent HTML overlays no longer expose a visible edit boundary and resize grip.");
     var isTransientWebViewFailure = formType.GetMethod(
                                         "IsTransientWebViewInitializationFailure",
                                         BindingFlags.Static | BindingFlags.NonPublic)
@@ -1900,9 +1902,9 @@ static void ValidateHtmlOverlayDefaults()
         Equals(
             getInteraction.Invoke(
                 null,
-                [new System.Drawing.Size(900, 320), new System.Drawing.Point(895, 315)]),
+                [new System.Drawing.Size(900, 320), new System.Drawing.Point(875, 295)]),
             resize),
-        "HTML overlay cursor polling no longer exposes a bottom-right resize target.");
+        "HTML overlay cursor polling no longer exposes an accessible bottom-right resize target.");
     var shouldBeginInteraction = formType.GetMethod(
                                      "ShouldBeginOverlayInteraction",
                                      BindingFlags.Static | BindingFlags.NonPublic)
@@ -1923,6 +1925,19 @@ static void ValidateHtmlOverlayDefaults()
             null,
             [true, true, true, false, false]) as bool? == false,
         "A click outside the overlay incorrectly began an interaction.");
+    var hasExceededDragThreshold = formType.GetMethod(
+                                       "HasExceededDragThreshold",
+                                       BindingFlags.Static | BindingFlags.NonPublic)
+                                   ?? throw new InvalidOperationException(
+                                       "HTML overlay drag threshold helper was not found.");
+    Assert(
+        hasExceededDragThreshold.Invoke(
+            null,
+            [new System.Drawing.Point(400, 300), new System.Drawing.Point(404, 304)]) as bool? == false &&
+        hasExceededDragThreshold.Invoke(
+            null,
+            [new System.Drawing.Point(400, 300), new System.Drawing.Point(406, 300)]) as bool? == true,
+        "HTML overlay clicks are no longer separated from intentional drag gestures.");
     var tryAcquireInteraction = formType.GetMethod(
                                     "TryAcquireInteraction",
                                     BindingFlags.Static | BindingFlags.NonPublic)
@@ -1973,12 +1988,12 @@ static void ValidateHtmlOverlayDefaults()
                                        "HTML overlay browser input routing helper was not found.");
     settings.SetEditing(true);
     Assert(
-        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == false,
-        "Windowed WebView2 still captures mouse input while editing an overlay.");
-    settings.IsLocked = true;
+        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
+        "Windowed WebView2 did not keep page clicks enabled while editing an overlay.");
+    settings.SetEditing(false);
     Assert(
         shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
-        "Windowed WebView2 did not resume page interaction after the overlay was locked.");
+        "Windowed WebView2 did not preserve page interaction after the overlay was locked.");
     var shieldType = typeof(MeterService).Assembly.GetType(
                          "DalamudActCompat.UI.OverlayEditShield",
                          throwOnError: true)
