@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.7",
+    "AssemblyVersion":  "0.3.6.8",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.7/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.8/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.7/DalamudActCompat.zip",
-    "LastUpdate":  1786012078046,
-    "Changelog":  "修复 HTML 悬浮窗编辑时按钮无响应和缩放区域难以操作：单击网页控件不再触发拖动，右下角增加可见缩放抓手，完成编辑后保持网页可交互。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.8/DalamudActCompat.zip",
+    "LastUpdate":  1786012747838,
+    "Changelog":  "修复 HTML 悬浮窗关闭穿透后仍未刷新原生窗口样式的问题；交互时允许 WebView2 窗口获得焦点，网页按钮不再失效，也不会带动下方卫月窗口。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

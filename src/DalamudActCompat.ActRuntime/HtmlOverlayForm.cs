@@ -17,6 +17,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
+    private const uint SwpFrameChanged = 0x0020;
     private const int VirtualKeyLeftButton = 0x01;
     private const int ResizeGripSize = 36;
     private const int DragThreshold = 6;
@@ -680,6 +681,16 @@ internal sealed class HtmlOverlayForm : IDisposable
     internal static bool ShouldEnableBrowserInput(HtmlOverlayWindowSettings settings)
         => !settings.IsClickThrough;
 
+    internal static nint CalculateOverlayExtendedStyle(
+        nint currentStyle,
+        bool isClickThrough)
+    {
+        var style = currentStyle | WsExLayered;
+        return isClickThrough
+            ? style | WsExTransparent | WsExNoActivate
+            : style & ~(WsExTransparent | WsExNoActivate);
+    }
+
     private void StartEditMonitor()
     {
         if (editMonitor is not null)
@@ -901,12 +912,25 @@ internal sealed class HtmlOverlayForm : IDisposable
                 webView.Enabled = ShouldEnableBrowserInput(settings);
             }
 
-            var extendedStyle = GetWindowLongPtr(form.Handle, GwlExStyle);
-            extendedStyle |= WsExLayered | WsExNoActivate;
-            extendedStyle = settings.IsClickThrough
-                ? extendedStyle | WsExTransparent
-                : extendedStyle & ~WsExTransparent;
-            SetWindowLongPtr(form.Handle, GwlExStyle, extendedStyle);
+            var currentStyle = GetWindowLongPtr(form.Handle, GwlExStyle);
+            var extendedStyle = CalculateOverlayExtendedStyle(
+                currentStyle,
+                settings.IsClickThrough);
+            if (currentStyle != extendedStyle)
+            {
+                SetWindowLongPtr(form.Handle, GwlExStyle, extendedStyle);
+                // Extended styles can remain cached until SetWindowPos applies
+                // SWP_FRAMECHANGED. Interactive overlays must also be allowed to
+                // activate so WebView2, rather than the focused game, owns clicks.
+                SetWindowPos(
+                    form.Handle,
+                    HwndTopMost,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged);
+            }
             if (settings.IsEditing)
             {
                 StartEditMonitor();

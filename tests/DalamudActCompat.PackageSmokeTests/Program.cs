@@ -902,7 +902,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 7)) == "v0.3.6.7",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 8)) == "v0.3.6.8",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1994,6 +1994,37 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
         "Windowed WebView2 did not preserve page interaction after the overlay was locked.");
+    var calculateExtendedStyle = formType.GetMethod(
+                                     "CalculateOverlayExtendedStyle",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay extended-style helper was not found.");
+    var clickThroughStyle = (nint)calculateExtendedStyle.Invoke(
+        null,
+        [(nint)0x00000100, true])!;
+    Assert(
+        (clickThroughStyle & (nint)0x00080000) != nint.Zero &&
+        (clickThroughStyle & (nint)0x00000020) != nint.Zero &&
+        (clickThroughStyle & (nint)0x08000000) != nint.Zero,
+        "A click-through HTML overlay no longer remains layered, transparent, and non-activating.");
+    var interactiveStyle = (nint)calculateExtendedStyle.Invoke(
+        null,
+        [clickThroughStyle, false])!;
+    Assert(
+        (interactiveStyle & (nint)0x00080000) != nint.Zero &&
+        (interactiveStyle & (nint)0x00000020) == nint.Zero &&
+        (interactiveStyle & (nint)0x08000000) == nint.Zero,
+        "An interactive HTML overlay still passes clicks through or refuses activation.");
+    var htmlOverlayFormSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "HtmlOverlayForm.cs"));
+    Assert(
+        htmlOverlayFormSource.Contains(
+            "SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged",
+            StringComparison.Ordinal),
+        "HTML overlay style changes are no longer flushed through SWP_FRAMECHANGED.");
     var shieldType = typeof(MeterService).Assembly.GetType(
                          "DalamudActCompat.UI.OverlayEditShield",
                          throwOnError: true)
