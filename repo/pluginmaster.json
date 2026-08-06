@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.2",
+    "AssemblyVersion":  "0.3.6.3",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.2/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.3/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.2/DalamudActCompat.zip",
-    "LastUpdate":  1786007626461,
-    "Changelog":  "三方扩展存在待确认项时移除关闭按钮与稍后处理，只能确认来源并安装；修复 FoxTTS 切换 Pro 后被旧 Host 配置覆盖的问题。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.3/DalamudActCompat.zip",
+    "LastUpdate":  1786008669525,
+    "Changelog":  "三方扩展存在待确认项时移除关闭按钮与稍后处理；修复 FoxTTS 配置编码声明异常及旧 Host 回写导致无法切换 Pro。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

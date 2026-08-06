@@ -16,7 +16,7 @@ public static class FoxTtsConfigurationDefaults
             return false;
         }
 
-        var document = XDocument.Load(configPath);
+        var document = Load(configPath, LoadOptions.None, out _);
         return string.Equals(
             document.Descendants("TTSEngine").FirstOrDefault()?.Value,
             DefaultEngine,
@@ -53,7 +53,10 @@ public static class FoxTtsConfigurationDefaults
             return Ensure(configRoot);
         }
 
-        var document = XDocument.Load(configPath, LoadOptions.PreserveWhitespace);
+        var document = Load(
+            configPath,
+            LoadOptions.PreserveWhitespace,
+            out var sourceEncoding);
         var engine = document.Descendants("TTSEngine").FirstOrDefault();
         if (engine is not null &&
             string.Equals(engine.Value, DefaultEngine, StringComparison.Ordinal))
@@ -81,7 +84,7 @@ public static class FoxTtsConfigurationDefaults
         var temporaryPath = $"{configPath}.tmp-{Guid.NewGuid():N}";
         try
         {
-            Save(document, temporaryPath, FileMode.CreateNew);
+            Save(document, temporaryPath, FileMode.CreateNew, sourceEncoding);
             File.Move(temporaryPath, configPath, overwrite: true);
         }
         finally
@@ -114,11 +117,36 @@ public static class FoxTtsConfigurationDefaults
                     new XElement("TTSEngine", DefaultEngine),
                     new XElement("PluginIntegration", "Auto"))));
 
-    private static void Save(XDocument document, string path, FileMode mode)
+    private static XDocument Load(
+        string path,
+        LoadOptions options,
+        out Encoding sourceEncoding)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite);
+        using var reader = new StreamReader(
+            stream,
+            new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true),
+            detectEncodingFromByteOrderMarks: true);
+        var xml = reader.ReadToEnd();
+        sourceEncoding = reader.CurrentEncoding;
+        return XDocument.Parse(xml, options);
+    }
+
+    private static void Save(
+        XDocument document,
+        string path,
+        FileMode mode,
+        Encoding? encoding = null)
     {
         var writerSettings = new XmlWriterSettings
         {
-            Encoding = ResolveEncoding(document.Declaration?.Encoding),
+            Encoding = encoding ?? ResolveEncoding(document.Declaration?.Encoding),
             Indent = true,
             OmitXmlDeclaration = false,
         };

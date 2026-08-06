@@ -131,6 +131,35 @@ void ValidateFoxTtsDefaultConfiguration()
         {
             throw new InvalidOperationException("Switching FoxTTS engines overwrote unrelated settings.");
         }
+
+        var mismatchedEncodingXml =
+            "<?xml version=\"1.0\" encoding=\"utf-16\" standalone=\"yes\"?>\r\n" +
+            "<Config><SettingsSerializer>" +
+            "<TTSEngine>ttsEngineCafe</TTSEngine>" +
+            "<PluginIntegration>Manual</PluginIntegration>" +
+            "</SettingsSerializer></Config>";
+        File.WriteAllText(
+            configurationPath,
+            mismatchedEncodingXml,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        if (FoxTtsConfigurationDefaults.IsPro(temporaryRoot))
+        {
+            throw new InvalidOperationException(
+                "A UTF-8 FoxTTS file with a stale UTF-16 declaration was incorrectly detected as Pro.");
+        }
+        if (!FoxTtsConfigurationDefaults.SetPro(temporaryRoot) ||
+            !FoxTtsConfigurationDefaults.IsPro(temporaryRoot))
+        {
+            throw new InvalidOperationException(
+                "A UTF-8 FoxTTS file with a stale UTF-16 declaration could not be switched to Pro.");
+        }
+
+        document = XDocument.Load(configurationPath);
+        if (document.Descendants("PluginIntegration").SingleOrDefault()?.Value != "Manual")
+        {
+            throw new InvalidOperationException(
+                "Repairing a stale FoxTTS encoding declaration overwrote unrelated settings.");
+        }
     }
     finally
     {
