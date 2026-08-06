@@ -54,6 +54,7 @@ try
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
+    ValidateEncounterParticipantsSurvivePartyDeparture();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
@@ -69,7 +70,7 @@ try
     ValidatePluginRepositoryMetadata();
     ValidateChinese755Opcodes();
     ValidateMeterRows();
-    ValidateCompactMeterLayout();
+    ValidateMeterLayout();
     ValidatePictoActOverlayCommands();
     ValidateDutyEncounterAggregation();
     ValidateControlCenterPresentation();
@@ -517,7 +518,7 @@ static void ValidateMeterRows()
         0x73 / 255f);
     Assert(
         System.Numerics.Vector4.DistanceSquared(defaultColor, requestedDefault) < 0.000001f,
-        "The multiplayer local-player highlight is not #8B573373 by default.");
+        "The Combat Meter local-player highlight is not #8B573373 by default.");
 
     var legacyConfiguration = new PluginConfiguration
     {
@@ -535,7 +536,7 @@ static void ValidateMeterRows()
         System.Numerics.Vector4.DistanceSquared(
             legacyConfiguration.Meter.LocalPlayerColor,
             requestedDefault) < 0.000001f,
-        "The previous multiplayer default highlight or parser startup was not migrated.");
+        "The previous Combat Meter default highlight or parser startup was not migrated.");
     var customColor = new System.Numerics.Vector4(0.1f, 0.2f, 0.3f, 0.4f);
     var customizedConfiguration = new PluginConfiguration
     {
@@ -662,49 +663,30 @@ static void ValidateMeterRows()
         "Display-only player ID masking mutated the encounter data.");
 }
 
-static void ValidateCompactMeterLayout()
+static void ValidateMeterLayout()
 {
-    var method = typeof(MeterWindow).GetMethod(
-                     "CalculateSingleCombatantWindowSize",
-                     BindingFlags.Static | BindingFlags.NonPublic)
-                 ?? throw new InvalidOperationException(
-                     "Single-combatant Meter layout helper was not found.");
-    var compact = (System.Numerics.Vector2)(method.Invoke(
-        null,
-        [new System.Numerics.Vector2(500, 420), true, 1.0f])
-        ?? throw new InvalidOperationException("Compact Meter layout returned no size."));
-    Assert(
-        compact.X is >= 320 and <= 440,
-        "Single-combatant Meter width is not compact or readable.");
-    Assert(
-        compact.Y is >= 90 and <= 120,
-        "Single-combatant Meter kept the oversized multi-player height.");
-
     var rowHeightMethod = typeof(MeterWindow).GetMethod(
                               "CalculateCombatantRowHeight",
                               BindingFlags.Static | BindingFlags.NonPublic)
                           ?? throw new InvalidOperationException(
                               "Meter row-height helper was not found.");
-    var multiRowHeight = (float)(rowHeightMethod.Invoke(null, [false, 19.0f])
-                                 ?? throw new InvalidOperationException(
-                                     "Multi-player Meter returned no row height."));
-    var singleRowHeight = (float)(rowHeightMethod.Invoke(null, [true, 19.0f])
-                                  ?? throw new InvalidOperationException(
-                                      "Single-player Meter returned no row height."));
+    var rowHeight = (float)(rowHeightMethod.Invoke(null, [19.0f])
+                            ?? throw new InvalidOperationException(
+                                "Combat Meter returned no row height."));
     Assert(
-        multiRowHeight <= 30 && multiRowHeight < singleRowHeight,
-        "Multi-player Meter did not keep each player on one compact line.");
+        rowHeight <= 30,
+        "Combat Meter did not keep each player on one compact line.");
 
     var iconSizeMethod = typeof(MeterWindow).GetMethod(
                              "CalculateJobIconSize",
                              BindingFlags.Static | BindingFlags.NonPublic)
                          ?? throw new InvalidOperationException(
                              "Meter job-icon sizing helper was not found.");
-    var iconSize = (float)(iconSizeMethod.Invoke(null, [multiRowHeight, 17.0f])
+    var iconSize = (float)(iconSizeMethod.Invoke(null, [rowHeight, 17.0f])
                            ?? throw new InvalidOperationException(
                                "Meter returned no job-icon size."));
     Assert(
-        iconSize is >= 20 and <= 24 && iconSize <= multiRowHeight - 4,
+        iconSize is >= 20 and <= 24 && iconSize <= rowHeight - 4,
         "Job icons were not normalized to the one-line Meter slot.");
 
     var rateLabelMethod = typeof(MeterWindow).GetMethod(
@@ -793,9 +775,57 @@ static void ValidateFflogsEstimateCurve()
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
     var orange = FflogsEstimateService.ColorForPercentile(95);
+    var roundedOrange = FflogsEstimateService.ColorForPercentile(94.6);
     Assert(
-        legendary != pink && pink != orange,
-        "FFLogs estimate color thresholds collapsed distinct ranking tiers.");
+        legendary != pink && pink != orange && roundedOrange == orange,
+        "FFLogs estimate colors did not match the rounded score shown by the Meter.");
+}
+
+static void ValidateEncounterParticipantsSurvivePartyDeparture()
+{
+    ActGlobals.Init();
+    var encounter = new EncounterData("Player 1", "Test Duty", false, null!);
+    var allies = Enumerable.Range(1, 8)
+        .Select(index => new CombatantData($"Player {index}", encounter))
+        .ToList();
+    encounter.SetAllies(allies);
+
+    var cachedIdentities = Enumerable.Range(1, 8)
+        .Select(index => new ActPlayerIdentity(
+            $"Player {index}",
+            "Test World",
+            index <= 2 ? "WAR" : "DPS",
+            index == 1,
+            false)
+        {
+            ContentId = (ulong)index,
+        })
+        .ToArray();
+    var liveIdentities = cachedIdentities.Take(5).ToArray();
+
+    var resolved = SelfHostedActRuntime.ResolveEncounterCombatants(
+        encounter,
+        liveIdentities,
+        cachedIdentities);
+
+    Assert(
+        resolved.Count == 8,
+        "A completed eight-player encounter lost combatants who left the live party before publication.");
+    Assert(
+        resolved.All(static item => item.Identity is not null),
+        "An encounter-scoped player identity was not retained after a party departure.");
+    Assert(
+        resolved.Skip(5).Select(static item => item.Identity!.Name)
+            .SequenceEqual(["Player 6", "Player 7", "Player 8"]),
+        "The departed players were not restored from the encounter identity cache.");
+
+    var withoutMetadata = SelfHostedActRuntime.ResolveEncounterCombatants(
+        encounter,
+        liveIdentities,
+        []);
+    Assert(
+        withoutMetadata.Count == 8 && withoutMetadata.Skip(5).All(static item => item.Identity is null),
+        "ACT allies without live identity metadata were silently removed from the encounter.");
 }
 
 static void ValidateDutyEncounterAggregation()
@@ -818,6 +848,10 @@ static void ValidateDutyEncounterAggregation()
     Assert(
         afterFirst.IsActive && afterFirst.TotalDamage == 100,
         "A completed boss incorrectly ended or reset the active duty session.");
+    Assert(
+        afterFirst.FflogsRankingEncounter?.EnemyName == "Boss A" &&
+        afterFirst.FflogsRankingEncounter.TotalDamage == 100,
+        "Duty aggregation did not retain the concrete boss segment for FFLogs estimation.");
     var duplicateFirst = accumulator.Update(first, finished: true, start.AddMinutes(3));
     Assert(
         duplicateFirst.TotalDamage == 100,
@@ -842,6 +876,15 @@ static void ValidateDutyEncounterAggregation()
         combinedActive.TotalDamage == 150 &&
         combinedActive.EnemyName == "测试副本",
         "The next boss did not continue the same duty-wide ACT encounter.");
+    Assert(
+        combinedActive.FflogsRankingEncounter?.Id == secondId &&
+        combinedActive.FflogsRankingEncounter.TotalDamage == 50,
+        "FFLogs estimation received cumulative duty totals instead of the active boss segment.");
+    Assert(
+        !JsonSerializer.Serialize(combinedActive).Contains(
+            nameof(Encounter.FflogsRankingEncounter),
+            StringComparison.Ordinal),
+        "The transient FFLogs ranking segment leaked into persisted encounter JSON.");
 
     var secondFinished = secondActive with
     {
@@ -871,6 +914,10 @@ static void ValidateDutyEncounterAggregation()
         completed.Combatants[0].CriticalHits == 5 &&
         completed.Combatants[0].CriticalDirectHits == 2,
         "Leaving the duty did not finalize the accumulated boss totals exactly once.");
+    Assert(
+        completed.FflogsRankingEncounter?.Id == secondId &&
+        completed.FflogsRankingEncounter.TotalDamage == 80,
+        "The completed duty did not retain its latest boss segment for FFLogs estimation.");
 }
 
 static Encounter CreateDutySegment(

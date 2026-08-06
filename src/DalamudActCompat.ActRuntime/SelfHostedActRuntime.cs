@@ -54,6 +54,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
     private Guid activeEncounterId;
+    private readonly Dictionary<string, ActPlayerIdentity> activeEncounterIdentities =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> lastKnownDead = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> observedDeaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> chatDamageTotals = new(StringComparer.OrdinalIgnoreCase);
@@ -924,6 +926,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
+            activeEncounterIdentities.Clear();
             activeEncounterPublished = false;
             activeEncounterNamesLogged = false;
             activeEncounterRelevantStart = default;
@@ -1231,6 +1234,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     {
                         var continuesChatEncounter = chatEncounterId != Guid.Empty;
                         criticalDirectHitCounters.Clear();
+                        activeEncounterIdentities.Clear();
                         activeEncounter = encounter;
                         activeEncounterId = continuesChatEncounter
                             ? chatEncounterId
@@ -1266,24 +1270,37 @@ public sealed class SelfHostedActRuntime : IDisposable
                         1,
                         ((endTime ?? DateTimeOffset.Now) - startTime).TotalSeconds);
                     var identities = gameStateProvider.Identities;
-                    var combatants = encounter.Items.Values
-                        .Select(combatant => (
-                            Combatant: combatant,
-                            Identity: ActPlayerIdentityResolver.Resolve(identities, combatant.Name)))
-                        .Where(static item => item.Identity is not null)
+                    CacheActiveEncounterIdentities(identities);
+                    var cachedIdentities = activeEncounterIdentities.Values.ToArray();
+                    var combatants = ResolveEncounterCombatants(
+                            encounter,
+                            identities,
+                            cachedIdentities)
                         .Select(item =>
                         {
                             var hitCounts = GetDamageHitCounts(item.Combatant);
+                            var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
+                            var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
+                                                string.Equals(
+                                                    item.Combatant.Name,
+                                                    "YOU",
+                                                    StringComparison.OrdinalIgnoreCase) ||
+                                                string.Equals(
+                                                    item.Combatant.Name,
+                                                    playerName(),
+                                                    StringComparison.OrdinalIgnoreCase);
                             return new ActCombatantSnapshot(
-                                item.Identity!.DisplayName,
-                                item.Identity.DisplayName,
-                                item.Identity.Job,
-                                item.Identity.IsLocalPlayer,
+                                displayName,
+                                displayName,
+                                item.Identity?.Job ?? string.Empty,
+                                isLocalPlayer,
                                 item.Combatant.Damage,
                                 item.Combatant.Healed,
                                 Math.Max(
                                     item.Combatant.Deaths,
-                                    observedDeaths.GetValueOrDefault(item.Identity.DisplayName)),
+                                    Math.Max(
+                                        observedDeaths.GetValueOrDefault(displayName),
+                                        observedDeaths.GetValueOrDefault(item.Combatant.Name))),
                                 item.Combatant.DPS,
                                 item.Combatant.Damage / encounterSeconds,
                                 item.Combatant.ExtDPS,
@@ -1323,6 +1340,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         }
 
                         activeEncounterId = Guid.Empty;
+                        activeEncounterIdentities.Clear();
                         activeEncounterPublished = false;
                         activeEncounterNamesLogged = false;
                         activeEncounterRelevantStart = default;
@@ -1355,6 +1373,58 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             log.Error(ex, "Failed to publish ACT encounter snapshot.");
         }
+    }
+
+    private void CacheActiveEncounterIdentities(IReadOnlyList<ActPlayerIdentity> identities)
+    {
+        foreach (var identity in identities)
+        {
+            var staleKeys = activeEncounterIdentities
+                .Where(pair =>
+                    (identity.ContentId != 0 && pair.Value.ContentId == identity.ContentId) ||
+                    (identity.EntityId != 0 && pair.Value.EntityId == identity.EntityId) ||
+                    string.Equals(
+                        pair.Value.DisplayName,
+                        identity.DisplayName,
+                        StringComparison.OrdinalIgnoreCase))
+                .Select(static pair => pair.Key)
+                .ToArray();
+            foreach (var staleKey in staleKeys)
+            {
+                activeEncounterIdentities.Remove(staleKey);
+            }
+
+            var key = identity.ContentId != 0
+                ? $"content:{identity.ContentId}"
+                : identity.DisplayName;
+            activeEncounterIdentities[key] = identity;
+        }
+    }
+
+    internal static IReadOnlyList<(CombatantData Combatant, ActPlayerIdentity? Identity)>
+        ResolveEncounterCombatants(
+            EncounterData encounter,
+            IReadOnlyList<ActPlayerIdentity> liveIdentities,
+            IReadOnlyList<ActPlayerIdentity> cachedIdentities)
+    {
+        var allies = encounter.GetAllies();
+        if (allies.Count == 0)
+        {
+            // Preserve the previous behavior while ACT is still building its ally graph,
+            // but allow identities captured earlier in this encounter to survive a party leave.
+            allies = encounter.Items.Values
+                .Where(combatant =>
+                    ActPlayerIdentityResolver.Resolve(liveIdentities, combatant.Name) is not null ||
+                    ActPlayerIdentityResolver.Resolve(cachedIdentities, combatant.Name) is not null)
+                .ToList();
+        }
+
+        return allies
+            .Select(combatant => (
+                Combatant: combatant,
+                Identity: ActPlayerIdentityResolver.Resolve(liveIdentities, combatant.Name) ??
+                          ActPlayerIdentityResolver.Resolve(cachedIdentities, combatant.Name)))
+            .ToArray();
     }
 
     private CombatantHitCounts GetDamageHitCounts(CombatantData combatant)

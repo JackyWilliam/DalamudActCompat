@@ -13,6 +13,9 @@ public sealed record Encounter(
     IReadOnlyList<ActionSummary> ActionSummaries,
     IReadOnlyList<JobSummary> JobSummaries)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Encounter? FflogsRankingEncounter { get; init; }
+
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
 
     public bool IsActive => EndTime is null;
