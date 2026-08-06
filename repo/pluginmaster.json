@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.0",
+    "AssemblyVersion":  "0.3.6.1",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.0/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.1/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.0/DalamudActCompat.zip",
-    "LastUpdate":  1786003996759,
-    "Changelog":  "新增自定义 URL HTML 悬浮窗与第三方扩展启动更新开关；FoxTTS 新配置默认 Cafe TTS Pro；修复聊天伤害归属和双 Cactbot 窗口 TTS 无声。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.1/DalamudActCompat.zip",
+    "LastUpdate":  1786007256999,
+    "Changelog":  "修复更新后初始化引导未自动出现；每版重新确认扩展权限，首次自动启用解析，并为非 Pro FoxTTS 提供更改、本次不更改和不再提醒选项。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
