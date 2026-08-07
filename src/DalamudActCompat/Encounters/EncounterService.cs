@@ -14,8 +14,11 @@ public sealed class EncounterService : IAsyncDisposable
     private readonly PluginConfiguration configuration;
     private readonly PluginLogger logger;
     private readonly PluginPaths paths;
-    private readonly SemaphoreSlim saveLock = new(1, 1);
+    private readonly object saveQueueLock = new();
     private IReadOnlyList<Encounter> recent = Array.Empty<Encounter>();
+    private Task pendingSaves = Task.CompletedTask;
+    private Task? disposeTask;
+    private bool acceptingSaves = true;
 
     public EncounterService(
         EncounterRepository repository,
@@ -36,7 +39,7 @@ public sealed class EncounterService : IAsyncDisposable
         try
         {
             recent = await repository.LoadRecentAsync(cancellationToken).ConfigureAwait(false);
-            stateStore.Replace(stateStore.GetSnapshot().Current, recent);
+            stateStore.UpdateRecent(recent);
         }
         catch (Exception ex)
         {
@@ -44,36 +47,72 @@ public sealed class EncounterService : IAsyncDisposable
         }
     }
 
-    public async Task AddFinishedEncounterAsync(Encounter encounter, CancellationToken cancellationToken)
+    public void QueueFinishedEncounter(Encounter encounter)
     {
-        await saveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(encounter);
+        lock (saveQueueLock)
+        {
+            if (!acceptingSaves)
+            {
+                logger.Warning("Encounter save was submitted after shutdown began and was ignored.");
+                return;
+            }
+
+            pendingSaves = SaveAfterAsync(pendingSaves, encounter);
+        }
+    }
+
+    private async Task SaveAfterAsync(Task previousSave, Encounter encounter)
+    {
         try
         {
+            await previousSave.ConfigureAwait(false);
             recent = recent.Prepend(encounter)
                 .Take(Math.Max(1, configuration.HistoryLimit))
                 .ToArray();
-            stateStore.Replace(stateStore.GetSnapshot().Current, recent);
-            await repository.SaveRecentAsync(recent, cancellationToken).ConfigureAwait(false);
+            stateStore.UpdateRecent(recent);
+            await repository.SaveRecentAsync(recent, CancellationToken.None).ConfigureAwait(false);
             Directory.CreateDirectory(paths.EncounterLogDirectory);
             var fileName = $"{encounter.StartTime.LocalDateTime:yyyyMMdd-HHmmss}-{encounter.Id:N}.json";
             await File.WriteAllTextAsync(
                 Path.Combine(paths.EncounterLogDirectory, fileName),
                 JsonSerializer.Serialize(encounter, new JsonSerializerOptions { WriteIndented = true }),
-                cancellationToken).ConfigureAwait(false);
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.Error(ex, "Failed to save encounter history.");
         }
-        finally
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (saveQueueLock)
         {
-            saveLock.Release();
+            if (disposeTask is null)
+            {
+                acceptingSaves = false;
+                disposeTask = FlushPendingSavesAsync(pendingSaves);
+            }
+
+            return new ValueTask(disposeTask);
         }
     }
 
-    public async ValueTask DisposeAsync()
+    private async Task FlushPendingSavesAsync(Task pending)
     {
-        saveLock.Dispose();
-        await ValueTask.CompletedTask;
+        try
+        {
+            await pending.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.Warning(
+                "Encounter save flush exceeded five seconds; the tracked save will continue without disposing its resources.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Encounter save flush failed during shutdown.");
+        }
     }
 }

@@ -111,6 +111,7 @@ internal static class Program
             shutdown.Token).ConfigureAwait(false);
         LegacyPluginRuntime? pluginRuntime = null;
         var pluginRuntimeReady = 0;
+        var pluginRuntimeDisposed = 0;
         var pluginStartupStarted = 0;
         var heartbeat = Task.Factory.StartNew(
             () => HeartbeatLoop(
@@ -237,9 +238,19 @@ internal static class Program
                             shutdown.Token).ConfigureAwait(false);
                         CompleteOutbound(outbound);
                         await writer.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        var postNamazuQueuesStopped = await HostPluginBridge
+                            .StopPostNamazuQueuesAsync()
+                            .ConfigureAwait(false);
+                        if (postNamazuQueuesStopped &&
+                            Volatile.Read(ref pluginRuntimeReady) == 1 &&
+                            Interlocked.Exchange(ref pluginRuntimeDisposed, 1) == 0)
                         {
                             pluginRuntime?.Dispose();
+                        }
+                        else if (!postNamazuQueuesStopped)
+                        {
+                            Console.Error.WriteLine(
+                                "Skipping legacy plugin runtime disposal because a PostNamazu action is still executing; the isolated Host process will exit instead.");
                         }
                         shutdown.Cancel();
                         return;
@@ -390,9 +401,19 @@ internal static class Program
         }
         finally
         {
-            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+            var postNamazuQueuesStopped = await HostPluginBridge
+                .StopPostNamazuQueuesAsync()
+                .ConfigureAwait(false);
+            if (postNamazuQueuesStopped &&
+                Volatile.Read(ref pluginRuntimeReady) == 1 &&
+                Interlocked.Exchange(ref pluginRuntimeDisposed, 1) == 0)
             {
                 pluginRuntime?.Dispose();
+            }
+            else if (!postNamazuQueuesStopped)
+            {
+                Console.Error.WriteLine(
+                    "Legacy plugin runtime remains undisposed because a PostNamazu action is still executing; process exit is the safe fallback.");
             }
             CompleteOutbound(outbound);
             shutdown.Cancel();

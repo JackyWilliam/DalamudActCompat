@@ -7,6 +7,7 @@ using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Compatibility.Cactbot;
 using Dalamud.Bindings.ImGui;
 
 namespace DalamudActCompat.UI;
@@ -25,6 +26,7 @@ public sealed class SettingsWindow : Window
     private readonly Action openPluginDirectory;
     private readonly UiText text;
     private readonly Func<bool> isCactbotInstalled;
+    private readonly Func<CactbotOperationStatus> getCactbotOperationStatus;
     private readonly Action selectCactbotPackage;
     private readonly Action openCactbotOverlay;
     private readonly Action openCactbotSettings;
@@ -51,6 +53,7 @@ public sealed class SettingsWindow : Window
         Action openPluginDirectory,
         UiText text,
         Func<bool> isCactbotInstalled,
+        Func<CactbotOperationStatus> getCactbotOperationStatus,
         Action selectCactbotPackage,
         Action openCactbotOverlay,
         Action openCactbotSettings,
@@ -74,6 +77,7 @@ public sealed class SettingsWindow : Window
         this.openPluginDirectory = openPluginDirectory;
         this.text = text;
         this.isCactbotInstalled = isCactbotInstalled;
+        this.getCactbotOperationStatus = getCactbotOperationStatus;
         this.selectCactbotPackage = selectCactbotPackage;
         this.openCactbotOverlay = openCactbotOverlay;
         this.openCactbotSettings = openCactbotSettings;
@@ -182,9 +186,7 @@ public sealed class SettingsWindow : Window
         ImGui.TextDisabled(text.Get("安装或启停扩展后请重启解析器。", "Restart the parser after installing or changing plugins."));
         ImGui.Separator();
         ImGui.TextUnformatted("Cactbot（OverlayPlugin addon）");
-        ImGui.TextDisabled(isCactbotInstalled()
-            ? text.Get("资源已安装；OverlayPlugin 事件源可用。", "Assets installed; OverlayPlugin event source is available.")
-            : text.Get("未安装。请选择 OverlayPlugin/cactbot 官方 Release ZIP。", "Not installed. Select the official OverlayPlugin/cactbot Release ZIP."));
+        ImGui.TextDisabled(FormatCactbotStatus());
         if (ImGui.Button(text.Get("安装/更新 Cactbot...", "Install/update Cactbot...")))
         {
             selectCactbotPackage();
@@ -415,18 +417,7 @@ public sealed class SettingsWindow : Window
             if (ImGui.Button(text.Get("确认恢复", "Confirm factory reset")))
             {
                 confirmFactoryReset = false;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        resetResult = await factoryReset().ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.Error(ex, "Factory reset failed.");
-                        resetResult = $"Factory reset failed: {ex.Message}";
-                    }
-                });
+                _ = RunFactoryResetAsync();
             }
 
             ImGui.SameLine();
@@ -458,6 +449,29 @@ public sealed class SettingsWindow : Window
     }
 
     public void Detach() => parserEngine.StatusChanged -= OnParserStatusChanged;
+
+    private string FormatCactbotStatus()
+    {
+        var status = getCactbotOperationStatus();
+        return status.State switch
+        {
+            CactbotOperationState.Checking => text.Get(
+                "正在检查内置 Cactbot 资源…",
+                "Checking bundled Cactbot assets…"),
+            CactbotOperationState.Installing => text.Get(
+                "正在安装 Cactbot 资源…",
+                "Installing Cactbot assets…"),
+            CactbotOperationState.Error => text.Get(
+                $"Cactbot 安装失败：{status.ErrorMessage}",
+                $"Cactbot installation failed: {status.ErrorMessage}"),
+            _ when isCactbotInstalled() => text.Get(
+                "资源已安装；OverlayPlugin 事件源可用。",
+                "Assets installed; OverlayPlugin event source is available."),
+            _ => text.Get(
+                "未安装。请选择 OverlayPlugin/cactbot 官方 Release ZIP。",
+                "Not installed. Select the official OverlayPlugin/cactbot Release ZIP."),
+        };
+    }
 
     private bool DrawPluginPermissions(
         string pluginId,
@@ -588,6 +602,23 @@ public sealed class SettingsWindow : Window
         ImGui.SameLine();
         ImGui.TextDisabled(note);
         ImGui.TextWrapped($"{text.Get("网址", "URL")}: {url}");
+    }
+
+    private async Task RunFactoryResetAsync()
+    {
+        try
+        {
+            resetResult = await factoryReset().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Plugin shutdown owns cancellation and observes the reset task.
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Factory reset failed.");
+            resetResult = $"Factory reset failed: {ex.Message}";
+        }
     }
 
     private void OpenUrl(string url)

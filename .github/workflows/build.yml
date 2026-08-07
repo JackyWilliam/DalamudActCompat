@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # SDK 15 targets the public staging API. Release packaging still uses the
+      # self-hosted CN launcher environment to verify the exact deployment DLLs.
+      DALAMUD_ARCHIVE_URL: https://goatcorp.github.io/dalamud-distrib/stg/latest.zip
 
     steps:
       - name: Checkout
@@ -22,11 +26,50 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Restore
-        run: dotnet restore DalamudActCompat.slnx
+      - name: Download Dalamud reference assemblies
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "dalamud.zip"
+          $dalamud = Join-Path $env:RUNNER_TEMP "dalamud"
+          Invoke-WebRequest -Uri $env:DALAMUD_ARCHIVE_URL -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $dalamud -Force
+          if (-not (Test-Path (Join-Path $dalamud "Dalamud.dll"))) {
+            throw "Dalamud reference archive did not contain Dalamud.dll."
+          }
+          "DALAMUD_HOME=$dalamud" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Build compatibility host
-        run: dotnet build src/DalamudActCompat.Host/DalamudActCompat.Host.csproj --configuration Release --no-restore
+      - name: Restore
+        shell: pwsh
+        run: |
+          $dalamud = $env:DALAMUD_HOME.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+          dotnet restore DalamudActCompat.slnx "-p:DalamudLibPath=$dalamud"
+
+      - name: Build full solution
+        shell: pwsh
+        run: |
+          $dalamud = $env:DALAMUD_HOME.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+          dotnet build DalamudActCompat.slnx `
+            --configuration Release `
+            --no-restore `
+            "-p:DalamudLibPath=$dalamud"
+
+      - name: Run Release Package smoke
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.PackageSmokeTests.exe"
+
+      - name: Run Host smoke
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe"
+
+      - name: Run Legacy Resource smoke
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.LegacyResourceSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.LegacyResourceSmokeTests.exe" `
+            "vendor/BundledActPlugins/triggernometry/Triggernometry.dll" `
+            "vendor/BundledActPlugins/postnamazu/PostNamazu.dll"
 
       - name: Validate custom repository JSON
         shell: pwsh
@@ -34,7 +77,7 @@ jobs:
           Get-Content repo/pluginmaster.json -Raw | ConvertFrom-Json | Out-Null
           Write-Host "Plugin metadata is valid JSON."
 
-      - name: Explain plugin build requirement
+      - name: Explain release environment requirement
         run: |
-          echo "The Dalamud plugin project is not built on GitHub-hosted runners because Dalamud.NET.Sdk requires local XIVLauncher/Dalamud dev files."
-          echo "Build the full solution on a Windows machine with XIVLauncher/Dalamud installed."
+          echo "Hosted CI compiles the full plugin against the public SDK 15 staging references and runs all offline smoke suites."
+          echo "The release workflow remains self-hosted for CN launcher reference verification, dependency synchronization, packaging, and publication."

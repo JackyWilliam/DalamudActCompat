@@ -3,6 +3,7 @@ using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Fflogs;
@@ -66,6 +67,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
     private readonly Func<bool> isCactbotInstalled;
+    private readonly Func<CactbotOperationStatus> getCactbotOperationStatus;
     private readonly Action selectCactbotPackage;
     private readonly Action openCactbotOverlay;
     private readonly Action openCactbotSettings;
@@ -115,6 +117,7 @@ public sealed class ControlCenterWindow : Window
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
         Func<bool> isCactbotInstalled,
+        Func<CactbotOperationStatus> getCactbotOperationStatus,
         Action selectCactbotPackage,
         Action openCactbotOverlay,
         Action openCactbotSettings,
@@ -149,6 +152,7 @@ public sealed class ControlCenterWindow : Window
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
         this.isCactbotInstalled = isCactbotInstalled;
+        this.getCactbotOperationStatus = getCactbotOperationStatus;
         this.selectCactbotPackage = selectCactbotPackage;
         this.openCactbotOverlay = openCactbotOverlay;
         this.openCactbotSettings = openCactbotSettings;
@@ -289,6 +293,21 @@ public sealed class ControlCenterWindow : Window
     public override void OnClose() => saveConfiguration();
 
     public void Detach() => parserEngine.StatusChanged -= OnParserStatusChanged;
+
+    private string FormatCactbotStatus()
+    {
+        var status = getCactbotOperationStatus();
+        return status.State switch
+        {
+            CactbotOperationState.Checking => text.Get("正在检查资源…", "Checking assets…"),
+            CactbotOperationState.Installing => text.Get("正在安装资源…", "Installing assets…"),
+            CactbotOperationState.Error => text.Get(
+                $"安装失败：{status.ErrorMessage}",
+                $"Installation failed: {status.ErrorMessage}"),
+            _ when isCactbotInstalled() => text.Get("资源已安装", "Assets installed"),
+            _ => text.Get("资源未安装", "Assets not installed"),
+        };
+    }
 
     internal static float EaseInOut(float progress)
     {
@@ -613,9 +632,7 @@ public sealed class ControlCenterWindow : Window
         configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
             StringComparer.OrdinalIgnoreCase);
         ImGui.TextColored(Gold, "Cactbot Raidboss");
-        ImGui.TextDisabled(isCactbotInstalled()
-            ? text.Get("资源已安装", "Assets installed")
-            : text.Get("资源未安装", "Assets not installed"));
+        ImGui.TextDisabled(FormatCactbotStatus());
         if (ImGui.Button(text.Get("打开 Cactbot", "Open Cactbot")))
         {
             openCactbotOverlay();
@@ -1118,18 +1135,7 @@ public sealed class ControlCenterWindow : Window
             if (ImGui.Button(text.Get("确认恢复", "Confirm factory reset")))
             {
                 confirmFactoryReset = false;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        factoryResetResult = await factoryReset().ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.Error(ex, "Factory reset failed.");
-                        factoryResetResult = $"{text.Get("恢复出厂设置失败", "Factory reset failed")}: {ex.Message}";
-                    }
-                });
+                _ = RunFactoryResetAsync();
             }
 
             ImGui.SameLine();
@@ -1358,7 +1364,7 @@ public sealed class ControlCenterWindow : Window
             var enabled = configuration.Fflogs.Enabled;
             if (ImGui.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
             {
-                configuration.Fflogs.Enabled = enabled;
+                UpdateFflogsSettings(settings => settings.Enabled = enabled);
                 fflogsEstimateService.NotifyCredentialsChanged();
                 changed = true;
                 if (enabled)
@@ -1395,7 +1401,7 @@ public sealed class ControlCenterWindow : Window
             var clientId = configuration.Fflogs.ClientId;
             if (ImGui.InputText("Client ID", ref clientId, 128))
             {
-                configuration.Fflogs.ClientId = clientId.Trim();
+                UpdateFflogsSettings(settings => settings.ClientId = clientId.Trim());
                 fflogsEstimateService.NotifyCredentialsChanged();
                 changed = true;
             }
@@ -1403,7 +1409,7 @@ public sealed class ControlCenterWindow : Window
             var clientSecret = configuration.Fflogs.ClientSecret;
             if (ImGui.InputText("Client Secret", ref clientSecret, 256, ImGuiInputTextFlags.Password))
             {
-                configuration.Fflogs.ClientSecret = clientSecret.Trim();
+                UpdateFflogsSettings(settings => settings.ClientSecret = clientSecret.Trim());
                 fflogsEstimateService.NotifyCredentialsChanged();
                 changed = true;
             }
@@ -1459,11 +1465,11 @@ public sealed class ControlCenterWindow : Window
 
             if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))
             {
-                configuration.Fflogs.EncounterMappings ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                var mappings = configuration.Fflogs.EncounterMappings ?? [];
                 if (!string.Equals(fflogsEncounterInputKey, encounter.EnemyName, StringComparison.Ordinal))
                 {
                     fflogsEncounterInputKey = encounter.EnemyName;
-                    fflogsEncounterIdInput = configuration.Fflogs.EncounterMappings.TryGetValue(encounter.EnemyName, out var mappedId)
+                    fflogsEncounterIdInput = mappings.TryGetValue(encounter.EnemyName, out var mappedId)
                         ? mappedId
                         : 0;
                 }
@@ -1475,14 +1481,17 @@ public sealed class ControlCenterWindow : Window
                 }
                 if (ImGui.Button(text.Get("绑定当前战斗", "Bind current encounter")) && fflogsEncounterIdInput > 0)
                 {
-                    configuration.Fflogs.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput;
+                    UpdateFflogsSettings(settings =>
+                        settings.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput);
                     fflogsEstimateService.RequestRefresh(encounter);
                     changed = true;
                 }
                 ImGui.SameLine();
                 if (ImGui.Button(text.Get("清除绑定", "Clear binding")) &&
-                    configuration.Fflogs.EncounterMappings.Remove(encounter.EnemyName))
+                    mappings.ContainsKey(encounter.EnemyName))
                 {
+                    UpdateFflogsSettings(settings =>
+                        settings.EncounterMappings.Remove(encounter.EnemyName));
                     fflogsEncounterIdInput = 0;
                     changed = true;
                 }
@@ -1500,6 +1509,30 @@ public sealed class ControlCenterWindow : Window
         }
 
         return changed;
+    }
+
+    private async Task RunFactoryResetAsync()
+    {
+        try
+        {
+            factoryResetResult = await factoryReset().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Plugin shutdown owns cancellation and observes the reset task.
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Factory reset failed.");
+            factoryResetResult = $"{text.Get("恢复出厂设置失败", "Factory reset failed")}: {ex.Message}";
+        }
+    }
+
+    private void UpdateFflogsSettings(Action<FflogsSettings> update)
+    {
+        var next = configuration.Fflogs.Snapshot();
+        update(next);
+        configuration.Fflogs = next;
     }
 
     private string FflogsStatusLabel(FflogsEstimateState state) => state switch

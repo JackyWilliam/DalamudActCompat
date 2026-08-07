@@ -251,7 +251,7 @@ public sealed class IinactAdapter : IParserEngine
                 wasBoundByDuty = true;
                 dutyEncounter = dutySession.Update(encounter, finished, DateTimeOffset.UtcNow);
             }
-            stateStore.Replace(dutyEncounter, stateStore.GetSnapshot().Recent);
+            stateStore.UpdateCurrent(dutyEncounter);
             return;
         }
 
@@ -291,12 +291,12 @@ public sealed class IinactAdapter : IParserEngine
 
         if (!finished)
         {
-            stateStore.Replace(encounter, stateStore.GetSnapshot().Recent);
+            stateStore.UpdateCurrent(encounter);
             return;
         }
 
-        stateStore.Replace(encounter, stateStore.GetSnapshot().Recent);
-        _ = encounterService.AddFinishedEncounterAsync(encounter, CancellationToken.None);
+        stateStore.UpdateCurrent(encounter);
+        encounterService.QueueFinishedEncounter(encounter);
     }
 
     private void OnFrameworkUpdate(IFramework _)
@@ -341,8 +341,8 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
-        stateStore.Replace(completed, stateStore.GetSnapshot().Recent);
-        _ = encounterService.AddFinishedEncounterAsync(completed, CancellationToken.None);
+        stateStore.UpdateCurrent(completed);
+        encounterService.QueueFinishedEncounter(completed);
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)

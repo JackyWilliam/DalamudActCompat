@@ -36,13 +36,18 @@ public static class HostPluginBridge
     private static readonly FfxivDataRepository FfxivRepositoryInstance = new();
     private static readonly object TriggerZoneListenerLock = new();
     private static readonly object PostNamazuQueueLock = new();
+    private static readonly object PostNamazuTaskLock = new();
     private static readonly List<string> PostNamazuQueueIds = [];
+    private static readonly HashSet<Task> PostNamazuQueueTasks = [];
+    private static readonly CancellationTokenSource PostNamazuQueueShutdown = new();
     private static WeakReference<object>? triggerZoneListener;
     private static Action<string>? ttsWriter;
     private static Action<string>? clipboardWriterForTests;
     private static long triggerEventDrops;
     private static int pendingTtsCount;
     private static int pendingOverlayCallCount;
+    private static bool postNamazuShutdownStarted;
+    private static Task<bool>? postNamazuShutdownTask;
 
     internal static void Configure(
         Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> messageSender)
@@ -362,7 +367,41 @@ public static class HostPluginBridge
                           new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                       ?? throw new InvalidDataException(
                           "PostNamazu queue payload did not contain an action array.");
-        _ = Task.Run(() => RunPostNamazuQueueAsync(module, actions));
+        Task task;
+        lock (PostNamazuTaskLock)
+        {
+            if (postNamazuShutdownStarted)
+            {
+                throw new InvalidOperationException(
+                    "The ACT Host is stopping and cannot start another PostNamazu queue.");
+            }
+
+            task = Task.Run(
+                () => RunPostNamazuQueueAsync(module, actions, PostNamazuQueueShutdown.Token),
+                CancellationToken.None);
+            PostNamazuQueueTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    ReportException(
+                        "postnamazu",
+                        "Queue task",
+                        completedTask.Exception?.GetBaseException()
+                        ?? new InvalidOperationException("Unknown PostNamazu queue failure."));
+                }
+
+                lock (PostNamazuTaskLock)
+                {
+                    PostNamazuQueueTasks.Remove(completedTask);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public static void BreakPostNamazuQueue(string pattern)
@@ -564,7 +603,8 @@ public static class HostPluginBridge
 
     private static async Task RunPostNamazuQueueAsync(
         object module,
-        IReadOnlyList<PostNamazuQueueAction> actions)
+        IReadOnlyList<PostNamazuQueueAction> actions,
+        CancellationToken cancellationToken)
     {
         var queueId = string.Empty;
         try
@@ -577,7 +617,7 @@ public static class HostPluginBridge
                         "PostNamazu queue delay cannot be negative.");
                 }
 
-                await Task.Delay(action.D).ConfigureAwait(false);
+                await Task.Delay(action.D, cancellationToken).ConfigureAwait(false);
                 lock (PostNamazuQueueLock)
                 {
                     if (queueId.Length > 0 && !PostNamazuQueueIds.Contains(queueId))
@@ -611,6 +651,9 @@ public static class HostPluginBridge
                 DispatchPostNamazuRegisteredAction(module, command, actionPayload);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
             ReportException("postnamazu", "Queue action", ex);
@@ -624,6 +667,61 @@ public static class HostPluginBridge
                     PostNamazuQueueIds.Remove(queueId);
                 }
             }
+        }
+    }
+
+    internal static Task<bool> StopPostNamazuQueuesAsync()
+    {
+        var shouldCancel = false;
+        Task[] tasks;
+        lock (PostNamazuTaskLock)
+        {
+            if (postNamazuShutdownTask is not null)
+            {
+                return postNamazuShutdownTask;
+            }
+
+            if (!postNamazuShutdownStarted)
+            {
+                postNamazuShutdownStarted = true;
+                shouldCancel = true;
+            }
+
+            tasks = PostNamazuQueueTasks.ToArray();
+        }
+
+        if (shouldCancel)
+        {
+            PostNamazuQueueShutdown.Cancel();
+        }
+
+        lock (PostNamazuTaskLock)
+        {
+            postNamazuShutdownTask ??= StopPostNamazuQueuesCoreAsync(tasks);
+            return postNamazuShutdownTask;
+        }
+    }
+
+    private static async Task<bool> StopPostNamazuQueuesCoreAsync(Task[] tasks)
+    {
+        try
+        {
+            await Task.WhenAll(tasks)
+                .WaitAsync(TimeSpan.FromSeconds(2))
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            Console.Error.WriteLine(
+                "PostNamazu compatibility queue tasks did not stop within two seconds; " +
+                "the isolated Host process will finish shutdown.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            ReportException("postnamazu", "Queue shutdown", ex);
+            return true;
         }
     }
 

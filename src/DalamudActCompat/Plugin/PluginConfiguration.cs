@@ -3,6 +3,7 @@ using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Fflogs;
+using Newtonsoft.Json;
 
 namespace DalamudActCompat.Plugin;
 
@@ -113,6 +114,38 @@ public sealed class PluginConfiguration : IPluginConfiguration
             new Dictionary<string, BundledActPluginUpdateRecord>(StringComparer.OrdinalIgnoreCase);
         ActPluginPermissions =
             new Dictionary<string, Dictionary<ActCapability, bool>>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal PluginConfiguration CreateSnapshot()
+        => JsonConvert.DeserializeObject<PluginConfiguration>(
+               JsonConvert.SerializeObject(this))
+           ?? throw new InvalidOperationException("Plugin configuration snapshot could not be created.");
+
+    internal void RestoreFrom(PluginConfiguration snapshot)
+    {
+        Version = snapshot.Version;
+        EnableParsing = snapshot.EnableParsing;
+        AutoStartParser = snapshot.AutoStartParser;
+        DebugMode = snapshot.DebugMode;
+        AutoCheckBundledPluginUpdates = snapshot.AutoCheckBundledPluginUpdates;
+        SuppressFoxTtsProPrompt = snapshot.SuppressFoxTtsProPrompt;
+        HistoryLimit = snapshot.HistoryLimit;
+        LogDirectory = snapshot.LogDirectory;
+        ActPluginDirectory = snapshot.ActPluginDirectory;
+        UiLanguage = snapshot.UiLanguage;
+        ShowLauncherButton = snapshot.ShowLauncherButton;
+        LauncherButtonSize = snapshot.LauncherButtonSize;
+        LauncherPositionX = snapshot.LauncherPositionX;
+        LauncherPositionY = snapshot.LauncherPositionY;
+        SelectedOverlayTemplate = snapshot.SelectedOverlayTemplate;
+        OverlayWindows = snapshot.OverlayWindows;
+        Meter = snapshot.Meter;
+        Fflogs = snapshot.Fflogs;
+        EmbeddedPlugins = snapshot.EmbeddedPlugins;
+        DisabledActPluginIds = snapshot.DisabledActPluginIds;
+        BundledPluginDisclosureKeys = snapshot.BundledPluginDisclosureKeys;
+        BundledPluginUpdateRecords = snapshot.BundledPluginUpdateRecords;
+        ActPluginPermissions = snapshot.ActPluginPermissions;
     }
 
     public bool IsActCapabilityAllowed(string pluginId, ActCapability capability)

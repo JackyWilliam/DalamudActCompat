@@ -59,6 +59,7 @@ if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
 }
+await ValidatePostNamazuQueueShutdownLifecycleAsync();
 var completion =
     "Host handshake, sequence/deadline validation, bounded IPC, command denial, " +
     "crash isolation, disconnect, and 100k-line PostNamazu copy tests passed.";
@@ -331,6 +332,89 @@ void ValidatePostNamazuQueueBreakAllCompatibility()
     Assert(
         queueIds.Count == 0,
         "PostNamazu stop=all did not preserve the original clear-all queue behavior.");
+}
+
+async Task ValidatePostNamazuQueueShutdownLifecycleAsync()
+{
+    var bridgeType = typeof(HostPluginBridge);
+    var configurePermissions = bridgeType.GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   bridgeType.FullName,
+                                   "ConfigurePermissions");
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["postnamazu"] = ["GameCommand"],
+                },
+                ["postnamazu"]),
+        ]);
+
+    BlockingPostNamazuPlugin.Reset();
+    HostPluginBridge.SendPostNamazuQueue(
+        new BlockingPostNamazuModule(),
+        "[{\"C\":\"command\",\"P\":\"shutdown-test\",\"D\":0}]");
+    var tasks = (HashSet<Task>?)bridgeType.GetField(
+                    "PostNamazuQueueTasks",
+                    BindingFlags.Static | BindingFlags.NonPublic)
+                ?.GetValue(null)
+                ?? throw new MissingFieldException(bridgeType.FullName, "PostNamazuQueueTasks");
+    Assert(
+        BlockingPostNamazuPlugin.Started.Wait(TimeSpan.FromSeconds(1)) &&
+        SpinWait.SpinUntil(
+            () =>
+            {
+                lock (tasks)
+                {
+                    return tasks.Count == 1;
+                }
+            },
+            TimeSpan.FromSeconds(1)),
+        "The compatibility bridge did not track its PostNamazu queue task.");
+
+    var stop = bridgeType.GetMethod(
+                   "StopPostNamazuQueuesAsync",
+                   BindingFlags.Static | BindingFlags.NonPublic)
+               ?? throw new MissingMethodException(
+                   bridgeType.FullName,
+                   "StopPostNamazuQueuesAsync");
+    try
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var allTasksStopped = await ((Task<bool>?)stop.Invoke(null, null)
+            ?? throw new InvalidOperationException("PostNamazu shutdown returned no task."));
+        stopwatch.Stop();
+        Assert(
+            !allTasksStopped && stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            "PostNamazu shutdown did not report a long synchronous action still using the plugin runtime.");
+
+        var hostProgramSource = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "src", "DalamudActCompat.Host", "Program.cs"));
+        Assert(
+            hostProgramSource.Contains("if (postNamazuQueuesStopped &&", StringComparison.Ordinal) &&
+            hostProgramSource.Contains("pluginRuntime?.Dispose();", StringComparison.Ordinal),
+            "Host shutdown can still dispose the plugin runtime while a PostNamazu action is executing.");
+    }
+    finally
+    {
+        BlockingPostNamazuPlugin.Release.Set();
+    }
+
+    Assert(
+        SpinWait.SpinUntil(
+            () =>
+            {
+                lock (tasks)
+                {
+                    return tasks.Count == 0;
+                }
+            },
+            TimeSpan.FromSeconds(2)),
+        "The long synchronous PostNamazu action remained tracked after it was released.");
 }
 
 void ValidatePostNamazuMarkPayloadNormalization()
@@ -1903,11 +1987,53 @@ async Task<HostEnvelope> ReadTriggerCommandAsync(HostTestPipe pipe)
         $"bridge={logBridge?.Detail ?? "unavailable"}; callbacks={callbacks}.");
 }
 
+string FindProjectRoot()
+{
+    var current = new DirectoryInfo(Path.GetDirectoryName(hostExecutable)!);
+    while (current is not null)
+    {
+        if (File.Exists(Path.Combine(current.FullName, "DalamudActCompat.slnx")))
+        {
+            return current.FullName;
+        }
+
+        current = current.Parent;
+    }
+
+    throw new DirectoryNotFoundException("Could not locate the DalamudActCompat repository root.");
+}
+
 static void Assert(bool condition, string message)
 {
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+internal class BlockingPostNamazuModuleBase
+{
+    public static BlockingPostNamazuPlugin PostNamazu { get; } = new();
+}
+
+internal sealed class BlockingPostNamazuModule : BlockingPostNamazuModuleBase;
+
+internal sealed class BlockingPostNamazuPlugin
+{
+    public static ManualResetEventSlim Started { get; } = new(initialState: false);
+
+    public static ManualResetEventSlim Release { get; } = new(initialState: false);
+
+    public static void Reset()
+    {
+        Started.Reset();
+        Release.Reset();
+    }
+
+    public void DoAction(string command, string payload)
+    {
+        Started.Set();
+        Release.Wait();
     }
 }
 

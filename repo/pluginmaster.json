@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.11",
+    "AssemblyVersion":  "0.3.6.12",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.11/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.12/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.11/DalamudActCompat.zip",
-    "LastUpdate":  1786028056232,
-    "Changelog":  "修复结算时离队成员丢失与 FFLogs 预估不显示；统一战斗统计布局；自建 HTML 悬浮窗记住打开状态，并从任务栏、Alt+Tab 和任务视图隐藏。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.12/DalamudActCompat.zip",
+    "LastUpdate":  1786111011946,
+    "Changelog":  "v0.3.6.12 稳定性修复：适配国服 2026.08.05（7.55h）网络操作码，恢复 Cactbot 文字与 TTS；更新检查不再提前停止解析；退出时可靠保存最后一次战斗；修复状态、FFLogs 与后台任务并发；异步安装 Cactbot；加强失败回滚、普通 CI 与 HTML 命中区域诊断。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

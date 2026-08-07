@@ -21,7 +21,9 @@ public sealed class BundledCactbotManager
 
     public string BundledVersion => package.Version;
 
-    public async Task<bool> EnsureCurrentAsync(CancellationToken cancellationToken)
+    public async Task<bool> EnsureCurrentAsync(
+        CancellationToken cancellationToken,
+        Action? installationStarting = null)
     {
         if (installer.IsInstalled &&
             installer.InstalledVersion is { } installedVersion &&
@@ -30,6 +32,7 @@ public sealed class BundledCactbotManager
             return false;
         }
 
+        installationStarting?.Invoke();
         await installer
             .InstallAsync(package.ArchivePath, cancellationToken)
             .ConfigureAwait(false);

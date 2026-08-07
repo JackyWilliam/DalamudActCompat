@@ -23,11 +23,30 @@ public sealed class EncounterStateStore
         }
     }
 
-    public void ResetCurrent()
+    public void UpdateCurrent(Encounter? current)
     {
         lock (syncRoot)
         {
-            snapshot = snapshot with { Current = null, CreatedAt = DateTimeOffset.UtcNow };
+            snapshot = snapshot with
+            {
+                Current = current,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
         }
     }
+
+    public void UpdateRecent(IReadOnlyList<Encounter> recent)
+    {
+        lock (syncRoot)
+        {
+            snapshot = snapshot with
+            {
+                Recent = recent.ToArray(),
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+        }
+    }
+
+    public void ResetCurrent()
+        => UpdateCurrent(null);
 }
