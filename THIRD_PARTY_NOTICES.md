@@ -35,7 +35,7 @@ acknowledged. DalamudActCompat also checks the author sources at startup and
 uses the same notice and load gate before installing an upstream update. URLs
 are displayed for attribution and verification; the notice does not open them.
 
-- Triggernometry CN Maintained Edition 2.1.1.2
+- Triggernometry CN Maintained Edition 2.1.2.2
   - Original author/copyright holder: Paissa Heavy Industries
   - Current CN maintainer and distributor: MnFeN
   - Project/source: <https://github.com/MnFeN/Triggernometry>
