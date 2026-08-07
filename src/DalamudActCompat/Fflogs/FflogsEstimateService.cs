@@ -29,7 +29,7 @@ public sealed record FflogsEstimate(double Percentile, Vector4 Color, string Enc
     public int Score => Math.Clamp((int)Math.Round(Percentile), 0, 100);
 }
 
-public sealed class FflogsEstimateService : IDisposable
+public sealed class FflogsEstimateService : IAsyncDisposable
 {
     private const string TokenEndpoint = "https://www.fflogs.com/oauth/token";
     private const string GraphQlEndpoint = "https://www.fflogs.com/api/v2/client";
@@ -46,12 +46,16 @@ public sealed class FflogsEstimateService : IDisposable
         Timeout = TimeSpan.FromSeconds(20),
     };
     private readonly SemaphoreSlim apiGate = new(1, 1);
+    private readonly SemaphoreSlim cacheWriteGate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private readonly ConcurrentDictionary<string, byte> loading = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FflogsCurveCacheEntry> curves = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int?> resolvedEncounterIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly object cacheLock = new();
     private readonly object statusLock = new();
+    private readonly object tokenLock = new();
+    private readonly object backgroundTaskLock = new();
+    private readonly HashSet<Task> backgroundTasks = [];
     private IReadOnlyList<FflogsEncounterCatalogEntry> encounters = [];
     private DateTimeOffset catalogFetchedAt;
     private FflogsEstimateStatus status = new(FflogsEstimateState.Disabled, "FFLogs estimation is disabled.");
@@ -60,6 +64,9 @@ public sealed class FflogsEstimateService : IDisposable
     private string tokenClientId = string.Empty;
     private string tokenClientSecret = string.Empty;
     private Dictionary<string, string>? localizedEnemyNames;
+    private Task? disposeTask;
+    private bool shutdownStarted;
+    private int resourcesDisposed;
 
     public FflogsEstimateService(
         Func<FflogsSettings> getSettings,
@@ -72,7 +79,7 @@ public sealed class FflogsEstimateService : IDisposable
         this.dataManager = dataManager;
         this.logger = logger;
         LoadCache();
-        CanUseApi(getSettings());
+        CanUseApi(GetSettingsSnapshot());
     }
 
     public FflogsEstimateStatus Status
@@ -89,7 +96,7 @@ public sealed class FflogsEstimateService : IDisposable
     public FflogsEstimate? GetEstimate(Encounter encounter)
     {
         encounter = encounter.FflogsRankingEncounter ?? encounter;
-        var settings = getSettings();
+        var settings = GetSettingsSnapshot();
         if (!CanUseApi(settings))
         {
             return null;
@@ -132,7 +139,7 @@ public sealed class FflogsEstimateService : IDisposable
 
     public void RequestRefresh(Encounter? encounter)
     {
-        var settings = getSettings();
+        var settings = GetSettingsSnapshot();
         if (!CanUseApi(settings))
         {
             return;
@@ -167,11 +174,15 @@ public sealed class FflogsEstimateService : IDisposable
 
     public void NotifyCredentialsChanged()
     {
-        accessToken = string.Empty;
-        accessTokenExpiresAt = default;
-        tokenClientId = string.Empty;
-        tokenClientSecret = string.Empty;
-        var settings = getSettings();
+        lock (tokenLock)
+        {
+            accessToken = string.Empty;
+            accessTokenExpiresAt = default;
+            tokenClientId = string.Empty;
+            tokenClientSecret = string.Empty;
+        }
+
+        var settings = GetSettingsSnapshot();
         if (settings.Enabled &&
             !string.IsNullOrWhiteSpace(settings.ClientId) &&
             !string.IsNullOrWhiteSpace(settings.ClientSecret))
@@ -272,12 +283,12 @@ public sealed class FflogsEstimateService : IDisposable
         }
 
         SetStatus(FflogsEstimateState.Loading, "Loading FFLogs public ranking samples…");
-        _ = Task.Run(async () =>
+        if (!TryStartBackgroundTask(async cancellationToken =>
         {
             try
             {
-                await EnsureCatalogAsync(lifetime.Token).ConfigureAwait(false);
-                var settings = getSettings();
+                await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
+                var settings = GetSettingsSnapshot();
                 var encounterId = TryResolveEncounterId(enemyName, settings);
                 if (encounterId is null)
                 {
@@ -287,12 +298,12 @@ public sealed class FflogsEstimateService : IDisposable
                     return;
                 }
 
-                var curve = await BuildCurveAsync(encounterId.Value, specName, lifetime.Token).ConfigureAwait(false);
+                var curve = await BuildCurveAsync(encounterId.Value, specName, cancellationToken).ConfigureAwait(false);
                 lock (cacheLock)
                 {
                     curves[CurveKey(encounterId.Value, specName)] = curve;
                 }
-                SaveCache();
+                await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
                 SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -307,7 +318,10 @@ public sealed class FflogsEstimateService : IDisposable
             {
                 loading.TryRemove(loadKey, out _);
             }
-        }, lifetime.Token);
+        }))
+        {
+            loading.TryRemove(loadKey, out _);
+        }
     }
 
     private void QueueCatalogRefresh()
@@ -318,12 +332,15 @@ public sealed class FflogsEstimateService : IDisposable
         }
 
         SetStatus(FflogsEstimateState.Loading, "Refreshing FFLogs encounter catalog…");
-        _ = Task.Run(async () =>
+        if (!TryStartBackgroundTask(async cancellationToken =>
         {
             try
             {
-                catalogFetchedAt = default;
-                await EnsureCatalogAsync(lifetime.Token).ConfigureAwait(false);
+                lock (cacheLock)
+                {
+                    catalogFetchedAt = default;
+                }
+                await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
                 SetStatus(FflogsEstimateState.Ready, "FFLogs encounter catalog refreshed.");
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -338,14 +355,20 @@ public sealed class FflogsEstimateService : IDisposable
             {
                 loading.TryRemove("catalog", out _);
             }
-        }, lifetime.Token);
+        }))
+        {
+            loading.TryRemove("catalog", out _);
+        }
     }
 
     private async Task EnsureCatalogAsync(CancellationToken cancellationToken)
     {
-        if (encounters.Count > 0 && !IsExpired(catalogFetchedAt, 24))
+        lock (cacheLock)
         {
-            return;
+            if (encounters.Count > 0 && !IsExpired(catalogFetchedAt, 24))
+            {
+                return;
+            }
         }
 
         const string query = """
@@ -376,13 +399,13 @@ public sealed class FflogsEstimateService : IDisposable
             }
         }
 
-        encounters = result;
-        catalogFetchedAt = DateTimeOffset.UtcNow;
         lock (cacheLock)
         {
+            encounters = result;
+            catalogFetchedAt = DateTimeOffset.UtcNow;
             resolvedEncounterIds.Clear();
         }
-        SaveCache();
+        await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<FflogsCurveCacheEntry> BuildCurveAsync(
@@ -560,13 +583,16 @@ public sealed class FflogsEstimateService : IDisposable
 
     private async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
     {
-        var settings = getSettings();
-        if (!string.IsNullOrWhiteSpace(accessToken) &&
-            accessTokenExpiresAt > DateTimeOffset.UtcNow.AddMinutes(1) &&
-            string.Equals(tokenClientId, settings.ClientId, StringComparison.Ordinal) &&
-            string.Equals(tokenClientSecret, settings.ClientSecret, StringComparison.Ordinal))
+        var settings = GetSettingsSnapshot();
+        lock (tokenLock)
         {
-            return accessToken;
+            if (!string.IsNullOrWhiteSpace(accessToken) &&
+                accessTokenExpiresAt > DateTimeOffset.UtcNow.AddMinutes(1) &&
+                string.Equals(tokenClientId, settings.ClientId, StringComparison.Ordinal) &&
+                string.Equals(tokenClientSecret, settings.ClientSecret, StringComparison.Ordinal))
+            {
+                return accessToken;
+            }
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint);
@@ -584,21 +610,26 @@ public sealed class FflogsEstimateService : IDisposable
         }
 
         using var tokenDocument = JsonDocument.Parse(body);
-        accessToken = tokenDocument.RootElement.GetProperty("access_token").GetString()
+        var newAccessToken = tokenDocument.RootElement.GetProperty("access_token").GetString()
             ?? throw new InvalidOperationException("FFLogs did not return an access token.");
         var expiresIn = tokenDocument.RootElement.TryGetProperty("expires_in", out var expires)
             ? expires.GetInt32()
             : 3600;
-        accessTokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expiresIn);
-        tokenClientId = settings.ClientId;
-        tokenClientSecret = settings.ClientSecret;
-        return accessToken;
+        lock (tokenLock)
+        {
+            accessToken = newAccessToken;
+            accessTokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expiresIn);
+            tokenClientId = settings.ClientId;
+            tokenClientSecret = settings.ClientSecret;
+        }
+        return newAccessToken;
     }
 
     private int? TryResolveEncounterId(string enemyName, FflogsSettings settings)
     {
-        settings.EncounterMappings ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        if (settings.EncounterMappings.TryGetValue(enemyName, out var configured) && configured > 0)
+        if (settings.EncounterMappings is not null &&
+            settings.EncounterMappings.TryGetValue(enemyName, out var configured) &&
+            configured > 0)
         {
             return configured;
         }
@@ -616,7 +647,12 @@ public sealed class FflogsEstimateService : IDisposable
             .Select(NormalizeName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var resolved = encounters
+        IReadOnlyList<FflogsEncounterCatalogEntry> encounterSnapshot;
+        lock (cacheLock)
+        {
+            encounterSnapshot = encounters;
+        }
+        var resolved = encounterSnapshot
             .Where(entry => names.Contains(NormalizeName(entry.Name), StringComparer.OrdinalIgnoreCase))
             .OrderBy(static entry => entry.Frozen)
             .Select(static entry => (int?)entry.Id)
@@ -698,23 +734,96 @@ public sealed class FflogsEstimateService : IDisposable
         }
     }
 
-    private void SaveCache()
+    internal async Task SaveCacheAsync(CancellationToken cancellationToken)
     {
+        var acquired = false;
+        var temporaryPath = CreateCacheTemporaryPath(cachePath);
         try
         {
+            await cacheWriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            acquired = true;
             FflogsCurveCacheEntry[] curveSnapshot;
+            FflogsEncounterCatalogEntry[] encounterSnapshot;
+            DateTimeOffset fetchedAtSnapshot;
             lock (cacheLock)
             {
                 curveSnapshot = curves.Values.ToArray();
+                encounterSnapshot = encounters.ToArray();
+                fetchedAtSnapshot = catalogFetchedAt;
             }
-            var document = new FflogsCacheDocument(catalogFetchedAt, encounters.ToArray(), curveSnapshot);
+            var document = new FflogsCacheDocument(fetchedAtSnapshot, encounterSnapshot, curveSnapshot);
             Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
-            File.WriteAllText(cachePath, JsonSerializer.Serialize(document));
+            await File.WriteAllTextAsync(
+                    temporaryPath,
+                    JsonSerializer.Serialize(document),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            File.Move(temporaryPath, cachePath, overwrite: true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
             logger.Warning($"FFLogs estimate cache could not be saved: {ex.Message}");
         }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (Exception ex)
+            {
+                logger.Warning($"FFLogs temporary cache file could not be removed: {ex.Message}");
+            }
+
+            if (acquired)
+            {
+                cacheWriteGate.Release();
+            }
+        }
+    }
+
+    internal static string CreateCacheTemporaryPath(string destinationPath)
+        => $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+
+    private FflogsSettings GetSettingsSnapshot() => getSettings().Snapshot();
+
+    private bool TryStartBackgroundTask(Func<CancellationToken, Task> work)
+    {
+        Task task;
+        lock (backgroundTaskLock)
+        {
+            if (shutdownStarted)
+            {
+                return false;
+            }
+
+            task = Task.Run(() => work(lifetime.Token), CancellationToken.None);
+            backgroundTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    logger.Error(
+                        completedTask.Exception?.GetBaseException()
+                        ?? new InvalidOperationException("Unknown FFLogs background-task failure."),
+                        "FFLogs background task failed outside its worker error boundary.");
+                }
+
+                lock (backgroundTaskLock)
+                {
+                    backgroundTasks.Remove(completedTask);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return true;
     }
 
     private void SetStatus(FflogsEstimateState stateValue, string message)
@@ -763,10 +872,80 @@ public sealed class FflogsEstimateService : IDisposable
     private static Vector4 Rgb(byte red, byte green, byte blue)
         => new(red / 255f, green / 255f, blue / 255f, 1);
 
-    public void Dispose()
+    public void BeginShutdown()
     {
-        lifetime.Cancel();
+        var shouldCancel = false;
+        lock (backgroundTaskLock)
+        {
+            if (!shutdownStarted)
+            {
+                shutdownStarted = true;
+                shouldCancel = true;
+            }
+        }
+
+        if (shouldCancel)
+        {
+            lifetime.Cancel();
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        BeginShutdown();
+        lock (backgroundTaskLock)
+        {
+            disposeTask ??= DisposeCoreAsync(backgroundTasks.ToArray());
+            return new ValueTask(disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task[] tasks)
+    {
+        var completion = Task.WhenAll(tasks);
+        try
+        {
+            await completion.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.Warning(
+                "FFLogs background tasks did not stop within five seconds; resources will be released after they exit.");
+            _ = completion.ContinueWith(
+                completedTask =>
+                {
+                    if (completedTask.IsFaulted)
+                    {
+                        logger.Error(
+                            completedTask.Exception?.GetBaseException()
+                            ?? new InvalidOperationException("Unknown FFLogs shutdown failure."),
+                            "FFLogs background shutdown failed.");
+                    }
+                    DisposeResources();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return;
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "FFLogs background shutdown failed.");
+        }
+
+        DisposeResources();
+    }
+
+    private void DisposeResources()
+    {
+        if (Interlocked.Exchange(ref resourcesDisposed, 1) != 0)
+        {
+            return;
+        }
+
         httpClient.Dispose();
+        apiGate.Dispose();
+        cacheWriteGate.Dispose();
         lifetime.Dispose();
     }
 }

@@ -12,4 +12,16 @@ public sealed class FflogsSettings
 
     public Dictionary<string, int> EncounterMappings { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    public FflogsSettings Snapshot()
+        => new()
+        {
+            Enabled = Enabled,
+            ClientId = ClientId,
+            ClientSecret = ClientSecret,
+            CacheHours = CacheHours,
+            EncounterMappings = new Dictionary<string, int>(
+                EncounterMappings ?? [],
+                StringComparer.OrdinalIgnoreCase),
+        };
 }

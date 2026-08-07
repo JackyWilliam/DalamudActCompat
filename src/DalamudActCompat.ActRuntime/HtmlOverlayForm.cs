@@ -2,6 +2,7 @@ using Dalamud.Plugin.Services;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Drawing;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -29,6 +30,8 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const int MaximumBrowserInputRegions = 2048;
     private const string CactbotRenderMessagePrefix = "dalamud-act-compat:cactbot-render:";
     private const string InputRegionMessagePrefix = "dalamud-act-compat:input-regions:";
+    private const string InputRegionDiagnosticMessagePrefix =
+        "dalamud-act-compat:input-region-diagnostic:";
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
     private static nint interactionOwner;
     internal const string CactbotResponsiveAlertLayoutScript =
@@ -211,6 +214,21 @@ internal sealed class HtmlOverlayForm : IDisposable
             const maximumRegions = 2048;
             let scheduled = false;
             let lastPayload = '';
+            let diagnostics = null;
+            if (window.__dalamudActCompatInputRegionDiagnostics === true) {
+              diagnostics = {
+                windowStarted: performance.now(),
+                refreshCount: 0,
+                refreshMilliseconds: 0,
+                peakRefreshMilliseconds: 0,
+                scannedElements: 0,
+                peakScannedElements: 0,
+                finalRectangles: 0,
+                peakFinalRectangles: 0,
+                regionChanges: 0,
+                currentScannedElements: 0,
+              };
+            }
 
             const hasVisibleColor = (value) => {
               if (!value || value === 'transparent')
@@ -286,7 +304,10 @@ internal sealed class HtmlOverlayForm : IDisposable
 
             const collectRegions = () => {
               const rectangles = [];
-              for (const element of document.querySelectorAll('*')) {
+              const elements = document.querySelectorAll('*');
+              if (diagnostics !== null)
+                diagnostics.currentScannedElements = elements.length;
+              for (const element of elements) {
                 const style = getComputedStyle(element);
                 if (!isRendered(element, style))
                   continue;
@@ -327,11 +348,75 @@ internal sealed class HtmlOverlayForm : IDisposable
 
             const report = () => {
               scheduled = false;
+              if (diagnostics === null) {
+                const payload = JSON.stringify({
+                  viewportWidth: window.innerWidth,
+                  viewportHeight: window.innerHeight,
+                  rectangles: collectRegions(),
+                });
+                if (payload === lastPayload)
+                  return;
+                lastPayload = payload;
+                try {
+                  window.chrome?.webview?.postMessage(prefix + payload);
+                } catch (_) {
+                }
+                return;
+              }
+
+              const startedAt = performance.now();
+              const regions = collectRegions();
               const payload = JSON.stringify({
                 viewportWidth: window.innerWidth,
                 viewportHeight: window.innerHeight,
-                rectangles: collectRegions(),
+                rectangles: regions,
               });
+              const elapsedMilliseconds = performance.now() - startedAt;
+              diagnostics.refreshCount++;
+              diagnostics.refreshMilliseconds += elapsedMilliseconds;
+              diagnostics.peakRefreshMilliseconds = Math.max(
+                diagnostics.peakRefreshMilliseconds,
+                elapsedMilliseconds);
+              diagnostics.scannedElements += diagnostics.currentScannedElements;
+              diagnostics.peakScannedElements = Math.max(
+                diagnostics.peakScannedElements,
+                diagnostics.currentScannedElements);
+              diagnostics.finalRectangles += regions.length;
+              diagnostics.peakFinalRectangles = Math.max(
+                diagnostics.peakFinalRectangles,
+                regions.length);
+              if (payload !== lastPayload)
+                diagnostics.regionChanges++;
+
+              const now = performance.now();
+              const diagnosticWindowMilliseconds = now - diagnostics.windowStarted;
+              if (diagnosticWindowMilliseconds >= 10000) {
+                try {
+                  window.chrome?.webview?.postMessage(
+                    'dalamud-act-compat:input-region-diagnostic:' + JSON.stringify({
+                      windowMilliseconds: diagnosticWindowMilliseconds,
+                      refreshCount: diagnostics.refreshCount,
+                      totalRefreshMilliseconds: diagnostics.refreshMilliseconds,
+                      peakRefreshMilliseconds: diagnostics.peakRefreshMilliseconds,
+                      totalScannedElements: diagnostics.scannedElements,
+                      peakScannedElements: diagnostics.peakScannedElements,
+                      totalFinalRectangles: diagnostics.finalRectangles,
+                      peakFinalRectangles: diagnostics.peakFinalRectangles,
+                      regionChanges: diagnostics.regionChanges,
+                    }));
+                } catch (_) {
+                }
+                diagnostics.windowStarted = now;
+                diagnostics.refreshCount = 0;
+                diagnostics.refreshMilliseconds = 0;
+                diagnostics.peakRefreshMilliseconds = 0;
+                diagnostics.scannedElements = 0;
+                diagnostics.peakScannedElements = 0;
+                diagnostics.finalRectangles = 0;
+                diagnostics.peakFinalRectangles = 0;
+                diagnostics.regionChanges = 0;
+              }
+
               if (payload === lastPayload)
                 return;
               lastPayload = payload;
@@ -433,6 +518,12 @@ internal sealed class HtmlOverlayForm : IDisposable
     private bool disposing;
     private bool applyingSettings;
     private Exception? startupFailure;
+    private long regionRebuildWindowStarted = Stopwatch.GetTimestamp();
+    private int regionRebuildCount;
+    private int regionRebuildRectangleCount;
+    private int regionRebuildPeakRectangles;
+    private double regionRebuildTotalMilliseconds;
+    private double regionRebuildPeakMilliseconds;
 
     public HtmlOverlayForm(
         Uri pageUri,
@@ -746,6 +837,9 @@ internal sealed class HtmlOverlayForm : IDisposable
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     OverlayEditIndicatorScript);
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    $"window.__dalamudActCompatInputRegionDiagnostics = " +
+                    $"{(debugMode ? "true" : "false")};");
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     OverlayInputRegionScript);
             }
             if (IsCactbotRaidbossPage(pageUri))
@@ -829,6 +923,14 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
+        if (debugMode &&
+            message.StartsWith(InputRegionDiagnosticMessagePrefix, StringComparison.Ordinal))
+        {
+            LogBrowserInputRegionDiagnostic(
+                message[InputRegionDiagnosticMessagePrefix.Length..]);
+            return;
+        }
+
         if (message.StartsWith(InputRegionMessagePrefix, StringComparison.Ordinal))
         {
             UpdateBrowserInputRegion(message[InputRegionMessagePrefix.Length..]);
@@ -859,6 +961,47 @@ internal sealed class HtmlOverlayForm : IDisposable
                 0,
                 SwpNoSize | SwpNoMove | SwpNoActivate);
         }
+    }
+
+    private void LogBrowserInputRegionDiagnostic(string json)
+    {
+        BrowserInputRegionDiagnosticPayload? diagnostic;
+        try
+        {
+            diagnostic = JsonSerializer.Deserialize<BrowserInputRegionDiagnosticPayload>(json);
+        }
+        catch (JsonException ex)
+        {
+            log.Warning(ex, $"Ignored invalid browser input-region diagnostics from {title}.");
+            return;
+        }
+
+        if (diagnostic is null || diagnostic.RefreshCount <= 0 ||
+            !double.IsFinite(diagnostic.WindowMilliseconds) ||
+            diagnostic.WindowMilliseconds <= 0 ||
+            !double.IsFinite(diagnostic.TotalRefreshMilliseconds) ||
+            !double.IsFinite(diagnostic.PeakRefreshMilliseconds))
+        {
+            return;
+        }
+
+        var refreshesPerSecond = diagnostic.RefreshCount * 1000d / diagnostic.WindowMilliseconds;
+        var averageRefreshMilliseconds =
+            diagnostic.TotalRefreshMilliseconds / diagnostic.RefreshCount;
+        var averageScannedElements =
+            diagnostic.TotalScannedElements / (double)diagnostic.RefreshCount;
+        var averageFinalRectangles =
+            diagnostic.TotalFinalRectangles / (double)diagnostic.RefreshCount;
+        log.Debug(
+            $"{title} input-region scan diagnostic over " +
+            $"{diagnostic.WindowMilliseconds / 1000d:0.0}s: " +
+            $"refreshes={diagnostic.RefreshCount} ({refreshesPerSecond:0.00}/s), " +
+            $"CPU={diagnostic.TotalRefreshMilliseconds:0.00}ms total / " +
+            $"{averageRefreshMilliseconds:0.00}ms avg / " +
+            $"{diagnostic.PeakRefreshMilliseconds:0.00}ms peak, " +
+            $"elements={averageScannedElements:0} avg / {diagnostic.PeakScannedElements} peak, " +
+            $"rectangles={averageFinalRectangles:0.0} avg / {diagnostic.PeakFinalRectangles} peak, " +
+            $"regionChanges={diagnostic.RegionChanges}.");
     }
 
     private void UpdateBrowserInputRegion(string json)
@@ -1099,15 +1242,41 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
+        if (!debugMode)
+        {
+            Region? fastRegion = null;
+            if (!settings.IsEditing && browserInputRegion is not null)
+            {
+                fastRegion = new Region();
+                fastRegion.MakeEmpty();
+                foreach (var rectangle in CalculateInputProxyRectangles(
+                             inputProxy.ClientSize,
+                             browserInputRegion.ViewportSize,
+                             browserInputRegion.Rectangles))
+                {
+                    fastRegion.Union(rectangle);
+                }
+            }
+
+            var previousFastRegion = inputProxy.Region;
+            inputProxy.Region = fastRegion;
+            previousFastRegion?.Dispose();
+            return;
+        }
+
+        var diagnosticTimer = Stopwatch.StartNew();
         Region? nextRegion = null;
+        var rectangleCount = 0;
         if (!settings.IsEditing && browserInputRegion is not null)
         {
             nextRegion = new Region();
             nextRegion.MakeEmpty();
-            foreach (var rectangle in CalculateInputProxyRectangles(
-                         inputProxy.ClientSize,
-                         browserInputRegion.ViewportSize,
-                         browserInputRegion.Rectangles))
+            var rectangles = CalculateInputProxyRectangles(
+                inputProxy.ClientSize,
+                browserInputRegion.ViewportSize,
+                browserInputRegion.Rectangles);
+            rectangleCount = rectangles.Length;
+            foreach (var rectangle in rectangles)
             {
                 nextRegion.Union(rectangle);
             }
@@ -1116,6 +1285,41 @@ internal sealed class HtmlOverlayForm : IDisposable
         var previousRegion = inputProxy.Region;
         inputProxy.Region = nextRegion;
         previousRegion?.Dispose();
+        if (nextRegion is not null)
+        {
+            diagnosticTimer.Stop();
+            RecordRegionRebuildDiagnostic(diagnosticTimer.Elapsed.TotalMilliseconds, rectangleCount);
+        }
+    }
+
+    private void RecordRegionRebuildDiagnostic(double elapsedMilliseconds, int rectangleCount)
+    {
+        regionRebuildCount++;
+        regionRebuildRectangleCount += rectangleCount;
+        regionRebuildPeakRectangles = Math.Max(regionRebuildPeakRectangles, rectangleCount);
+        regionRebuildTotalMilliseconds += elapsedMilliseconds;
+        regionRebuildPeakMilliseconds = Math.Max(regionRebuildPeakMilliseconds, elapsedMilliseconds);
+
+        var window = Stopwatch.GetElapsedTime(regionRebuildWindowStarted);
+        if (window < TimeSpan.FromSeconds(10))
+        {
+            return;
+        }
+
+        log.Debug(
+            $"{title} Windows input-region rebuild diagnostic over {window.TotalSeconds:0.0}s: " +
+            $"rebuilds={regionRebuildCount} ({regionRebuildCount / window.TotalSeconds:0.00}/s), " +
+            $"CPU={regionRebuildTotalMilliseconds:0.00}ms total / " +
+            $"{regionRebuildTotalMilliseconds / regionRebuildCount:0.00}ms avg / " +
+            $"{regionRebuildPeakMilliseconds:0.00}ms peak, " +
+            $"rectangles={regionRebuildRectangleCount / (double)regionRebuildCount:0.0} avg / " +
+            $"{regionRebuildPeakRectangles} peak.");
+        regionRebuildWindowStarted = Stopwatch.GetTimestamp();
+        regionRebuildCount = 0;
+        regionRebuildRectangleCount = 0;
+        regionRebuildPeakRectangles = 0;
+        regionRebuildTotalMilliseconds = 0;
+        regionRebuildPeakMilliseconds = 0;
     }
 
     private async void OnInputProxyMouseClick(object? sender, MouseEventArgs args)
@@ -1606,6 +1810,36 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         [System.Text.Json.Serialization.JsonPropertyName("rectangles")]
         public float[][]? Rectangles { get; init; }
+    }
+
+    private sealed class BrowserInputRegionDiagnosticPayload
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("windowMilliseconds")]
+        public double WindowMilliseconds { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("refreshCount")]
+        public int RefreshCount { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("totalRefreshMilliseconds")]
+        public double TotalRefreshMilliseconds { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("peakRefreshMilliseconds")]
+        public double PeakRefreshMilliseconds { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("totalScannedElements")]
+        public long TotalScannedElements { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("peakScannedElements")]
+        public int PeakScannedElements { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("totalFinalRectangles")]
+        public long TotalFinalRectangles { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("peakFinalRectangles")]
+        public int PeakFinalRectangles { get; init; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("regionChanges")]
+        public int RegionChanges { get; init; }
     }
 
     private sealed record BrowserInputRegion(SizeF ViewportSize, RectangleF[] Rectangles);

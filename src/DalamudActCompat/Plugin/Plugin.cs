@@ -48,6 +48,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly LauncherWindow launcherWindow;
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
     private readonly FactoryResetService factoryResetService;
+    private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
     private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
@@ -55,6 +56,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FileDialogManager fileDialogManager = new();
     private readonly CancellationTokenSource bundledUpdateCancellation = new();
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
+    private readonly CancellationTokenSource cactbotOperationCancellation = new();
+    private readonly object cactbotTaskLock = new();
+    private readonly object cactbotStatusLock = new();
+    private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
+    private readonly HashSet<Task> cactbotTasks = [];
     private readonly ActHostSupervisor hostSupervisor;
     private readonly PictoActOverlayService pictoActOverlay;
     private readonly IObjectTable objectTable;
@@ -72,6 +78,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Task hostCommandWorker;
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
+    private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
+    private Task? cactbotShutdownTask;
+    private bool cactbotShutdownStarted;
+    private int cactbotCancellationDisposed;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -249,8 +259,14 @@ public sealed class Plugin : IDalamudPlugin
             paths,
             configuration,
             logger,
-            SaveConfiguration);
-        cactbotInstaller = new CactbotPackageInstaller(paths);
+            SaveConfigurationForFactoryReset);
+        factoryResetOperations = new FactoryResetOperationCoordinator(FactoryResetCoreAsync);
+        cactbotInstaller = new CactbotPackageInstaller(
+            paths,
+            logger,
+            warning => TryRunCactbotCompletion(
+                CancellationToken.None,
+                () => logger.Warning(warning)));
         thirdPartyPluginNoticeWindow = new ThirdPartyPluginNoticeWindow(
             bundledPluginManager.GetDisclosures,
             bundledPluginManager.GetPendingDisclosures,
@@ -268,12 +284,13 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
-            FactoryResetAsync,
+            StartFactoryReset,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
             OpenPluginDirectory,
             text,
             () => cactbotInstaller.IsInstalled,
+            GetCactbotOperationStatus,
             SelectCactbotPackage,
             OpenCactbotOverlay,
             OpenCactbotSettings,
@@ -313,6 +330,7 @@ public sealed class Plugin : IDalamudPlugin
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
             () => cactbotInstaller.IsInstalled,
+            GetCactbotOperationStatus,
             SelectCactbotPackage,
             OpenCactbotOverlay,
             OpenCactbotSettings,
@@ -320,7 +338,7 @@ public sealed class Plugin : IDalamudPlugin
             OpenHtmlOverlay,
             CloseHtmlOverlay,
             DeleteHtmlOverlay,
-            FactoryResetAsync,
+            StartFactoryReset,
             stateStore.ResetCurrent,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
@@ -351,8 +369,8 @@ public sealed class Plugin : IDalamudPlugin
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
-        EnsureBundledCactbot(pluginInterface.AssemblyLocation.Directory!.FullName);
         lifecycle.Start();
+        StartBundledCactbotInitialization(pluginInterface.AssemblyLocation.Directory!.FullName);
         _ = Task.Run(StartIndependentHostAsync);
         if (configuration.AutoCheckBundledPluginUpdates)
         {
@@ -365,6 +383,12 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         bundledUpdateCancellation.Cancel();
+        BeginCactbotShutdown();
+        fflogsEstimateService.BeginShutdown();
+        var factoryResetCompleted = factoryResetOperations
+            .WaitForShutdownAsync(TimeSpan.FromSeconds(5))
+            .GetAwaiter()
+            .GetResult();
         bundledPluginUpdateChecker.Dispose();
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
@@ -373,7 +397,6 @@ public sealed class Plugin : IDalamudPlugin
         settingsWindow.Detach();
         advancedSettingsWindow.Detach();
         statusWindow.Detach();
-        fflogsEstimateService.Dispose();
         windowSystem.RemoveAllWindows();
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
@@ -381,8 +404,16 @@ public sealed class Plugin : IDalamudPlugin
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
 
-        SaveConfiguration();
-        var shutdown = Task.Run(DisposeComponentsAsync);
+        if (factoryResetCompleted)
+        {
+            SaveConfiguration();
+        }
+        else
+        {
+            logger.Warning(
+                "Factory reset did not stop within five seconds. Dalamud configuration saving and component disposal are deferred to avoid racing the active reset.");
+        }
+        var shutdown = Task.Run(() => DisposeComponentsAsync(factoryResetCompleted));
         var completed = ReferenceEquals(
             Task.WhenAny(shutdown, Task.Delay(TimeSpan.FromMilliseconds(250)))
                 .GetAwaiter()
@@ -524,8 +555,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void LoadSampleEncounter()
     {
-        var snapshot = stateStore.GetSnapshot();
-        stateStore.Replace(SampleEncounterFactory.Create(DateTimeOffset.UtcNow), snapshot.Recent);
+        stateStore.UpdateCurrent(SampleEncounterFactory.Create(DateTimeOffset.UtcNow));
         logger.Information("Loaded sample encounter snapshot.");
     }
 
@@ -541,34 +571,278 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void EnsureBundledCactbot(string pluginAssemblyDirectory)
+    private void StartBundledCactbotInitialization(string pluginAssemblyDirectory)
     {
+        _ = StartCactbotOperation(
+            cancellationToken => EnsureBundledCactbotAsync(pluginAssemblyDirectory, cancellationToken));
+    }
+
+    private async Task EnsureBundledCactbotAsync(
+        string pluginAssemblyDirectory,
+        CancellationToken cancellationToken)
+    {
+        TrySetCactbotOperationStatus(CactbotOperationState.Checking);
+        var gateAcquired = false;
         try
         {
+            await cactbotFileOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            gateAcquired = true;
             var bundledCactbotManager = new BundledCactbotManager(
                 pluginAssemblyDirectory,
                 cactbotInstaller);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-            var installed = bundledCactbotManager
-                .EnsureCurrentAsync(timeout.Token)
-                .GetAwaiter()
-                .GetResult();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMinutes(2));
+            var installed = await bundledCactbotManager
+                .EnsureCurrentAsync(
+                    timeout.Token,
+                    () => TrySetCactbotOperationStatus(CactbotOperationState.Installing))
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TrySetCactbotOperationStatus(CactbotOperationState.Ready))
+            {
+                return;
+            }
             if (installed)
             {
-                logger.Information(
-                    $"Installed bundled Cactbot {bundledCactbotManager.BundledVersion} into this user's plugin configuration.");
+                TryRunCactbotCompletion(
+                    cancellationToken,
+                    () => logger.Information(
+                        $"Installed bundled Cactbot {bundledCactbotManager.BundledVersion} into this user's plugin configuration."));
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            logger.Error(ex, "Bundled Cactbot installation failed.");
+            if (!CactbotOperationLifecycle.CanPublishCompletion(
+                    IsCactbotShutdownStarted(),
+                    cancellationToken))
+            {
+                return;
+            }
+            TryRunCactbotCompletion(
+                cancellationToken,
+                () =>
+                {
+                    SetCactbotOperationStatus(CactbotOperationState.Error, ex.Message);
+                    logger.Error(ex, "Bundled Cactbot installation failed.");
+                });
+        }
+        finally
+        {
+            if (gateAcquired)
+            {
+                cactbotFileOperationGate.Release();
+            }
         }
     }
 
-    private async Task<string> FactoryResetAsync()
+    private void SaveConfigurationForFactoryReset()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        return await factoryResetService.ResetAsync(timeout.Token).ConfigureAwait(false);
+        if (factoryResetOperations.IsShutdownStarted)
+        {
+            throw new OperationCanceledException(
+                "Plugin shutdown started before the factory-reset configuration save.",
+                factoryResetOperations.ShutdownToken);
+        }
+
+        services.PluginInterface.SavePluginConfig(configuration);
+    }
+
+    private Task? StartCactbotOperation(Func<CancellationToken, Task> operation)
+    {
+        Task task;
+        lock (cactbotTaskLock)
+        {
+            if (cactbotShutdownStarted)
+            {
+                return null;
+            }
+
+            task = Task.Run(
+                () => operation(cactbotOperationCancellation.Token),
+                CancellationToken.None);
+            cactbotTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completedTask =>
+            {
+                var failure = completedTask.Exception?.GetBaseException();
+                if (failure is not null)
+                {
+                    TryRunCactbotCompletion(
+                        CancellationToken.None,
+                        () => logger.Error(
+                            failure,
+                            "Cactbot background operation failed outside its worker error boundary."));
+                }
+
+                lock (cactbotTaskLock)
+                {
+                    cactbotTasks.Remove(completedTask);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return task;
+    }
+
+    private CactbotOperationStatus GetCactbotOperationStatus()
+    {
+        lock (cactbotStatusLock)
+        {
+            return cactbotOperationStatus;
+        }
+    }
+
+    private void SetCactbotOperationStatus(CactbotOperationState state, string? errorMessage = null)
+    {
+        lock (cactbotStatusLock)
+        {
+            cactbotOperationStatus = new CactbotOperationStatus(state, errorMessage);
+        }
+    }
+
+    private bool TrySetCactbotOperationStatus(
+        CactbotOperationState state,
+        string? errorMessage = null)
+        => TryRunCactbotCompletion(
+            CancellationToken.None,
+            () => SetCactbotOperationStatus(state, errorMessage));
+
+    private bool TryRunCactbotCompletion(
+        CancellationToken cancellationToken,
+        Action action)
+    {
+        lock (cactbotTaskLock)
+        {
+            if (!CactbotOperationLifecycle.CanPublishCompletion(
+                    cactbotShutdownStarted,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            action();
+            return true;
+        }
+    }
+
+    private Task PublishCactbotInstalledNotificationAsync(CancellationToken cancellationToken)
+    {
+        lock (cactbotTaskLock)
+        {
+            return CactbotOperationLifecycle.PublishIfActiveAsync(
+                cactbotShutdownStarted,
+                cancellationToken,
+                () => services.Framework.RunOnFrameworkThread(() =>
+                {
+                    TryRunCactbotCompletion(
+                        cancellationToken,
+                        () => services.NotificationManager.AddNotification(new()
+                        {
+                            Title = "ACT 兼容",
+                            Content = "Cactbot 资源已安装。重启解析器以加载 OverlayPlugin 事件源。",
+                        }));
+                }));
+        }
+    }
+
+    private bool IsCactbotShutdownStarted()
+    {
+        lock (cactbotTaskLock)
+        {
+            return cactbotShutdownStarted;
+        }
+    }
+
+    private void BeginCactbotShutdown()
+    {
+        var shouldCancel = false;
+        lock (cactbotTaskLock)
+        {
+            if (!cactbotShutdownStarted)
+            {
+                cactbotShutdownStarted = true;
+                shouldCancel = true;
+            }
+        }
+
+        if (shouldCancel)
+        {
+            cactbotOperationCancellation.Cancel();
+        }
+    }
+
+    private Task ShutdownCactbotOperationsAsync()
+    {
+        BeginCactbotShutdown();
+        lock (cactbotTaskLock)
+        {
+            cactbotShutdownTask ??= ShutdownCactbotOperationsCoreAsync(cactbotTasks.ToArray());
+            return cactbotShutdownTask;
+        }
+    }
+
+    private async Task ShutdownCactbotOperationsCoreAsync(Task[] tasks)
+    {
+        var completion = Task.WhenAll(tasks);
+        try
+        {
+            await completion.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.Warning(
+                "Cactbot background operations did not stop within five seconds; cancellation resources will be released after they exit.");
+            _ = completion.ContinueWith(
+                completedTask =>
+                {
+                    _ = completedTask.Exception;
+                    DisposeCactbotCancellation();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return;
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Cactbot background shutdown failed.");
+        }
+
+        DisposeCactbotCancellation();
+    }
+
+    private void DisposeCactbotCancellation()
+    {
+        if (Interlocked.Exchange(ref cactbotCancellationDisposed, 1) == 0)
+        {
+            cactbotOperationCancellation.Dispose();
+        }
+    }
+
+    private Task<string> StartFactoryReset()
+        => factoryResetOperations.Start();
+
+    private async Task<string> FactoryResetCoreAsync(CancellationToken shutdownToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            return await factoryResetService
+                .ResetAsync(timeout.Token, shutdownToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            cactbotFileOperationGate.Release();
+        }
     }
 
     private void InstallActPlugin(string packagePath)
@@ -602,18 +876,29 @@ public sealed class Plugin : IDalamudPlugin
     private async Task InstallBundledPluginsAsync(
         IReadOnlyList<BundledActPluginDescriptor> plugins)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
-        await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
-        await bundledPluginManager
-            .InstallAndAcknowledgeAsync(plugins, timeout.Token)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            bundledUpdateCancellation.Token);
+        timeout.CancelAfter(TimeSpan.FromMinutes(2));
+        var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+        var parserWasRunning = parserEngine.Status.State == ParserState.Running;
+        await BundledPluginInstallCoordinator.ExecuteAsync(
+                hostWasRunning,
+                parserWasRunning,
+                hostSupervisor.StopAsync,
+                parserEngine.StopAsync,
+                async cancellationToken =>
+                {
+                    await bundledPluginManager
+                        .InstallAndAcknowledgeAsync(plugins, cancellationToken)
+                        .ConfigureAwait(false);
+                    SaveConfiguration();
+                },
+                hostSupervisor.StartAsync,
+                parserEngine.StartAsync,
+                () => !bundledUpdateCancellation.IsCancellationRequested,
+                timeout.Token,
+                TimeSpan.FromSeconds(20))
             .ConfigureAwait(false);
-        SaveConfiguration();
-        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
-        if (configuration.EnableParsing && configuration.AutoStartParser)
-        {
-            await parserEngine.StartAsync(timeout.Token).ConfigureAwait(false);
-        }
 
         services.NotificationManager.AddNotification(new()
         {
@@ -680,7 +965,7 @@ public sealed class Plugin : IDalamudPlugin
                         bundledPluginManager.Plugins,
                         cancellationToken)
                     .ConfigureAwait(false);
-                var appliedUpdates = bundledPluginManager.ApplyOnlineUpdates(
+                bundledPluginManager.ApplyOnlineUpdates(
                     check.Updates);
                 var pendingDisclosures = bundledPluginManager
                     .GetPendingDisclosures()
@@ -688,19 +973,6 @@ public sealed class Plugin : IDalamudPlugin
                 var pendingOnline = pendingDisclosures
                     .Where(plugin => plugin.IsOnlineUpdate)
                     .ToArray();
-                if (appliedUpdates > 0 && pendingOnline.Length > 0)
-                {
-                    using var stopTimeout = CancellationTokenSource
-                        .CreateLinkedTokenSource(cancellationToken);
-                    stopTimeout.CancelAfter(TimeSpan.FromSeconds(20));
-                    await parserEngine
-                        .StopAsync(stopTimeout.Token)
-                        .ConfigureAwait(false);
-                    await hostSupervisor
-                        .StopAsync(stopTimeout.Token)
-                        .ConfigureAwait(false);
-                }
-
                 var message = BuildBundledPluginUpdateMessage(
                     check,
                     pendingOnline.Length);
@@ -818,21 +1090,62 @@ public sealed class Plugin : IDalamudPlugin
                     return;
                 }
 
-                try
+                var operation = StartCactbotOperation(
+                    cancellationToken => InstallSelectedCactbotAsync(selectedPath, cancellationToken));
+                if (operation is not null)
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                    await cactbotInstaller.InstallAsync(selectedPath, timeout.Token).ConfigureAwait(false);
-                    services.NotificationManager.AddNotification(new()
-                    {
-                        Title = "ACT 兼容",
-                        Content = "Cactbot 资源已安装。重启解析器以加载 OverlayPlugin 事件源。",
-                    });
-                }
-                catch (Exception ex)
-                {
-                    logger.Error(ex, "Cactbot installation failed.");
+                    await operation.ConfigureAwait(false);
                 }
             });
+    }
+
+    private async Task InstallSelectedCactbotAsync(
+        string selectedPath,
+        CancellationToken cancellationToken)
+    {
+        TrySetCactbotOperationStatus(CactbotOperationState.Installing);
+        var gateAcquired = false;
+        try
+        {
+            await cactbotFileOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            gateAcquired = true;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMinutes(2));
+            await cactbotInstaller.InstallAsync(selectedPath, timeout.Token).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TrySetCactbotOperationStatus(CactbotOperationState.Ready))
+            {
+                return;
+            }
+
+            await PublishCactbotInstalledNotificationAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (!CactbotOperationLifecycle.CanPublishCompletion(
+                    IsCactbotShutdownStarted(),
+                    cancellationToken))
+            {
+                return;
+            }
+            TryRunCactbotCompletion(
+                cancellationToken,
+                () =>
+                {
+                    SetCactbotOperationStatus(CactbotOperationState.Error, ex.Message);
+                    logger.Error(ex, "Cactbot installation failed.");
+                });
+        }
+        finally
+        {
+            if (gateAcquired)
+            {
+                cactbotFileOperationGate.Release();
+            }
+        }
     }
 
     private void OpenPluginDirectory()
@@ -1169,7 +1482,7 @@ public sealed class Plugin : IDalamudPlugin
                 .ToArray());
     }
 
-    private async Task DisposeComponentsAsync()
+    private async Task DisposeComponentsAsync(bool factoryResetCompleted)
     {
         hostCommandQueue.Writer.TryComplete();
         await hostCommandCancellation.CancelAsync().ConfigureAwait(false);
@@ -1185,9 +1498,36 @@ public sealed class Plugin : IDalamudPlugin
                 "ACT Host command broker did not stop within 500 ms; it remains off the game thread.");
         }
 
+        if (!factoryResetCompleted)
+        {
+            var delayedDisposal = DisposeComponentsAfterFactoryResetAsync();
+            _ = delayedDisposal.ContinueWith(
+                task => logger.Error(
+                    task.Exception?.GetBaseException()
+                    ?? new InvalidOperationException("Unknown delayed shutdown failure."),
+                    "ACT compatibility delayed shutdown failed after factory reset."),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return;
+        }
+
+        await DisposeRemainingComponentsAsync().ConfigureAwait(false);
+    }
+
+    private async Task DisposeComponentsAfterFactoryResetAsync()
+    {
+        await factoryResetOperations.WaitForCompletionAsync().ConfigureAwait(false);
+        await DisposeRemainingComponentsAsync().ConfigureAwait(false);
+    }
+
+    private async Task DisposeRemainingComponentsAsync()
+    {
+        await ShutdownCactbotOperationsAsync().ConfigureAwait(false);
+        await fflogsEstimateService.DisposeAsync().ConfigureAwait(false);
         await lifecycle.DisposeAsync().ConfigureAwait(false);
-        await encounterService.DisposeAsync().ConfigureAwait(false);
         await parserEngine.DisposeAsync().ConfigureAwait(false);
+        await encounterService.DisposeAsync().ConfigureAwait(false);
         await hostSupervisor.DisposeAsync().ConfigureAwait(false);
     }
 

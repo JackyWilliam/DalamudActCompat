@@ -16,9 +16,11 @@ using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
+using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Processes;
@@ -68,13 +70,19 @@ try
     }
     ValidateParserDependencyVersions();
     ValidatePluginRepositoryMetadata();
-    ValidateChinese755Opcodes();
+    ValidateChinese755hOpcodes();
     ValidateMeterRows();
     ValidateMeterLayout();
     ValidatePictoActOverlayCommands();
     ValidateDutyEncounterAggregation();
     ValidateControlCenterPresentation();
     ValidateFflogsEstimateCurve();
+    ValidateFflogsConcurrencyBoundaries();
+    await ValidateFflogsCacheWritersAsync(testRoot);
+    await ValidateBundledPluginInstallLifecycleAsync();
+    await ValidateEncounterShutdownFlushAsync(testRoot);
+    await ValidateAtomicEncounterStateUpdatesAsync();
+    await ValidateFactoryResetRollbackAsync(testRoot);
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -98,7 +106,9 @@ try
         await WriteArchiveEntryAsync(archive, "cactbot/cactbot/resources/test.txt", "ok"u8.ToArray());
     }
     var cactbotInstaller = new CactbotPackageInstaller(paths);
-    await cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None);
+    await Task.WhenAll(
+        cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None),
+        cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None));
     Assert(cactbotInstaller.IsInstalled, "Official Cactbot package layout was not installed.");
     Assert(File.Exists(Path.Combine(paths.CactbotDirectory, "resources", "test.txt")),
         "Cactbot resources were not preserved.");
@@ -109,6 +119,27 @@ try
     Assert(
         await File.ReadAllTextAsync(customCactbotUserFile) == "custom",
         "Cactbot upgrade overwrote the user's custom files.");
+    cactbotInstaller.DeleteCommittedBackupAsync = _ =>
+        Task.FromException(new IOException("simulated backup cleanup failure"));
+    await cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None);
+    Assert(
+        cactbotInstaller.IsInstalled &&
+        Directory.EnumerateDirectories(
+                paths.ConfigDirectory,
+                $"{Path.GetFileName(paths.CactbotDirectory)}.backup-*")
+            .Any(),
+        "A committed Cactbot install was reported as failed when only backup cleanup was blocked.");
+    cactbotInstaller.DeleteCommittedBackupAsync = backup =>
+        Task.Run(() => Directory.Delete(backup, recursive: true));
+    await cactbotInstaller.InstallAsync(cactbotPackage, CancellationToken.None);
+    Assert(
+        !Directory.EnumerateDirectories(
+                paths.ConfigDirectory,
+                $"{Path.GetFileName(paths.CactbotDirectory)}.backup-*")
+            .Any(),
+        "A stale Cactbot backup was not cleaned on the next successful install.");
+    await ValidateCactbotMissingTargetBackupRecoveryAsync(testRoot, cactbotPackage);
+    await ValidateCactbotPostShutdownPublicationGuardAsync();
     await ValidateBundledCactbotPortableInstallAsync(testRoot);
     await ValidateOfficialBundledCactbotAsync(testRoot);
 
@@ -957,7 +988,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 11)) == "v0.3.6.11",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 12)) == "v0.3.6.12",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1162,6 +1193,35 @@ static void ValidateControlCenterPresentation()
         !bundledInstallMethod.Contains("configuration.EnableParsing =", StringComparison.Ordinal) &&
         !bundledInstallMethod.Contains("configuration.AutoStartParser =", StringComparison.Ordinal),
         "Parser startup remains coupled to third-party extension acknowledgement.");
+    var buildBundledUpdateMessageIndex = pluginSource.IndexOf(
+        "private static string BuildBundledPluginUpdateMessage",
+        startBundledUpdateCheckIndex,
+        StringComparison.Ordinal);
+    var bundledUpdateCheckMethod = pluginSource[
+        startBundledUpdateCheckIndex..buildBundledUpdateMessageIndex];
+    Assert(
+        !bundledUpdateCheckMethod.Contains("parserEngine.StopAsync", StringComparison.Ordinal) &&
+        !bundledUpdateCheckMethod.Contains("hostSupervisor.StopAsync", StringComparison.Ordinal) &&
+        bundledInstallMethod.Contains("BundledPluginInstallCoordinator.ExecuteAsync", StringComparison.Ordinal),
+        "Checking for bundled DLL updates still pauses ACT services before installation begins.");
+    var pluginConstructorEnd = pluginSource.IndexOf(
+        "public string Name",
+        StringComparison.Ordinal);
+    var pluginConstructor = pluginSource[..pluginConstructorEnd];
+    var lifecycleStartForCactbot = pluginConstructor.IndexOf(
+        "lifecycle.Start();",
+        StringComparison.Ordinal);
+    var cactbotInitializationStart = pluginConstructor.IndexOf(
+        "StartBundledCactbotInitialization",
+        StringComparison.Ordinal);
+    Assert(
+        lifecycleStartForCactbot >= 0 &&
+        cactbotInitializationStart > lifecycleStartForCactbot &&
+        !pluginConstructor.Contains("EnsureCurrentAsync(timeout.Token).GetAwaiter()", StringComparison.Ordinal) &&
+        pluginSource.Contains("ShutdownCactbotOperationsAsync", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("CactbotOperationState.Checking", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("CactbotOperationState.Installing", StringComparison.Ordinal),
+        "Cactbot validation still blocks plugin startup or lacks tracked status/shutdown handling.");
     Assert(
         statusSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         statusSource.Contains("runtime-status-content", StringComparison.Ordinal) &&
@@ -1251,32 +1311,44 @@ static void ValidateControlCenterPresentation()
         $"The new control center lost legacy setting paths: {string.Join(", ", missingLegacyPaths)}");
 }
 
-static void ValidateChinese755Opcodes()
+static void ValidateChinese755hOpcodes()
 {
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
     var opcodes = OpcodeManager.Instance.CurrentOpcodes;
     var expected = new Dictionary<string, ushort>
     {
-        ["Ability1"] = 0x01F3,
-        ["Ability8"] = 0x0114,
-        ["Ability16"] = 0x02CD,
-        ["Ability24"] = 0x00ED,
-        ["Ability32"] = 0x02C7,
-        ["ActorCast"] = 0x016B,
-        ["EffectResult"] = 0x0238,
-        ["ActorControl"] = 0x0112,
-        ["ActorControlSelf"] = 0x020E,
-        ["ActorControlTarget"] = 0x01A2,
-        ["StatusEffectList"] = 0x014C,
-        ["StatusEffectList2"] = 0x0201,
-        ["StatusEffectList3"] = 0x02E8,
+        ["Ability1"] = 0x0296,
+        ["Ability8"] = 0x0164,
+        ["Ability16"] = 0x01B1,
+        ["Ability24"] = 0x039B,
+        ["Ability32"] = 0x0372,
+        ["ActorCast"] = 0x018C,
+        ["EffectResult"] = 0x02F5,
+        ["EffectResultBasic"] = 0x03A3,
+        ["ActorControl"] = 0x01DA,
+        ["ActorControlSelf"] = 0x035D,
+        ["ActorControlTarget"] = 0x013C,
+        ["StatusEffectList"] = 0x01F1,
+        ["StatusEffectList2"] = 0x009B,
+        ["StatusEffectList3"] = 0x0153,
+        ["BossStatusEffectList"] = 0x0320,
+        ["StatusEffectListForay3"] = 0x00DC,
+        ["PlayerSpawn"] = 0x0398,
+        ["NpcSpawn"] = 0x006F,
+        ["NpcSpawn2"] = 0x0287,
+        ["ActorMove"] = 0x038D,
+        ["ActorSetPos"] = 0x03DF,
+        ["ActorGauge"] = 0x0221,
+        ["PresetWaymark"] = 0x0149,
+        ["Waymark"] = 0x0171,
+        ["SystemLogMessage"] = 0x01E7,
     };
 
     foreach (var pair in expected)
     {
         Assert(
             opcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
-            $"Chinese 7.55 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+            $"Chinese 7.55h opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
     }
 }
 
@@ -1331,13 +1403,16 @@ static void ValidateParserDependencyVersions()
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
         });
-    var chinese755 = document.RootElement
+    var chinese755h = document.RootElement
         .GetProperty("Chinese")
-        .GetProperty("2026.07.16.0001.0000");
+        .GetProperty("2026.08.05.0000.0000");
     Assert(
-        chinese755.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 887 &&
-        chinese755.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 552,
-        "OverlayPlugin Chinese 7.55 opcodes are stale.");
+        chinese755h.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 188 &&
+        chinese755h.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 979 &&
+        chinese755h.GetProperty("Countdown").GetProperty("opcode").GetInt32() == 802 &&
+        chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
+        chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
+        "OverlayPlugin Chinese 7.55h opcodes are stale.");
 }
 
 static void AssertFileVersion(string path, string expected, string component)
@@ -1488,6 +1563,624 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
         "Bundled DLLs were loadable before acknowledging the new host release notice.");
+}
+
+static async Task ValidateCactbotMissingTargetBackupRecoveryAsync(
+    string testRoot,
+    string validPackage)
+{
+    var paths = new PluginPaths(Path.Combine(testRoot, "cactbot-missing-target-recovery"));
+    paths.EnsureCreated();
+    await File.WriteAllBytesAsync(
+        Path.Combine(paths.CactbotDirectory, "CactbotOverlay.dll"),
+        [9, 8, 7]);
+    var raidboss = Path.Combine(paths.CactbotDirectory, "ui", "raidboss", "raidboss.html");
+    Directory.CreateDirectory(Path.GetDirectoryName(raidboss)!);
+    await File.WriteAllTextAsync(raidboss, "old-raidboss");
+    var userFile = Path.Combine(paths.CactbotDirectory, "user", "custom.js");
+    Directory.CreateDirectory(Path.GetDirectoryName(userFile)!);
+    await File.WriteAllTextAsync(userFile, "old-user-data");
+
+    var installer = new CactbotPackageInstaller(paths);
+    installer.MoveDirectory = (source, destination) =>
+    {
+        if (destination.Equals(paths.CactbotDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            if (source.StartsWith(paths.PluginStagingDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("simulated Cactbot commit failure");
+            }
+
+            if (source.StartsWith(
+                    paths.CactbotDirectory + ".backup-",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("simulated Cactbot rollback failure");
+            }
+        }
+
+        Directory.Move(source, destination);
+    };
+
+    AggregateException? failedReplacement = null;
+    try
+    {
+        await installer.InstallAsync(validPackage, CancellationToken.None);
+    }
+    catch (AggregateException ex)
+    {
+        failedReplacement = ex;
+    }
+
+    var preservedBackup = Directory
+        .EnumerateDirectories(
+            paths.ConfigDirectory,
+            $"{Path.GetFileName(paths.CactbotDirectory)}.backup-*")
+        .Single();
+    Assert(
+        failedReplacement is not null &&
+        !Directory.Exists(paths.CactbotDirectory) &&
+        File.Exists(Path.Combine(preservedBackup, "CactbotOverlay.dll")) &&
+        File.Exists(Path.Combine(preservedBackup, "user", "custom.js")),
+        "A failed Cactbot commit/rollback did not preserve the previous installation as the recovery backup.");
+
+    var invalidPackage = Path.Combine(testRoot, "cactbot-invalid-after-missing-target.zip");
+    using (var archive = ZipFile.Open(invalidPackage, ZipArchiveMode.Create))
+    {
+        await WriteArchiveEntryAsync(archive, "not-cactbot/readme.txt", "invalid"u8.ToArray());
+    }
+
+    try
+    {
+        await installer.InstallAsync(invalidPackage, CancellationToken.None);
+    }
+    catch (InvalidDataException)
+    {
+    }
+    Assert(
+        !Directory.Exists(paths.CactbotDirectory) &&
+        Directory.Exists(preservedBackup) &&
+        File.Exists(Path.Combine(preservedBackup, "CactbotOverlay.dll")),
+        "A transient recovery failure deleted the only Cactbot backup or created a false target directory.");
+
+    installer.MoveDirectory = Directory.Move;
+    var invalidFailed = false;
+    try
+    {
+        await installer.InstallAsync(invalidPackage, CancellationToken.None);
+    }
+    catch (InvalidDataException)
+    {
+        invalidFailed = true;
+    }
+
+    Assert(
+        invalidFailed &&
+        installer.IsInstalled &&
+        await File.ReadAllTextAsync(Path.Combine(paths.CactbotDirectory, "ui", "raidboss", "raidboss.html")) ==
+            "old-raidboss" &&
+        await File.ReadAllTextAsync(Path.Combine(paths.CactbotDirectory, "user", "custom.js")) ==
+            "old-user-data",
+        "The only recoverable Cactbot backup was deleted before the next package reached a valid staged state.");
+}
+
+static async Task ValidateCactbotPostShutdownPublicationGuardAsync()
+{
+    var publishCount = 0;
+    await CactbotOperationLifecycle.PublishIfActiveAsync(
+        shutdownStarted: false,
+        CancellationToken.None,
+        () =>
+        {
+            publishCount++;
+            return Task.CompletedTask;
+        });
+    await CactbotOperationLifecycle.PublishIfActiveAsync(
+        shutdownStarted: true,
+        CancellationToken.None,
+        () =>
+        {
+            publishCount++;
+            return Task.CompletedTask;
+        });
+    using var canceled = new CancellationTokenSource();
+    canceled.Cancel();
+    await CactbotOperationLifecycle.PublishIfActiveAsync(
+        shutdownStarted: false,
+        canceled.Token,
+        () =>
+        {
+            publishCount++;
+            return Task.CompletedTask;
+        });
+    Assert(
+        publishCount == 1,
+        "Cactbot completion publication ran after plugin shutdown or cancellation.");
+
+    var pluginSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(), "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    Assert(
+        pluginSource.Contains("PublishCactbotInstalledNotificationAsync", StringComparison.Ordinal) &&
+        pluginSource.Contains("services.Framework.RunOnFrameworkThread", StringComparison.Ordinal) &&
+        pluginSource.Contains("cancellationToken.ThrowIfCancellationRequested();", StringComparison.Ordinal),
+        "Cactbot completion is not guarded and explicitly dispatched to the framework thread.");
+}
+
+static void ValidateFflogsConcurrencyBoundaries()
+{
+    var original = new FflogsSettings
+    {
+        Enabled = true,
+        ClientId = "client",
+        ClientSecret = "secret",
+        EncounterMappings = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Boss"] = 1,
+        },
+    };
+    var snapshot = original.Snapshot();
+    snapshot.ClientId = "changed";
+    snapshot.EncounterMappings["Boss"] = 2;
+    snapshot.EncounterMappings["Other"] = 3;
+    Assert(
+        original.ClientId == "client" &&
+        original.EncounterMappings["Boss"] == 1 &&
+        !original.EncounterMappings.ContainsKey("Other"),
+        "FFLogs configuration snapshots still share mutable UI state.");
+
+    Assert(
+        typeof(IAsyncDisposable).IsAssignableFrom(typeof(FflogsEstimateService)) &&
+        typeof(FflogsEstimateService).GetMethod(nameof(FflogsEstimateService.BeginShutdown)) is not null,
+        "FFLogs background work does not expose a cancellable, awaitable shutdown lifecycle.");
+
+    var projectRoot = FindProjectRoot();
+    var serviceSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Fflogs", "FflogsEstimateService.cs"));
+    var controlCenterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    Assert(
+        serviceSource.Contains("TryStartBackgroundTask", StringComparison.Ordinal) &&
+        serviceSource.Contains("SaveCacheAsync", StringComparison.Ordinal) &&
+        serviceSource.Contains("cacheWriteGate", StringComparison.Ordinal) &&
+        !serviceSource.Contains("_ = Task.Run", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("UpdateFflogsSettings", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("configuration.Fflogs = next;", StringComparison.Ordinal),
+        "FFLogs UI ownership, task tracking, or serialized cache persistence regressed.");
+}
+
+static async Task ValidateFflogsCacheWritersAsync(string testRoot)
+{
+    var cacheDirectory = Path.Combine(testRoot, "fflogs-cache-writers");
+    var cachePath = Path.Combine(cacheDirectory, "fflogs-cache.json");
+    var dataManager = DispatchProxy.Create<IDataManager, NoOpDataManagerProxy>();
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var service = new FflogsEstimateService(
+        () => new FflogsSettings(),
+        cachePath,
+        dataManager,
+        new PluginLogger(log));
+    try
+    {
+        var firstTemporaryPath = FflogsEstimateService.CreateCacheTemporaryPath(cachePath);
+        var secondTemporaryPath = FflogsEstimateService.CreateCacheTemporaryPath(cachePath);
+        Assert(
+            !firstTemporaryPath.Equals(secondTemporaryPath, StringComparison.OrdinalIgnoreCase),
+            "FFLogs cache writers still share one temporary-file path.");
+
+        await service.SaveCacheAsync(CancellationToken.None);
+        await service.SaveCacheAsync(CancellationToken.None);
+        await Task.WhenAll(
+            service.SaveCacheAsync(CancellationToken.None),
+            service.SaveCacheAsync(CancellationToken.None));
+
+        using var cacheDocument = JsonDocument.Parse(await File.ReadAllTextAsync(cachePath));
+        Assert(
+            cacheDocument.RootElement.TryGetProperty("CatalogFetchedAt", out _) &&
+            !Directory.EnumerateFiles(cacheDirectory, "*.tmp").Any(),
+            "Consecutive or concurrent FFLogs cache saves corrupted the cache or left writer temp files behind.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task ValidateFactoryResetRollbackAsync(string testRoot)
+{
+    var configRoot = Path.Combine(testRoot, "factory-reset-rollback");
+    var paths = new PluginPaths(configRoot);
+    paths.EnsureCreated();
+    var originalFile = Path.Combine(configRoot, "user-data.txt");
+    await File.WriteAllTextAsync(originalFile, "original");
+    var configuration = new PluginConfiguration
+    {
+        DebugMode = true,
+        HistoryLimit = 42,
+        UiLanguage = "en",
+    };
+    var parser = new TestParserEngine(ParserState.Running);
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var persistedConfiguration = Path.Combine(configRoot, "persisted-configuration.txt");
+    var saveAttempts = 0;
+    var service = new FactoryResetService(
+        parser,
+        paths,
+        configuration,
+        new PluginLogger(log),
+        () =>
+        {
+            saveAttempts++;
+            File.WriteAllText(
+                persistedConfiguration,
+                $"{configuration.DebugMode}|{configuration.HistoryLimit}|{configuration.UiLanguage}");
+            if (saveAttempts == 1)
+            {
+                throw new IOException("simulated configuration commit failure");
+            }
+        });
+
+    var failed = false;
+    try
+    {
+        await service.ResetAsync(CancellationToken.None);
+    }
+    catch (IOException)
+    {
+        failed = true;
+    }
+
+    Assert(failed, "The simulated factory-reset commit failure was not observed.");
+    Assert(
+        File.Exists(originalFile) &&
+        await File.ReadAllTextAsync(originalFile) == "original",
+        "Factory-reset rollback did not restore files moved before the failed commit.");
+    Assert(
+        configuration.DebugMode &&
+        configuration.HistoryLimit == 42 &&
+        configuration.UiLanguage == "en",
+        "Factory-reset rollback did not restore the in-memory configuration.");
+    Assert(
+        saveAttempts == 2 &&
+        await File.ReadAllTextAsync(persistedConfiguration) == "True|42|en",
+        "Factory-reset rollback did not persist the restored configuration snapshot.");
+    Assert(
+        parser.StopCount == 1 &&
+        parser.StartCount == 1 &&
+        parser.Status.State == ParserState.Running,
+        "Factory-reset failure left a previously running parser stopped.");
+
+    var partialRoot = Path.Combine(testRoot, "factory-reset-partial-staging");
+    var partialPaths = new PluginPaths(partialRoot);
+    partialPaths.EnsureCreated();
+    var partialFiles = new Dictionary<string, string>
+    {
+        [Path.Combine(partialRoot, "first.cfg")] = "first",
+        [Path.Combine(partialRoot, "second.cfg")] = "second",
+        [Path.Combine(partialRoot, "third.cfg")] = "third",
+    };
+    foreach (var (path, contents) in partialFiles)
+    {
+        await File.WriteAllTextAsync(path, contents);
+    }
+
+    var partialConfiguration = new PluginConfiguration { HistoryLimit = 77 };
+    var partialParser = new TestParserEngine(ParserState.Stopped);
+    var partialSaveCalled = false;
+    var partialService = new FactoryResetService(
+        partialParser,
+        partialPaths,
+        partialConfiguration,
+        new PluginLogger(log),
+        () => partialSaveCalled = true);
+    var stagedOriginalEntries = 0;
+    partialService.StageEntry = (source, destination) =>
+    {
+        if (partialFiles.ContainsKey(source))
+        {
+            stagedOriginalEntries++;
+            if (stagedOriginalEntries == 2)
+            {
+                throw new IOException("simulated partial staging failure");
+            }
+        }
+
+        MoveTestEntry(source, destination);
+    };
+
+    var partialFailed = false;
+    try
+    {
+        await partialService.ResetAsync(CancellationToken.None);
+    }
+    catch (IOException ex) when (ex.Message == "simulated partial staging failure")
+    {
+        partialFailed = true;
+    }
+
+    Assert(
+        partialFailed && stagedOriginalEntries == 2 && !partialSaveCalled,
+        "The partial factory-reset staging failure did not occur before defaults were applied.");
+    foreach (var (path, contents) in partialFiles)
+    {
+        Assert(
+            File.Exists(path) && await File.ReadAllTextAsync(path) == contents,
+            $"Factory-reset partial staging rollback lost an original entry: {Path.GetFileName(path)}");
+    }
+    Assert(
+        partialConfiguration.HistoryLimit == 77,
+        "Factory-reset partial staging rollback changed the original in-memory configuration.");
+
+    var doubleFailureRoot = Path.Combine(testRoot, "factory-reset-persist-rollback-failure");
+    var doubleFailurePaths = new PluginPaths(doubleFailureRoot);
+    doubleFailurePaths.EnsureCreated();
+    var doubleFailureFile = Path.Combine(doubleFailureRoot, "original.cfg");
+    await File.WriteAllTextAsync(doubleFailureFile, "original");
+    var doubleFailureConfiguration = new PluginConfiguration { HistoryLimit = 88 };
+    var doubleFailureService = new FactoryResetService(
+        new TestParserEngine(ParserState.Stopped),
+        doubleFailurePaths,
+        doubleFailureConfiguration,
+        new PluginLogger(log),
+        () => throw new IOException("simulated persistent configuration failure"));
+    AggregateException? rollbackAggregate = null;
+    try
+    {
+        await doubleFailureService.ResetAsync(CancellationToken.None);
+    }
+    catch (AggregateException ex)
+    {
+        rollbackAggregate = ex;
+    }
+
+    Assert(
+        rollbackAggregate is not null &&
+        rollbackAggregate.Flatten().InnerExceptions.Any(error =>
+            error.Message.Contains("persist", StringComparison.OrdinalIgnoreCase)) &&
+        doubleFailureConfiguration.HistoryLimit == 88 &&
+        File.Exists(doubleFailureFile),
+        "A failed persisted rollback was swallowed or did not retain the restored in-memory/filesystem state.");
+
+    var successRoot = Path.Combine(testRoot, "factory-reset-commit");
+    var successPaths = new PluginPaths(successRoot);
+    successPaths.EnsureCreated();
+    var successOriginalFile = Path.Combine(successRoot, "user-data.txt");
+    await File.WriteAllTextAsync(successOriginalFile, "backup-me");
+    var successConfiguration = new PluginConfiguration
+    {
+        DebugMode = true,
+        HistoryLimit = 99,
+    };
+    var successParser = new TestParserEngine(ParserState.Running);
+    var successService = new FactoryResetService(
+        successParser,
+        successPaths,
+        successConfiguration,
+        new PluginLogger(log),
+        () => File.WriteAllText(Path.Combine(successRoot, "configuration-saved.marker"), "saved"));
+    var backup = await successService.ResetAsync(CancellationToken.None);
+    Assert(
+        File.Exists(Path.Combine(backup, "user-data.txt")) &&
+        !File.Exists(successOriginalFile) &&
+        File.Exists(Path.Combine(successRoot, "configuration-saved.marker")),
+        "Factory reset did not commit the new layout while preserving the original files in its backup.");
+    Assert(
+        !successConfiguration.DebugMode &&
+        successConfiguration.HistoryLimit == 20 &&
+        successParser.StopCount == 1 &&
+        successParser.StartCount == 0,
+        "Successful factory reset changed its existing stop-and-reset semantics.");
+
+    var shutdownRoot = Path.Combine(testRoot, "factory-reset-shutdown");
+    var shutdownPaths = new PluginPaths(shutdownRoot);
+    shutdownPaths.EnsureCreated();
+    await File.WriteAllTextAsync(Path.Combine(shutdownRoot, "original.cfg"), "original");
+    var shutdownParser = new TestParserEngine(ParserState.Running);
+    using var pluginShutdown = new CancellationTokenSource();
+    var shutdownService = new FactoryResetService(
+        shutdownParser,
+        shutdownPaths,
+        new PluginConfiguration(),
+        new PluginLogger(log),
+        () => { });
+    shutdownService.StageEntry = (_, _) =>
+    {
+        pluginShutdown.Cancel();
+        throw new IOException("simulated staging failure during shutdown");
+    };
+    try
+    {
+        await shutdownService.ResetAsync(CancellationToken.None, pluginShutdown.Token);
+        throw new InvalidOperationException("Factory reset did not expose the shutdown staging failure.");
+    }
+    catch (IOException ex) when (ex.Message == "simulated staging failure during shutdown")
+    {
+    }
+
+    Assert(
+        shutdownParser.StopCount == 1 && shutdownParser.StartCount == 0,
+        "Factory-reset rollback restarted the parser after plugin shutdown began.");
+
+    var operationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var cancellationObserved = false;
+    var operationCount = 0;
+    var coordinator = new FactoryResetOperationCoordinator(async shutdownToken =>
+    {
+        operationCount++;
+        operationStarted.TrySetResult();
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, shutdownToken);
+            return "unexpected";
+        }
+        catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+        {
+            cancellationObserved = true;
+            throw;
+        }
+    });
+    var firstReset = coordinator.Start();
+    var duplicateReset = coordinator.Start();
+    Assert(
+        ReferenceEquals(firstReset, duplicateReset),
+        "Factory-reset coordinator allowed more than one simultaneous reset task.");
+    await operationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    Assert(
+        await coordinator.WaitForShutdownAsync(TimeSpan.FromSeconds(2)) &&
+        cancellationObserved &&
+        operationCount == 1 &&
+        coordinator.Start().IsCanceled,
+        "Factory-reset coordinator did not cancel and join its active task during shutdown.");
+}
+
+static void MoveTestEntry(string source, string destination)
+{
+    if (Directory.Exists(source))
+    {
+        Directory.Move(source, destination);
+    }
+    else
+    {
+        File.Move(source, destination);
+    }
+}
+
+static async Task ValidateBundledPluginInstallLifecycleAsync()
+{
+    var events = new List<string>();
+    await BundledPluginInstallCoordinator.ExecuteAsync(
+        hostWasRunning: true,
+        parserWasRunning: true,
+        _ => RecordAsync("stop-host"),
+        _ => RecordAsync("stop-parser"),
+        _ => RecordAsync("install"),
+        _ => RecordAsync("start-host"),
+        _ => RecordAsync("start-parser"),
+        () => true,
+        CancellationToken.None,
+        TimeSpan.FromSeconds(1));
+    Assert(
+        events.SequenceEqual(
+            ["stop-host", "stop-parser", "install", "start-host", "start-parser"]),
+        "Bundled DLL installation did not pause and restore running ACT services in order.");
+
+    events.Clear();
+    var failed = false;
+    try
+    {
+        await BundledPluginInstallCoordinator.ExecuteAsync(
+            hostWasRunning: true,
+            parserWasRunning: true,
+            _ => RecordAsync("stop-host"),
+            _ => RecordAsync("stop-parser"),
+            _ => throw new InvalidOperationException("expected install failure"),
+            _ => RecordAsync("start-host"),
+            _ => RecordAsync("start-parser"),
+            () => true,
+            CancellationToken.None,
+            TimeSpan.FromSeconds(1));
+    }
+    catch (InvalidOperationException ex) when (ex.Message == "expected install failure")
+    {
+        failed = true;
+    }
+
+    Assert(failed, "A bundled DLL installation failure was not observed by the caller.");
+    Assert(
+        events.SequenceEqual(
+            ["stop-host", "stop-parser", "start-host", "start-parser"]),
+        "ACT services were not restored after a bundled DLL installation failure.");
+
+    events.Clear();
+    await BundledPluginInstallCoordinator.ExecuteAsync(
+        hostWasRunning: false,
+        parserWasRunning: false,
+        _ => RecordAsync("stop-host"),
+        _ => RecordAsync("stop-parser"),
+        _ => RecordAsync("install"),
+        _ => RecordAsync("start-host"),
+        _ => RecordAsync("start-parser"),
+        () => true,
+        CancellationToken.None,
+        TimeSpan.FromSeconds(1));
+    Assert(
+        events.SequenceEqual(["install"]),
+        "Bundled DLL installation changed ACT services that were already stopped.");
+
+    Task RecordAsync(string value)
+    {
+        events.Add(value);
+        return Task.CompletedTask;
+    }
+}
+
+static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "encounter-shutdown-flush");
+    var paths = new PluginPaths(root);
+    var repository = new EncounterRepository(new JsonFileStore(), paths);
+    var stateStore = new EncounterStateStore();
+    var configuration = new PluginConfiguration { HistoryLimit = 5 };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var service = new EncounterService(
+        repository,
+        stateStore,
+        configuration,
+        new PluginLogger(log),
+        paths);
+    var encounter = SampleEncounterFactory.Create(DateTimeOffset.UtcNow) with
+    {
+        EndTime = DateTimeOffset.UtcNow,
+    };
+
+    service.QueueFinishedEncounter(encounter);
+    await service.DisposeAsync();
+    await service.DisposeAsync();
+
+    var persisted = await repository.LoadRecentAsync(CancellationToken.None);
+    Assert(
+        persisted.Count == 1 && persisted[0].Id == encounter.Id,
+        "An encounter submitted immediately before shutdown was not flushed to history.");
+    Assert(
+        Directory.EnumerateFiles(paths.EncounterLogDirectory, "*.json").Count() == 1,
+        "An encounter submitted immediately before shutdown did not write its individual log.");
+}
+
+static async Task ValidateAtomicEncounterStateUpdatesAsync()
+{
+    var stateStore = new EncounterStateStore();
+    var start = DateTimeOffset.UtcNow;
+    var current = SampleEncounterFactory.Create(start);
+    var recent = SampleEncounterFactory.Create(start.AddMinutes(-1)) with
+    {
+        EndTime = start,
+    };
+    using var gate = new ManualResetEventSlim();
+
+    var updateCurrent = Task.Run(() =>
+    {
+        gate.Wait();
+        for (var iteration = 0; iteration < 1000; iteration++)
+        {
+            stateStore.UpdateCurrent(current);
+        }
+    });
+    var updateRecent = Task.Run(() =>
+    {
+        gate.Wait();
+        for (var iteration = 0; iteration < 1000; iteration++)
+        {
+            stateStore.UpdateRecent([recent]);
+        }
+    });
+
+    gate.Set();
+    await Task.WhenAll(updateCurrent, updateRecent);
+    var snapshot = stateStore.GetSnapshot();
+    Assert(
+        snapshot.Current?.Id == current.Id &&
+        snapshot.Recent.Count == 1 &&
+        snapshot.Recent[0].Id == recent.Id,
+        "Concurrent Current and Recent encounter updates overwrote one another.");
 }
 
 static async Task ValidateBundledCactbotPortableInstallAsync(string testRoot)
@@ -2142,16 +2835,54 @@ static void ValidateHtmlOverlayDefaults()
     var inputRegionScript = formType.GetField(
                                 "OverlayInputRegionScript",
                                 BindingFlags.Static | BindingFlags.NonPublic)
-                            ?.GetRawConstantValue() as string;
+                            ?.GetRawConstantValue() as string
+                            ?? throw new InvalidOperationException(
+                                "HTML overlay dynamic input-region script was not found.");
     Assert(
         htmlOverlayFormSource.Contains("Opacity = 0.01", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Show(form)", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Region = nextRegion", StringComparison.Ordinal) &&
-        inputRegionScript?.Contains("ResizeObserver", StringComparison.Ordinal) == true &&
+        inputRegionScript.Contains("ResizeObserver", StringComparison.Ordinal) &&
         inputRegionScript.Contains("MutationObserver", StringComparison.Ordinal) &&
         inputRegionScript.Contains("dalamud-act-compat:input-regions:", StringComparison.Ordinal),
         "The transparent HTML overlay no longer has a content-shaped dynamic input proxy.");
+    Assert(
+        inputRegionScript.Contains("performance.now()", StringComparison.Ordinal) &&
+        inputRegionScript.Contains("diagnostics.refreshCount", StringComparison.Ordinal) &&
+        inputRegionScript.Contains("scannedElements", StringComparison.Ordinal) &&
+        inputRegionScript.Contains("peakFinalRectangles", StringComparison.Ordinal) &&
+        inputRegionScript.Contains("diagnosticWindowMilliseconds >= 10000", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains(
+            "window.__dalamudActCompatInputRegionDiagnostics",
+            StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("RecordRegionRebuildDiagnostic", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("Windows input-region rebuild diagnostic", StringComparison.Ordinal),
+        "HTML dynamic hit-region profiling is missing, unthrottled, or no longer debug-only.");
+    var disabledDiagnosticBranch = inputRegionScript.IndexOf(
+        "if (diagnostics === null)",
+        StringComparison.Ordinal);
+    var enabledDiagnosticMeasurement = inputRegionScript.IndexOf(
+        "const startedAt = performance.now();",
+        StringComparison.Ordinal);
+    var disabledFastPath = disabledDiagnosticBranch >= 0 &&
+                           enabledDiagnosticMeasurement > disabledDiagnosticBranch
+        ? inputRegionScript[disabledDiagnosticBranch..enabledDiagnosticMeasurement]
+        : string.Empty;
+    Assert(
+        inputRegionScript.Contains("let diagnostics = null;", StringComparison.Ordinal) &&
+        inputRegionScript.Contains(
+            "if (window.__dalamudActCompatInputRegionDiagnostics === true)",
+            StringComparison.Ordinal) &&
+        disabledFastPath.Contains("rectangles: collectRegions()", StringComparison.Ordinal) &&
+        disabledFastPath.Contains("return;", StringComparison.Ordinal) &&
+        !disabledFastPath.Contains("performance.now()", StringComparison.Ordinal) &&
+        !disabledFastPath.Contains("Math.max", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.IndexOf("if (!debugMode)", StringComparison.Ordinal) <
+        htmlOverlayFormSource.IndexOf(
+            "var diagnosticTimer = Stopwatch.StartNew();",
+            StringComparison.Ordinal),
+        "HTML input-region diagnostics still execute measurement work on the disabled fast path.");
     var shieldType = typeof(MeterService).Assembly.GetType(
                          "DalamudActCompat.UI.OverlayEditShield",
                          throwOnError: true)
@@ -3146,6 +3877,52 @@ internal enum PluginIntegrationMode
     Auto,
 }
 
+internal sealed class TestParserEngine : IParserEngine
+{
+    public TestParserEngine(ParserState initialState)
+    {
+        Status = new ParserStatus(initialState, initialState.ToString(), DateTimeOffset.UtcNow);
+    }
+
+    public event EventHandler<ParserStatus>? StatusChanged;
+
+    public ParserStatus Status { get; private set; }
+
+    public int StartCount { get; private set; }
+
+    public int StopCount { get; private set; }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StartCount++;
+        SetStatus(ParserState.Running);
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StopCount++;
+        SetStatus(ParserState.Stopped);
+        return Task.CompletedTask;
+    }
+
+    public async Task RestartAsync(CancellationToken cancellationToken)
+    {
+        await StopAsync(cancellationToken);
+        await StartAsync(cancellationToken);
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private void SetStatus(ParserState state)
+    {
+        Status = new ParserStatus(state, state.ToString(), DateTimeOffset.UtcNow);
+        StatusChanged?.Invoke(this, Status);
+    }
+}
+
 internal sealed class EnumSettingsOwner
 {
     public PluginIntegrationMode PluginIntegration { get; set; }
@@ -3169,6 +3946,19 @@ internal sealed class FoxTtsProbe : IDisposable
 }
 
 public class NoOpPluginLogProxy : DispatchProxy
+{
+    protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+    {
+        var returnType = targetMethod?.ReturnType;
+        return returnType is null || returnType == typeof(void)
+            ? null
+            : returnType.IsValueType
+                ? Activator.CreateInstance(returnType)
+                : null;
+    }
+}
+
+public class NoOpDataManagerProxy : DispatchProxy
 {
     protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
     {
