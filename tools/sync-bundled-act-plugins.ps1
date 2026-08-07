@@ -88,7 +88,10 @@ function Copy-Or-Verify {
         [string] $Source,
 
         [Parameter(Mandatory = $true)]
-        [string] $Destination
+        [string] $Destination,
+
+        [Parameter(Mandatory = $false)]
+        [switch] $NormalizeText
     )
 
     if ($Check) {
@@ -96,7 +99,19 @@ function Copy-Or-Verify {
             throw "Bundled plugin file is missing: $Destination"
         }
 
-        if ((Get-Sha256 $Source) -ne (Get-Sha256 $Destination)) {
+        $matches = if ($NormalizeText) {
+            $sourceText = [IO.File]::ReadAllText($Source).
+                Replace("`r`n", "`n").
+                Replace("`r", "`n")
+            $destinationText = [IO.File]::ReadAllText($Destination).
+                Replace("`r`n", "`n").
+                Replace("`r", "`n")
+            $sourceText -ceq $destinationText
+        } else {
+            (Get-Sha256 $Source) -eq (Get-Sha256 $Destination)
+        }
+
+        if (-not $matches) {
             throw "Bundled plugin file is not current: $Destination"
         }
 
@@ -210,16 +225,19 @@ Copy-Or-Verify `
     (Join-Path $destinationRoot "triggernometry/Triggernometry.dll")
 Copy-Or-Verify `
     $triggerTranslation `
-    (Join-Path $destinationRoot "triggernometry/zh-CN.triglations.xml")
+    (Join-Path $destinationRoot "triggernometry/zh-CN.triglations.xml") `
+    -NormalizeText
 Copy-Or-Verify `
     $triggerLicense `
-    (Join-Path $destinationRoot "triggernometry/LICENSE.txt")
+    (Join-Path $destinationRoot "triggernometry/LICENSE.txt") `
+    -NormalizeText
 Copy-Or-Verify `
     $foxDll `
     (Join-Path $destinationRoot "act.foxtts/ACT.FoxTTS.dll")
 Copy-Or-Verify `
     $foxLicense `
-    (Join-Path $destinationRoot "act.foxtts/LICENSE.txt")
+    (Join-Path $destinationRoot "act.foxtts/LICENSE.txt") `
+    -NormalizeText
 Copy-Or-Verify `
     $postNamazuDll.FullName `
     (Join-Path $destinationRoot "postnamazu/PostNamazu.dll")
