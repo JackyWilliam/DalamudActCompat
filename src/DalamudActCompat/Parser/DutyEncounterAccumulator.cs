@@ -11,6 +11,7 @@ internal sealed class DutyEncounterAccumulator
     private double completedDurationSeconds;
     private Guid sessionId;
     private DateTimeOffset? startTime;
+    private uint? territoryId;
     private string zoneName = string.Empty;
     private Encounter? latestSegment;
 
@@ -67,6 +68,7 @@ internal sealed class DutyEncounterAccumulator
         completedDurationSeconds = 0;
         sessionId = Guid.Empty;
         startTime = null;
+        territoryId = null;
         zoneName = string.Empty;
         latestSegment = null;
     }
@@ -86,6 +88,10 @@ internal sealed class DutyEncounterAccumulator
         if (!string.IsNullOrWhiteSpace(segment.ZoneName))
         {
             zoneName = segment.ZoneName;
+        }
+        if (segment.TerritoryId is > 0)
+        {
+            territoryId = segment.TerritoryId;
         }
     }
 
@@ -172,6 +178,7 @@ internal sealed class DutyEncounterAccumulator
             // Duty totals remain on the meter, while FFLogs comparisons must use one
             // concrete boss segment instead of cumulative damage from the whole duty.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
+            TerritoryId = territoryId,
             // ACT treats merged encounters as the sum of their active encounter
             // durations. Travel, cutscenes, and waits between pulls must not lower DPS.
             CombatDuration = TimeSpan.FromSeconds(durationSeconds),

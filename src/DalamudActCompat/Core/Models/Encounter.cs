@@ -16,6 +16,8 @@ public sealed record Encounter(
     [System.Text.Json.Serialization.JsonIgnore]
     public Encounter? FflogsRankingEncounter { get; init; }
 
+    public uint? TerritoryId { get; init; }
+
     public TimeSpan? CombatDuration { get; init; }
 
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;

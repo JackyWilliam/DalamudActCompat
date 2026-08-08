@@ -1,4 +1,5 @@
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Fflogs;
@@ -12,6 +13,8 @@ public sealed class MeterWindow : Window
 {
     internal const float CombatantRowSpacing = 3;
     internal const string LimitBreakDisplayName = "LB (Limit Break)";
+    internal const float MinimumTableWidthWithFflogs = 410;
+    internal const float MinimumTableWidthWithoutFflogs = 350;
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
@@ -23,7 +26,9 @@ public sealed class MeterWindow : Window
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
     private readonly JobIconTextureSet jobIcons;
-    private readonly Func<string, string> localizeZoneName;
+    private readonly ISharedImmediateTexture runningStatusIcon;
+    private readonly ISharedImmediateTexture endedStatusIcon;
+    private readonly Func<uint?, string, string> localizeZoneName;
     private readonly Action saveConfiguration;
     private bool isDragging;
     private Vector2 dragOffset;
@@ -34,7 +39,9 @@ public sealed class MeterWindow : Window
         PluginConfiguration configuration,
         UiText text,
         JobIconTextureSet jobIcons,
-        Func<string, string> localizeZoneName,
+        ISharedImmediateTexture runningStatusIcon,
+        ISharedImmediateTexture endedStatusIcon,
+        Func<uint?, string, string> localizeZoneName,
         Action saveConfiguration)
         : base("战斗统计###DalamudActCompatMeter")
     {
@@ -43,6 +50,8 @@ public sealed class MeterWindow : Window
         this.configuration = configuration;
         this.text = text;
         this.jobIcons = jobIcons;
+        this.runningStatusIcon = runningStatusIcon;
+        this.endedStatusIcon = endedStatusIcon;
         this.localizeZoneName = localizeZoneName;
         this.saveConfiguration = saveConfiguration;
         ShowCloseButton = false;
@@ -121,12 +130,13 @@ public sealed class MeterWindow : Window
             return;
         }
 
-        var rows = meterService.GetRows(encounter);
+        var allRows = meterService.GetRows(encounter);
+        var rows = SelectVisibleRows(allRows, settings.CompactMode);
         if (settings.ShowHeader)
         {
             DrawEncounterHeader(encounter, settings);
         }
-        else if (!settings.IsLocked)
+        else
         {
             DrawCompactDragHandle(settings);
         }
@@ -139,19 +149,25 @@ public sealed class MeterWindow : Window
 
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         var showFflogs = configuration.Fflogs.Enabled && sortMode != MeterSortMode.Hps;
-        var estimate = showFflogs && rows.Any(static row => row.IsLocalPlayer)
-            ? fflogsEstimateService.GetEstimate(encounter)
-            : null;
-        var maximumScore = Math.Max(1, rows.Max(row => Score(row, sortMode)));
-        var minimumTableWidth = (showFflogs ? 450 : 390) * settings.FontScale;
-        ImGui.SetNextWindowContentSize(new Vector2(
-            Math.Max(ImGui.GetContentRegionAvail().X, minimumTableWidth),
-            0));
+        var maximumScore = Math.Max(1, allRows.Max(row => Score(row, sortMode)));
+        var availableTableWidth = ImGui.GetContentRegionAvail().X;
+        var minimumTableWidth = (showFflogs
+            ? MinimumTableWidthWithFflogs
+            : MinimumTableWidthWithoutFflogs) * settings.FontScale;
+        var useHorizontalScroll = ShouldEnableHorizontalScroll(
+            availableTableWidth,
+            minimumTableWidth);
+        if (useHorizontalScroll)
+        {
+            ImGui.SetNextWindowContentSize(new Vector2(minimumTableWidth, 0));
+        }
         if (ImGui.BeginChild(
                 "meter-rows",
                 new Vector2(-1, -1),
                 false,
-                ImGuiWindowFlags.HorizontalScrollbar))
+                useHorizontalScroll
+                    ? ImGuiWindowFlags.HorizontalScrollbar
+                    : ImGuiWindowFlags.None))
         {
             var layout = BuildColumnLayout(
                 ImGui.GetContentRegionAvail().X,
@@ -163,12 +179,16 @@ public sealed class MeterWindow : Window
             {
                 DrawCombatantRow(
                     rows[index],
-                    index + 1,
                     maximumScore,
                     encounter,
                     settings,
                     layout,
-                    rows[index].IsLocalPlayer ? estimate : null);
+                    showFflogs && !MeterService.IsLimitBreak(rows[index].Id, rows[index].Name)
+                        ? fflogsEstimateService.GetEstimate(
+                            encounter,
+                            rows[index].Id,
+                            rows[index].Name)
+                        : null);
             }
         }
         ImGui.EndChild();
@@ -190,22 +210,26 @@ public sealed class MeterWindow : Window
     private void DrawEncounterHeader(Encounter encounter, MeterSettings settings)
     {
         const float headerHeight = 44;
+        const float toggleWidth = 54;
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
+        var toggleStart = new Vector2(start.X + width - toggleWidth - 6, start.Y + 9);
+        var toggleEnd = toggleStart + new Vector2(toggleWidth, 26);
+        var toggleHovered = CanInteractWithCompactToggle(settings) &&
+                            ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
         ImGui.InvisibleButton("meter-header-drag", new Vector2(width, headerHeight));
-        HandleHeaderDrag(settings);
+        HandleHeaderDrag(settings, allowStart: !toggleHovered);
+        HandleCompactModeToggle(settings, toggleHovered);
 
         var drawList = ImGui.GetWindowDrawList();
         drawList.AddRectFilled(start, start + new Vector2(width, headerHeight), ImGui.GetColorU32(NavyRaised), 6);
-        var stateColor = encounter.IsActive
-            ? new Vector4(0.38f, 0.78f, 0.66f, 1)
-            : new Vector4(0.66f, 0.69f, 0.74f, 1);
-        drawList.AddText(start + new Vector2(10, 6), ImGui.GetColorU32(stateColor), encounter.IsActive ? "●" : "○");
+        DrawEncounterStateIcon(drawList, encounter.IsActive, start + new Vector2(9, 5));
+        var titleRight = Math.Max(start.X + 36, toggleStart.X - 6);
         drawList.AddText(
-            start + new Vector2(28, 6),
+            start + new Vector2(36, 6),
             ImGui.GetColorU32(Gold),
-            LocalizeEncounterTitle(encounter));
-        var subtitle = $"{localizeZoneName(encounter.ZoneName)}  ·  {FormatDuration(encounter.EffectiveDuration)}";
+            TrimToWidth(LocalizeEncounterTitle(encounter), titleRight - start.X - 36));
+        var subtitle = $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  {FormatDuration(encounter.EffectiveDuration)}";
         if (!UsesStatusAsEncounterTitle(encounter))
         {
             subtitle += "  ·  " +
@@ -213,7 +237,11 @@ public sealed class MeterWindow : Window
                             ? text.Get("战斗中", "Running")
                             : text.Get("已结束", "Ended"));
         }
-        drawList.AddText(start + new Vector2(28, 24), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), subtitle);
+        drawList.AddText(
+            start + new Vector2(36, 24),
+            ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
+            TrimToWidth(subtitle, titleRight - start.X - 36));
+        DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered);
     }
 
     private string LocalizeEncounterTitle(Encounter encounter)
@@ -229,7 +257,7 @@ public sealed class MeterWindow : Window
             encounter.EnemyName,
             encounter.ZoneName,
             StringComparison.OrdinalIgnoreCase)
-            ? localizeZoneName(encounter.EnemyName)
+            ? localizeZoneName(encounter.TerritoryId, encounter.EnemyName)
             : encounter.EnemyName;
     }
 
@@ -239,31 +267,38 @@ public sealed class MeterWindow : Window
 
     private void DrawCompactDragHandle(MeterSettings settings)
     {
-        const float height = 8;
+        const float height = 26;
+        const float toggleWidth = 54;
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
+        var toggleStart = new Vector2(start.X + width - toggleWidth, start.Y);
+        var toggleEnd = toggleStart + new Vector2(toggleWidth, 24);
+        var toggleHovered = CanInteractWithCompactToggle(settings) &&
+                            ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
         ImGui.InvisibleButton("meter-compact-drag", new Vector2(width, height));
-        HandleHeaderDrag(settings);
-        if (ImGui.IsItemHovered())
+        HandleHeaderDrag(settings, allowStart: !toggleHovered);
+        HandleCompactModeToggle(settings, toggleHovered);
+        var drawList = ImGui.GetWindowDrawList();
+        if (!settings.IsLocked && ImGui.IsItemHovered() && !toggleHovered)
         {
-            var drawList = ImGui.GetWindowDrawList();
             var centerY = start.Y + (height * 0.5f);
             drawList.AddLine(
                 new Vector2(start.X + 8, centerY),
-                new Vector2(start.X + width - 8, centerY),
+                new Vector2(toggleStart.X - 8, centerY),
                 ImGui.GetColorU32(new Vector4(Gold.X, Gold.Y, Gold.Z, 0.65f)),
                 2);
         }
+        DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered);
     }
 
-    private void HandleHeaderDrag(MeterSettings settings)
+    private void HandleHeaderDrag(MeterSettings settings, bool allowStart = true)
     {
         if (settings.IsLocked)
         {
             return;
         }
 
-        if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+        if (allowStart && ImGui.IsItemClicked(ImGuiMouseButton.Left))
         {
             isDragging = true;
             dragOffset = ImGui.GetMousePos() - ImGui.GetWindowPos();
@@ -278,6 +313,76 @@ public sealed class MeterWindow : Window
         {
             isDragging = false;
         }
+    }
+
+    private static bool CanInteractWithCompactToggle(MeterSettings settings)
+        => !settings.IsLocked || !settings.ClickThroughWhenLocked;
+
+    private void HandleCompactModeToggle(
+        MeterSettings settings,
+        bool hovered)
+    {
+        if (!hovered || !ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            return;
+        }
+
+        settings.CompactMode = !settings.CompactMode;
+        saveConfiguration();
+    }
+
+    private void DrawCompactModeToggle(
+        ImDrawListPtr drawList,
+        MeterSettings settings,
+        Vector2 start,
+        Vector2 end,
+        bool hovered)
+    {
+        var fill = settings.CompactMode
+            ? new Vector4(0.17f, 0.34f, 0.42f, 0.96f)
+            : hovered
+                ? NavyHover
+                : new Vector4(0.10f, 0.14f, 0.20f, 0.96f);
+        drawList.AddRectFilled(start, end, ImGui.GetColorU32(fill), 4);
+        drawList.AddRect(
+            start,
+            end,
+            ImGui.GetColorU32(settings.CompactMode ? IceBlue : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.65f)),
+            4);
+        var label = settings.CompactMode
+            ? text.Get("自己", "Self")
+            : text.Get("全队", "Party");
+        var labelSize = ImGui.CalcTextSize(label);
+        drawList.AddText(
+            start + ((end - start - labelSize) * 0.5f),
+            ImGui.GetColorU32(settings.CompactMode ? IceBlue : Vector4.One),
+            label);
+        if (hovered)
+        {
+            ImGui.SetTooltip(text.Get(
+                settings.CompactMode ? "点击显示完整队伍" : "点击只显示自己",
+                settings.CompactMode ? "Show the full party" : "Show only yourself"));
+        }
+    }
+
+    private void DrawEncounterStateIcon(ImDrawListPtr drawList, bool isActive, Vector2 start)
+    {
+        const float iconSize = 24;
+        var texture = isActive ? runningStatusIcon : endedStatusIcon;
+        var wrap = texture.GetWrapOrEmpty();
+        if (wrap.Handle.Handle != 0)
+        {
+            drawList.AddImage(
+                wrap.Handle,
+                start,
+                start + new Vector2(iconSize, iconSize));
+            return;
+        }
+
+        var stateColor = isActive
+            ? new Vector4(0.38f, 0.78f, 0.66f, 1)
+            : new Vector4(0.66f, 0.69f, 0.74f, 1);
+        drawList.AddText(start + new Vector2(4, 2), ImGui.GetColorU32(stateColor), isActive ? "●" : "○");
     }
 
     private MeterColumnLayout BuildColumnLayout(
@@ -297,7 +402,7 @@ public sealed class MeterWindow : Window
         {
             right -= width;
             var column = new MeterColumn(right, width);
-            right -= 6;
+            right -= 4;
             return column;
         }
 
@@ -378,7 +483,6 @@ public sealed class MeterWindow : Window
 
     private void DrawCombatantRow(
         CombatantRow row,
-        int rank,
         double maximumScore,
         Encounter encounter,
         MeterSettings settings,
@@ -389,7 +493,7 @@ public sealed class MeterWindow : Window
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         var end = start + new Vector2(width, rowHeight);
-        ImGui.InvisibleButton($"meter-row-{rank}-{row.Name}", new Vector2(width, rowHeight));
+        ImGui.InvisibleButton($"meter-row-{row.Id}-{row.Name}", new Vector2(width, rowHeight));
 
         var drawList = ImGui.GetWindowDrawList();
         var hovered = ImGui.IsItemHovered();
@@ -491,7 +595,7 @@ public sealed class MeterWindow : Window
         drawList.AddText(
             new Vector2(x, lineY),
             ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)),
-            $"{rank,2}");
+            row.Rank is { } rank ? $"{rank,2}" : "--");
         x += 25;
         x = DrawJob(x, lineY);
 
@@ -525,9 +629,9 @@ public sealed class MeterWindow : Window
         if (layout.Fflogs is { } fflogsColumn)
         {
             DrawColumn(
-                row.IsLocalPlayer
-                    ? estimate is null ? "--" : $"~{estimate.Score}"
-                    : string.Empty,
+                isLimitBreak
+                    ? string.Empty
+                    : estimate is null ? "--" : $"~{estimate.Score}",
                 fflogsColumn,
                 estimate?.Color ?? new Vector4(0.66f, 0.69f, 0.74f, 1));
         }
@@ -535,7 +639,7 @@ public sealed class MeterWindow : Window
         var availableNameWidth = Math.Max(20, start.X + layout.NameRight - x - 6);
         drawList.AddText(
             new Vector2(x, lineY),
-            ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+            ImGui.GetColorU32(row.IsLocalPlayer || isLimitBreak ? Gold : Vector4.One),
             TrimToWidth(displayName, availableNameWidth));
 
         if (estimate is not null && hovered)
@@ -556,6 +660,16 @@ public sealed class MeterWindow : Window
 
     internal static float CalculateJobIconSize(float rowHeight, float textLineHeight)
         => Math.Min(rowHeight - 4, Math.Max(22, textLineHeight + 4));
+
+    internal static bool ShouldEnableHorizontalScroll(float availableWidth, float requiredWidth)
+        => requiredWidth > availableWidth + 1;
+
+    internal static IReadOnlyList<CombatantRow> SelectVisibleRows(
+        IReadOnlyList<CombatantRow> rows,
+        bool compactMode)
+        => compactMode
+            ? rows.Where(static row => row.IsLocalPlayer).ToArray()
+            : rows;
 
     private static double Score(CombatantRow row, MeterSortMode mode) => mode switch
     {

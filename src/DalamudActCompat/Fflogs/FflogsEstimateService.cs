@@ -118,22 +118,40 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     public FflogsEstimate? GetEstimate(Encounter encounter)
     {
         encounter = encounter.FflogsRankingEncounter ?? encounter;
+        var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
+        return localPlayer is null
+            ? null
+            : GetEstimateCore(encounter, localPlayer);
+    }
+
+    public FflogsEstimate? GetEstimate(
+        Encounter encounter,
+        string combatantId,
+        string combatantName)
+    {
+        encounter = encounter.FflogsRankingEncounter ?? encounter;
+        var combatant = ResolveRankingCombatant(encounter, combatantId, combatantName);
+        return combatant is null
+            ? null
+            : GetEstimateCore(encounter, combatant);
+    }
+
+    private FflogsEstimate? GetEstimateCore(Encounter encounter, Combatant combatant)
+    {
         var settings = GetSettingsSnapshot();
         if (!CanUseApi(settings))
         {
             return null;
         }
 
-        var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
-        if (localPlayer is null ||
-            string.IsNullOrWhiteSpace(localPlayer.Job) ||
+        if (string.IsNullOrWhiteSpace(combatant.Job) ||
             encounter.EffectiveDuration.TotalSeconds < 15)
         {
             return null;
         }
 
         var activeEncounter = ActiveEncounter;
-        var specName = ToFflogsSpecName(localPlayer.Job);
+        var specName = ToFflogsSpecName(combatant.Job);
         if (activeEncounter is not null)
         {
             var key = CurveKey(activeEncounter.EncounterId, activeEncounter.Difficulty, specName);
@@ -145,9 +163,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
             if (curve is not null && !IsExpired(curve.FetchedAt, settings.CacheHours))
             {
-                var encounterDps = localPlayer.EncDps > 0
-                    ? localPlayer.EncDps
-                    : localPlayer.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+                var encounterDps = combatant.EncDps > 0
+                    ? combatant.EncDps
+                    : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
                 var percentile = EstimatePercentile(curve.Points, encounterDps);
                 SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
                 return new FflogsEstimate(
@@ -178,8 +196,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         encounter = encounter.FflogsRankingEncounter ?? encounter;
 
         var activeEncounter = ActiveEncounter;
-        var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
-        if (localPlayer is null || string.IsNullOrWhiteSpace(localPlayer.Job))
+        var specNames = ResolveFflogsSpecs(encounter);
+        if (specNames.Count == 0)
         {
             QueueCatalogRefresh();
             return;
@@ -189,15 +207,50 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             lock (cacheLock)
             {
-                curves.Remove(CurveKey(
-                    activeEncounter.EncounterId,
-                    activeEncounter.Difficulty,
-                    ToFflogsSpecName(localPlayer.Job)));
+                foreach (var specName in specNames)
+                {
+                    curves.Remove(CurveKey(
+                        activeEncounter.EncounterId,
+                        activeEncounter.Difficulty,
+                        specName));
+                }
             }
         }
 
-        QueueCurveLoad(ToFflogsSpecName(localPlayer.Job));
+        foreach (var specName in specNames)
+        {
+            QueueCurveLoad(specName);
+        }
     }
+
+    internal static Combatant? ResolveRankingCombatant(
+        Encounter encounter,
+        string combatantId,
+        string combatantName)
+    {
+        if (!string.IsNullOrWhiteSpace(combatantId))
+        {
+            var byId = encounter.Combatants.FirstOrDefault(combatant =>
+                string.Equals(combatant.Id, combatantId, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null)
+            {
+                return byId;
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(combatantName)
+            ? null
+            : encounter.Combatants.FirstOrDefault(combatant =>
+                string.Equals(combatant.Name, combatantName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static IReadOnlyList<string> ResolveFflogsSpecs(Encounter encounter)
+        => encounter.Combatants
+            .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))
+            .Select(static combatant => ToFflogsSpecName(combatant.Job))
+            .Where(static specName => !string.IsNullOrWhiteSpace(specName))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     public void NotifyCredentialsChanged()
     {

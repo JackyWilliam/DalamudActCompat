@@ -511,6 +511,10 @@ public sealed class ControlCenterWindow : Window
             changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
             ImGui.SameLine();
             changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+            changed |= Checkbox(
+                text.Get("缩略模式（只显示自己）", "Compact mode (self only)"),
+                configuration.Meter.CompactMode,
+                value => configuration.Meter.CompactMode = value);
             if (configuration.Meter.ShowJob)
             {
                 var jobStyle = configuration.Meter.JobDisplayStyle;

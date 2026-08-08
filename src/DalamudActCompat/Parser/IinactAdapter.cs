@@ -16,6 +16,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly EncounterService encounterService;
     private readonly string logDirectory;
     private readonly IFramework framework;
+    private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
@@ -38,6 +39,7 @@ public sealed class IinactAdapter : IParserEngine
         EncounterService encounterService,
         string logDirectory,
         IFramework framework,
+        Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
@@ -49,6 +51,7 @@ public sealed class IinactAdapter : IParserEngine
         this.encounterService = encounterService;
         this.logDirectory = logDirectory;
         this.framework = framework;
+        this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
@@ -241,7 +244,10 @@ public sealed class IinactAdapter : IParserEngine
 
     private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)
     {
-        var encounter = ActEncounterMapper.Map(snapshot);
+        var encounter = ActEncounterMapper.Map(snapshot) with
+        {
+            TerritoryId = getTerritoryId(),
+        };
         var boundByDuty = isBoundByDuty();
         if (boundByDuty)
         {

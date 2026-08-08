@@ -129,7 +129,9 @@ if ([int]$manifest.DalamudApiLevel -ne $ExpectedDalamudApiLevel) {
 $requiredUiAssets = @(
     "Assets/act-logo.jpg",
     "Assets/act-button.png",
-    "Assets/JobIcons/LimitBreak.png"
+    "Assets/JobIcons/LimitBreak.png",
+    "Assets/StatusIcons/CombatRunning.png",
+    "Assets/StatusIcons/CombatEnded.png"
 )
 $missingUiAssets = @($requiredUiAssets | Where-Object {
     -not (Test-Path (Join-Path $validationDir $_))

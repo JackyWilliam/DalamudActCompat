@@ -68,11 +68,27 @@ public sealed class MeterService
             CalculateHitRate(combatant.CriticalDirectHits, combatant.DamageHits),
             combatant.Deaths));
 
-        return MeterSortModeOptions.Normalize(settings.SortMode) switch
+        var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
         {
-            MeterSortMode.Hps => rows.OrderByDescending(static row => row.Hps).ToArray(),
-            _ => rows.OrderByDescending(static row => row.Dps).ToArray(),
+            MeterSortMode.Hps => rows
+                .OrderBy(static row => IsLimitBreak(row.Id, row.Name))
+                .ThenByDescending(static row => row.Hps),
+            _ => rows
+                .OrderBy(static row => IsLimitBreak(row.Id, row.Name))
+                .ThenByDescending(static row => row.Dps),
         };
+
+        var playerRank = 0;
+        var ranked = new List<CombatantRow>();
+        foreach (var row in ordered)
+        {
+            ranked.Add(row with
+            {
+                Rank = NextPlayerRank(IsLimitBreak(row.Id, row.Name), ref playerRank),
+            });
+        }
+
+        return ranked;
     }
 
     internal static bool IsLimitBreak(Combatant combatant)
@@ -81,6 +97,9 @@ public sealed class MeterService
     internal static bool IsLimitBreak(string id, string name)
         => string.Equals(id, "Limit Break", StringComparison.OrdinalIgnoreCase) ||
            string.Equals(name, "Limit Break", StringComparison.OrdinalIgnoreCase);
+
+    internal static int? NextPlayerRank(bool isLimitBreak, ref int playerRank)
+        => isLimitBreak ? null : ++playerRank;
 
     private double ResolveDps(Combatant combatant, double encounterDuration)
         => settings.DpsMetric switch
@@ -109,4 +128,5 @@ public sealed record CombatantRow(
     double DamagePercent,
     double? CriticalHitPercent,
     double? CriticalDirectHitPercent,
-    int Deaths);
+    int Deaths,
+    int? Rank = null);

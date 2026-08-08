@@ -41,6 +41,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterWindow encounterWindow;
     private readonly ControlCenterWindow settingsWindow;
     private readonly SettingsWindow advancedSettingsWindow;
@@ -212,16 +213,20 @@ public sealed class Plugin : IDalamudPlugin
             encounterService,
             paths.CombatLogDirectory,
             framework,
+            () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins));
         var meterService = new MeterService(stateStore, configuration.Meter);
+        zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
         fflogsEstimateService = new FflogsEstimateService(
             () => configuration.Fflogs,
             paths.FflogsCacheFile,
             logger);
-        fflogsEstimateService.NotifyTerritoryChanged(clientState.TerritoryType, string.Empty);
+        fflogsEstimateService.NotifyTerritoryChanged(
+            clientState.TerritoryType,
+            zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
 
         _ = new OverlayManager(new OverlayEventBus());
 
@@ -236,13 +241,18 @@ public sealed class Plugin : IDalamudPlugin
         var jobIcons = new JobIconTextureSet(
             textureProvider,
             Path.Combine(assetDirectory, "JobIcons"));
-        var zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
+        var runningStatusIcon = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "StatusIcons", "CombatRunning.png"));
+        var endedStatusIcon = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "StatusIcons", "CombatEnded.png"));
         meterWindow = new MeterWindow(
             meterService,
             fflogsEstimateService,
             configuration,
             text,
             jobIcons,
+            runningStatusIcon,
+            endedStatusIcon,
             zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
@@ -253,6 +263,7 @@ public sealed class Plugin : IDalamudPlugin
             text,
             jobIcons,
             logoTexture,
+            zoneNameLocalizer.Localize,
             SaveConfiguration);
         factoryResetService = new FactoryResetService(
             parserEngine,
@@ -1546,7 +1557,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
     {
-        fflogsEstimateService.NotifyTerritoryChanged(territoryId, zoneName);
+        fflogsEstimateService.NotifyTerritoryChanged(
+            territoryId,
+            zoneNameLocalizer.Localize(territoryId, zoneName));
         hostSupervisor.PublishZone(territoryId, zoneName);
     }
 

@@ -645,6 +645,19 @@ static void ValidateMeterRows()
         rows.Any(static row => row.Name == "Limit Break" && row.TotalDamage == 50_000),
         "Limit Break damage is missing from the Meter rows.");
     Assert(
+        rows[^1].Name == "Limit Break" &&
+        rows[^1].Rank is null &&
+        rows.Take(rows.Count - 1).Select(static row => row.Rank).SequenceEqual([1, 2]),
+        "Limit Break participated in Meter ranking or was not pinned to the final row.");
+    var historyRows = EncounterWindow.OrderCombatantsForDisplay(
+        encounter,
+        encounter.EffectiveDuration.TotalSeconds,
+        settings.SortMode,
+        settings.DpsMetric);
+    Assert(
+        historyRows[^1].Name == "Limit Break",
+        "Limit Break was not pinned to the final row in encounter history.");
+    Assert(
         MeterWindow.LimitBreakDisplayName == "LB (Limit Break)",
         "The Limit Break row does not show the requested player-column label.");
     Assert(
@@ -666,6 +679,18 @@ static void ValidateMeterRows()
     rows = meter.GetRows();
     Assert(rows[0].Name == "Healer@Beta", "HPS sorting did not promote the highest-healing player.");
     Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
+    Assert(
+        rows[^1].Name == "Limit Break" && rows[^1].Rank is null,
+        "Limit Break participated in HPS ranking or was not pinned to the final row.");
+    var compactRows = MeterWindow.SelectVisibleRows(rows, compactMode: true);
+    Assert(
+        compactRows.Count == 1 &&
+        compactRows[0].IsLocalPlayer &&
+        compactRows[0].Rank == 2,
+        "Compact mode did not preserve the local player's full-party rank.");
+    Assert(
+        MeterWindow.SelectVisibleRows(rows, compactMode: false).Count == rows.Count,
+        "Disabling compact mode did not restore the full Meter list.");
 
     settings.SortMode = MeterSortMode.Deaths;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
@@ -691,6 +716,14 @@ static void ValidateMeterRows()
     {
         UiLanguage = "zh-CN",
     };
+    configuration.Meter.CompactMode = true;
+    var restoredConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+                                    Newtonsoft.Json.JsonConvert.SerializeObject(configuration))
+                                ?? throw new InvalidOperationException(
+                                    "Compact Meter configuration could not be restored.");
+    Assert(
+        restoredConfiguration.Meter.CompactMode,
+        "The user-selected compact Meter mode was not persisted.");
     var text = new UiText(configuration);
     settings.PlayerIdentityMode = PlayerIdentityMode.Job;
     Assert(
@@ -753,6 +786,28 @@ static void ValidateMeterLayout()
             "JobIcons",
             "LimitBreak.png")),
         "The supplied Limit Break icon is missing from plugin assets.");
+    Assert(
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "StatusIcons",
+            "CombatRunning.png")) &&
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "StatusIcons",
+            "CombatEnded.png")),
+        "The requested running or ended Combat Meter status icon is missing.");
+    Assert(
+        MeterWindow.MinimumTableWidthWithFflogs == 410 &&
+        MeterWindow.MinimumTableWidthWithoutFflogs == 350 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(500, 410) &&
+        MeterWindow.ShouldEnableHorizontalScroll(400, 410),
+        "The Meter width was not shortened or its horizontal scrollbar is always enabled.");
 
     var rowHeightMethod = typeof(MeterWindow).GetMethod(
                               "CalculateCombatantRowHeight",
@@ -827,6 +882,21 @@ static void ValidateMeterLayout()
         Equals(resolveZoneName.Invoke(null, ["Middle La Noscea", zoneNames]), "中拉诺西亚") &&
         Equals(resolveZoneName.Invoke(null, ["Unknown Zone", zoneNames]), "Unknown Zone"),
         "Meter zone names no longer localize with a safe ACT-name fallback.");
+    var resolveTerritoryName = localizerType.GetMethod(
+                                   "ResolveByTerritory",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new InvalidOperationException(
+                                   "Meter territory-name resolver was not found.");
+    var territoryNames = new Dictionary<uint, string>
+    {
+        [1327] = "轻量级重型斗技场（零式）",
+    };
+    Assert(
+        Equals(resolveTerritoryName.Invoke(
+            null,
+            [1327u, "AAC Heavyweight M4 (Savage)", territoryNames, zoneNames]),
+            "轻量级重型斗技场（零式）"),
+        "A known Territory ID did not take priority over ACT's English zone name.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -858,6 +928,30 @@ static void ValidateFflogsEstimateCurve()
     Assert(
         legendary != pink && pink != orange && roundedOrange == orange,
         "FFLogs estimate colors did not match the rounded score shown by the Meter.");
+
+    var encounter = new Encounter(
+        Guid.NewGuid(),
+        DateTimeOffset.UtcNow.AddMinutes(-1),
+        DateTimeOffset.UtcNow,
+        "Test Zone",
+        "Test Boss",
+        [
+            new Combatant("tank", "Tank", "PLD", true, 100, 0, 0),
+            new Combatant("healer", "Healer", "WHM", false, 80, 0, 0),
+            new Combatant("tank-2", "Tank 2", "PLD", false, 90, 0, 0),
+            new Combatant("Limit Break", "Limit Break", "", false, 50, 0, 0),
+        ],
+        [],
+        [],
+        [],
+        [],
+        []);
+    Assert(
+        FflogsEstimateService.ResolveFflogsSpecs(encounter)
+            .SequenceEqual(["Paladin", "WhiteMage"], StringComparer.OrdinalIgnoreCase) &&
+        FflogsEstimateService.ResolveRankingCombatant(encounter, "healer", "")?.Name == "Healer" &&
+        FflogsEstimateService.ResolveRankingCombatant(encounter, "missing", "Tank 2")?.Id == "tank-2",
+        "FFLogs did not deduplicate party jobs or resolve estimates for non-local players.");
 }
 
 static void ValidateFflogsCurrentEncounterTable()
@@ -1055,8 +1149,9 @@ static void ValidateDutyEncounterAggregation()
                        "The accumulated duty encounter could not be restored from JSON.");
     Assert(
         restored.CombatDuration == TimeSpan.FromMinutes(4) &&
-        restored.EffectiveDuration == TimeSpan.FromMinutes(4),
-        "The accumulated active-combat duration was not preserved in encounter history.");
+        restored.EffectiveDuration == TimeSpan.FromMinutes(4) &&
+        restored.TerritoryId == 777,
+        "The accumulated active-combat duration or Territory ID was not preserved in encounter history.");
 }
 
 static void ValidateDutyEncounterPartySizes()
@@ -1164,7 +1259,10 @@ static Encounter CreateDutySegment(
         Array.Empty<HealEvent>(),
         Array.Empty<DeathEvent>(),
         Array.Empty<ActionSummary>(),
-        Array.Empty<JobSummary>());
+        Array.Empty<JobSummary>())
+    {
+        TerritoryId = 777,
+    };
 
 static void ValidateControlCenterPresentation()
 {

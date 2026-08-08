@@ -32,6 +32,7 @@ public sealed class EncounterWindow : Window
     private readonly UiText text;
     private readonly JobIconTextureSet jobIcons;
     private readonly ISharedImmediateTexture logoTexture;
+    private readonly Func<uint?, string, string> localizeZoneName;
     private readonly Action saveConfiguration;
     private HistoryPage selectedPage;
     private Guid? selectedRecentId;
@@ -49,6 +50,7 @@ public sealed class EncounterWindow : Window
         UiText text,
         JobIconTextureSet jobIcons,
         ISharedImmediateTexture logoTexture,
+        Func<uint?, string, string> localizeZoneName,
         Action saveConfiguration)
         : base("战斗记录###DalamudActCompatHistory")
     {
@@ -58,6 +60,7 @@ public sealed class EncounterWindow : Window
         this.text = text;
         this.jobIcons = jobIcons;
         this.logoTexture = logoTexture;
+        this.localizeZoneName = localizeZoneName;
         this.saveConfiguration = saveConfiguration;
         Size = new Vector2(980, 620);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -312,15 +315,19 @@ public sealed class EncounterWindow : Window
     private void DrawEncounterDetails(Encounter encounter)
     {
         var durationSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
-        ImGui.TextColored(Gold, encounter.EnemyName);
+        ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
         ImGui.TextDisabled(
-            $"{encounter.ZoneName}  ·  {encounter.StartTime.LocalDateTime:yyyy-MM-dd HH:mm:ss}  ·  " +
+            $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  " +
+            $"{encounter.StartTime.LocalDateTime:yyyy-MM-dd HH:mm:ss}  ·  " +
             $"{FormatDuration(encounter.EffectiveDuration)}");
         ImGui.Spacing();
 
         if (ImGui.BeginTable("encounter-summary", 4, ImGuiTableFlags.SizingStretchSame))
         {
-            SummaryCell("party", text.Get("队伍人数", "Party"), encounter.Combatants.Count.ToString());
+            SummaryCell(
+                "party",
+                text.Get("队伍人数", "Party"),
+                encounter.Combatants.Count(static combatant => !MeterService.IsLimitBreak(combatant)).ToString());
             SummaryCell("damage", text.Get("总伤害", "Damage"), encounter.TotalDamage.ToString("N0"));
             SummaryCell("dps", "DPS", (encounter.TotalDamage / durationSeconds).ToString("N0"));
             SummaryCell("deaths", text.Get("死亡", "Deaths"), encounter.TotalDeaths.ToString());
@@ -344,17 +351,25 @@ public sealed class EncounterWindow : Window
         ImGui.TextDisabled(text.Get("仅按 DPS 或 HPS 排序", "Sort by DPS or HPS only"));
         ImGui.Spacing();
 
-        var ordered = encounter.Combatants
+        var ordered = OrderCombatantsForDisplay(
+                encounter,
+                durationSeconds,
+                sortMode,
+                configuration.Meter.DpsMetric)
             .Select(combatant => new CombatantPerformance(
                 combatant,
                 ResolveRate(combatant, durationSeconds, sortMode, configuration.Meter.DpsMetric),
                 ResolvePercent(combatant, encounter, sortMode)))
-            .OrderByDescending(item => item.Rate)
             .ToArray();
         var maximumRate = Math.Max(1, ordered.Select(item => item.Rate).DefaultIfEmpty(1).Max());
+        var playerRank = 0;
         for (var index = 0; index < ordered.Length; index++)
         {
-            DrawCombatantRow(ordered[index], index + 1, maximumRate, encounter);
+            var performance = ordered[index];
+            var rank = MeterService.NextPlayerRank(
+                MeterService.IsLimitBreak(performance.Combatant),
+                ref playerRank);
+            DrawCombatantRow(performance, rank, maximumRate, encounter);
             ImGui.Spacing();
         }
 
@@ -450,7 +465,7 @@ public sealed class EncounterWindow : Window
 
     private void DrawCombatantRow(
         CombatantPerformance performance,
-        int rank,
+        int? rank,
         double maximumRate,
         Encounter encounter)
     {
@@ -459,7 +474,7 @@ public sealed class EncounterWindow : Window
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         var end = start + new Vector2(width, rowHeight);
-        ImGui.InvisibleButton($"history-row-{rank}-{combatant.Id}", new Vector2(width, rowHeight));
+        ImGui.InvisibleButton($"history-row-{combatant.Id}", new Vector2(width, rowHeight));
         var drawList = ImGui.GetWindowDrawList();
         var hovered = ImGui.IsItemHovered();
         drawList.AddRectFilled(start, end, ImGui.GetColorU32(hovered ? NavyHover : NavyRaised), 6);
@@ -476,9 +491,12 @@ public sealed class EncounterWindow : Window
 
         var lineY = start.Y + (rowHeight - ImGui.GetTextLineHeight()) * 0.5f;
         var x = start.X + 9;
-        drawList.AddText(new Vector2(x, lineY), ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)), $"{rank,2}");
+        drawList.AddText(
+            new Vector2(x, lineY),
+            ImGui.GetColorU32(new Vector4(0.68f, 0.71f, 0.76f, 1)),
+            rank is { } playerRank ? $"{playerRank,2}" : "--");
         x += 27;
-        x = DrawJob(drawList, combatant.Job, x, start.Y, lineY, rowHeight);
+        x = DrawJob(drawList, combatant, x, start.Y, lineY, rowHeight);
 
         var right = end.X - 9;
         void DrawRight(string value, Vector4 color, float gap = 12)
@@ -493,18 +511,44 @@ public sealed class EncounterWindow : Window
         DrawRight($"{performance.Percent:N1}%", new Vector4(0.72f, 0.78f, 0.84f, 1));
         DrawRight($"{(MeterSortModeOptions.Normalize(configuration.Meter.SortMode) == MeterSortMode.Hps ? "HPS" : DpsRateLabel())} {performance.Rate:N0}", MeterWindow.PrimaryRateColor(combatant.IsLocalPlayer));
 
-        var name = PlayerIdentityFormatter.Format(combatant, encounter.Combatants, configuration.Meter, text);
-        drawList.AddText(new Vector2(x, lineY), ImGui.GetColorU32(combatant.IsLocalPlayer ? Gold : Vector4.One), TrimToWidth(name, Math.Max(20, right - x - 6)));
+        var isLimitBreak = MeterService.IsLimitBreak(combatant);
+        var name = isLimitBreak
+            ? MeterWindow.LimitBreakDisplayName
+            : PlayerIdentityFormatter.Format(combatant, encounter.Combatants, configuration.Meter, text);
+        drawList.AddText(
+            new Vector2(x, lineY),
+            ImGui.GetColorU32(combatant.IsLocalPlayer || isLimitBreak ? Gold : Vector4.One),
+            TrimToWidth(name, Math.Max(20, right - x - 6)));
     }
 
     private float DrawJob(
         ImDrawListPtr drawList,
-        string job,
+        Combatant combatant,
         float x,
         float rowTop,
         float textY,
         float rowHeight)
     {
+        if (MeterService.IsLimitBreak(combatant))
+        {
+            var limitBreakTexture = jobIcons.GetLimitBreak();
+            if (limitBreakTexture is not null)
+            {
+                var iconSize = MeterWindow.CalculateJobIconSize(rowHeight, ImGui.GetTextLineHeight());
+                var iconTop = rowTop + (rowHeight - iconSize) * 0.5f;
+                var wrap = limitBreakTexture.GetWrapOrEmpty();
+                drawList.AddImage(
+                    wrap.Handle,
+                    new Vector2(x, iconTop),
+                    new Vector2(x + iconSize, iconTop + iconSize));
+                return x + iconSize + 7;
+            }
+
+            drawList.AddText(new Vector2(x, textY), ImGui.GetColorU32(Gold), "LB");
+            return x + ImGui.CalcTextSize("LB").X + 7;
+        }
+
+        var job = combatant.Job;
         var texture = jobIcons.Get(configuration.Meter.JobDisplayStyle, job);
         if (texture is not null)
         {
@@ -522,6 +566,20 @@ public sealed class EncounterWindow : Window
         drawList.AddText(new Vector2(x + (badgeWidth - labelSize.X) * 0.5f, textY), ImGui.GetColorU32(Vector4.One), label);
         return x + badgeWidth + 8;
     }
+
+    internal static IReadOnlyList<Combatant> OrderCombatantsForDisplay(
+        Encounter encounter,
+        double encounterDuration,
+        MeterSortMode sortMode,
+        DpsMetric dpsMetric)
+        => encounter.Combatants
+            .OrderBy(static combatant => MeterService.IsLimitBreak(combatant))
+            .ThenByDescending(combatant => ResolveRate(
+                combatant,
+                encounterDuration,
+                sortMode,
+                dpsMetric))
+            .ToArray();
 
     internal static double ResolveRate(
         Combatant combatant,
@@ -566,6 +624,14 @@ public sealed class EncounterWindow : Window
             ? encounter.IsActive
                 ? text.Get("状态：战斗中", "Status: Running")
                 : text.Get("状态：已结束", "Status: Ended")
+            : LocalizeEncounterTitle(encounter);
+
+    private string LocalizeEncounterTitle(Encounter encounter)
+        => string.Equals(
+            encounter.EnemyName,
+            encounter.ZoneName,
+            StringComparison.OrdinalIgnoreCase)
+            ? localizeZoneName(encounter.TerritoryId, encounter.EnemyName)
             : encounter.EnemyName;
 
     private static string TrimToWidth(string value, float maximumWidth)
