@@ -42,7 +42,7 @@ be terminated without terminating FFXIV.
   PostNamazu staged connection state, and game-side controls to stop or restart
   the Host.
 - FFXIV 7.55 parser stack: IINACT 2.10.3.4, OverlayPlugin Core 0.19.103,
-  Machina 7.55 opcodes, Unscrambler.XIV 7.55.0, and FFXIV_ACT_Plugin 3.0.2.5.
+  Machina 7.55 opcodes, Unscrambler.XIV 7.55.0, and FFXIV_ACT_Plugin 3.0.2.7.
 - Triggernometry CN 2.1.1.2, ACT.FoxTTS 3.3.1.189, and PostNamazu 1.3.6.6 are
   bundled with the release. Their author, maintainer, version, permission,
   project/source URL, exact DLL download URL, and SHA-256 are shown on first

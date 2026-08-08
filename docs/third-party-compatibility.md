@@ -4,7 +4,7 @@
 
 国服与国际服当前同步在 7.55 版本进度；区域网络操作码仍按各客户端实际值分别维护。
 解析链已更新到 IINACT 2.10.3.4、OverlayPlugin Core 0.19.103、
-Machina 7.55、Unscrambler.XIV 7.55.0 和 FFXIV_ACT_Plugin 3.0.2.5。
+Machina 7.55、Unscrambler.XIV 7.55.0 和 FFXIV_ACT_Plugin 3.0.2.7。
 
 Triggernometry 中文维护版 2.1.1.2、ACT.FoxTTS 3.3.1.189 和
 PostNamazu 1.3.6.6 随本插件发布。首次安装以及 DalamudActCompat 每次更新后，
