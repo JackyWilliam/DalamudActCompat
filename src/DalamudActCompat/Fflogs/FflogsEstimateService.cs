@@ -3,11 +3,8 @@ using System.Net.Http.Headers;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
-using Dalamud.Game;
-using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Infrastructure.Logging;
-using Lumina.Excel.Sheets;
 
 namespace DalamudActCompat.Fflogs;
 
@@ -18,11 +15,18 @@ public enum FflogsEstimateState
     Idle,
     Loading,
     Ready,
-    EncounterNotMatched,
+    InactiveContent,
     Error,
 }
 
 public sealed record FflogsEstimateStatus(FflogsEstimateState State, string Message);
+
+public sealed record FflogsActiveEncounter(
+    uint TerritoryId,
+    int Phase,
+    int EncounterId,
+    string EncounterName,
+    int Difficulty);
 
 public sealed record FflogsEstimate(double Percentile, Vector4 Color, string EncounterName)
 {
@@ -39,7 +43,6 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     private readonly Func<FflogsSettings> getSettings;
     private readonly string cachePath;
-    private readonly IDataManager dataManager;
     private readonly PluginLogger logger;
     private readonly HttpClient httpClient = new()
     {
@@ -50,8 +53,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new();
     private readonly ConcurrentDictionary<string, byte> loading = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FflogsCurveCacheEntry> curves = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, int?> resolvedEncounterIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly object cacheLock = new();
+    private readonly object encounterContextLock = new();
     private readonly object statusLock = new();
     private readonly object tokenLock = new();
     private readonly object backgroundTaskLock = new();
@@ -63,7 +66,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private DateTimeOffset accessTokenExpiresAt;
     private string tokenClientId = string.Empty;
     private string tokenClientSecret = string.Empty;
-    private Dictionary<string, string>? localizedEnemyNames;
+    private uint currentTerritoryId;
+    private string currentZoneName = string.Empty;
+    private int currentPhase = 1;
     private Task? disposeTask;
     private bool shutdownStarted;
     private int resourcesDisposed;
@@ -71,12 +76,10 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     public FflogsEstimateService(
         Func<FflogsSettings> getSettings,
         string cachePath,
-        IDataManager dataManager,
         PluginLogger logger)
     {
         this.getSettings = getSettings;
         this.cachePath = cachePath;
-        this.dataManager = dataManager;
         this.logger = logger;
         LoadCache();
         CanUseApi(GetSettingsSnapshot());
@@ -90,6 +93,25 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             {
                 return status;
             }
+        }
+    }
+
+    public FflogsActiveEncounter? ActiveEncounter
+    {
+        get
+        {
+            var context = GetEncounterContext();
+            return CurrentFflogsEncounterTable.TryResolve(
+                context.TerritoryId,
+                context.Phase,
+                out var encounter)
+                ? new FflogsActiveEncounter(
+                    encounter.TerritoryId,
+                    encounter.Phase,
+                    encounter.EncounterId,
+                    encounter.EncounterName,
+                    encounter.Difficulty)
+                : null;
         }
     }
 
@@ -108,11 +130,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             return null;
         }
 
-        var encounterId = TryResolveEncounterId(encounter.EnemyName, settings);
+        var activeEncounter = ActiveEncounter;
         var specName = ToFflogsSpecName(localPlayer.Job);
-        if (encounterId is int resolvedId)
+        if (activeEncounter is not null)
         {
-            var key = CurveKey(resolvedId, specName);
+            var key = CurveKey(activeEncounter.EncounterId, activeEncounter.Difficulty, specName);
             FflogsCurveCacheEntry? curve;
             lock (cacheLock)
             {
@@ -133,7 +155,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             }
         }
 
-        QueueCurveLoad(encounter.EnemyName, specName);
+        QueueCurveLoad(specName);
         return null;
     }
 
@@ -153,7 +175,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
         encounter = encounter.FflogsRankingEncounter ?? encounter;
 
-        var encounterId = TryResolveEncounterId(encounter.EnemyName, settings);
+        var activeEncounter = ActiveEncounter;
         var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
         if (localPlayer is null || string.IsNullOrWhiteSpace(localPlayer.Job))
         {
@@ -161,15 +183,18 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             return;
         }
 
-        if (encounterId is int resolvedId && localPlayer is not null)
+        if (activeEncounter is not null)
         {
             lock (cacheLock)
             {
-                curves.Remove(CurveKey(resolvedId, ToFflogsSpecName(localPlayer.Job)));
+                curves.Remove(CurveKey(
+                    activeEncounter.EncounterId,
+                    activeEncounter.Difficulty,
+                    ToFflogsSpecName(localPlayer.Job)));
             }
         }
 
-        QueueCurveLoad(encounter.EnemyName, localPlayer is null ? string.Empty : ToFflogsSpecName(localPlayer.Job));
+        QueueCurveLoad(ToFflogsSpecName(localPlayer.Job));
     }
 
     public void NotifyCredentialsChanged()
@@ -187,11 +212,86 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             !string.IsNullOrWhiteSpace(settings.ClientId) &&
             !string.IsNullOrWhiteSpace(settings.ClientSecret))
         {
-            SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
+            if (ActiveEncounter is null)
+            {
+                SetInactiveContentStatus();
+            }
+            else
+            {
+                SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
+            }
         }
         else
         {
             CanUseApi(settings);
+        }
+    }
+
+    public void NotifyTerritoryChanged(uint territoryId, string zoneName)
+    {
+        lock (encounterContextLock)
+        {
+            currentTerritoryId = territoryId;
+            currentZoneName = zoneName?.Trim() ?? string.Empty;
+            currentPhase = 1;
+        }
+
+        var settings = GetSettingsSnapshot();
+        if (!CurrentFflogsEncounterTable.TryResolve(territoryId, 1, out var encounter))
+        {
+            if (settings.Enabled &&
+                !string.IsNullOrWhiteSpace(settings.ClientId) &&
+                !string.IsNullOrWhiteSpace(settings.ClientSecret))
+            {
+                SetStatus(
+                    FflogsEstimateState.InactiveContent,
+                    $"Territory {territoryId} is not part of the current FFLogs ranking tier.");
+            }
+            else
+            {
+                CanUseApi(settings);
+            }
+            return;
+        }
+
+        if (CanUseApi(settings))
+        {
+            SetStatus(
+                FflogsEstimateState.Idle,
+                $"Automatically matched {encounter.EncounterName} (FFLogs encounter {encounter.EncounterId}).");
+            QueueCatalogLoad(forceRefresh: false);
+        }
+    }
+
+    public void ObserveLogLine(string actLine)
+    {
+        CurrentFflogsEncounter? encounter = null;
+        lock (encounterContextLock)
+        {
+            var observedPhase = CurrentFflogsEncounterTable.ObservePhase(
+                currentTerritoryId,
+                currentPhase,
+                actLine);
+            if (observedPhase == currentPhase)
+            {
+                return;
+            }
+
+            currentPhase = observedPhase;
+            if (CurrentFflogsEncounterTable.TryResolve(
+                    currentTerritoryId,
+                    currentPhase,
+                    out var resolvedEncounter))
+            {
+                encounter = resolvedEncounter;
+            }
+        }
+
+        if (encounter is not null && CanUseApi(GetSettingsSnapshot()))
+        {
+            SetStatus(
+                FflogsEstimateState.Idle,
+                $"Automatically switched to {encounter.EncounterName} (FFLogs encounter {encounter.EncounterId}).");
         }
     }
 
@@ -269,14 +369,23 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         return 100;
     }
 
-    private void QueueCurveLoad(string enemyName, string specName)
+    private void QueueCurveLoad(string specName)
     {
-        if (string.IsNullOrWhiteSpace(enemyName) || string.IsNullOrWhiteSpace(specName))
+        if (string.IsNullOrWhiteSpace(specName))
         {
             return;
         }
 
-        var loadKey = $"{enemyName}|{specName}";
+        var activeEncounter = ActiveEncounter;
+        if (activeEncounter is null)
+        {
+            SetInactiveContentStatus();
+            return;
+        }
+
+        var encounterId = activeEncounter.EncounterId;
+        var difficulty = activeEncounter.Difficulty;
+        var loadKey = $"{encounterId}|{difficulty}|{specName}";
         if (!loading.TryAdd(loadKey, 0))
         {
             return;
@@ -288,23 +397,28 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             try
             {
                 await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
-                var settings = GetSettingsSnapshot();
-                var encounterId = TryResolveEncounterId(enemyName, settings);
-                if (encounterId is null)
-                {
-                    SetStatus(
-                        FflogsEstimateState.EncounterNotMatched,
-                        $"Could not match encounter '{enemyName}'. Bind its FFLogs encounter ID in settings.");
-                    return;
-                }
-
-                var curve = await BuildCurveAsync(encounterId.Value, specName, cancellationToken).ConfigureAwait(false);
+                var curve = await BuildCurveAsync(
+                    encounterId,
+                    difficulty,
+                    specName,
+                    cancellationToken).ConfigureAwait(false);
                 lock (cacheLock)
                 {
-                    curves[CurveKey(encounterId.Value, specName)] = curve;
+                    curves[CurveKey(encounterId, difficulty, specName)] = curve;
                 }
                 await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
-                SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
+                var currentEncounter = ActiveEncounter;
+                if (currentEncounter?.EncounterId == encounterId &&
+                    currentEncounter.Difficulty == difficulty)
+                {
+                    SetStatus(
+                        FflogsEstimateState.Ready,
+                        $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
+                }
+                else if (currentEncounter is null)
+                {
+                    SetInactiveContentStatus();
+                }
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {
@@ -312,7 +426,16 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             catch (Exception ex)
             {
                 logger.Error(ex, "FFLogs public-ranking estimate refresh failed.");
-                SetStatus(FflogsEstimateState.Error, ex.Message);
+                var currentEncounter = ActiveEncounter;
+                if (currentEncounter?.EncounterId == encounterId &&
+                    currentEncounter.Difficulty == difficulty)
+                {
+                    SetStatus(FflogsEstimateState.Error, ex.Message);
+                }
+                else if (currentEncounter is null)
+                {
+                    SetInactiveContentStatus();
+                }
             }
             finally
             {
@@ -325,6 +448,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     }
 
     private void QueueCatalogRefresh()
+        => QueueCatalogLoad(forceRefresh: true);
+
+    private void QueueCatalogLoad(bool forceRefresh)
     {
         if (!loading.TryAdd("catalog", 0))
         {
@@ -336,12 +462,26 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             try
             {
-                lock (cacheLock)
+                if (forceRefresh)
                 {
-                    catalogFetchedAt = default;
+                    lock (cacheLock)
+                    {
+                        catalogFetchedAt = default;
+                    }
                 }
                 await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
-                SetStatus(FflogsEstimateState.Ready, "FFLogs encounter catalog refreshed.");
+                var activeEncounter = ActiveEncounter;
+                if (activeEncounter is null)
+                {
+                    SetInactiveContentStatus();
+                }
+                else
+                {
+                    SetStatus(
+                        FflogsEstimateState.Ready,
+                        $"Automatically matched {activeEncounter.EncounterName} " +
+                        $"(FFLogs encounter {activeEncounter.EncounterId}).");
+                }
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {
@@ -372,9 +512,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         const string query = """
-            query EncounterCatalog {
+            query EncounterCatalog($zoneId: Int!) {
               worldData {
-                zones {
+                zone(id: $zoneId) {
                   id
                   name
                   frozen
@@ -383,36 +523,75 @@ public sealed class FflogsEstimateService : IAsyncDisposable
               }
             }
             """;
-        using var document = await QueryAsync(query, new { }, cancellationToken).ConfigureAwait(false);
+        using var document = await QueryAsync(
+            query,
+            new { zoneId = CurrentFflogsEncounterTable.ZoneId },
+            cancellationToken).ConfigureAwait(false);
         var result = new List<FflogsEncounterCatalogEntry>();
-        foreach (var zone in document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("zones").EnumerateArray())
+        var zone = document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("zone");
+        if (zone.ValueKind == JsonValueKind.Null)
         {
-            var frozen = zone.TryGetProperty("frozen", out var frozenValue) && frozenValue.ValueKind == JsonValueKind.True;
-            var zoneName = zone.GetProperty("name").GetString() ?? string.Empty;
-            foreach (var encounter in zone.GetProperty("encounters").EnumerateArray())
+            throw new InvalidOperationException(
+                $"The current FFLogs zone {CurrentFflogsEncounterTable.ZoneId} was not found.");
+        }
+
+        var frozen = zone.TryGetProperty("frozen", out var frozenValue) && frozenValue.ValueKind == JsonValueKind.True;
+        if (frozen)
+        {
+            throw new InvalidOperationException(
+                $"FFLogs zone {CurrentFflogsEncounterTable.ZoneId} is frozen; update the current duty table before loading rankings.");
+        }
+
+        var zoneName = zone.GetProperty("name").GetString() ?? CurrentFflogsEncounterTable.ZoneName;
+        foreach (var encounter in zone.GetProperty("encounters").EnumerateArray())
+        {
+            var encounterId = encounter.GetProperty("id").GetInt32();
+            if (!CurrentFflogsEncounterTable.IsSupportedEncounter(encounterId))
             {
-                result.Add(new FflogsEncounterCatalogEntry(
-                    encounter.GetProperty("id").GetInt32(),
-                    encounter.GetProperty("name").GetString() ?? string.Empty,
-                    zoneName,
-                    frozen));
+                continue;
             }
+
+            result.Add(new FflogsEncounterCatalogEntry(
+                encounterId,
+                encounter.GetProperty("name").GetString() ?? string.Empty,
+                zoneName,
+                frozen));
+        }
+
+        if (result.Count == 0)
+        {
+            throw new InvalidOperationException("FFLogs returned no encounters for the current ranking tier.");
         }
 
         lock (cacheLock)
         {
             encounters = result;
             catalogFetchedAt = DateTimeOffset.UtcNow;
-            resolvedEncounterIds.Clear();
         }
         await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<FflogsCurveCacheEntry> BuildCurveAsync(
         int encounterId,
+        int difficulty,
         string specName,
         CancellationToken cancellationToken)
     {
+        if (!CurrentFflogsEncounterTable.IsSupportedRanking(encounterId, difficulty))
+        {
+            throw new InvalidOperationException(
+                $"FFLogs encounter {encounterId} difficulty {difficulty} is outside the current ranking tier.");
+        }
+
+        lock (cacheLock)
+        {
+            if (!encounters.Any(entry => entry.Id == encounterId && !entry.Frozen))
+            {
+                throw new InvalidOperationException(
+                    $"FFLogs encounter {encounterId} is not in the active ranking catalog.");
+            }
+        }
+
         var pages = new Dictionary<int, FflogsRankingPage>();
         async Task<FflogsRankingPage> GetPage(int page)
         {
@@ -421,7 +600,12 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 return cached;
             }
 
-            var fetched = await FetchRankingPageAsync(encounterId, specName, page, cancellationToken).ConfigureAwait(false);
+            var fetched = await FetchRankingPageAsync(
+                encounterId,
+                difficulty,
+                specName,
+                page,
+                cancellationToken).ConfigureAwait(false);
             pages[page] = fetched;
             return fetched;
         }
@@ -498,26 +682,35 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             first.EncounterName,
             specName,
             DateTimeOffset.UtcNow,
-            points);
+            points,
+            difficulty);
     }
 
     private async Task<FflogsRankingPage> FetchRankingPageAsync(
         int encounterId,
+        int difficulty,
         string specName,
         int page,
         CancellationToken cancellationToken)
     {
         const string query = """
-            query RankingPage($encounterId: Int!, $specName: String!, $page: Int!) {
+            query RankingPage($encounterId: Int!, $difficulty: Int!, $specName: String!, $page: Int!) {
               worldData {
                 encounter(id: $encounterId) {
                   name
-                  characterRankings(metric: dps, specName: $specName, page: $page)
+                  characterRankings(
+                    metric: dps,
+                    difficulty: $difficulty,
+                    specName: $specName,
+                    page: $page)
                 }
               }
             }
             """;
-        using var document = await QueryAsync(query, new { encounterId, specName, page }, cancellationToken).ConfigureAwait(false);
+        using var document = await QueryAsync(
+            query,
+            new { encounterId, difficulty, specName, page },
+            cancellationToken).ConfigureAwait(false);
         var encounter = document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("encounter");
         if (encounter.ValueKind == JsonValueKind.Null)
         {
@@ -625,87 +818,6 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         return newAccessToken;
     }
 
-    private int? TryResolveEncounterId(string enemyName, FflogsSettings settings)
-    {
-        if (settings.EncounterMappings is not null &&
-            settings.EncounterMappings.TryGetValue(enemyName, out var configured) &&
-            configured > 0)
-        {
-            return configured;
-        }
-
-        lock (cacheLock)
-        {
-            if (resolvedEncounterIds.TryGetValue(enemyName, out var cached))
-            {
-                return cached;
-            }
-        }
-
-        var names = new[] { enemyName, TranslateEnemyName(enemyName) }
-            .Where(static name => !string.IsNullOrWhiteSpace(name))
-            .Select(NormalizeName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        IReadOnlyList<FflogsEncounterCatalogEntry> encounterSnapshot;
-        lock (cacheLock)
-        {
-            encounterSnapshot = encounters;
-        }
-        var resolved = encounterSnapshot
-            .Where(entry => names.Contains(NormalizeName(entry.Name), StringComparer.OrdinalIgnoreCase))
-            .OrderBy(static entry => entry.Frozen)
-            .Select(static entry => (int?)entry.Id)
-            .FirstOrDefault();
-        lock (cacheLock)
-        {
-            resolvedEncounterIds[enemyName] = resolved;
-        }
-        return resolved;
-    }
-
-    private string TranslateEnemyName(string enemyName)
-    {
-        if (enemyName.All(character => character <= sbyte.MaxValue))
-        {
-            return enemyName;
-        }
-
-        try
-        {
-            localizedEnemyNames ??= BuildLocalizedEnemyNameMap();
-            return localizedEnemyNames.TryGetValue(enemyName, out var english) ? english : enemyName;
-        }
-        catch (Exception ex)
-        {
-            logger.Warning($"FFLogs local encounter-name translation was unavailable: {ex.Message}");
-            localizedEnemyNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            return enemyName;
-        }
-    }
-
-    private Dictionary<string, string> BuildLocalizedEnemyNameMap()
-    {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var localizedSheet = dataManager.GetExcelSheet<BNpcName>();
-        var englishSheet = dataManager.GetExcelSheet<BNpcName>(ClientLanguage.English);
-        foreach (var localized in localizedSheet)
-        {
-            var localizedName = localized.Singular.ToString();
-            if (string.IsNullOrWhiteSpace(localizedName))
-            {
-                continue;
-            }
-
-            var english = englishSheet.GetRow(localized.RowId).Singular.ToString();
-            if (!string.IsNullOrWhiteSpace(english))
-            {
-                map.TryAdd(localizedName, english);
-            }
-        }
-        return map;
-    }
-
     private void LoadCache()
     {
         try
@@ -721,11 +833,18 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 return;
             }
 
-            encounters = cache.Encounters ?? [];
-            catalogFetchedAt = cache.CatalogFetchedAt;
+            encounters = (cache.Encounters ?? [])
+                .Where(static encounter =>
+                    CurrentFflogsEncounterTable.IsSupportedEncounter(encounter.Id) &&
+                    !encounter.Frozen)
+                .ToArray();
+            catalogFetchedAt = encounters.Count > 0 ? cache.CatalogFetchedAt : default;
             foreach (var curve in cache.Curves ?? [])
             {
-                curves[CurveKey(curve.EncounterId, curve.SpecName)] = curve;
+                if (CurrentFflogsEncounterTable.IsSupportedRanking(curve.EncounterId, curve.Difficulty))
+                {
+                    curves[CurveKey(curve.EncounterId, curve.Difficulty, curve.SpecName)] = curve;
+                }
             }
         }
         catch (Exception ex)
@@ -790,6 +909,25 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     private FflogsSettings GetSettingsSnapshot() => getSettings().Snapshot();
 
+    private (uint TerritoryId, string ZoneName, int Phase) GetEncounterContext()
+    {
+        lock (encounterContextLock)
+        {
+            return (currentTerritoryId, currentZoneName, currentPhase);
+        }
+    }
+
+    private void SetInactiveContentStatus()
+    {
+        var context = GetEncounterContext();
+        var location = !string.IsNullOrWhiteSpace(context.ZoneName)
+            ? context.ZoneName
+            : $"territory {context.TerritoryId}";
+        SetStatus(
+            FflogsEstimateState.InactiveContent,
+            $"{location} is not part of the current FFLogs ranking tier.");
+    }
+
     private bool TryStartBackgroundTask(Func<CancellationToken, Task> work)
     {
         Task task;
@@ -837,10 +975,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private static bool IsExpired(DateTimeOffset fetchedAt, int hours)
         => fetchedAt == default || fetchedAt.AddHours(Math.Clamp(hours, 1, 168)) <= DateTimeOffset.UtcNow;
 
-    private static string CurveKey(int encounterId, string specName) => $"{encounterId}:{specName}";
-
-    private static string NormalizeName(string value)
-        => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+    private static string CurveKey(int encounterId, int difficulty, string specName)
+        => $"{encounterId}:{difficulty}:{specName}";
 
     private static string ToFflogsSpecName(string job) => job.Trim().ToUpperInvariant() switch
     {
@@ -957,7 +1093,8 @@ public sealed record FflogsCurveCacheEntry(
     string EncounterName,
     string SpecName,
     DateTimeOffset FetchedAt,
-    IReadOnlyList<FflogsCurvePoint> Points);
+    IReadOnlyList<FflogsCurvePoint> Points,
+    int Difficulty = 0);
 
 public sealed record FflogsEncounterCatalogEntry(int Id, string Name, string ZoneName, bool Frozen);
 

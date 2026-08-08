@@ -220,8 +220,8 @@ public sealed class Plugin : IDalamudPlugin
         fflogsEstimateService = new FflogsEstimateService(
             () => configuration.Fflogs,
             paths.FflogsCacheFile,
-            dataManager,
             logger);
+        fflogsEstimateService.NotifyTerritoryChanged(clientState.TerritoryType, string.Empty);
 
         _ = new OverlayManager(new OverlayEventBus());
 
@@ -1536,10 +1536,19 @@ public sealed class Plugin : IDalamudPlugin
         string rawLine,
         string actLine,
         bool isImport)
-        => hostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
+    {
+        if (!isImport)
+        {
+            fflogsEstimateService.ObserveLogLine(actLine);
+        }
+        hostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
+    }
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
-        => hostSupervisor.PublishZone(territoryId, zoneName);
+    {
+        fflogsEstimateService.NotifyTerritoryChanged(territoryId, zoneName);
+        hostSupervisor.PublishZone(territoryId, zoneName);
+    }
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
         => hostSupervisor.PublishEncounter(finished);

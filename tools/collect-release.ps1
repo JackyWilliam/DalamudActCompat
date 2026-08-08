@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.6.12",
+    [string] $ExpectedAssemblyVersion = "0.3.6.13",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -128,7 +128,8 @@ if ([int]$manifest.DalamudApiLevel -ne $ExpectedDalamudApiLevel) {
 
 $requiredUiAssets = @(
     "Assets/act-logo.jpg",
-    "Assets/act-button.png"
+    "Assets/act-button.png",
+    "Assets/JobIcons/LimitBreak.png"
 )
 $missingUiAssets = @($requiredUiAssets | Where-Object {
     -not (Test-Path (Join-Path $validationDir $_))

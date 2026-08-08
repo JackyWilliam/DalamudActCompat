@@ -68,6 +68,13 @@ public sealed class MeterService
         };
     }
 
+    internal static bool IsLimitBreak(Combatant combatant)
+        => IsLimitBreak(combatant.Id, combatant.Name);
+
+    internal static bool IsLimitBreak(string id, string name)
+        => string.Equals(id, "Limit Break", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(name, "Limit Break", StringComparison.OrdinalIgnoreCase);
+
     private double ResolveDps(Combatant combatant, double encounterDuration)
         => settings.DpsMetric switch
         {

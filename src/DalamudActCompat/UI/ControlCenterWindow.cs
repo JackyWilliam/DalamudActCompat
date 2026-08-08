@@ -85,8 +85,6 @@ public sealed class ControlCenterWindow : Window
     private string customOverlayUrl = string.Empty;
     private string? customOverlayFeedback;
     private bool customOverlayFeedbackIsError;
-    private string? fflogsEncounterInputKey;
-    private int fflogsEncounterIdInput;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
@@ -1430,7 +1428,8 @@ public sealed class ControlCenterWindow : Window
             var status = fflogsEstimateService.Status;
             ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
             var statusDetail = status.State is
-                FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched
+                FflogsEstimateState.Error or
+                FflogsEstimateState.InactiveContent
                 ? status.Message
                 : string.Empty;
             var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 2.4f;
@@ -1450,61 +1449,41 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.Spacing();
-        var currentEncounter = getCurrentEncounter();
-        var encounter = currentEncounter?.FflogsRankingEncounter ?? currentEncounter;
         if (ImGui.BeginTable(
-                "fflogs-encounter-binding-card",
+                "fflogs-automatic-encounter-card",
                 1,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableNextColumn();
-            ImGui.TextColored(IceBlue, text.Get("当前战斗绑定", "Current encounter binding"));
+            ImGui.TextColored(IceBlue, text.Get("当前副本自动识别", "Automatic duty matching"));
             ImGui.TextDisabled(text.Get(
-                "仅在自动匹配失败时，手动把当前首领绑定到 FFLogs Encounter ID。",
-                "Only bind the current boss to an FFLogs encounter ID when automatic matching fails."));
+                "进入副本后按游戏 Territory ID 自动匹配；只会访问当前开放的 FFLogs 榜单。",
+                "Matches by the game's Territory ID on duty entry and only accesses the current FFLogs ranking tier."));
 
-            if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))
+            var activeEncounter = fflogsEstimateService.ActiveEncounter;
+            if (activeEncounter is not null)
             {
-                var mappings = configuration.Fflogs.EncounterMappings ?? [];
-                if (!string.Equals(fflogsEncounterInputKey, encounter.EnemyName, StringComparison.Ordinal))
+                ImGui.TextDisabled(
+                    $"Territory {activeEncounter.TerritoryId}  ·  " +
+                    $"{activeEncounter.EncounterName}  ·  " +
+                    $"FFLogs #{activeEncounter.EncounterId}  ·  " +
+                    $"{(activeEncounter.Difficulty == 101 ? "Savage" : "Normal")}");
+                if (activeEncounter.Phase > 1)
                 {
-                    fflogsEncounterInputKey = encounter.EnemyName;
-                    fflogsEncounterIdInput = mappings.TryGetValue(encounter.EnemyName, out var mappedId)
-                        ? mappedId
-                        : 0;
-                }
-
-                ImGui.TextDisabled($"{text.Get("当前首领", "Current boss")}: {encounter.EnemyName}");
-                if (ImGui.InputInt(text.Get("FFLogs Encounter ID", "FFLogs encounter ID"), ref fflogsEncounterIdInput))
-                {
-                    fflogsEncounterIdInput = Math.Max(0, fflogsEncounterIdInput);
-                }
-                if (ImGui.Button(text.Get("绑定当前战斗", "Bind current encounter")) && fflogsEncounterIdInput > 0)
-                {
-                    UpdateFflogsSettings(settings =>
-                        settings.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput);
-                    fflogsEstimateService.RequestRefresh(encounter);
-                    changed = true;
-                }
-                ImGui.SameLine();
-                if (ImGui.Button(text.Get("清除绑定", "Clear binding")) &&
-                    mappings.ContainsKey(encounter.EnemyName))
-                {
-                    UpdateFflogsSettings(settings =>
-                        settings.EncounterMappings.Remove(encounter.EnemyName));
-                    fflogsEncounterIdInput = 0;
-                    changed = true;
+                    ImGui.TextColored(
+                        IceBlue,
+                        text.Get("已自动切换至第二阶段榜单", "Automatically switched to the phase-two ranking"));
                 }
             }
             else
             {
                 ImGui.TextDisabled(text.Get(
-                    "当前没有可绑定的战斗。开始战斗后，这里会显示首领名称。",
-                    "There is no encounter to bind. The boss name appears here after combat starts."));
+                    "当前不在最新团队副本榜单中，不会加载历史榜单。",
+                    "The current territory is outside the latest raid tier; historical rankings will not be loaded."));
             }
             ImGui.TextDisabled(text.Get(
-                "自动匹配失败时，可从 FFLogs 对应首领页面 URL 中填写 Encounter ID。",
-                "If automatic matching fails, enter the encounter ID from the matching FFLogs boss page URL."));
+                "榜单换季时只需更新内置副本表，不依赖国服客户端返回英文 Boss 名。",
+                "Tier rollovers only require updating the built-in duty table; English boss names are not required from the CN client."));
             ImGui.EndTable();
         }
 
@@ -1542,7 +1521,7 @@ public sealed class ControlCenterWindow : Window
         FflogsEstimateState.Idle => text.Get("状态：等待测试或战斗数据", "Status: waiting for a test or encounter data"),
         FflogsEstimateState.Loading => text.Get("状态：正在连接 FFLogs…", "Status: connecting to FFLogs…"),
         FflogsEstimateState.Ready => text.Get("状态：估算数据已就绪", "Status: estimate data ready"),
-        FflogsEstimateState.EncounterNotMatched => text.Get("状态：未匹配到当前战斗", "Status: current encounter not matched"),
+        FflogsEstimateState.InactiveContent => text.Get("状态：当前副本没有活跃榜单", "Status: no active ranking for this duty"),
         FflogsEstimateState.Error => text.Get("状态：连接失败", "Status: connection failed"),
         _ => state.ToString(),
     };
@@ -1551,7 +1530,7 @@ public sealed class ControlCenterWindow : Window
     {
         FflogsEstimateState.Ready => IceBlue,
         FflogsEstimateState.Error => new Vector4(0.93f, 0.38f, 0.36f, 1),
-        FflogsEstimateState.EncounterNotMatched => Gold,
+        FflogsEstimateState.InactiveContent => Gold,
         _ => new Vector4(0.70f, 0.72f, 0.76f, 1),
     };
 

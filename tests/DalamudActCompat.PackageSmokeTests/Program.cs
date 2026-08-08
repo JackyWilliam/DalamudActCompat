@@ -77,6 +77,7 @@ try
     ValidateDutyEncounterAggregation();
     ValidateControlCenterPresentation();
     ValidateFflogsEstimateCurve();
+    ValidateFflogsCurrentEncounterTable();
     ValidateFflogsConcurrencyBoundaries();
     await ValidateFflogsCacheWritersAsync(testRoot);
     await ValidateBundledPluginInstallLifecycleAsync();
@@ -621,6 +622,7 @@ static void ValidateMeterRows()
                 11_000, 10_000, 10_000,
                 DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2),
             new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3, 2_500, 2_000, 2_000),
+            new Combatant("Limit Break", "Limit Break", "", false, 50_000, 0, 0, 5_000, 5_000, 5_000),
         ],
         [],
         [],
@@ -637,6 +639,13 @@ static void ValidateMeterRows()
     };
     var meter = new MeterService(state, settings);
     var rows = meter.GetRows();
+    Assert(
+        rows.Count == 3 &&
+        rows.Any(static row => row.Name == "Limit Break" && row.TotalDamage == 50_000),
+        "Limit Break damage is missing from the Meter rows.");
+    Assert(
+        encounter.Combatants.Any(static combatant => combatant.Name == "Limit Break"),
+        "Hiding Limit Break from the Meter mutated the underlying encounter data.");
     Assert(rows[0].Name == "Tank@Alpha", "DPS sorting did not preserve the player server name.");
     Assert(rows[0].Job == "PLD", "The resolved player job was not preserved.");
     Assert(rows[0].Deaths == 1, "The resolved player death count was not preserved.");
@@ -696,6 +705,19 @@ static void ValidateMeterRows()
 
 static void ValidateMeterLayout()
 {
+    Assert(
+        MeterWindow.CombatantRowSpacing == 3,
+        "Combat Meter player rows are not separated by the requested three pixels.");
+    Assert(
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "JobIcons",
+            "LimitBreak.png")),
+        "The supplied Limit Break icon is missing from plugin assets.");
+
     var rowHeightMethod = typeof(MeterWindow).GetMethod(
                               "CalculateCombatantRowHeight",
                               BindingFlags.Static | BindingFlags.NonPublic)
@@ -730,16 +752,6 @@ static void ValidateMeterLayout()
         Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS"),
         "The ACT Meter still labels encounter DPS as EncDPS instead of eDPS.");
 
-    var sortLabelMethod = typeof(MeterWindow).GetMethod(
-                              "SortModeLabel",
-                              BindingFlags.Static | BindingFlags.NonPublic)
-                          ?? throw new InvalidOperationException(
-                              "Meter sort-mode label helper was not found.");
-    Assert(
-        Equals(sortLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS") &&
-        Equals(sortLabelMethod.Invoke(null, [MeterSortMode.Hps, settings]), "HPS"),
-        "The compact Meter control no longer exposes both DPS and HPS modes.");
-
     var rateColorMethod = typeof(MeterWindow).GetMethod(
                               "PrimaryRateColor",
                               BindingFlags.Static | BindingFlags.NonPublic)
@@ -753,14 +765,14 @@ static void ValidateMeterLayout()
         "The local player's DPS/HPS value is not brighter than party values.");
 
     var hitRateTextMethod = typeof(MeterWindow).GetMethod(
-                                "FormatHitRate",
+                                "FormatHitRateValue",
                                 BindingFlags.Static | BindingFlags.NonPublic)
                             ?? throw new InvalidOperationException(
                                 "Meter hit-rate formatter was not found.");
     Assert(
-        Equals(hitRateTextMethod.Invoke(null, ["暴击", 25.0]), "暴击 25.0%") &&
-        Equals(hitRateTextMethod.Invoke(null, ["直暴", null]), "直暴 --"),
-        "The Meter does not format critical and critical-direct rates safely.");
+        Equals(hitRateTextMethod.Invoke(null, [25.0]), "25.0%") &&
+        Equals(hitRateTextMethod.Invoke(null, [null]), "--"),
+        "The Meter does not keep critical-rate values compact below their column headers.");
 
     var localizerType = typeof(MeterWindow).Assembly.GetType(
                             "DalamudActCompat.Meter.ZoneNameLocalizer")
@@ -810,6 +822,52 @@ static void ValidateFflogsEstimateCurve()
     Assert(
         legendary != pink && pink != orange && roundedOrange == orange,
         "FFLogs estimate colors did not match the rounded score shown by the Meter.");
+}
+
+static void ValidateFflogsCurrentEncounterTable()
+{
+    var tableType = typeof(FflogsEstimateService).Assembly.GetType(
+                        "DalamudActCompat.Fflogs.CurrentFflogsEncounterTable")
+                    ?? throw new InvalidOperationException(
+                        "The current FFLogs encounter table was not found.");
+    var tryResolve = tableType.GetMethod(
+                         "TryResolve",
+                         BindingFlags.Static | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException(
+                         "The current FFLogs duty resolver was not found.");
+    var observePhase = tableType.GetMethod(
+                           "ObservePhase",
+                           BindingFlags.Static | BindingFlags.NonPublic)
+                       ?? throw new InvalidOperationException(
+                           "The FFLogs phase observer was not found.");
+
+    object?[] normalM4Arguments = [1326u, 1, null];
+    Assert(
+        Equals(tryResolve.Invoke(null, normalM4Arguments), true) &&
+        ReadEncounterValue(normalM4Arguments[2], "EncounterId") == 104 &&
+        ReadEncounterValue(normalM4Arguments[2], "Difficulty") == 100,
+        "AAC Heavyweight M4 did not resolve to the current Lindwurm Normal ranking.");
+
+    object?[] oldDutyArguments = [1269u, 1, null];
+    Assert(
+        Equals(tryResolve.Invoke(null, oldDutyArguments), false),
+        "A duty outside the current FFLogs tier was allowed to resolve.");
+
+    var phaseTwo = (int)(observePhase.Invoke(
+        null,
+        [1327u, 1, "21|2026-08-08T00:00:00.0000000+08:00|40000001|Lindwurm|BBD8|Mindless Flesh"])
+        ?? 0);
+    object?[] savageM4Arguments = [1327u, phaseTwo, null];
+    Assert(
+        phaseTwo == 2 &&
+        Equals(tryResolve.Invoke(null, savageM4Arguments), true) &&
+        ReadEncounterValue(savageM4Arguments[2], "EncounterId") == 105 &&
+        ReadEncounterValue(savageM4Arguments[2], "Difficulty") == 101,
+        "M4S did not switch to the Lindwurm II Savage ranking after a phase-two action.");
+
+    static int ReadEncounterValue(object? encounter, string propertyName)
+        => (int)(encounter?.GetType().GetProperty(propertyName)?.GetValue(encounter)
+                 ?? throw new InvalidOperationException($"Resolved FFLogs encounter has no {propertyName}."));
 }
 
 static void ValidateEncounterParticipantsSurvivePartyDeparture()
@@ -988,7 +1046,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 12)) == "v0.3.6.12",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 13)) == "v0.3.6.13",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1752,12 +1810,25 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
 {
     var cacheDirectory = Path.Combine(testRoot, "fflogs-cache-writers");
     var cachePath = Path.Combine(cacheDirectory, "fflogs-cache.json");
-    var dataManager = DispatchProxy.Create<IDataManager, NoOpDataManagerProxy>();
+    Directory.CreateDirectory(cacheDirectory);
+    var seededCache = JsonSerializer.Serialize(new FflogsCacheDocument(
+            DateTimeOffset.UtcNow,
+            [
+                new FflogsEncounterCatalogEntry(100, "Howling Blade", "AAC Cruiserweight", false),
+                new FflogsEncounterCatalogEntry(104, "Lindwurm", "AAC Heavyweight", false),
+            ],
+            [
+                new FflogsCurveCacheEntry(100, "Howling Blade", "Paladin", DateTimeOffset.UtcNow, [], 101),
+                new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 0),
+                new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 100),
+            ]));
+    await File.WriteAllTextAsync(
+        cachePath,
+        seededCache.Replace(",\"Difficulty\":0", string.Empty, StringComparison.Ordinal));
     var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
     var service = new FflogsEstimateService(
         () => new FflogsSettings(),
         cachePath,
-        dataManager,
         new PluginLogger(log));
     try
     {
@@ -1774,10 +1845,21 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
             service.SaveCacheAsync(CancellationToken.None));
 
         using var cacheDocument = JsonDocument.Parse(await File.ReadAllTextAsync(cachePath));
+        var cachedEncounterIds = cacheDocument.RootElement.GetProperty("Encounters")
+            .EnumerateArray()
+            .Select(static encounter => encounter.GetProperty("Id").GetInt32())
+            .ToArray();
+        var cachedCurveIds = cacheDocument.RootElement.GetProperty("Curves")
+            .EnumerateArray()
+            .Select(static curve => curve.GetProperty("EncounterId").GetInt32())
+            .ToArray();
         Assert(
             cacheDocument.RootElement.TryGetProperty("CatalogFetchedAt", out _) &&
+            cachedEncounterIds.SequenceEqual([104]) &&
+            cachedCurveIds.SequenceEqual([104]) &&
+            cacheDocument.RootElement.GetProperty("Curves")[0].GetProperty("Difficulty").GetInt32() == 100 &&
             !Directory.EnumerateFiles(cacheDirectory, "*.tmp").Any(),
-            "Consecutive or concurrent FFLogs cache saves corrupted the cache or left writer temp files behind.");
+            "FFLogs cache persistence retained an old ranking tier, corrupted the cache, or left temp files behind.");
     }
     finally
     {
@@ -2494,14 +2576,15 @@ static void ValidateHtmlOverlayDefaults()
     var fflogsApiCardIndex = controlCenterSource.IndexOf(
         "fflogs-api-refresh-card",
         StringComparison.Ordinal);
-    var fflogsBindingCardIndex = controlCenterSource.IndexOf(
-        "fflogs-encounter-binding-card",
+    var fflogsAutomaticCardIndex = controlCenterSource.IndexOf(
+        "fflogs-automatic-encounter-card",
         StringComparison.Ordinal);
     Assert(
-        fflogsApiCardIndex >= 0 && fflogsBindingCardIndex > fflogsApiCardIndex &&
+        fflogsApiCardIndex >= 0 && fflogsAutomaticCardIndex > fflogsApiCardIndex &&
         controlCenterSource.Contains("API 凭据与数据刷新", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("当前战斗绑定", StringComparison.Ordinal),
-        "FFLogs credential refresh and encounter binding are not presented as separate modules.");
+        controlCenterSource.Contains("当前副本自动识别", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("绑定当前战斗", StringComparison.Ordinal),
+        "FFLogs automatic duty matching is missing or manual encounter binding is still exposed.");
     Assert(
         !controlCenterSource.Contains("control-center-sidebar", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("parser-state-card", StringComparison.Ordinal) &&
@@ -2516,8 +2599,12 @@ static void ValidateHtmlOverlayDefaults()
         "MeterWindow.cs"));
     Assert(
         !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
-        !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal),
-        "The destructive encounter-reset control is still exposed directly on the Meter overlay.");
+        !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal) &&
+        !meterWindowSource.Contains("DrawControls(", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("meter-column-header", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("#  玩家", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("jobIcons.GetLimitBreak()", StringComparison.Ordinal),
+        "The Meter overlay still exposes controls, its table header is missing, or Limit Break lacks its icon.");
 
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
