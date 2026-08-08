@@ -19,10 +19,12 @@ public sealed class MeterWindow : Window
     internal const float MinimumExpandedWindowHeight = 170;
     internal const float DefaultExpandedWindowWidth = 500;
     internal const float DefaultExpandedWindowHeight = 420;
-    private const float CompactWindowMinimumHeight = 90;
+    private const float CompactWindowMinimumHeight = 60;
+    private const float EmptyStateHeight = 42;
     private const float EncounterHeaderHeight = 44;
     private const float CompactDragHandleHeight = 26;
     private const float CompactToggleSize = 26;
+    private const float WindowResizeAnimationDurationSeconds = 0.18f;
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
@@ -38,8 +40,12 @@ public sealed class MeterWindow : Window
     private readonly ISharedImmediateTexture endedStatusIcon;
     private readonly Func<uint?, string, string> localizeZoneName;
     private readonly Action saveConfiguration;
+    private bool isHeightAnimationActive;
     private bool isDragging;
     private bool observedCompactMode;
+    private float heightAnimationElapsedSeconds;
+    private float heightAnimationStart;
+    private float heightAnimationTarget;
     private Vector2 dragOffset;
 
     public MeterWindow(
@@ -95,7 +101,7 @@ public sealed class MeterWindow : Window
         {
             MinimumSize = new Vector2(
                 MinimumExpandedWindowWidth,
-                settings.CompactMode
+                settings.CompactMode || isHeightAnimationActive
                     ? CompactWindowMinimumHeight
                     : MinimumExpandedWindowHeight),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
@@ -138,6 +144,13 @@ public sealed class MeterWindow : Window
         var encounter = meterService.DisplayEncounter;
         using var fontScale = new FontScaleScope(settings.FontScale);
 
+        AdvanceWindowHeightAnimation();
+        SynchronizeCompactMode(settings);
+        if (!settings.CompactMode)
+        {
+            CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
+        }
+
         if (encounter is null)
         {
             DrawEmptyState(settings);
@@ -145,11 +158,6 @@ public sealed class MeterWindow : Window
         }
 
         var allRows = meterService.GetRows(encounter);
-        SynchronizeCompactMode(settings);
-        if (!settings.CompactMode)
-        {
-            CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
-        }
         if (settings.ShowHeader)
         {
             DrawEncounterHeader(encounter, settings);
@@ -216,15 +224,39 @@ public sealed class MeterWindow : Window
 
     private void DrawEmptyState(MeterSettings settings)
     {
-        const float height = 42;
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
-        ImGui.InvisibleButton("empty-meter-drag", new Vector2(width, height));
-        HandleHeaderDrag(settings);
+        var toggleStart = new Vector2(
+            start.X + width - CompactToggleSize - 6,
+            start.Y + ((EmptyStateHeight - CompactToggleSize) * 0.5f));
+        var toggleEnd = toggleStart + new Vector2(CompactToggleSize, CompactToggleSize);
+        var toggleHovered = CanInteractWithCompactToggle(settings) &&
+                            ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
+        ImGui.InvisibleButton("empty-meter-drag", new Vector2(width, EmptyStateHeight));
+        HandleHeaderDrag(settings, allowStart: !toggleHovered);
+        HandleCompactModeToggle(settings, toggleHovered);
+        ApplyEmptyStateCompactWindowHeight(settings);
+
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(start, start + new Vector2(width, height), ImGui.GetColorU32(NavyRaised), 6);
-        drawList.AddText(start + new Vector2(10, 6), ImGui.GetColorU32(IceBlue), text.Get("● 等待战斗数据", "● Waiting for encounter data"));
-        drawList.AddText(start + new Vector2(10, 23), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), text.Get("解析开始后会自动显示排行", "Rankings appear automatically when parsing begins"));
+        drawList.AddRectFilled(
+            start,
+            start + new Vector2(width, EmptyStateHeight),
+            ImGui.GetColorU32(NavyRaised),
+            6);
+        var textWidth = Math.Max(20, toggleStart.X - start.X - 16);
+        drawList.AddText(
+            start + new Vector2(10, 6),
+            ImGui.GetColorU32(IceBlue),
+            TrimToWidth(
+                text.Get("● 等待战斗数据", "● Waiting for encounter data"),
+                textWidth));
+        drawList.AddText(
+            start + new Vector2(10, 23),
+            ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
+            TrimToWidth(
+                text.Get("解析开始后会自动显示排行", "Rankings appear automatically when parsing begins"),
+                textWidth));
+        DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered);
     }
 
     private void DrawEncounterHeader(Encounter encounter, MeterSettings settings)
@@ -411,8 +443,19 @@ public sealed class MeterWindow : Window
                 ? settings.ExpandedWindowHeight
                 : DefaultExpandedWindowHeight);
 
-    private static void RestoreExpandedWindowSize(MeterSettings settings)
-        => ImGui.SetWindowSize(NormalizeExpandedWindowSize(settings), ImGuiCond.Always);
+    private void RestoreExpandedWindowSize(MeterSettings settings)
+    {
+        var targetSize = NormalizeExpandedWindowSize(settings);
+        var currentSize = ImGui.GetWindowSize();
+        if (Math.Abs(currentSize.X - targetSize.X) > 0.5f)
+        {
+            ImGui.SetWindowSize(
+                new Vector2(targetSize.X, currentSize.Y),
+                ImGuiCond.Always);
+        }
+
+        BeginWindowHeightAnimation(targetSize.Y);
+    }
 
     private void ApplyCompactWindowHeight(MeterSettings settings, bool useHorizontalScroll)
     {
@@ -428,11 +471,78 @@ public sealed class MeterWindow : Window
             ImGui.GetStyle().ItemSpacing.Y,
             ImGui.GetStyle().ScrollbarSize,
             useHorizontalScroll);
-        var currentSize = ImGui.GetWindowSize();
-        if (Math.Abs(currentSize.Y - targetHeight) > 0.5f)
+        BeginWindowHeightAnimation(targetHeight);
+    }
+
+    private void ApplyEmptyStateCompactWindowHeight(MeterSettings settings)
+    {
+        if (!settings.CompactMode)
         {
-            ImGui.SetWindowSize(new Vector2(currentSize.X, targetHeight), ImGuiCond.Always);
+            return;
         }
+
+        var targetHeight = CalculateEmptyStateWindowHeight(
+            ImGui.GetStyle().WindowPadding.Y);
+        BeginWindowHeightAnimation(targetHeight);
+    }
+
+    private void BeginWindowHeightAnimation(float targetHeight)
+    {
+        if (!float.IsFinite(targetHeight) || targetHeight <= 0)
+        {
+            return;
+        }
+
+        if (isHeightAnimationActive &&
+            Math.Abs(heightAnimationTarget - targetHeight) <= 0.5f)
+        {
+            return;
+        }
+
+        var currentHeight = ImGui.GetWindowSize().Y;
+        if (!float.IsFinite(currentHeight) ||
+            Math.Abs(currentHeight - targetHeight) <= 0.5f)
+        {
+            isHeightAnimationActive = false;
+            return;
+        }
+
+        heightAnimationStart = currentHeight;
+        heightAnimationTarget = targetHeight;
+        heightAnimationElapsedSeconds = 0;
+        isHeightAnimationActive = true;
+    }
+
+    private void AdvanceWindowHeightAnimation()
+    {
+        if (!isHeightAnimationActive)
+        {
+            return;
+        }
+
+        var deltaTime = ImGui.GetIO().DeltaTime;
+        if (!float.IsFinite(deltaTime) || deltaTime <= 0)
+        {
+            deltaTime = 1f / 60f;
+        }
+
+        heightAnimationElapsedSeconds += Math.Min(deltaTime, 0.05f);
+        var progress = Math.Clamp(
+            heightAnimationElapsedSeconds / WindowResizeAnimationDurationSeconds,
+            0,
+            1);
+        var height = float.Lerp(
+            heightAnimationStart,
+            heightAnimationTarget,
+            EaseOutCubic(progress));
+        if (progress >= 1)
+        {
+            height = heightAnimationTarget;
+            isHeightAnimationActive = false;
+        }
+
+        var currentSize = ImGui.GetWindowSize();
+        ImGui.SetWindowSize(new Vector2(currentSize.X, height), ImGuiCond.Always);
     }
 
     private void DrawCompactModeToggle(
@@ -811,6 +921,18 @@ public sealed class MeterWindow : Window
             rowHeight +
             horizontalScrollbarHeight +
             2);
+    }
+
+    internal static float CalculateEmptyStateWindowHeight(float windowPaddingY)
+        => MathF.Ceiling(
+            (Math.Max(0, windowPaddingY) * 2) +
+            EmptyStateHeight +
+            2);
+
+    internal static float EaseOutCubic(float progress)
+    {
+        var normalized = Math.Clamp(progress, 0, 1);
+        return 1 - MathF.Pow(1 - normalized, 3);
     }
 
     internal static float CalculateJobIconSize(float rowHeight, float textLineHeight)

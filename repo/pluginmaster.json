@@ -16,7 +16,7 @@
     "DownloadLinkTesting":  null,
     "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
     "LastUpdate":  1786184282843,
-    "Changelog":  "v0.3.7.0 战斗统计升级：LB 不占玩家排名并固定置底；新增战斗中/已结束图标、国服中文地名、只显示自己的收起模式与悬浮窗箭头切换，收起时自动缩至一行并在展开时恢复原尺寸；缩短表格并按需显示横向滚动条，FFLogs 预估扩展到全队；修复木人结算保留与 LB 伤害归属，4/8/24 人多战斗段副本按有效战斗时长计算累计 DPS/HPS。",
+    "Changelog":  "v0.3.7.0 战斗统计升级：LB 不占玩家排名并固定置底；新增战斗中/已结束图标、国服中文地名、只显示自己的收起模式与悬浮窗箭头切换，无战斗数据时也可操作；收起时自动缩至一行，展开时恢复原尺寸，并加入上下滑动动画；缩短表格并按需显示横向滚动条，FFLogs 预估扩展到全队；修复木人结算保留与 LB 伤害归属，4/8/24 人多战斗段副本按有效战斗时长计算累计 DPS/HPS。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

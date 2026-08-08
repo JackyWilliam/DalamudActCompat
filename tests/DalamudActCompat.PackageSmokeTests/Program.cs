@@ -850,6 +850,14 @@ static void ValidateMeterLayout()
         compactHeightWithScroll == compactHeight + 14 &&
         compactHeightWithoutHeader == compactHeight - 18,
         "Compact mode did not size the Meter to exactly one header and one player row.");
+    Assert(
+        MeterWindow.CalculateEmptyStateWindowHeight(windowPaddingY: 9) == 62,
+        "The empty Meter state did not retain the compact toggle at a compact height.");
+    Assert(
+        MeterWindow.EaseOutCubic(0) == 0 &&
+        Math.Abs(MeterWindow.EaseOutCubic(0.5f) - 0.875f) < 0.0001f &&
+        MeterWindow.EaseOutCubic(1) == 1,
+        "The Meter collapse and expand transition did not use the expected smooth easing.");
 
     var invalidExpandedSize = new MeterSettings
     {
