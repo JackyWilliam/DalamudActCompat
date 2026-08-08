@@ -4,8 +4,8 @@ namespace DalamudActCompat.ActRuntime;
 
 public static class ChineseCombatChatParser
 {
-    private static readonly Regex ActorRegex = new(
-        @"(?<actor>.+?)发动(?:攻击|了)",
+    private static readonly Regex ActionAnnouncementRegex = new(
+        @"(?<actor>.+?)发动(?:攻击|了)(?:“(?<action>[^”]+)”)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DamageRegex = new(
         @"(?<target>\S+?)受到了(?<damage>\d+)(?:\([^)]+\))?点伤害",
@@ -37,9 +37,24 @@ public static class ChineseCombatChatParser
 
     public static bool TryExtractActor(string message, out string actor)
     {
-        var actorMatch = ActorRegex.Match(message);
-        actor = actorMatch.Success
-            ? actorMatch.Groups["actor"].Value.Trim()
+        var announcementMatch = ActionAnnouncementRegex.Match(message);
+        actor = announcementMatch.Success
+            ? announcementMatch.Groups["actor"].Value.Trim()
+            : string.Empty;
+        return !string.IsNullOrWhiteSpace(actor);
+    }
+
+    public static bool TryExtractActionAnnouncement(
+        string message,
+        out string actor,
+        out string action)
+    {
+        var announcementMatch = ActionAnnouncementRegex.Match(message);
+        actor = announcementMatch.Success
+            ? announcementMatch.Groups["actor"].Value.Trim()
+            : string.Empty;
+        action = announcementMatch.Success
+            ? announcementMatch.Groups["action"].Value.Trim()
             : string.Empty;
         return !string.IsNullOrWhiteSpace(actor);
     }
@@ -47,9 +62,16 @@ public static class ChineseCombatChatParser
 
 public sealed class ChineseCombatChatContext
 {
+    public const string LimitBreakActorName = "Limit Break";
     private static readonly TimeSpan ActorContextLifetime = TimeSpan.FromSeconds(2);
+    private readonly IReadOnlySet<string> limitBreakActionNames;
     private string pendingActor = string.Empty;
     private DateTimeOffset pendingActorObservedAt;
+
+    public ChineseCombatChatContext(IReadOnlySet<string>? limitBreakActionNames = null)
+    {
+        this.limitBreakActionNames = limitBreakActionNames ?? new HashSet<string>();
+    }
 
     public bool TryParse(
         string message,
@@ -58,12 +80,16 @@ public sealed class ChineseCombatChatContext
         out string target,
         out long damage)
     {
-        var hasActorAnnouncement = ChineseCombatChatParser.TryExtractActor(
+        var hasActorAnnouncement = ChineseCombatChatParser.TryExtractActionAnnouncement(
             message,
-            out var announcedActor);
+            out var announcedActor,
+            out var announcedAction);
         if (hasActorAnnouncement)
         {
-            pendingActor = announcedActor;
+            pendingActor = !string.IsNullOrWhiteSpace(announcedAction) &&
+                           limitBreakActionNames.Contains(announcedAction)
+                ? LimitBreakActorName
+                : announcedActor;
             pendingActorObservedAt = observedAt;
         }
 

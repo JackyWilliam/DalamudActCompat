@@ -68,7 +68,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private DateTimeOffset lastRelevantCombatAction;
     private bool chatEncounterDirty;
     private bool chatEncounterPublished;
-    private readonly ChineseCombatChatContext chatParser = new();
+    private readonly ChineseCombatChatContext chatParser;
     private string chatEnemy = string.Empty;
     private string chatZone = string.Empty;
     private bool activeEncounterPublished;
@@ -107,6 +107,19 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.getOverlayWindowSettings = getOverlayWindowSettings;
         this.getOverlayWindowSettingsSnapshot = getOverlayWindowSettingsSnapshot;
         this.debugMode = debugMode;
+        HashSet<string> limitBreakActionNames;
+        try
+        {
+            limitBreakActionNames = LoadLimitBreakActionNames(dataManager);
+        }
+        catch (Exception ex)
+        {
+            limitBreakActionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            log.Warning(ex, "Localized Limit Break action names could not be loaded.");
+        }
+        chatParser = new ChineseCombatChatContext(limitBreakActionNames);
+        log.Information(
+            $"Loaded {limitBreakActionNames.Count} localized Limit Break action names for combat attribution.");
         NativePostNamazuBridge.Configure(framework, log, sigScanner, resolveActorId);
         LegacyResourceCompatibility.Configure(log, notificationManager);
         CompatibilityPermissionBroker.Configure(
@@ -1011,7 +1024,11 @@ public sealed class SelfHostedActRuntime : IDisposable
             // Keep split combat lines together for at most two seconds, but only let the
             // local player or party members create and extend this plugin's encounter.
             var identities = gameStateProvider.Identities;
-            if (ActPlayerIdentityResolver.Resolve(identities, actor) is null)
+            var isLimitBreak = string.Equals(
+                actor,
+                ChineseCombatChatContext.LimitBreakActorName,
+                StringComparison.OrdinalIgnoreCase);
+            if (!isLimitBreak && ActPlayerIdentityResolver.Resolve(identities, actor) is null)
             {
                 return;
             }
@@ -1140,19 +1157,35 @@ public sealed class SelfHostedActRuntime : IDisposable
             1,
             ((finished ? chatLastDamage : DateTimeOffset.Now) - chatEncounterStart).TotalSeconds);
         var combatants = chatDamageTotals
-            .Select(pair => (Pair: pair, Identity: ActPlayerIdentityResolver.Resolve(identities, pair.Key)))
-            .Where(static item => item.Identity is not null)
-            .Select(item => new ActCombatantSnapshot(
-                item.Identity!.DisplayName,
-                item.Identity.DisplayName,
-                item.Identity.Job,
-                item.Identity.IsLocalPlayer,
-                item.Pair.Value,
-                0,
-                observedDeaths.GetValueOrDefault(item.Identity.DisplayName),
-                item.Pair.Value / elapsedSeconds,
-                item.Pair.Value / elapsedSeconds,
-                item.Pair.Value / elapsedSeconds))
+            .Select(pair =>
+            {
+                var identity = ActPlayerIdentityResolver.Resolve(identities, pair.Key);
+                var isLimitBreak = string.Equals(
+                    pair.Key,
+                    ChineseCombatChatContext.LimitBreakActorName,
+                    StringComparison.OrdinalIgnoreCase);
+                if (identity is null && !isLimitBreak)
+                {
+                    return null;
+                }
+
+                var displayName = isLimitBreak
+                    ? ChineseCombatChatContext.LimitBreakActorName
+                    : identity!.DisplayName;
+                return new ActCombatantSnapshot(
+                    displayName,
+                    displayName,
+                    isLimitBreak ? string.Empty : identity!.Job,
+                    !isLimitBreak && identity!.IsLocalPlayer,
+                    pair.Value,
+                    0,
+                    isLimitBreak ? 0 : observedDeaths.GetValueOrDefault(displayName),
+                    pair.Value / elapsedSeconds,
+                    pair.Value / elapsedSeconds,
+                    pair.Value / elapsedSeconds);
+            })
+            .Where(static combatant => combatant is not null)
+            .Select(static combatant => combatant!)
             .ToArray();
         return combatants.Length == 0
             ? null
@@ -1318,7 +1351,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     if (combatants.Length > 0)
                     {
-                        activeEncounterPublished = true;
+                        activeEncounterPublished |= combatants.Any(static combatant =>
+                            combatant.TotalDamage > 0 || combatant.TotalHealing > 0);
                         snapshot = new ActEncounterSnapshot(
                             activeEncounterId,
                             startTime,
@@ -1338,7 +1372,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     if (finished)
                     {
                         activeEncounter = null;
-                        if (snapshot is null)
+                        if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)
                         {
                             fallbackSnapshot = CreateChatEncounterSnapshot(
                                 finished: true,
@@ -1366,19 +1400,50 @@ public sealed class SelfHostedActRuntime : IDisposable
                     "The Chinese combat-chat fallback will be used for this encounter.");
             }
 
-            if (snapshot is not null)
+            if (ShouldPreferChatFallback(snapshot, fallbackSnapshot))
+            {
+                log.Warning(
+                    "ACT completion snapshot contained no damage; preserved the valid Chinese combat-chat snapshot.");
+                EncounterChanged?.Invoke(fallbackSnapshot!, true);
+            }
+            else if (snapshot is not null)
             {
                 EncounterChanged?.Invoke(snapshot, finished);
-            }
-            else if (fallbackSnapshot is not null)
-            {
-                EncounterChanged?.Invoke(fallbackSnapshot, true);
             }
         }
         catch (Exception ex)
         {
             log.Error(ex, "Failed to publish ACT encounter snapshot.");
         }
+    }
+
+    private static long SnapshotTotalDamage(ActEncounterSnapshot snapshot)
+        => snapshot.Combatants.Sum(static combatant => Math.Max(0, combatant.TotalDamage));
+
+    internal static bool ShouldPreferChatFallback(
+        ActEncounterSnapshot? primary,
+        ActEncounterSnapshot? fallback)
+        => fallback is not null &&
+           SnapshotTotalDamage(fallback) > 0 &&
+           (primary is null || SnapshotTotalDamage(primary) <= 0);
+
+    private static HashSet<string> LoadLimitBreakActionNames(IDataManager dataManager)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var action in dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>())
+        {
+            if (action.ActionCategory.RowId is not (9 or 15))
+            {
+                continue;
+            }
+
+            var name = action.Name.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                names.Add(name);
+            }
+        }
+        return names;
     }
 
     private void RestoreHtmlOverlays()

@@ -3902,6 +3902,45 @@ static void ValidateChineseCombatChatParsing()
             out _) &&
         contextualActor == "队友",
         "Adjacent split combat lines no longer retain their legitimate attacker context.");
+
+    var limitBreakContext = new ChineseCombatChatContext(
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "终结时刻" });
+    Assert(
+        !limitBreakContext.TryParse(
+            "埃斯蒂尼安丿发动了“终结时刻”。",
+            observedAt,
+            out _,
+            out _,
+            out _) &&
+        limitBreakContext.TryParse(
+            "  \uE06F 木人受到了936686点伤害。",
+            observedAt.AddMilliseconds(10),
+            out var limitBreakActor,
+            out _,
+            out var limitBreakDamage) &&
+        limitBreakActor == ChineseCombatChatContext.LimitBreakActorName &&
+        limitBreakDamage == 936686,
+        "Chinese Limit Break damage was attributed to the player instead of the synthetic LB combatant.");
+
+    var snapshotTime = DateTimeOffset.UtcNow;
+    var emptyActSnapshot = new ActEncounterSnapshot(
+        Guid.NewGuid(),
+        snapshotTime,
+        snapshotTime,
+        "Middle La Noscea",
+        "木人",
+        [new ActCombatantSnapshot("player", "Player", "PLD", true, 0, 0, 0)]);
+    var chatFallbackSnapshot = new ActEncounterSnapshot(
+        emptyActSnapshot.Id,
+        snapshotTime,
+        snapshotTime,
+        "Middle La Noscea",
+        "木人",
+        [new ActCombatantSnapshot("player", "Player", "PLD", true, 936686, 0, 0)]);
+    Assert(
+        SelfHostedActRuntime.ShouldPreferChatFallback(emptyActSnapshot, chatFallbackSnapshot) &&
+        !SelfHostedActRuntime.ShouldPreferChatFallback(chatFallbackSnapshot, emptyActSnapshot),
+        "A zero-damage ACT completion snapshot can still overwrite a valid chat fallback snapshot.");
 }
 
 static string FindProjectRoot()
