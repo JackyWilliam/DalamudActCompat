@@ -61,6 +61,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, bool> lastKnownDead = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> observedDeaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> chatDamageTotals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> chatDamageHitTotals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> chatCriticalHitTotals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> chatCriticalDirectHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
@@ -1016,7 +1019,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                     now,
                     out var actor,
                     out var target,
-                    out var damage))
+                    out var damage,
+                    out var isCritical,
+                    out var isDirectHit))
             {
                 return;
             }
@@ -1056,6 +1061,16 @@ public sealed class SelfHostedActRuntime : IDisposable
             chatEnemy = target;
             chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
             chatDamageTotals[actor] = chatDamageTotals.GetValueOrDefault(actor) + damage;
+            chatDamageHitTotals[actor] = chatDamageHitTotals.GetValueOrDefault(actor) + 1;
+            if (isCritical)
+            {
+                chatCriticalHitTotals[actor] = chatCriticalHitTotals.GetValueOrDefault(actor) + 1;
+            }
+            if (isCritical && isDirectHit)
+            {
+                chatCriticalDirectHitTotals[actor] =
+                    chatCriticalDirectHitTotals.GetValueOrDefault(actor) + 1;
+            }
             chatEncounterDirty = true;
         }
 
@@ -1182,7 +1197,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                     isLimitBreak ? 0 : observedDeaths.GetValueOrDefault(displayName),
                     pair.Value / elapsedSeconds,
                     pair.Value / elapsedSeconds,
-                    pair.Value / elapsedSeconds);
+                    pair.Value / elapsedSeconds,
+                    chatDamageHitTotals.GetValueOrDefault(pair.Key),
+                    chatCriticalHitTotals.GetValueOrDefault(pair.Key),
+                    chatCriticalDirectHitTotals.GetValueOrDefault(pair.Key));
             })
             .Where(static combatant => combatant is not null)
             .Select(static combatant => combatant!)
@@ -1645,6 +1663,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatEncounterDirty = false;
         chatEncounterPublished = false;
         chatDamageTotals.Clear();
+        chatDamageHitTotals.Clear();
+        chatCriticalHitTotals.Clear();
+        chatCriticalDirectHitTotals.Clear();
         chatParser.Clear();
         chatEnemy = string.Empty;
         chatZone = string.Empty;

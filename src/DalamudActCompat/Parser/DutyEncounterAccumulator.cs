@@ -207,6 +207,8 @@ internal sealed class DutyEncounterAccumulator
         private int damageHits;
         private int criticalHits;
         private int criticalDirectHits;
+        private double? fflogsPercentile;
+        private string? fflogsEncounterName;
         private double personalDamageDurationSeconds;
         private double externalDamageDurationSeconds;
 
@@ -231,6 +233,15 @@ internal sealed class DutyEncounterAccumulator
             damageHits += combatant.DamageHits;
             criticalHits += combatant.CriticalHits;
             criticalDirectHits += combatant.CriticalDirectHits;
+            if (combatant.FflogsPercentile is { } percentile &&
+                double.IsFinite(percentile) &&
+                percentile >= 0 &&
+                percentile <= 100 &&
+                !string.IsNullOrWhiteSpace(combatant.FflogsEncounterName))
+            {
+                fflogsPercentile = percentile;
+                fflogsEncounterName = combatant.FflogsEncounterName;
+            }
             personalDamageDurationSeconds += ResolveDamageDuration(
                 combatant.TotalDamage,
                 combatant.Dps,
@@ -254,6 +265,8 @@ internal sealed class DutyEncounterAccumulator
                 damageHits = damageHits,
                 criticalHits = criticalHits,
                 criticalDirectHits = criticalDirectHits,
+                fflogsPercentile = fflogsPercentile,
+                fflogsEncounterName = fflogsEncounterName,
                 personalDamageDurationSeconds = personalDamageDurationSeconds,
                 externalDamageDurationSeconds = externalDamageDurationSeconds,
             };
@@ -284,7 +297,9 @@ internal sealed class DutyEncounterAccumulator
                 externalRate,
                 damageHits,
                 criticalHits,
-                criticalDirectHits);
+                criticalDirectHits,
+                fflogsPercentile,
+                fflogsEncounterName);
         }
 
         private static double ResolveDamageDuration(

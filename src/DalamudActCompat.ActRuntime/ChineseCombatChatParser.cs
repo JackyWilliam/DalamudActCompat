@@ -17,10 +17,29 @@ public static class ChineseCombatChatParser
         out string actor,
         out string target,
         out long damage)
+        => TryParse(
+            message,
+            previousActor,
+            out actor,
+            out target,
+            out damage,
+            out _,
+            out _);
+
+    public static bool TryParse(
+        string message,
+        string previousActor,
+        out string actor,
+        out string target,
+        out long damage,
+        out bool isCritical,
+        out bool isDirectHit)
     {
         actor = TryExtractActor(message, out var explicitActor)
             ? explicitActor
             : previousActor;
+        isCritical = message.Contains("\u66B4\u51FB", StringComparison.Ordinal);
+        isDirectHit = message.Contains("\u76F4\u51FB", StringComparison.Ordinal);
 
         var damageMatch = DamageRegex.Match(message);
         damage = 0;
@@ -79,6 +98,23 @@ public sealed class ChineseCombatChatContext
         out string actor,
         out string target,
         out long damage)
+        => TryParse(
+            message,
+            observedAt,
+            out actor,
+            out target,
+            out damage,
+            out _,
+            out _);
+
+    public bool TryParse(
+        string message,
+        DateTimeOffset observedAt,
+        out string actor,
+        out string target,
+        out long damage,
+        out bool isCritical,
+        out bool isDirectHit)
     {
         var hasActorAnnouncement = ChineseCombatChatParser.TryExtractActionAnnouncement(
             message,
@@ -102,10 +138,15 @@ public sealed class ChineseCombatChatContext
                 inheritedActor,
                 out actor,
                 out target,
-                out damage))
+                out damage,
+                out isCritical,
+                out isDirectHit))
         {
             return true;
         }
+
+        isCritical = false;
+        isDirectHit = false;
 
         if (!hasActorAnnouncement)
         {

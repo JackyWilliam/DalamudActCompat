@@ -64,6 +64,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openBundledPluginNotice;
     private readonly Action checkBundledPluginUpdates;
     private readonly Action openLogDirectory;
+    private readonly Func<string> openCombatLogDirectory;
     private readonly Func<string> buildDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
@@ -88,6 +89,8 @@ public sealed class ControlCenterWindow : Window
     private bool customOverlayFeedbackIsError;
     private string? diagnosticCopyFeedback;
     private bool diagnosticCopyFeedbackIsError;
+    private string? combatLogFolderFeedback;
+    private bool combatLogFolderFeedbackIsError;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
@@ -115,6 +118,7 @@ public sealed class ControlCenterWindow : Window
         Action openBundledPluginNotice,
         Action checkBundledPluginUpdates,
         Action openLogDirectory,
+        Func<string> openCombatLogDirectory,
         Func<string> buildDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
@@ -151,6 +155,7 @@ public sealed class ControlCenterWindow : Window
         this.openBundledPluginNotice = openBundledPluginNotice;
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
         this.openLogDirectory = openLogDirectory;
+        this.openCombatLogDirectory = openCombatLogDirectory;
         this.buildDiagnosticReport = buildDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
@@ -384,7 +389,7 @@ public sealed class ControlCenterWindow : Window
         BrandedWindowChrome.EndGoldCard();
 
         ImGui.Spacing();
-        if (BrandedWindowChrome.BeginGoldCard("overview-quick-actions-card", 90))
+        if (BrandedWindowChrome.BeginGoldCard("overview-quick-actions-card", 140))
         {
             ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
             var meterVisible = configuration.Meter.IsVisible;
@@ -411,6 +416,28 @@ public sealed class ControlCenterWindow : Window
             }
             ImGui.SameLine();
             DrawStatusWindowToggleButton(new Vector2(150, 36));
+
+            if (ImGui.Button(
+                    text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs"),
+                    new Vector2(230, 36)))
+            {
+                OpenCombatLogDirectoryForUpload();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "打开 FFLogs 上传使用的原始 Network 日志目录，并把文件夹路径复制到剪贴板。",
+                    "Opens the raw Network log directory used for FFLogs uploads and copies its folder path to the clipboard."));
+            }
+            if (!string.IsNullOrWhiteSpace(combatLogFolderFeedback))
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(
+                    combatLogFolderFeedbackIsError
+                        ? new Vector4(0.95f, 0.45f, 0.40f, 1)
+                        : IceBlue,
+                    combatLogFolderFeedback);
+            }
         }
         BrandedWindowChrome.EndGoldCard();
 
@@ -437,6 +464,28 @@ public sealed class ControlCenterWindow : Window
         }
         BrandedWindowChrome.EndGoldCard();
         return changed;
+    }
+
+    private void OpenCombatLogDirectoryForUpload()
+    {
+        try
+        {
+            var directory = openCombatLogDirectory();
+            ImGui.SetClipboardText(directory);
+            combatLogFolderFeedback = text.Get(
+                "已打开，文件夹路径已复制",
+                "Opened; folder path copied");
+            combatLogFolderFeedbackIsError = false;
+            logger.Information("FFLogs upload log directory opened and its path copied to the clipboard.");
+        }
+        catch (Exception ex)
+        {
+            combatLogFolderFeedback = text.Get(
+                "打开或复制失败",
+                "Open or copy failed");
+            combatLogFolderFeedbackIsError = true;
+            logger.Error(ex, "Failed to open or copy the FFLogs upload log directory.");
+        }
     }
 
     private bool DrawMeter()

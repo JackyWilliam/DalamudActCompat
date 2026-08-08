@@ -21,6 +21,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
+    private readonly Func<Encounter, Encounter> captureFflogsEstimates;
     private readonly object syncRoot = new();
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
@@ -43,7 +44,8 @@ public sealed class IinactAdapter : IParserEngine
         Func<bool> isBoundByDuty,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
-        Func<IReadOnlyList<RuntimePluginSpec>> customPlugins)
+        Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
+        Func<Encounter, Encounter>? captureFflogsEstimates = null)
     {
         this.actRuntime = actRuntime;
         this.logger = logger;
@@ -56,6 +58,7 @@ public sealed class IinactAdapter : IParserEngine
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
+        this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
         actRuntime.EncounterChanged += OnEncounterChanged;
         framework.Update += OnFrameworkUpdate;
         wasBoundByDuty = isBoundByDuty();
@@ -248,6 +251,10 @@ public sealed class IinactAdapter : IParserEngine
         {
             TerritoryId = getTerritoryId(),
         };
+        if (finished)
+        {
+            encounter = CaptureFflogsEstimatesSafely(encounter);
+        }
         var boundByDuty = isBoundByDuty();
         if (boundByDuty)
         {
@@ -347,8 +354,22 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
+        completed = CaptureFflogsEstimatesSafely(completed);
         stateStore.UpdateCurrent(completed);
         encounterService.QueueFinishedEncounter(completed);
+    }
+
+    private Encounter CaptureFflogsEstimatesSafely(Encounter encounter)
+    {
+        try
+        {
+            return captureFflogsEstimates(encounter);
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"FFLogs estimate capture failed; saving encounter without it: {ex.Message}");
+            return encounter;
+        }
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)

@@ -136,8 +136,65 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             : GetEstimateCore(encounter, combatant);
     }
 
+    public Encounter CaptureAvailableEstimates(Encounter encounter)
+    {
+        var settings = GetSettingsSnapshot();
+        if (!HasApiAccess(settings))
+        {
+            return encounter;
+        }
+
+        var rankingEncounter = encounter.FflogsRankingEncounter ?? encounter;
+        if (rankingEncounter.EffectiveDuration.TotalSeconds < 15)
+        {
+            return encounter;
+        }
+
+        var changed = false;
+        var combatants = encounter.Combatants
+            .Select(combatant =>
+            {
+                var rankingCombatant = ResolveRankingCombatant(
+                    rankingEncounter,
+                    combatant.Id,
+                    combatant.Name);
+                if (rankingCombatant is null)
+                {
+                    return combatant;
+                }
+
+                var estimate = GetPersistedEstimate(rankingCombatant) ??
+                               TryGetCachedEstimate(
+                                   rankingEncounter,
+                                   rankingCombatant,
+                                   settings,
+                                   updateStatus: false);
+                if (estimate is null)
+                {
+                    return combatant;
+                }
+
+                changed = true;
+                return combatant with
+                {
+                    FflogsPercentile = estimate.Percentile,
+                    FflogsEncounterName = estimate.EncounterName,
+                };
+            })
+            .ToArray();
+
+        return changed
+            ? encounter with { Combatants = combatants }
+            : encounter;
+    }
+
     private FflogsEstimate? GetEstimateCore(Encounter encounter, Combatant combatant)
     {
+        if (!encounter.IsActive)
+        {
+            return GetPersistedEstimate(combatant);
+        }
+
         var settings = GetSettingsSnapshot();
         if (!CanUseApi(settings))
         {
@@ -150,33 +207,82 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             return null;
         }
 
-        var activeEncounter = ActiveEncounter;
-        var specName = ToFflogsSpecName(combatant.Job);
-        if (activeEncounter is not null)
+        var estimate = TryGetCachedEstimate(
+            encounter,
+            combatant,
+            settings,
+            updateStatus: true);
+        if (estimate is not null)
         {
-            var key = CurveKey(activeEncounter.EncounterId, activeEncounter.Difficulty, specName);
-            FflogsCurveCacheEntry? curve;
-            lock (cacheLock)
-            {
-                curves.TryGetValue(key, out curve);
-            }
-
-            if (curve is not null && !IsExpired(curve.FetchedAt, settings.CacheHours))
-            {
-                var encounterDps = combatant.EncDps > 0
-                    ? combatant.EncDps
-                    : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
-                var percentile = EstimatePercentile(curve.Points, encounterDps);
-                SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
-                return new FflogsEstimate(
-                    percentile,
-                    ColorForPercentile(percentile),
-                    curve.EncounterName);
-            }
+            return estimate;
         }
 
-        QueueCurveLoad(specName);
+        QueueCurveLoad(ToFflogsSpecName(combatant.Job));
         return null;
+    }
+
+    internal static FflogsEstimate? GetPersistedEstimate(Combatant combatant)
+    {
+        if (combatant.FflogsPercentile is not { } percentile ||
+            !double.IsFinite(percentile) ||
+            percentile < 0 ||
+            percentile > 100 ||
+            string.IsNullOrWhiteSpace(combatant.FflogsEncounterName))
+        {
+            return null;
+        }
+
+        return new FflogsEstimate(
+            percentile,
+            ColorForPercentile(percentile),
+            combatant.FflogsEncounterName);
+    }
+
+    private FflogsEstimate? TryGetCachedEstimate(
+        Encounter encounter,
+        Combatant combatant,
+        FflogsSettings settings,
+        bool updateStatus)
+    {
+        if (string.IsNullOrWhiteSpace(combatant.Job) ||
+            encounter.EffectiveDuration.TotalSeconds < 15)
+        {
+            return null;
+        }
+
+        var activeEncounter = ActiveEncounter;
+        if (activeEncounter is null)
+        {
+            return null;
+        }
+
+        var specName = ToFflogsSpecName(combatant.Job);
+        var key = CurveKey(activeEncounter.EncounterId, activeEncounter.Difficulty, specName);
+        FflogsCurveCacheEntry? curve;
+        lock (cacheLock)
+        {
+            curves.TryGetValue(key, out curve);
+        }
+
+        if (curve is null || IsExpired(curve.FetchedAt, settings.CacheHours))
+        {
+            return null;
+        }
+
+        var encounterDps = combatant.EncDps > 0
+            ? combatant.EncDps
+            : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+        var percentile = EstimatePercentile(curve.Points, encounterDps);
+        if (updateStatus)
+        {
+            SetStatus(
+                FflogsEstimateState.Ready,
+                $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
+        }
+        return new FflogsEstimate(
+            percentile,
+            ColorForPercentile(percentile),
+            curve.EncounterName);
     }
 
     public void RequestRefresh(Encounter? encounter)
@@ -370,6 +476,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
         return true;
     }
+
+    private static bool HasApiAccess(FflogsSettings settings)
+        => settings.Enabled &&
+           !string.IsNullOrWhiteSpace(settings.ClientId) &&
+           !string.IsNullOrWhiteSpace(settings.ClientSecret);
 
     public static Vector4 ColorForPercentile(double percentile)
     {

@@ -5,6 +5,7 @@ using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
+using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Plugin;
@@ -424,6 +425,14 @@ public sealed class EncounterWindow : Window
         }
         drawList.AddText(start + new Vector2(10, 8), ImGui.GetColorU32(selected ? IceBlue : Vector4.One), TrimToWidth(EncounterTitle(encounter), width - 20));
         var detail = $"{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(encounter.EffectiveDuration)}  ·  {encounter.TotalDeaths} {text.Get("死亡", "KO")}";
+        var localEstimate = encounter.Combatants
+            .Where(static combatant => combatant.IsLocalPlayer)
+            .Select(FflogsEstimateService.GetPersistedEstimate)
+            .FirstOrDefault(static estimate => estimate is not null);
+        if (localEstimate is not null)
+        {
+            detail += $"  ·  FFLogs ~{localEstimate.Score}";
+        }
         drawList.AddText(start + new Vector2(10, 32), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), TrimToWidth(detail, width - 20));
         ImGui.PopID();
         return clicked;
@@ -507,6 +516,14 @@ public sealed class EncounterWindow : Window
             right -= gap;
         }
 
+        var fflogsEstimate = MeterSortModeOptions.Normalize(configuration.Meter.SortMode) == MeterSortMode.Dps
+            ? FflogsEstimateService.GetPersistedEstimate(combatant)
+            : null;
+        if (fflogsEstimate is not null)
+        {
+            DrawRight($"FFLogs ~{fflogsEstimate.Score}", fflogsEstimate.Color);
+        }
+
         DrawRight(text.Get($"死亡 {combatant.Deaths}", $"KO {combatant.Deaths}"), new Vector4(0.78f, 0.80f, 0.84f, 1));
         DrawRight($"{performance.Percent:N1}%", new Vector4(0.72f, 0.78f, 0.84f, 1));
         DrawRight($"{(MeterSortModeOptions.Normalize(configuration.Meter.SortMode) == MeterSortMode.Hps ? "HPS" : DpsRateLabel())} {performance.Rate:N0}", MeterWindow.PrimaryRateColor(combatant.IsLocalPlayer));
@@ -519,6 +536,12 @@ public sealed class EncounterWindow : Window
             new Vector2(x, lineY),
             ImGui.GetColorU32(combatant.IsLocalPlayer || isLimitBreak ? Gold : Vector4.One),
             TrimToWidth(name, Math.Max(20, right - x - 6)));
+        if (hovered && fflogsEstimate is not null)
+        {
+            ImGui.SetTooltip(text.Get(
+                $"FFLogs 公开排名样本估算：{fflogsEstimate.Score}（{fflogsEstimate.EncounterName}，非官方实时成绩）",
+                $"FFLogs public-ranking estimate: {fflogsEstimate.Score} ({fflogsEstimate.EncounterName}; not an official live parse)"));
+        }
     }
 
     private float DrawJob(

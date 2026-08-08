@@ -165,6 +165,14 @@ public sealed class Plugin : IDalamudPlugin
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger, paths);
+        zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
+        fflogsEstimateService = new FflogsEstimateService(
+            () => configuration.Fflogs,
+            paths.FflogsCacheFile,
+            logger);
+        fflogsEstimateService.NotifyTerritoryChanged(
+            clientState.TerritoryType,
+            zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
         actRuntime = new SelfHostedActRuntime(
             pluginInterface,
             log,
@@ -218,16 +226,9 @@ public sealed class Plugin : IDalamudPlugin
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
-            DiscoverRuntimePlugins));
+            DiscoverRuntimePlugins,
+            fflogsEstimateService.CaptureAvailableEstimates));
         var meterService = new MeterService(stateStore, configuration.Meter);
-        zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
-        fflogsEstimateService = new FflogsEstimateService(
-            () => configuration.Fflogs,
-            paths.FflogsCacheFile,
-            logger);
-        fflogsEstimateService.NotifyTerritoryChanged(
-            clientState.TerritoryType,
-            zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
 
         _ = new OverlayManager(new OverlayEventBus());
 
@@ -339,6 +340,7 @@ public sealed class Plugin : IDalamudPlugin
             thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
+            OpenCombatLogDirectory,
             BuildDiagnosticReport,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
@@ -1196,6 +1198,16 @@ public sealed class Plugin : IDalamudPlugin
         {
             logger.Error(ex, "Failed to open the log directory.");
         }
+    }
+
+    private string OpenCombatLogDirectory()
+    {
+        Directory.CreateDirectory(paths.CombatLogDirectory);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.CombatLogDirectory)
+        {
+            UseShellExecute = true,
+        });
+        return paths.CombatLogDirectory;
     }
 
     private string BuildDiagnosticReport()

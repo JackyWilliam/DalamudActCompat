@@ -80,6 +80,7 @@ try
     ValidateControlCenterPresentation();
     ValidateDiagnosticReport(testRoot);
     ValidateFflogsEstimateCurve();
+    await ValidateFflogsPersistenceAsync(testRoot);
     ValidateFflogsCurrentEncounterTable();
     ValidateFflogsConcurrencyBoundaries();
     await ValidateFflogsCacheWritersAsync(testRoot);
@@ -1006,6 +1007,94 @@ static void ValidateFflogsEstimateCurve()
         "FFLogs did not deduplicate party jobs or resolve estimates for non-local players.");
 }
 
+static async Task ValidateFflogsPersistenceAsync(string testRoot)
+{
+    var cachePath = Path.Combine(testRoot, "fflogs-persistence", "fflogs-cache.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+    await File.WriteAllTextAsync(
+        cachePath,
+        JsonSerializer.Serialize(new FflogsCacheDocument(
+            DateTimeOffset.UtcNow,
+            [new FflogsEncounterCatalogEntry(104, "Lindwurm", "AAC Heavyweight", false)],
+            [new FflogsCurveCacheEntry(
+                104,
+                "Lindwurm",
+                "Paladin",
+                DateTimeOffset.UtcNow,
+                [new FflogsCurvePoint(0, 1_000), new FflogsCurvePoint(100, 3_000)],
+                101)])));
+
+    var settings = new FflogsSettings
+    {
+        ClientId = "client",
+        ClientSecret = "secret",
+    };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var service = new FflogsEstimateService(
+        () => settings,
+        cachePath,
+        new PluginLogger(log));
+    service.NotifyTerritoryChanged(1327, "AAC Heavyweight M4 (Savage)");
+    settings.Enabled = true;
+
+    var end = DateTimeOffset.UtcNow;
+    var encounter = new Encounter(
+        Guid.NewGuid(),
+        end.AddSeconds(-30),
+        end,
+        "AAC Heavyweight M4 (Savage)",
+        "Lindwurm",
+        [new Combatant(
+            "local", "Player", "PLD", true, 60_000, 0, 0,
+            Dps: 2_000,
+            EncDps: 2_000,
+            ExtDps: 2_000)],
+        [],
+        [],
+        [],
+        [],
+        [])
+    {
+        TerritoryId = 1327,
+        CombatDuration = TimeSpan.FromSeconds(30),
+    };
+
+    var captured = service.CaptureAvailableEstimates(encounter);
+    var capturedCombatant = captured.Combatants.Single();
+    Assert(
+        capturedCombatant.FflogsPercentile == 50 &&
+        capturedCombatant.FflogsEncounterName == "Lindwurm",
+        "An FFLogs estimate already visible at encounter end was not captured for history.");
+
+    var dutyFinalizedFromAnActiveBoss = service.CaptureAvailableEstimates(encounter with
+    {
+        Combatants = [encounter.Combatants[0]],
+        FflogsRankingEncounter = encounter with { EndTime = null },
+    });
+    Assert(
+        dutyFinalizedFromAnActiveBoss.Combatants[0].FflogsPercentile == 50,
+        "Leaving a duty during an active boss did not capture the available FFLogs estimate.");
+
+    var restored = JsonSerializer.Deserialize<Encounter>(JsonSerializer.Serialize(captured))
+                   ?? throw new InvalidOperationException(
+                       "The encounter containing a captured FFLogs estimate could not be restored.");
+    settings.Enabled = false;
+    var historicalEstimate = service.GetEstimate(restored, "local", "Player");
+    Assert(
+        historicalEstimate is { Score: 50, EncounterName: "Lindwurm" },
+        "A captured FFLogs estimate did not survive JSON history or later setting changes.");
+
+    settings.Enabled = true;
+    var unavailable = service.CaptureAvailableEstimates(encounter with
+    {
+        Combatants = [encounter.Combatants[0] with { Job = "WAR" }],
+    });
+    Assert(
+        unavailable.Combatants[0].FflogsPercentile is null &&
+        service.Status.State != FflogsEstimateState.Loading,
+        "Encounter finalization queued a new FFLogs request instead of capturing only an available estimate.");
+}
+
 static void ValidateFflogsCurrentEncounterTable()
 {
     var tableType = typeof(FflogsEstimateService).Assembly.GetType(
@@ -1115,6 +1204,17 @@ static void ValidateDutyEncounterAggregation()
         damageHits: 10,
         criticalHits: 3,
         criticalDirectHits: 1);
+    first = first with
+    {
+        Combatants =
+        [
+            first.Combatants[0] with
+            {
+                FflogsPercentile = 40,
+                FflogsEncounterName = "Boss A",
+            },
+        ],
+    };
     var afterFirst = accumulator.Update(first, finished: true, start.AddMinutes(2));
     Assert(
         afterFirst.IsActive && afterFirst.TotalDamage == 100,
@@ -1169,6 +1269,8 @@ static void ValidateDutyEncounterAggregation()
                 DamageHits = 8,
                 CriticalHits = 2,
                 CriticalDirectHits = 1,
+                FflogsPercentile = 75,
+                FflogsEncounterName = "Boss B",
             },
         ],
     };
@@ -1194,6 +1296,10 @@ static void ValidateDutyEncounterAggregation()
         completed.FflogsRankingEncounter?.Id == secondId &&
         completed.FflogsRankingEncounter.TotalDamage == 80,
         "The completed duty did not retain its latest boss segment for FFLogs estimation.");
+    Assert(
+        completed.Combatants[0].FflogsPercentile == 75 &&
+        completed.Combatants[0].FflogsEncounterName == "Boss B",
+        "Duty history did not retain the latest completed boss's FFLogs estimate.");
 
     var serialized = JsonSerializer.Serialize(completed);
     var restored = JsonSerializer.Deserialize<Encounter>(serialized)
@@ -1202,7 +1308,9 @@ static void ValidateDutyEncounterAggregation()
     Assert(
         restored.CombatDuration == TimeSpan.FromMinutes(4) &&
         restored.EffectiveDuration == TimeSpan.FromMinutes(4) &&
-        restored.TerritoryId == 777,
+        restored.TerritoryId == 777 &&
+        restored.Combatants[0].FflogsPercentile == 75 &&
+        restored.Combatants[0].FflogsEncounterName == "Boss B",
         "The accumulated active-combat duration or Territory ID was not preserved in encounter history.");
 }
 
@@ -1419,12 +1527,16 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
-            parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)),
-        "The home/settings labels, guarded factory-reset action, or diagnostic copy action are missing from the settings UI.");
+            parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
+        typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
+        "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -1442,9 +1554,11 @@ static void ValidateControlCenterPresentation()
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
+        historySource.Contains("FflogsEstimateService.GetPersistedEstimate", StringComparison.Ordinal) &&
+        historySource.Contains("FFLogs ~", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
-        "Combat History does not use the rounded branded frame and shared navigation rail.");
+        "Combat History lost its branded frame, navigation rail, or saved FFLogs display.");
     var chromeSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "BrandedWindowChrome.cs"));
     Assert(
@@ -4109,8 +4223,15 @@ static void ValidateActEncounterMapping()
         }
         """);
     Assert(
-        legacyCombatant is { DamageHits: 0, CriticalHits: 0, CriticalDirectHits: 0 },
-        "Legacy combatant JSON without hit-count fields is no longer compatible.");
+        legacyCombatant is
+        {
+            DamageHits: 0,
+            CriticalHits: 0,
+            CriticalDirectHits: 0,
+            FflogsPercentile: null,
+            FflogsEncounterName: null,
+        },
+        "Legacy combatant JSON without hit-count or FFLogs fields is no longer compatible.");
 }
 
 static void ValidateChineseCombatChatParsing()
@@ -4137,10 +4258,25 @@ static void ValidateChineseCombatChatParsing()
             actor,
             out var inheritedActor,
             out target,
-            out damage),
+            out damage,
+            out var isCritical,
+            out var isDirectHit),
         "Chinese ability damage chat was not parsed.");
-    Assert(inheritedActor == actor && target == "木人" && damage == 39870,
+    Assert(
+        inheritedActor == actor && target == "木人" && damage == 39870 &&
+        isCritical && !isDirectHit,
         "Chinese ability damage fields were mapped incorrectly.");
+    Assert(
+        ChineseCombatChatParser.TryParse(
+            "  \uE06F 直击加暴击！ 木人受到了23175点伤害。",
+            actor,
+            out _,
+            out target,
+            out damage,
+            out isCritical,
+            out isDirectHit) &&
+        target == "木人" && damage == 23175 && isCritical && isDirectHit,
+        "Chinese critical-direct damage did not retain both hit flags.");
 
     var context = new ChineseCombatChatContext();
     var observedAt = DateTimeOffset.UtcNow;
@@ -4232,6 +4368,10 @@ static void ValidateDiagnosticReport(string testRoot)
         "pluginConfigs",
         "DalamudActCompat"));
     paths.EnsureCreated();
+    Assert(
+        paths.CombatLogDirectory == Path.Combine(paths.LogDirectory, "ffxiv") &&
+        Directory.Exists(paths.CombatLogDirectory),
+        "The FFLogs upload shortcut does not target the raw FFXIV Network log directory.");
     File.WriteAllLines(
         Path.Combine(launcherRoot, "dalamud.log"),
         [
