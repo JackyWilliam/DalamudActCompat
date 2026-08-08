@@ -11,6 +11,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
@@ -41,6 +42,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterWindow encounterWindow;
     private readonly ControlCenterWindow settingsWindow;
     private readonly SettingsWindow advancedSettingsWindow;
@@ -163,6 +165,14 @@ public sealed class Plugin : IDalamudPlugin
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
         encounterService = new EncounterService(repository, stateStore, configuration, logger, paths);
+        zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
+        fflogsEstimateService = new FflogsEstimateService(
+            () => configuration.Fflogs,
+            paths.FflogsCacheFile,
+            logger);
+        fflogsEstimateService.NotifyTerritoryChanged(
+            clientState.TerritoryType,
+            zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
         actRuntime = new SelfHostedActRuntime(
             pluginInterface,
             log,
@@ -212,16 +222,13 @@ public sealed class Plugin : IDalamudPlugin
             encounterService,
             paths.CombatLogDirectory,
             framework,
+            () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
-            DiscoverRuntimePlugins));
+            DiscoverRuntimePlugins,
+            fflogsEstimateService.CaptureAvailableEstimates));
         var meterService = new MeterService(stateStore, configuration.Meter);
-        fflogsEstimateService = new FflogsEstimateService(
-            () => configuration.Fflogs,
-            paths.FflogsCacheFile,
-            dataManager,
-            logger);
 
         _ = new OverlayManager(new OverlayEventBus());
 
@@ -236,13 +243,18 @@ public sealed class Plugin : IDalamudPlugin
         var jobIcons = new JobIconTextureSet(
             textureProvider,
             Path.Combine(assetDirectory, "JobIcons"));
-        var zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
+        var runningStatusIcon = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "StatusIcons", "CombatRunning.png"));
+        var endedStatusIcon = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "StatusIcons", "CombatEnded.png"));
         meterWindow = new MeterWindow(
             meterService,
             fflogsEstimateService,
             configuration,
             text,
             jobIcons,
+            runningStatusIcon,
+            endedStatusIcon,
             zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
@@ -253,6 +265,7 @@ public sealed class Plugin : IDalamudPlugin
             text,
             jobIcons,
             logoTexture,
+            zoneNameLocalizer.Localize,
             SaveConfiguration);
         factoryResetService = new FactoryResetService(
             parserEngine,
@@ -327,6 +340,8 @@ public sealed class Plugin : IDalamudPlugin
             thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
+            OpenCombatLogDirectory,
+            BuildDiagnosticReport,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
             () => cactbotInstaller.IsInstalled,
@@ -1185,6 +1200,46 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private string OpenCombatLogDirectory()
+    {
+        Directory.CreateDirectory(paths.CombatLogDirectory);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.CombatLogDirectory)
+        {
+            UseShellExecute = true,
+        });
+        return paths.CombatLogDirectory;
+    }
+
+    private string BuildDiagnosticReport()
+    {
+        IReadOnlyList<InstalledActPlugin> installedPlugins;
+        string? discoveryError = null;
+        try
+        {
+            installedPlugins = packageInstaller.Discover(configuration.DisabledActPluginIds);
+        }
+        catch (Exception ex)
+        {
+            installedPlugins = [];
+            discoveryError = ex.GetType().Name;
+        }
+
+        return DiagnosticReportBuilder.Build(
+            paths,
+            new DiagnosticReportSnapshot(
+                typeof(Plugin).Assembly.GetName().Version?.ToString(4) ?? "unknown",
+                typeof(IDalamudPluginInterface).Assembly.GetName().Version?.ToString() ?? "unknown",
+                parserEngine.Status,
+                hostSupervisor.Snapshot,
+                configuration.EnableParsing,
+                configuration.DebugMode,
+                configuration.Fflogs.Enabled,
+                configuration.Meter.SortMode,
+                configuration.Meter.CompactMode,
+                installedPlugins,
+                discoveryError));
+    }
+
     private void ConfigureBundledPluginPermissions(bool enableFullFunctionality)
     {
         foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.All)
@@ -1536,10 +1591,21 @@ public sealed class Plugin : IDalamudPlugin
         string rawLine,
         string actLine,
         bool isImport)
-        => hostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
+    {
+        if (!isImport)
+        {
+            fflogsEstimateService.ObserveLogLine(actLine);
+        }
+        hostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
+    }
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
-        => hostSupervisor.PublishZone(territoryId, zoneName);
+    {
+        fflogsEstimateService.NotifyTerritoryChanged(
+            territoryId,
+            zoneNameLocalizer.Localize(territoryId, zoneName));
+        hostSupervisor.PublishZone(territoryId, zoneName);
+    }
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
         => hostSupervisor.PublishEncounter(finished);

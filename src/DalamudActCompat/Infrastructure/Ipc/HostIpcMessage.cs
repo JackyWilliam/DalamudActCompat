@@ -14,7 +14,10 @@ internal sealed record HostEncounterDto(
     DateTimeOffset? EndTime,
     string ZoneName,
     string EnemyName,
-    IReadOnlyList<HostCombatantDto> Combatants);
+    IReadOnlyList<HostCombatantDto> Combatants)
+{
+    public uint? TerritoryId { get; init; }
+}
 
 internal sealed record HostCombatantDto(
     string Id,
@@ -72,6 +75,9 @@ internal static class HostIpcMapper
             Array.Empty<HealEvent>(),
             Array.Empty<DeathEvent>(),
             Array.Empty<ActionSummary>(),
-            jobSummaries);
+            jobSummaries)
+        {
+            TerritoryId = source.TerritoryId,
+        };
     }
 }

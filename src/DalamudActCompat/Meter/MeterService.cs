@@ -18,15 +18,22 @@ public sealed class MeterService
         this.settings = settings;
     }
 
-    public EncounterSnapshot Snapshot => stateStore.GetSnapshot();
+    public Encounter? DisplayEncounter => stateStore.GetDisplayEncounter();
 
     public IReadOnlyList<CombatantRow> GetRows()
     {
-        var encounter = Snapshot.Current;
+        var encounter = DisplayEncounter;
         if (encounter is null)
         {
             return Array.Empty<CombatantRow>();
         }
+
+        return GetRows(encounter);
+    }
+
+    public IReadOnlyList<CombatantRow> GetRows(Encounter encounter)
+    {
+        ArgumentNullException.ThrowIfNull(encounter);
 
         lock (cacheLock)
         {
@@ -45,7 +52,7 @@ public sealed class MeterService
 
     private IReadOnlyList<CombatantRow> BuildRows(Encounter encounter)
     {
-        var duration = Math.Max(1.0, encounter.Duration.TotalSeconds);
+        var duration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
         var rows = encounter.Combatants.Select(combatant => new CombatantRow(
             combatant.Id,
@@ -61,12 +68,38 @@ public sealed class MeterService
             CalculateHitRate(combatant.CriticalDirectHits, combatant.DamageHits),
             combatant.Deaths));
 
-        return MeterSortModeOptions.Normalize(settings.SortMode) switch
+        var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
         {
-            MeterSortMode.Hps => rows.OrderByDescending(static row => row.Hps).ToArray(),
-            _ => rows.OrderByDescending(static row => row.Dps).ToArray(),
+            MeterSortMode.Hps => rows
+                .OrderBy(static row => IsLimitBreak(row.Id, row.Name))
+                .ThenByDescending(static row => row.Hps),
+            _ => rows
+                .OrderBy(static row => IsLimitBreak(row.Id, row.Name))
+                .ThenByDescending(static row => row.Dps),
         };
+
+        var playerRank = 0;
+        var ranked = new List<CombatantRow>();
+        foreach (var row in ordered)
+        {
+            ranked.Add(row with
+            {
+                Rank = NextPlayerRank(IsLimitBreak(row.Id, row.Name), ref playerRank),
+            });
+        }
+
+        return ranked;
     }
+
+    internal static bool IsLimitBreak(Combatant combatant)
+        => IsLimitBreak(combatant.Id, combatant.Name);
+
+    internal static bool IsLimitBreak(string id, string name)
+        => string.Equals(id, "Limit Break", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(name, "Limit Break", StringComparison.OrdinalIgnoreCase);
+
+    internal static int? NextPlayerRank(bool isLimitBreak, ref int playerRank)
+        => isLimitBreak ? null : ++playerRank;
 
     private double ResolveDps(Combatant combatant, double encounterDuration)
         => settings.DpsMetric switch
@@ -95,4 +128,5 @@ public sealed record CombatantRow(
     double DamagePercent,
     double? CriticalHitPercent,
     double? CriticalDirectHitPercent,
-    int Deaths);
+    int Deaths,
+    int? Rank = null);

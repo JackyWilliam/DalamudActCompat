@@ -64,6 +64,8 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openBundledPluginNotice;
     private readonly Action checkBundledPluginUpdates;
     private readonly Action openLogDirectory;
+    private readonly Func<string> openCombatLogDirectory;
+    private readonly Func<string> buildDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
     private readonly Func<bool> isCactbotInstalled;
@@ -85,8 +87,10 @@ public sealed class ControlCenterWindow : Window
     private string customOverlayUrl = string.Empty;
     private string? customOverlayFeedback;
     private bool customOverlayFeedbackIsError;
-    private string? fflogsEncounterInputKey;
-    private int fflogsEncounterIdInput;
+    private string? diagnosticCopyFeedback;
+    private bool diagnosticCopyFeedbackIsError;
+    private string? combatLogFolderFeedback;
+    private bool combatLogFolderFeedbackIsError;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
@@ -114,6 +118,8 @@ public sealed class ControlCenterWindow : Window
         Action openBundledPluginNotice,
         Action checkBundledPluginUpdates,
         Action openLogDirectory,
+        Func<string> openCombatLogDirectory,
+        Func<string> buildDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
         Func<bool> isCactbotInstalled,
@@ -149,6 +155,8 @@ public sealed class ControlCenterWindow : Window
         this.openBundledPluginNotice = openBundledPluginNotice;
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
         this.openLogDirectory = openLogDirectory;
+        this.openCombatLogDirectory = openCombatLogDirectory;
+        this.buildDiagnosticReport = buildDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
         this.isCactbotInstalled = isCactbotInstalled;
@@ -381,7 +389,7 @@ public sealed class ControlCenterWindow : Window
         BrandedWindowChrome.EndGoldCard();
 
         ImGui.Spacing();
-        if (BrandedWindowChrome.BeginGoldCard("overview-quick-actions-card", 90))
+        if (BrandedWindowChrome.BeginGoldCard("overview-quick-actions-card", 140))
         {
             ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
             var meterVisible = configuration.Meter.IsVisible;
@@ -408,6 +416,28 @@ public sealed class ControlCenterWindow : Window
             }
             ImGui.SameLine();
             DrawStatusWindowToggleButton(new Vector2(150, 36));
+
+            if (ImGui.Button(
+                    text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs"),
+                    new Vector2(230, 36)))
+            {
+                OpenCombatLogDirectoryForUpload();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "打开 FFLogs 上传使用的原始 Network 日志目录，并把文件夹路径复制到剪贴板。",
+                    "Opens the raw Network log directory used for FFLogs uploads and copies its folder path to the clipboard."));
+            }
+            if (!string.IsNullOrWhiteSpace(combatLogFolderFeedback))
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(
+                    combatLogFolderFeedbackIsError
+                        ? new Vector4(0.95f, 0.45f, 0.40f, 1)
+                        : IceBlue,
+                    combatLogFolderFeedback);
+            }
         }
         BrandedWindowChrome.EndGoldCard();
 
@@ -434,6 +464,28 @@ public sealed class ControlCenterWindow : Window
         }
         BrandedWindowChrome.EndGoldCard();
         return changed;
+    }
+
+    private void OpenCombatLogDirectoryForUpload()
+    {
+        try
+        {
+            var directory = openCombatLogDirectory();
+            ImGui.SetClipboardText(directory);
+            combatLogFolderFeedback = text.Get(
+                "已打开，文件夹路径已复制",
+                "Opened; folder path copied");
+            combatLogFolderFeedbackIsError = false;
+            logger.Information("FFLogs upload log directory opened and its path copied to the clipboard.");
+        }
+        catch (Exception ex)
+        {
+            combatLogFolderFeedback = text.Get(
+                "打开或复制失败",
+                "Open or copy failed");
+            combatLogFolderFeedbackIsError = true;
+            logger.Error(ex, "Failed to open or copy the FFLogs upload log directory.");
+        }
     }
 
     private bool DrawMeter()
@@ -513,6 +565,10 @@ public sealed class ControlCenterWindow : Window
             changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
             ImGui.SameLine();
             changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+            changed |= Checkbox(
+                text.Get("收起（只显示自己）", "Collapsed (self only)"),
+                configuration.Meter.CompactMode,
+                value => configuration.Meter.CompactMode = value);
             if (configuration.Meter.ShowJob)
             {
                 var jobStyle = configuration.Meter.JobDisplayStyle;
@@ -1061,14 +1117,34 @@ public sealed class ControlCenterWindow : Window
         ImGui.SameLine();
         DrawStatusWindowToggleButton(Vector2.Zero, detailedLabel: true);
         ImGui.SameLine();
+        if (ImGui.Button(text.Get("三方扩展声明", "Third-party extension notice")))
+        {
+            openBundledPluginNotice();
+        }
+
+        if (ImGui.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
+        {
+            CopyDiagnosticReport();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(text.Get(
+                "复制本插件相关的运行状态与近期日志；不复制战斗日志和配置文件，并会遮盖用户路径与常见凭据。原始战斗数据问题可使用右侧按钮打开日志文件夹。",
+                "Copies recent plugin diagnostics and runtime state. Combat logs and configuration files are excluded, and user paths and common credentials are redacted. For raw combat-data issues, use the button on the right to open the log folder."));
+        }
+        ImGui.SameLine();
         if (ImGui.Button(text.Get("打开日志文件夹", "Open log folder")))
         {
             openLogDirectory();
         }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("三方扩展声明", "Third-party extension notice")))
+
+        if (!string.IsNullOrWhiteSpace(diagnosticCopyFeedback))
         {
-            openBundledPluginNotice();
+            ImGui.TextColored(
+                diagnosticCopyFeedbackIsError
+                    ? new Vector4(0.95f, 0.45f, 0.40f, 1)
+                    : IceBlue,
+                diagnosticCopyFeedback);
         }
 
         ImGui.Spacing();
@@ -1151,6 +1227,28 @@ public sealed class ControlCenterWindow : Window
                 $"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {factoryResetResult}");
         }
         return changed;
+    }
+
+    private void CopyDiagnosticReport()
+    {
+        try
+        {
+            var report = buildDiagnosticReport();
+            ImGui.SetClipboardText(report);
+            diagnosticCopyFeedback = text.Get(
+                $"已复制诊断日志（{report.Length:N0} 字符），可直接粘贴到问题反馈。",
+                $"Diagnostic log copied ({report.Length:N0} characters); paste it into the issue report.");
+            diagnosticCopyFeedbackIsError = false;
+            logger.Information("Bounded diagnostic report copied to the clipboard.");
+        }
+        catch (Exception ex)
+        {
+            diagnosticCopyFeedback = text.Get(
+                "复制失败，请改用“打开日志文件夹”。",
+                "Copy failed; use Open log folder instead.");
+            diagnosticCopyFeedbackIsError = true;
+            logger.Error(ex, "Failed to copy the diagnostic report.");
+        }
     }
 
     private bool DrawOverlayWindowSettings(string name)
@@ -1430,7 +1528,8 @@ public sealed class ControlCenterWindow : Window
             var status = fflogsEstimateService.Status;
             ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
             var statusDetail = status.State is
-                FflogsEstimateState.Error or FflogsEstimateState.EncounterNotMatched
+                FflogsEstimateState.Error or
+                FflogsEstimateState.InactiveContent
                 ? status.Message
                 : string.Empty;
             var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 2.4f;
@@ -1450,61 +1549,41 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.Spacing();
-        var currentEncounter = getCurrentEncounter();
-        var encounter = currentEncounter?.FflogsRankingEncounter ?? currentEncounter;
         if (ImGui.BeginTable(
-                "fflogs-encounter-binding-card",
+                "fflogs-automatic-encounter-card",
                 1,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableNextColumn();
-            ImGui.TextColored(IceBlue, text.Get("当前战斗绑定", "Current encounter binding"));
+            ImGui.TextColored(IceBlue, text.Get("当前副本自动识别", "Automatic duty matching"));
             ImGui.TextDisabled(text.Get(
-                "仅在自动匹配失败时，手动把当前首领绑定到 FFLogs Encounter ID。",
-                "Only bind the current boss to an FFLogs encounter ID when automatic matching fails."));
+                "进入副本后按游戏 Territory ID 自动匹配；只会访问当前开放的 FFLogs 榜单。",
+                "Matches by the game's Territory ID on duty entry and only accesses the current FFLogs ranking tier."));
 
-            if (encounter is not null && !string.IsNullOrWhiteSpace(encounter.EnemyName))
+            var activeEncounter = fflogsEstimateService.ActiveEncounter;
+            if (activeEncounter is not null)
             {
-                var mappings = configuration.Fflogs.EncounterMappings ?? [];
-                if (!string.Equals(fflogsEncounterInputKey, encounter.EnemyName, StringComparison.Ordinal))
+                ImGui.TextDisabled(
+                    $"Territory {activeEncounter.TerritoryId}  ·  " +
+                    $"{activeEncounter.EncounterName}  ·  " +
+                    $"FFLogs #{activeEncounter.EncounterId}  ·  " +
+                    $"{(activeEncounter.Difficulty == 101 ? "Savage" : "Normal")}");
+                if (activeEncounter.Phase > 1)
                 {
-                    fflogsEncounterInputKey = encounter.EnemyName;
-                    fflogsEncounterIdInput = mappings.TryGetValue(encounter.EnemyName, out var mappedId)
-                        ? mappedId
-                        : 0;
-                }
-
-                ImGui.TextDisabled($"{text.Get("当前首领", "Current boss")}: {encounter.EnemyName}");
-                if (ImGui.InputInt(text.Get("FFLogs Encounter ID", "FFLogs encounter ID"), ref fflogsEncounterIdInput))
-                {
-                    fflogsEncounterIdInput = Math.Max(0, fflogsEncounterIdInput);
-                }
-                if (ImGui.Button(text.Get("绑定当前战斗", "Bind current encounter")) && fflogsEncounterIdInput > 0)
-                {
-                    UpdateFflogsSettings(settings =>
-                        settings.EncounterMappings[encounter.EnemyName] = fflogsEncounterIdInput);
-                    fflogsEstimateService.RequestRefresh(encounter);
-                    changed = true;
-                }
-                ImGui.SameLine();
-                if (ImGui.Button(text.Get("清除绑定", "Clear binding")) &&
-                    mappings.ContainsKey(encounter.EnemyName))
-                {
-                    UpdateFflogsSettings(settings =>
-                        settings.EncounterMappings.Remove(encounter.EnemyName));
-                    fflogsEncounterIdInput = 0;
-                    changed = true;
+                    ImGui.TextColored(
+                        IceBlue,
+                        text.Get("已自动切换至第二阶段榜单", "Automatically switched to the phase-two ranking"));
                 }
             }
             else
             {
                 ImGui.TextDisabled(text.Get(
-                    "当前没有可绑定的战斗。开始战斗后，这里会显示首领名称。",
-                    "There is no encounter to bind. The boss name appears here after combat starts."));
+                    "当前不在最新团队副本榜单中，不会加载历史榜单。",
+                    "The current territory is outside the latest raid tier; historical rankings will not be loaded."));
             }
             ImGui.TextDisabled(text.Get(
-                "自动匹配失败时，可从 FFLogs 对应首领页面 URL 中填写 Encounter ID。",
-                "If automatic matching fails, enter the encounter ID from the matching FFLogs boss page URL."));
+                "榜单换季时只需更新内置副本表，不依赖国服客户端返回英文 Boss 名。",
+                "Tier rollovers only require updating the built-in duty table; English boss names are not required from the CN client."));
             ImGui.EndTable();
         }
 
@@ -1542,7 +1621,7 @@ public sealed class ControlCenterWindow : Window
         FflogsEstimateState.Idle => text.Get("状态：等待测试或战斗数据", "Status: waiting for a test or encounter data"),
         FflogsEstimateState.Loading => text.Get("状态：正在连接 FFLogs…", "Status: connecting to FFLogs…"),
         FflogsEstimateState.Ready => text.Get("状态：估算数据已就绪", "Status: estimate data ready"),
-        FflogsEstimateState.EncounterNotMatched => text.Get("状态：未匹配到当前战斗", "Status: current encounter not matched"),
+        FflogsEstimateState.InactiveContent => text.Get("状态：当前副本没有活跃榜单", "Status: no active ranking for this duty"),
         FflogsEstimateState.Error => text.Get("状态：连接失败", "Status: connection failed"),
         _ => state.ToString(),
     };
@@ -1551,7 +1630,7 @@ public sealed class ControlCenterWindow : Window
     {
         FflogsEstimateState.Ready => IceBlue,
         FflogsEstimateState.Error => new Vector4(0.93f, 0.38f, 0.36f, 1),
-        FflogsEstimateState.EncounterNotMatched => Gold,
+        FflogsEstimateState.InactiveContent => Gold,
         _ => new Vector4(0.70f, 0.72f, 0.76f, 1),
     };
 

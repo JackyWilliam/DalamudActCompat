@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.12",
+    "AssemblyVersion":  "0.3.7.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.12/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.12/DalamudActCompat.zip",
-    "LastUpdate":  1786113280499,
-    "Changelog":  "v0.3.6.12 稳定性修复：适配国服 2026.08.05（7.55h）网络操作码，恢复 Cactbot 文字与 TTS；同步 Triggernometry 2.1.2.2；更新检查不再提前停止解析；退出时可靠保存最后一次战斗；修复状态、FFLogs 与后台任务并发；异步安装 Cactbot；加强失败回滚、普通 CI 与 HTML 命中区域诊断。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
+    "LastUpdate":  1786184282843,
+    "Changelog":  "v0.3.7.0 战斗统计升级：LB 不占玩家排名并固定置底；新增战斗中/已结束图标、国服中文地名、只显示自己的收起模式与悬浮窗箭头切换，无战斗数据时也可操作；收起时自动缩至一行，展开时恢复原尺寸，并加入上下滑动动画；新增一键复制脱敏诊断日志，以及打开 FFLogs 上传日志目录并复制路径的快捷入口；缩短表格并按需显示横向滚动条，FFLogs 预估扩展到全队并随战斗记录保存；修复木人结算保留、脱战后暴击/直暴率丢失、LB 伤害归属与失误产生空战斗历史，4/8/24 人多战斗段副本按有效战斗时长计算累计 DPS/HPS。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

@@ -20,6 +20,7 @@ using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -74,9 +75,14 @@ try
     ValidateMeterRows();
     ValidateMeterLayout();
     ValidatePictoActOverlayCommands();
+    ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
+    ValidateDutyEncounterPartySizes();
     ValidateControlCenterPresentation();
+    ValidateDiagnosticReport(testRoot);
     ValidateFflogsEstimateCurve();
+    await ValidateFflogsPersistenceAsync(testRoot);
+    ValidateFflogsCurrentEncounterTable();
     ValidateFflogsConcurrencyBoundaries();
     await ValidateFflogsCacheWritersAsync(testRoot);
     await ValidateBundledPluginInstallLifecycleAsync();
@@ -621,6 +627,7 @@ static void ValidateMeterRows()
                 11_000, 10_000, 10_000,
                 DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2),
             new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3, 2_500, 2_000, 2_000),
+            new Combatant("Limit Break", "Limit Break", "", false, 50_000, 0, 0, 5_000, 5_000, 5_000),
         ],
         [],
         [],
@@ -637,6 +644,29 @@ static void ValidateMeterRows()
     };
     var meter = new MeterService(state, settings);
     var rows = meter.GetRows();
+    Assert(
+        rows.Count == 3 &&
+        rows.Any(static row => row.Name == "Limit Break" && row.TotalDamage == 50_000),
+        "Limit Break damage is missing from the Meter rows.");
+    Assert(
+        rows[^1].Name == "Limit Break" &&
+        rows[^1].Rank is null &&
+        rows.Take(rows.Count - 1).Select(static row => row.Rank).SequenceEqual([1, 2]),
+        "Limit Break participated in Meter ranking or was not pinned to the final row.");
+    var historyRows = EncounterWindow.OrderCombatantsForDisplay(
+        encounter,
+        encounter.EffectiveDuration.TotalSeconds,
+        settings.SortMode,
+        settings.DpsMetric);
+    Assert(
+        historyRows[^1].Name == "Limit Break",
+        "Limit Break was not pinned to the final row in encounter history.");
+    Assert(
+        MeterWindow.LimitBreakDisplayName == "LB (Limit Break)",
+        "The Limit Break row does not show the requested player-column label.");
+    Assert(
+        encounter.Combatants.Any(static combatant => combatant.Name == "Limit Break"),
+        "Hiding Limit Break from the Meter mutated the underlying encounter data.");
     Assert(rows[0].Name == "Tank@Alpha", "DPS sorting did not preserve the player server name.");
     Assert(rows[0].Job == "PLD", "The resolved player job was not preserved.");
     Assert(rows[0].Deaths == 1, "The resolved player death count was not preserved.");
@@ -653,6 +683,18 @@ static void ValidateMeterRows()
     rows = meter.GetRows();
     Assert(rows[0].Name == "Healer@Beta", "HPS sorting did not promote the highest-healing player.");
     Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
+    Assert(
+        rows[^1].Name == "Limit Break" && rows[^1].Rank is null,
+        "Limit Break participated in HPS ranking or was not pinned to the final row.");
+    var compactRows = MeterWindow.SelectVisibleRows(rows, compactMode: true);
+    Assert(
+        compactRows.Count == 1 &&
+        compactRows[0].IsLocalPlayer &&
+        compactRows[0].Rank == 2,
+        "Compact mode did not preserve the local player's full-party rank.");
+    Assert(
+        MeterWindow.SelectVisibleRows(rows, compactMode: false).Count == rows.Count,
+        "Disabling compact mode did not restore the full Meter list.");
 
     settings.SortMode = MeterSortMode.Deaths;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
@@ -678,6 +720,18 @@ static void ValidateMeterRows()
     {
         UiLanguage = "zh-CN",
     };
+    configuration.Meter.CompactMode = true;
+    configuration.Meter.ExpandedWindowWidth = 612;
+    configuration.Meter.ExpandedWindowHeight = 284;
+    var restoredConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+                                    Newtonsoft.Json.JsonConvert.SerializeObject(configuration))
+                                ?? throw new InvalidOperationException(
+                                    "Compact Meter configuration could not be restored.");
+    Assert(
+        restoredConfiguration.Meter.CompactMode &&
+        restoredConfiguration.Meter.ExpandedWindowWidth == 612 &&
+        restoredConfiguration.Meter.ExpandedWindowHeight == 284,
+        "The compact Meter mode or its expanded window size was not persisted.");
     var text = new UiText(configuration);
     settings.PlayerIdentityMode = PlayerIdentityMode.Job;
     Assert(
@@ -692,10 +746,77 @@ static void ValidateMeterRows()
     Assert(
         encounter.Combatants[0].Name == "Tank@Alpha",
         "Display-only player ID masking mutated the encounter data.");
+
+    var emptyCompletion = encounter with
+    {
+        EndTime = encounter.EndTime?.AddSeconds(1),
+        Combatants = [],
+    };
+    state.UpdateCurrent(emptyCompletion);
+    Assert(
+        state.GetDisplayEncounter()?.Id == encounter.Id &&
+        state.GetDisplayEncounter()?.TotalDamage == encounter.TotalDamage,
+        "An empty combat completion replaced the latest displayable Meter encounter.");
+    state.UpdateCurrent(null);
+    Assert(
+        state.GetDisplayEncounter()?.TotalDamage == encounter.TotalDamage,
+        "Clearing a transient current snapshot discarded the latest displayable Meter encounter.");
+
+    var activeEncounter = encounter with
+    {
+        Id = Guid.NewGuid(),
+        EndTime = null,
+    };
+    state.UpdateCurrent(activeEncounter);
+    state.UpdateCurrent(null);
+    Assert(
+        state.GetDisplayEncounter() is { IsActive: false } retainedEncounter &&
+        retainedEncounter.Id == activeEncounter.Id &&
+        retainedEncounter.TotalDamage == activeEncounter.TotalDamage,
+        "A cleared live snapshot did not retain a completed Meter encounter.");
+    state.ResetCurrent();
+    Assert(
+        state.GetDisplayEncounter() is null,
+        "An explicit Meter reset did not clear the retained encounter.");
 }
 
 static void ValidateMeterLayout()
 {
+    Assert(
+        MeterWindow.CombatantRowSpacing == 3,
+        "Combat Meter player rows are not separated by the requested three pixels.");
+    Assert(
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "JobIcons",
+            "LimitBreak.png")),
+        "The supplied Limit Break icon is missing from plugin assets.");
+    Assert(
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "StatusIcons",
+            "CombatRunning.png")) &&
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "StatusIcons",
+            "CombatEnded.png")),
+        "The requested running or ended Combat Meter status icon is missing.");
+    Assert(
+        MeterWindow.MinimumTableWidthWithFflogs == 410 &&
+        MeterWindow.MinimumTableWidthWithoutFflogs == 350 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(500, 410) &&
+        MeterWindow.ShouldEnableHorizontalScroll(400, 410),
+        "The Meter width was not shortened or its horizontal scrollbar is always enabled.");
+
     var rowHeightMethod = typeof(MeterWindow).GetMethod(
                               "CalculateCombatantRowHeight",
                               BindingFlags.Static | BindingFlags.NonPublic)
@@ -707,6 +828,52 @@ static void ValidateMeterLayout()
     Assert(
         rowHeight <= 30,
         "Combat Meter did not keep each player on one compact line.");
+    var compactHeight = MeterWindow.CalculateCompactWindowHeight(
+        showHeader: true,
+        textLineHeightWithSpacing: 19,
+        windowPaddingY: 9,
+        itemSpacingY: MeterWindow.CombatantRowSpacing,
+        scrollbarSize: 14,
+        useHorizontalScroll: false);
+    var compactHeightWithScroll = MeterWindow.CalculateCompactWindowHeight(
+        showHeader: true,
+        textLineHeightWithSpacing: 19,
+        windowPaddingY: 9,
+        itemSpacingY: MeterWindow.CombatantRowSpacing,
+        scrollbarSize: 14,
+        useHorizontalScroll: true);
+    var compactHeightWithoutHeader = MeterWindow.CalculateCompactWindowHeight(
+        showHeader: false,
+        textLineHeightWithSpacing: 19,
+        windowPaddingY: 9,
+        itemSpacingY: MeterWindow.CombatantRowSpacing,
+        scrollbarSize: 14,
+        useHorizontalScroll: false);
+    Assert(
+        compactHeight == 121 &&
+        compactHeightWithScroll == compactHeight + 14 &&
+        compactHeightWithoutHeader == compactHeight - 18,
+        "Compact mode did not size the Meter to exactly one header and one player row.");
+    Assert(
+        MeterWindow.CalculateEmptyStateWindowHeight(windowPaddingY: 9) == 62,
+        "The empty Meter state did not retain the compact toggle at a compact height.");
+    Assert(
+        MeterWindow.EaseOutCubic(0) == 0 &&
+        Math.Abs(MeterWindow.EaseOutCubic(0.5f) - 0.875f) < 0.0001f &&
+        MeterWindow.EaseOutCubic(1) == 1,
+        "The Meter collapse and expand transition did not use the expected smooth easing.");
+
+    var invalidExpandedSize = new MeterSettings
+    {
+        ExpandedWindowWidth = float.NaN,
+        ExpandedWindowHeight = 100,
+    };
+    Assert(
+        MeterWindow.NormalizeExpandedWindowSize(invalidExpandedSize) ==
+        new System.Numerics.Vector2(
+            MeterWindow.DefaultExpandedWindowWidth,
+            MeterWindow.DefaultExpandedWindowHeight),
+        "Invalid saved Meter dimensions did not fall back to the established expanded size.");
 
     var iconSizeMethod = typeof(MeterWindow).GetMethod(
                              "CalculateJobIconSize",
@@ -730,16 +897,6 @@ static void ValidateMeterLayout()
         Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS"),
         "The ACT Meter still labels encounter DPS as EncDPS instead of eDPS.");
 
-    var sortLabelMethod = typeof(MeterWindow).GetMethod(
-                              "SortModeLabel",
-                              BindingFlags.Static | BindingFlags.NonPublic)
-                          ?? throw new InvalidOperationException(
-                              "Meter sort-mode label helper was not found.");
-    Assert(
-        Equals(sortLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS") &&
-        Equals(sortLabelMethod.Invoke(null, [MeterSortMode.Hps, settings]), "HPS"),
-        "The compact Meter control no longer exposes both DPS and HPS modes.");
-
     var rateColorMethod = typeof(MeterWindow).GetMethod(
                               "PrimaryRateColor",
                               BindingFlags.Static | BindingFlags.NonPublic)
@@ -753,14 +910,14 @@ static void ValidateMeterLayout()
         "The local player's DPS/HPS value is not brighter than party values.");
 
     var hitRateTextMethod = typeof(MeterWindow).GetMethod(
-                                "FormatHitRate",
+                                "FormatHitRateValue",
                                 BindingFlags.Static | BindingFlags.NonPublic)
                             ?? throw new InvalidOperationException(
                                 "Meter hit-rate formatter was not found.");
     Assert(
-        Equals(hitRateTextMethod.Invoke(null, ["暴击", 25.0]), "暴击 25.0%") &&
-        Equals(hitRateTextMethod.Invoke(null, ["直暴", null]), "直暴 --"),
-        "The Meter does not format critical and critical-direct rates safely.");
+        Equals(hitRateTextMethod.Invoke(null, [25.0]), "25.0%") &&
+        Equals(hitRateTextMethod.Invoke(null, [null]), "--"),
+        "The Meter does not keep critical-rate values compact below their column headers.");
 
     var localizerType = typeof(MeterWindow).Assembly.GetType(
                             "DalamudActCompat.Meter.ZoneNameLocalizer")
@@ -779,6 +936,21 @@ static void ValidateMeterLayout()
         Equals(resolveZoneName.Invoke(null, ["Middle La Noscea", zoneNames]), "中拉诺西亚") &&
         Equals(resolveZoneName.Invoke(null, ["Unknown Zone", zoneNames]), "Unknown Zone"),
         "Meter zone names no longer localize with a safe ACT-name fallback.");
+    var resolveTerritoryName = localizerType.GetMethod(
+                                   "ResolveByTerritory",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new InvalidOperationException(
+                                   "Meter territory-name resolver was not found.");
+    var territoryNames = new Dictionary<uint, string>
+    {
+        [1327] = "轻量级重型斗技场（零式）",
+    };
+    Assert(
+        Equals(resolveTerritoryName.Invoke(
+            null,
+            [1327u, "AAC Heavyweight M4 (Savage)", territoryNames, zoneNames]),
+            "轻量级重型斗技场（零式）"),
+        "A known Territory ID did not take priority over ACT's English zone name.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -810,6 +982,164 @@ static void ValidateFflogsEstimateCurve()
     Assert(
         legendary != pink && pink != orange && roundedOrange == orange,
         "FFLogs estimate colors did not match the rounded score shown by the Meter.");
+
+    var encounter = new Encounter(
+        Guid.NewGuid(),
+        DateTimeOffset.UtcNow.AddMinutes(-1),
+        DateTimeOffset.UtcNow,
+        "Test Zone",
+        "Test Boss",
+        [
+            new Combatant("tank", "Tank", "PLD", true, 100, 0, 0),
+            new Combatant("healer", "Healer", "WHM", false, 80, 0, 0),
+            new Combatant("tank-2", "Tank 2", "PLD", false, 90, 0, 0),
+            new Combatant("Limit Break", "Limit Break", "", false, 50, 0, 0),
+        ],
+        [],
+        [],
+        [],
+        [],
+        []);
+    Assert(
+        FflogsEstimateService.ResolveFflogsSpecs(encounter)
+            .SequenceEqual(["Paladin", "WhiteMage"], StringComparer.OrdinalIgnoreCase) &&
+        FflogsEstimateService.ResolveRankingCombatant(encounter, "healer", "")?.Name == "Healer" &&
+        FflogsEstimateService.ResolveRankingCombatant(encounter, "missing", "Tank 2")?.Id == "tank-2",
+        "FFLogs did not deduplicate party jobs or resolve estimates for non-local players.");
+}
+
+static async Task ValidateFflogsPersistenceAsync(string testRoot)
+{
+    var cachePath = Path.Combine(testRoot, "fflogs-persistence", "fflogs-cache.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+    await File.WriteAllTextAsync(
+        cachePath,
+        JsonSerializer.Serialize(new FflogsCacheDocument(
+            DateTimeOffset.UtcNow,
+            [new FflogsEncounterCatalogEntry(104, "Lindwurm", "AAC Heavyweight", false)],
+            [new FflogsCurveCacheEntry(
+                104,
+                "Lindwurm",
+                "Paladin",
+                DateTimeOffset.UtcNow,
+                [new FflogsCurvePoint(0, 1_000), new FflogsCurvePoint(100, 3_000)],
+                101)])));
+
+    var settings = new FflogsSettings
+    {
+        ClientId = "client",
+        ClientSecret = "secret",
+    };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var service = new FflogsEstimateService(
+        () => settings,
+        cachePath,
+        new PluginLogger(log));
+    service.NotifyTerritoryChanged(1327, "AAC Heavyweight M4 (Savage)");
+    settings.Enabled = true;
+
+    var end = DateTimeOffset.UtcNow;
+    var encounter = new Encounter(
+        Guid.NewGuid(),
+        end.AddSeconds(-30),
+        end,
+        "AAC Heavyweight M4 (Savage)",
+        "Lindwurm",
+        [new Combatant(
+            "local", "Player", "PLD", true, 60_000, 0, 0,
+            Dps: 2_000,
+            EncDps: 2_000,
+            ExtDps: 2_000)],
+        [],
+        [],
+        [],
+        [],
+        [])
+    {
+        TerritoryId = 1327,
+        CombatDuration = TimeSpan.FromSeconds(30),
+    };
+
+    var captured = service.CaptureAvailableEstimates(encounter);
+    var capturedCombatant = captured.Combatants.Single();
+    Assert(
+        capturedCombatant.FflogsPercentile == 50 &&
+        capturedCombatant.FflogsEncounterName == "Lindwurm",
+        "An FFLogs estimate already visible at encounter end was not captured for history.");
+
+    var dutyFinalizedFromAnActiveBoss = service.CaptureAvailableEstimates(encounter with
+    {
+        Combatants = [encounter.Combatants[0]],
+        FflogsRankingEncounter = encounter with { EndTime = null },
+    });
+    Assert(
+        dutyFinalizedFromAnActiveBoss.Combatants[0].FflogsPercentile == 50,
+        "Leaving a duty during an active boss did not capture the available FFLogs estimate.");
+
+    var restored = JsonSerializer.Deserialize<Encounter>(JsonSerializer.Serialize(captured))
+                   ?? throw new InvalidOperationException(
+                       "The encounter containing a captured FFLogs estimate could not be restored.");
+    settings.Enabled = false;
+    var historicalEstimate = service.GetEstimate(restored, "local", "Player");
+    Assert(
+        historicalEstimate is { Score: 50, EncounterName: "Lindwurm" },
+        "A captured FFLogs estimate did not survive JSON history or later setting changes.");
+
+    settings.Enabled = true;
+    var unavailable = service.CaptureAvailableEstimates(encounter with
+    {
+        Combatants = [encounter.Combatants[0] with { Job = "WAR" }],
+    });
+    Assert(
+        unavailable.Combatants[0].FflogsPercentile is null &&
+        service.Status.State != FflogsEstimateState.Loading,
+        "Encounter finalization queued a new FFLogs request instead of capturing only an available estimate.");
+}
+
+static void ValidateFflogsCurrentEncounterTable()
+{
+    var tableType = typeof(FflogsEstimateService).Assembly.GetType(
+                        "DalamudActCompat.Fflogs.CurrentFflogsEncounterTable")
+                    ?? throw new InvalidOperationException(
+                        "The current FFLogs encounter table was not found.");
+    var tryResolve = tableType.GetMethod(
+                         "TryResolve",
+                         BindingFlags.Static | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException(
+                         "The current FFLogs duty resolver was not found.");
+    var observePhase = tableType.GetMethod(
+                           "ObservePhase",
+                           BindingFlags.Static | BindingFlags.NonPublic)
+                       ?? throw new InvalidOperationException(
+                           "The FFLogs phase observer was not found.");
+
+    object?[] normalM4Arguments = [1326u, 1, null];
+    Assert(
+        Equals(tryResolve.Invoke(null, normalM4Arguments), true) &&
+        ReadEncounterValue(normalM4Arguments[2], "EncounterId") == 104 &&
+        ReadEncounterValue(normalM4Arguments[2], "Difficulty") == 100,
+        "AAC Heavyweight M4 did not resolve to the current Lindwurm Normal ranking.");
+
+    object?[] oldDutyArguments = [1269u, 1, null];
+    Assert(
+        Equals(tryResolve.Invoke(null, oldDutyArguments), false),
+        "A duty outside the current FFLogs tier was allowed to resolve.");
+
+    var phaseTwo = (int)(observePhase.Invoke(
+        null,
+        [1327u, 1, "21|2026-08-08T00:00:00.0000000+08:00|40000001|Lindwurm|BBD8|Mindless Flesh"])
+        ?? 0);
+    object?[] savageM4Arguments = [1327u, phaseTwo, null];
+    Assert(
+        phaseTwo == 2 &&
+        Equals(tryResolve.Invoke(null, savageM4Arguments), true) &&
+        ReadEncounterValue(savageM4Arguments[2], "EncounterId") == 105 &&
+        ReadEncounterValue(savageM4Arguments[2], "Difficulty") == 101,
+        "M4S did not switch to the Lindwurm II Savage ranking after a phase-two action.");
+
+    static int ReadEncounterValue(object? encounter, string propertyName)
+        => (int)(encounter?.GetType().GetProperty(propertyName)?.GetValue(encounter)
+                 ?? throw new InvalidOperationException($"Resolved FFLogs encounter has no {propertyName}."));
 }
 
 static void ValidateEncounterParticipantsSurvivePartyDeparture()
@@ -859,6 +1189,41 @@ static void ValidateEncounterParticipantsSurvivePartyDeparture()
         "ACT allies without live identity metadata were silently removed from the encounter.");
 }
 
+static void ValidateEmptyEncounterFiltering()
+{
+    var now = DateTimeOffset.UtcNow;
+    var empty = new Encounter(
+        Guid.NewGuid(),
+        now,
+        now,
+        "Middle La Noscea",
+        "Encounter",
+        [new Combatant("local", "Player", "PLD", true, 0, 0, 0)],
+        [],
+        [],
+        [],
+        [],
+        []);
+
+    Assert(
+        !IinactAdapter.HasMeaningfulActivity(empty),
+        "A zero-damage missed action is still eligible for encounter history.");
+    Assert(
+        IinactAdapter.HasMeaningfulActivity(empty with
+        {
+            Combatants = [empty.Combatants[0] with { TotalDamage = 1 }],
+        }) &&
+        IinactAdapter.HasMeaningfulActivity(empty with
+        {
+            Combatants = [empty.Combatants[0] with { TotalHealing = 1 }],
+        }) &&
+        IinactAdapter.HasMeaningfulActivity(empty with
+        {
+            Combatants = [empty.Combatants[0] with { Deaths = 1 }],
+        }),
+        "The empty-encounter filter rejects a meaningful damage, healing, or death record.");
+}
+
 static void ValidateDutyEncounterAggregation()
 {
     var start = new DateTimeOffset(2026, 8, 4, 12, 0, 0, TimeSpan.Zero);
@@ -875,6 +1240,17 @@ static void ValidateDutyEncounterAggregation()
         damageHits: 10,
         criticalHits: 3,
         criticalDirectHits: 1);
+    first = first with
+    {
+        Combatants =
+        [
+            first.Combatants[0] with
+            {
+                FflogsPercentile = 40,
+                FflogsEncounterName = "Boss A",
+            },
+        ],
+    };
     var afterFirst = accumulator.Update(first, finished: true, start.AddMinutes(2));
     Assert(
         afterFirst.IsActive && afterFirst.TotalDamage == 100,
@@ -929,6 +1305,8 @@ static void ValidateDutyEncounterAggregation()
                 DamageHits = 8,
                 CriticalHits = 2,
                 CriticalDirectHits = 1,
+                FflogsPercentile = 75,
+                FflogsEncounterName = "Boss B",
             },
         ],
     };
@@ -946,10 +1324,109 @@ static void ValidateDutyEncounterAggregation()
         completed.Combatants[0].CriticalDirectHits == 2,
         "Leaving the duty did not finalize the accumulated boss totals exactly once.");
     Assert(
+        completed.Duration == TimeSpan.FromMinutes(7) &&
+        completed.EffectiveDuration == TimeSpan.FromMinutes(4) &&
+        Math.Abs(completed.Combatants[0].EncDps - 0.75) < 0.0001,
+        "Duty DPS included travel or waiting time between completed combat segments.");
+    Assert(
         completed.FflogsRankingEncounter?.Id == secondId &&
         completed.FflogsRankingEncounter.TotalDamage == 80,
         "The completed duty did not retain its latest boss segment for FFLogs estimation.");
+    Assert(
+        completed.Combatants[0].FflogsPercentile == 75 &&
+        completed.Combatants[0].FflogsEncounterName == "Boss B",
+        "Duty history did not retain the latest completed boss's FFLogs estimate.");
+
+    var serialized = JsonSerializer.Serialize(completed);
+    var restored = JsonSerializer.Deserialize<Encounter>(serialized)
+                   ?? throw new InvalidOperationException(
+                       "The accumulated duty encounter could not be restored from JSON.");
+    Assert(
+        restored.CombatDuration == TimeSpan.FromMinutes(4) &&
+        restored.EffectiveDuration == TimeSpan.FromMinutes(4) &&
+        restored.TerritoryId == 777 &&
+        restored.Combatants[0].FflogsPercentile == 75 &&
+        restored.Combatants[0].FflogsEncounterName == "Boss B",
+        "The accumulated active-combat duration or Territory ID was not preserved in encounter history.");
 }
+
+static void ValidateDutyEncounterPartySizes()
+{
+    foreach (var partySize in new[] { 4, 8, 24 })
+    {
+        var start = new DateTimeOffset(2026, 8, 8, 12, 0, 0, TimeSpan.Zero);
+        var first = CreatePartySegment(
+            Guid.NewGuid(),
+            start,
+            start.AddSeconds(30),
+            partySize,
+            damage: 3_000,
+            dps: 150,
+            encDps: 100,
+            extDps: 75);
+        var second = CreatePartySegment(
+            Guid.NewGuid(),
+            start.AddSeconds(90),
+            start.AddSeconds(110),
+            partySize,
+            damage: 2_000,
+            dps: 200,
+            encDps: 100,
+            extDps: 50);
+        var accumulator = new DutyEncounterAccumulator();
+        _ = accumulator.Update(first, finished: true, first.EndTime!.Value);
+        _ = accumulator.Update(second, finished: true, second.EndTime!.Value);
+        var completed = accumulator.Complete(start.AddSeconds(120))
+                        ?? throw new InvalidOperationException(
+                            $"The {partySize}-player duty produced no accumulated encounter.");
+
+        Assert(
+            completed.Combatants.Count == partySize &&
+            completed.EffectiveDuration == TimeSpan.FromSeconds(50) &&
+            completed.Duration == TimeSpan.FromSeconds(120),
+            $"The {partySize}-player duty did not preserve its roster or active-combat duration.");
+        Assert(
+            completed.Combatants.All(combatant =>
+                Math.Abs(combatant.Dps - (5_000d / 30)) < 0.0001 &&
+                Math.Abs(combatant.EncDps - 100) < 0.0001 &&
+                Math.Abs(combatant.ExtDps - 62.5) < 0.0001),
+            $"The {partySize}-player duty did not retain distinct DPS, EncDPS, and ExtDPS durations.");
+    }
+}
+
+static Encounter CreatePartySegment(
+    Guid id,
+    DateTimeOffset start,
+    DateTimeOffset end,
+    int partySize,
+    long damage,
+    double dps,
+    double encDps,
+    double extDps)
+    => new(
+        id,
+        start,
+        end,
+        "测试副本",
+        "测试首领",
+        Enumerable.Range(1, partySize)
+            .Select(index => new Combatant(
+                $"player-{index}",
+                $"Player {index}",
+                index <= 2 ? "PLD" : "DPS",
+                index == 1,
+                damage,
+                0,
+                0,
+                dps,
+                encDps,
+                extDps))
+            .ToArray(),
+        [],
+        [],
+        [],
+        [],
+        []);
 
 static Encounter CreateDutySegment(
     Guid id,
@@ -978,7 +1455,10 @@ static Encounter CreateDutySegment(
         Array.Empty<HealEvent>(),
         Array.Empty<DeathEvent>(),
         Array.Empty<ActionSummary>(),
-        Array.Empty<JobSummary>());
+        Array.Empty<JobSummary>())
+    {
+        TerritoryId = 777,
+    };
 
 static void ValidateControlCenterPresentation()
 {
@@ -988,7 +1468,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 12)) == "v0.3.6.12",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 0)) == "v0.3.7.0",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1082,10 +1562,17 @@ static void ValidateControlCenterPresentation()
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
-            parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)),
-        "The home/settings labels or guarded factory-reset action are missing from the new settings UI.");
+            parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
+        typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
+        typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
+        "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -1103,9 +1590,11 @@ static void ValidateControlCenterPresentation()
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
+        historySource.Contains("FflogsEstimateService.GetPersistedEstimate", StringComparison.Ordinal) &&
+        historySource.Contains("FFLogs ~", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
-        "Combat History does not use the rounded branded frame and shared navigation rail.");
+        "Combat History lost its branded frame, navigation rail, or saved FFLogs display.");
     var chromeSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "BrandedWindowChrome.cs"));
     Assert(
@@ -1752,12 +2241,25 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
 {
     var cacheDirectory = Path.Combine(testRoot, "fflogs-cache-writers");
     var cachePath = Path.Combine(cacheDirectory, "fflogs-cache.json");
-    var dataManager = DispatchProxy.Create<IDataManager, NoOpDataManagerProxy>();
+    Directory.CreateDirectory(cacheDirectory);
+    var seededCache = JsonSerializer.Serialize(new FflogsCacheDocument(
+            DateTimeOffset.UtcNow,
+            [
+                new FflogsEncounterCatalogEntry(100, "Howling Blade", "AAC Cruiserweight", false),
+                new FflogsEncounterCatalogEntry(104, "Lindwurm", "AAC Heavyweight", false),
+            ],
+            [
+                new FflogsCurveCacheEntry(100, "Howling Blade", "Paladin", DateTimeOffset.UtcNow, [], 101),
+                new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 0),
+                new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 100),
+            ]));
+    await File.WriteAllTextAsync(
+        cachePath,
+        seededCache.Replace(",\"Difficulty\":0", string.Empty, StringComparison.Ordinal));
     var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
     var service = new FflogsEstimateService(
         () => new FflogsSettings(),
         cachePath,
-        dataManager,
         new PluginLogger(log));
     try
     {
@@ -1774,10 +2276,21 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
             service.SaveCacheAsync(CancellationToken.None));
 
         using var cacheDocument = JsonDocument.Parse(await File.ReadAllTextAsync(cachePath));
+        var cachedEncounterIds = cacheDocument.RootElement.GetProperty("Encounters")
+            .EnumerateArray()
+            .Select(static encounter => encounter.GetProperty("Id").GetInt32())
+            .ToArray();
+        var cachedCurveIds = cacheDocument.RootElement.GetProperty("Curves")
+            .EnumerateArray()
+            .Select(static curve => curve.GetProperty("EncounterId").GetInt32())
+            .ToArray();
         Assert(
             cacheDocument.RootElement.TryGetProperty("CatalogFetchedAt", out _) &&
+            cachedEncounterIds.SequenceEqual([104]) &&
+            cachedCurveIds.SequenceEqual([104]) &&
+            cacheDocument.RootElement.GetProperty("Curves")[0].GetProperty("Difficulty").GetInt32() == 100 &&
             !Directory.EnumerateFiles(cacheDirectory, "*.tmp").Any(),
-            "Consecutive or concurrent FFLogs cache saves corrupted the cache or left writer temp files behind.");
+            "FFLogs cache persistence retained an old ranking tier, corrupted the cache, or left temp files behind.");
     }
     finally
     {
@@ -2494,14 +3007,15 @@ static void ValidateHtmlOverlayDefaults()
     var fflogsApiCardIndex = controlCenterSource.IndexOf(
         "fflogs-api-refresh-card",
         StringComparison.Ordinal);
-    var fflogsBindingCardIndex = controlCenterSource.IndexOf(
-        "fflogs-encounter-binding-card",
+    var fflogsAutomaticCardIndex = controlCenterSource.IndexOf(
+        "fflogs-automatic-encounter-card",
         StringComparison.Ordinal);
     Assert(
-        fflogsApiCardIndex >= 0 && fflogsBindingCardIndex > fflogsApiCardIndex &&
+        fflogsApiCardIndex >= 0 && fflogsAutomaticCardIndex > fflogsApiCardIndex &&
         controlCenterSource.Contains("API 凭据与数据刷新", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("当前战斗绑定", StringComparison.Ordinal),
-        "FFLogs credential refresh and encounter binding are not presented as separate modules.");
+        controlCenterSource.Contains("当前副本自动识别", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("绑定当前战斗", StringComparison.Ordinal),
+        "FFLogs automatic duty matching is missing or manual encounter binding is still exposed.");
     Assert(
         !controlCenterSource.Contains("control-center-sidebar", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("parser-state-card", StringComparison.Ordinal) &&
@@ -2516,8 +3030,12 @@ static void ValidateHtmlOverlayDefaults()
         "MeterWindow.cs"));
     Assert(
         !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
-        !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal),
-        "The destructive encounter-reset control is still exposed directly on the Meter overlay.");
+        !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal) &&
+        !meterWindowSource.Contains("DrawControls(", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("meter-column-header", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("#  玩家", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("jobIcons.GetLimitBreak()", StringComparison.Ordinal),
+        "The Meter overlay still exposes controls, its table header is missing, or Limit Break lacks its icon.");
 
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
@@ -3741,8 +4259,15 @@ static void ValidateActEncounterMapping()
         }
         """);
     Assert(
-        legacyCombatant is { DamageHits: 0, CriticalHits: 0, CriticalDirectHits: 0 },
-        "Legacy combatant JSON without hit-count fields is no longer compatible.");
+        legacyCombatant is
+        {
+            DamageHits: 0,
+            CriticalHits: 0,
+            CriticalDirectHits: 0,
+            FflogsPercentile: null,
+            FflogsEncounterName: null,
+        },
+        "Legacy combatant JSON without hit-count or FFLogs fields is no longer compatible.");
 }
 
 static void ValidateChineseCombatChatParsing()
@@ -3769,10 +4294,25 @@ static void ValidateChineseCombatChatParsing()
             actor,
             out var inheritedActor,
             out target,
-            out damage),
+            out damage,
+            out var isCritical,
+            out var isDirectHit),
         "Chinese ability damage chat was not parsed.");
-    Assert(inheritedActor == actor && target == "木人" && damage == 39870,
+    Assert(
+        inheritedActor == actor && target == "木人" && damage == 39870 &&
+        isCritical && !isDirectHit,
         "Chinese ability damage fields were mapped incorrectly.");
+    Assert(
+        ChineseCombatChatParser.TryParse(
+            "  \uE06F 直击加暴击！ 木人受到了23175点伤害。",
+            actor,
+            out _,
+            out target,
+            out damage,
+            out isCritical,
+            out isDirectHit) &&
+        target == "木人" && damage == 23175 && isCritical && isDirectHit,
+        "Chinese critical-direct damage did not retain both hit flags.");
 
     var context = new ChineseCombatChatContext();
     var observedAt = DateTimeOffset.UtcNow;
@@ -3815,6 +4355,149 @@ static void ValidateChineseCombatChatParsing()
             out _) &&
         contextualActor == "队友",
         "Adjacent split combat lines no longer retain their legitimate attacker context.");
+
+    var limitBreakContext = new ChineseCombatChatContext(
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "终结时刻" });
+    Assert(
+        !limitBreakContext.TryParse(
+            "埃斯蒂尼安丿发动了“终结时刻”。",
+            observedAt,
+            out _,
+            out _,
+            out _) &&
+        limitBreakContext.TryParse(
+            "  \uE06F 木人受到了936686点伤害。",
+            observedAt.AddMilliseconds(10),
+            out var limitBreakActor,
+            out _,
+            out var limitBreakDamage) &&
+        limitBreakActor == ChineseCombatChatContext.LimitBreakActorName &&
+        limitBreakDamage == 936686,
+        "Chinese Limit Break damage was attributed to the player instead of the synthetic LB combatant.");
+
+    var snapshotTime = DateTimeOffset.UtcNow;
+    var emptyActSnapshot = new ActEncounterSnapshot(
+        Guid.NewGuid(),
+        snapshotTime,
+        snapshotTime,
+        "Middle La Noscea",
+        "木人",
+        [new ActCombatantSnapshot("player", "Player", "PLD", true, 0, 0, 0)]);
+    var chatFallbackSnapshot = new ActEncounterSnapshot(
+        emptyActSnapshot.Id,
+        snapshotTime,
+        snapshotTime,
+        "Middle La Noscea",
+        "木人",
+        [new ActCombatantSnapshot("player", "Player", "PLD", true, 936686, 0, 0)]);
+    Assert(
+        SelfHostedActRuntime.ShouldPreferChatFallback(emptyActSnapshot, chatFallbackSnapshot) &&
+        !SelfHostedActRuntime.ShouldPreferChatFallback(chatFallbackSnapshot, emptyActSnapshot),
+        "A zero-damage ACT completion snapshot can still overwrite a valid chat fallback snapshot.");
+}
+
+static void ValidateDiagnosticReport(string testRoot)
+{
+    var launcherRoot = Path.Combine(testRoot, "diagnostic-launcher");
+    var paths = new PluginPaths(Path.Combine(
+        launcherRoot,
+        "pluginConfigs",
+        "DalamudActCompat"));
+    paths.EnsureCreated();
+    Assert(
+        paths.CombatLogDirectory == Path.Combine(paths.LogDirectory, "ffxiv") &&
+        Directory.Exists(paths.CombatLogDirectory),
+        "The FFLogs upload shortcut does not target the raw FFXIV Network log directory.");
+    File.WriteAllLines(
+        Path.Combine(launcherRoot, "dalamud.log"),
+        [
+            "[OtherPlugin] private unrelated line",
+            "[DalamudActCompat] parser failed token=secret-token path=C:\\Users\\Alice\\game",
+            "   at DalamudActCompat.Parser.Start()",
+            "[OtherPlugin] another unrelated line",
+        ]);
+    File.WriteAllLines(
+        Path.Combine(launcherRoot, "dalamud.old.log"),
+        ["[DalamudActCompat] old failure https://example.invalid/?api_key=old-secret"]);
+    File.WriteAllLines(
+        Path.Combine(paths.LogDirectory, "external-host.log"),
+        ["host extension failed password=host-secret Authorization: Bearer bearer-secret"]);
+
+    var manifest = new ActPluginManifest
+    {
+        Id = "triggernometry",
+        Name = "Triggernometry",
+        Version = "2.1.2.2",
+        HostApiVersion = 1,
+    };
+    var host = new HostSupervisorSnapshot(
+        HostSupervisorState.Running,
+        ProcessRunning: true,
+        HostConnectionStatus.Connected,
+        ControlQueueLength: 1,
+        DataQueueLength: 2,
+        DroppedMessages: 0,
+        SessionId: "0123456789abcdef",
+        LastWrittenSequence: 8,
+        HostAcknowledgedSequence: 7,
+        HostWorkingSetBytes: 64 * 1024 * 1024,
+        HostThreadCount: 4,
+        HealthState: "Healthy",
+        HealthDetail: "ready at C:\\Users\\Alice\\runtime",
+        PluginHealth: [],
+        Diagnostics: [],
+        PluginStages: []);
+    var report = DiagnosticReportBuilder.Build(
+        paths,
+        new DiagnosticReportSnapshot(
+            "0.3.7.0",
+            "15.0.0",
+            new ParserStatus(
+                ParserState.Running,
+                "Running",
+                DateTimeOffset.Parse("2026-08-08T12:00:00+08:00")),
+            host,
+            ParsingEnabled: true,
+            DebugMode: false,
+            FflogsEnabled: true,
+            MeterSortMode.Dps,
+            MeterCompactMode: false,
+            [new InstalledActPlugin(manifest, "C:\\Users\\Alice\\plugin", Enabled: true)]));
+
+    Assert(
+        report.Contains("Plugin: 0.3.7.0", StringComparison.Ordinal) &&
+        report.Contains("parser failed", StringComparison.Ordinal) &&
+        report.Contains("at DalamudActCompat.Parser.Start()", StringComparison.Ordinal) &&
+        report.Contains("host extension failed", StringComparison.Ordinal) &&
+        report.Contains("triggernometry; version=2.1.2.2; enabled=True", StringComparison.Ordinal),
+        "The one-click diagnostic report omitted version, plugin, Host, or exception context.");
+    Assert(
+        !report.Contains("private unrelated", StringComparison.Ordinal) &&
+        !report.Contains("Alice", StringComparison.Ordinal) &&
+        !report.Contains("secret-token", StringComparison.Ordinal) &&
+        !report.Contains("old-secret", StringComparison.Ordinal) &&
+        !report.Contains("host-secret", StringComparison.Ordinal) &&
+        !report.Contains("bearer-secret", StringComparison.Ordinal) &&
+        report.Contains("<redacted>", StringComparison.Ordinal) &&
+        report.Contains("<user>", StringComparison.Ordinal),
+        "The diagnostic report included unrelated Dalamud lines or failed to redact sensitive values.");
+    Assert(
+        report.Length <= DiagnosticReportBuilder.MaximumReportCharacters &&
+        report.Contains("combat/network logs and configuration files are excluded", StringComparison.Ordinal),
+        "The diagnostic report is unbounded or does not explain its privacy exclusions.");
+
+    var selected = DiagnosticReportBuilder.SelectRelevantDalamudLines(
+        [
+            "[OtherPlugin] before",
+            "[DalamudActCompat] failure",
+            "   at DalamudActCompat.Test()",
+            "[OtherPlugin] after",
+        ]);
+    Assert(
+        selected.Count == 2 &&
+        selected[0].Contains("failure", StringComparison.Ordinal) &&
+        selected[1].Contains("at DalamudActCompat.Test()", StringComparison.Ordinal),
+        "The diagnostic log filter did not retain only plugin lines and their exception continuation.");
 }
 
 static string FindProjectRoot()

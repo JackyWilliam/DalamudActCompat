@@ -10,6 +10,8 @@ public sealed class FflogsSettings
 
     public int CacheHours { get; set; } = 24;
 
+    // Retained for backward-compatible deserialization of older configurations.
+    // Current encounters are resolved from stable territory IDs instead.
     public Dictionary<string, int> EncounterMappings { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 

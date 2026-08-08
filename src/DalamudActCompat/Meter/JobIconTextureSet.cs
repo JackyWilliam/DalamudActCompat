@@ -31,6 +31,14 @@ public sealed class JobIconTextureSet
         }
 
         var path = Path.Combine(rootDirectory, folder, $"{code}.png");
+        return GetFromPath(path);
+    }
+
+    public ISharedImmediateTexture? GetLimitBreak()
+        => GetFromPath(Path.Combine(rootDirectory, "LimitBreak.png"));
+
+    private ISharedImmediateTexture? GetFromPath(string path)
+    {
         if (textures.TryGetValue(path, out var texture))
         {
             return texture;

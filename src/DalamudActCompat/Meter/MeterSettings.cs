@@ -76,6 +76,12 @@ public sealed class MeterSettings
 
     public bool ShowHeader { get; set; } = true;
 
+    public bool CompactMode { get; set; }
+
+    public float ExpandedWindowWidth { get; set; } = 500;
+
+    public float ExpandedWindowHeight { get; set; } = 420;
+
     public bool ShowJob { get; set; } = true;
 
     public JobDisplayStyle JobDisplayStyle { get; set; } = JobDisplayStyle.Abbreviation;

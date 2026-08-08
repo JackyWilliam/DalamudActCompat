@@ -8,8 +8,10 @@ internal sealed class DutyEncounterAccumulator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> completedSegmentIds = [];
     private readonly HashSet<Guid> segmentIds = [];
+    private double completedDurationSeconds;
     private Guid sessionId;
     private DateTimeOffset? startTime;
+    private uint? territoryId;
     private string zoneName = string.Empty;
     private Encounter? latestSegment;
 
@@ -27,7 +29,9 @@ internal sealed class DutyEncounterAccumulator
         segmentIds.Add(segment.Id);
         if (finished && completedSegmentIds.Add(segment.Id))
         {
-            AddCombatants(segment.Combatants);
+            var segmentDurationSeconds = ResolveSegmentDurationSeconds(segment, now);
+            AddCombatants(segment.Combatants, segmentDurationSeconds);
+            completedDurationSeconds += segmentDurationSeconds;
         }
 
         var activeSegment = !finished && !completedSegmentIds.Contains(segment.Id)
@@ -46,7 +50,9 @@ internal sealed class DutyEncounterAccumulator
 
         if (latestSegment is not null && completedSegmentIds.Add(latestSegment.Id))
         {
-            AddCombatants(latestSegment.Combatants);
+            var segmentDurationSeconds = ResolveSegmentDurationSeconds(latestSegment, endTime);
+            AddCombatants(latestSegment.Combatants, segmentDurationSeconds);
+            completedDurationSeconds += segmentDurationSeconds;
         }
 
         var completed = Build(activeSegment: null, endTime, endTime);
@@ -59,8 +65,10 @@ internal sealed class DutyEncounterAccumulator
         completedCombatants.Clear();
         completedSegmentIds.Clear();
         segmentIds.Clear();
+        completedDurationSeconds = 0;
         sessionId = Guid.Empty;
         startTime = null;
+        territoryId = null;
         zoneName = string.Empty;
         latestSegment = null;
     }
@@ -81,9 +89,15 @@ internal sealed class DutyEncounterAccumulator
         {
             zoneName = segment.ZoneName;
         }
+        if (segment.TerritoryId is > 0)
+        {
+            territoryId = segment.TerritoryId;
+        }
     }
 
-    private void AddCombatants(IEnumerable<Combatant> combatants)
+    private void AddCombatants(
+        IEnumerable<Combatant> combatants,
+        double encounterDurationSeconds)
     {
         foreach (var combatant in combatants)
         {
@@ -96,7 +110,7 @@ internal sealed class DutyEncounterAccumulator
                 completedCombatants.Add(key, totals);
             }
 
-            totals.Add(combatant);
+            totals.Add(combatant, encounterDurationSeconds);
         }
     }
 
@@ -105,6 +119,9 @@ internal sealed class DutyEncounterAccumulator
         DateTimeOffset? endTime,
         DateTimeOffset now)
     {
+        var activeDurationSeconds = activeSegment is null
+            ? 0
+            : ResolveSegmentDurationSeconds(activeSegment, now);
         var merged = completedCombatants.ToDictionary(
             pair => pair.Key,
             pair => pair.Value.Clone(),
@@ -122,12 +139,14 @@ internal sealed class DutyEncounterAccumulator
                     merged.Add(key, totals);
                 }
 
-                totals.Add(combatant);
+                totals.Add(combatant, activeDurationSeconds);
             }
         }
 
         var sessionStart = startTime ?? now;
-        var durationSeconds = Math.Max(1, ((endTime ?? now) - sessionStart).TotalSeconds);
+        var durationSeconds = Math.Max(
+            1,
+            completedDurationSeconds + activeDurationSeconds);
         var combatants = merged.Values
             .Select(totals => totals.ToCombatant(durationSeconds))
             .ToArray();
@@ -159,8 +178,22 @@ internal sealed class DutyEncounterAccumulator
             // Duty totals remain on the meter, while FFLogs comparisons must use one
             // concrete boss segment instead of cumulative damage from the whole duty.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
+            TerritoryId = territoryId,
+            // ACT treats merged encounters as the sum of their active encounter
+            // durations. Travel, cutscenes, and waits between pulls must not lower DPS.
+            CombatDuration = TimeSpan.FromSeconds(durationSeconds),
         };
     }
+
+    private static double ResolveSegmentDurationSeconds(
+        Encounter segment,
+        DateTimeOffset fallbackEndTime)
+        => segment.CombatDuration is { } combatDuration && combatDuration > TimeSpan.Zero
+            ? Math.Max(1, combatDuration.TotalSeconds)
+            : Math.Max(
+                1,
+                (segment.EndTime.GetValueOrDefault(fallbackEndTime) - segment.StartTime)
+                .TotalSeconds);
 
     private sealed class CombatantTotals
     {
@@ -174,8 +207,12 @@ internal sealed class DutyEncounterAccumulator
         private int damageHits;
         private int criticalHits;
         private int criticalDirectHits;
+        private double? fflogsPercentile;
+        private string? fflogsEncounterName;
+        private double personalDamageDurationSeconds;
+        private double externalDamageDurationSeconds;
 
-        public void Add(Combatant combatant)
+        public void Add(Combatant combatant, double encounterDurationSeconds)
         {
             if (!string.IsNullOrWhiteSpace(combatant.Id))
             {
@@ -196,6 +233,23 @@ internal sealed class DutyEncounterAccumulator
             damageHits += combatant.DamageHits;
             criticalHits += combatant.CriticalHits;
             criticalDirectHits += combatant.CriticalDirectHits;
+            if (combatant.FflogsPercentile is { } percentile &&
+                double.IsFinite(percentile) &&
+                percentile >= 0 &&
+                percentile <= 100 &&
+                !string.IsNullOrWhiteSpace(combatant.FflogsEncounterName))
+            {
+                fflogsPercentile = percentile;
+                fflogsEncounterName = combatant.FflogsEncounterName;
+            }
+            personalDamageDurationSeconds += ResolveDamageDuration(
+                combatant.TotalDamage,
+                combatant.Dps,
+                encounterDurationSeconds);
+            externalDamageDurationSeconds += ResolveDamageDuration(
+                combatant.TotalDamage,
+                combatant.ExtDps,
+                encounterDurationSeconds);
         }
 
         public CombatantTotals Clone()
@@ -211,11 +265,25 @@ internal sealed class DutyEncounterAccumulator
                 damageHits = damageHits,
                 criticalHits = criticalHits,
                 criticalDirectHits = criticalDirectHits,
+                fflogsPercentile = fflogsPercentile,
+                fflogsEncounterName = fflogsEncounterName,
+                personalDamageDurationSeconds = personalDamageDurationSeconds,
+                externalDamageDurationSeconds = externalDamageDurationSeconds,
             };
 
         public Combatant ToCombatant(double durationSeconds)
         {
-            var rate = totalDamage / durationSeconds;
+            var encounterRate = totalDamage / durationSeconds;
+            var personalRate = totalDamage / Math.Max(
+                1,
+                personalDamageDurationSeconds > 0
+                    ? personalDamageDurationSeconds
+                    : durationSeconds);
+            var externalRate = totalDamage / Math.Max(
+                1,
+                externalDamageDurationSeconds > 0
+                    ? externalDamageDurationSeconds
+                    : durationSeconds);
             return new Combatant(
                 id,
                 name,
@@ -224,12 +292,24 @@ internal sealed class DutyEncounterAccumulator
                 totalDamage,
                 totalHealing,
                 deaths,
-                rate,
-                rate,
-                rate,
+                personalRate,
+                encounterRate,
+                externalRate,
                 damageHits,
                 criticalHits,
-                criticalDirectHits);
+                criticalDirectHits,
+                fflogsPercentile,
+                fflogsEncounterName);
         }
+
+        private static double ResolveDamageDuration(
+            long damage,
+            double rate,
+            double encounterDurationSeconds)
+            => damage > 0 && double.IsFinite(rate) && rate > 0
+                ? damage / rate
+                : damage > 0
+                    ? encounterDurationSeconds
+                    : 0;
     }
 }

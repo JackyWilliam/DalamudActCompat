@@ -8,23 +8,28 @@ internal sealed class ZoneNameLocalizer(
     IDataManager dataManager,
     IPluginLog log)
 {
+    private IReadOnlyDictionary<uint, string>? localizedTerritories;
     private IReadOnlyDictionary<string, string>? localizedNames;
 
-    public string Localize(string zoneName)
+    public string Localize(uint? territoryId, string zoneName)
     {
-        if (string.IsNullOrWhiteSpace(zoneName))
-        {
-            return zoneName;
-        }
-
         try
         {
-            localizedNames ??= BuildLocalizedNames();
-            return Resolve(zoneName, localizedNames);
+            if (localizedTerritories is null || localizedNames is null)
+            {
+                (localizedTerritories, localizedNames) = BuildLocalizedNames();
+            }
+
+            return ResolveByTerritory(
+                territoryId,
+                zoneName,
+                localizedTerritories,
+                localizedNames);
         }
         catch (Exception ex)
         {
             log.Warning($"Meter zone-name localization was unavailable: {ex.Message}");
+            localizedTerritories = new Dictionary<uint, string>();
             localizedNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             return zoneName;
         }
@@ -38,9 +43,28 @@ internal sealed class ZoneNameLocalizer(
             ? localized
             : zoneName;
 
-    private IReadOnlyDictionary<string, string> BuildLocalizedNames()
+    internal static string ResolveByTerritory(
+        uint? territoryId,
+        string zoneName,
+        IReadOnlyDictionary<uint, string> localizedTerritories,
+        IReadOnlyDictionary<string, string> localizedNames)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (territoryId is > 0 &&
+            localizedTerritories.TryGetValue(territoryId.Value, out var localized) &&
+            !string.IsNullOrWhiteSpace(localized))
+        {
+            return localized;
+        }
+
+        return Resolve(zoneName, localizedNames);
+    }
+
+    private (
+        IReadOnlyDictionary<uint, string> Territories,
+        IReadOnlyDictionary<string, string> Names) BuildLocalizedNames()
+    {
+        var territories = new Dictionary<uint, string>();
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var localizedSheet = dataManager.GetExcelSheet<TerritoryType>();
         var englishSheet = dataManager.GetExcelSheet<TerritoryType>(ClientLanguage.English);
         foreach (var localizedTerritory in localizedSheet)
@@ -51,14 +75,15 @@ internal sealed class ZoneNameLocalizer(
                 continue;
             }
 
+            territories.TryAdd(localizedTerritory.RowId, localized);
             var englishTerritory = englishSheet.GetRow(localizedTerritory.RowId);
             var english = englishTerritory.PlaceName.ValueNullable?.Name.ToString();
             if (!string.IsNullOrWhiteSpace(english))
             {
-                map.TryAdd(english, localized);
+                names.TryAdd(english, localized);
             }
         }
 
-        return map;
+        return (territories, names);
     }
 }

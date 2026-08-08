@@ -16,10 +16,12 @@ public sealed class IinactAdapter : IParserEngine
     private readonly EncounterService encounterService;
     private readonly string logDirectory;
     private readonly IFramework framework;
+    private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
+    private readonly Func<Encounter, Encounter> captureFflogsEstimates;
     private readonly object syncRoot = new();
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
@@ -38,10 +40,12 @@ public sealed class IinactAdapter : IParserEngine
         EncounterService encounterService,
         string logDirectory,
         IFramework framework,
+        Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
-        Func<IReadOnlyList<RuntimePluginSpec>> customPlugins)
+        Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
+        Func<Encounter, Encounter>? captureFflogsEstimates = null)
     {
         this.actRuntime = actRuntime;
         this.logger = logger;
@@ -49,10 +53,12 @@ public sealed class IinactAdapter : IParserEngine
         this.encounterService = encounterService;
         this.logDirectory = logDirectory;
         this.framework = framework;
+        this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
+        this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
         actRuntime.EncounterChanged += OnEncounterChanged;
         framework.Update += OnFrameworkUpdate;
         wasBoundByDuty = isBoundByDuty();
@@ -241,7 +247,20 @@ public sealed class IinactAdapter : IParserEngine
 
     private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)
     {
-        var encounter = ActEncounterMapper.Map(snapshot);
+        var encounter = ActEncounterMapper.Map(snapshot) with
+        {
+            TerritoryId = getTerritoryId(),
+        };
+        // ACT can open and immediately close an encounter for a missed action.
+        // Do not let that empty snapshot replace the meter or become a history file.
+        if (!HasMeaningfulActivity(encounter))
+        {
+            return;
+        }
+        if (finished)
+        {
+            encounter = CaptureFflogsEstimatesSafely(encounter);
+        }
         var boundByDuty = isBoundByDuty();
         if (boundByDuty)
         {
@@ -341,8 +360,27 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
+        completed = CaptureFflogsEstimatesSafely(completed);
         stateStore.UpdateCurrent(completed);
         encounterService.QueueFinishedEncounter(completed);
+    }
+
+    internal static bool HasMeaningfulActivity(Encounter encounter)
+        => encounter.TotalDamage > 0 ||
+           encounter.TotalHealing > 0 ||
+           encounter.TotalDeaths > 0;
+
+    private Encounter CaptureFflogsEstimatesSafely(Encounter encounter)
+    {
+        try
+        {
+            return captureFflogsEstimates(encounter);
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"FFLogs estimate capture failed; saving encounter without it: {ex.Message}");
+            return encounter;
+        }
     }
 
     private void SetStatus(ParserState state, string message, string? detail = null)
