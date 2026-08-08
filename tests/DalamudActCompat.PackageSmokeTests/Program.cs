@@ -20,6 +20,7 @@ using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -77,6 +78,7 @@ try
     ValidateDutyEncounterAggregation();
     ValidateDutyEncounterPartySizes();
     ValidateControlCenterPresentation();
+    ValidateDiagnosticReport(testRoot);
     ValidateFflogsEstimateCurve();
     ValidateFflogsCurrentEncounterTable();
     ValidateFflogsConcurrencyBoundaries();
@@ -1416,10 +1418,13 @@ static void ValidateControlCenterPresentation()
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
-            parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)),
-        "The home/settings labels or guarded factory-reset action are missing from the new settings UI.");
+            parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
+        typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)),
+        "The home/settings labels, guarded factory-reset action, or diagnostic copy action are missing from the settings UI.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -4217,6 +4222,106 @@ static void ValidateChineseCombatChatParsing()
         SelfHostedActRuntime.ShouldPreferChatFallback(emptyActSnapshot, chatFallbackSnapshot) &&
         !SelfHostedActRuntime.ShouldPreferChatFallback(chatFallbackSnapshot, emptyActSnapshot),
         "A zero-damage ACT completion snapshot can still overwrite a valid chat fallback snapshot.");
+}
+
+static void ValidateDiagnosticReport(string testRoot)
+{
+    var launcherRoot = Path.Combine(testRoot, "diagnostic-launcher");
+    var paths = new PluginPaths(Path.Combine(
+        launcherRoot,
+        "pluginConfigs",
+        "DalamudActCompat"));
+    paths.EnsureCreated();
+    File.WriteAllLines(
+        Path.Combine(launcherRoot, "dalamud.log"),
+        [
+            "[OtherPlugin] private unrelated line",
+            "[DalamudActCompat] parser failed token=secret-token path=C:\\Users\\Alice\\game",
+            "   at DalamudActCompat.Parser.Start()",
+            "[OtherPlugin] another unrelated line",
+        ]);
+    File.WriteAllLines(
+        Path.Combine(launcherRoot, "dalamud.old.log"),
+        ["[DalamudActCompat] old failure https://example.invalid/?api_key=old-secret"]);
+    File.WriteAllLines(
+        Path.Combine(paths.LogDirectory, "external-host.log"),
+        ["host extension failed password=host-secret Authorization: Bearer bearer-secret"]);
+
+    var manifest = new ActPluginManifest
+    {
+        Id = "triggernometry",
+        Name = "Triggernometry",
+        Version = "2.1.2.2",
+        HostApiVersion = 1,
+    };
+    var host = new HostSupervisorSnapshot(
+        HostSupervisorState.Running,
+        ProcessRunning: true,
+        HostConnectionStatus.Connected,
+        ControlQueueLength: 1,
+        DataQueueLength: 2,
+        DroppedMessages: 0,
+        SessionId: "0123456789abcdef",
+        LastWrittenSequence: 8,
+        HostAcknowledgedSequence: 7,
+        HostWorkingSetBytes: 64 * 1024 * 1024,
+        HostThreadCount: 4,
+        HealthState: "Healthy",
+        HealthDetail: "ready at C:\\Users\\Alice\\runtime",
+        PluginHealth: [],
+        Diagnostics: [],
+        PluginStages: []);
+    var report = DiagnosticReportBuilder.Build(
+        paths,
+        new DiagnosticReportSnapshot(
+            "0.3.7.0",
+            "15.0.0",
+            new ParserStatus(
+                ParserState.Running,
+                "Running",
+                DateTimeOffset.Parse("2026-08-08T12:00:00+08:00")),
+            host,
+            ParsingEnabled: true,
+            DebugMode: false,
+            FflogsEnabled: true,
+            MeterSortMode.Dps,
+            MeterCompactMode: false,
+            [new InstalledActPlugin(manifest, "C:\\Users\\Alice\\plugin", Enabled: true)]));
+
+    Assert(
+        report.Contains("Plugin: 0.3.7.0", StringComparison.Ordinal) &&
+        report.Contains("parser failed", StringComparison.Ordinal) &&
+        report.Contains("at DalamudActCompat.Parser.Start()", StringComparison.Ordinal) &&
+        report.Contains("host extension failed", StringComparison.Ordinal) &&
+        report.Contains("triggernometry; version=2.1.2.2; enabled=True", StringComparison.Ordinal),
+        "The one-click diagnostic report omitted version, plugin, Host, or exception context.");
+    Assert(
+        !report.Contains("private unrelated", StringComparison.Ordinal) &&
+        !report.Contains("Alice", StringComparison.Ordinal) &&
+        !report.Contains("secret-token", StringComparison.Ordinal) &&
+        !report.Contains("old-secret", StringComparison.Ordinal) &&
+        !report.Contains("host-secret", StringComparison.Ordinal) &&
+        !report.Contains("bearer-secret", StringComparison.Ordinal) &&
+        report.Contains("<redacted>", StringComparison.Ordinal) &&
+        report.Contains("<user>", StringComparison.Ordinal),
+        "The diagnostic report included unrelated Dalamud lines or failed to redact sensitive values.");
+    Assert(
+        report.Length <= DiagnosticReportBuilder.MaximumReportCharacters &&
+        report.Contains("combat/network logs and configuration files are excluded", StringComparison.Ordinal),
+        "The diagnostic report is unbounded or does not explain its privacy exclusions.");
+
+    var selected = DiagnosticReportBuilder.SelectRelevantDalamudLines(
+        [
+            "[OtherPlugin] before",
+            "[DalamudActCompat] failure",
+            "   at DalamudActCompat.Test()",
+            "[OtherPlugin] after",
+        ]);
+    Assert(
+        selected.Count == 2 &&
+        selected[0].Contains("failure", StringComparison.Ordinal) &&
+        selected[1].Contains("at DalamudActCompat.Test()", StringComparison.Ordinal),
+        "The diagnostic log filter did not retain only plugin lines and their exception continuation.");
 }
 
 static string FindProjectRoot()

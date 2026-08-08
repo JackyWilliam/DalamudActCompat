@@ -64,6 +64,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openBundledPluginNotice;
     private readonly Action checkBundledPluginUpdates;
     private readonly Action openLogDirectory;
+    private readonly Func<string> buildDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
     private readonly Func<bool> isCactbotInstalled;
@@ -85,6 +86,8 @@ public sealed class ControlCenterWindow : Window
     private string customOverlayUrl = string.Empty;
     private string? customOverlayFeedback;
     private bool customOverlayFeedbackIsError;
+    private string? diagnosticCopyFeedback;
+    private bool diagnosticCopyFeedbackIsError;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
@@ -112,6 +115,7 @@ public sealed class ControlCenterWindow : Window
         Action openBundledPluginNotice,
         Action checkBundledPluginUpdates,
         Action openLogDirectory,
+        Func<string> buildDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
         Func<bool> isCactbotInstalled,
@@ -147,6 +151,7 @@ public sealed class ControlCenterWindow : Window
         this.openBundledPluginNotice = openBundledPluginNotice;
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
         this.openLogDirectory = openLogDirectory;
+        this.buildDiagnosticReport = buildDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
         this.isCactbotInstalled = isCactbotInstalled;
@@ -1063,14 +1068,34 @@ public sealed class ControlCenterWindow : Window
         ImGui.SameLine();
         DrawStatusWindowToggleButton(Vector2.Zero, detailedLabel: true);
         ImGui.SameLine();
+        if (ImGui.Button(text.Get("三方扩展声明", "Third-party extension notice")))
+        {
+            openBundledPluginNotice();
+        }
+
+        if (ImGui.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
+        {
+            CopyDiagnosticReport();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(text.Get(
+                "复制本插件相关的运行状态与近期日志；不复制战斗日志和配置文件，并会遮盖用户路径与常见凭据。原始战斗数据问题可使用右侧按钮打开日志文件夹。",
+                "Copies recent plugin diagnostics and runtime state. Combat logs and configuration files are excluded, and user paths and common credentials are redacted. For raw combat-data issues, use the button on the right to open the log folder."));
+        }
+        ImGui.SameLine();
         if (ImGui.Button(text.Get("打开日志文件夹", "Open log folder")))
         {
             openLogDirectory();
         }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("三方扩展声明", "Third-party extension notice")))
+
+        if (!string.IsNullOrWhiteSpace(diagnosticCopyFeedback))
         {
-            openBundledPluginNotice();
+            ImGui.TextColored(
+                diagnosticCopyFeedbackIsError
+                    ? new Vector4(0.95f, 0.45f, 0.40f, 1)
+                    : IceBlue,
+                diagnosticCopyFeedback);
         }
 
         ImGui.Spacing();
@@ -1153,6 +1178,28 @@ public sealed class ControlCenterWindow : Window
                 $"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {factoryResetResult}");
         }
         return changed;
+    }
+
+    private void CopyDiagnosticReport()
+    {
+        try
+        {
+            var report = buildDiagnosticReport();
+            ImGui.SetClipboardText(report);
+            diagnosticCopyFeedback = text.Get(
+                $"已复制诊断日志（{report.Length:N0} 字符），可直接粘贴到问题反馈。",
+                $"Diagnostic log copied ({report.Length:N0} characters); paste it into the issue report.");
+            diagnosticCopyFeedbackIsError = false;
+            logger.Information("Bounded diagnostic report copied to the clipboard.");
+        }
+        catch (Exception ex)
+        {
+            diagnosticCopyFeedback = text.Get(
+                "复制失败，请改用“打开日志文件夹”。",
+                "Copy failed; use Open log folder instead.");
+            diagnosticCopyFeedbackIsError = true;
+            logger.Error(ex, "Failed to copy the diagnostic report.");
+        }
     }
 
     private bool DrawOverlayWindowSettings(string name)

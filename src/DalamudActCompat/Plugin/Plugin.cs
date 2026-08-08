@@ -11,6 +11,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
@@ -338,6 +339,7 @@ public sealed class Plugin : IDalamudPlugin
             thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
+            BuildDiagnosticReport,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
             () => cactbotInstaller.IsInstalled,
@@ -1194,6 +1196,36 @@ public sealed class Plugin : IDalamudPlugin
         {
             logger.Error(ex, "Failed to open the log directory.");
         }
+    }
+
+    private string BuildDiagnosticReport()
+    {
+        IReadOnlyList<InstalledActPlugin> installedPlugins;
+        string? discoveryError = null;
+        try
+        {
+            installedPlugins = packageInstaller.Discover(configuration.DisabledActPluginIds);
+        }
+        catch (Exception ex)
+        {
+            installedPlugins = [];
+            discoveryError = ex.GetType().Name;
+        }
+
+        return DiagnosticReportBuilder.Build(
+            paths,
+            new DiagnosticReportSnapshot(
+                typeof(Plugin).Assembly.GetName().Version?.ToString(4) ?? "unknown",
+                typeof(IDalamudPluginInterface).Assembly.GetName().Version?.ToString() ?? "unknown",
+                parserEngine.Status,
+                hostSupervisor.Snapshot,
+                configuration.EnableParsing,
+                configuration.DebugMode,
+                configuration.Fflogs.Enabled,
+                configuration.Meter.SortMode,
+                configuration.Meter.CompactMode,
+                installedPlugins,
+                discoveryError));
     }
 
     private void ConfigureBundledPluginPermissions(bool enableFullFunctionality)
