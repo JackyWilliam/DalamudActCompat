@@ -362,7 +362,7 @@ public sealed class SettingsWindow : Window
         ImGui.TextUnformatted(text.Get("战斗统计显示列", "Combat Meter columns"));
         changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
         changed |= Checkbox(
-            text.Get("缩略模式（只显示自己）", "Compact mode (self only)"),
+            text.Get("收起（只显示自己）", "Collapsed (self only)"),
             configuration.Meter.CompactMode,
             value => configuration.Meter.CompactMode = value);
         changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);

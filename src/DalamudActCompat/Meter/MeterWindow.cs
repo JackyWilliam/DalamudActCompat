@@ -15,6 +15,14 @@ public sealed class MeterWindow : Window
     internal const string LimitBreakDisplayName = "LB (Limit Break)";
     internal const float MinimumTableWidthWithFflogs = 410;
     internal const float MinimumTableWidthWithoutFflogs = 350;
+    internal const float MinimumExpandedWindowWidth = 380;
+    internal const float MinimumExpandedWindowHeight = 170;
+    internal const float DefaultExpandedWindowWidth = 500;
+    internal const float DefaultExpandedWindowHeight = 420;
+    private const float CompactWindowMinimumHeight = 90;
+    private const float EncounterHeaderHeight = 44;
+    private const float CompactDragHandleHeight = 26;
+    private const float CompactToggleSize = 26;
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
@@ -31,6 +39,7 @@ public sealed class MeterWindow : Window
     private readonly Func<uint?, string, string> localizeZoneName;
     private readonly Action saveConfiguration;
     private bool isDragging;
+    private bool observedCompactMode;
     private Vector2 dragOffset;
 
     public MeterWindow(
@@ -54,6 +63,7 @@ public sealed class MeterWindow : Window
         this.endedStatusIcon = endedStatusIcon;
         this.localizeZoneName = localizeZoneName;
         this.saveConfiguration = saveConfiguration;
+        observedCompactMode = configuration.Meter.CompactMode;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
         Size = new Vector2(500, 420);
@@ -83,7 +93,11 @@ public sealed class MeterWindow : Window
         var settings = configuration.Meter;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(380, 170),
+            MinimumSize = new Vector2(
+                MinimumExpandedWindowWidth,
+                settings.CompactMode
+                    ? CompactWindowMinimumHeight
+                    : MinimumExpandedWindowHeight),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
         Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
@@ -131,7 +145,11 @@ public sealed class MeterWindow : Window
         }
 
         var allRows = meterService.GetRows(encounter);
-        var rows = SelectVisibleRows(allRows, settings.CompactMode);
+        SynchronizeCompactMode(settings);
+        if (!settings.CompactMode)
+        {
+            CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
+        }
         if (settings.ShowHeader)
         {
             DrawEncounterHeader(encounter, settings);
@@ -141,15 +159,9 @@ public sealed class MeterWindow : Window
             DrawCompactDragHandle(settings);
         }
 
-        if (rows.Count == 0)
-        {
-            ImGui.TextDisabled(text.Get("等待玩家数据…", "Waiting for player data…"));
-            return;
-        }
-
+        var rows = SelectVisibleRows(allRows, settings.CompactMode);
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         var showFflogs = configuration.Fflogs.Enabled && sortMode != MeterSortMode.Hps;
-        var maximumScore = Math.Max(1, allRows.Max(row => Score(row, sortMode)));
         var availableTableWidth = ImGui.GetContentRegionAvail().X;
         var minimumTableWidth = (showFflogs
             ? MinimumTableWidthWithFflogs
@@ -157,6 +169,14 @@ public sealed class MeterWindow : Window
         var useHorizontalScroll = ShouldEnableHorizontalScroll(
             availableTableWidth,
             minimumTableWidth);
+        ApplyCompactWindowHeight(settings, useHorizontalScroll);
+        if (rows.Count == 0)
+        {
+            ImGui.TextDisabled(text.Get("等待玩家数据…", "Waiting for player data…"));
+            return;
+        }
+
+        var maximumScore = Math.Max(1, allRows.Max(row => Score(row, sortMode)));
         if (useHorizontalScroll)
         {
             ImGui.SetNextWindowContentSize(new Vector2(minimumTableWidth, 0));
@@ -209,20 +229,22 @@ public sealed class MeterWindow : Window
 
     private void DrawEncounterHeader(Encounter encounter, MeterSettings settings)
     {
-        const float headerHeight = 44;
-        const float toggleWidth = 54;
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
-        var toggleStart = new Vector2(start.X + width - toggleWidth - 6, start.Y + 9);
-        var toggleEnd = toggleStart + new Vector2(toggleWidth, 26);
+        var toggleStart = new Vector2(start.X + width - CompactToggleSize - 6, start.Y + 9);
+        var toggleEnd = toggleStart + new Vector2(CompactToggleSize, CompactToggleSize);
         var toggleHovered = CanInteractWithCompactToggle(settings) &&
                             ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
-        ImGui.InvisibleButton("meter-header-drag", new Vector2(width, headerHeight));
+        ImGui.InvisibleButton("meter-header-drag", new Vector2(width, EncounterHeaderHeight));
         HandleHeaderDrag(settings, allowStart: !toggleHovered);
         HandleCompactModeToggle(settings, toggleHovered);
 
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(start, start + new Vector2(width, headerHeight), ImGui.GetColorU32(NavyRaised), 6);
+        drawList.AddRectFilled(
+            start,
+            start + new Vector2(width, EncounterHeaderHeight),
+            ImGui.GetColorU32(NavyRaised),
+            6);
         DrawEncounterStateIcon(drawList, encounter.IsActive, start + new Vector2(9, 5));
         var titleRight = Math.Max(start.X + 36, toggleStart.X - 6);
         drawList.AddText(
@@ -267,21 +289,19 @@ public sealed class MeterWindow : Window
 
     private void DrawCompactDragHandle(MeterSettings settings)
     {
-        const float height = 26;
-        const float toggleWidth = 54;
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
-        var toggleStart = new Vector2(start.X + width - toggleWidth, start.Y);
-        var toggleEnd = toggleStart + new Vector2(toggleWidth, 24);
+        var toggleStart = new Vector2(start.X + width - CompactToggleSize, start.Y);
+        var toggleEnd = toggleStart + new Vector2(CompactToggleSize, CompactToggleSize);
         var toggleHovered = CanInteractWithCompactToggle(settings) &&
                             ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
-        ImGui.InvisibleButton("meter-compact-drag", new Vector2(width, height));
+        ImGui.InvisibleButton("meter-compact-drag", new Vector2(width, CompactDragHandleHeight));
         HandleHeaderDrag(settings, allowStart: !toggleHovered);
         HandleCompactModeToggle(settings, toggleHovered);
         var drawList = ImGui.GetWindowDrawList();
         if (!settings.IsLocked && ImGui.IsItemHovered() && !toggleHovered)
         {
-            var centerY = start.Y + (height * 0.5f);
+            var centerY = start.Y + (CompactDragHandleHeight * 0.5f);
             drawList.AddLine(
                 new Vector2(start.X + 8, centerY),
                 new Vector2(toggleStart.X - 8, centerY),
@@ -327,8 +347,92 @@ public sealed class MeterWindow : Window
             return;
         }
 
-        settings.CompactMode = !settings.CompactMode;
+        if (settings.CompactMode)
+        {
+            settings.CompactMode = false;
+            observedCompactMode = false;
+            RestoreExpandedWindowSize(settings);
+        }
+        else
+        {
+            CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
+            settings.CompactMode = true;
+            observedCompactMode = true;
+        }
+        isDragging = false;
         saveConfiguration();
+    }
+
+    private void SynchronizeCompactMode(MeterSettings settings)
+    {
+        if (settings.CompactMode == observedCompactMode)
+        {
+            return;
+        }
+
+        if (settings.CompactMode)
+        {
+            CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
+        }
+        else
+        {
+            RestoreExpandedWindowSize(settings);
+        }
+
+        observedCompactMode = settings.CompactMode;
+        saveConfiguration();
+    }
+
+    private static void CaptureExpandedWindowSize(MeterSettings settings, Vector2 size)
+    {
+        if (!IsValidExpandedWindowSize(size))
+        {
+            return;
+        }
+
+        settings.ExpandedWindowWidth = size.X;
+        settings.ExpandedWindowHeight = size.Y;
+    }
+
+    private static bool IsValidExpandedWindowSize(Vector2 size)
+        => float.IsFinite(size.X) &&
+           float.IsFinite(size.Y) &&
+           size.X >= MinimumExpandedWindowWidth &&
+           size.Y >= MinimumExpandedWindowHeight;
+
+    internal static Vector2 NormalizeExpandedWindowSize(MeterSettings settings)
+        => new(
+            float.IsFinite(settings.ExpandedWindowWidth) &&
+            settings.ExpandedWindowWidth >= MinimumExpandedWindowWidth
+                ? settings.ExpandedWindowWidth
+                : DefaultExpandedWindowWidth,
+            float.IsFinite(settings.ExpandedWindowHeight) &&
+            settings.ExpandedWindowHeight >= MinimumExpandedWindowHeight
+                ? settings.ExpandedWindowHeight
+                : DefaultExpandedWindowHeight);
+
+    private static void RestoreExpandedWindowSize(MeterSettings settings)
+        => ImGui.SetWindowSize(NormalizeExpandedWindowSize(settings), ImGuiCond.Always);
+
+    private void ApplyCompactWindowHeight(MeterSettings settings, bool useHorizontalScroll)
+    {
+        if (!settings.CompactMode)
+        {
+            return;
+        }
+
+        var targetHeight = CalculateCompactWindowHeight(
+            settings.ShowHeader,
+            ImGui.GetTextLineHeightWithSpacing(),
+            ImGui.GetStyle().WindowPadding.Y,
+            ImGui.GetStyle().ItemSpacing.Y,
+            ImGui.GetStyle().ScrollbarSize,
+            useHorizontalScroll);
+        var currentSize = ImGui.GetWindowSize();
+        if (Math.Abs(currentSize.Y - targetHeight) > 0.5f)
+        {
+            ImGui.SetWindowSize(new Vector2(currentSize.X, targetHeight), ImGuiCond.Always);
+        }
     }
 
     private void DrawCompactModeToggle(
@@ -338,31 +442,56 @@ public sealed class MeterWindow : Window
         Vector2 end,
         bool hovered)
     {
-        var fill = settings.CompactMode
-            ? new Vector4(0.17f, 0.34f, 0.42f, 0.96f)
+        var pressed = hovered && ImGui.IsMouseDown(ImGuiMouseButton.Left);
+        var fill = pressed
+            ? new Vector4(0.07f, 0.11f, 0.17f, 0.98f)
             : hovered
-                ? NavyHover
-                : new Vector4(0.10f, 0.14f, 0.20f, 0.96f);
+                ? settings.CompactMode
+                    ? new Vector4(0.21f, 0.40f, 0.49f, 0.98f)
+                    : NavyHover
+                : settings.CompactMode
+                    ? new Vector4(0.17f, 0.34f, 0.42f, 0.96f)
+                    : new Vector4(0.10f, 0.14f, 0.20f, 0.96f);
+        var accent = settings.CompactMode ? IceBlue : Gold;
+        if (!hovered && !settings.CompactMode)
+        {
+            accent.W = 0.72f;
+        }
         drawList.AddRectFilled(start, end, ImGui.GetColorU32(fill), 4);
         drawList.AddRect(
             start,
             end,
-            ImGui.GetColorU32(settings.CompactMode ? IceBlue : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.65f)),
+            ImGui.GetColorU32(accent),
             4);
-        var label = settings.CompactMode
-            ? text.Get("自己", "Self")
-            : text.Get("全队", "Party");
-        var labelSize = ImGui.CalcTextSize(label);
-        drawList.AddText(
-            start + ((end - start - labelSize) * 0.5f),
-            ImGui.GetColorU32(settings.CompactMode ? IceBlue : Vector4.One),
-            label);
+        DrawCompactChevron(
+            drawList,
+            start,
+            end,
+            pointsDown: settings.CompactMode,
+            hovered ? Vector4.One : accent);
         if (hovered)
         {
             ImGui.SetTooltip(text.Get(
-                settings.CompactMode ? "点击显示完整队伍" : "点击只显示自己",
-                settings.CompactMode ? "Show the full party" : "Show only yourself"));
+                settings.CompactMode ? "展开：显示完整队伍" : "收起：只显示自己",
+                settings.CompactMode ? "Expand: show the full party" : "Collapse: show only yourself"));
         }
+    }
+
+    private static void DrawCompactChevron(
+        ImDrawListPtr drawList,
+        Vector2 start,
+        Vector2 end,
+        bool pointsDown,
+        Vector4 color)
+    {
+        var center = (start + end) * 0.5f;
+        const float halfWidth = 4.5f;
+        const float halfHeight = 2.5f;
+        var middle = new Vector2(center.X, center.Y + (pointsDown ? halfHeight : -halfHeight));
+        var edgeY = center.Y + (pointsDown ? -halfHeight : halfHeight);
+        var packedColor = ImGui.GetColorU32(color);
+        drawList.AddLine(new Vector2(center.X - halfWidth, edgeY), middle, packedColor, 2.2f);
+        drawList.AddLine(middle, new Vector2(center.X + halfWidth, edgeY), packedColor, 2.2f);
     }
 
     private void DrawEncounterStateIcon(ImDrawListPtr drawList, bool isActive, Vector2 start)
@@ -657,6 +786,32 @@ public sealed class MeterWindow : Window
 
     internal static float CalculateCombatantRowHeight(float textLineHeightWithSpacing)
         => Math.Max(28, textLineHeightWithSpacing + 8);
+
+    internal static float CalculateCompactWindowHeight(
+        bool showHeader,
+        float textLineHeightWithSpacing,
+        float windowPaddingY,
+        float itemSpacingY,
+        float scrollbarSize,
+        bool useHorizontalScroll)
+    {
+        var topSectionHeight = showHeader
+            ? EncounterHeaderHeight
+            : CompactDragHandleHeight;
+        var tableHeaderHeight = Math.Max(22, textLineHeightWithSpacing + 4);
+        var rowHeight = CalculateCombatantRowHeight(textLineHeightWithSpacing);
+        var horizontalScrollbarHeight = useHorizontalScroll
+            ? Math.Max(0, scrollbarSize)
+            : 0;
+        return MathF.Ceiling(
+            (Math.Max(0, windowPaddingY) * 2) +
+            topSectionHeight +
+            (Math.Max(0, itemSpacingY) * 2) +
+            tableHeaderHeight +
+            rowHeight +
+            horizontalScrollbarHeight +
+            2);
+    }
 
     internal static float CalculateJobIconSize(float rowHeight, float textLineHeight)
         => Math.Min(rowHeight - 4, Math.Max(22, textLineHeight + 4));

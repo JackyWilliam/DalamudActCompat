@@ -512,7 +512,7 @@ public sealed class ControlCenterWindow : Window
             ImGui.SameLine();
             changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
             changed |= Checkbox(
-                text.Get("缩略模式（只显示自己）", "Compact mode (self only)"),
+                text.Get("收起（只显示自己）", "Collapsed (self only)"),
                 configuration.Meter.CompactMode,
                 value => configuration.Meter.CompactMode = value);
             if (configuration.Meter.ShowJob)

@@ -717,13 +717,17 @@ static void ValidateMeterRows()
         UiLanguage = "zh-CN",
     };
     configuration.Meter.CompactMode = true;
+    configuration.Meter.ExpandedWindowWidth = 612;
+    configuration.Meter.ExpandedWindowHeight = 284;
     var restoredConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
                                     Newtonsoft.Json.JsonConvert.SerializeObject(configuration))
                                 ?? throw new InvalidOperationException(
                                     "Compact Meter configuration could not be restored.");
     Assert(
-        restoredConfiguration.Meter.CompactMode,
-        "The user-selected compact Meter mode was not persisted.");
+        restoredConfiguration.Meter.CompactMode &&
+        restoredConfiguration.Meter.ExpandedWindowWidth == 612 &&
+        restoredConfiguration.Meter.ExpandedWindowHeight == 284,
+        "The compact Meter mode or its expanded window size was not persisted.");
     var text = new UiText(configuration);
     settings.PlayerIdentityMode = PlayerIdentityMode.Job;
     Assert(
@@ -820,6 +824,44 @@ static void ValidateMeterLayout()
     Assert(
         rowHeight <= 30,
         "Combat Meter did not keep each player on one compact line.");
+    var compactHeight = MeterWindow.CalculateCompactWindowHeight(
+        showHeader: true,
+        textLineHeightWithSpacing: 19,
+        windowPaddingY: 9,
+        itemSpacingY: MeterWindow.CombatantRowSpacing,
+        scrollbarSize: 14,
+        useHorizontalScroll: false);
+    var compactHeightWithScroll = MeterWindow.CalculateCompactWindowHeight(
+        showHeader: true,
+        textLineHeightWithSpacing: 19,
+        windowPaddingY: 9,
+        itemSpacingY: MeterWindow.CombatantRowSpacing,
+        scrollbarSize: 14,
+        useHorizontalScroll: true);
+    var compactHeightWithoutHeader = MeterWindow.CalculateCompactWindowHeight(
+        showHeader: false,
+        textLineHeightWithSpacing: 19,
+        windowPaddingY: 9,
+        itemSpacingY: MeterWindow.CombatantRowSpacing,
+        scrollbarSize: 14,
+        useHorizontalScroll: false);
+    Assert(
+        compactHeight == 121 &&
+        compactHeightWithScroll == compactHeight + 14 &&
+        compactHeightWithoutHeader == compactHeight - 18,
+        "Compact mode did not size the Meter to exactly one header and one player row.");
+
+    var invalidExpandedSize = new MeterSettings
+    {
+        ExpandedWindowWidth = float.NaN,
+        ExpandedWindowHeight = 100,
+    };
+    Assert(
+        MeterWindow.NormalizeExpandedWindowSize(invalidExpandedSize) ==
+        new System.Numerics.Vector2(
+            MeterWindow.DefaultExpandedWindowWidth,
+            MeterWindow.DefaultExpandedWindowHeight),
+        "Invalid saved Meter dimensions did not fall back to the established expanded size.");
 
     var iconSizeMethod = typeof(MeterWindow).GetMethod(
                              "CalculateJobIconSize",
