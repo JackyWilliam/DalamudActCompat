@@ -75,6 +75,7 @@ try
     ValidateMeterRows();
     ValidateMeterLayout();
     ValidatePictoActOverlayCommands();
+    ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
     ValidateDutyEncounterPartySizes();
     ValidateControlCenterPresentation();
@@ -1186,6 +1187,41 @@ static void ValidateEncounterParticipantsSurvivePartyDeparture()
     Assert(
         withoutMetadata.Count == 8 && withoutMetadata.Skip(5).All(static item => item.Identity is null),
         "ACT allies without live identity metadata were silently removed from the encounter.");
+}
+
+static void ValidateEmptyEncounterFiltering()
+{
+    var now = DateTimeOffset.UtcNow;
+    var empty = new Encounter(
+        Guid.NewGuid(),
+        now,
+        now,
+        "Middle La Noscea",
+        "Encounter",
+        [new Combatant("local", "Player", "PLD", true, 0, 0, 0)],
+        [],
+        [],
+        [],
+        [],
+        []);
+
+    Assert(
+        !IinactAdapter.HasMeaningfulActivity(empty),
+        "A zero-damage missed action is still eligible for encounter history.");
+    Assert(
+        IinactAdapter.HasMeaningfulActivity(empty with
+        {
+            Combatants = [empty.Combatants[0] with { TotalDamage = 1 }],
+        }) &&
+        IinactAdapter.HasMeaningfulActivity(empty with
+        {
+            Combatants = [empty.Combatants[0] with { TotalHealing = 1 }],
+        }) &&
+        IinactAdapter.HasMeaningfulActivity(empty with
+        {
+            Combatants = [empty.Combatants[0] with { Deaths = 1 }],
+        }),
+        "The empty-encounter filter rejects a meaningful damage, healing, or death record.");
 }
 
 static void ValidateDutyEncounterAggregation()

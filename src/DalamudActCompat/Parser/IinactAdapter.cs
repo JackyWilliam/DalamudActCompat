@@ -251,6 +251,12 @@ public sealed class IinactAdapter : IParserEngine
         {
             TerritoryId = getTerritoryId(),
         };
+        // ACT can open and immediately close an encounter for a missed action.
+        // Do not let that empty snapshot replace the meter or become a history file.
+        if (!HasMeaningfulActivity(encounter))
+        {
+            return;
+        }
         if (finished)
         {
             encounter = CaptureFflogsEstimatesSafely(encounter);
@@ -358,6 +364,11 @@ public sealed class IinactAdapter : IParserEngine
         stateStore.UpdateCurrent(completed);
         encounterService.QueueFinishedEncounter(completed);
     }
+
+    internal static bool HasMeaningfulActivity(Encounter encounter)
+        => encounter.TotalDamage > 0 ||
+           encounter.TotalHealing > 0 ||
+           encounter.TotalDeaths > 0;
 
     private Encounter CaptureFflogsEstimatesSafely(Encounter encounter)
     {
