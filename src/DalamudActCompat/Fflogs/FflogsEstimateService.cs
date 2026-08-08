@@ -125,7 +125,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         var localPlayer = encounter.Combatants.FirstOrDefault(static combatant => combatant.IsLocalPlayer);
-        if (localPlayer is null || string.IsNullOrWhiteSpace(localPlayer.Job) || encounter.Duration.TotalSeconds < 15)
+        if (localPlayer is null ||
+            string.IsNullOrWhiteSpace(localPlayer.Job) ||
+            encounter.EffectiveDuration.TotalSeconds < 15)
         {
             return null;
         }
@@ -145,7 +147,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             {
                 var encounterDps = localPlayer.EncDps > 0
                     ? localPlayer.EncDps
-                    : localPlayer.TotalDamage / Math.Max(1, encounter.Duration.TotalSeconds);
+                    : localPlayer.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
                 var percentile = EstimatePercentile(curve.Points, encounterDps);
                 SetStatus(FflogsEstimateState.Ready, $"FFLogs estimate ready: {curve.EncounterName} / {specName}.");
                 return new FflogsEstimate(

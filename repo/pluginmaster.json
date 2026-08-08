@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.6.13",
+    "AssemblyVersion":  "0.3.7.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.13/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.6.13/DalamudActCompat.zip",
-    "LastUpdate":  1786177039261,
-    "Changelog":  "v0.3.6.13 战斗统计与 FFLogs 修复：统计行改为统一表头、紧凑数值与 3px 行距，移除悬浮窗排序控件；Limit Break 改用专属图标但保留伤害统计；FFLogs 改用 Territory ID 自动识别当前 AAC Heavyweight 榜单，支持 M4S 第二阶段自动切榜，并拒绝加载历史榜单。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
+    "LastUpdate":  1786181511691,
+    "Changelog":  "v0.3.7.0 战斗统计升级：新增表头与紧凑表格、Limit Break 独立图标和名称、当前 AAC Heavyweight 的 FFLogs 自动匹配；修复木人脱战结算保留、LB 伤害归属，并让 4/8/24 人多战斗段副本按有效战斗时长计算累计 DPS/HPS。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

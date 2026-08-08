@@ -311,11 +311,11 @@ public sealed class EncounterWindow : Window
 
     private void DrawEncounterDetails(Encounter encounter)
     {
-        var durationSeconds = Math.Max(1, encounter.Duration.TotalSeconds);
+        var durationSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
         ImGui.TextColored(Gold, encounter.EnemyName);
         ImGui.TextDisabled(
             $"{encounter.ZoneName}  ·  {encounter.StartTime.LocalDateTime:yyyy-MM-dd HH:mm:ss}  ·  " +
-            $"{FormatDuration(encounter.Duration)}");
+            $"{FormatDuration(encounter.EffectiveDuration)}");
         ImGui.Spacing();
 
         if (ImGui.BeginTable("encounter-summary", 4, ImGuiTableFlags.SizingStretchSame))
@@ -408,7 +408,7 @@ public sealed class EncounterWindow : Window
             drawList.AddRectFilled(start, start + new Vector2(3, height), ImGui.GetColorU32(IceBlue), 6);
         }
         drawList.AddText(start + new Vector2(10, 8), ImGui.GetColorU32(selected ? IceBlue : Vector4.One), TrimToWidth(EncounterTitle(encounter), width - 20));
-        var detail = $"{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(encounter.Duration)}  ·  {encounter.TotalDeaths} {text.Get("死亡", "KO")}";
+        var detail = $"{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(encounter.EffectiveDuration)}  ·  {encounter.TotalDeaths} {text.Get("死亡", "KO")}";
         drawList.AddText(start + new Vector2(10, 32), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), TrimToWidth(detail, width - 20));
         ImGui.PopID();
         return clicked;

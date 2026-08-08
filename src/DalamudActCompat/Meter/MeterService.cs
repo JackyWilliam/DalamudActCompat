@@ -18,15 +18,22 @@ public sealed class MeterService
         this.settings = settings;
     }
 
-    public EncounterSnapshot Snapshot => stateStore.GetSnapshot();
+    public Encounter? DisplayEncounter => stateStore.GetDisplayEncounter();
 
     public IReadOnlyList<CombatantRow> GetRows()
     {
-        var encounter = Snapshot.Current;
+        var encounter = DisplayEncounter;
         if (encounter is null)
         {
             return Array.Empty<CombatantRow>();
         }
+
+        return GetRows(encounter);
+    }
+
+    public IReadOnlyList<CombatantRow> GetRows(Encounter encounter)
+    {
+        ArgumentNullException.ThrowIfNull(encounter);
 
         lock (cacheLock)
         {
@@ -45,7 +52,7 @@ public sealed class MeterService
 
     private IReadOnlyList<CombatantRow> BuildRows(Encounter encounter)
     {
-        var duration = Math.Max(1.0, encounter.Duration.TotalSeconds);
+        var duration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
         var rows = encounter.Combatants.Select(combatant => new CombatantRow(
             combatant.Id,

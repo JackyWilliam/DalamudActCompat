@@ -16,7 +16,15 @@ public sealed record Encounter(
     [System.Text.Json.Serialization.JsonIgnore]
     public Encounter? FflogsRankingEncounter { get; init; }
 
+    public TimeSpan? CombatDuration { get; init; }
+
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public TimeSpan EffectiveDuration
+        => CombatDuration is { } combatDuration && combatDuration > TimeSpan.Zero
+            ? combatDuration
+            : Duration;
 
     public bool IsActive => EndTime is null;
 

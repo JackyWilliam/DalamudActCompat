@@ -75,6 +75,7 @@ try
     ValidateMeterLayout();
     ValidatePictoActOverlayCommands();
     ValidateDutyEncounterAggregation();
+    ValidateDutyEncounterPartySizes();
     ValidateControlCenterPresentation();
     ValidateFflogsEstimateCurve();
     ValidateFflogsCurrentEncounterTable();
@@ -644,6 +645,9 @@ static void ValidateMeterRows()
         rows.Any(static row => row.Name == "Limit Break" && row.TotalDamage == 50_000),
         "Limit Break damage is missing from the Meter rows.");
     Assert(
+        MeterWindow.LimitBreakDisplayName == "LB (Limit Break)",
+        "The Limit Break row does not show the requested player-column label.");
+    Assert(
         encounter.Combatants.Any(static combatant => combatant.Name == "Limit Break"),
         "Hiding Limit Break from the Meter mutated the underlying encounter data.");
     Assert(rows[0].Name == "Tank@Alpha", "DPS sorting did not preserve the player server name.");
@@ -701,6 +705,38 @@ static void ValidateMeterRows()
     Assert(
         encounter.Combatants[0].Name == "Tank@Alpha",
         "Display-only player ID masking mutated the encounter data.");
+
+    var emptyCompletion = encounter with
+    {
+        EndTime = encounter.EndTime?.AddSeconds(1),
+        Combatants = [],
+    };
+    state.UpdateCurrent(emptyCompletion);
+    Assert(
+        state.GetDisplayEncounter()?.Id == encounter.Id &&
+        state.GetDisplayEncounter()?.TotalDamage == encounter.TotalDamage,
+        "An empty combat completion replaced the latest displayable Meter encounter.");
+    state.UpdateCurrent(null);
+    Assert(
+        state.GetDisplayEncounter()?.TotalDamage == encounter.TotalDamage,
+        "Clearing a transient current snapshot discarded the latest displayable Meter encounter.");
+
+    var activeEncounter = encounter with
+    {
+        Id = Guid.NewGuid(),
+        EndTime = null,
+    };
+    state.UpdateCurrent(activeEncounter);
+    state.UpdateCurrent(null);
+    Assert(
+        state.GetDisplayEncounter() is { IsActive: false } retainedEncounter &&
+        retainedEncounter.Id == activeEncounter.Id &&
+        retainedEncounter.TotalDamage == activeEncounter.TotalDamage,
+        "A cleared live snapshot did not retain a completed Meter encounter.");
+    state.ResetCurrent();
+    Assert(
+        state.GetDisplayEncounter() is null,
+        "An explicit Meter reset did not clear the retained encounter.");
 }
 
 static void ValidateMeterLayout()
@@ -1004,10 +1040,102 @@ static void ValidateDutyEncounterAggregation()
         completed.Combatants[0].CriticalDirectHits == 2,
         "Leaving the duty did not finalize the accumulated boss totals exactly once.");
     Assert(
+        completed.Duration == TimeSpan.FromMinutes(7) &&
+        completed.EffectiveDuration == TimeSpan.FromMinutes(4) &&
+        Math.Abs(completed.Combatants[0].EncDps - 0.75) < 0.0001,
+        "Duty DPS included travel or waiting time between completed combat segments.");
+    Assert(
         completed.FflogsRankingEncounter?.Id == secondId &&
         completed.FflogsRankingEncounter.TotalDamage == 80,
         "The completed duty did not retain its latest boss segment for FFLogs estimation.");
+
+    var serialized = JsonSerializer.Serialize(completed);
+    var restored = JsonSerializer.Deserialize<Encounter>(serialized)
+                   ?? throw new InvalidOperationException(
+                       "The accumulated duty encounter could not be restored from JSON.");
+    Assert(
+        restored.CombatDuration == TimeSpan.FromMinutes(4) &&
+        restored.EffectiveDuration == TimeSpan.FromMinutes(4),
+        "The accumulated active-combat duration was not preserved in encounter history.");
 }
+
+static void ValidateDutyEncounterPartySizes()
+{
+    foreach (var partySize in new[] { 4, 8, 24 })
+    {
+        var start = new DateTimeOffset(2026, 8, 8, 12, 0, 0, TimeSpan.Zero);
+        var first = CreatePartySegment(
+            Guid.NewGuid(),
+            start,
+            start.AddSeconds(30),
+            partySize,
+            damage: 3_000,
+            dps: 150,
+            encDps: 100,
+            extDps: 75);
+        var second = CreatePartySegment(
+            Guid.NewGuid(),
+            start.AddSeconds(90),
+            start.AddSeconds(110),
+            partySize,
+            damage: 2_000,
+            dps: 200,
+            encDps: 100,
+            extDps: 50);
+        var accumulator = new DutyEncounterAccumulator();
+        _ = accumulator.Update(first, finished: true, first.EndTime!.Value);
+        _ = accumulator.Update(second, finished: true, second.EndTime!.Value);
+        var completed = accumulator.Complete(start.AddSeconds(120))
+                        ?? throw new InvalidOperationException(
+                            $"The {partySize}-player duty produced no accumulated encounter.");
+
+        Assert(
+            completed.Combatants.Count == partySize &&
+            completed.EffectiveDuration == TimeSpan.FromSeconds(50) &&
+            completed.Duration == TimeSpan.FromSeconds(120),
+            $"The {partySize}-player duty did not preserve its roster or active-combat duration.");
+        Assert(
+            completed.Combatants.All(combatant =>
+                Math.Abs(combatant.Dps - (5_000d / 30)) < 0.0001 &&
+                Math.Abs(combatant.EncDps - 100) < 0.0001 &&
+                Math.Abs(combatant.ExtDps - 62.5) < 0.0001),
+            $"The {partySize}-player duty did not retain distinct DPS, EncDPS, and ExtDPS durations.");
+    }
+}
+
+static Encounter CreatePartySegment(
+    Guid id,
+    DateTimeOffset start,
+    DateTimeOffset end,
+    int partySize,
+    long damage,
+    double dps,
+    double encDps,
+    double extDps)
+    => new(
+        id,
+        start,
+        end,
+        "测试副本",
+        "测试首领",
+        Enumerable.Range(1, partySize)
+            .Select(index => new Combatant(
+                $"player-{index}",
+                $"Player {index}",
+                index <= 2 ? "PLD" : "DPS",
+                index == 1,
+                damage,
+                0,
+                0,
+                dps,
+                encDps,
+                extDps))
+            .ToArray(),
+        [],
+        [],
+        [],
+        [],
+        []);
 
 static Encounter CreateDutySegment(
     Guid id,
@@ -1046,7 +1174,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 6, 13)) == "v0.3.6.13",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 0)) == "v0.3.7.0",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&

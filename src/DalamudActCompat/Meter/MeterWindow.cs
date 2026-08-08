@@ -11,6 +11,7 @@ namespace DalamudActCompat.Meter;
 public sealed class MeterWindow : Window
 {
     internal const float CombatantRowSpacing = 3;
+    internal const string LimitBreakDisplayName = "LB (Limit Break)";
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
@@ -64,8 +65,8 @@ public sealed class MeterWindow : Window
             return false;
         }
 
-        var snapshot = meterService.Snapshot;
-        return !settings.AutoHideOutOfCombat || snapshot.Current?.IsActive == true;
+        var encounter = meterService.DisplayEncounter;
+        return !settings.AutoHideOutOfCombat || encounter?.IsActive == true;
     }
 
     public override void PreDraw()
@@ -111,17 +112,16 @@ public sealed class MeterWindow : Window
     public override void Draw()
     {
         var settings = configuration.Meter;
-        var snapshot = meterService.Snapshot;
+        var encounter = meterService.DisplayEncounter;
         using var fontScale = new FontScaleScope(settings.FontScale);
 
-        if (snapshot.Current is null)
+        if (encounter is null)
         {
             DrawEmptyState(settings);
             return;
         }
 
-        var encounter = snapshot.Current;
-        var rows = meterService.GetRows();
+        var rows = meterService.GetRows(encounter);
         if (settings.ShowHeader)
         {
             DrawEncounterHeader(encounter, settings);
@@ -205,7 +205,7 @@ public sealed class MeterWindow : Window
             start + new Vector2(28, 6),
             ImGui.GetColorU32(Gold),
             LocalizeEncounterTitle(encounter));
-        var subtitle = $"{localizeZoneName(encounter.ZoneName)}  ·  {FormatDuration(encounter.Duration)}";
+        var subtitle = $"{localizeZoneName(encounter.ZoneName)}  ·  {FormatDuration(encounter.EffectiveDuration)}";
         if (!UsesStatusAsEncounterTitle(encounter))
         {
             subtitle += "  ·  " +
@@ -422,7 +422,7 @@ public sealed class MeterWindow : Window
         var combatant = encounter.Combatants.FirstOrDefault(item =>
             string.Equals(item.Id, row.Id, StringComparison.OrdinalIgnoreCase));
         var displayName = isLimitBreak
-            ? string.Empty
+            ? LimitBreakDisplayName
             : combatant is null
                 ? row.Name
                 : PlayerIdentityFormatter.Format(combatant, encounter.Combatants, settings, text);
