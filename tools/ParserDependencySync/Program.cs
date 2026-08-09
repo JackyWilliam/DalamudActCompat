@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using FetchDependencies;
 
 if (args.Length is < 2 or > 3)
 {
@@ -31,7 +32,16 @@ if (checkOnly)
         return 1;
     }
 
-    Console.WriteLine($"FFXIV_ACT_Plugin {localVersion} is current.");
+    var logfilePath = Path.Combine(dependencyDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
+    if (!LogFormatIdentity.Matches(logfilePath, iinactVersion))
+    {
+        Console.Error.WriteLine(
+            $"FFXIV_ACT_Plugin.Logfile has a stale IINACT identity. Expected {LogFormatIdentity.ExpectedTemplate(iinactVersion)}.");
+        return 1;
+    }
+
+    Console.WriteLine(
+        $"FFXIV_ACT_Plugin {localVersion} is current and identifies IINACT {iinactVersion}.");
     return 0;
 }
 
@@ -47,6 +57,14 @@ if (localVersion != remoteVersion)
 {
     Console.Error.WriteLine(
         $"FFXIV_ACT_Plugin update did not reach current version. Local {localVersion}, current {remoteVersion}.");
+    return 1;
+}
+
+var synchronizedLogfilePath = Path.Combine(dependencyDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
+if (!LogFormatIdentity.Matches(synchronizedLogfilePath, iinactVersion))
+{
+    Console.Error.WriteLine(
+        $"FFXIV_ACT_Plugin.Logfile identity patch failed. Expected {LogFormatIdentity.ExpectedTemplate(iinactVersion)}.");
     return 1;
 }
 

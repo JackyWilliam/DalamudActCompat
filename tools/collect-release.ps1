@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.7.2",
+    [string] $ExpectedAssemblyVersion = "0.3.7.3",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -78,6 +78,41 @@ function Assert-FileVersion {
     $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path).FileVersion
     if ($actualVersion -ne $ExpectedVersion) {
         throw "$Component version mismatch. Expected $ExpectedVersion, got $actualVersion."
+    }
+}
+
+function Assert-Utf16Text {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ExpectedText,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Component
+    )
+
+    $assemblyBytes = [IO.File]::ReadAllBytes($Path)
+    $expectedBytes = [Text.Encoding]::Unicode.GetBytes($ExpectedText)
+    $found = $false
+    for ($offset = 0; $offset -le $assemblyBytes.Length - $expectedBytes.Length; $offset++) {
+        $matches = $true
+        for ($index = 0; $index -lt $expectedBytes.Length; $index++) {
+            if ($assemblyBytes[$offset + $index] -ne $expectedBytes[$index]) {
+                $matches = $false
+                break
+            }
+        }
+
+        if ($matches) {
+            $found = $true
+            break
+        }
+    }
+
+    if (-not $found) {
+        throw "$Component identity mismatch. Expected embedded text '$ExpectedText'."
     }
 }
 
@@ -323,6 +358,10 @@ Assert-FileVersion `
     -Path (Join-Path $validationDir "FFXIV_ACT_Plugin.dll") `
     -ExpectedVersion $ExpectedFfxivActPluginVersion `
     -Component "FFXIV_ACT_Plugin"
+Assert-Utf16Text `
+    -Path (Join-Path $validationDir "FFXIV_ACT_Plugin.Logfile.dll") `
+    -ExpectedText "This is IINACT $ExpectedIinactVersion" `
+    -Component "FFXIV_ACT_Plugin.Logfile"
 Assert-FileVersion `
     -Path (Join-Path $validationDir "Machina.dll") `
     -ExpectedVersion $ExpectedMachinaVersion `

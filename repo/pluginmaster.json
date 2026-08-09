@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.7.2",
+    "AssemblyVersion":  "0.3.7.3",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.2/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.3/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.2/DalamudActCompat.zip",
-    "LastUpdate":  1786263692812,
-    "Changelog":  "v0.3.7.2 兼容性修复：解析链更新到 IINACT 2.10.3.5、Unscrambler.XIV 7.55.1、OverlayPlugin Core 0.19.104 和 FFXIV_ACT_Plugin 3.0.2.7；国服 7.55h 使用完整操作码定义和运行时定位的地区密钥表，修复不完整 fallback 导致 FF Logs 排名无效的问题；未来版本未正式支持时会明确警告日志不保证排名有效。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.3/DalamudActCompat.zip",
+    "LastUpdate":  1786266909968,
+    "Changelog":  "v0.3.7.3 兼容性修复：解析链使用 IINACT 2.10.3.5、Unscrambler.XIV 7.55.1、OverlayPlugin Core 0.19.104 和 FFXIV_ACT_Plugin 3.0.2.7；国服 7.55h 使用完整操作码定义和运行时定位的地区密钥表；修复日志程序集仍声明旧 IINACT 2.10.3.4 的构建缓存问题，并增加发布门禁。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

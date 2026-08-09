@@ -1482,7 +1482,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 2)) == "v0.3.7.2",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 3)) == "v0.3.7.3",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1891,6 +1891,12 @@ static void ValidateParserDependencyVersions()
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
         "3.0.2.7",
         "FFXIV_ACT_Plugin");
+    var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
+    Assert(
+        FetchDependencies.LogFormatIdentity.Matches(
+            logfileAssemblyPath,
+            new Version(2, 10, 3, 5)),
+        $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
     var opcodeResource = overlayAssembly
@@ -4618,7 +4624,7 @@ static void ValidateDiagnosticReport(string testRoot)
     var report = DiagnosticReportBuilder.Build(
         paths,
         new DiagnosticReportSnapshot(
-            "0.3.7.2",
+            "0.3.7.3",
             "15.0.0",
             new ParserStatus(
                 ParserState.Running,
@@ -4633,7 +4639,7 @@ static void ValidateDiagnosticReport(string testRoot)
             [new InstalledActPlugin(manifest, "C:\\Users\\Alice\\plugin", Enabled: true)]));
 
     Assert(
-        report.Contains("Plugin: 0.3.7.2", StringComparison.Ordinal) &&
+        report.Contains("Plugin: 0.3.7.3", StringComparison.Ordinal) &&
         report.Contains("parser failed", StringComparison.Ordinal) &&
         report.Contains("at DalamudActCompat.Parser.Start()", StringComparison.Ordinal) &&
         report.Contains("host extension failed", StringComparison.Ordinal) &&
