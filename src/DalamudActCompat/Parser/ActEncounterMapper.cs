@@ -45,7 +45,11 @@ public static class ActEncounterMapper
             Array.Empty<HealEvent>(),
             Array.Empty<DeathEvent>(),
             Array.Empty<ActionSummary>(),
-            jobs);
+            jobs)
+        {
+            CombatDuration = source.CombatDuration,
+            IsTransitioning = source.IsTransitioning,
+        };
     }
 
     private static double NormalizeRate(double value)

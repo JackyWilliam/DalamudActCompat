@@ -21,6 +21,15 @@ internal sealed class RaidDpsEstimator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HitBaseline> hitBaselines =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> actorNamesById =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> ownerIdsByActorId =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> damageTargets =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> untargetableDamageTargets =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<DamageDowntimeInterval> completedDamageDowntimes = [];
     private bool encounterActive;
     private DateTimeOffset firstObservedDamage;
     private DateTimeOffset lastObservedDamage;
@@ -38,6 +47,8 @@ internal sealed class RaidDpsEstimator
             [0x71E] = RaidBuffDefinition.Damage(1.05), // Technical Finish
             [0x839] = RaidBuffDefinition.Damage(1.05), // Standard Finish (partner)
             [0xF09] = RaidBuffDefinition.Damage(1.05), // Dokumori
+            [0xF2F] = RaidBuffDefinition.Damage(1.06), // The Balance
+            [0xF31] = RaidBuffDefinition.Damage(1.06), // The Spear
 
             // Critical/direct-hit buffs.
             [0x312] = RaidBuffDefinition.Critical(0.10), // Battle Litany
@@ -67,6 +78,10 @@ internal sealed class RaidDpsEstimator
             ["标准舞步结束"] = RaidBuffDefinition.Damage(1.05),
             ["Dokumori"] = RaidBuffDefinition.Damage(1.05),
             ["介毒之术"] = RaidBuffDefinition.Damage(1.05),
+            ["The Balance"] = RaidBuffDefinition.Damage(1.06),
+            ["太阳神之衡"] = RaidBuffDefinition.Damage(1.06),
+            ["The Spear"] = RaidBuffDefinition.Damage(1.06),
+            ["战争神之枪"] = RaidBuffDefinition.Damage(1.06),
             ["Radiant Finale"] = RaidBuffDefinition.Damage(1.04),
             ["光明神的最终乐章"] = RaidBuffDefinition.Damage(1.04),
             ["Battle Litany"] = RaidBuffDefinition.Critical(0.10),
@@ -88,6 +103,9 @@ internal sealed class RaidDpsEstimator
             statusHistory.AddRange(activeStatuses.Values.Where(status => status.EndTime > startTime));
             damageAdjustments.Clear();
             hitBaselines.Clear();
+            damageTargets.Clear();
+            untargetableDamageTargets.Clear();
+            completedDamageDowntimes.Clear();
             firstObservedDamage = default;
             lastObservedDamage = default;
             encounterActive = true;
@@ -111,9 +129,73 @@ internal sealed class RaidDpsEstimator
             statusHistory.Clear();
             damageAdjustments.Clear();
             hitBaselines.Clear();
+            actorNamesById.Clear();
+            ownerIdsByActorId.Clear();
+            damageTargets.Clear();
+            untargetableDamageTargets.Clear();
+            completedDamageDowntimes.Clear();
             firstObservedDamage = default;
             lastObservedDamage = default;
         }
+    }
+
+    public bool ObserveNetworkLine(DateTimeOffset timestamp, string rawLine)
+    {
+        if (string.IsNullOrWhiteSpace(rawLine))
+        {
+            return false;
+        }
+
+        if (rawLine.StartsWith("03|", StringComparison.Ordinal))
+        {
+            var fields = rawLine.Split('|');
+            if (fields.Length >= 7)
+            {
+                lock (syncRoot)
+                {
+                    RememberActor(fields[2], fields[3]);
+                    if (IsActorId(fields[6]))
+                    {
+                        ownerIdsByActorId[fields[2]] = fields[6];
+                    }
+                }
+            }
+            return false;
+        }
+
+        if (rawLine.StartsWith("34|", StringComparison.Ordinal))
+        {
+            var fields = rawLine.Split('|');
+            if (fields.Length < 7 || (fields[6] != "00" && fields[6] != "01"))
+            {
+                return false;
+            }
+
+            var targetName = NormalizeActorName(fields[3]);
+            lock (syncRoot)
+            {
+                RememberActor(fields[2], targetName);
+                if (!encounterActive || !damageTargets.Contains(targetName))
+                {
+                    return false;
+                }
+
+                var wasTransitioning = untargetableDamageTargets.Count > 0;
+                if (fields[6] == "00")
+                {
+                    untargetableDamageTargets.TryAdd(targetName, timestamp);
+                }
+                else if (untargetableDamageTargets.Remove(targetName, out var startTime) &&
+                         timestamp > startTime)
+                {
+                    completedDamageDowntimes.Add(new DamageDowntimeInterval(startTime, timestamp));
+                }
+                return wasTransitioning != (untargetableDamageTargets.Count > 0);
+            }
+        }
+
+        ObserveStatusLine(timestamp, rawLine);
+        return false;
     }
 
     public void ObserveStatusLine(DateTimeOffset timestamp, string rawLine)
@@ -145,6 +227,8 @@ internal sealed class RaidDpsEstimator
         var key = new RaidStatusKey(statusId, sourceId, targetId);
         lock (syncRoot)
         {
+            RememberActor(sourceId, sourceName);
+            RememberActor(targetId, targetName);
             PruneExpiredStatuses(timestamp);
             if (fields[0] == "30")
             {
@@ -191,9 +275,18 @@ internal sealed class RaidDpsEstimator
         }
     }
 
-    public void ObserveDamage(MasterSwing swing, string attackerName, string victimName)
+    public void ObserveDamage(
+        MasterSwing swing,
+        string attackerName,
+        string victimName,
+        string? damageSourceName = null)
     {
         ArgumentNullException.ThrowIfNull(swing);
+        if (!IsDamageSwing(swing))
+        {
+            return;
+        }
+
         var directHit = swing.Tags.TryGetValue("DirectHit", out var directValue) &&
                         string.Equals(directValue?.ToString(), "True", StringComparison.OrdinalIgnoreCase);
         var isDot = swing.AttackType.Contains("DoT", StringComparison.OrdinalIgnoreCase) ||
@@ -207,7 +300,39 @@ internal sealed class RaidDpsEstimator
             swing.Damage.Number,
             swing.Critical,
             directHit,
-            isDot);
+            isDot,
+            damageSourceName);
+    }
+
+    internal static bool IsDamageSwing(MasterSwing swing)
+        => IsDamageSwingType(swing.SwingType);
+
+    internal static bool IsDamageSwingType(int swingType)
+        => swingType is 1 or 2;
+
+    internal bool TryResolvePetOwner(string actorName, out string ownerName)
+    {
+        actorName = NormalizeActorName(actorName);
+        lock (syncRoot)
+        {
+            var owners = ownerIdsByActorId
+                .Where(pair =>
+                    actorNamesById.TryGetValue(pair.Key, out var mappedName) &&
+                    SameActor(mappedName, actorName) &&
+                    actorNamesById.ContainsKey(pair.Value))
+                .Select(pair => actorNamesById[pair.Value])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(2)
+                .ToArray();
+            if (owners.Length == 1)
+            {
+                ownerName = owners[0];
+                return true;
+            }
+        }
+
+        ownerName = string.Empty;
+        return false;
     }
 
     public void ObserveDamage(
@@ -217,7 +342,8 @@ internal sealed class RaidDpsEstimator
         long damage,
         bool critical,
         bool directHit,
-        bool isDot = false)
+        bool isDot = false,
+        string? damageSourceName = null)
     {
         if (damage <= 0 || string.IsNullOrWhiteSpace(attackerName))
         {
@@ -225,12 +351,18 @@ internal sealed class RaidDpsEstimator
         }
 
         attackerName = NormalizeActorName(attackerName);
+        damageSourceName = NormalizeActorName(damageSourceName ?? attackerName);
         victimName = NormalizeActorName(victimName);
         lock (syncRoot)
         {
             if (!encounterActive)
             {
                 return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(victimName))
+            {
+                damageTargets.Add(victimName);
             }
 
             if (firstObservedDamage == default || timestamp < firstObservedDamage)
@@ -245,9 +377,14 @@ internal sealed class RaidDpsEstimator
             var externalBuffs = statusHistory
                 .Where(status => status.StartTime <= timestamp && timestamp < status.EndTime)
                 .Where(status => SameActor(status.TargetName, attackerName) ||
+                                 SameActor(status.TargetName, damageSourceName) ||
                                  (!string.IsNullOrWhiteSpace(victimName) &&
                                   SameActor(status.TargetName, victimName)))
                 .Where(status => !SameActor(status.SourceName, attackerName))
+                .GroupBy(status => (
+                    status.Key.StatusId,
+                    SourceName: NormalizeActorName(status.SourceName)))
+                .Select(static group => group.First())
                 .ToArray();
 
             var percentageBuffs = externalBuffs
@@ -285,7 +422,17 @@ internal sealed class RaidDpsEstimator
             var unbuffedCriticalChance = baseline.ResolveCriticalChance();
             var unbuffedDirectChance = baseline.ResolveDirectHitChance();
 
-            if (!isDot && critical && criticalBuffs.Length > 0)
+            if (isDot && (criticalBuffs.Length > 0 || directBuffs.Length > 0))
+            {
+                TransferDotCriticalDirectContribution(
+                    attackerName,
+                    damageAfterPercentageRemoval,
+                    unbuffedCriticalChance,
+                    unbuffedDirectChance,
+                    criticalBuffs,
+                    directBuffs);
+            }
+            else if (critical && criticalBuffs.Length > 0)
             {
                 var criticalMultiplier = 1.35 + unbuffedCriticalChance;
                 var combinedHitMultiplier = criticalMultiplier * (directHit ? 1.25 : 1);
@@ -338,7 +485,8 @@ internal sealed class RaidDpsEstimator
         string actorName,
         long rawDamage,
         double encounterDurationSeconds,
-        bool useObservedDamageWindow = false)
+        bool useObservedDamageWindow = false,
+        DateTimeOffset? measurementEndTime = null)
     {
         if (rawDamage <= 0 || !double.IsFinite(encounterDurationSeconds) || encounterDurationSeconds <= 0)
         {
@@ -350,11 +498,28 @@ internal sealed class RaidDpsEstimator
         {
             var adjustedDamage = rawDamage + damageAdjustments.GetValueOrDefault(actorName);
             var durationSeconds = encounterDurationSeconds;
-            if (useObservedDamageWindow &&
-                firstObservedDamage != default &&
-                lastObservedDamage > firstObservedDamage)
+            if (firstObservedDamage != default &&
+                ((useObservedDamageWindow && lastObservedDamage > firstObservedDamage) ||
+                 (!useObservedDamageWindow &&
+                  measurementEndTime is { } activeEndTime &&
+                  activeEndTime > firstObservedDamage)))
             {
-                durationSeconds = (lastObservedDamage - firstObservedDamage).TotalSeconds;
+                var observedEndTime = useObservedDamageWindow
+                    ? lastObservedDamage
+                    : measurementEndTime!.Value;
+                durationSeconds = (observedEndTime - firstObservedDamage).TotalSeconds;
+            }
+            var downtimeStart = firstObservedDamage;
+            var downtimeEnd = useObservedDamageWindow
+                ? lastObservedDamage
+                : measurementEndTime ?? DateTimeOffset.Now;
+            if (downtimeStart != default && downtimeEnd > downtimeStart)
+            {
+                durationSeconds -= ResolveDamageDowntimeSecondsUnsafe(downtimeStart, downtimeEnd);
+            }
+            if (durationSeconds <= 0)
+            {
+                return 0;
             }
             return Math.Max(0, adjustedDamage) / durationSeconds;
         }
@@ -367,6 +532,49 @@ internal sealed class RaidDpsEstimator
             return firstObservedDamage != default && lastObservedDamage > firstObservedDamage
                 ? (lastObservedDamage - firstObservedDamage).TotalSeconds
                 : 0;
+        }
+    }
+
+    internal double ResolveDamageDowntimeSeconds(DateTimeOffset measurementEndTime)
+    {
+        lock (syncRoot)
+        {
+            return firstObservedDamage != default && measurementEndTime > firstObservedDamage
+                ? ResolveDamageDowntimeSecondsUnsafe(firstObservedDamage, measurementEndTime)
+                : 0;
+        }
+    }
+
+    internal double ResolveEffectiveDamageDurationSeconds()
+        => ResolveEffectiveDamageDurationSeconds(lastObservedDamage, useObservedDamageEnd: true);
+
+    internal double ResolveEffectiveDamageDurationSeconds(
+        DateTimeOffset measurementEndTime,
+        bool useObservedDamageEnd)
+    {
+        lock (syncRoot)
+        {
+            var endTime = useObservedDamageEnd ? lastObservedDamage : measurementEndTime;
+            if (firstObservedDamage == default || endTime <= firstObservedDamage)
+            {
+                return 0;
+            }
+
+            return Math.Max(
+                0,
+                (endTime - firstObservedDamage).TotalSeconds -
+                ResolveDamageDowntimeSecondsUnsafe(firstObservedDamage, endTime));
+        }
+    }
+
+    internal bool IsTransitioning
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return encounterActive && untargetableDamageTargets.Count > 0;
+            }
         }
     }
 
@@ -395,6 +603,119 @@ internal sealed class RaidDpsEstimator
         damageAdjustments[attackerName] = damageAdjustments.GetValueOrDefault(attackerName) - amount;
         damageAdjustments[sourceName] = damageAdjustments.GetValueOrDefault(sourceName) + amount;
     }
+
+    private void TransferDotCriticalDirectContribution(
+        string attackerName,
+        double damage,
+        double unbuffedCriticalChance,
+        double unbuffedDirectChance,
+        IReadOnlyList<RaidStatusInterval> criticalBuffs,
+        IReadOnlyList<RaidStatusInterval> directBuffs)
+    {
+        var buffedCriticalChance = Math.Clamp(
+            unbuffedCriticalChance + criticalBuffs.Sum(static status => status.Definition.CriticalChance),
+            0.01,
+            1);
+        var buffedDirectChance = Math.Clamp(
+            unbuffedDirectChance + directBuffs.Sum(static status => status.Definition.DirectHitChance),
+            0.01,
+            1);
+        var criticalMultiplier = 1.35 + unbuffedCriticalChance;
+        const double directMultiplier = 1.25;
+        var combinedMultiplier = criticalMultiplier * directMultiplier;
+        var noCritical = 1 - buffedCriticalChance;
+        var noDirect = 1 - buffedDirectChance;
+        var totalMultiplier =
+            (noCritical * noDirect) +
+            (buffedCriticalChance * noDirect * criticalMultiplier) +
+            (noCritical * buffedDirectChance * directMultiplier) +
+            (buffedCriticalChance * buffedDirectChance * combinedMultiplier);
+        if (totalMultiplier <= 0)
+        {
+            return;
+        }
+
+        var criticalPortion =
+            ((buffedCriticalChance * noDirect * criticalMultiplier) +
+             ((Math.Log(criticalMultiplier) / Math.Log(combinedMultiplier)) *
+              buffedCriticalChance * buffedDirectChance * combinedMultiplier)) *
+            damage / totalMultiplier;
+        var directPortion =
+            ((buffedDirectChance * noCritical * directMultiplier) +
+             ((Math.Log(directMultiplier) / Math.Log(combinedMultiplier)) *
+              buffedCriticalChance * buffedDirectChance * combinedMultiplier)) *
+            damage / totalMultiplier;
+
+        foreach (var status in criticalBuffs)
+        {
+            TransferContribution(
+                attackerName,
+                status.SourceName,
+                criticalPortion * status.Definition.CriticalChance / buffedCriticalChance);
+        }
+        foreach (var status in directBuffs)
+        {
+            TransferContribution(
+                attackerName,
+                status.SourceName,
+                directPortion * status.Definition.DirectHitChance / buffedDirectChance);
+        }
+    }
+
+    private double ResolveDamageDowntimeSecondsUnsafe(
+        DateTimeOffset rangeStart,
+        DateTimeOffset rangeEnd)
+    {
+        var intervals = completedDamageDowntimes
+            .Concat(untargetableDamageTargets.Values.Select(startTime =>
+                new DamageDowntimeInterval(startTime, rangeEnd)))
+            .Select(interval => new DamageDowntimeInterval(
+                interval.StartTime > rangeStart ? interval.StartTime : rangeStart,
+                interval.EndTime < rangeEnd ? interval.EndTime : rangeEnd))
+            .Where(interval => interval.EndTime > interval.StartTime)
+            .OrderBy(interval => interval.StartTime)
+            .ToArray();
+        if (intervals.Length == 0)
+        {
+            return 0;
+        }
+
+        var totalSeconds = 0d;
+        var mergedStart = intervals[0].StartTime;
+        var mergedEnd = intervals[0].EndTime;
+        foreach (var interval in intervals.Skip(1))
+        {
+            if (interval.StartTime <= mergedEnd)
+            {
+                if (interval.EndTime > mergedEnd)
+                {
+                    mergedEnd = interval.EndTime;
+                }
+                continue;
+            }
+
+            totalSeconds += (mergedEnd - mergedStart).TotalSeconds;
+            mergedStart = interval.StartTime;
+            mergedEnd = interval.EndTime;
+        }
+
+        return totalSeconds + (mergedEnd - mergedStart).TotalSeconds;
+    }
+
+    private void RememberActor(string actorId, string actorName)
+    {
+        if (IsActorId(actorId) && !string.IsNullOrWhiteSpace(actorName))
+        {
+            actorNamesById[actorId] = NormalizeActorName(actorName);
+        }
+    }
+
+    private static bool IsActorId(string value)
+        => !string.IsNullOrWhiteSpace(value) &&
+           !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) &&
+           !string.Equals(value, "0000", StringComparison.OrdinalIgnoreCase) &&
+           !string.Equals(value, "00000000", StringComparison.OrdinalIgnoreCase) &&
+           !string.Equals(value, "E0000000", StringComparison.OrdinalIgnoreCase);
 
     private void PruneExpiredStatuses(DateTimeOffset timestamp)
     {
@@ -470,6 +791,10 @@ internal sealed class RaidDpsEstimator
     }
 
     private readonly record struct RaidStatusKey(uint StatusId, string SourceId, string TargetId);
+
+    private readonly record struct DamageDowntimeInterval(
+        DateTimeOffset StartTime,
+        DateTimeOffset EndTime);
 
     private sealed record RaidStatusInterval(
         RaidStatusKey Key,

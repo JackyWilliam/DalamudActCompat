@@ -20,6 +20,8 @@ public sealed record Encounter(
 
     public TimeSpan? CombatDuration { get; init; }
 
+    public bool IsTransitioning { get; init; }
+
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
 
     [System.Text.Json.Serialization.JsonIgnore]

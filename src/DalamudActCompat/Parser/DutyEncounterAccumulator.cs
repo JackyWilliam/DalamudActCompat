@@ -179,6 +179,7 @@ internal sealed class DutyEncounterAccumulator
             // concrete boss segment instead of cumulative damage from the whole duty.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
             TerritoryId = territoryId,
+            IsTransitioning = activeSegment?.IsTransitioning == true,
             // ACT treats merged encounters as the sum of their active encounter
             // durations. Travel, cutscenes, and waits between pulls must not lower DPS.
             CombatDuration = TimeSpan.FromSeconds(durationSeconds),

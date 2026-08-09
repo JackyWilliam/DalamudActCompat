@@ -864,8 +864,15 @@ static void ValidateMeterLayout()
             "DalamudActCompat",
             "Assets",
             "StatusIcons",
+            "CombatTransition.png")) &&
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "StatusIcons",
             "CombatEnded.png")),
-        "The requested running or ended Combat Meter status icon is missing.");
+        "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
         MeterWindow.MinimumTableWidthWithFflogs == 410 &&
         MeterWindow.MinimumTableWidthWithoutFflogs == 350 &&
@@ -1380,13 +1387,17 @@ static void ValidateDutyEncounterAggregation()
         deaths: 0,
         damageHits: 5,
         criticalHits: 1,
-        criticalDirectHits: 1);
+        criticalDirectHits: 1) with
+    {
+        IsTransitioning = true,
+    };
     var combinedActive = accumulator.Update(secondActive, finished: false, start.AddMinutes(5));
     Assert(
         combinedActive.Id == afterFirst.Id &&
         combinedActive.TotalDamage == 150 &&
+        combinedActive.IsTransitioning &&
         combinedActive.EnemyName == "测试副本",
-        "The next boss did not continue the same duty-wide ACT encounter.");
+        "The next boss did not continue the same duty-wide ACT encounter or retain transition state.");
     Assert(
         combinedActive.FflogsRankingEncounter?.Id == secondId &&
         combinedActive.FflogsRankingEncounter.TotalDamage == 50,
@@ -1400,6 +1411,7 @@ static void ValidateDutyEncounterAggregation()
     var secondFinished = secondActive with
     {
         EndTime = start.AddMinutes(6),
+        IsTransitioning = false,
         Combatants =
         [
             secondActive.Combatants[0] with
@@ -1572,7 +1584,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 5)) == "v0.3.7.5",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 6)) == "v0.3.7.6",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -3172,6 +3184,11 @@ static void ValidateRaidDpsEstimator()
 {
     var start = DateTimeOffset.UtcNow;
     var estimator = new RaidDpsEstimator();
+    Assert(
+        RaidDpsEstimator.IsDamageSwingType(1) &&
+        RaidDpsEstimator.IsDamageSwingType(2) &&
+        !RaidDpsEstimator.IsDamageSwingType(3),
+        "ACT healing swings can still enter the DPS/rDPS damage window.");
     estimator.StartEncounter(start);
     estimator.ObserveStatusLine(
         start,
@@ -3261,6 +3278,76 @@ static void ValidateRaidDpsEstimator()
         Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: false) - (1_000d / 30)) < 0.001 &&
         Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: true) - 100) < 0.001,
         "Finished rDPS did not trim non-damage tail time while active rDPS retained wall-clock duration.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000001|Summoner|1B|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|40000001|Solar Bahamut|00|64|10000001|00||");
+    Assert(
+        estimator.TryResolvePetOwner("Solar Bahamut", out var petOwner) &&
+        petOwner == "Summoner",
+        "A party pet was not resolved back to its owner from AddCombatant data.");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000002|Astrologian|10000001|Summoner|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000002|Astrologian|40000001|Solar Bahamut|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Summoner",
+        "Boss",
+        1_060,
+        critical: false,
+        directHit: false,
+        damageSourceName: "Solar Bahamut");
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Summoner") + 60) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Astrologian") - 60) < 0.001,
+        "Pet damage or the AST single-target card was not included exactly once in rDPS attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveDamage(
+        start,
+        "Paladin",
+        "Lindwurm",
+        1_000,
+        critical: false,
+        directHit: false);
+    Assert(
+        estimator.ObserveNetworkLine(
+            start.AddSeconds(330),
+            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|00|") &&
+        estimator.IsTransitioning,
+        "NameToggle 00 did not switch the active encounter to transition state.");
+    Assert(
+        estimator.ObserveNetworkLine(
+            start.AddSeconds(352.145),
+            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|01|") &&
+        !estimator.IsTransitioning,
+        "NameToggle 01 did not switch the encounter back to running state.");
+    estimator.ObserveDamage(
+        start.AddSeconds(397.974),
+        "Paladin",
+        "Lindwurm",
+        374_829,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageDowntimeSeconds(start.AddSeconds(397.974)) - 22.145) < 0.001 &&
+        Math.Abs(estimator.ResolveEffectiveDamageDurationSeconds() - 375.829) < 0.001 &&
+        Math.Abs(
+            estimator.ResolveRate(
+                "Paladin",
+                375_829,
+                397.974,
+                useObservedDamageWindow: true) - 1_000) < 0.001,
+        "The verified Lindwurm transition interval was not removed from DPS/rDPS duration.");
 }
 
 static void ValidateDalamudGameStateBridge()
@@ -4599,12 +4686,19 @@ static void ValidateActEncounterMapping()
                 double.NegativeInfinity,
                 double.NaN,
                 Rdps: double.NaN),
-        ]);
+        ])
+    {
+        CombatDuration = TimeSpan.FromSeconds(9),
+        IsTransitioning = true,
+    };
 
     var encounter = ActEncounterMapper.Map(snapshot);
     Assert(encounter.Id == id, "ACT encounter id was not preserved.");
     Assert(encounter.StartTime == start, "ACT encounter start time was not preserved.");
     Assert(encounter.IsActive, "Active ACT encounter was mapped as finished.");
+    Assert(
+        encounter.IsTransitioning && encounter.CombatDuration == TimeSpan.FromSeconds(9),
+        "ACT transition state or effective combat duration was not mapped.");
     Assert(encounter.TotalDamage == 140_001, "ACT combatant damage totals were not mapped.");
     Assert(encounter.TotalHealing == 92_000, "ACT combatant healing totals were not mapped.");
     Assert(encounter.TotalDeaths == 1, "ACT combatant deaths were not mapped.");

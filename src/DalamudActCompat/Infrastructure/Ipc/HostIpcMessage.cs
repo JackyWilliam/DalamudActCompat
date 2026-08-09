@@ -17,6 +17,10 @@ internal sealed record HostEncounterDto(
     IReadOnlyList<HostCombatantDto> Combatants)
 {
     public uint? TerritoryId { get; init; }
+
+    public TimeSpan? CombatDuration { get; init; }
+
+    public bool IsTransitioning { get; init; }
 }
 
 internal sealed record HostCombatantDto(
@@ -80,6 +84,8 @@ internal static class HostIpcMapper
             jobSummaries)
         {
             TerritoryId = source.TerritoryId,
+            CombatDuration = source.CombatDuration,
+            IsTransitioning = source.IsTransitioning,
         };
     }
 }

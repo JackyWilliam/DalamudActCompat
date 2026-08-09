@@ -6,7 +6,12 @@ public sealed record ActEncounterSnapshot(
     DateTimeOffset? EndTime,
     string ZoneName,
     string EnemyName,
-    IReadOnlyList<ActCombatantSnapshot> Combatants);
+    IReadOnlyList<ActCombatantSnapshot> Combatants)
+{
+    public TimeSpan? CombatDuration { get; init; }
+
+    public bool IsTransitioning { get; init; }
+}
 
 public sealed record ActCombatantSnapshot(
     string Id,

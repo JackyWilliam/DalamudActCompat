@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.7.5",
+    [string] $ExpectedAssemblyVersion = "0.3.7.6",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -206,6 +206,7 @@ $requiredUiAssets = @(
     "Assets/act-button.png",
     "Assets/JobIcons/LimitBreak.png",
     "Assets/StatusIcons/CombatRunning.png",
+    "Assets/StatusIcons/CombatTransition.png",
     "Assets/StatusIcons/CombatEnded.png"
 )
 $missingUiAssets = @($requiredUiAssets | Where-Object {

@@ -37,6 +37,7 @@ public sealed class MeterWindow : Window
     private readonly UiText text;
     private readonly JobIconTextureSet jobIcons;
     private readonly ISharedImmediateTexture runningStatusIcon;
+    private readonly ISharedImmediateTexture transitionStatusIcon;
     private readonly ISharedImmediateTexture endedStatusIcon;
     private readonly Func<uint?, string, string> localizeZoneName;
     private readonly Action saveConfiguration;
@@ -55,6 +56,7 @@ public sealed class MeterWindow : Window
         UiText text,
         JobIconTextureSet jobIcons,
         ISharedImmediateTexture runningStatusIcon,
+        ISharedImmediateTexture transitionStatusIcon,
         ISharedImmediateTexture endedStatusIcon,
         Func<uint?, string, string> localizeZoneName,
         Action saveConfiguration)
@@ -66,6 +68,7 @@ public sealed class MeterWindow : Window
         this.text = text;
         this.jobIcons = jobIcons;
         this.runningStatusIcon = runningStatusIcon;
+        this.transitionStatusIcon = transitionStatusIcon;
         this.endedStatusIcon = endedStatusIcon;
         this.localizeZoneName = localizeZoneName;
         this.saveConfiguration = saveConfiguration;
@@ -277,7 +280,7 @@ public sealed class MeterWindow : Window
             start + new Vector2(width, EncounterHeaderHeight),
             ImGui.GetColorU32(NavyRaised),
             6);
-        DrawEncounterStateIcon(drawList, encounter.IsActive, start + new Vector2(9, 5));
+        DrawEncounterStateIcon(drawList, encounter, start + new Vector2(9, 5));
         var titleRight = Math.Max(start.X + 36, toggleStart.X - 6);
         drawList.AddText(
             start + new Vector2(36, 6),
@@ -287,9 +290,7 @@ public sealed class MeterWindow : Window
         if (!UsesStatusAsEncounterTitle(encounter))
         {
             subtitle += "  ·  " +
-                        (encounter.IsActive
-                            ? text.Get("战斗中", "Running")
-                            : text.Get("已结束", "Ended"));
+                        ResolveEncounterStateText(encounter);
         }
         drawList.AddText(
             start + new Vector2(36, 24),
@@ -302,9 +303,7 @@ public sealed class MeterWindow : Window
     {
         if (UsesStatusAsEncounterTitle(encounter))
         {
-            return encounter.IsActive
-                ? text.Get("状态：战斗中", "Status: Running")
-                : text.Get("状态：已结束", "Status: Ended");
+            return text.Get("状态：", "Status: ") + ResolveEncounterStateText(encounter);
         }
 
         return string.Equals(
@@ -318,6 +317,13 @@ public sealed class MeterWindow : Window
     private static bool UsesStatusAsEncounterTitle(Encounter encounter)
         => string.IsNullOrWhiteSpace(encounter.EnemyName) ||
            string.Equals(encounter.EnemyName, "Encounter", StringComparison.OrdinalIgnoreCase);
+
+    private string ResolveEncounterStateText(Encounter encounter)
+        => encounter.IsActive
+            ? encounter.IsTransitioning
+                ? text.Get("转阶段", "Transition")
+                : text.Get("战斗中", "Running")
+            : text.Get("已结束", "Ended");
 
     private void DrawCompactDragHandle(MeterSettings settings)
     {
@@ -604,10 +610,14 @@ public sealed class MeterWindow : Window
         drawList.AddLine(middle, new Vector2(center.X + halfWidth, edgeY), packedColor, 2.2f);
     }
 
-    private void DrawEncounterStateIcon(ImDrawListPtr drawList, bool isActive, Vector2 start)
+    private void DrawEncounterStateIcon(ImDrawListPtr drawList, Encounter encounter, Vector2 start)
     {
         const float iconSize = 24;
-        var texture = isActive ? runningStatusIcon : endedStatusIcon;
+        var texture = encounter.IsActive
+            ? encounter.IsTransitioning
+                ? transitionStatusIcon
+                : runningStatusIcon
+            : endedStatusIcon;
         var wrap = texture.GetWrapOrEmpty();
         if (wrap.Handle.Handle != 0)
         {
@@ -618,10 +628,18 @@ public sealed class MeterWindow : Window
             return;
         }
 
-        var stateColor = isActive
-            ? new Vector4(0.38f, 0.78f, 0.66f, 1)
+        var stateColor = encounter.IsActive
+            ? encounter.IsTransitioning
+                ? new Vector4(0.95f, 0.68f, 0.24f, 1)
+                : new Vector4(0.38f, 0.78f, 0.66f, 1)
             : new Vector4(0.66f, 0.69f, 0.74f, 1);
-        drawList.AddText(start + new Vector2(4, 2), ImGui.GetColorU32(stateColor), isActive ? "●" : "○");
+        var fallbackGlyph = encounter.IsActive
+            ? encounter.IsTransitioning ? "◆" : "●"
+            : "○";
+        drawList.AddText(
+            start + new Vector2(4, 2),
+            ImGui.GetColorU32(stateColor),
+            fallbackGlyph);
     }
 
     private MeterColumnLayout BuildColumnLayout(
