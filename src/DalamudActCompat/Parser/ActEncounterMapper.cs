@@ -21,7 +21,8 @@ public static class ActEncounterMapper
                 NormalizeRate(combatant.ExtDps),
                 Math.Max(0, combatant.DamageHits),
                 Math.Max(0, combatant.CriticalHits),
-                Math.Max(0, combatant.CriticalDirectHits)))
+                Math.Max(0, combatant.CriticalDirectHits),
+                Rdps: NormalizeRate(combatant.Rdps)))
             .ToArray();
         var jobs = combatants
             .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))
@@ -44,7 +45,11 @@ public static class ActEncounterMapper
             Array.Empty<HealEvent>(),
             Array.Empty<DeathEvent>(),
             Array.Empty<ActionSummary>(),
-            jobs);
+            jobs)
+        {
+            CombatDuration = source.CombatDuration,
+            IsTransitioning = source.IsTransitioning,
+        };
     }
 
     private static double NormalizeRate(double value)

@@ -16,6 +16,12 @@ internal static class CurrentFflogsEncounterTable
     // reviewable data change and prevents stale cached encounters from opening.
     internal const int ZoneId = 73;
     internal const string ZoneName = "AAC Heavyweight";
+    // CN is one partition behind the global default for the current tier. Keep
+    // these values beside the explicit duty table so a tier rollover updates
+    // the ranking population and encounter mapping together.
+    internal const string RankingRegion = "CN";
+    internal const int RankingPartition = 9;
+    internal const string RankingMetric = "rdps";
 
     private static readonly IReadOnlyDictionary<uint, DutyEntry> Duties =
         new Dictionary<uint, DutyEntry>

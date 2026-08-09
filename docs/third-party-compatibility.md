@@ -1,10 +1,13 @@
 # 第三方 ACT 扩展兼容说明
 
-核对日期：2026-07-31。
+核对日期：2026-08-09。
 
 国服与国际服当前同步在 7.55 版本进度；区域网络操作码仍按各客户端实际值分别维护。
-解析链已更新到 IINACT 2.10.3.4、OverlayPlugin Core 0.19.103、
-Machina 7.55、Unscrambler.XIV 7.55.0 和 FFXIV_ACT_Plugin 3.0.2.5。
+解析链已更新到 IINACT 2.10.3.5、OverlayPlugin Core 0.19.104、
+Machina 7.55h、Unscrambler.XIV 7.55.1 和 FFXIV_ACT_Plugin 3.0.2.7。
+国服 `2026.08.05.0000.0000` 使用 Unscrambler 7.55.1 的完整操作码定义，并从正在运行的
+国服客户端动态定位地区专用密钥表，不复用国际服固定内存地址。未来游戏版本未被正式支持时，
+插件会明确提示兜底解析不保证 FF Logs 排名有效，不再静默生成看似安全的上传日志。
 
 Triggernometry 中文维护版 2.1.1.2、ACT.FoxTTS 3.3.1.189 和
 PostNamazu 1.3.6.6 随本插件发布。首次安装以及 DalamudActCompat 每次更新后，

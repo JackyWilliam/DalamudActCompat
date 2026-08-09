@@ -37,6 +37,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly object encounterSync = new();
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly RaidDpsEstimator raidDpsEstimator = new();
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -69,6 +70,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private DateTimeOffset chatLastDamage;
     private DateTimeOffset activeEncounterRelevantStart;
     private DateTimeOffset lastRelevantCombatAction;
+    private bool transitionStateDirty;
     private bool chatEncounterDirty;
     private bool chatEncounterPublished;
     private readonly ChineseCombatChatContext chatParser;
@@ -946,6 +948,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         gameStateProvider.Clear();
         lock (encounterSync)
         {
+            raidDpsEstimator.Reset();
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
             activeEncounterIdentities.Clear();
@@ -953,6 +956,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             activeEncounterNamesLogged = false;
             activeEncounterRelevantStart = default;
             lastRelevantCombatAction = default;
+            transitionStateDirty = false;
             lastKnownDead.Clear();
             observedDeaths.Clear();
             ResetChatEncounterUnsafe();
@@ -1001,6 +1005,16 @@ public sealed class SelfHostedActRuntime : IDisposable
         if (isImport)
         {
             return;
+        }
+
+        if (raidDpsEstimator.ObserveNetworkLine(
+                new DateTimeOffset(logInfo.detectedTime),
+                logInfo.originalLogLine))
+        {
+            lock (encounterSync)
+            {
+                transitionStateDirty = true;
+            }
         }
 
         var fields = logInfo.originalLogLine.Split('|');
@@ -1091,6 +1105,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         ActEncounterSnapshot? activeChatEncounter = null;
         ActEncounterSnapshot? completedChatEncounter = null;
+        EncounterData? transitionEncounterToPublish = null;
         EncounterData? activeEncounterToEnd = null;
         lock (encounterSync)
         {
@@ -1130,6 +1145,12 @@ public sealed class SelfHostedActRuntime : IDisposable
             {
                 activeEncounterToEnd = activeEncounter;
             }
+
+            if (transitionStateDirty)
+            {
+                transitionEncounterToPublish = activeEncounter;
+                transitionStateDirty = false;
+            }
         }
 
         if (activeChatEncounter is not null)
@@ -1140,6 +1161,11 @@ public sealed class SelfHostedActRuntime : IDisposable
         if (completedChatEncounter is not null)
         {
             EncounterChanged?.Invoke(completedChatEncounter, true);
+        }
+
+        if (transitionEncounterToPublish is not null)
+        {
+            PublishEncounter(transitionEncounterToPublish, false);
         }
 
         if (activeEncounterToEnd is not null)
@@ -1229,25 +1255,60 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
+        var swing = action.combatAction;
         var identities = gameStateProvider.Identities;
-        if (!IsTrackedCombatantEvent(
-                action.combatAction.Attacker,
-                action.combatAction.Victim,
-                identities))
+        var attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Attacker);
+        if (attackerIdentity is null &&
+            raidDpsEstimator.TryResolvePetOwner(swing.Attacker, out var ownerName))
         {
+            attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, ownerName);
+        }
+        var victimIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Victim);
+        if (attackerIdentity is null && victimIdentity is null)
+        {
+            return;
+        }
+
+        var isDamageSwing = RaidDpsEstimator.IsDamageSwing(swing);
+        var actionTime = swing.Time == default
+            ? DateTimeOffset.Now
+            : new DateTimeOffset(swing.Time);
+        if (!isDamageSwing)
+        {
+            lock (encounterSync)
+            {
+                if (!ReferenceEquals(activeEncounter, encounter))
+                {
+                    return;
+                }
+            }
+
+            // Healing remains visible in ACT totals, but it must never create or extend
+            // the damage window used by DPS/rDPS and FFLogs estimates.
+            PublishEncounter(encounter, false);
             return;
         }
 
         lock (encounterSync)
         {
-            var actionTime = action.combatAction.Time == default
-                ? DateTimeOffset.Now
-                : new DateTimeOffset(action.combatAction.Time);
             if (!ReferenceEquals(activeEncounter, encounter))
             {
                 activeEncounterRelevantStart = actionTime;
+                raidDpsEstimator.StartEncounter(actionTime);
             }
             lastRelevantCombatAction = actionTime;
+        }
+
+        var victimName = victimIdentity?.Name ?? swing.Victim;
+        // Incoming enemy damage also reaches this callback. Only party-owned damage
+        // can contribute to a party member's rDPS attribution.
+        if (attackerIdentity is not null)
+        {
+            raidDpsEstimator.ObserveDamage(
+                swing,
+                attackerIdentity.Name,
+                victimName,
+                swing.Attacker);
         }
 
         PublishEncounter(encounter, false);
@@ -1326,6 +1387,12 @@ public sealed class SelfHostedActRuntime : IDisposable
                     var encounterSeconds = Math.Max(
                         1,
                         ((endTime ?? DateTimeOffset.Now) - startTime).TotalSeconds);
+                    var measurementEndTime = endTime ?? DateTimeOffset.Now;
+                    var effectiveEncounterSeconds = Math.Max(
+                        1,
+                        raidDpsEstimator.ResolveEffectiveDamageDurationSeconds(
+                            measurementEndTime,
+                            useObservedDamageEnd: finished));
                     var identities = gameStateProvider.Identities;
                     CacheActiveEncounterIdentities(identities);
                     var cachedIdentities = activeEncounterIdentities.Values.ToArray();
@@ -1337,6 +1404,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         {
                             var hitCounts = GetDamageHitCounts(item.Combatant);
                             var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
+                            var actorName = item.Identity?.Name ?? item.Combatant.Name;
                             var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
                                                 string.Equals(
                                                     item.Combatant.Name,
@@ -1358,12 +1426,18 @@ public sealed class SelfHostedActRuntime : IDisposable
                                     Math.Max(
                                         observedDeaths.GetValueOrDefault(displayName),
                                         observedDeaths.GetValueOrDefault(item.Combatant.Name))),
-                                item.Combatant.DPS,
-                                item.Combatant.Damage / encounterSeconds,
+                                item.Combatant.Damage / effectiveEncounterSeconds,
+                                item.Combatant.Damage / effectiveEncounterSeconds,
                                 item.Combatant.ExtDPS,
                                 hitCounts.DamageHits,
                                 hitCounts.CriticalHits,
-                                hitCounts.CriticalDirectHits);
+                                hitCounts.CriticalDirectHits,
+                                raidDpsEstimator.ResolveRate(
+                                    actorName,
+                                    item.Combatant.Damage,
+                                    encounterSeconds,
+                                    useObservedDamageWindow: finished,
+                                    measurementEndTime: measurementEndTime));
                         })
                         .ToArray();
 
@@ -1377,7 +1451,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                             endTime,
                             encounter.ZoneName ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
                             encounter.Title ?? string.Empty,
-                            combatants);
+                            combatants)
+                        {
+                            CombatDuration = TimeSpan.FromSeconds(effectiveEncounterSeconds),
+                            IsTransitioning = !finished && raidDpsEstimator.IsTransitioning,
+                        };
                     }
                     else if (!activeEncounterNamesLogged)
                     {
@@ -1389,6 +1467,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     if (finished)
                     {
+                        raidDpsEstimator.FinishEncounter();
                         activeEncounter = null;
                         if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)
                         {
@@ -1403,6 +1482,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         activeEncounterNamesLogged = false;
                         activeEncounterRelevantStart = default;
                         lastRelevantCombatAction = default;
+                        transitionStateDirty = false;
                         lastKnownDead.Clear();
                         observedDeaths.Clear();
                         ResetChatEncounterUnsafe();

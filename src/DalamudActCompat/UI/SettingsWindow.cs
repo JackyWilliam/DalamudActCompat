@@ -654,6 +654,7 @@ public sealed class SettingsWindow : Window
 
     private string DpsMetricLabel(DpsMetric metric) => metric switch
     {
+        DpsMetric.Rdps => text.Get("rDPS（团队贡献估算）", "rDPS (estimated raid contribution)"),
         DpsMetric.Dps => text.Get("DPS（个人有效动作时长）", "DPS (personal active duration)"),
         DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
         DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),

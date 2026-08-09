@@ -179,6 +179,7 @@ internal sealed class DutyEncounterAccumulator
             // concrete boss segment instead of cumulative damage from the whole duty.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
             TerritoryId = territoryId,
+            IsTransitioning = activeSegment?.IsTransitioning == true,
             // ACT treats merged encounters as the sum of their active encounter
             // durations. Travel, cutscenes, and waits between pulls must not lower DPS.
             CombatDuration = TimeSpan.FromSeconds(durationSeconds),
@@ -211,6 +212,7 @@ internal sealed class DutyEncounterAccumulator
         private string? fflogsEncounterName;
         private double personalDamageDurationSeconds;
         private double externalDamageDurationSeconds;
+        private double raidContributionDamage;
 
         public void Add(Combatant combatant, double encounterDurationSeconds)
         {
@@ -250,6 +252,12 @@ internal sealed class DutyEncounterAccumulator
                 combatant.TotalDamage,
                 combatant.ExtDps,
                 encounterDurationSeconds);
+            raidContributionDamage += (combatant.Rdps > 0
+                    ? combatant.Rdps
+                    : combatant.EncDps > 0
+                        ? combatant.EncDps
+                        : combatant.TotalDamage / Math.Max(1, encounterDurationSeconds)) *
+                encounterDurationSeconds;
         }
 
         public CombatantTotals Clone()
@@ -269,6 +277,7 @@ internal sealed class DutyEncounterAccumulator
                 fflogsEncounterName = fflogsEncounterName,
                 personalDamageDurationSeconds = personalDamageDurationSeconds,
                 externalDamageDurationSeconds = externalDamageDurationSeconds,
+                raidContributionDamage = raidContributionDamage,
             };
 
         public Combatant ToCombatant(double durationSeconds)
@@ -299,7 +308,8 @@ internal sealed class DutyEncounterAccumulator
                 criticalHits,
                 criticalDirectHits,
                 fflogsPercentile,
-                fflogsEncounterName);
+                fflogsEncounterName,
+                raidContributionDamage / durationSeconds);
         }
 
         private static double ResolveDamageDuration(

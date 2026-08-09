@@ -15,4 +15,5 @@ public sealed record Combatant(
     int CriticalHits = 0,
     int CriticalDirectHits = 0,
     double? FflogsPercentile = null,
-    string? FflogsEncounterName = null);
+    string? FflogsEncounterName = null,
+    double Rdps = 0);

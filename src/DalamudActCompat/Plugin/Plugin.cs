@@ -245,6 +245,8 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(assetDirectory, "JobIcons"));
         var runningStatusIcon = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "StatusIcons", "CombatRunning.png"));
+        var transitionStatusIcon = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "StatusIcons", "CombatTransition.png"));
         var endedStatusIcon = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "StatusIcons", "CombatEnded.png"));
         meterWindow = new MeterWindow(
@@ -254,6 +256,7 @@ public sealed class Plugin : IDalamudPlugin
             text,
             jobIcons,
             runningStatusIcon,
+            transitionStatusIcon,
             endedStatusIcon,
             zoneNameLocalizer.Localize,
             SaveConfiguration);

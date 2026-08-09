@@ -39,7 +39,15 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private const string GraphQlEndpoint = "https://www.fflogs.com/api/v2/client";
     private const int PageSize = 100;
     private const int MaximumPage = 4096;
-    private static readonly double[] PercentilePoints = [0, 25, 50, 75, 95, 99, 100];
+    internal const int CurrentCurveFormatVersion = 1;
+    private static readonly double[] PercentilePoints =
+    [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25,
+        30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90,
+        95, 96, 97, 98, 99, 100,
+    ];
 
     private readonly Func<FflogsSettings> getSettings;
     private readonly string cachePath;
@@ -96,6 +104,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
     }
 
+    internal static IReadOnlyList<double> CurveSamplePercentiles => PercentilePoints;
+
     public FflogsActiveEncounter? ActiveEncounter
     {
         get
@@ -151,6 +161,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         var changed = false;
+        var missingSpecs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var combatants = encounter.Combatants
             .Select(combatant =>
             {
@@ -171,6 +182,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                                    updateStatus: false);
                 if (estimate is null)
                 {
+                    var specName = ToFflogsSpecName(rankingCombatant.Job);
+                    if (!string.IsNullOrWhiteSpace(specName))
+                    {
+                        missingSpecs.Add(specName);
+                    }
                     return combatant;
                 }
 
@@ -182,6 +198,17 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 };
             })
             .ToArray();
+
+        // Active snapshots warm every party job in the background. A finished
+        // encounter only persists already available estimates and must not start
+        // new network work during shutdown/finalization.
+        if (rankingEncounter.IsActive)
+        {
+            foreach (var specName in missingSpecs)
+            {
+                QueueCurveLoad(specName);
+            }
+        }
 
         return changed
             ? encounter with { Combatants = combatants }
@@ -269,9 +296,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             return null;
         }
 
-        var encounterDps = combatant.EncDps > 0
-            ? combatant.EncDps
-            : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+        var encounterDps = combatant.Rdps > 0
+            ? combatant.Rdps
+            : combatant.EncDps > 0
+                ? combatant.EncDps
+                : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
         var percentile = EstimatePercentile(curve.Points, encounterDps);
         if (updateStatus)
         {
@@ -849,7 +878,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             specName,
             DateTimeOffset.UtcNow,
             points,
-            difficulty);
+            difficulty,
+            CurrentFflogsEncounterTable.RankingRegion,
+            CurrentFflogsEncounterTable.RankingPartition,
+            CurrentFflogsEncounterTable.RankingMetric,
+            CurrentCurveFormatVersion);
     }
 
     private async Task<FflogsRankingPage> FetchRankingPageAsync(
@@ -860,14 +893,23 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         const string query = """
-            query RankingPage($encounterId: Int!, $difficulty: Int!, $specName: String!, $page: Int!) {
+            query RankingPage(
+              $encounterId: Int!,
+              $difficulty: Int!,
+              $specName: String!,
+              $page: Int!,
+              $serverRegion: String!,
+              $partition: Int!,
+              $metric: CharacterRankingMetricType!) {
               worldData {
                 encounter(id: $encounterId) {
                   name
                   characterRankings(
-                    metric: dps,
+                    metric: $metric,
                     difficulty: $difficulty,
                     specName: $specName,
+                    serverRegion: $serverRegion,
+                    partition: $partition,
                     page: $page)
                 }
               }
@@ -875,7 +917,16 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             """;
         using var document = await QueryAsync(
             query,
-            new { encounterId, difficulty, specName, page },
+            new
+            {
+                encounterId,
+                difficulty,
+                specName,
+                page,
+                serverRegion = CurrentFflogsEncounterTable.RankingRegion,
+                partition = CurrentFflogsEncounterTable.RankingPartition,
+                metric = CurrentFflogsEncounterTable.RankingMetric,
+            },
             cancellationToken).ConfigureAwait(false);
         var encounter = document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("encounter");
         if (encounter.ValueKind == JsonValueKind.Null)
@@ -1007,7 +1058,17 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             catalogFetchedAt = encounters.Count > 0 ? cache.CatalogFetchedAt : default;
             foreach (var curve in cache.Curves ?? [])
             {
-                if (CurrentFflogsEncounterTable.IsSupportedRanking(curve.EncounterId, curve.Difficulty))
+                if (CurrentFflogsEncounterTable.IsSupportedRanking(curve.EncounterId, curve.Difficulty) &&
+                    curve.FormatVersion == CurrentCurveFormatVersion &&
+                    string.Equals(
+                        curve.Region,
+                        CurrentFflogsEncounterTable.RankingRegion,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    curve.Partition == CurrentFflogsEncounterTable.RankingPartition &&
+                    string.Equals(
+                        curve.Metric,
+                        CurrentFflogsEncounterTable.RankingMetric,
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     curves[CurveKey(curve.EncounterId, curve.Difficulty, curve.SpecName)] = curve;
                 }
@@ -1260,7 +1321,11 @@ public sealed record FflogsCurveCacheEntry(
     string SpecName,
     DateTimeOffset FetchedAt,
     IReadOnlyList<FflogsCurvePoint> Points,
-    int Difficulty = 0);
+    int Difficulty = 0,
+    string Region = "",
+    int Partition = 0,
+    string Metric = "",
+    int FormatVersion = 0);
 
 public sealed record FflogsEncounterCatalogEntry(int Id, string Name, string ZoneName, bool Frozen);
 

@@ -57,6 +57,7 @@ try
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
+    ValidateRaidDpsEstimator();
     ValidateEncounterParticipantsSurvivePartyDeparture();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -70,6 +71,7 @@ try
         await ValidateLiveHtmlOverlayInputAsync(testRoot);
     }
     ValidateParserDependencyVersions();
+    ValidateUnscramblerSupportPolicy();
     ValidatePluginRepositoryMetadata();
     ValidateChinese755hOpcodes();
     ValidateMeterRows();
@@ -327,6 +329,19 @@ static void ValidatePluginRepositoryMetadata()
     using var document = JsonDocument.Parse(File.ReadAllText(
         Path.Combine(projectRoot, "repo", "pluginmaster.json")));
     var entry = document.RootElement.EnumerateArray().Single();
+    var assemblyVersion = typeof(ControlCenterWindow).Assembly
+        .GetName()
+        .Version!
+        .ToString(4);
+    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat.zip";
+    Assert(
+        entry.GetProperty("AssemblyVersion").GetString() == assemblyVersion &&
+        entry.GetProperty("DownloadLinkInstall").GetString() is { } installUrl &&
+        installUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
+        entry.GetProperty("DownloadLinkUpdate").GetString() is { } updateUrl &&
+        updateUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
+        entry.GetProperty("DownloadLinkTesting").ValueKind == JsonValueKind.Null,
+        "Dalamud custom repository version or release download links drifted from the plugin assembly.");
     var iconUrl = entry.GetProperty("IconUrl").GetString();
     Assert(
         Uri.TryCreate(iconUrl, UriKind.Absolute, out var iconUri) &&
@@ -567,7 +582,8 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 3 &&
+        legacyConfiguration.Version == 4 &&
+        legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
         System.Numerics.Vector4.DistanceSquared(
@@ -596,7 +612,8 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 3 &&
+        parserMigration.Version == 4 &&
+        parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
         "An existing user with prior third-party acknowledgements did not receive the one-time parser startup migration.");
@@ -609,10 +626,38 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 3 &&
+        newConfiguration.Version == 4 &&
+        newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser,
-        "A new installation does not start the parser independently of third-party confirmation.");
+        "A new installation does not default to rDPS or start the parser independently of third-party confirmation.");
+
+    var previousEdpsUser = new PluginConfiguration
+    {
+        Version = 3,
+        Meter = new MeterSettings { DpsMetric = DpsMetric.EncDps },
+    };
+    Assert(
+        previousEdpsUser.ApplyMigrations() &&
+        previousEdpsUser.Version == 4 &&
+        previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
+        "The one-time eDPS-to-rDPS migration was not applied.");
+    previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
+    Assert(
+        !previousEdpsUser.ApplyMigrations() &&
+        previousEdpsUser.Meter.DpsMetric == DpsMetric.ExtDps,
+        "A post-migration manual DPS metric choice was overwritten.");
+
+    var previousCustomMetricUser = new PluginConfiguration
+    {
+        Version = 3,
+        Meter = new MeterSettings { DpsMetric = DpsMetric.Dps },
+    };
+    Assert(
+        previousCustomMetricUser.ApplyMigrations() &&
+        previousCustomMetricUser.Version == 4 &&
+        previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
+        "The rDPS migration overwrote a previously customized DPS metric.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -625,8 +670,10 @@ static void ValidateMeterRows()
             new Combatant(
                 "tank", "Tank@Alpha", "PLD", true, 100_000, 10_000, 1,
                 11_000, 10_000, 10_000,
-                DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2),
-            new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3, 2_500, 2_000, 2_000),
+                DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2, Rdps: 9_500),
+            new Combatant(
+                "healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3,
+                2_500, 2_000, 2_000, Rdps: 11_000),
             new Combatant("Limit Break", "Limit Break", "", false, 50_000, 0, 0, 5_000, 5_000, 5_000),
         ],
         [],
@@ -678,6 +725,14 @@ static void ValidateMeterRows()
         Math.Abs(rows.Sum(row => row.DamagePercent) - 100) < 0.01,
         "Meter damage percentages did not cover the encounter total.");
 
+    settings.DpsMetric = DpsMetric.Rdps;
+    Thread.Sleep(settings.RefreshIntervalMs + 20);
+    rows = meter.GetRows();
+    Assert(
+        rows[0].Name == "Healer@Beta" && rows[0].Dps == 11_000 &&
+        rows[1].Name == "Tank@Alpha" && rows[1].Dps == 9_500,
+        "The Meter did not display and sort by the calculated rDPS field.");
+
     settings.SortMode = MeterSortMode.Hps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
@@ -696,6 +751,7 @@ static void ValidateMeterRows()
         MeterWindow.SelectVisibleRows(rows, compactMode: false).Count == rows.Count,
         "Disabling compact mode did not restore the full Meter list.");
 
+    settings.DpsMetric = DpsMetric.EncDps;
     settings.SortMode = MeterSortMode.Deaths;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
@@ -808,8 +864,15 @@ static void ValidateMeterLayout()
             "DalamudActCompat",
             "Assets",
             "StatusIcons",
+            "CombatTransition.png")) &&
+        File.Exists(Path.Combine(
+            FindProjectRoot(),
+            "src",
+            "DalamudActCompat",
+            "Assets",
+            "StatusIcons",
             "CombatEnded.png")),
-        "The requested running or ended Combat Meter status icon is missing.");
+        "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
         MeterWindow.MinimumTableWidthWithFflogs == 410 &&
         MeterWindow.MinimumTableWidthWithoutFflogs == 350 &&
@@ -892,7 +955,12 @@ static void ValidateMeterLayout()
                               BindingFlags.Static | BindingFlags.NonPublic)
                           ?? throw new InvalidOperationException(
                               "Meter primary-rate label helper was not found.");
-    var settings = new MeterSettings { DpsMetric = DpsMetric.EncDps };
+    var settings = new MeterSettings();
+    Assert(
+        settings.DpsMetric == DpsMetric.Rdps &&
+        Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "rDPS"),
+        "The ACT Meter does not default to the rDPS calculation metric.");
+    settings.DpsMetric = DpsMetric.EncDps;
     Assert(
         Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS"),
         "The ACT Meter still labels encounter DPS as EncDPS instead of eDPS.");
@@ -975,6 +1043,78 @@ static void ValidateFflogsEstimateCurve()
         (double)estimatePercentile.Invoke(null, [curve, 9_000d])! == 100,
         "FFLogs estimate did not clamp values outside the sampled curve.");
 
+    Assert(
+        Enumerable.Range(0, 26).All(percentile =>
+            FflogsEstimateService.CurveSamplePercentiles.Contains(percentile)) &&
+        FflogsEstimateService.CurveSamplePercentiles.Contains(30) &&
+        FflogsEstimateService.CurveSamplePercentiles.Contains(90) &&
+        Enumerable.Range(95, 6).All(percentile =>
+            FflogsEstimateService.CurveSamplePercentiles.Contains(percentile)),
+        "FFLogs curve sampling no longer protects the nonlinear low-percentile range.");
+
+    FflogsCurvePoint[] lindwurmPaladinLowCurve =
+    [
+        new(16, 19_196.895),
+        new(17, 19_320.374),
+    ];
+    var observedLindwurmPaladinRdps = (double)estimatePercentile.Invoke(
+        null,
+        [lindwurmPaladinLowCurve, 19_245.4d])!;
+    Assert(
+        Math.Round(observedLindwurmPaladinRdps, MidpointRounding.AwayFromZero) == 16,
+        "Dense low-percentile sampling did not reproduce the observed Lindwurm Paladin parse.");
+
+    FflogsCurvePoint[] lindwurmBlackMageLowCurve =
+    [
+        new(1, 18_235.211),
+        new(2, 19_999.254),
+    ];
+    var observedLindwurmBlackMageRdps = (double)estimatePercentile.Invoke(
+        null,
+        [lindwurmBlackMageLowCurve, 19_437.3d])!;
+    Assert(
+        Math.Round(observedLindwurmBlackMageRdps, MidpointRounding.AwayFromZero) == 2,
+        "Dense low-percentile sampling did not reproduce the observed Lindwurm Black Mage parse.");
+
+    FflogsCurvePoint[] tyrantPaladinCurve =
+    [
+        new(25, 18_718.784),
+        new(50, 20_830.289),
+    ];
+    var observedPaladinRdps = (double)estimatePercentile.Invoke(
+        null,
+        [tyrantPaladinCurve, 20_550d])!;
+    Assert(
+        Math.Round(observedPaladinRdps, MidpointRounding.AwayFromZero) == 47,
+        "The corrected local Paladin rDPS did not calibrate to the observed CN ranking of 47.");
+
+    FflogsCurvePoint[] tyrantMachinistCurve =
+    [
+        new(25, 29_403.226),
+        new(50, 32_079.946),
+    ];
+    var observedMachinistRdps = (double)estimatePercentile.Invoke(
+        null,
+        [tyrantMachinistCurve, 30_601d])!;
+    Assert(
+        Math.Round(observedMachinistRdps, MidpointRounding.AwayFromZero) == 36,
+        "The corrected local Machinist rDPS did not calibrate to the observed CN ranking of 36.");
+
+    var fflogsSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Fflogs",
+        "FflogsEstimateService.cs"));
+    Assert(
+        fflogsSource.Contains("metric: $metric", StringComparison.Ordinal) &&
+        fflogsSource.Contains(
+            "metric = CurrentFflogsEncounterTable.RankingMetric",
+            StringComparison.Ordinal) &&
+        fflogsSource.Contains("serverRegion: $serverRegion", StringComparison.Ordinal) &&
+        fflogsSource.Contains("partition: $partition", StringComparison.Ordinal),
+        "FFLogs curves are no longer sourced from the CN rDPS ranking population.");
+
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
     var orange = FflogsEstimateService.ColorForPercentile(95);
@@ -1023,7 +1163,11 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
                 "Paladin",
                 DateTimeOffset.UtcNow,
                 [new FflogsCurvePoint(0, 1_000), new FflogsCurvePoint(100, 3_000)],
-                101)])));
+                101,
+                "CN",
+                9,
+                "rdps",
+                FflogsEstimateService.CurrentCurveFormatVersion)])));
 
     var settings = new FflogsSettings
     {
@@ -1046,10 +1190,11 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
         "AAC Heavyweight M4 (Savage)",
         "Lindwurm",
         [new Combatant(
-            "local", "Player", "PLD", true, 60_000, 0, 0,
-            Dps: 2_000,
-            EncDps: 2_000,
-            ExtDps: 2_000)],
+            "local", "Player", "PLD", true, 90_000, 0, 0,
+            Dps: 3_000,
+            EncDps: 3_000,
+            ExtDps: 3_000,
+            Rdps: 2_000)],
         [],
         [],
         [],
@@ -1276,13 +1421,17 @@ static void ValidateDutyEncounterAggregation()
         deaths: 0,
         damageHits: 5,
         criticalHits: 1,
-        criticalDirectHits: 1);
+        criticalDirectHits: 1) with
+    {
+        IsTransitioning = true,
+    };
     var combinedActive = accumulator.Update(secondActive, finished: false, start.AddMinutes(5));
     Assert(
         combinedActive.Id == afterFirst.Id &&
         combinedActive.TotalDamage == 150 &&
+        combinedActive.IsTransitioning &&
         combinedActive.EnemyName == "测试副本",
-        "The next boss did not continue the same duty-wide ACT encounter.");
+        "The next boss did not continue the same duty-wide ACT encounter or retain transition state.");
     Assert(
         combinedActive.FflogsRankingEncounter?.Id == secondId &&
         combinedActive.FflogsRankingEncounter.TotalDamage == 50,
@@ -1296,6 +1445,7 @@ static void ValidateDutyEncounterAggregation()
     var secondFinished = secondActive with
     {
         EndTime = start.AddMinutes(6),
+        IsTransitioning = false,
         Combatants =
         [
             secondActive.Combatants[0] with
@@ -1468,7 +1618,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 0)) == "v0.3.7.0",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 7)) == "v0.3.7.7",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1530,8 +1680,10 @@ static void ValidateControlCenterPresentation()
         1,
         Dps: 2_000,
         EncDps: 1_500,
-        ExtDps: 1_250);
+        ExtDps: 1_250,
+        Rdps: 1_750);
     Assert(
+        EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.Rdps) == 1_750 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.EncDps) == 1_500 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.ExtDps) == 1_250 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Hps, DpsMetric.EncDps) == 1_000,
@@ -1857,11 +2009,11 @@ static void ValidatePostNamazuRawLogCompatibility()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 4),
-        "IINACT is not at 2.10.3.4.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 5),
+        "IINACT is not at 2.10.3.5.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 103, 0),
-        "OverlayPlugin Core is not at 0.19.103.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 104, 0),
+        "OverlayPlugin Core is not at 0.19.104.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -1871,12 +2023,18 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.55.0.0",
+        "7.55.1.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
-        "3.0.2.5",
+        "3.0.2.7",
         "FFXIV_ACT_Plugin");
+    var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
+    Assert(
+        FetchDependencies.LogFormatIdentity.Matches(
+            logfileAssemblyPath,
+            new Version(2, 10, 3, 5)),
+        $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
     var opcodeResource = overlayAssembly
@@ -1902,6 +2060,160 @@ static void ValidateParserDependencyVersions()
         chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
         chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
         "OverlayPlugin Chinese 7.55h opcodes are stale.");
+}
+
+static void ValidateUnscramblerSupportPolicy()
+{
+    var bundledPolicy = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "CanUseBundledVersionConstants",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    var chineseRuntimePolicy = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "CanUseChineseRuntimeVersionConstants",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    var chineseRuntimeFactory = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "GetChineseRuntimeVersionConstant",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    Assert(
+        bundledPolicy is not null &&
+        chineseRuntimePolicy is not null &&
+        chineseRuntimeFactory is not null,
+        "Unscrambler support policy is missing.");
+
+    static bool InvokeBundled(MethodInfo policy, GameRegion region, string version)
+        => policy.Invoke(null, [region, version]) is true;
+
+    static bool InvokeChineseRuntime(
+        MethodInfo policy,
+        GameRegion region,
+        string version,
+        int opcodeKeyTableSize)
+        => policy.Invoke(null, [region, version, opcodeKeyTableSize]) is true;
+
+    const string chinese755h = "2026.08.05.0000.0000";
+    const uint chineseOpcodeKeyTableOffset = 0x231EB40;
+    const int opcodeKeyTableSize = 89 * 4;
+    var globalConstants = Unscrambler.Constants.VersionConstants.ForGameVersion(chinese755h);
+    var unscrambler = Unscrambler.UnscramblerFactory.ForGameVersion(chinese755h);
+    var expectedObfuscatedOpcodes = new Dictionary<string, int>
+    {
+        ["PlayerSpawn"] = 0x398,
+        ["NpcSpawn"] = 0x06F,
+        ["NpcSpawn2"] = 0x287,
+        ["ActionEffect01"] = 0x296,
+        ["ActionEffect08"] = 0x164,
+        ["ActionEffect16"] = 0x1B1,
+        ["ActionEffect24"] = 0x39B,
+        ["ActionEffect32"] = 0x372,
+        ["StatusEffectList"] = 0x1F1,
+        ["StatusEffectList3"] = 0x153,
+        ["Examine"] = 0x2BB,
+        ["UpdateGearset"] = 0x336,
+        ["UpdateParty"] = 0x1B8,
+        ["ActorControl"] = 0x1DA,
+        ["ActorCast"] = 0x18C,
+        ["UnknownEffect01"] = 0x0BF,
+        ["UnknownEffect16"] = 0x115,
+        ["ActionEffect02"] = 0x305,
+        ["ActionEffect04"] = 0x14D,
+    };
+    Assert(
+        unscrambler is not null &&
+        globalConstants.InitZoneOpcode == 0x028D &&
+        globalConstants.UnknownObfuscationInitOpcode == 0x0128 &&
+        globalConstants.OpcodeKeyTableOffset == 0x2323420 &&
+        globalConstants.OpcodeKeyTableSize == opcodeKeyTableSize,
+        "Unscrambler 7.55h1 factory or Global constants are incomplete.");
+    Assert(
+        globalConstants.ObfuscatedOpcodes.Count == expectedObfuscatedOpcodes.Count &&
+        expectedObfuscatedOpcodes.All(pair =>
+            globalConstants.ObfuscatedOpcodes.TryGetValue(pair.Key, out var opcode) &&
+            opcode == pair.Value),
+        "Unscrambler 7.55h1 contains incomplete or stale obfuscated opcodes.");
+
+    var chineseRuntimeConstants = (Unscrambler.Constants.VersionConstants)chineseRuntimeFactory!.Invoke(
+        null,
+        [chinese755h, chineseOpcodeKeyTableOffset, opcodeKeyTableSize])!;
+    var chineseUnscrambler = new Unscrambler.Unscramble.Versions.Unscrambler73();
+    chineseUnscrambler.Initialize(chineseRuntimeConstants);
+    Assert(
+        chineseRuntimeConstants.OpcodeKeyTableOffset == chineseOpcodeKeyTableOffset &&
+        chineseRuntimeConstants.OpcodeKeyTableOffset != globalConstants.OpcodeKeyTableOffset &&
+        chineseRuntimeConstants.OpcodeKeyTableSize == opcodeKeyTableSize &&
+        chineseRuntimeConstants.TableOffsets.Length == 0 &&
+        chineseRuntimeConstants.MidTableOffset == 0 &&
+        chineseRuntimeConstants.DayTableOffset == 0 &&
+        chineseRuntimeConstants.ObfuscatedOpcodes.Count == globalConstants.ObfuscatedOpcodes.Count &&
+        globalConstants.ObfuscatedOpcodes.All(pair =>
+            chineseRuntimeConstants.ObfuscatedOpcodes.TryGetValue(pair.Key, out var opcode) &&
+            opcode == pair.Value),
+        "Chinese 7.55h runtime constants reused a Global memory offset or lost official opcodes.");
+
+    OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
+    var chineseOpcodes = OpcodeManager.Instance.CurrentOpcodes;
+    var unscramblerToMachina = new Dictionary<string, string>
+    {
+        ["PlayerSpawn"] = "PlayerSpawn",
+        ["NpcSpawn"] = "NpcSpawn",
+        ["NpcSpawn2"] = "NpcSpawn2",
+        ["ActionEffect01"] = "Ability1",
+        ["ActionEffect08"] = "Ability8",
+        ["ActionEffect16"] = "Ability16",
+        ["ActionEffect24"] = "Ability24",
+        ["ActionEffect32"] = "Ability32",
+        ["StatusEffectList"] = "StatusEffectList",
+        ["StatusEffectList3"] = "StatusEffectList3",
+        ["ActorControl"] = "ActorControl",
+        ["ActorCast"] = "ActorCast",
+    };
+    foreach (var pair in unscramblerToMachina)
+    {
+        Assert(
+            chineseRuntimeConstants.ObfuscatedOpcodes[pair.Key] == chineseOpcodes[pair.Value],
+            $"Unscrambler opcode {pair.Key} does not match Chinese Machina {pair.Value}.");
+    }
+    Assert(
+        !InvokeBundled(bundledPolicy!, GameRegion.Chinese, chinese755h),
+        "Chinese 7.55h incorrectly reuses the Global key-table address.");
+    Assert(
+        InvokeBundled(bundledPolicy!, GameRegion.Global, chinese755h),
+        "Global 7.55h no longer uses its bundled Unscrambler constants.");
+    Assert(
+        !InvokeBundled(bundledPolicy!, GameRegion.Korean, chinese755h),
+        "Korean clients incorrectly reuse Global Unscrambler constants.");
+    Assert(
+        !InvokeBundled(bundledPolicy!, GameRegion.Global, "2099.01.01.0000.0000"),
+        "Unknown Global game versions incorrectly use bundled Unscrambler constants.");
+    Assert(
+        InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            chinese755h,
+            opcodeKeyTableSize),
+        "Chinese 7.55h does not use its runtime-discovered regional key table.");
+    Assert(
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            chinese755h,
+            opcodeKeyTableSize - 4),
+        "Chinese 7.55h accepts an unexpected opcode key-table size.");
+    Assert(
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Korean,
+            chinese755h,
+            opcodeKeyTableSize) &&
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            "2026.07.16.0001.0000",
+            opcodeKeyTableSize) &&
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            "2099.01.01.0000.0000",
+            opcodeKeyTableSize),
+        "A different region or Chinese game version is incorrectly marked ranking-safe.");
 }
 
 static void AssertFileVersion(string path, string expected, string component)
@@ -2227,14 +2539,23 @@ static void ValidateFflogsConcurrencyBoundaries()
         projectRoot, "src", "DalamudActCompat", "Fflogs", "FflogsEstimateService.cs"));
     var controlCenterSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var adapterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Parser", "IinactAdapter.cs"));
     Assert(
         serviceSource.Contains("TryStartBackgroundTask", StringComparison.Ordinal) &&
         serviceSource.Contains("SaveCacheAsync", StringComparison.Ordinal) &&
         serviceSource.Contains("cacheWriteGate", StringComparison.Ordinal) &&
+        serviceSource.Contains("missingSpecs", StringComparison.Ordinal) &&
+        serviceSource.Contains("QueueCurveLoad(specName)", StringComparison.Ordinal) &&
         !serviceSource.Contains("_ = Task.Run", StringComparison.Ordinal) &&
+        adapterSource.IndexOf(
+            "encounter = CaptureFflogsEstimatesSafely(encounter);",
+            StringComparison.Ordinal) is var captureIndex &&
+        captureIndex >= 0 &&
+        captureIndex < adapterSource.IndexOf("var boundByDuty", StringComparison.Ordinal) &&
         controlCenterSource.Contains("UpdateFflogsSettings", StringComparison.Ordinal) &&
         controlCenterSource.Contains("configuration.Fflogs = next;", StringComparison.Ordinal),
-        "FFLogs UI ownership, task tracking, or serialized cache persistence regressed.");
+        "FFLogs background preloading, UI ownership, task tracking, or serialized cache persistence regressed.");
 }
 
 static async Task ValidateFflogsCacheWritersAsync(string testRoot)
@@ -2251,7 +2572,27 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
             [
                 new FflogsCurveCacheEntry(100, "Howling Blade", "Paladin", DateTimeOffset.UtcNow, [], 101),
                 new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 0),
-                new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 100),
+                new FflogsCurveCacheEntry(
+                    104,
+                    "Lindwurm",
+                    "Paladin",
+                    DateTimeOffset.UtcNow,
+                    [],
+                    100,
+                    "CN",
+                    9,
+                    "rdps"),
+                new FflogsCurveCacheEntry(
+                    104,
+                    "Lindwurm",
+                    "WhiteMage",
+                    DateTimeOffset.UtcNow,
+                    [new FflogsCurvePoint(25, 16_000)],
+                    100,
+                    "CN",
+                    9,
+                    "rdps",
+                    FflogsEstimateService.CurrentCurveFormatVersion),
             ]));
     await File.WriteAllTextAsync(
         cachePath,
@@ -2289,8 +2630,10 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
             cachedEncounterIds.SequenceEqual([104]) &&
             cachedCurveIds.SequenceEqual([104]) &&
             cacheDocument.RootElement.GetProperty("Curves")[0].GetProperty("Difficulty").GetInt32() == 100 &&
+            cacheDocument.RootElement.GetProperty("Curves")[0].GetProperty("FormatVersion").GetInt32() ==
+                FflogsEstimateService.CurrentCurveFormatVersion &&
             !Directory.EnumerateFiles(cacheDirectory, "*.tmp").Any(),
-            "FFLogs cache persistence retained an old ranking tier, corrupted the cache, or left temp files behind.");
+            "FFLogs cache persistence retained an old ranking tier/curve format, corrupted the cache, or left temp files behind.");
     }
     finally
     {
@@ -2882,6 +3225,176 @@ static void ValidateCombatEventScoping()
         runtimeSource.Contains("lastRelevantCombatAction", StringComparison.Ordinal) &&
         runtimeSource.Contains("ActGlobals.oFormActMain.EndCombat(true)", StringComparison.Ordinal),
         "Open-world combat does not end independently while duty encounters remain protected.");
+}
+
+static void ValidateRaidDpsEstimator()
+{
+    var start = DateTimeOffset.UtcNow;
+    var estimator = new RaidDpsEstimator();
+    Assert(
+        RaidDpsEstimator.IsDamageSwingType(1) &&
+        RaidDpsEstimator.IsDamageSwingType(2) &&
+        !RaidDpsEstimator.IsDamageSwingType(3),
+        "ACT healing swings can still enter the DPS/rDPS damage window.");
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|技巧舞步结束|20.00|10000001|Dancer|10000002|Paladin@Alpha|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin@Alpha") + 50) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Dancer") - 50) < 0.001 &&
+        Math.Abs(
+            estimator.ResolveDamageAdjustment("Paladin") +
+            estimator.ResolveDamageAdjustment("Dancer")) < 0.001,
+        "Percentage raid-buff damage was not transferred from the receiver to the provider.");
+
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|71E|技巧舞步结束|0.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(3),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin") + 50) < 0.001,
+        "A removed raid buff continued changing rDPS attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|312|战斗连祷|20.00|10000003|Dragoon|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_600,
+        critical: true,
+        directHit: false);
+    var paladinAdjustment = estimator.ResolveDamageAdjustment("Paladin");
+    var dragoonAdjustment = estimator.ResolveDamageAdjustment("Dragoon");
+    Assert(
+        paladinAdjustment < 0 && dragoonAdjustment > 0 &&
+        Math.Abs(paladinAdjustment + dragoonAdjustment) < 0.001,
+        "Critical-hit raid-buff attribution was not positive and damage-conserving.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|技巧舞步结束|20.00|10000002|Paladin|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin")) < 0.001,
+        "A self-provided damage buff was incorrectly treated as external rDPS contribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveDamage(
+        start.AddSeconds(2),
+        "Paladin",
+        "Boss",
+        500,
+        critical: false,
+        directHit: false);
+    estimator.ObserveDamage(
+        start.AddSeconds(12),
+        "Paladin",
+        "Boss",
+        500,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveObservedDamageDurationSeconds() - 10) < 0.001 &&
+        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: false) - (1_000d / 30)) < 0.001 &&
+        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: true) - 100) < 0.001,
+        "Finished rDPS did not trim non-damage tail time while active rDPS retained wall-clock duration.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000001|Summoner|1B|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|40000001|Solar Bahamut|00|64|10000001|00||");
+    Assert(
+        estimator.TryResolvePetOwner("Solar Bahamut", out var petOwner) &&
+        petOwner == "Summoner",
+        "A party pet was not resolved back to its owner from AddCombatant data.");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000002|Astrologian|10000001|Summoner|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000002|Astrologian|40000001|Solar Bahamut|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Summoner",
+        "Boss",
+        1_060,
+        critical: false,
+        directHit: false,
+        damageSourceName: "Solar Bahamut");
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Summoner") + 60) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Astrologian") - 60) < 0.001,
+        "Pet damage or the AST single-target card was not included exactly once in rDPS attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveDamage(
+        start,
+        "Paladin",
+        "Lindwurm",
+        1_000,
+        critical: false,
+        directHit: false);
+    Assert(
+        estimator.ObserveNetworkLine(
+            start.AddSeconds(330),
+            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|00|") &&
+        estimator.IsTransitioning,
+        "NameToggle 00 did not switch the active encounter to transition state.");
+    Assert(
+        estimator.ObserveNetworkLine(
+            start.AddSeconds(352.145),
+            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|01|") &&
+        !estimator.IsTransitioning,
+        "NameToggle 01 did not switch the encounter back to running state.");
+    estimator.ObserveDamage(
+        start.AddSeconds(397.974),
+        "Paladin",
+        "Lindwurm",
+        374_829,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageDowntimeSeconds(start.AddSeconds(397.974)) - 22.145) < 0.001 &&
+        Math.Abs(estimator.ResolveEffectiveDamageDurationSeconds() - 375.829) < 0.001 &&
+        Math.Abs(
+            estimator.ResolveRate(
+                "Paladin",
+                375_829,
+                397.974,
+                useObservedDamageWindow: true) - 1_000) < 0.001,
+        "The verified Lindwurm transition interval was not removed from DPS/rDPS duration.");
 }
 
 static void ValidateDalamudGameStateBridge()
@@ -4205,7 +4718,8 @@ static void ValidateActEncounterMapping()
             new ActCombatantSnapshot(
                 "local", "You", "SAM", true, 120_000, 2_000, 0,
                 13_000, 12_000, 12_000,
-                DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4),
+                DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4,
+                Rdps: 11_500),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
             new ActCombatantSnapshot(
                 "early",
@@ -4217,13 +4731,21 @@ static void ValidateActEncounterMapping()
                 0,
                 double.PositiveInfinity,
                 double.NegativeInfinity,
-                double.NaN),
-        ]);
+                double.NaN,
+                Rdps: double.NaN),
+        ])
+    {
+        CombatDuration = TimeSpan.FromSeconds(9),
+        IsTransitioning = true,
+    };
 
     var encounter = ActEncounterMapper.Map(snapshot);
     Assert(encounter.Id == id, "ACT encounter id was not preserved.");
     Assert(encounter.StartTime == start, "ACT encounter start time was not preserved.");
     Assert(encounter.IsActive, "Active ACT encounter was mapped as finished.");
+    Assert(
+        encounter.IsTransitioning && encounter.CombatDuration == TimeSpan.FromSeconds(9),
+        "ACT transition state or effective combat duration was not mapped.");
     Assert(encounter.TotalDamage == 140_001, "ACT combatant damage totals were not mapped.");
     Assert(encounter.TotalHealing == 92_000, "ACT combatant healing totals were not mapped.");
     Assert(encounter.TotalDeaths == 1, "ACT combatant deaths were not mapped.");
@@ -4231,13 +4753,15 @@ static void ValidateActEncounterMapping()
         "ACT local player marker was not mapped.");
     Assert(encounter.JobSummaries.Count == 3, "ACT job summaries were not generated.");
     var local = encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer);
-    Assert(local.Dps == 13_000 && local.EncDps == 12_000 && local.ExtDps == 12_000,
+    Assert(
+        local.Dps == 13_000 && local.EncDps == 12_000 &&
+        local.ExtDps == 12_000 && local.Rdps == 11_500,
         "ACT DPS metric fields were not mapped.");
     Assert(
         local.DamageHits == 40 && local.CriticalHits == 12 && local.CriticalDirectHits == 4,
         "ACT critical and critical-direct hit counts were not mapped.");
     var early = encounter.Combatants.Single(static combatant => combatant.Name == "Early Pull");
-    Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0,
+    Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0 && early.Rdps == 0,
         "Non-finite ACT rates were not normalized before persistence.");
     Assert(
         !string.IsNullOrWhiteSpace(JsonSerializer.Serialize(encounter)),
@@ -4266,8 +4790,9 @@ static void ValidateActEncounterMapping()
             CriticalDirectHits: 0,
             FflogsPercentile: null,
             FflogsEncounterName: null,
+            Rdps: 0,
         },
-        "Legacy combatant JSON without hit-count or FFLogs fields is no longer compatible.");
+        "Legacy combatant JSON without hit-count, FFLogs, or rDPS fields is no longer compatible.");
 }
 
 static void ValidateChineseCombatChatParsing()
@@ -4450,7 +4975,7 @@ static void ValidateDiagnosticReport(string testRoot)
     var report = DiagnosticReportBuilder.Build(
         paths,
         new DiagnosticReportSnapshot(
-            "0.3.7.0",
+            "0.3.7.3",
             "15.0.0",
             new ParserStatus(
                 ParserState.Running,
@@ -4465,7 +4990,7 @@ static void ValidateDiagnosticReport(string testRoot)
             [new InstalledActPlugin(manifest, "C:\\Users\\Alice\\plugin", Enabled: true)]));
 
     Assert(
-        report.Contains("Plugin: 0.3.7.0", StringComparison.Ordinal) &&
+        report.Contains("Plugin: 0.3.7.3", StringComparison.Ordinal) &&
         report.Contains("parser failed", StringComparison.Ordinal) &&
         report.Contains("at DalamudActCompat.Parser.Start()", StringComparison.Ordinal) &&
         report.Contains("host extension failed", StringComparison.Ordinal) &&

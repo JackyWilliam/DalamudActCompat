@@ -17,6 +17,10 @@ internal sealed record HostEncounterDto(
     IReadOnlyList<HostCombatantDto> Combatants)
 {
     public uint? TerritoryId { get; init; }
+
+    public TimeSpan? CombatDuration { get; init; }
+
+    public bool IsTransitioning { get; init; }
 }
 
 internal sealed record HostCombatantDto(
@@ -32,7 +36,8 @@ internal sealed record HostCombatantDto(
     double ExtDps = 0,
     int DamageHits = 0,
     int CriticalHits = 0,
-    int CriticalDirectHits = 0);
+    int CriticalDirectHits = 0,
+    double Rdps = 0);
 
 internal static class HostIpcMapper
 {
@@ -52,7 +57,8 @@ internal static class HostIpcMapper
                 combatant.ExtDps,
                 combatant.DamageHits,
                 combatant.CriticalHits,
-                combatant.CriticalDirectHits))
+                combatant.CriticalDirectHits,
+                Rdps: combatant.Rdps))
             .ToArray();
 
         var jobSummaries = combatants
@@ -78,6 +84,8 @@ internal static class HostIpcMapper
             jobSummaries)
         {
             TerritoryId = source.TerritoryId,
+            CombatDuration = source.CombatDuration,
+            IsTransitioning = source.IsTransitioning,
         };
     }
 }

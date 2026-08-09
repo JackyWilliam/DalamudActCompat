@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.7.0",
+    "AssemblyVersion":  "0.3.7.7",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.7/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.0/DalamudActCompat.zip",
-    "LastUpdate":  1786184282843,
-    "Changelog":  "v0.3.7.0 战斗统计升级：LB 不占玩家排名并固定置底；新增战斗中/已结束图标、国服中文地名、只显示自己的收起模式与悬浮窗箭头切换，无战斗数据时也可操作；收起时自动缩至一行，展开时恢复原尺寸，并加入上下滑动动画；新增一键复制脱敏诊断日志，以及打开 FFLogs 上传日志目录并复制路径的快捷入口；缩短表格并按需显示横向滚动条，FFLogs 预估扩展到全队并随战斗记录保存；修复木人结算保留、脱战后暴击/直暴率丢失、LB 伤害归属与失误产生空战斗历史，4/8/24 人多战斗段副本按有效战斗时长计算累计 DPS/HPS。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.7/DalamudActCompat.zip",
+    "LastUpdate":  1786287147038,
+    "Changelog":  "v0.3.7.7 加密 FFLogs 低分段排名曲线并自动淘汰旧七点缓存，修复低分预估被异常放大的问题。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

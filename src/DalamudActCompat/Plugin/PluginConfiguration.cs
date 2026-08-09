@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 3;
+    private const int CurrentVersion = 4;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -80,6 +80,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
             EnableParsing = true;
             AutoStartParser = true;
             Version = 3;
+            changed = true;
+        }
+        if (Version < 4)
+        {
+            if (Meter.DpsMetric == DpsMetric.EncDps)
+            {
+                Meter.DpsMetric = DpsMetric.Rdps;
+            }
+            Version = 4;
             changed = true;
         }
 

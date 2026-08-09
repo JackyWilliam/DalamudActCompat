@@ -539,8 +539,8 @@ public sealed class EncounterWindow : Window
         if (hovered && fflogsEstimate is not null)
         {
             ImGui.SetTooltip(text.Get(
-                $"FFLogs 公开排名样本估算：{fflogsEstimate.Score}（{fflogsEstimate.EncounterName}，非官方实时成绩）",
-                $"FFLogs public-ranking estimate: {fflogsEstimate.Score} ({fflogsEstimate.EncounterName}; not an official live parse)"));
+                $"FFLogs 公开排名样本估算：{fflogsEstimate.Score}（{fflogsEstimate.EncounterName}，基于本地 rDPS 归因，非官方实时成绩）",
+                $"FFLogs public-ranking estimate: {fflogsEstimate.Score} ({fflogsEstimate.EncounterName}; based on local rDPS attribution; not an official live parse)"));
         }
     }
 
@@ -617,6 +617,7 @@ public sealed class EncounterWindow : Window
 
         return dpsMetric switch
         {
+            DpsMetric.Rdps when combatant.Rdps > 0 => combatant.Rdps,
             DpsMetric.Dps when combatant.Dps > 0 => combatant.Dps,
             DpsMetric.ExtDps when combatant.ExtDps > 0 => combatant.ExtDps,
             DpsMetric.EncDps when combatant.EncDps > 0 => combatant.EncDps,
@@ -636,6 +637,7 @@ public sealed class EncounterWindow : Window
 
     private string DpsRateLabel() => configuration.Meter.DpsMetric switch
     {
+        DpsMetric.Rdps => "rDPS",
         DpsMetric.EncDps => "eDPS",
         DpsMetric.ExtDps => "ExtDPS",
         _ => "DPS",
