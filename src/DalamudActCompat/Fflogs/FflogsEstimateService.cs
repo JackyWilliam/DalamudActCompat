@@ -39,7 +39,15 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private const string GraphQlEndpoint = "https://www.fflogs.com/api/v2/client";
     private const int PageSize = 100;
     private const int MaximumPage = 4096;
-    private static readonly double[] PercentilePoints = [0, 25, 50, 75, 95, 99, 100];
+    internal const int CurrentCurveFormatVersion = 1;
+    private static readonly double[] PercentilePoints =
+    [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25,
+        30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90,
+        95, 96, 97, 98, 99, 100,
+    ];
 
     private readonly Func<FflogsSettings> getSettings;
     private readonly string cachePath;
@@ -95,6 +103,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             }
         }
     }
+
+    internal static IReadOnlyList<double> CurveSamplePercentiles => PercentilePoints;
 
     public FflogsActiveEncounter? ActiveEncounter
     {
@@ -871,7 +881,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             difficulty,
             CurrentFflogsEncounterTable.RankingRegion,
             CurrentFflogsEncounterTable.RankingPartition,
-            CurrentFflogsEncounterTable.RankingMetric);
+            CurrentFflogsEncounterTable.RankingMetric,
+            CurrentCurveFormatVersion);
     }
 
     private async Task<FflogsRankingPage> FetchRankingPageAsync(
@@ -1048,6 +1059,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             foreach (var curve in cache.Curves ?? [])
             {
                 if (CurrentFflogsEncounterTable.IsSupportedRanking(curve.EncounterId, curve.Difficulty) &&
+                    curve.FormatVersion == CurrentCurveFormatVersion &&
                     string.Equals(
                         curve.Region,
                         CurrentFflogsEncounterTable.RankingRegion,
@@ -1312,7 +1324,8 @@ public sealed record FflogsCurveCacheEntry(
     int Difficulty = 0,
     string Region = "",
     int Partition = 0,
-    string Metric = "");
+    string Metric = "",
+    int FormatVersion = 0);
 
 public sealed record FflogsEncounterCatalogEntry(int Id, string Name, string ZoneName, bool Frozen);
 

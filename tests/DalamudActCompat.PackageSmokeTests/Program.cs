@@ -1043,6 +1043,39 @@ static void ValidateFflogsEstimateCurve()
         (double)estimatePercentile.Invoke(null, [curve, 9_000d])! == 100,
         "FFLogs estimate did not clamp values outside the sampled curve.");
 
+    Assert(
+        Enumerable.Range(0, 26).All(percentile =>
+            FflogsEstimateService.CurveSamplePercentiles.Contains(percentile)) &&
+        FflogsEstimateService.CurveSamplePercentiles.Contains(30) &&
+        FflogsEstimateService.CurveSamplePercentiles.Contains(90) &&
+        Enumerable.Range(95, 6).All(percentile =>
+            FflogsEstimateService.CurveSamplePercentiles.Contains(percentile)),
+        "FFLogs curve sampling no longer protects the nonlinear low-percentile range.");
+
+    FflogsCurvePoint[] lindwurmPaladinLowCurve =
+    [
+        new(16, 19_196.895),
+        new(17, 19_320.374),
+    ];
+    var observedLindwurmPaladinRdps = (double)estimatePercentile.Invoke(
+        null,
+        [lindwurmPaladinLowCurve, 19_245.4d])!;
+    Assert(
+        Math.Round(observedLindwurmPaladinRdps, MidpointRounding.AwayFromZero) == 16,
+        "Dense low-percentile sampling did not reproduce the observed Lindwurm Paladin parse.");
+
+    FflogsCurvePoint[] lindwurmBlackMageLowCurve =
+    [
+        new(1, 18_235.211),
+        new(2, 19_999.254),
+    ];
+    var observedLindwurmBlackMageRdps = (double)estimatePercentile.Invoke(
+        null,
+        [lindwurmBlackMageLowCurve, 19_437.3d])!;
+    Assert(
+        Math.Round(observedLindwurmBlackMageRdps, MidpointRounding.AwayFromZero) == 2,
+        "Dense low-percentile sampling did not reproduce the observed Lindwurm Black Mage parse.");
+
     FflogsCurvePoint[] tyrantPaladinCurve =
     [
         new(25, 18_718.784),
@@ -1133,7 +1166,8 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
                 101,
                 "CN",
                 9,
-                "rdps")])));
+                "rdps",
+                FflogsEstimateService.CurrentCurveFormatVersion)])));
 
     var settings = new FflogsSettings
     {
@@ -1584,7 +1618,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 6)) == "v0.3.7.6",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 7)) == "v0.3.7.7",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -2548,6 +2582,17 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
                     "CN",
                     9,
                     "rdps"),
+                new FflogsCurveCacheEntry(
+                    104,
+                    "Lindwurm",
+                    "WhiteMage",
+                    DateTimeOffset.UtcNow,
+                    [new FflogsCurvePoint(25, 16_000)],
+                    100,
+                    "CN",
+                    9,
+                    "rdps",
+                    FflogsEstimateService.CurrentCurveFormatVersion),
             ]));
     await File.WriteAllTextAsync(
         cachePath,
@@ -2585,8 +2630,10 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
             cachedEncounterIds.SequenceEqual([104]) &&
             cachedCurveIds.SequenceEqual([104]) &&
             cacheDocument.RootElement.GetProperty("Curves")[0].GetProperty("Difficulty").GetInt32() == 100 &&
+            cacheDocument.RootElement.GetProperty("Curves")[0].GetProperty("FormatVersion").GetInt32() ==
+                FflogsEstimateService.CurrentCurveFormatVersion &&
             !Directory.EnumerateFiles(cacheDirectory, "*.tmp").Any(),
-            "FFLogs cache persistence retained an old ranking tier, corrupted the cache, or left temp files behind.");
+            "FFLogs cache persistence retained an old ranking tier/curve format, corrupted the cache, or left temp files behind.");
     }
     finally
     {
