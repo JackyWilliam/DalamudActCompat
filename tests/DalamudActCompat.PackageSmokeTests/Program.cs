@@ -70,6 +70,7 @@ try
         await ValidateLiveHtmlOverlayInputAsync(testRoot);
     }
     ValidateParserDependencyVersions();
+    ValidateUnscramblerSupportPolicy();
     ValidatePluginRepositoryMetadata();
     ValidateChinese755hOpcodes();
     ValidateMeterRows();
@@ -327,6 +328,19 @@ static void ValidatePluginRepositoryMetadata()
     using var document = JsonDocument.Parse(File.ReadAllText(
         Path.Combine(projectRoot, "repo", "pluginmaster.json")));
     var entry = document.RootElement.EnumerateArray().Single();
+    var assemblyVersion = typeof(ControlCenterWindow).Assembly
+        .GetName()
+        .Version!
+        .ToString(4);
+    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat.zip";
+    Assert(
+        entry.GetProperty("AssemblyVersion").GetString() == assemblyVersion &&
+        entry.GetProperty("DownloadLinkInstall").GetString() is { } installUrl &&
+        installUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
+        entry.GetProperty("DownloadLinkUpdate").GetString() is { } updateUrl &&
+        updateUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
+        entry.GetProperty("DownloadLinkTesting").ValueKind == JsonValueKind.Null,
+        "Dalamud custom repository version or release download links drifted from the plugin assembly.");
     var iconUrl = entry.GetProperty("IconUrl").GetString();
     Assert(
         Uri.TryCreate(iconUrl, UriKind.Absolute, out var iconUri) &&
@@ -1468,7 +1482,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 1)) == "v0.3.7.1",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 2)) == "v0.3.7.2",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1857,11 +1871,11 @@ static void ValidatePostNamazuRawLogCompatibility()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 4),
-        "IINACT is not at 2.10.3.4.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 5),
+        "IINACT is not at 2.10.3.5.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 103, 0),
-        "OverlayPlugin Core is not at 0.19.103.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 104, 0),
+        "OverlayPlugin Core is not at 0.19.104.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -1871,7 +1885,7 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.55.0.0",
+        "7.55.1.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
@@ -1902,6 +1916,160 @@ static void ValidateParserDependencyVersions()
         chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
         chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
         "OverlayPlugin Chinese 7.55h opcodes are stale.");
+}
+
+static void ValidateUnscramblerSupportPolicy()
+{
+    var bundledPolicy = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "CanUseBundledVersionConstants",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    var chineseRuntimePolicy = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "CanUseChineseRuntimeVersionConstants",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    var chineseRuntimeFactory = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "GetChineseRuntimeVersionConstant",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    Assert(
+        bundledPolicy is not null &&
+        chineseRuntimePolicy is not null &&
+        chineseRuntimeFactory is not null,
+        "Unscrambler support policy is missing.");
+
+    static bool InvokeBundled(MethodInfo policy, GameRegion region, string version)
+        => policy.Invoke(null, [region, version]) is true;
+
+    static bool InvokeChineseRuntime(
+        MethodInfo policy,
+        GameRegion region,
+        string version,
+        int opcodeKeyTableSize)
+        => policy.Invoke(null, [region, version, opcodeKeyTableSize]) is true;
+
+    const string chinese755h = "2026.08.05.0000.0000";
+    const uint chineseOpcodeKeyTableOffset = 0x231EB40;
+    const int opcodeKeyTableSize = 89 * 4;
+    var globalConstants = Unscrambler.Constants.VersionConstants.ForGameVersion(chinese755h);
+    var unscrambler = Unscrambler.UnscramblerFactory.ForGameVersion(chinese755h);
+    var expectedObfuscatedOpcodes = new Dictionary<string, int>
+    {
+        ["PlayerSpawn"] = 0x398,
+        ["NpcSpawn"] = 0x06F,
+        ["NpcSpawn2"] = 0x287,
+        ["ActionEffect01"] = 0x296,
+        ["ActionEffect08"] = 0x164,
+        ["ActionEffect16"] = 0x1B1,
+        ["ActionEffect24"] = 0x39B,
+        ["ActionEffect32"] = 0x372,
+        ["StatusEffectList"] = 0x1F1,
+        ["StatusEffectList3"] = 0x153,
+        ["Examine"] = 0x2BB,
+        ["UpdateGearset"] = 0x336,
+        ["UpdateParty"] = 0x1B8,
+        ["ActorControl"] = 0x1DA,
+        ["ActorCast"] = 0x18C,
+        ["UnknownEffect01"] = 0x0BF,
+        ["UnknownEffect16"] = 0x115,
+        ["ActionEffect02"] = 0x305,
+        ["ActionEffect04"] = 0x14D,
+    };
+    Assert(
+        unscrambler is not null &&
+        globalConstants.InitZoneOpcode == 0x028D &&
+        globalConstants.UnknownObfuscationInitOpcode == 0x0128 &&
+        globalConstants.OpcodeKeyTableOffset == 0x2323420 &&
+        globalConstants.OpcodeKeyTableSize == opcodeKeyTableSize,
+        "Unscrambler 7.55h1 factory or Global constants are incomplete.");
+    Assert(
+        globalConstants.ObfuscatedOpcodes.Count == expectedObfuscatedOpcodes.Count &&
+        expectedObfuscatedOpcodes.All(pair =>
+            globalConstants.ObfuscatedOpcodes.TryGetValue(pair.Key, out var opcode) &&
+            opcode == pair.Value),
+        "Unscrambler 7.55h1 contains incomplete or stale obfuscated opcodes.");
+
+    var chineseRuntimeConstants = (Unscrambler.Constants.VersionConstants)chineseRuntimeFactory!.Invoke(
+        null,
+        [chinese755h, chineseOpcodeKeyTableOffset, opcodeKeyTableSize])!;
+    var chineseUnscrambler = new Unscrambler.Unscramble.Versions.Unscrambler73();
+    chineseUnscrambler.Initialize(chineseRuntimeConstants);
+    Assert(
+        chineseRuntimeConstants.OpcodeKeyTableOffset == chineseOpcodeKeyTableOffset &&
+        chineseRuntimeConstants.OpcodeKeyTableOffset != globalConstants.OpcodeKeyTableOffset &&
+        chineseRuntimeConstants.OpcodeKeyTableSize == opcodeKeyTableSize &&
+        chineseRuntimeConstants.TableOffsets.Length == 0 &&
+        chineseRuntimeConstants.MidTableOffset == 0 &&
+        chineseRuntimeConstants.DayTableOffset == 0 &&
+        chineseRuntimeConstants.ObfuscatedOpcodes.Count == globalConstants.ObfuscatedOpcodes.Count &&
+        globalConstants.ObfuscatedOpcodes.All(pair =>
+            chineseRuntimeConstants.ObfuscatedOpcodes.TryGetValue(pair.Key, out var opcode) &&
+            opcode == pair.Value),
+        "Chinese 7.55h runtime constants reused a Global memory offset or lost official opcodes.");
+
+    OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
+    var chineseOpcodes = OpcodeManager.Instance.CurrentOpcodes;
+    var unscramblerToMachina = new Dictionary<string, string>
+    {
+        ["PlayerSpawn"] = "PlayerSpawn",
+        ["NpcSpawn"] = "NpcSpawn",
+        ["NpcSpawn2"] = "NpcSpawn2",
+        ["ActionEffect01"] = "Ability1",
+        ["ActionEffect08"] = "Ability8",
+        ["ActionEffect16"] = "Ability16",
+        ["ActionEffect24"] = "Ability24",
+        ["ActionEffect32"] = "Ability32",
+        ["StatusEffectList"] = "StatusEffectList",
+        ["StatusEffectList3"] = "StatusEffectList3",
+        ["ActorControl"] = "ActorControl",
+        ["ActorCast"] = "ActorCast",
+    };
+    foreach (var pair in unscramblerToMachina)
+    {
+        Assert(
+            chineseRuntimeConstants.ObfuscatedOpcodes[pair.Key] == chineseOpcodes[pair.Value],
+            $"Unscrambler opcode {pair.Key} does not match Chinese Machina {pair.Value}.");
+    }
+    Assert(
+        !InvokeBundled(bundledPolicy!, GameRegion.Chinese, chinese755h),
+        "Chinese 7.55h incorrectly reuses the Global key-table address.");
+    Assert(
+        InvokeBundled(bundledPolicy!, GameRegion.Global, chinese755h),
+        "Global 7.55h no longer uses its bundled Unscrambler constants.");
+    Assert(
+        !InvokeBundled(bundledPolicy!, GameRegion.Korean, chinese755h),
+        "Korean clients incorrectly reuse Global Unscrambler constants.");
+    Assert(
+        !InvokeBundled(bundledPolicy!, GameRegion.Global, "2099.01.01.0000.0000"),
+        "Unknown Global game versions incorrectly use bundled Unscrambler constants.");
+    Assert(
+        InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            chinese755h,
+            opcodeKeyTableSize),
+        "Chinese 7.55h does not use its runtime-discovered regional key table.");
+    Assert(
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            chinese755h,
+            opcodeKeyTableSize - 4),
+        "Chinese 7.55h accepts an unexpected opcode key-table size.");
+    Assert(
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Korean,
+            chinese755h,
+            opcodeKeyTableSize) &&
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            "2026.07.16.0001.0000",
+            opcodeKeyTableSize) &&
+        !InvokeChineseRuntime(
+            chineseRuntimePolicy!,
+            GameRegion.Chinese,
+            "2099.01.01.0000.0000",
+            opcodeKeyTableSize),
+        "A different region or Chinese game version is incorrectly marked ranking-safe.");
 }
 
 static void AssertFileVersion(string path, string expected, string component)
@@ -4450,7 +4618,7 @@ static void ValidateDiagnosticReport(string testRoot)
     var report = DiagnosticReportBuilder.Build(
         paths,
         new DiagnosticReportSnapshot(
-            "0.3.7.1",
+            "0.3.7.2",
             "15.0.0",
             new ParserStatus(
                 ParserState.Running,
@@ -4465,7 +4633,7 @@ static void ValidateDiagnosticReport(string testRoot)
             [new InstalledActPlugin(manifest, "C:\\Users\\Alice\\plugin", Enabled: true)]));
 
     Assert(
-        report.Contains("Plugin: 0.3.7.1", StringComparison.Ordinal) &&
+        report.Contains("Plugin: 0.3.7.2", StringComparison.Ordinal) &&
         report.Contains("parser failed", StringComparison.Ordinal) &&
         report.Contains("at DalamudActCompat.Parser.Start()", StringComparison.Ordinal) &&
         report.Contains("host extension failed", StringComparison.Ordinal) &&

@@ -6,10 +6,28 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.7.1",
+    [string] $ExpectedAssemblyVersion = "0.3.7.2",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
+
+    [Parameter(Mandatory = $false)]
+    [string] $ExpectedIinactVersion = "2.10.3.5",
+
+    [Parameter(Mandatory = $false)]
+    [string] $ExpectedOverlayPluginVersion = "0.19.104.0",
+
+    [Parameter(Mandatory = $false)]
+    [string] $ExpectedUnscramblerVersion = "7.55.1.0",
+
+    [Parameter(Mandatory = $false)]
+    [string] $ExpectedFfxivActPluginVersion = "3.0.2.7",
+
+    [Parameter(Mandatory = $false)]
+    [string] $ExpectedMachinaVersion = "2.3.1.3",
+
+    [Parameter(Mandatory = $false)]
+    [string] $ExpectedMachinaFfxivVersion = "2.4.5.5",
 
     [Parameter(Mandatory = $false)]
     [bool] $RequireCompatibilityHost = $true
@@ -39,6 +57,28 @@ function Get-ChildRelativePath {
     }
 
     return $childFullPath.Substring($baseFullPath.Length)
+}
+
+function Assert-FileVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ExpectedVersion,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Component
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "$Component assembly is missing: $Path"
+    }
+
+    $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path).FileVersion
+    if ($actualVersion -ne $ExpectedVersion) {
+        throw "$Component version mismatch. Expected $ExpectedVersion, got $actualVersion."
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
@@ -230,6 +270,10 @@ $cactbotArchiveRelativePath = "BundledCactbot/$($cactbotLock.relativeArchive)"
 $requiredRuntimeFiles = @(
     "Advanced Combat Tracker.dll",
     "DalamudActCompat.ActRuntime.dll",
+    "IINACT.dll",
+    "Machina.dll",
+    "Machina.FFXIV.dll",
+    "Unscrambler.dll",
     "FFXIV_ACT_Plugin.dll",
     "FFXIV_ACT_Plugin.Common.dll",
     "FFXIV_ACT_Plugin.Config.dll",
@@ -263,6 +307,31 @@ if ($missingRuntimeFiles.Count -gt 0) {
     throw "Plugin ZIP is missing self-hosted ACT runtime files: $($missingRuntimeFiles -join ', ')"
 }
 
+Assert-FileVersion `
+    -Path (Join-Path $validationDir "IINACT.dll") `
+    -ExpectedVersion $ExpectedIinactVersion `
+    -Component "IINACT"
+Assert-FileVersion `
+    -Path (Join-Path $validationDir "OverlayPlugin.Core.dll") `
+    -ExpectedVersion $ExpectedOverlayPluginVersion `
+    -Component "OverlayPlugin Core"
+Assert-FileVersion `
+    -Path (Join-Path $validationDir "Unscrambler.dll") `
+    -ExpectedVersion $ExpectedUnscramblerVersion `
+    -Component "Unscrambler.XIV"
+Assert-FileVersion `
+    -Path (Join-Path $validationDir "FFXIV_ACT_Plugin.dll") `
+    -ExpectedVersion $ExpectedFfxivActPluginVersion `
+    -Component "FFXIV_ACT_Plugin"
+Assert-FileVersion `
+    -Path (Join-Path $validationDir "Machina.dll") `
+    -ExpectedVersion $ExpectedMachinaVersion `
+    -Component "Machina"
+Assert-FileVersion `
+    -Path (Join-Path $validationDir "Machina.FFXIV.dll") `
+    -ExpectedVersion $ExpectedMachinaFfxivVersion `
+    -Component "Machina.FFXIV"
+
 $cactbotArchivePath = Join-Path $validationDir $cactbotArchiveRelativePath
 $cactbotArchiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $cactbotArchivePath).Hash
 if ($cactbotArchiveSha256 -ne $cactbotLock.sha256) {
@@ -270,6 +339,7 @@ if ($cactbotArchiveSha256 -ne $cactbotLock.sha256) {
 }
 
 Write-Host "Validated self-hosted ACT runtime files: $($requiredRuntimeFiles.Count)"
+Write-Host "Validated parser runtime versions: IINACT $ExpectedIinactVersion, OverlayPlugin Core $ExpectedOverlayPluginVersion, Unscrambler.XIV $ExpectedUnscramblerVersion, FFXIV_ACT_Plugin $ExpectedFfxivActPluginVersion, Machina $ExpectedMachinaVersion, Machina.FFXIV $ExpectedMachinaFfxivVersion"
 
 Write-Host "Collected plugin ZIP: $destination"
 Write-Host "Validated AssemblyVersion: $($manifest.AssemblyVersion)"
