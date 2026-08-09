@@ -257,10 +257,9 @@ public sealed class IinactAdapter : IParserEngine
         {
             return;
         }
-        if (finished)
-        {
-            encounter = CaptureFflogsEstimatesSafely(encounter);
-        }
+        // Queue every party job's ranking curve as soon as combat data appears.
+        // This must not depend on whether the compact meter happens to draw that row.
+        encounter = CaptureFflogsEstimatesSafely(encounter);
         var boundByDuty = isBoundByDuty();
         if (boundByDuty)
         {

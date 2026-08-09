@@ -57,6 +57,7 @@ try
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
+    ValidateRaidDpsEstimator();
     ValidateEncounterParticipantsSurvivePartyDeparture();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -581,7 +582,8 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 3 &&
+        legacyConfiguration.Version == 4 &&
+        legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
         System.Numerics.Vector4.DistanceSquared(
@@ -610,7 +612,8 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 3 &&
+        parserMigration.Version == 4 &&
+        parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
         "An existing user with prior third-party acknowledgements did not receive the one-time parser startup migration.");
@@ -623,10 +626,38 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 3 &&
+        newConfiguration.Version == 4 &&
+        newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser,
-        "A new installation does not start the parser independently of third-party confirmation.");
+        "A new installation does not default to rDPS or start the parser independently of third-party confirmation.");
+
+    var previousEdpsUser = new PluginConfiguration
+    {
+        Version = 3,
+        Meter = new MeterSettings { DpsMetric = DpsMetric.EncDps },
+    };
+    Assert(
+        previousEdpsUser.ApplyMigrations() &&
+        previousEdpsUser.Version == 4 &&
+        previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
+        "The one-time eDPS-to-rDPS migration was not applied.");
+    previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
+    Assert(
+        !previousEdpsUser.ApplyMigrations() &&
+        previousEdpsUser.Meter.DpsMetric == DpsMetric.ExtDps,
+        "A post-migration manual DPS metric choice was overwritten.");
+
+    var previousCustomMetricUser = new PluginConfiguration
+    {
+        Version = 3,
+        Meter = new MeterSettings { DpsMetric = DpsMetric.Dps },
+    };
+    Assert(
+        previousCustomMetricUser.ApplyMigrations() &&
+        previousCustomMetricUser.Version == 4 &&
+        previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
+        "The rDPS migration overwrote a previously customized DPS metric.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -639,8 +670,10 @@ static void ValidateMeterRows()
             new Combatant(
                 "tank", "Tank@Alpha", "PLD", true, 100_000, 10_000, 1,
                 11_000, 10_000, 10_000,
-                DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2),
-            new Combatant("healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3, 2_500, 2_000, 2_000),
+                DamageHits: 20, CriticalHits: 5, CriticalDirectHits: 2, Rdps: 9_500),
+            new Combatant(
+                "healer", "Healer@Beta", "WHM", false, 20_000, 200_000, 3,
+                2_500, 2_000, 2_000, Rdps: 11_000),
             new Combatant("Limit Break", "Limit Break", "", false, 50_000, 0, 0, 5_000, 5_000, 5_000),
         ],
         [],
@@ -692,6 +725,14 @@ static void ValidateMeterRows()
         Math.Abs(rows.Sum(row => row.DamagePercent) - 100) < 0.01,
         "Meter damage percentages did not cover the encounter total.");
 
+    settings.DpsMetric = DpsMetric.Rdps;
+    Thread.Sleep(settings.RefreshIntervalMs + 20);
+    rows = meter.GetRows();
+    Assert(
+        rows[0].Name == "Healer@Beta" && rows[0].Dps == 11_000 &&
+        rows[1].Name == "Tank@Alpha" && rows[1].Dps == 9_500,
+        "The Meter did not display and sort by the calculated rDPS field.");
+
     settings.SortMode = MeterSortMode.Hps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
@@ -710,6 +751,7 @@ static void ValidateMeterRows()
         MeterWindow.SelectVisibleRows(rows, compactMode: false).Count == rows.Count,
         "Disabling compact mode did not restore the full Meter list.");
 
+    settings.DpsMetric = DpsMetric.EncDps;
     settings.SortMode = MeterSortMode.Deaths;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
@@ -906,7 +948,12 @@ static void ValidateMeterLayout()
                               BindingFlags.Static | BindingFlags.NonPublic)
                           ?? throw new InvalidOperationException(
                               "Meter primary-rate label helper was not found.");
-    var settings = new MeterSettings { DpsMetric = DpsMetric.EncDps };
+    var settings = new MeterSettings();
+    Assert(
+        settings.DpsMetric == DpsMetric.Rdps &&
+        Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "rDPS"),
+        "The ACT Meter does not default to the rDPS calculation metric.");
+    settings.DpsMetric = DpsMetric.EncDps;
     Assert(
         Equals(rateLabelMethod.Invoke(null, [MeterSortMode.Dps, settings]), "eDPS"),
         "The ACT Meter still labels encounter DPS as EncDPS instead of eDPS.");
@@ -989,6 +1036,18 @@ static void ValidateFflogsEstimateCurve()
         (double)estimatePercentile.Invoke(null, [curve, 9_000d])! == 100,
         "FFLogs estimate did not clamp values outside the sampled curve.");
 
+    FflogsCurvePoint[] tyrantPaladinCurve =
+    [
+        new(50, 20_503.936),
+        new(75, 23_802.093),
+    ];
+    var observedPaladinRdps = (double)estimatePercentile.Invoke(
+        null,
+        [tyrantPaladinCurve, 21_875.9d])!;
+    Assert(
+        Math.Round(observedPaladinRdps, MidpointRounding.AwayFromZero) == 60,
+        "The user's 21,875.9 Paladin rDPS did not calibrate to the observed FFLogs parse of 60.");
+
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
     var orange = FflogsEstimateService.ColorForPercentile(95);
@@ -1060,10 +1119,11 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
         "AAC Heavyweight M4 (Savage)",
         "Lindwurm",
         [new Combatant(
-            "local", "Player", "PLD", true, 60_000, 0, 0,
-            Dps: 2_000,
-            EncDps: 2_000,
-            ExtDps: 2_000)],
+            "local", "Player", "PLD", true, 90_000, 0, 0,
+            Dps: 3_000,
+            EncDps: 3_000,
+            ExtDps: 3_000,
+            Rdps: 2_000)],
         [],
         [],
         [],
@@ -1482,7 +1542,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 3)) == "v0.3.7.3",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 4)) == "v0.3.7.4",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -1544,8 +1604,10 @@ static void ValidateControlCenterPresentation()
         1,
         Dps: 2_000,
         EncDps: 1_500,
-        ExtDps: 1_250);
+        ExtDps: 1_250,
+        Rdps: 1_750);
     Assert(
+        EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.Rdps) == 1_750 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.EncDps) == 1_500 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Dps, DpsMetric.ExtDps) == 1_250 &&
         EncounterWindow.ResolveRate(combatant, 60, MeterSortMode.Hps, DpsMetric.EncDps) == 1_000,
@@ -2401,14 +2463,23 @@ static void ValidateFflogsConcurrencyBoundaries()
         projectRoot, "src", "DalamudActCompat", "Fflogs", "FflogsEstimateService.cs"));
     var controlCenterSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var adapterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Parser", "IinactAdapter.cs"));
     Assert(
         serviceSource.Contains("TryStartBackgroundTask", StringComparison.Ordinal) &&
         serviceSource.Contains("SaveCacheAsync", StringComparison.Ordinal) &&
         serviceSource.Contains("cacheWriteGate", StringComparison.Ordinal) &&
+        serviceSource.Contains("missingSpecs", StringComparison.Ordinal) &&
+        serviceSource.Contains("QueueCurveLoad(specName)", StringComparison.Ordinal) &&
         !serviceSource.Contains("_ = Task.Run", StringComparison.Ordinal) &&
+        adapterSource.IndexOf(
+            "encounter = CaptureFflogsEstimatesSafely(encounter);",
+            StringComparison.Ordinal) is var captureIndex &&
+        captureIndex >= 0 &&
+        captureIndex < adapterSource.IndexOf("var boundByDuty", StringComparison.Ordinal) &&
         controlCenterSource.Contains("UpdateFflogsSettings", StringComparison.Ordinal) &&
         controlCenterSource.Contains("configuration.Fflogs = next;", StringComparison.Ordinal),
-        "FFLogs UI ownership, task tracking, or serialized cache persistence regressed.");
+        "FFLogs background preloading, UI ownership, task tracking, or serialized cache persistence regressed.");
 }
 
 static async Task ValidateFflogsCacheWritersAsync(string testRoot)
@@ -3056,6 +3127,79 @@ static void ValidateCombatEventScoping()
         runtimeSource.Contains("lastRelevantCombatAction", StringComparison.Ordinal) &&
         runtimeSource.Contains("ActGlobals.oFormActMain.EndCombat(true)", StringComparison.Ordinal),
         "Open-world combat does not end independently while duty encounters remain protected.");
+}
+
+static void ValidateRaidDpsEstimator()
+{
+    var start = DateTimeOffset.UtcNow;
+    var estimator = new RaidDpsEstimator();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|技巧舞步结束|20.00|10000001|Dancer|10000002|Paladin@Alpha|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin@Alpha") + 50) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Dancer") - 50) < 0.001 &&
+        Math.Abs(
+            estimator.ResolveDamageAdjustment("Paladin") +
+            estimator.ResolveDamageAdjustment("Dancer")) < 0.001,
+        "Percentage raid-buff damage was not transferred from the receiver to the provider.");
+
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|71E|技巧舞步结束|0.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(3),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin") + 50) < 0.001,
+        "A removed raid buff continued changing rDPS attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|312|战斗连祷|20.00|10000003|Dragoon|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_600,
+        critical: true,
+        directHit: false);
+    var paladinAdjustment = estimator.ResolveDamageAdjustment("Paladin");
+    var dragoonAdjustment = estimator.ResolveDamageAdjustment("Dragoon");
+    Assert(
+        paladinAdjustment < 0 && dragoonAdjustment > 0 &&
+        Math.Abs(paladinAdjustment + dragoonAdjustment) < 0.001,
+        "Critical-hit raid-buff attribution was not positive and damage-conserving.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|技巧舞步结束|20.00|10000002|Paladin|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin")) < 0.001,
+        "A self-provided damage buff was incorrectly treated as external rDPS contribution.");
 }
 
 static void ValidateDalamudGameStateBridge()
@@ -4379,7 +4523,8 @@ static void ValidateActEncounterMapping()
             new ActCombatantSnapshot(
                 "local", "You", "SAM", true, 120_000, 2_000, 0,
                 13_000, 12_000, 12_000,
-                DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4),
+                DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4,
+                Rdps: 11_500),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
             new ActCombatantSnapshot(
                 "early",
@@ -4391,7 +4536,8 @@ static void ValidateActEncounterMapping()
                 0,
                 double.PositiveInfinity,
                 double.NegativeInfinity,
-                double.NaN),
+                double.NaN,
+                Rdps: double.NaN),
         ]);
 
     var encounter = ActEncounterMapper.Map(snapshot);
@@ -4405,13 +4551,15 @@ static void ValidateActEncounterMapping()
         "ACT local player marker was not mapped.");
     Assert(encounter.JobSummaries.Count == 3, "ACT job summaries were not generated.");
     var local = encounter.Combatants.Single(static combatant => combatant.IsLocalPlayer);
-    Assert(local.Dps == 13_000 && local.EncDps == 12_000 && local.ExtDps == 12_000,
+    Assert(
+        local.Dps == 13_000 && local.EncDps == 12_000 &&
+        local.ExtDps == 12_000 && local.Rdps == 11_500,
         "ACT DPS metric fields were not mapped.");
     Assert(
         local.DamageHits == 40 && local.CriticalHits == 12 && local.CriticalDirectHits == 4,
         "ACT critical and critical-direct hit counts were not mapped.");
     var early = encounter.Combatants.Single(static combatant => combatant.Name == "Early Pull");
-    Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0,
+    Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0 && early.Rdps == 0,
         "Non-finite ACT rates were not normalized before persistence.");
     Assert(
         !string.IsNullOrWhiteSpace(JsonSerializer.Serialize(encounter)),
@@ -4440,8 +4588,9 @@ static void ValidateActEncounterMapping()
             CriticalDirectHits: 0,
             FflogsPercentile: null,
             FflogsEncounterName: null,
+            Rdps: 0,
         },
-        "Legacy combatant JSON without hit-count or FFLogs fields is no longer compatible.");
+        "Legacy combatant JSON without hit-count, FFLogs, or rDPS fields is no longer compatible.");
 }
 
 static void ValidateChineseCombatChatParsing()

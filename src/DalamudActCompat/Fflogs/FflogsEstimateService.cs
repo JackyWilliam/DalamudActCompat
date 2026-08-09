@@ -151,6 +151,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         var changed = false;
+        var missingSpecs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var combatants = encounter.Combatants
             .Select(combatant =>
             {
@@ -171,6 +172,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                                    updateStatus: false);
                 if (estimate is null)
                 {
+                    var specName = ToFflogsSpecName(rankingCombatant.Job);
+                    if (!string.IsNullOrWhiteSpace(specName))
+                    {
+                        missingSpecs.Add(specName);
+                    }
                     return combatant;
                 }
 
@@ -182,6 +188,17 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 };
             })
             .ToArray();
+
+        // Active snapshots warm every party job in the background. A finished
+        // encounter only persists already available estimates and must not start
+        // new network work during shutdown/finalization.
+        if (rankingEncounter.IsActive)
+        {
+            foreach (var specName in missingSpecs)
+            {
+                QueueCurveLoad(specName);
+            }
+        }
 
         return changed
             ? encounter with { Combatants = combatants }
@@ -269,9 +286,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             return null;
         }
 
-        var encounterDps = combatant.EncDps > 0
-            ? combatant.EncDps
-            : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+        var encounterDps = combatant.Rdps > 0
+            ? combatant.Rdps
+            : combatant.EncDps > 0
+                ? combatant.EncDps
+                : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
         var percentile = EstimatePercentile(curve.Points, encounterDps);
         if (updateStatus)
         {

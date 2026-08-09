@@ -104,6 +104,7 @@ public sealed class MeterService
     private double ResolveDps(Combatant combatant, double encounterDuration)
         => settings.DpsMetric switch
         {
+            DpsMetric.Rdps when combatant.Rdps > 0 => combatant.Rdps,
             DpsMetric.Dps when combatant.Dps > 0 => combatant.Dps,
             DpsMetric.ExtDps when combatant.ExtDps > 0 => combatant.ExtDps,
             DpsMetric.EncDps when combatant.EncDps > 0 => combatant.EncDps,

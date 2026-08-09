@@ -884,8 +884,8 @@ public sealed class MeterWindow : Window
         if (estimate is not null && hovered)
         {
             ImGui.SetTooltip(text.Get(
-                $"FFLogs 公开排名样本估算：{estimate.Score}（非官方实时成绩）",
-                $"FFLogs public-ranking estimate: {estimate.Score} (not an official live parse)"));
+                $"FFLogs 公开排名样本估算：{estimate.Score}（基于本地 rDPS 归因，非官方实时成绩）",
+                $"FFLogs public-ranking estimate: {estimate.Score} (based on local rDPS attribution; not an official live parse)"));
         }
     }
 
@@ -1009,6 +1009,7 @@ public sealed class MeterWindow : Window
             ? "HPS"
             : settings.DpsMetric switch
             {
+                DpsMetric.Rdps => "rDPS",
                 DpsMetric.EncDps => "eDPS",
                 DpsMetric.ExtDps => "ExtDPS",
                 _ => "DPS",

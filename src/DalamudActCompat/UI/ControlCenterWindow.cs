@@ -1396,6 +1396,7 @@ public sealed class ControlCenterWindow : Window
 
     private string DpsMetricLabel(DpsMetric metric) => metric switch
     {
+        DpsMetric.Rdps => text.Get("rDPS（团队贡献估算）", "rDPS (estimated raid contribution)"),
         DpsMetric.Dps => text.Get("DPS（个人有效动作时长）", "DPS (personal active duration)"),
         DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
         DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),
@@ -1442,8 +1443,8 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("FFLogs 实时估算", "FFLogs live estimate"));
         ImGui.TextWrapped(text.Get(
-            "使用 FFLogs 公共排名样本估算自己的当前 EncDPS 百分位；显示为带“~”的颜色与数字，不是官方实时日志分数。",
-            "Estimate your current EncDPS percentile from public FFLogs ranking samples. The colored number is prefixed with '~' and is not an official live-log score."));
+            "后台按团队增益归因计算 rDPS，再用 FFLogs 公共排名样本估算百分位；显示为带“~”的颜色与数字，不是官方实时日志分数。",
+            "Calculate estimated rDPS from raid-buff attribution in the background, then estimate its percentile from public FFLogs ranking samples. The colored number is prefixed with '~' and is not an official live-log score."));
 
         var changed = false;
         if (ImGui.BeginTable(

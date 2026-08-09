@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.7.3",
+    "AssemblyVersion":  "0.3.7.4",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.3/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.4/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.3/DalamudActCompat.zip",
-    "LastUpdate":  1786266909968,
-    "Changelog":  "v0.3.7.3 兼容性修复：解析链使用 IINACT 2.10.3.5、Unscrambler.XIV 7.55.1、OverlayPlugin Core 0.19.104 和 FFXIV_ACT_Plugin 3.0.2.7；国服 7.55h 使用完整操作码定义和运行时定位的地区密钥表；修复日志程序集仍声明旧 IINACT 2.10.3.4 的构建缓存问题，并增加发布门禁。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.7.4/DalamudActCompat.zip",
+    "LastUpdate":  1786269944575,
+    "Changelog":  "v0.3.7.4 rDPS 与 FFLogs 估算修复：新增基于团队增益归因的 rDPS 计算并设为默认；仅本次将原 eDPS 用户迁移到 rDPS，保留其他手动选择；FFLogs 始终使用后台 rDPS，并在悬浮窗未展开时预加载全队职业曲线。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

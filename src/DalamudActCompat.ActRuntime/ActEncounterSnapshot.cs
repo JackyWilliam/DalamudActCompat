@@ -21,4 +21,5 @@ public sealed record ActCombatantSnapshot(
     double ExtDps = 0,
     int DamageHits = 0,
     int CriticalHits = 0,
-    int CriticalDirectHits = 0);
+    int CriticalDirectHits = 0,
+    double Rdps = 0);

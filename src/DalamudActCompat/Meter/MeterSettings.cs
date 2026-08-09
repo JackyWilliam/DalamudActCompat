@@ -26,6 +26,7 @@ public enum DpsMetric
     Dps,
     EncDps,
     ExtDps,
+    Rdps,
 }
 
 public enum PlayerIdentityMode
@@ -66,7 +67,7 @@ public sealed class MeterSettings
 
     public int RefreshIntervalMs { get; set; } = 750;
 
-    public DpsMetric DpsMetric { get; set; } = DpsMetric.EncDps;
+    public DpsMetric DpsMetric { get; set; } = DpsMetric.Rdps;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
 

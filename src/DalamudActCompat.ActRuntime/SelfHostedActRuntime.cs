@@ -37,6 +37,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly object encounterSync = new();
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly RaidDpsEstimator raidDpsEstimator = new();
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -946,6 +947,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         gameStateProvider.Clear();
         lock (encounterSync)
         {
+            raidDpsEstimator.Reset();
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
             activeEncounterIdentities.Clear();
@@ -1002,6 +1004,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             return;
         }
+
+        raidDpsEstimator.ObserveStatusLine(
+            new DateTimeOffset(logInfo.detectedTime),
+            logInfo.originalLogLine);
 
         var fields = logInfo.originalLogLine.Split('|');
         if (fields.Length < 5 || fields[0] != "00")
@@ -1246,8 +1252,26 @@ public sealed class SelfHostedActRuntime : IDisposable
             if (!ReferenceEquals(activeEncounter, encounter))
             {
                 activeEncounterRelevantStart = actionTime;
+                raidDpsEstimator.StartEncounter(actionTime);
             }
             lastRelevantCombatAction = actionTime;
+        }
+
+        var attackerIdentity = ActPlayerIdentityResolver.Resolve(
+            identities,
+            action.combatAction.Attacker);
+        var victimName = ActPlayerIdentityResolver.Resolve(
+                             identities,
+                             action.combatAction.Victim)?.Name ??
+                         action.combatAction.Victim;
+        // Incoming enemy damage also reaches this callback. Only party-owned damage
+        // can contribute to a party member's rDPS attribution.
+        if (attackerIdentity is not null)
+        {
+            raidDpsEstimator.ObserveDamage(
+                action.combatAction,
+                attackerIdentity.Name,
+                victimName);
         }
 
         PublishEncounter(encounter, false);
@@ -1337,6 +1361,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         {
                             var hitCounts = GetDamageHitCounts(item.Combatant);
                             var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
+                            var actorName = item.Identity?.Name ?? item.Combatant.Name;
                             var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
                                                 string.Equals(
                                                     item.Combatant.Name,
@@ -1363,7 +1388,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 item.Combatant.ExtDPS,
                                 hitCounts.DamageHits,
                                 hitCounts.CriticalHits,
-                                hitCounts.CriticalDirectHits);
+                                hitCounts.CriticalDirectHits,
+                                raidDpsEstimator.ResolveRate(
+                                    actorName,
+                                    item.Combatant.Damage,
+                                    encounterSeconds));
                         })
                         .ToArray();
 
@@ -1389,6 +1418,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     if (finished)
                     {
+                        raidDpsEstimator.FinishEncounter();
                         activeEncounter = null;
                         if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)
                         {
