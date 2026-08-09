@@ -1392,7 +1392,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 raidDpsEstimator.ResolveRate(
                                     actorName,
                                     item.Combatant.Damage,
-                                    encounterSeconds));
+                                    encounterSeconds,
+                                    useObservedDamageWindow: finished));
                         })
                         .ToArray();
 

@@ -1038,15 +1038,42 @@ static void ValidateFflogsEstimateCurve()
 
     FflogsCurvePoint[] tyrantPaladinCurve =
     [
-        new(50, 20_503.936),
-        new(75, 23_802.093),
+        new(25, 18_718.784),
+        new(50, 20_830.289),
     ];
     var observedPaladinRdps = (double)estimatePercentile.Invoke(
         null,
-        [tyrantPaladinCurve, 21_875.9d])!;
+        [tyrantPaladinCurve, 20_550d])!;
     Assert(
-        Math.Round(observedPaladinRdps, MidpointRounding.AwayFromZero) == 60,
-        "The user's 21,875.9 Paladin rDPS did not calibrate to the observed FFLogs parse of 60.");
+        Math.Round(observedPaladinRdps, MidpointRounding.AwayFromZero) == 47,
+        "The corrected local Paladin rDPS did not calibrate to the observed CN ranking of 47.");
+
+    FflogsCurvePoint[] tyrantMachinistCurve =
+    [
+        new(25, 29_403.226),
+        new(50, 32_079.946),
+    ];
+    var observedMachinistRdps = (double)estimatePercentile.Invoke(
+        null,
+        [tyrantMachinistCurve, 30_601d])!;
+    Assert(
+        Math.Round(observedMachinistRdps, MidpointRounding.AwayFromZero) == 36,
+        "The corrected local Machinist rDPS did not calibrate to the observed CN ranking of 36.");
+
+    var fflogsSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Fflogs",
+        "FflogsEstimateService.cs"));
+    Assert(
+        fflogsSource.Contains("metric: $metric", StringComparison.Ordinal) &&
+        fflogsSource.Contains(
+            "metric = CurrentFflogsEncounterTable.RankingMetric",
+            StringComparison.Ordinal) &&
+        fflogsSource.Contains("serverRegion: $serverRegion", StringComparison.Ordinal) &&
+        fflogsSource.Contains("partition: $partition", StringComparison.Ordinal),
+        "FFLogs curves are no longer sourced from the CN rDPS ranking population.");
 
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
@@ -1096,7 +1123,10 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
                 "Paladin",
                 DateTimeOffset.UtcNow,
                 [new FflogsCurvePoint(0, 1_000), new FflogsCurvePoint(100, 3_000)],
-                101)])));
+                101,
+                "CN",
+                9,
+                "rdps")])));
 
     var settings = new FflogsSettings
     {
@@ -1542,7 +1572,7 @@ static void ValidateControlCenterPresentation()
         ControlCenterWindow.EaseInOut(1) == 1,
         "The ACT control center visibility transition is not a bounded ease-in-out curve.");
     Assert(
-        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 4)) == "v0.3.7.4",
+        ControlCenterWindow.FormatVersionLabel(new Version(0, 3, 7, 5)) == "v0.3.7.5",
         "The ACT control center no longer displays the full four-part assembly version.");
     Assert(
         !ControlCenterWindow.IsResetConfirmationExpired(11_000, 10_999) &&
@@ -2496,7 +2526,16 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
             [
                 new FflogsCurveCacheEntry(100, "Howling Blade", "Paladin", DateTimeOffset.UtcNow, [], 101),
                 new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 0),
-                new FflogsCurveCacheEntry(104, "Lindwurm", "Paladin", DateTimeOffset.UtcNow, [], 100),
+                new FflogsCurveCacheEntry(
+                    104,
+                    "Lindwurm",
+                    "Paladin",
+                    DateTimeOffset.UtcNow,
+                    [],
+                    100,
+                    "CN",
+                    9,
+                    "rdps"),
             ]));
     await File.WriteAllTextAsync(
         cachePath,
@@ -3200,6 +3239,28 @@ static void ValidateRaidDpsEstimator()
     Assert(
         Math.Abs(estimator.ResolveDamageAdjustment("Paladin")) < 0.001,
         "A self-provided damage buff was incorrectly treated as external rDPS contribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveDamage(
+        start.AddSeconds(2),
+        "Paladin",
+        "Boss",
+        500,
+        critical: false,
+        directHit: false);
+    estimator.ObserveDamage(
+        start.AddSeconds(12),
+        "Paladin",
+        "Boss",
+        500,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveObservedDamageDurationSeconds() - 10) < 0.001 &&
+        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: false) - (1_000d / 30)) < 0.001 &&
+        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: true) - 100) < 0.001,
+        "Finished rDPS did not trim non-damage tail time while active rDPS retained wall-clock duration.");
 }
 
 static void ValidateDalamudGameStateBridge()

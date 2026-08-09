@@ -22,6 +22,8 @@ internal sealed class RaidDpsEstimator
     private readonly Dictionary<string, HitBaseline> hitBaselines =
         new(StringComparer.OrdinalIgnoreCase);
     private bool encounterActive;
+    private DateTimeOffset firstObservedDamage;
+    private DateTimeOffset lastObservedDamage;
 
     private static readonly IReadOnlyDictionary<uint, RaidBuffDefinition> StatusesById =
         new Dictionary<uint, RaidBuffDefinition>
@@ -86,6 +88,8 @@ internal sealed class RaidDpsEstimator
             statusHistory.AddRange(activeStatuses.Values.Where(status => status.EndTime > startTime));
             damageAdjustments.Clear();
             hitBaselines.Clear();
+            firstObservedDamage = default;
+            lastObservedDamage = default;
             encounterActive = true;
         }
     }
@@ -107,6 +111,8 @@ internal sealed class RaidDpsEstimator
             statusHistory.Clear();
             damageAdjustments.Clear();
             hitBaselines.Clear();
+            firstObservedDamage = default;
+            lastObservedDamage = default;
         }
     }
 
@@ -227,6 +233,15 @@ internal sealed class RaidDpsEstimator
                 return;
             }
 
+            if (firstObservedDamage == default || timestamp < firstObservedDamage)
+            {
+                firstObservedDamage = timestamp;
+            }
+            if (lastObservedDamage == default || timestamp > lastObservedDamage)
+            {
+                lastObservedDamage = timestamp;
+            }
+
             var externalBuffs = statusHistory
                 .Where(status => status.StartTime <= timestamp && timestamp < status.EndTime)
                 .Where(status => SameActor(status.TargetName, attackerName) ||
@@ -319,7 +334,11 @@ internal sealed class RaidDpsEstimator
         }
     }
 
-    public double ResolveRate(string actorName, long rawDamage, double encounterDurationSeconds)
+    public double ResolveRate(
+        string actorName,
+        long rawDamage,
+        double encounterDurationSeconds,
+        bool useObservedDamageWindow = false)
     {
         if (rawDamage <= 0 || !double.IsFinite(encounterDurationSeconds) || encounterDurationSeconds <= 0)
         {
@@ -330,7 +349,24 @@ internal sealed class RaidDpsEstimator
         lock (syncRoot)
         {
             var adjustedDamage = rawDamage + damageAdjustments.GetValueOrDefault(actorName);
-            return Math.Max(0, adjustedDamage) / encounterDurationSeconds;
+            var durationSeconds = encounterDurationSeconds;
+            if (useObservedDamageWindow &&
+                firstObservedDamage != default &&
+                lastObservedDamage > firstObservedDamage)
+            {
+                durationSeconds = (lastObservedDamage - firstObservedDamage).TotalSeconds;
+            }
+            return Math.Max(0, adjustedDamage) / durationSeconds;
+        }
+    }
+
+    internal double ResolveObservedDamageDurationSeconds()
+    {
+        lock (syncRoot)
+        {
+            return firstObservedDamage != default && lastObservedDamage > firstObservedDamage
+                ? (lastObservedDamage - firstObservedDamage).TotalSeconds
+                : 0;
         }
     }
 
