@@ -1,6 +1,7 @@
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.ImGuiFileDialog;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
@@ -64,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
     private readonly HashSet<Task> cactbotTasks = [];
     private readonly ActHostSupervisor hostSupervisor;
+    private int silverDasherEventsEnabled;
     private readonly PictoActOverlayService pictoActOverlay;
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
@@ -157,8 +159,10 @@ public sealed class Plugin : IDalamudPlugin
             paths.ActPluginDirectory,
             paths.ConfigDirectory,
             hostIpcClient,
-            logger);
+            logger,
+            () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
+        hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
             CancellationToken.None);
@@ -213,6 +217,7 @@ public sealed class Plugin : IDalamudPlugin
                 }));
         actRuntime.RawLogLineReceived += OnRawLogLineForHost;
         actRuntime.ZoneChanged += OnZoneChangedForHost;
+        actRuntime.NetworkReceived += OnNetworkReceivedForHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;
         framework.Update += OnFrameworkUpdateForHost;
         parserEngine = new ParserEngine(new IinactAdapter(
@@ -313,6 +318,7 @@ public sealed class Plugin : IDalamudPlugin
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
             CloseHtmlOverlay,
+            DeleteHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration,
             () => StartBundledPluginUpdateCheck(openWindow: true));
@@ -418,9 +424,11 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.RemoveAllWindows();
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
+        actRuntime.NetworkReceived -= OnNetworkReceivedForHost;
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
+        hostSupervisor.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
 
         if (factoryResetCompleted)
         {
@@ -506,11 +514,7 @@ public sealed class Plugin : IDalamudPlugin
                 settingsWindow.ShowAnimated();
                 break;
             case "cactbot":
-                if (!actRuntime.ShowCactbotOverlay())
-                {
-                    logger.Warning(
-                        "Cactbot overlay is not running. Install Cactbot, enable OverlayPlugin, and restart the parser.");
-                }
+                OpenCactbotOverlay();
                 break;
             case "overlay":
                 OpenHtmlOverlay(string.IsNullOrWhiteSpace(remainder)
@@ -941,8 +945,8 @@ public sealed class Plugin : IDalamudPlugin
                             {
                                 Title = text.Get("扩展更新", "Extension updates"),
                                 Content = text.Get(
-                                    "正在检查三项 DLL 的作者上游版本。",
-                                    "Checking the author sources for all three DLLs."),
+                                    "正在检查三项已注册在线来源的 DLL。",
+                                    "Checking the three DLLs with registered online sources."),
                             });
                         })
                     .ConfigureAwait(false);
@@ -1245,7 +1249,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ConfigureBundledPluginPermissions(bool enableFullFunctionality)
     {
-        foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.All)
+        foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.FullPermissionConfirmation)
         {
             foreach (var capability in capabilities)
             {
@@ -1257,7 +1261,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         SaveConfiguration();
         logger.Information(enableFullFunctionality
-            ? "All declared capabilities were enabled for bundled ACT plugins by user choice."
+            ? "All declared capabilities were enabled for bundled ACT plugins, including SilverDasher, by user choice."
             : "Bundled ACT plugin permissions were reset to safe defaults by user choice.");
     }
 
@@ -1319,13 +1323,7 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OpenCactbotOverlay()
-    {
-        if (!actRuntime.ShowCactbotOverlay())
-        {
-            logger.Warning(
-                "Cactbot overlay is not running. Install Cactbot, enable OverlayPlugin, and restart the parser.");
-        }
-    }
+        => _ = OpenHtmlOverlay(configuration.SelectedCactbotOverlay);
 
     private void OpenCactbotSettings()
     {
@@ -1336,35 +1334,42 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void OpenHtmlOverlay(string name)
+    private bool OpenHtmlOverlay(string name)
     {
+        name = SelfHostedActRuntime.NormalizeCactbotOverlayName(name);
         try
         {
             if (actRuntime.ShowHtmlOverlay(name))
             {
-                configuration.GetOverlayWindowSettings(name).OpenOnStartup = true;
-                if (actRuntime.OverlayTemplates.Any(template => string.Equals(
-                        template.Name,
-                        name,
-                        StringComparison.OrdinalIgnoreCase)))
+                configuration.RegisterOverlayWindow(name).OpenOnStartup = true;
+                var template = actRuntime.OverlayTemplates.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (template?.IsCactbot == true)
+                {
+                    configuration.SelectedCactbotOverlay = name;
+                }
+                else if (template is not null)
                 {
                     configuration.SelectedOverlayTemplate = name;
                 }
                 SaveConfiguration();
-                return;
+                return true;
             }
 
             logger.Warning(
                 $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template or saved custom URL.");
+            return false;
         }
         catch (Exception ex)
         {
             logger.Error(ex, $"HTML overlay '{name}' could not be opened.");
+            return false;
         }
     }
 
     private void CloseHtmlOverlay(string name)
     {
+        name = SelfHostedActRuntime.NormalizeCactbotOverlayName(name);
         if (!actRuntime.HideHtmlOverlay(name))
         {
             logger.Warning($"HTML overlay '{name}' is not available to close.");
@@ -1377,13 +1382,22 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DeleteHtmlOverlay(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) ||
-            string.Equals(
-                name,
-                SelfHostedActRuntime.CactbotOverlayName,
-                StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(name))
         {
-            logger.Warning("The Cactbot overlay is managed separately and cannot be deleted.");
+            return;
+        }
+
+        if (SelfHostedActRuntime.IsCactbotOverlayName(name))
+        {
+            if (!actRuntime.ResetCactbotOverlayWindow(name))
+            {
+                logger.Warning($"Cactbot overlay '{name}' could not be reset.");
+                return;
+            }
+
+            SaveConfiguration();
+            logger.Information(
+                $"Removed Cactbot overlay '{name}' from the opened list and reset its saved layout.");
             return;
         }
 
@@ -1520,7 +1534,17 @@ public sealed class Plugin : IDalamudPlugin
     private HostPermissionSnapshot BuildHostPermissionSnapshot()
     {
         var capabilities = Enum.GetValues<ActCapability>();
-        string[] pluginIds = ["triggernometry", "postnamazu"];
+        string[] pluginIds = ["triggernometry", "postnamazu", "silverdasher"];
+        var allowedPluginIds = packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin =>
+                plugin.Enabled &&
+                bundledPluginManager.IsAllowedToLoad(plugin))
+            .Select(plugin => plugin.Manifest.Id)
+            .ToArray();
+        Volatile.Write(
+            ref silverDasherEventsEnabled,
+            allowedPluginIds.Contains("silverdasher", StringComparer.OrdinalIgnoreCase) ? 1 : 0);
         var allowed = pluginIds.ToDictionary(
             pluginId => pluginId,
             pluginId => (IReadOnlyList<string>)capabilities
@@ -1531,13 +1555,7 @@ public sealed class Plugin : IDalamudPlugin
             StringComparer.OrdinalIgnoreCase);
         return new HostPermissionSnapshot(
             allowed,
-            packageInstaller
-                .Discover(configuration.DisabledActPluginIds)
-                .Where(plugin =>
-                    plugin.Enabled &&
-                    bundledPluginManager.IsAllowedToLoad(plugin))
-                .Select(plugin => plugin.Manifest.Id)
-                .ToArray());
+            allowedPluginIds);
     }
 
     private async Task DisposeComponentsAsync(bool factoryResetCompleted)
@@ -1610,6 +1628,9 @@ public sealed class Plugin : IDalamudPlugin
         hostSupervisor.PublishZone(territoryId, zoneName);
     }
 
+    private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
+        => _ = hostSupervisor.PublishSilverDasherNetwork(connection, epoch, message);
+
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
         => hostSupervisor.PublishEncounter(finished);
 
@@ -1656,6 +1677,39 @@ public sealed class Plugin : IDalamudPlugin
             false,
             "busy",
             "The bounded game-side command broker queue is full.");
+    }
+
+    private void OnSilverDasherNotificationRequested(
+        object? sender,
+        HostSilverDasherNotification notification)
+    {
+        try
+        {
+            _ = services.Framework.RunOnFrameworkThread(() =>
+            {
+                try
+                {
+                    services.NotificationManager.AddNotification(new Notification
+                    {
+                        Title = "银山雀儿 / SilverDasher",
+                        Content = string.IsNullOrWhiteSpace(notification.Detail)
+                            ? notification.Message
+                            : $"{notification.Message}\n{notification.Detail}",
+                        Type = NotificationType.Info,
+                    });
+                }
+                catch (Exception exception)
+                {
+                    logger.Error(
+                        exception,
+                        "Could not display the SilverDasher game-side notification.");
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            logger.Error(exception, "Could not display the SilverDasher game-side notification.");
+        }
     }
 
     private async Task RunHostCommandBrokerAsync(CancellationToken cancellationToken)

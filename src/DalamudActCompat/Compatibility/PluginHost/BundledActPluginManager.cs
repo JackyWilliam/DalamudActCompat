@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using DalamudActCompat.Plugin;
@@ -62,13 +63,15 @@ public sealed class BundledActPluginManager
                         plugin.Id,
                         candidate.Id,
                         StringComparison.OrdinalIgnoreCase));
-                if (bundled is null || !candidate.IsOnlineUpdate)
+                if (bundled is null ||
+                    bundled.DisableOnlineUpdates ||
+                    !candidate.IsOnlineUpdate)
                 {
                     throw new InvalidDataException(
                         $"Online update does not match a bundled plugin: {candidate.Id}.");
                 }
 
-                ValidateAssembly(candidate);
+                ValidateArtifact(candidate);
                 var baselineVersion = bundled.Version;
                 var baselineSha = bundled.Sha256;
                 if (TryGetCurrentUpdateRecord(bundled, out var record))
@@ -157,16 +160,19 @@ public sealed class BundledActPluginManager
                     IsCurrentPackage(installed, plugin));
             if (current is null)
             {
-                if (string.IsNullOrWhiteSpace(plugin.AssemblyPath) ||
-                    !File.Exists(plugin.AssemblyPath))
+                var installSource = string.IsNullOrWhiteSpace(plugin.PackagePath)
+                    ? plugin.AssemblyPath
+                    : plugin.PackagePath;
+                if (string.IsNullOrWhiteSpace(installSource) ||
+                    !File.Exists(installSource))
                 {
                     throw new FileNotFoundException(
-                        $"The approved DLL update cache is missing for {plugin.Id}.",
-                        plugin.AssemblyPath);
+                        $"The approved plugin artifact is missing for {plugin.Id}.",
+                        installSource);
                 }
 
                 var result = await installer
-                    .InstallAsync(plugin.AssemblyPath, cancellationToken)
+                    .InstallAsync(installSource, cancellationToken)
                     .ConfigureAwait(false);
                 if (!string.Equals(
                         result.Manifest.Id,
@@ -193,7 +199,10 @@ public sealed class BundledActPluginManager
             {
                 configuration.BundledPluginDisclosureKeys[plugin.Id] =
                     GetDisclosureKey(plugin);
-                configuration.DisabledActPluginIds.Remove(plugin.Id);
+                if (plugin.EnableAfterInstall)
+                {
+                    configuration.DisabledActPluginIds.Remove(plugin.Id);
+                }
                 if (plugin.IsOnlineUpdate)
                 {
                     configuration.BundledPluginUpdateRecords[plugin.Id] =
@@ -218,6 +227,11 @@ public sealed class BundledActPluginManager
         BundledActPluginDescriptor bundled,
         IReadOnlyList<InstalledActPlugin> installed)
     {
+        if (bundled.DisableOnlineUpdates)
+        {
+            return bundled;
+        }
+
         if (onlineUpdates.TryGetValue(bundled.Id, out var online))
         {
             return online;
@@ -256,6 +270,8 @@ public sealed class BundledActPluginManager
             LicenseFile = bundled.LicenseFile,
             RelativeAssembly = bundled.RelativeAssembly,
             Sha256 = record.Sha256,
+            DisableOnlineUpdates = bundled.DisableOnlineUpdates,
+            EnableAfterInstall = bundled.EnableAfterInstall,
             IsOnlineUpdate = true,
         };
     }
@@ -314,7 +330,7 @@ public sealed class BundledActPluginManager
     }
 
     private string GetDisclosureKey(BundledActPluginDescriptor plugin)
-        => $"{hostVersion}|{plugin.Id}|{plugin.Version}|{plugin.Sha256}";
+        => $"{hostVersion}|{plugin.Id}|{plugin.Version}|{plugin.Sha256}|{plugin.PackageSha256}";
 
     private static bool IsCurrentPackage(
         InstalledActPlugin installed,
@@ -368,27 +384,108 @@ public sealed class BundledActPluginManager
                     "Bundled plugin lock contains an invalid entry.");
             }
 
-            var assemblyPath = Path.GetFullPath(
-                Path.Combine(root, plugin.RelativeAssembly));
-            if (!assemblyPath.StartsWith(
-                    rootPrefix,
-                    StringComparison.OrdinalIgnoreCase) ||
-                !File.Exists(assemblyPath))
+            var hasPackage = !string.IsNullOrWhiteSpace(plugin.RelativePackage) ||
+                             !string.IsNullOrWhiteSpace(plugin.PackageSha256);
+            if (hasPackage)
             {
-                throw new InvalidDataException(
-                    $"Bundled plugin assembly is missing or outside its package: {plugin.Id}.");
+                if (string.IsNullOrWhiteSpace(plugin.RelativePackage) ||
+                    plugin.PackageSha256.Length != 64)
+                {
+                    throw new InvalidDataException(
+                        $"Bundled plugin package metadata is incomplete: {plugin.Id}.");
+                }
+
+                var packagePath = Path.GetFullPath(
+                    Path.Combine(root, plugin.RelativePackage));
+                if (!packagePath.StartsWith(
+                        rootPrefix,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(
+                        Path.GetExtension(packagePath),
+                        ".zip",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(packagePath))
+                {
+                    throw new InvalidDataException(
+                        $"Bundled plugin package is missing or outside its bundle: {plugin.Id}.");
+                }
+
+                plugin.PackagePath = packagePath;
+            }
+            else
+            {
+                var assemblyPath = Path.GetFullPath(
+                    Path.Combine(root, plugin.RelativeAssembly));
+                if (!assemblyPath.StartsWith(
+                        rootPrefix,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(assemblyPath))
+                {
+                    throw new InvalidDataException(
+                        $"Bundled plugin assembly is missing or outside its bundle: {plugin.Id}.");
+                }
+
+                plugin.AssemblyPath = assemblyPath;
             }
 
-            plugin.AssemblyPath = assemblyPath;
-            ValidateAssembly(plugin);
+            ValidateArtifact(plugin);
         }
 
         return manifest.Plugins;
     }
 
-    private static void ValidateAssembly(
+    private static void ValidateArtifact(
         BundledActPluginDescriptor plugin)
     {
+        if (!string.IsNullOrWhiteSpace(plugin.PackagePath))
+        {
+            using var packageStream = File.OpenRead(plugin.PackagePath);
+            var actualPackageSha = Convert
+                .ToHexString(SHA256.HashData(packageStream))
+                .ToLowerInvariant();
+            if (!string.Equals(
+                    actualPackageSha,
+                    plugin.PackageSha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Bundled plugin package hash does not match its disclosure: {plugin.Id}.");
+            }
+
+            packageStream.Position = 0;
+            using var archive = new ZipArchive(
+                packageStream,
+                ZipArchiveMode.Read,
+                leaveOpen: true);
+            var expectedEntry = plugin.RelativeAssembly.Replace('\\', '/');
+            var entries = archive.Entries
+                .Where(entry => string.Equals(
+                    entry.FullName,
+                    expectedEntry,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (entries.Length != 1)
+            {
+                throw new InvalidDataException(
+                    $"Bundled plugin package does not contain exactly one disclosed entry assembly: {plugin.Id}.");
+            }
+
+            using var packageAssemblyStream = entries[0].Open();
+            var actualAssemblySha = Convert
+                .ToHexString(SHA256.HashData(packageAssemblyStream))
+                .ToLowerInvariant();
+            if (!string.Equals(
+                    actualAssemblySha,
+                    plugin.Sha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Bundled plugin package entry hash does not match its disclosure: {plugin.Id}.");
+            }
+
+            return;
+        }
+
         using var assemblyStream = File.OpenRead(plugin.AssemblyPath);
         var actualSha = Convert
             .ToHexString(SHA256.HashData(assemblyStream))

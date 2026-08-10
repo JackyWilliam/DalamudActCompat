@@ -14,7 +14,8 @@
                         "license":  "MIT",
                         "licenseFile":  "triggernometry/LICENSE.txt",
                         "relativeAssembly":  "triggernometry/Triggernometry.dll",
-                        "sha256":  "ce417ec8c4a225d88ffb71de1d578e3e21bc405369c54445daabc3947c07e8af"
+                        "sha256":  "ce417ec8c4a225d88ffb71de1d578e3e21bc405369c54445daabc3947c07e8af",
+                        "enableAfterInstall":  true
                     },
                     {
                         "id":  "act.foxtts",
@@ -29,7 +30,8 @@
                         "license":  "GPL-3.0",
                         "licenseFile":  "act.foxtts/LICENSE.txt",
                         "relativeAssembly":  "act.foxtts/ACT.FoxTTS.dll",
-                        "sha256":  "ec237d37b77f33b6d706b3959c3720b05273bc0b06795c6479f7fb8dab32d87b"
+                        "sha256":  "ec237d37b77f33b6d706b3959c3720b05273bc0b06795c6479f7fb8dab32d87b",
+                        "enableAfterInstall":  true
                     },
                     {
                         "id":  "postnamazu",
@@ -44,7 +46,27 @@
                         "license":  "Redistribution authorized by the author; the upstream repository declares no SPDX license",
                         "licenseFile":  "",
                         "relativeAssembly":  "postnamazu/PostNamazu.dll",
-                        "sha256":  "f8f0e09b6eec83d52f76556b289ba7448b56609b1c4d232a0729eac8e0239097"
+                        "sha256":  "f8f0e09b6eec83d52f76556b289ba7448b56609b1c4d232a0729eac8e0239097",
+                        "enableAfterInstall":  true
+                    },
+                    {
+                        "id":  "silverdasher",
+                        "name":  "银山雀儿 / SilverDasher",
+                        "version":  "0.6.0.4",
+                        "author":  "The Players / SilverDasher",
+                        "maintainer":  "SilverDasher maintainers / QQ group 582145824",
+                        "copyright":  "Copyright © The Players 2022-2025",
+                        "projectUrl":  "https://www.ffcafe.cn/act/",
+                        "downloadUrl":  "https://www.ffcafe.cn/act/",
+                        "sourceUrl":  "https://www.ffcafe.cn/act/",
+                        "license":  "The supplied package contains no license file; redistribution of this bundled version was authorized by the upstream maintainer on 2026-08-10",
+                        "licenseFile":  "",
+                        "relativeAssembly":  "Plugins/SilverDasher/SilverDasher.dll",
+                        "sha256":  "a3f356743a438b49cc0796858ca3b127e79de90e4d7e960177ebda50a8568cf8",
+                        "relativePackage":  "silverdasher/SilverDasher-0.6.0.4-cafe.zip",
+                        "packageSha256":  "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866",
+                        "disableOnlineUpdates":  true,
+                        "enableAfterInstall":  false
                     }
                 ]
 }

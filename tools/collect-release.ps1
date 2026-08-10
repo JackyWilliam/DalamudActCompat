@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.7.7",
+    [string] $ExpectedAssemblyVersion = "0.3.8.1",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -303,6 +303,26 @@ if ([string]::IsNullOrWhiteSpace($cactbotLock.relativeArchive) -or
 }
 
 $cactbotArchiveRelativePath = "BundledCactbot/$($cactbotLock.relativeArchive)"
+$bundledPluginLockPath = Join-Path $validationDir "BundledActPlugins/bundled-plugins.lock.json"
+if (-not (Test-Path -LiteralPath $bundledPluginLockPath)) {
+    throw "Bundled ACT plugin lock is missing."
+}
+
+$bundledPluginLock = Get-Content -LiteralPath $bundledPluginLockPath -Raw | ConvertFrom-Json
+if ([int]$bundledPluginLock.schemaVersion -ne 1 -or
+    @($bundledPluginLock.plugins).Count -eq 0) {
+    throw "Bundled ACT plugin lock is invalid."
+}
+
+$bundledPluginArtifactPaths = @($bundledPluginLock.plugins | ForEach-Object {
+    $relativePackage = [string] $_.relativePackage
+    $relativeArtifact = if ([string]::IsNullOrWhiteSpace($relativePackage)) {
+        [string] $_.relativeAssembly
+    } else {
+        $relativePackage
+    }
+    "BundledActPlugins/$relativeArtifact"
+})
 $requiredRuntimeFiles = @(
     "Advanced Combat Tracker.dll",
     "DalamudActCompat.ActRuntime.dll",
@@ -326,12 +346,10 @@ $requiredRuntimeFiles = @(
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
     "THIRD_PARTY_NOTICES.md",
     "BundledActPlugins/bundled-plugins.lock.json",
-    "BundledActPlugins/triggernometry/Triggernometry.dll",
     "BundledActPlugins/triggernometry/zh-CN.triglations.xml",
     "BundledActPlugins/triggernometry/LICENSE.txt",
-    "BundledActPlugins/act.foxtts/ACT.FoxTTS.dll",
-    "BundledActPlugins/act.foxtts/LICENSE.txt",
-    "BundledActPlugins/postnamazu/PostNamazu.dll",
+    "BundledActPlugins/act.foxtts/LICENSE.txt"
+) + $bundledPluginArtifactPaths + @(
     $cactbotLockRelativePath,
     $cactbotArchiveRelativePath,
     "BundledCactbot/LICENSE.txt"
@@ -341,6 +359,52 @@ $missingRuntimeFiles = @($requiredRuntimeFiles | Where-Object {
 })
 if ($missingRuntimeFiles.Count -gt 0) {
     throw "Plugin ZIP is missing self-hosted ACT runtime files: $($missingRuntimeFiles -join ', ')"
+}
+
+foreach ($plugin in @($bundledPluginLock.plugins)) {
+    $relativeAssembly = [string] $plugin.relativeAssembly
+    $expectedAssemblySha256 = [string] $plugin.sha256
+    $relativePackage = [string] $plugin.relativePackage
+    if ([string]::IsNullOrWhiteSpace($relativeAssembly) -or
+        $expectedAssemblySha256.Length -ne 64) {
+        throw "Bundled ACT plugin lock entry is incomplete: $($plugin.id)."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($relativePackage)) {
+        $assemblyPath = Join-Path $validationDir "BundledActPlugins/$relativeAssembly"
+        $actualAssemblySha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $assemblyPath).Hash
+    } else {
+        $expectedPackageSha256 = [string] $plugin.packageSha256
+        $packagePath = Join-Path $validationDir "BundledActPlugins/$relativePackage"
+        $actualPackageSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagePath).Hash
+        if ($expectedPackageSha256.Length -ne 64 -or
+            $actualPackageSha256 -ine $expectedPackageSha256) {
+            throw "Bundled ACT plugin package does not match its locked SHA-256: $relativePackage."
+        }
+
+        $packageArchive = [IO.Compression.ZipFile]::OpenRead($packagePath)
+        try {
+            $assemblyEntries = @($packageArchive.Entries | Where-Object {
+                $_.FullName.Replace("\", "/") -ieq $relativeAssembly.Replace("\", "/")
+            })
+            if ($assemblyEntries.Count -ne 1) {
+                throw "Bundled ACT plugin package does not contain exactly one entry assembly: $relativeAssembly."
+            }
+
+            $assemblyStream = $assemblyEntries[0].Open()
+            try {
+                $actualAssemblySha256 = (Get-FileHash -InputStream $assemblyStream -Algorithm SHA256).Hash
+            } finally {
+                $assemblyStream.Dispose()
+            }
+        } finally {
+            $packageArchive.Dispose()
+        }
+    }
+
+    if ($actualAssemblySha256 -ine $expectedAssemblySha256) {
+        throw "Bundled ACT plugin entry assembly does not match its locked SHA-256: $relativeAssembly."
+    }
 }
 
 Assert-FileVersion `
@@ -379,6 +443,7 @@ if ($cactbotArchiveSha256 -ne $cactbotLock.sha256) {
 }
 
 Write-Host "Validated self-hosted ACT runtime files: $($requiredRuntimeFiles.Count)"
+Write-Host "Validated bundled ACT plugin hashes: $(@($bundledPluginLock.plugins).Count)"
 Write-Host "Validated parser runtime versions: IINACT $ExpectedIinactVersion, OverlayPlugin Core $ExpectedOverlayPluginVersion, Unscrambler.XIV $ExpectedUnscramblerVersion, FFXIV_ACT_Plugin $ExpectedFfxivActPluginVersion, Machina $ExpectedMachinaVersion, Machina.FFXIV $ExpectedMachinaFfxivVersion"
 
 Write-Host "Collected plugin ZIP: $destination"

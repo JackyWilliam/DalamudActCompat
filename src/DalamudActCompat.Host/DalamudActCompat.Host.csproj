@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
     <NoWarn>$(NoWarn);NU1510;CS0436</NoWarn>
   </PropertyGroup>
   <ItemGroup>

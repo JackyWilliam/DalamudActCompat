@@ -20,6 +20,7 @@ public sealed partial class ActPluginPackageInstaller
         new("postnamazu", "PostNamazu", "PostNamazu.dll", "PostNamazu.PostNamazu"),
         new("act.foxtts", "ACT.FoxTTS", "ACT.FoxTTS.dll", "ACT.FoxTTS.FoxTTSPlugin"),
         new("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
+        new("silverdasher", "银山雀儿 / SilverDasher", "SilverDasher.dll", "SilverDasher.Loader.Loader"),
     ];
 
     public ActPluginPackageInstaller(PluginPaths paths)
@@ -190,7 +191,15 @@ public sealed partial class ActPluginPackageInstaller
             }
 
             var relativeAssembly = Path.GetRelativePath(stagingDirectory, assembly);
-            var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly).FileVersion ?? "unknown";
+            var versionAssembly = known.Id == "silverdasher"
+                ? Directory
+                    .EnumerateFiles(stagingDirectory, "SilverDasher.Core.dll", SearchOption.AllDirectories)
+                    .FirstOrDefault()
+                : null;
+            var version = System.Diagnostics.FileVersionInfo
+                              .GetVersionInfo(versionAssembly ?? assembly)
+                              .FileVersion
+                          ?? "unknown";
             var manifest = new ActPluginManifest
             {
                 Id = known.Id,
@@ -209,7 +218,7 @@ public sealed partial class ActPluginPackageInstaller
         }
 
         throw new InvalidDataException(
-            $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, or Triggernometry release.");
+            $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, Triggernometry, or SilverDasher release.");
     }
 
     private static void StageLooseDll(string dllPath, string stagingDirectory)
@@ -221,6 +230,12 @@ public sealed partial class ActPluginPackageInstaller
         {
             throw new InvalidDataException(
                 $"Unknown ACT plugin DLL '{fileName}'. Supported DLLs: {string.Join(", ", KnownPlugins.Select(plugin => plugin.AssemblyName))}.");
+        }
+
+        if (known.Id == "silverdasher")
+        {
+            throw new InvalidDataException(
+                "SilverDasher must be installed from its complete ZIP package so libs and data files are preserved.");
         }
 
         File.Copy(dllPath, Path.Combine(stagingDirectory, fileName));
@@ -353,6 +368,26 @@ public sealed partial class ActPluginPackageInstaller
         if (!entryAssembly.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(entryAssembly))
         {
             throw new InvalidDataException("Plugin entry assembly is missing or outside the package.");
+        }
+
+        if (string.Equals(manifest.Id, "silverdasher", StringComparison.OrdinalIgnoreCase))
+        {
+            var entryDirectory = Path.GetDirectoryName(entryAssembly)!;
+            string[] requiredFiles =
+            [
+                Path.Combine(entryDirectory, "libs", "SilverDasher.Core.dll"),
+                Path.Combine(entryDirectory, "data", "opcodes.json"),
+                Path.Combine(entryDirectory, "data", "territories.json"),
+            ];
+            if (!string.Equals(
+                    Path.GetFileName(entryAssembly),
+                    "SilverDasher.dll",
+                    StringComparison.OrdinalIgnoreCase) ||
+                requiredFiles.Any(path => !File.Exists(path)))
+            {
+                throw new InvalidDataException(
+                    "SilverDasher package must preserve its loader plus the sibling libs and data directories.");
+            }
         }
     }
 

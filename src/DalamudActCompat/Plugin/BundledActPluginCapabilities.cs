@@ -26,10 +26,26 @@ internal static class BundledActPluginCapabilities
         ActCapability.HighRiskScript,
     ];
 
+    public static IReadOnlyList<ActCapability> SilverDasher { get; } =
+    [
+        ActCapability.ReadCombatLogs,
+        ActCapability.ReadLocalConfiguration,
+        ActCapability.TextToSpeech,
+        ActCapability.NetworkRequest,
+        ActCapability.WriteFiles,
+        ActCapability.NativeGameMemory,
+    ];
+
     public static IReadOnlyList<(string PluginId, IReadOnlyList<ActCapability> Capabilities)> All { get; } =
     [
         ("act.foxtts", FoxTts),
         ("postnamazu", PostNamazu),
         ("triggernometry", Triggernometry),
+    ];
+
+    public static IReadOnlyList<(string PluginId, IReadOnlyList<ActCapability> Capabilities)> FullPermissionConfirmation { get; } =
+    [
+        .. All,
+        ("silverdasher", SilverDasher),
     ];
 }

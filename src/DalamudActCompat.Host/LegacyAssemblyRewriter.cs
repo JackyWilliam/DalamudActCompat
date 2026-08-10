@@ -1,10 +1,13 @@
 using System.Collections;
 using System.ComponentModel;
 using System.Drawing;
+using System.Diagnostics;
 using System.Formats.Nrbf;
 using System.Globalization;
 using System.IO.Compression;
+using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Resources;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
@@ -20,6 +23,820 @@ namespace DalamudActCompat.Host;
 
 public static class LegacyAssemblyRewriter
 {
+    private const string SilverDasherWeaverFileName = "SilverDasher.Weaver.dll";
+    private const string SilverDasherWeaverSha256 =
+        "20FE1491A9B35BB5096F25D1115A3E51F2C8BBAE2B741C204C2069ADDA507ECC";
+    private const string SilverDasherCompatibleWeaverSha256 =
+        "CD77EC62F7802C50BE02EC99AA83DFD5DE6CED7A41A4A866F80FB8A7509E26E1";
+    private const int SilverDasherWeaverProcessAttachJumpOffset = 0x3254;
+
+    public static Assembly LoadSilverDasher(
+        string assemblyPath,
+        AssemblyLoadContext loadContext)
+    {
+        _ = loadContext;
+        using var input = File.OpenRead(assemblyPath);
+        using var definition = AssemblyDefinition.ReadAssembly(input);
+        if (!string.Equals(
+                definition.Name.Name,
+                "SilverDasher",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Unexpected SilverDasher loader identity: {definition.Name.FullName}.");
+        }
+
+        var loaderType = definition.MainModule.GetType("SilverDasher.Loader.Loader")
+                         ?? throw new TypeLoadException(
+                             "SilverDasher loader type SilverDasher.Loader.Loader is missing.");
+        var loadMethod = loaderType.Methods.SingleOrDefault(method =>
+            method.Name == "Load" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String &&
+            method.ReturnType.FullName == typeof(Assembly).FullName)
+                         ?? throw new MissingMethodException(
+                             loaderType.FullName,
+                             "Load(string)");
+        var bridge = definition.MainModule.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.LoadSilverDasherAssembly),
+                BindingFlags.Public | BindingFlags.Static)!
+            );
+        ReplaceWithBridge(
+            loadMethod,
+            bridge,
+            loadInstance: false,
+            loadParameters: true);
+
+        using var output = new MemoryStream();
+        definition.Write(output);
+        return LoadContentAddressedAssembly(
+            "silverdasher",
+            "SilverDasher.Loader",
+            output.ToArray());
+    }
+
+    public static Assembly LoadSilverDasherCore(string assemblyPath)
+    {
+        using var input = File.OpenRead(assemblyPath);
+        using var definition = AssemblyDefinition.ReadAssembly(input);
+        if (!string.Equals(
+                definition.Name.Name,
+                "SilverDasher.Core",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Unexpected SilverDasher core identity: {definition.Name.FullName}.");
+        }
+
+        var module = definition.MainModule;
+        var processCalls = module.Types
+            .SelectMany(EnumerateTypes)
+            .SelectMany(type => type.Methods)
+            .Where(method => method.HasBody)
+            .SelectMany(method => method.Body.Instructions)
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "FFXIV_ACT_Plugin.Common.IDataRepository" &&
+                called.Name == "GetCurrentFFXIVProcess" &&
+                called.Parameters.Count == 0)
+            .ToArray();
+        if (processCalls.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher process-access surface changed; expected 1 call, found {processCalls.Length}.");
+        }
+
+        var primal = module.GetType("SilverDasher.ACT.Doppelgangers.Primal")
+                     ?? throw new TypeLoadException(
+                         "SilverDasher Primal compatibility target is missing.");
+        var init = primal.Methods.SingleOrDefault(method =>
+            method.Name == "Init" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 0 &&
+            method.ReturnType.MetadataType == MetadataType.Void)
+                   ?? throw new MissingMethodException(primal.FullName, "Init()");
+        if (!init.Body.Instructions.Contains(processCalls[0]))
+        {
+            throw new InvalidOperationException(
+                "SilverDasher process access moved outside Primal.Init; refusing a broad rewrite.");
+        }
+
+        var changeProcess = primal.Methods.SingleOrDefault(method =>
+            method.Name == "ChangeProcess" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType.FullName == typeof(Process).FullName &&
+            method.ReturnType.MetadataType == MetadataType.Void)
+                            ?? throw new MissingMethodException(
+                                primal.FullName,
+                                "ChangeProcess(Process)");
+        var getProcess = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.GetSilverDasherGameProcess),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var changeProcessCalls = init.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == changeProcess.FullName);
+        if (changeProcessCalls != 1)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher process-change surface changed; expected 1 call, found {changeProcessCalls}.");
+        }
+
+        var processCall = processCalls[0];
+        processCall.OpCode = OpCodes.Pop;
+        processCall.Operand = null;
+        init.Body.GetILProcessor().InsertAfter(
+            processCall,
+            Instruction.Create(OpCodes.Call, getProcess));
+
+        var ttsCalls = module.Types
+            .SelectMany(EnumerateTypes)
+            .SelectMany(type => type.Methods)
+            .Where(method => method.HasBody)
+            .SelectMany(method => method.Body.Instructions.Select(instruction => (method, instruction)))
+            .Where(pair =>
+                pair.instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "Advanced_Combat_Tracker.FormActMain" &&
+                called.Name == "TTS" &&
+                called.Parameters.Count == 1 &&
+                called.Parameters[0].ParameterType.MetadataType == MetadataType.String)
+            .ToArray();
+        if (ttsCalls.Length != 2 ||
+            ttsCalls.Select(pair => pair.method.FullName).ToHashSet(StringComparer.Ordinal).Count != 2)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher TTS surface changed; expected 2 exact calls, found {ttsCalls.Length}.");
+        }
+
+        var sendTts = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.SendSilverDasherTts),
+                BindingFlags.Public | BindingFlags.Static)!);
+        foreach (var (method, instruction) in ttsCalls)
+        {
+            var instructions = method.Body.Instructions;
+            var callIndex = instructions.IndexOf(instruction);
+            var formLoad = instructions
+                .Take(callIndex)
+                .LastOrDefault(candidate =>
+                    candidate.Operand is FieldReference field &&
+                    field.DeclaringType.FullName == "Advanced_Combat_Tracker.ActGlobals" &&
+                    field.Name == "oFormActMain");
+            if (formLoad is null)
+            {
+                throw new InvalidOperationException(
+                    $"SilverDasher TTS call in {method.FullName} has no exact ACT form receiver load.");
+            }
+
+            formLoad.OpCode = OpCodes.Nop;
+            formLoad.Operand = null;
+            instruction.OpCode = OpCodes.Call;
+            instruction.Operand = sendTts;
+        }
+
+        RewriteSilverDasherNotifications(module);
+        RewriteSilverDasherCombatantLookup(module);
+        RewriteSilverDasherMqttPayload(module);
+        RewriteSilverDasherUnknownOpcodeGuard(module);
+        RewriteSilverDasherWpfDispatch(module);
+
+        using var output = new MemoryStream();
+        definition.Write(output);
+        var assembly = LoadContentAddressedAssembly(
+            "silverdasher",
+            "SilverDasher.Core",
+            output.ToArray());
+        RegisterSilverDasherWeaverResolver(assembly, assemblyPath);
+        return assembly;
+    }
+
+    private static void RegisterSilverDasherWeaverResolver(
+        Assembly coreAssembly,
+        string coreAssemblyPath)
+    {
+        var coreDirectory = Path.GetDirectoryName(Path.GetFullPath(coreAssemblyPath))
+                            ?? throw new InvalidDataException(
+                                "SilverDasher core assembly has no parent directory.");
+        var weaverPath = Path.Combine(coreDirectory, SilverDasherWeaverFileName);
+        NativeLibrary.SetDllImportResolver(
+            coreAssembly,
+            (libraryName, _, _) =>
+            {
+                if (!string.Equals(
+                        libraryName,
+                        SilverDasherWeaverFileName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return IntPtr.Zero;
+                }
+
+                HostPluginBridge.DemandSilverDasherCapability("NativeGameMemory");
+                var compatiblePath = PrepareSilverDasherWeaverCompatibilityCopy(weaverPath);
+                var handle = NativeLibrary.Load(compatiblePath);
+                Console.WriteLine(
+                    "SilverDasher Weaver loaded through its hash-pinned DACT Host compatibility copy.");
+                return handle;
+            });
+    }
+
+    private static string PrepareSilverDasherWeaverCompatibilityCopy(string weaverPath)
+    {
+        if (!File.Exists(weaverPath))
+        {
+            throw new FileNotFoundException(
+                "SilverDasher Weaver native library is missing.",
+                weaverPath);
+        }
+
+        var image = File.ReadAllBytes(weaverPath);
+        var sourceHash = Convert.ToHexString(SHA256.HashData(image));
+        if (!string.Equals(sourceHash, SilverDasherWeaverSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"SilverDasher Weaver hash changed; expected {SilverDasherWeaverSha256}, got {sourceHash}.");
+        }
+
+        ReadOnlySpan<byte> expectedCode =
+        [
+            0x83, 0xEA, 0x01, 0x74, 0x0B, 0x83, 0xFA, 0x01,
+            0x74, 0x06, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3,
+            0xE9, 0x4B, 0xED, 0xFF, 0xFF,
+        ];
+        const int codeStart = SilverDasherWeaverProcessAttachJumpOffset - 4;
+        if (image.Length < codeStart + expectedCode.Length ||
+            !image.AsSpan(codeStart, expectedCode.Length).SequenceEqual(expectedCode))
+        {
+            throw new InvalidDataException(
+                "SilverDasher Weaver process-identity guard changed; refusing a broad native patch.");
+        }
+
+        // The original native DLL accepts only CafeACT/ACT executable names in DllMain.
+        // Retarget its process-attach branch to the existing success return. This changes
+        // one displacement byte and leaves its exports, hardware seal, and user package intact.
+        image[SilverDasherWeaverProcessAttachJumpOffset] = 0x05;
+        var compatibleHash = Convert.ToHexString(SHA256.HashData(image));
+        if (!string.Equals(
+                compatibleHash,
+                SilverDasherCompatibleWeaverSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"SilverDasher Weaver compatibility image is unexpected: {compatibleHash}.");
+        }
+
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            "silverdasher");
+        Directory.CreateDirectory(cacheDirectory);
+        var compatiblePath = Path.Combine(
+            cacheDirectory,
+            $"SilverDasher.Weaver-{compatibleHash}.dll");
+        if (!File.Exists(compatiblePath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.native.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, compatiblePath);
+                }
+                catch (IOException) when (File.Exists(compatiblePath))
+                {
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        var cachedHash = Convert.ToHexString(
+            SHA256.HashData(File.ReadAllBytes(compatiblePath)));
+        if (!string.Equals(
+                cachedHash,
+                SilverDasherCompatibleWeaverSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Cached SilverDasher Weaver compatibility image is invalid: {cachedHash}.");
+        }
+
+        return compatiblePath;
+    }
+
+    public static Assembly LoadSilverDasherManagedZodiark(string assemblyPath)
+    {
+        using var input = File.OpenRead(assemblyPath);
+        using var definition = AssemblyDefinition.ReadAssembly(input);
+        if (!string.Equals(
+                definition.Name.Name,
+                "SilverDasher.ManagedZodiark",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Unexpected SilverDasher Zodiark identity: {definition.Name.FullName}.");
+        }
+
+        var zodiarkProcess = definition.MainModule.GetType("Zodiark.ZodiarkProcess")
+                             ?? throw new TypeLoadException(
+                                 "SilverDasher Zodiark process type is missing.");
+        var openProcess = zodiarkProcess.Methods.SingleOrDefault(method =>
+            method.Name == "OpenProcess" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType.FullName == typeof(Process).FullName &&
+            method.ReturnType.MetadataType == MetadataType.Void &&
+            method.HasBody)
+                          ?? throw new MissingMethodException(
+                              zodiarkProcess.FullName,
+                              "OpenProcess(Process)");
+        var enterDebugModeCalls = openProcess.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(Process).FullName &&
+                called.Name == nameof(Process.EnterDebugMode) &&
+                called.Parameters.Count == 0)
+            .ToArray();
+        var allAccessConstants = openProcess.Body.Instructions
+            .Where(instruction =>
+                instruction.OpCode.Code == Code.Ldc_I4 &&
+                instruction.Operand is int value &&
+                value == 0x001F0FFF)
+            .ToArray();
+        if (enterDebugModeCalls.Length != 1 || allAccessConstants.Length != 1)
+        {
+            throw new InvalidOperationException(
+                "SilverDasher Zodiark privilege surface changed; refusing a broad process-access rewrite.");
+        }
+
+        enterDebugModeCalls[0].OpCode = OpCodes.Nop;
+        enterDebugModeCalls[0].Operand = null;
+        // SilverDasher only scans the game process. Avoid PROCESS_ALL_ACCESS and
+        // request exactly PROCESS_QUERY_INFORMATION | PROCESS_VM_READ.
+        allAccessConstants[0].Operand = 0x0410;
+
+        var checkPrivilege = zodiarkProcess.Methods.SingleOrDefault(method =>
+            method.Name == "CheckSeDebugPrivilege" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType is ByReferenceType byReference &&
+            byReference.ElementType.MetadataType == MetadataType.Boolean &&
+            method.ReturnType.MetadataType == MetadataType.Int32 &&
+            method.HasBody)
+                             ?? throw new MissingMethodException(
+                                 zodiarkProcess.FullName,
+                                 "CheckSeDebugPrivilege(bool&)");
+        checkPrivilege.Body.ExceptionHandlers.Clear();
+        checkPrivilege.Body.Variables.Clear();
+        checkPrivilege.Body.InitLocals = false;
+        checkPrivilege.Body.Instructions.Clear();
+        var checkIl = checkPrivilege.Body.GetILProcessor();
+        checkIl.Append(checkIl.Create(OpCodes.Ldarg_1));
+        checkIl.Append(checkIl.Create(OpCodes.Ldc_I4_1));
+        checkIl.Append(checkIl.Create(OpCodes.Stind_I1));
+        checkIl.Append(checkIl.Create(OpCodes.Ldc_I4_0));
+        checkIl.Append(checkIl.Create(OpCodes.Ret));
+
+        using var output = new MemoryStream();
+        definition.Write(output);
+        return LoadContentAddressedAssembly(
+            "silverdasher",
+            "SilverDasher.ManagedZodiark",
+            output.ToArray());
+    }
+
+    private static void RewriteSilverDasherNotifications(ModuleDefinition module)
+    {
+        var notifier = module.GetType("SilverDasher.ACT.Doppelgangers.Notifier")
+                       ?? throw new TypeLoadException(
+                           "SilverDasher notification compatibility target is missing.");
+        var sendToast = notifier.Methods.SingleOrDefault(method =>
+            method.Name == "SendToast" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 4 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String &&
+            method.Parameters[1].ParameterType.FullName == "SilverDasher.ACT.Models.HuntState" &&
+            method.Parameters[2].ParameterType.MetadataType == MetadataType.String &&
+            method.Parameters[3].ParameterType.MetadataType == MetadataType.Boolean &&
+            method.ReturnType.MetadataType == MetadataType.Boolean &&
+            method.HasBody)
+                        ?? throw new MissingMethodException(
+                            notifier.FullName,
+                            "SendToast(string,HuntState,string,bool)");
+        var calls = sendToast.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .ToArray();
+        var uniqueCalls = calls
+            .DistinctBy(called => called.FullName)
+            .ToArray();
+        var configField = sendToast.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<FieldReference>()
+            .DistinctBy(field => field.FullName)
+            .SingleOrDefault(field =>
+                field.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Keeper" &&
+                field.Name == "Config")
+                          ?? throw new MissingFieldException(
+                              "SilverDasher.ACT.Doppelgangers.Keeper",
+                              "Config");
+        var mobsField = sendToast.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<FieldReference>()
+            .DistinctBy(field => field.FullName)
+            .SingleOrDefault(field =>
+                field.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Keeper" &&
+                field.Name == "Mobs")
+                        ?? throw new MissingFieldException(
+                            "SilverDasher.ACT.Doppelgangers.Keeper",
+                            "Mobs");
+        var getSystemToast = uniqueCalls.SingleOrDefault(called =>
+                                 called.DeclaringType.FullName == "SilverDasher.ACT.Models.Config" &&
+                                 called.Name == "get_SystemToast" &&
+                                 called.Parameters.Count == 0)
+                             ?? throw new MissingMethodException(
+                                 "SilverDasher.ACT.Models.Config",
+                                 "get_SystemToast");
+        var statusPushable = uniqueCalls.SingleOrDefault(called =>
+                                 called.DeclaringType.FullName == "SilverDasher.ACT.Models.Config" &&
+                                 called.Name == "StatusPushable" &&
+                                 called.Parameters.Count == 2)
+                             ?? throw new MissingMethodException(
+                                 "SilverDasher.ACT.Models.Config",
+                                 "StatusPushable");
+        var getKeeper = uniqueCalls.SingleOrDefault(called =>
+                            called.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Doppelganger" &&
+                            called.Name == "get_Keeper" &&
+                            called.Parameters.Count == 0)
+                        ?? throw new MissingMethodException(
+                            "SilverDasher.ACT.Doppelgangers.Doppelganger",
+                            "get_Keeper");
+        var getStateName = uniqueCalls.SingleOrDefault(called =>
+                               called.DeclaringType.FullName == "SilverDasher.ACT.Storages.MobStorage" &&
+                               called.Name == "GetStateName" &&
+                               called.Parameters.Count == 1)
+                           ?? throw new MissingMethodException(
+                               "SilverDasher.ACT.Storages.MobStorage",
+                               "GetStateName");
+        var concat = uniqueCalls.SingleOrDefault(called =>
+                         called.DeclaringType.FullName == typeof(string).FullName &&
+                         called.Name == nameof(string.Concat) &&
+                         called.Parameters.Count == 2 &&
+                         called.Parameters.All(parameter =>
+                             parameter.ParameterType.MetadataType == MetadataType.String))
+                     ?? throw new MissingMethodException(typeof(string).FullName, "Concat(string,string)");
+        var nativeNotificationCalls = calls.Count(called =>
+            called.DeclaringType.FullName is
+                "Windows.UI.Notifications.ToastNotificationManager" or
+                "Windows.UI.Notifications.ToastNotifier" or
+                "Microsoft.Toolkit.Uwp.Notifications.ToastContentBuilder");
+        if (nativeNotificationCalls != 7)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher toast surface changed; expected 7 native calls, found {nativeNotificationCalls}.");
+        }
+
+        var bridge = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.SendSilverDasherNotification),
+                BindingFlags.Public | BindingFlags.Static)!);
+        sendToast.Body = new Mono.Cecil.Cil.MethodBody(sendToast)
+        {
+            InitLocals = false,
+        };
+        var il = sendToast.Body.GetILProcessor();
+        var checkStatus = il.Create(OpCodes.Ldsfld, configField);
+        var dispatch = il.Create(OpCodes.Ldarg_1);
+        il.Append(il.Create(OpCodes.Ldarg, sendToast.Parameters[3]));
+        il.Append(il.Create(OpCodes.Brfalse_S, dispatch));
+        il.Append(il.Create(OpCodes.Ldsfld, configField));
+        il.Append(il.Create(OpCodes.Callvirt, getSystemToast));
+        il.Append(il.Create(OpCodes.Brtrue_S, checkStatus));
+        il.Append(il.Create(OpCodes.Ldc_I4_0));
+        il.Append(il.Create(OpCodes.Ret));
+        il.Append(checkStatus);
+        il.Append(il.Create(OpCodes.Ldstr, "Toast"));
+        il.Append(il.Create(OpCodes.Ldarg_2));
+        il.Append(il.Create(OpCodes.Callvirt, statusPushable));
+        il.Append(il.Create(OpCodes.Brtrue_S, dispatch));
+        il.Append(il.Create(OpCodes.Ldc_I4_0));
+        il.Append(il.Create(OpCodes.Ret));
+        il.Append(dispatch);
+        il.Append(il.Create(OpCodes.Ldarg_3));
+        il.Append(il.Create(OpCodes.Ldarg_0));
+        il.Append(il.Create(OpCodes.Call, getKeeper));
+        il.Append(il.Create(OpCodes.Ldfld, mobsField));
+        il.Append(il.Create(OpCodes.Ldarg_2));
+        il.Append(il.Create(OpCodes.Callvirt, getStateName));
+        il.Append(il.Create(OpCodes.Call, concat));
+        il.Append(il.Create(OpCodes.Call, bridge));
+        il.Append(il.Create(OpCodes.Ret));
+    }
+
+    private static void RewriteSilverDasherCombatantLookup(ModuleDefinition module)
+    {
+        var negotiator = module.GetType("SilverDasher.ACT.Doppelgangers.Negotiator")
+                         ?? throw new TypeLoadException(
+                             "SilverDasher combatant compatibility target is missing.");
+        var scanMobs = negotiator.Methods.SingleOrDefault(method =>
+            method.Name == "ScanMobs" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 0 &&
+            method.HasBody)
+                       ?? throw new MissingMethodException(negotiator.FullName, "ScanMobs()");
+        var ffdata = negotiator.Fields.SingleOrDefault(field =>
+                         field.Name == "ffdata" &&
+                         field.FieldType.FullName == "FFXIV_ACT_Plugin.Common.IDataRepository")
+                     ?? throw new MissingFieldException(negotiator.FullName, "ffdata");
+        var dynamicNames = scanMobs.Body.Instructions
+            .Where(instruction => instruction.OpCode.Code == Code.Ldstr)
+            .Select(instruction => instruction.Operand as string)
+            .Where(name => name is "DataRepository" or "GetCombatantList")
+            .ToArray();
+        var storeCombatants = scanMobs.Body.Instructions.SingleOrDefault(instruction =>
+            instruction.Offset == 0x00F4 && instruction.OpCode.Code == Code.Stloc_3);
+        var dynamicStart = scanMobs.Body.Instructions.SingleOrDefault(instruction =>
+            instruction.Offset == 0x001F &&
+            instruction.OpCode.Code == Code.Ldsfld &&
+            instruction.Operand is FieldReference field &&
+            field.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Negotiator/<>o__9");
+        if (dynamicNames.Length != 2 ||
+            !dynamicNames.Contains("DataRepository", StringComparer.Ordinal) ||
+            !dynamicNames.Contains("GetCombatantList", StringComparer.Ordinal) ||
+            dynamicStart is null ||
+            storeCombatants is null)
+        {
+            throw new InvalidOperationException(
+                "SilverDasher dynamic combatant lookup surface changed; refusing a broad rewrite.");
+        }
+
+        var block = scanMobs.Body.Instructions
+            .SkipWhile(instruction => instruction != dynamicStart)
+            .TakeWhile(instruction => instruction != storeCombatants)
+            .ToArray();
+        if (block.Length < 3 || scanMobs.Body.ExceptionHandlers.Any(handler =>
+                block.Contains(handler.TryStart) ||
+                block.Contains(handler.TryEnd) ||
+                block.Contains(handler.HandlerStart) ||
+                block.Contains(handler.HandlerEnd) ||
+                (handler.FilterStart is not null && block.Contains(handler.FilterStart))))
+        {
+            throw new InvalidOperationException(
+                "SilverDasher dynamic combatant lookup control flow changed; refusing a broad rewrite.");
+        }
+
+        var getCombatants = module.ImportReference(
+            typeof(FFXIV_ACT_Plugin.Common.IDataRepository).GetMethod(
+                nameof(FFXIV_ACT_Plugin.Common.IDataRepository.GetCombatantList),
+                BindingFlags.Public | BindingFlags.Instance,
+                null,
+                Type.EmptyTypes,
+                null)!);
+        foreach (var instruction in block)
+        {
+            instruction.OpCode = OpCodes.Nop;
+            instruction.Operand = null;
+        }
+
+        block[0].OpCode = OpCodes.Ldarg_0;
+        block[1].OpCode = OpCodes.Ldfld;
+        block[1].Operand = ffdata;
+        block[2].OpCode = OpCodes.Callvirt;
+        block[2].Operand = getCombatants;
+    }
+
+    private static void RewriteSilverDasherMqttPayload(ModuleDefinition module)
+    {
+        var notifier = module.GetType("SilverDasher.ACT.Doppelgangers.Notifier")
+                       ?? throw new TypeLoadException(
+                           "SilverDasher MQTT compatibility target is missing.");
+        var unpack = notifier.Methods.SingleOrDefault(method =>
+            method.Name == "Unpack" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 2 &&
+            method.Parameters.All(parameter =>
+                parameter.ParameterType.MetadataType == MetadataType.String) &&
+            method.ReturnType.MetadataType == MetadataType.Void &&
+            method.HasBody)
+                     ?? throw new MissingMethodException(
+                         notifier.FullName,
+                         "Unpack(string,string)");
+        var deserializeCalls = unpack.Body.Instructions.Count(instruction =>
+            instruction.Operand is GenericInstanceMethod called &&
+            called.DeclaringType.FullName == "Newtonsoft.Json.JsonConvert" &&
+            called.Name == "DeserializeObject" &&
+            called.GenericArguments.Count == 1 &&
+            called.GenericArguments[0].FullName == "Newtonsoft.Json.Linq.JObject");
+        if (deserializeCalls != 1)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher MQTT payload surface changed; expected 1 JSON parse, found {deserializeCalls}.");
+        }
+
+        var normalize = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.NormalizeSilverDasherMqttPayload),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var first = unpack.Body.Instructions[0];
+        var il = unpack.Body.GetILProcessor();
+        il.InsertBefore(first, il.Create(OpCodes.Ldarg_2));
+        il.InsertBefore(first, il.Create(OpCodes.Call, normalize));
+        il.InsertBefore(first, il.Create(OpCodes.Starg, unpack.Parameters[1]));
+    }
+
+    private static void RewriteSilverDasherUnknownOpcodeGuard(ModuleDefinition module)
+    {
+        var opcodeType = module.GetType("SilverDasher.ACT.Enums.OpcodeType")
+                         ?? throw new TypeLoadException(
+                             "SilverDasher opcode type enum is missing.");
+        var unknown = opcodeType.Fields.SingleOrDefault(field =>
+            field.Name == "Unknown" &&
+            field.HasConstant &&
+            Convert.ToInt32(field.Constant, CultureInfo.InvariantCulture) == 0)
+                      ?? throw new InvalidOperationException(
+                          "SilverDasher Unknown opcode value changed.");
+        _ = unknown;
+
+        var overseer = module.GetType("SilverDasher.ACT.Doppelgangers.Overseer")
+                       ?? throw new TypeLoadException(
+                           "SilverDasher network overseer is missing.");
+        var receive = overseer.Methods.SingleOrDefault(method =>
+            method.Name == "OnNetworkReceive" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 3 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String &&
+            method.Parameters[1].ParameterType.MetadataType == MetadataType.Int64 &&
+            method.Parameters[2].ParameterType is ArrayType array &&
+            array.ElementType.MetadataType == MetadataType.Byte &&
+            method.ReturnType.MetadataType == MetadataType.Void &&
+            method.HasBody)
+                      ?? throw new MissingMethodException(
+                          overseer.FullName,
+                          "OnNetworkReceive(string,long,byte[])");
+        var getOpcodeCalls = receive.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "SilverDasher.ACT.Storages.OpcodeStorage" &&
+                called.Name == "GetOpcode" &&
+                called.Parameters.Count == 1)
+            .ToArray();
+        var storeOpcodeType = receive.Body.Instructions.FirstOrDefault(instruction =>
+            instruction.OpCode.Code == Code.Stloc_0);
+        if (getOpcodeCalls.Length != 1 ||
+            storeOpcodeType is null ||
+            receive.Body.Variables.Count == 0 ||
+            receive.Body.Variables[0].VariableType.FullName != opcodeType.FullName)
+        {
+            throw new InvalidOperationException(
+                "SilverDasher network opcode surface changed; refusing a broad callback rewrite.");
+        }
+
+        var continueInstruction = storeOpcodeType.Next
+                                  ?? throw new InvalidOperationException(
+                                      "SilverDasher network callback has no opcode continuation.");
+        var il = receive.Body.GetILProcessor();
+        var loadOpcodeType = il.Create(OpCodes.Ldloc, receive.Body.Variables[0]);
+        var continueWhenKnown = il.Create(OpCodes.Brtrue_S, continueInstruction);
+        var returnUnknown = il.Create(OpCodes.Ret);
+        il.InsertAfter(storeOpcodeType, loadOpcodeType);
+        il.InsertAfter(loadOpcodeType, continueWhenKnown);
+        il.InsertAfter(continueWhenKnown, returnUnknown);
+    }
+
+    private static void RewriteSilverDasherWpfDispatch(ModuleDefinition module)
+    {
+        var pluginControl = module.GetType("SilverDasher.ACT.Views.PluginControl")
+                            ?? throw new TypeLoadException(
+                                "SilverDasher WPF plugin control is missing.");
+        var dispatcherTemplate = pluginControl.Methods.Single(method =>
+            method.Name == "ButtonRestartToggle" && method.HasBody);
+        var templateCalls = dispatcherTemplate.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .ToArray();
+        var getDispatcher = templateCalls.Single(called =>
+            called.DeclaringType.FullName == "System.Windows.Threading.DispatcherObject" &&
+            called.Name == "get_Dispatcher");
+        var invoke = templateCalls.Single(called =>
+            called.DeclaringType.FullName == "System.Windows.Threading.Dispatcher" &&
+            called.Name == "Invoke" &&
+            called.Parameters.Count == 1 &&
+            called.Parameters[0].ParameterType.FullName == typeof(Action).FullName);
+        var actionConstructor = templateCalls.Single(called =>
+            called.DeclaringType.FullName == typeof(Action).FullName &&
+            called.Name == ".ctor" &&
+            called.Parameters.Count == 2);
+
+        foreach (var methodName in new[] { "SetPluginStatus", "Log" })
+        {
+            var method = pluginControl.Methods.SingleOrDefault(candidate =>
+                candidate.Name == methodName &&
+                !candidate.IsStatic &&
+                candidate.Parameters.Count == 1 &&
+                candidate.ReturnType.MetadataType == MetadataType.Void)
+                         ?? throw new MissingMethodException(pluginControl.FullName, methodName);
+            var winFormsDispatchCalls = method.Body.Instructions.Count(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "System.Windows.Forms.Control" &&
+                called.Name is "get_InvokeRequired" or "Invoke");
+            if (winFormsDispatchCalls != 2 || method.Body.Variables.Count != 1)
+            {
+                throw new InvalidOperationException(
+                    $"SilverDasher {methodName} UI dispatch surface changed; refusing a broad WPF patch.");
+            }
+
+            var closureType = method.Body.Variables[0].VariableType.Resolve()
+                              ?? throw new TypeLoadException(
+                                  $"SilverDasher {methodName} closure type could not be resolved.");
+            var closureConstructor = closureType.Methods.Single(candidate =>
+                candidate.IsConstructor &&
+                !candidate.IsStatic &&
+                candidate.Parameters.Count == 0);
+            var callback = closureType.Methods.Single(candidate =>
+                candidate.Name.EndsWith(">b__0", StringComparison.Ordinal) &&
+                !candidate.IsStatic &&
+                candidate.Parameters.Count == 0 &&
+                candidate.ReturnType.MetadataType == MetadataType.Void);
+            var ownerField = closureType.Fields.Single(field =>
+                field.FieldType.FullName == pluginControl.FullName);
+            var valueField = closureType.Fields.Single(field =>
+                field.FieldType.FullName == method.Parameters[0].ParameterType.FullName);
+
+            method.Body = new Mono.Cecil.Cil.MethodBody(method)
+            {
+                InitLocals = true,
+            };
+            var closure = new VariableDefinition(closureType);
+            method.Body.Variables.Add(closure);
+            var il = method.Body.GetILProcessor();
+            il.Append(il.Create(OpCodes.Newobj, closureConstructor));
+            il.Append(il.Create(OpCodes.Stloc, closure));
+            il.Append(il.Create(OpCodes.Ldloc, closure));
+            il.Append(il.Create(OpCodes.Ldarg_0));
+            il.Append(il.Create(OpCodes.Stfld, ownerField));
+            il.Append(il.Create(OpCodes.Ldloc, closure));
+            il.Append(il.Create(OpCodes.Ldarg_1));
+            il.Append(il.Create(OpCodes.Stfld, valueField));
+            il.Append(il.Create(OpCodes.Ldarg_0));
+            il.Append(il.Create(OpCodes.Call, getDispatcher));
+            il.Append(il.Create(OpCodes.Ldloc, closure));
+            il.Append(il.Create(OpCodes.Ldftn, callback));
+            il.Append(il.Create(OpCodes.Newobj, actionConstructor));
+            il.Append(il.Create(OpCodes.Callvirt, invoke));
+            il.Append(il.Create(OpCodes.Ret));
+        }
+    }
+
+    private static Assembly LoadContentAddressedAssembly(
+        string cacheName,
+        string fileName,
+        byte[] image)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(image));
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            cacheName);
+        Directory.CreateDirectory(cacheDirectory);
+        var assemblyPath = Path.Combine(cacheDirectory, $"{fileName}-{hash}.dll");
+        if (!File.Exists(assemblyPath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, assemblyPath);
+                }
+                catch (IOException) when (File.Exists(assemblyPath))
+                {
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        return Assembly.Load(File.ReadAllBytes(assemblyPath));
+    }
+
     public static Assembly LoadTriggernometry(
         string assemblyPath,
         AssemblyLoadContext loadContext)

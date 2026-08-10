@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $destinationRoot = Join-Path $projectRoot "vendor/BundledActPlugins"
@@ -64,6 +65,35 @@ function Get-Sha256 {
     )
 
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-ZipEntrySha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+
+        [Parameter(Mandatory = $true)]
+        [string] $EntryPath
+    )
+
+    $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $entries = @($archive.Entries | Where-Object {
+            $_.FullName.Replace("\", "/") -ieq $EntryPath.Replace("\", "/")
+        })
+        if ($entries.Count -ne 1) {
+            throw "Expected exactly one ZIP entry '$EntryPath' in $Path, found $($entries.Count)."
+        }
+
+        $stream = $entries[0].Open()
+        try {
+            return (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $archive.Dispose()
+    }
 }
 
 function Remove-TrailingWhitespace {
@@ -130,6 +160,16 @@ New-Item -ItemType Directory -Force -Path `
     $foxDirectory, `
     $postNamazuDirectory | Out-Null
 
+$silverPackage = Join-Path $destinationRoot "silverdasher/SilverDasher-0.6.0.4-cafe.zip"
+$silverPackageSha256 = "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866"
+$silverAssemblyPath = "Plugins/SilverDasher/SilverDasher.dll"
+$silverAssemblySha256 = "a3f356743a438b49cc0796858ca3b127e79de90e4d7e960177ebda50a8568cf8"
+if (-not (Test-Path -LiteralPath $silverPackage) -or
+    (Get-Sha256 $silverPackage) -ne $silverPackageSha256 -or
+    (Get-ZipEntrySha256 $silverPackage $silverAssemblyPath) -ne $silverAssemblySha256) {
+    throw "The bundled SilverDasher 0.6.0.4 complete package no longer matches its fixed hashes."
+}
+
 $triggerDllUrl = "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/Triggernometry.dll"
 $triggerTranslationUrl = "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/zh-CN.triglations.xml"
 $triggerDll = Join-Path $triggerDirectory "Triggernometry.dll"
@@ -187,6 +227,7 @@ $plugins = @(
         licenseFile = "triggernometry/LICENSE.txt"
         relativeAssembly = "triggernometry/Triggernometry.dll"
         sha256 = Get-Sha256 $triggerDll
+        enableAfterInstall = $true
     },
     [ordered]@{
         id = "act.foxtts"
@@ -202,6 +243,7 @@ $plugins = @(
         licenseFile = "act.foxtts/LICENSE.txt"
         relativeAssembly = "act.foxtts/ACT.FoxTTS.dll"
         sha256 = Get-Sha256 $foxDll
+        enableAfterInstall = $true
     },
     [ordered]@{
         id = "postnamazu"
@@ -217,6 +259,26 @@ $plugins = @(
         licenseFile = ""
         relativeAssembly = "postnamazu/PostNamazu.dll"
         sha256 = Get-Sha256 $postNamazuDll.FullName
+        enableAfterInstall = $true
+    },
+    [ordered]@{
+        id = "silverdasher"
+        name = "银山雀儿 / SilverDasher"
+        version = "0.6.0.4"
+        author = "The Players / SilverDasher"
+        maintainer = "SilverDasher maintainers / QQ group 582145824"
+        copyright = "Copyright © The Players 2022-2025"
+        projectUrl = "https://www.ffcafe.cn/act/"
+        downloadUrl = "https://www.ffcafe.cn/act/"
+        sourceUrl = "https://www.ffcafe.cn/act/"
+        license = "The supplied package contains no license file; redistribution of this bundled version was authorized by the upstream maintainer on 2026-08-10"
+        licenseFile = ""
+        relativeAssembly = $silverAssemblyPath
+        sha256 = $silverAssemblySha256
+        relativePackage = "silverdasher/SilverDasher-0.6.0.4-cafe.zip"
+        packageSha256 = $silverPackageSha256
+        disableOnlineUpdates = $true
+        enableAfterInstall = $false
     }
 )
 
@@ -261,12 +323,41 @@ if ($Check) {
 
     foreach ($plugin in $plugins) {
         $actual = $actualById[$plugin.id]
+        $expectedRelativePackage = if ($plugin.Contains("relativePackage")) {
+            [string] $plugin.relativePackage
+        } else {
+            ""
+        }
+        $expectedPackageSha256 = if ($plugin.Contains("packageSha256")) {
+            [string] $plugin.packageSha256
+        } else {
+            ""
+        }
+        $expectedDisableOnlineUpdates = if ($plugin.Contains("disableOnlineUpdates")) {
+            [bool] $plugin.disableOnlineUpdates
+        } else {
+            $false
+        }
+        $expectedEnableAfterInstall = if ($plugin.Contains("enableAfterInstall")) {
+            [bool] $plugin.enableAfterInstall
+        } else {
+            $true
+        }
         if ($null -eq $actual -or
             $actual.version -ne $plugin.version -or
             $actual.downloadUrl -ne $plugin.downloadUrl -or
-            $actual.sha256 -ne $plugin.sha256) {
+            $actual.relativeAssembly -ne $plugin.relativeAssembly -or
+            $actual.sha256 -ne $plugin.sha256 -or
+            [string] $actual.relativePackage -ne $expectedRelativePackage -or
+            [string] $actual.packageSha256 -ne $expectedPackageSha256 -or
+            [bool] $actual.disableOnlineUpdates -ne $expectedDisableOnlineUpdates -or
+            [bool] $actual.enableAfterInstall -ne $expectedEnableAfterInstall) {
             throw "Bundled plugin lock is not current for $($plugin.id)."
         }
+    }
+
+    if ($actualById.Count -ne $plugins.Count) {
+        throw "Bundled plugin lock contains an unexpected or missing plugin entry."
     }
 
     Write-Host "Bundled ACT plugins are current."

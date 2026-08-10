@@ -53,6 +53,8 @@ try
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
+    ValidateSilverDasherPermissionIsolation();
+    await ValidateSilverDasherNotificationIpcAsync();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
@@ -171,6 +173,83 @@ try
     var knownPlugin = await installer.InstallAsync(knownPackagePath, CancellationToken.None);
     Assert(knownPlugin.Manifest.Id == "postnamazu", "Known third-party package was not recognized.");
     Assert(knownPlugin.Manifest.EntryType == "PostNamazu.PostNamazu", "Known plugin entry type is incorrect.");
+
+    var silverDasherSource = Environment.GetEnvironmentVariable("ACTCOMPAT_SILVERDASHER_ROOT");
+    if (!string.IsNullOrWhiteSpace(silverDasherSource) && Directory.Exists(silverDasherSource))
+    {
+        var silverDasherPackage = Path.Combine(testRoot, "silverdasher.zip");
+        ZipFile.CreateFromDirectory(silverDasherSource, silverDasherPackage);
+        var loaderPath = Directory.EnumerateFiles(
+                silverDasherSource,
+                "SilverDasher.dll",
+                SearchOption.AllDirectories)
+            .Single();
+        var corePath = Directory.EnumerateFiles(
+                silverDasherSource,
+                "SilverDasher.Core.dll",
+                SearchOption.AllDirectories)
+            .Single();
+        var originalLoaderHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(loaderPath)));
+        var originalCoreHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath)));
+        var silverDasher = await installer.InstallAsync(
+            silverDasherPackage,
+            CancellationToken.None);
+        Assert(
+            silverDasher.Manifest is
+            {
+                Id: "silverdasher",
+                Version: "0.6.0.4",
+                EntryType: "SilverDasher.Loader.Loader",
+            } &&
+            silverDasher.Manifest.EntryAssembly.EndsWith(
+                "SilverDasher.dll",
+                StringComparison.OrdinalIgnoreCase),
+            "The original SilverDasher 0.6.0.4 package did not produce the required compatibility manifest.");
+        Assert(
+            File.Exists(Path.Combine(
+                silverDasher.InstallDirectory,
+                Path.GetRelativePath(silverDasherSource, corePath))) &&
+            Directory.EnumerateFiles(
+                silverDasher.InstallDirectory,
+                "fates.json",
+                SearchOption.AllDirectories).Any(),
+            "SilverDasher libs or data files were not preserved during ZIP installation.");
+        Assert(
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(loaderPath))) == originalLoaderHash &&
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath))) == originalCoreHash,
+            "Installing SilverDasher modified the user's original DLL files.");
+        try
+        {
+            await installer.InstallAsync(loaderPath, CancellationToken.None);
+            throw new InvalidOperationException("A loose SilverDasher loader DLL was accepted without libs and data.");
+        }
+        catch (InvalidDataException)
+        {
+        }
+        var incompleteSilverDasherPackage = Path.Combine(
+            testRoot,
+            "silverdasher-incomplete.zip");
+        using (var archive = ZipFile.Open(
+                   incompleteSilverDasherPackage,
+                   ZipArchiveMode.Create))
+        {
+            var entry = archive.CreateEntry("SilverDasher.dll");
+            await using var source = File.OpenRead(loaderPath);
+            await using var destination = entry.Open();
+            await source.CopyToAsync(destination);
+        }
+        try
+        {
+            await installer.InstallAsync(
+                incompleteSilverDasherPackage,
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "An incomplete SilverDasher ZIP was accepted without sibling libs and data.");
+        }
+        catch (InvalidDataException)
+        {
+        }
+    }
 
     var loosePluginDirectory = Path.Combine(testRoot, "loose-plugin");
     Directory.CreateDirectory(loosePluginDirectory);
@@ -405,6 +484,29 @@ static void ValidateBoundedHostQueue()
     Assert(
         queue.DroppedDataMessages == 1,
         "Data queue did not record its dropped oldest item.");
+
+    var existingDataCount = queue.DataCount;
+    var existingDropCount = queue.DroppedDataMessages;
+    for (var index = 0; index <= HostProtocol.SilverDasherQueueCapacity; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                HostProtocol.DataQueueCapacity + index + 2,
+                HostMessageTypes.SilverDasherNetworkReceived,
+                HostMessagePriority.SilverDasherData,
+                new HostSilverDasherNetworkEvent("down", index, [1, 2, 3]))),
+            "SilverDasher queue rejected a low-priority event instead of dropping its own oldest event.");
+    }
+
+    Assert(
+        queue.SilverDasherCount == HostProtocol.SilverDasherQueueCapacity &&
+        queue.DroppedSilverDasherMessages == 1,
+        "SilverDasher event queue did not apply its independent bound.");
+    Assert(
+        queue.DataCount == existingDataCount &&
+        queue.DroppedDataMessages == existingDropCount,
+        "SilverDasher backpressure changed the existing ACT plugin data queue.");
     queue.Clear();
     Assert(
         queue.TryEnqueue(HostEnvelope.Create(
@@ -582,7 +684,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 4 &&
+        legacyConfiguration.Version == 7 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -612,7 +714,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 4 &&
+        parserMigration.Version == 7 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -626,11 +728,32 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 4 &&
+        newConfiguration.Version == 7 &&
+        newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
-        newConfiguration.AutoStartParser,
-        "A new installation does not default to rDPS or start the parser independently of third-party confirmation.");
+        newConfiguration.AutoStartParser &&
+        newConfiguration.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
+        newConfiguration.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
+        "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
+
+    var previousV6Configuration = new PluginConfiguration
+    {
+        Version = 6,
+        DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    };
+    Assert(
+        previousV6Configuration.ApplyMigrations() &&
+        previousV6Configuration.Version == 7 &&
+        previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
+        "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
+    previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
+    Assert(
+        !previousV6Configuration.ApplyMigrations() &&
+        !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
+        "A post-migration manual SilverDasher enable choice was overwritten.");
 
     var previousEdpsUser = new PluginConfiguration
     {
@@ -639,7 +762,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 4 &&
+        previousEdpsUser.Version == 7 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -655,9 +778,158 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 4 &&
+        previousCustomMetricUser.Version == 7 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
+
+    var previousTimelineUser = new PluginConfiguration
+    {
+        Version = 4,
+        SelectedOverlayTemplate = SelfHostedActRuntime.CactbotTimelineOverlayName,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                Left = 100,
+                Top = 120,
+            },
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] =
+                new HtmlOverlayWindowSettings
+                {
+                    OpenOnStartup = true,
+                    Left = 640,
+                    Top = 180,
+                    Width = 720,
+                    Height = 360,
+                },
+        },
+    };
+    Assert(
+        previousTimelineUser.ApplyMigrations() &&
+        previousTimelineUser.Version == 7 &&
+        previousTimelineUser.SelectedCactbotOverlay ==
+            SelfHostedActRuntime.CactbotTimelineOverlayName &&
+        previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
+        previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).OpenOnStartup &&
+        previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).HasBeenOpened &&
+        previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).Left == 640 &&
+        !previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup,
+        "The Cactbot split migration lost an existing Timeline-only layout or reopened the combined window.");
+
+    var previousCombinedTemplateUser = new PluginConfiguration
+    {
+        Version = 4,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotCombinedTemplateName] =
+                new HtmlOverlayWindowSettings
+                {
+                    OpenOnStartup = true,
+                    Left = 321,
+                    Width = 876,
+                },
+        },
+    };
+    Assert(
+        previousCombinedTemplateUser.ApplyMigrations() &&
+        !previousCombinedTemplateUser.OverlayWindows.ContainsKey(
+            SelfHostedActRuntime.CactbotCombinedTemplateName) &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).Left == 321 &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).Width == 876,
+        "The legacy combined template was not normalized without losing its saved layout.");
+
+    var previousCustomCactbotPrefixUser = new PluginConfiguration
+    {
+        Version = 4,
+        SelectedOverlayTemplate = "Cactbot Personal",
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["Cactbot Personal"] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+                SourceUrl = "https://example.com/personal-overlay",
+                Left = 456,
+            },
+        },
+    };
+    Assert(
+        previousCustomCactbotPrefixUser.ApplyMigrations() &&
+        previousCustomCactbotPrefixUser.SelectedOverlayTemplate == "Cactbot Personal" &&
+        previousCustomCactbotPrefixUser.GetOverlayWindowSettings(
+            "Cactbot Personal").OpenOnStartup &&
+        previousCustomCactbotPrefixUser.GetOverlayWindowSettings(
+            "Cactbot Personal").Left == 456,
+        "The Cactbot split migration swallowed an existing custom overlay that only shared the prefix.");
+
+    var previousV5CactbotUser = new PluginConfiguration
+    {
+        Version = 5,
+        SelectedCactbotOverlay = SelfHostedActRuntime.CactbotOverlayName,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            [SelfHostedActRuntime.CactbotAlertsOverlayName] = new HtmlOverlayWindowSettings(),
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] = new HtmlOverlayWindowSettings(),
+            ["Cactbot DPS Xephero"] = new HtmlOverlayWindowSettings(),
+            ["Cactbot Personal"] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+        },
+    };
+    Assert(
+        previousV5CactbotUser.ApplyMigrations() &&
+        previousV5CactbotUser.Version == 7 &&
+        previousV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotAlertsOverlayName).HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            "Cactbot DPS Xephero").HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            "Cactbot Personal").HasBeenOpened,
+        "The Cactbot usage migration listed a selection/conflict ghost or captured a custom prefix overlay.");
+    var selectedOnlyV5CactbotUser = new PluginConfiguration
+    {
+        Version = 5,
+        SelectedCactbotOverlay = SelfHostedActRuntime.CactbotTimelineOverlayName,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] =
+                new HtmlOverlayWindowSettings(),
+            ["Cactbot DPS Rdmty"] = new HtmlOverlayWindowSettings
+            {
+                Left = 240,
+            },
+        },
+    };
+    Assert(
+        selectedOnlyV5CactbotUser.ApplyMigrations() &&
+        !selectedOnlyV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).HasBeenOpened &&
+        selectedOnlyV5CactbotUser.GetOverlayWindowSettings(
+            "Cactbot DPS Rdmty").HasBeenOpened,
+        "A selected-only Cactbot template became false history or a customized closed layout was lost.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -1667,8 +1939,9 @@ static void ValidateControlCenterPresentation()
     Assert(
         !ttsPromptConfiguration.SuppressFoxTtsProPrompt &&
         ttsPromptConfiguration.EnableParsing &&
-        ttsPromptConfiguration.AutoStartParser,
-        "Factory reset does not restore the FoxTTS prompt or independent parser startup defaults.");
+        ttsPromptConfiguration.AutoStartParser &&
+        ttsPromptConfiguration.DisabledActPluginIds.Contains("silverdasher"),
+        "Factory reset does not restore the FoxTTS prompt, SilverDasher disabled state, or independent parser startup defaults.");
 
     var combatant = new Combatant(
         "local",
@@ -1725,6 +1998,21 @@ static void ValidateControlCenterPresentation()
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
         "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
+    Assert(
+        !controlCenterSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
+        !settingsSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
+        thirdPartySource.Contains(
+            "DrawMetadata(text.Get(\"当前维护者\", \"Current maintainer\"), plugin.Maintainer);",
+            StringComparison.Ordinal),
+        "SilverDasher support information leaked into its introduction or disappeared from the third-party extension card.");
+    Assert(
+        controlCenterSource.Contains("out bool hostConfigurationChanged", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("hostConfigurationChanged |= extensionChanged", StringComparison.Ordinal) &&
+        settingsSource.Contains("hostConfigurationChanged = true;", StringComparison.Ordinal) &&
+        settingsSource.Contains(
+            "permissionsChanged || hostConfigurationChanged",
+            StringComparison.Ordinal),
+        "Compatibility-extension enable/disable changes no longer restart the isolated Host immediately.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -1880,11 +2168,11 @@ static void ValidateControlCenterPresentation()
         "private void CompleteBundledPluginSetup",
         StringComparison.Ordinal);
     var finalPermissionRestartIndex = pluginSource.IndexOf(
-        "ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);",
+        "ApplyActPermissionChanges(",
         completeBundledSetupIndex,
         StringComparison.Ordinal);
     var permissionRefreshMethodIndex = pluginSource.IndexOf(
-        "private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)",
+        "private void ApplyActPermissionChanges(",
         StringComparison.Ordinal);
     var stopHostBeforeFoxTtsIndex = pluginSource.IndexOf(
         "await hostSupervisor.StopAsync(timeout.Token)",
@@ -1910,7 +2198,7 @@ static void ValidateControlCenterPresentation()
             Regex.Escape("applyPermissionChanges();"),
             RegexOptions.CultureInvariant).Count == 1 &&
         controlCenterSource.Contains(
-            "changed |= permissionsChanged;",
+            "changed |= hostConfigurationChanged;",
             StringComparison.Ordinal) &&
         settingsSource.Contains(
             "changed |= permissionsChanged;",
@@ -1921,8 +2209,10 @@ static void ValidateControlCenterPresentation()
         finalPermissionRestartIndex > completeBundledSetupIndex &&
         Regex.Matches(
             pluginSource,
-            Regex.Escape("ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);"),
+            @"ApplyActPermissionChanges\(choice == FoxTtsProChoice\.EnablePro\);",
             RegexOptions.CultureInvariant).Count == 1 &&
+        !pluginSource.Contains("autoOpenSilverDasherAfterSetup", StringComparison.Ordinal) &&
+        !pluginSource.Contains("OpenPluginConfigurationAfterRestartAsync", StringComparison.Ordinal) &&
         permissionRefreshMethodIndex > finalPermissionRestartIndex &&
         stopHostBeforeFoxTtsIndex > permissionRefreshMethodIndex &&
         setFoxTtsProIndex > stopHostBeforeFoxTtsIndex &&
@@ -2060,6 +2350,61 @@ static void ValidateParserDependencyVersions()
         chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
         chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
         "OverlayPlugin Chinese 7.55h opcodes are stale.");
+}
+
+static void ValidateSilverDasherPermissionIsolation()
+{
+    string[] existingPermissionGroup =
+        BundledActPluginCapabilities.All.Select(entry => entry.PluginId).ToArray();
+    Assert(
+        existingPermissionGroup.SequenceEqual(
+            new[] { "act.foxtts", "postnamazu", "triggernometry" },
+            StringComparer.Ordinal),
+        "SilverDasher changed the existing FoxTTS/PostNamazu/Triggernometry permission workflow.");
+    Assert(
+        BundledActPluginCapabilities.SilverDasher.Contains(ActCapability.ReadCombatLogs) &&
+        BundledActPluginCapabilities.SilverDasher.Contains(ActCapability.NativeGameMemory),
+        "SilverDasher does not expose its independent event and memory capability declarations.");
+    Assert(
+        BundledActPluginCapabilities.FullPermissionConfirmation
+            .Select(entry => entry.PluginId)
+            .SequenceEqual(
+                new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher" },
+                StringComparer.Ordinal),
+        "The explicit full-permission confirmation does not enable every SilverDasher declaration last.");
+}
+
+static async Task ValidateSilverDasherNotificationIpcAsync()
+{
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var client = new HostIpcClient(
+        new EncounterStateStore(),
+        new PluginLogger(log));
+    HostSilverDasherNotification? received = null;
+    client.SilverDasherNotificationRequested += (_, notification) => received = notification;
+    var applyMessage = typeof(HostIpcClient).GetMethod(
+                           "ApplyMessage",
+                           BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostIpcClient).FullName,
+                           "ApplyMessage");
+    applyMessage.Invoke(
+        client,
+        [
+            HostEnvelope.Create(
+                "silverdasher-notification-smoke",
+                1,
+                HostMessageTypes.SilverDasherNotification,
+                HostMessagePriority.Critical,
+                new HostSilverDasherNotification("测试通知", "坐标与状态")),
+        ]);
+    Assert(
+        received is { Message: "测试通知", Detail: "坐标与状态" } &&
+        !string.Equals(
+            HostMessageTypes.SilverDasherNotification,
+            HostMessageTypes.CommandRequest,
+            StringComparison.Ordinal),
+        "SilverDasher notification did not use its independent typed Host IPC channel.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -2241,10 +2586,10 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         configuration);
 
     var pending = manager.GetPendingDisclosures();
-    Assert(pending.Count == 3, "A new install did not require all three bundled DLL disclosures.");
+    Assert(pending.Count == 4, "A new install did not require all four bundled extension disclosures.");
     Assert(
-        manager.GetDisclosures().Count == 3,
-        "The third-party notice did not expose every bundled DLL source.");
+        manager.GetDisclosures().Count == 4,
+        "The third-party notice did not expose every bundled extension source.");
     Assert(
         pending.Any(plugin =>
             plugin.Id == "triggernometry" &&
@@ -2264,19 +2609,51 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.Author == "Natsukage" &&
             plugin.DownloadUrl.Contains("/releases/download/", StringComparison.Ordinal)),
         "PostNamazu author or DLL URL disclosure is incomplete.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "silverdasher" &&
+            plugin.Version == "0.6.0.4" &&
+            plugin.Maintainer.Contains("582145824", StringComparison.Ordinal) &&
+            plugin.DisableOnlineUpdates &&
+            !plugin.EnableAfterInstall &&
+            plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
+            File.Exists(plugin.PackagePath)),
+        "SilverDasher complete-package version, support group, fixed hash, or bundled artifact is missing.");
 
     await manager.InstallAndAcknowledgeAsync(pending, CancellationToken.None);
     Assert(
         manager.GetPendingDisclosures().Count == 0,
         "Acknowledged current bundled DLLs still required disclosure.");
     Assert(
-        manager.GetDisclosures().Count == 3 &&
+        manager.GetDisclosures().Count == 4 &&
         manager.GetDisclosures().All(plugin =>
             !string.IsNullOrWhiteSpace(plugin.Author) &&
             Uri.TryCreate(plugin.ProjectUrl, UriKind.Absolute, out _)),
         "Acknowledged DLL author and project URL disclosures disappeared from the notice.");
     var installed = installer.Discover(configuration.DisabledActPluginIds);
-    Assert(installed.Count == 3, "Not all bundled DLLs were installed.");
+    Assert(installed.Count == 4, "Not all bundled extensions were installed.");
+    var installedSilverDasher = installed.Single(plugin =>
+        plugin.Manifest.Id == "silverdasher");
+    Assert(
+        !installedSilverDasher.Enabled,
+        "The bundled SilverDasher install did not preserve its disabled default.");
+    Assert(
+        installed.Where(plugin => plugin.Manifest.Id != "silverdasher").All(plugin => plugin.Enabled),
+        "Installing SilverDasher unexpectedly changed another bundled extension's enabled state.");
+    Assert(
+        File.Exists(Path.Combine(
+            installedSilverDasher.InstallDirectory,
+            "Plugins",
+            "SilverDasher",
+            "libs",
+            "SilverDasher.Core.dll")) &&
+        File.Exists(Path.Combine(
+            installedSilverDasher.InstallDirectory,
+            "Plugins",
+            "SilverDasher",
+            "data",
+            "opcodes.json")),
+        "The bundled SilverDasher install did not preserve its complete libs/data package.");
     Assert(
         installed.All(manager.IsAllowedToLoad),
         "Acknowledged current bundled DLLs were not enabled for runtime loading.");
@@ -2319,9 +2696,14 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             onlinePending.Count == 3 &&
             onlinePending.All(plugin => plugin.IsOnlineUpdate),
             "Online DLL updates did not require a new disclosure.");
+        var onlineUpdateIds = check.Updates
+            .Select(plugin => plugin.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         Assert(
-            installed.All(plugin => !manager.IsAllowedToLoad(plugin)),
-            "Old DLLs remained loadable after an online update was discovered.");
+            installed.All(plugin => onlineUpdateIds.Contains(plugin.Manifest.Id)
+                ? !manager.IsAllowedToLoad(plugin)
+                : manager.IsAllowedToLoad(plugin)),
+            "Online-updated DLLs were not gated, or the hash-fixed SilverDasher package was unnecessarily disabled.");
 
         await manager.InstallAndAcknowledgeAsync(
             onlinePending,
@@ -2359,8 +2741,8 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         installer,
         configuration);
     Assert(
-        nextRelease.GetPendingDisclosures().Count == 3,
-        "A DalamudActCompat update did not require the bundled DLL disclosure again.");
+        nextRelease.GetPendingDisclosures().Count == 4,
+        "A DalamudActCompat update did not require every bundled extension disclosure again.");
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
         "Bundled DLLs were loadable before acknowledging the new host release notice.");
@@ -3478,6 +3860,14 @@ static void ValidateHtmlOverlayDefaults()
             null)?.ReturnType == typeof(bool),
         "The HTML overlay runtime no longer exposes explicit window deletion.");
     Assert(
+        typeof(SelfHostedActRuntime).GetMethod(
+            nameof(SelfHostedActRuntime.ResetCactbotOverlayWindow),
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(string)],
+            null)?.ReturnType == typeof(bool),
+        "The Cactbot manager no longer exposes an in-place window reset.");
+    Assert(
         typeof(ControlCenterWindow).GetConstructors()
             .Single()
             .GetParameters()
@@ -3485,6 +3875,20 @@ static void ValidateHtmlOverlayDefaults()
                 parameter.Name == "deleteHtmlOverlay" &&
                 parameter.ParameterType == typeof(Action<string>)),
         "The control center no longer exposes the created-overlay delete action.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "openHtmlOverlay" &&
+                parameter.ParameterType == typeof(Func<string, bool>)) &&
+        typeof(SettingsWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "deleteHtmlOverlay" &&
+                parameter.ParameterType == typeof(Action<string>)),
+        "Overlay editing cannot verify preview startup or the advanced Cactbot list cannot reset an entry.");
     Assert(
         typeof(ControlCenterWindow).GetConstructors()
             .Single()
@@ -3506,12 +3910,38 @@ static void ValidateHtmlOverlayDefaults()
     var templateOverlayIndex = controlCenterSource.IndexOf(
         "从模板创建",
         StringComparison.Ordinal);
+    var usedCactbotIndex = controlCenterSource.IndexOf(
+        "打开过的 Cactbot 悬浮窗",
+        StringComparison.Ordinal);
+    var availableCactbotIndex = controlCenterSource.IndexOf(
+        "从本地模板添加",
+        StringComparison.Ordinal);
+    var settingsWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "SettingsWindow.cs"));
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
+        usedCactbotIndex >= 0 && availableCactbotIndex > usedCactbotIndex &&
         controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
         controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal),
-        "Created/custom HTML overlays are not listed above the template form or the trust warning regressed.");
+        controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            ".Where(static template => template.IsCactbot)",
+            StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "!SelfHostedActRuntime.IsCactbotOverlayName(name)",
+            StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "pair.Value.HasBeenOpened",
+            StringComparison.Ordinal) &&
+        controlCenterSource.Contains("deleteHtmlOverlay(selectedName)", StringComparison.Ordinal) &&
+        settingsWindowSource.Contains("打开过的 Cactbot 悬浮窗", StringComparison.Ordinal) &&
+        settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
+        settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
+        "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
     Assert(
         controlCenterSource.Contains(
             "private const int ResetConfirmationMilliseconds = 10_000;",
@@ -3568,6 +3998,7 @@ static void ValidateHtmlOverlayDefaults()
         "Finishing HTML overlay editing did not lock the layout while preserving page input.");
 
     settings.OpenOnStartup = true;
+    settings.HasBeenOpened = true;
     var serializedOverlaySettings = Newtonsoft.Json.JsonConvert.SerializeObject(settings);
     var restoredOverlaySettings = Newtonsoft.Json.JsonConvert.DeserializeObject<HtmlOverlayWindowSettings>(
                                       serializedOverlaySettings)
@@ -3575,9 +4006,47 @@ static void ValidateHtmlOverlayDefaults()
                                       "HTML overlay settings did not deserialize.");
     Assert(
         serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.OpenOnStartup), StringComparison.Ordinal) &&
+        serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.HasBeenOpened), StringComparison.Ordinal) &&
         !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsVisible), StringComparison.Ordinal) &&
-        restoredOverlaySettings.OpenOnStartup,
-        "The user-requested HTML overlay startup state was not persisted independently of runtime visibility.");
+        restoredOverlaySettings.OpenOnStartup &&
+        restoredOverlaySettings.HasBeenOpened,
+        "The overlay usage/startup state was not persisted independently of runtime visibility.");
+    var resetSettings = new HtmlOverlayWindowSettings
+    {
+        OpenOnStartup = true,
+        HasBeenOpened = true,
+        IsClickThrough = false,
+        IsLocked = false,
+        ZoomFactor = 1.5f,
+        SourceUrl = "https://example.com/overlay",
+        Left = 10,
+        Top = 20,
+        Width = 700,
+        Height = 300,
+    };
+    resetSettings.ResetRegistration();
+    Assert(
+        !resetSettings.OpenOnStartup &&
+        !resetSettings.HasBeenOpened &&
+        resetSettings.IsClickThrough &&
+        resetSettings.IsLocked &&
+        resetSettings.ZoomFactor == 1.0f &&
+        string.IsNullOrEmpty(resetSettings.SourceUrl) &&
+        resetSettings.Left is null &&
+        resetSettings.Top is null &&
+        resetSettings.Width is null &&
+        resetSettings.Height is null,
+        "Removing a Cactbot overlay did not reset its saved layout and display state in place.");
+    var registrationConfiguration = new PluginConfiguration();
+    var registeredSettings = registrationConfiguration.RegisterOverlayWindow(
+        SelfHostedActRuntime.CactbotTimelineOverlayName);
+    Assert(
+        registeredSettings.HasBeenOpened &&
+        ReferenceEquals(
+            registeredSettings,
+            registrationConfiguration.GetOverlayWindowSettings(
+                SelfHostedActRuntime.CactbotTimelineOverlayName)),
+        "A successful overlay open did not register persistent usage on the existing settings object.");
     var overlaysToRestore = SelfHostedActRuntime.SelectHtmlOverlaysToRestore(
         new Dictionary<string, HtmlOverlayWindowSettings>(StringComparer.OrdinalIgnoreCase)
         {
@@ -3589,8 +4058,91 @@ static void ValidateHtmlOverlayDefaults()
             },
         });
     Assert(
-        overlaysToRestore.SequenceEqual(["Skills"]),
-        "HTML overlay startup restoration did not preserve only the user-open custom windows.");
+        overlaysToRestore.SequenceEqual(
+            [SelfHostedActRuntime.CactbotOverlayName, "Skills"]),
+        "HTML overlay startup restoration did not preserve Cactbot and user-open custom windows.");
+    var conflictingRaidbossWindowsToRestore = SelfHostedActRuntime.SelectHtmlOverlaysToRestore(
+        new Dictionary<string, HtmlOverlayWindowSettings>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            [SelfHostedActRuntime.CactbotAlertsOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            ["Skills"] = restoredOverlaySettings,
+        });
+    Assert(
+        conflictingRaidbossWindowsToRestore.SequenceEqual(
+            [
+                SelfHostedActRuntime.CactbotAlertsOverlayName,
+                SelfHostedActRuntime.CactbotTimelineOverlayName,
+                "Skills",
+            ]) &&
+        !SelfHostedActRuntime.IsCactbotOverlayName("Cactbot Personal"),
+        "Conflicting Raidboss startup state was not normalized or a custom Cactbot-prefixed name was captured.");
+
+    var probedTemplates = SelfHostedActRuntime.ProbeOverlayTemplates();
+    Assert(
+        probedTemplates.Single(template => template.Name == "Kagerou").IsCactbot == false &&
+        probedTemplates.Single(template =>
+            template.Name == SelfHostedActRuntime.CactbotTimelineOverlayName).IsCactbot &&
+        probedTemplates
+            .Where(static template => template.IsCactbot)
+            .All(template => SelfHostedActRuntime.IsCactbotOverlayName(template.Name)),
+        "Overlay templates lost their Cactbot classification.");
+
+    var localCactbotRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"actcompat-cactbot-uri-{Guid.NewGuid():N}");
+    var localRaidboss = Path.Combine(localCactbotRoot, "ui", "raidboss", "raidboss.html");
+    var outsideCactbotPage = Path.Combine(
+        Path.GetDirectoryName(localCactbotRoot)!,
+        $"{Path.GetFileName(localCactbotRoot)}-outside.html");
+    Directory.CreateDirectory(Path.GetDirectoryName(localRaidboss)!);
+    File.WriteAllText(localRaidboss, "<html></html>");
+    File.WriteAllText(outsideCactbotPage, "<html></html>");
+    try
+    {
+        Assert(
+            SelfHostedActRuntime.TryBuildLocalCactbotOverlayUri(
+                "https://overlayplugin.github.io/cactbot/ui/raidboss/raidboss.html?alerts=0&timeline=1",
+                localCactbotRoot,
+                new Uri("ws://127.0.0.1:10501/ws"),
+                out var localTimelineUri) &&
+            localTimelineUri.IsFile &&
+            localTimelineUri.AbsoluteUri.Contains("alerts=0&timeline=1", StringComparison.Ordinal) &&
+            localTimelineUri.AbsoluteUri.Contains(
+                "OVERLAY_WS=ws://127.0.0.1:10501/ws",
+                StringComparison.Ordinal) &&
+            !localTimelineUri.AbsoluteUri.Contains("proxy.iinact.com", StringComparison.Ordinal),
+            "Timeline-only did not resolve to the installed local Cactbot page with its mode and WebSocket parameters.");
+        Assert(
+            !SelfHostedActRuntime.TryBuildLocalCactbotOverlayUri(
+                "https://overlayplugin.github.io/cactbot/ui/fisher/fisher.html",
+                localCactbotRoot,
+                new Uri("ws://127.0.0.1:10501/ws"),
+                out _),
+            "A missing local Cactbot page silently fell back to a remote template.");
+        Assert(
+            !SelfHostedActRuntime.TryBuildLocalCactbotOverlayUri(
+                $"https://overlayplugin.github.io/cactbot/%2e%2e%2f{Uri.EscapeDataString(Path.GetFileName(outsideCactbotPage))}",
+                localCactbotRoot,
+                new Uri("ws://127.0.0.1:10501/ws"),
+                out _),
+            "An encoded Cactbot template path escaped the installed local package root.");
+    }
+    finally
+    {
+        Directory.Delete(localCactbotRoot, recursive: true);
+        File.Delete(outsideCactbotPage);
+    }
 
     Assert(
         SelfHostedActRuntime.TryBuildCustomOverlayUri(
@@ -3613,6 +4165,26 @@ static void ValidateHtmlOverlayDefaults()
     var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
                        "DalamudActCompat.ActRuntime.HtmlOverlayForm")
                    ?? throw new InvalidOperationException("HTML overlay form was not found.");
+    var combineInitializationTasks = formType.GetMethod(
+                                         "CombineInitializationTasks",
+                                         BindingFlags.Static | BindingFlags.NonPublic)
+                                     ?? throw new InvalidOperationException(
+                                         "WebView2 in-flight initialization combiner was not found.");
+    var firstInitialization = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var combinedInitialization = combineInitializationTasks.Invoke(
+                                     null,
+                                     [firstInitialization.Task, Task.CompletedTask]) as Task
+                                 ?? throw new InvalidOperationException(
+                                     "WebView2 initialization combiner did not return a Task.");
+    Assert(
+        !combinedInitialization.IsCompleted,
+        "A newer completed WebView2 attempt hid an older in-flight initialization.");
+    firstInitialization.SetResult(true);
+    combinedInitialization.GetAwaiter().GetResult();
+    Assert(
+        combinedInitialization.IsCompletedSuccessfully,
+        "The combined WebView2 initialization did not finish after every attempt completed.");
     var isRaidbossPage = formType.GetMethod(
                              "IsCactbotRaidbossPage",
                              BindingFlags.Static | BindingFlags.NonPublic)
@@ -3656,18 +4228,6 @@ static void ValidateHtmlOverlayDefaults()
             "#container.hide-alerts.dalamud-act-compat-alert-repair",
             StringComparison.Ordinal),
         "The Cactbot visibility repair can override a user's explicit disabled-alert setting.");
-    var editIndicatorScript = formType.GetField(
-                                  "OverlayEditIndicatorScript",
-                                  BindingFlags.Static | BindingFlags.NonPublic)
-                              ?.GetRawConstantValue() as string;
-    Assert(
-        editIndicatorScript?.Contains(
-            "data-dalamud-act-compat-editing='true'",
-            StringComparison.Ordinal) == true &&
-        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal) &&
-        editIndicatorScript.Contains("repeating-linear-gradient", StringComparison.Ordinal) &&
-        editIndicatorScript.Contains("cursor: nwse-resize", StringComparison.Ordinal),
-        "Transparent HTML overlays no longer expose a visible edit boundary and resize grip.");
     var isTransientWebViewFailure = formType.GetMethod(
                                         "IsTransientWebViewInitializationFailure",
                                         BindingFlags.Static | BindingFlags.NonPublic)
@@ -3681,8 +4241,35 @@ static void ValidateHtmlOverlayDefaults()
                 unchecked((int)0x80004004))]) as bool? == true &&
         isTransientWebViewFailure.Invoke(
             null,
+            [new System.Runtime.InteropServices.COMException(
+                "The profile is busy.",
+                unchecked((int)0x800700AA))]) as bool? == true &&
+        isTransientWebViewFailure.Invoke(
+            null,
             [new InvalidOperationException("permanent")]) as bool? == false,
-        "Cactbot WebView2 startup no longer retries only the transient E_ABORT failure.");
+        "Cactbot WebView2 startup no longer retries transient abort/profile-busy failures only.");
+    var describeWebViewFailure = formType.GetMethod(
+                                     "DescribeWebViewInitializationFailure",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "WebView2 initialization failure classifier was not found.");
+    Assert(
+        (describeWebViewFailure.Invoke(
+             null,
+             [new FileNotFoundException("missing")]) as string)?.Contains(
+            "WebView2Loader.dll",
+            StringComparison.Ordinal) == true &&
+        (describeWebViewFailure.Invoke(
+             null,
+             [new UnauthorizedAccessException("denied")]) as string)?.Contains(
+            "权限",
+            StringComparison.Ordinal) == true &&
+        (describeWebViewFailure.Invoke(
+             null,
+             [new InvalidOperationException("unknown")]) as string)?.Contains(
+            "Dalamud 日志",
+            StringComparison.Ordinal) == true,
+        "WebView2 failures are still collapsed into the misleading Runtime-missing prompt.");
 
     var interactionType = formType.GetNestedType(
                               "OverlayInteraction",
@@ -3832,8 +4419,43 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         htmlOverlayFormSource.Contains(
             "SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged",
-            StringComparison.Ordinal),
-        "HTML overlay style changes are no longer flushed through SWP_FRAMECHANGED.");
+            StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("sealed class EditChromeForm", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("WsExTransparent", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains(
+            "MaximumWebViewInitializationAttempts = 6",
+            StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("ReplaceWebViewControl();", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("RetryFailedWebViewAsync", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("pendingInitialization", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("ShutdownCompletion", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("form.BeginInvoke(async () =>", StringComparison.Ordinal) &&
+        !htmlOverlayFormSource.Contains("form.Invoke(() =>", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains(
+            "WaitForBrowserProcessesExit",
+            StringComparison.Ordinal) &&
+        !htmlOverlayFormSource.Contains("MessageBox.Show", StringComparison.Ordinal),
+        "HTML overlays lost native edit chrome, bounded WebView2 recovery, shutdown waiting, or restored a blocking error popup.");
+    var selfHostedRuntimeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    Assert(
+        selfHostedRuntimeSource.Contains("webview2-session.lock", StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains(
+            "TryBuildLocalCactbotOverlayUri",
+            StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains(
+            "CloseConflictingRaidbossWindows",
+            StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains(
+            "ReleaseWebViewSessionLockWhenSafe",
+            StringComparison.Ordinal) &&
+        Regex.Matches(
+            selfHostedRuntimeSource,
+            Regex.Escape("cactbotOverlay.Show();")).Count == 1,
+        "Cactbot windows are no longer lifecycle-locked, local-only, conflict-safe, or startup-intent driven.");
     var calculateBrowserInputPoint = formType.GetMethod(
                                          "CalculateBrowserInputPoint",
                                          BindingFlags.Static | BindingFlags.NonPublic)
@@ -3997,6 +4619,7 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                            new System.Drawing.Size(320, 200),
                            false,
                            log,
+                           null,
                        ],
                        culture: null)
                    ?? throw new InvalidOperationException("HTML overlay input smoke form was not created.");
@@ -4006,11 +4629,43 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                     ?? throw new InvalidOperationException("HTML overlay host form field was not found.");
     var proxyField = formType.GetField("inputProxy", BindingFlags.Instance | BindingFlags.NonPublic)
                      ?? throw new InvalidOperationException("HTML overlay input proxy field was not found.");
+    var editChromeField = formType.GetField(
+                              "editChrome",
+                              BindingFlags.Instance | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Native HTML overlay edit chrome field was not found.");
+    var browserStateField = formType.GetField(
+                                "browserState",
+                                BindingFlags.Instance | BindingFlags.NonPublic)
+                            ?? throw new InvalidOperationException(
+                             "HTML overlay browser state field was not found.");
+    var navigationStartedField = formType.GetField(
+                                     "navigationStarted",
+                                     BindingFlags.Instance | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay navigation state field was not found.");
     var show = formType.GetMethod("Show", BindingFlags.Instance | BindingFlags.Public)
                ?? throw new InvalidOperationException("HTML overlay show method was not found.");
+    var hide = formType.GetMethod("Hide", BindingFlags.Instance | BindingFlags.Public)
+               ?? throw new InvalidOperationException("HTML overlay hide method was not found.");
     var applySettings = formType.GetMethod("ApplySettings", BindingFlags.Instance | BindingFlags.Public)
                         ?? throw new InvalidOperationException(
                             "HTML overlay ApplySettings method was not found.");
+    var browserProcessIdsProperty = formType.GetProperty(
+                                        "BrowserProcessIds",
+                                        BindingFlags.Instance | BindingFlags.Public)
+                                    ?? throw new InvalidOperationException(
+                                     "HTML overlay browser process list was not found.");
+    var shutdownCompletionProperty = formType.GetProperty(
+                                         "ShutdownCompletion",
+                                         BindingFlags.Instance | BindingFlags.Public)
+                                     ?? throw new InvalidOperationException(
+                                         "HTML overlay shutdown completion was not exposed.");
+    var waitForBrowserProcessesExit = formType.GetMethod(
+                                          "WaitForBrowserProcessesExit",
+                                          BindingFlags.Static | BindingFlags.Public)
+                                      ?? throw new InvalidOperationException(
+                                          "HTML overlay browser shutdown waiter was not found.");
 
     NativeInputProbe.GetCursorPos(out var originalCursor);
     try
@@ -4126,16 +4781,31 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
             collapsedRegionReady,
             "The live HTML input proxy did not shrink after the visible page content collapsed.");
 
+        await InvokeControlAsync(liveWebView, () =>
+        {
+            liveWebView.Visible = false;
+            return true;
+        });
         settings.SetEditing(true);
         applySettings.Invoke(instance, null);
         var editingUsesFullRegion = false;
+        var nativeEditChromeVisible = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
             editingUsesFullRegion =
                 await WindowAtProxyPointAsync(liveProxy, new System.Drawing.Point(280, 160)) ==
                 proxyHandle;
-            if (editingUsesFullRegion)
+            if (editChromeField.GetValue(instance) is Form chrome && chrome.IsHandleCreated)
+            {
+                nativeEditChromeVisible = await InvokeControlAsync(
+                    chrome,
+                    () => chrome.Visible && chrome.Bounds == liveHostForm.Bounds &&
+                          (NativeInputProbe.GetWindowLongPtr(
+                               chrome.Handle,
+                               NativeInputProbe.GwlExStyle) & (nint)0x00000020) != nint.Zero);
+            }
+            if (editingUsesFullRegion && nativeEditChromeVisible)
             {
                 break;
             }
@@ -4144,9 +4814,52 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(
-            editingUsesFullRegion,
-            "HTML overlay editing mode did not restore the full drag and resize region.");
+            editingUsesFullRegion && nativeEditChromeVisible,
+            "HTML overlay editing mode did not restore the full input region and independent native edit boundary.");
 
+        var beforeMove = await InvokeControlAsync(liveHostForm, () => liveHostForm.Bounds);
+        var moveStart = await InvokeControlAsync(
+            liveHostForm,
+            () => liveHostForm.PointToScreen(new System.Drawing.Point(
+                liveHostForm.ClientSize.Width / 2,
+                liveHostForm.ClientSize.Height / 2)));
+        NativeInputProbe.SetCursorPos(moveStart.X, moveStart.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.SetCursorPos(moveStart.X + 45, moveStart.Y + 30);
+        await Task.Delay(180);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftUp, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(120);
+        var movedBounds = await InvokeControlAsync(liveHostForm, () => liveHostForm.Bounds);
+        Assert(
+            movedBounds.Left >= beforeMove.Left + 35 &&
+            movedBounds.Top >= beforeMove.Top + 20,
+            "A physical drag over the native edit boundary did not move the blank-capable overlay host.");
+
+        var beforeResize = movedBounds;
+        var resizeStart = await InvokeControlAsync(
+            liveHostForm,
+            () => liveHostForm.PointToScreen(new System.Drawing.Point(
+                liveHostForm.ClientSize.Width - 8,
+                liveHostForm.ClientSize.Height - 8)));
+        NativeInputProbe.SetCursorPos(resizeStart.X, resizeStart.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.SetCursorPos(resizeStart.X + 35, resizeStart.Y + 25);
+        await Task.Delay(180);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftUp, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(120);
+        var resizedBounds = await InvokeControlAsync(liveHostForm, () => liveHostForm.Bounds);
+        Assert(
+            resizedBounds.Width >= beforeResize.Width + 25 &&
+            resizedBounds.Height >= beforeResize.Height + 15,
+            "A physical drag on the native bottom-right grip did not resize the overlay host.");
+
+        await InvokeControlAsync(liveWebView, () =>
+        {
+            liveWebView.Visible = true;
+            return true;
+        });
         settings.SetEditing(false);
         applySettings.Invoke(instance, null);
         var lockedRestoresContentRegion = false;
@@ -4169,11 +4882,84 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         Assert(
             lockedRestoresContentRegion,
             "HTML overlay locking did not restore the collapsed content-shaped input region.");
+        if (editChromeField.GetValue(instance) is Form hiddenChrome)
+        {
+            Assert(
+                !await InvokeControlAsync(hiddenChrome, () => hiddenChrome.Visible),
+                "The native HTML overlay edit boundary remained visible after locking.");
+        }
+
+        hide.Invoke(instance, null);
+        browserStateField.SetValue(
+            instance,
+            Enum.Parse(browserStateField.FieldType, "Failed"));
+        show.Invoke(instance, null);
+        var reopenedAfterFailure = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            reopenedAfterFailure = string.Equals(
+                browserStateField.GetValue(instance)?.ToString(),
+                "Loaded",
+                StringComparison.Ordinal);
+            if (reopenedAfterFailure)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            reopenedAfterFailure,
+            "Closing and reopening a failed HTML overlay did not retry its WebView2 page.");
+
+        hide.Invoke(instance, null);
+        var webViewBeforePreNavigationRetry = webViewField.GetValue(instance);
+        navigationStartedField.SetValue(instance, false);
+        browserStateField.SetValue(
+            instance,
+            Enum.Parse(browserStateField.FieldType, "Failed"));
+        show.Invoke(instance, null);
+        var rebuiltBeforeNavigation = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            rebuiltBeforeNavigation =
+                !ReferenceEquals(webViewField.GetValue(instance), webViewBeforePreNavigationRetry) &&
+                string.Equals(
+                    browserStateField.GetValue(instance)?.ToString(),
+                    "Loaded",
+                    StringComparison.Ordinal);
+            if (rebuiltBeforeNavigation)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            rebuiltBeforeNavigation,
+            "A failed WebView2 that had not begun navigation reloaded about:blank instead of rebuilding.");
     }
     finally
     {
         NativeInputProbe.SetCursorPos(originalCursor.X, originalCursor.Y);
+        var browserProcessIds =
+            (browserProcessIdsProperty.GetValue(instance) as IEnumerable<int> ?? [])
+            .ToHashSet();
         ((IDisposable)instance).Dispose();
+        var shutdownCompletion = shutdownCompletionProperty.GetValue(instance) as Task
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay shutdown completion was not a Task.");
+        await shutdownCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert(shutdownCompletion.IsCompletedSuccessfully, "HTML overlay shutdown did not complete cleanly.");
+        browserProcessIds.UnionWith(
+            browserProcessIdsProperty.GetValue(instance) as IEnumerable<int> ?? []);
+        waitForBrowserProcessesExit.Invoke(
+            null,
+            [browserProcessIds, TimeSpan.FromSeconds(5), log]);
     }
 }
 
@@ -4453,6 +5239,22 @@ static void ValidateActPluginDataCompatibility()
     Assert(
         type.GetField("btnXButton")?.FieldType == typeof(Button),
         "ActPluginData.btnXButton compatibility field is missing.");
+    Assert(
+        typeof(FormActMain).GetMethod(
+            "PluginGetSelfData",
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(IActPluginV1)],
+            null)?.ReturnType == typeof(ActPluginData),
+        "FormActMain does not expose the exact PluginGetSelfData(IActPluginV1) ABI required by SilverDasher.");
+    Assert(
+        typeof(FormActMain).GetMethod(
+            "PluginGetSelfData",
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(object)],
+            null)?.ReturnType == typeof(ActPluginData),
+        "The existing PluginGetSelfData(object) compatibility overload was replaced.");
 }
 
 static ZipArchiveEntry? FindArchiveEntry(ZipArchive archive, string normalizedPath)
@@ -4544,6 +5346,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/ACT.FoxTTS.dll",
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
+        "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
     };
     foreach (var required in requiredBundledPluginFiles)
     {
@@ -4568,13 +5371,58 @@ static void ValidateLegacyResourceRuntimeDependencies()
             ?? throw new InvalidDataException("Bundled ACT plugin assembly path is empty.");
         var expectedHash = plugin.GetProperty("sha256").GetString()
             ?? throw new InvalidDataException("Bundled ACT plugin SHA-256 is empty.");
-        var assemblyEntry = FindArchiveEntry(
-            archive,
-            $"BundledActPlugins/{relativeAssembly}")
-            ?? throw new InvalidDataException(
-                $"Bundled ACT plugin assembly is missing: {relativeAssembly}.");
-        using var assemblyStream = assemblyEntry.Open();
-        var actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        string actualHash;
+        if (plugin.TryGetProperty("relativePackage", out var relativePackageProperty) &&
+            !string.IsNullOrWhiteSpace(relativePackageProperty.GetString()))
+        {
+            var relativePackage = relativePackageProperty.GetString()!;
+            var expectedPackageHash = plugin.GetProperty("packageSha256").GetString()
+                ?? throw new InvalidDataException("Bundled ACT plugin package SHA-256 is empty.");
+            var packageEntry = FindArchiveEntry(
+                archive,
+                $"BundledActPlugins/{relativePackage}")
+                ?? throw new InvalidDataException(
+                    $"Bundled ACT plugin package is missing: {relativePackage}.");
+            using var packageMemory = new MemoryStream();
+            using (var packageStream = packageEntry.Open())
+            {
+                packageStream.CopyTo(packageMemory);
+            }
+
+            var actualPackageHash = Convert.ToHexString(
+                SHA256.HashData(packageMemory.ToArray()));
+            Assert(
+                string.Equals(
+                    actualPackageHash,
+                    expectedPackageHash,
+                    StringComparison.OrdinalIgnoreCase),
+                $"Bundled ACT plugin package does not match its locked SHA-256: {relativePackage}.");
+            packageMemory.Position = 0;
+            using var packageArchive = new ZipArchive(
+                packageMemory,
+                ZipArchiveMode.Read,
+                leaveOpen: true);
+            var assemblyEntry = packageArchive.Entries.SingleOrDefault(entry =>
+                string.Equals(
+                    entry.FullName.Replace('\\', '/'),
+                    relativeAssembly.Replace('\\', '/'),
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException(
+                    $"Bundled ACT plugin package entry assembly is missing: {relativeAssembly}.");
+            using var assemblyStream = assemblyEntry.Open();
+            actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        }
+        else
+        {
+            var assemblyEntry = FindArchiveEntry(
+                archive,
+                $"BundledActPlugins/{relativeAssembly}")
+                ?? throw new InvalidDataException(
+                    $"Bundled ACT plugin assembly is missing: {relativeAssembly}.");
+            using var assemblyStream = assemblyEntry.Open();
+            actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        }
+
         Assert(
             string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase),
             $"Bundled ACT plugin does not match its locked SHA-256: {relativeAssembly}.");

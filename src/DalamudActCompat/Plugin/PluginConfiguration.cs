@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 4;
+    private const int CurrentVersion = 7;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -41,8 +41,11 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string SelectedOverlayTemplate { get; set; } = "Kagerou";
 
+    public string SelectedCactbotOverlay { get; set; } =
+        SelfHostedActRuntime.CactbotOverlayName;
+
     public Dictionary<string, HtmlOverlayWindowSettings> OverlayWindows { get; set; } =
-        new(StringComparer.OrdinalIgnoreCase);
+        CreateDefaultOverlayWindows();
 
     public MeterSettings Meter { get; set; } = new();
 
@@ -50,7 +53,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
 
-    public HashSet<string> DisabledActPluginIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> DisabledActPluginIds { get; set; } =
+        CreateDefaultDisabledActPluginIds();
 
     public Dictionary<string, string> BundledPluginDisclosureKeys { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
@@ -91,6 +95,99 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 4;
             changed = true;
         }
+        if (Version < 5)
+        {
+            OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+                StringComparer.OrdinalIgnoreCase);
+            if (OverlayWindows.Remove(
+                    SelfHostedActRuntime.CactbotCombinedTemplateName,
+                    out var combinedTemplateSettings))
+            {
+                if (!OverlayWindows.TryGetValue(
+                        SelfHostedActRuntime.CactbotOverlayName,
+                        out var existingCombinedSettings) ||
+                    combinedTemplateSettings.OpenOnStartup)
+                {
+                    OverlayWindows[SelfHostedActRuntime.CactbotOverlayName] =
+                        combinedTemplateSettings;
+                }
+                else
+                {
+                    existingCombinedSettings.OpenOnStartup |=
+                        combinedTemplateSettings.OpenOnStartup;
+                }
+            }
+
+            var independentRaidbossOpen =
+                OverlayWindows.TryGetValue(
+                    SelfHostedActRuntime.CactbotAlertsOverlayName,
+                    out var alertsSettings) && alertsSettings.OpenOnStartup ||
+                OverlayWindows.TryGetValue(
+                    SelfHostedActRuntime.CactbotTimelineOverlayName,
+                    out var timelineSettings) && timelineSettings.OpenOnStartup;
+            if (!OverlayWindows.TryGetValue(
+                    SelfHostedActRuntime.CactbotOverlayName,
+                    out var combinedSettings))
+            {
+                combinedSettings = new HtmlOverlayWindowSettings();
+                OverlayWindows[SelfHostedActRuntime.CactbotOverlayName] = combinedSettings;
+            }
+
+            // The legacy built-in window always opened. Preserve that behavior unless the
+            // user had explicitly opened one of the independent Raidboss templates.
+            combinedSettings.OpenOnStartup = !independentRaidbossOpen;
+            if (SelfHostedActRuntime.IsCactbotOverlayName(SelectedOverlayTemplate))
+            {
+                SelectedCactbotOverlay =
+                    SelfHostedActRuntime.NormalizeCactbotOverlayName(SelectedOverlayTemplate);
+                SelectedOverlayTemplate = "Kagerou";
+            }
+
+            Version = 5;
+            changed = true;
+        }
+        if (Version < 6)
+        {
+            OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, settings) in OverlayWindows)
+            {
+                if (!SelfHostedActRuntime.IsCactbotOverlayName(name))
+                {
+                    continue;
+                }
+
+                var normalizedName = SelfHostedActRuntime.NormalizeCactbotOverlayName(name);
+                var isCombined = string.Equals(
+                    normalizedName,
+                    SelfHostedActRuntime.CactbotOverlayName,
+                    StringComparison.OrdinalIgnoreCase);
+                var hasUsageEvidence = settings.HasBeenOpened ||
+                                       settings.OpenOnStartup ||
+                                       !string.IsNullOrWhiteSpace(settings.SourceUrl) ||
+                                       settings.Left is not null ||
+                                       settings.Top is not null ||
+                                       settings.Width is not null ||
+                                       settings.Height is not null ||
+                                       Math.Abs(settings.ZoomFactor - 1.0f) > 0.0001f ||
+                                       !settings.IsClickThrough ||
+                                       !settings.IsLocked;
+                if (isCombined || hasUsageEvidence)
+                {
+                    settings.HasBeenOpened = true;
+                }
+            }
+
+            Version = 6;
+            changed = true;
+        }
+        if (Version < 7)
+        {
+            DisabledActPluginIds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            DisabledActPluginIds.Add("silverdasher");
+            Version = 7;
+            changed = true;
+        }
 
         return changed;
     }
@@ -112,12 +209,12 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LauncherPositionX = 80;
         LauncherPositionY = 160;
         SelectedOverlayTemplate = "Kagerou";
-        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
-            StringComparer.OrdinalIgnoreCase);
+        SelectedCactbotOverlay = SelfHostedActRuntime.CactbotOverlayName;
+        OverlayWindows = CreateDefaultOverlayWindows();
         Meter = new MeterSettings();
         Fflogs = new FflogsSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
-        DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        DisabledActPluginIds = CreateDefaultDisabledActPluginIds();
         BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         BundledPluginUpdateRecords =
             new Dictionary<string, BundledActPluginUpdateRecord>(StringComparer.OrdinalIgnoreCase);
@@ -147,6 +244,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LauncherPositionX = snapshot.LauncherPositionX;
         LauncherPositionY = snapshot.LauncherPositionY;
         SelectedOverlayTemplate = snapshot.SelectedOverlayTemplate;
+        SelectedCactbotOverlay = snapshot.SelectedCactbotOverlay;
         OverlayWindows = snapshot.OverlayWindows;
         Meter = snapshot.Meter;
         Fflogs = snapshot.Fflogs;
@@ -207,9 +305,32 @@ public sealed class PluginConfiguration : IPluginConfiguration
         return settings;
     }
 
+    public HtmlOverlayWindowSettings RegisterOverlayWindow(string name)
+    {
+        var settings = GetOverlayWindowSettings(name);
+        settings.HasBeenOpened = true;
+        return settings;
+    }
+
     public IReadOnlyDictionary<string, HtmlOverlayWindowSettings> GetOverlayWindowSettingsSnapshot()
         => new Dictionary<string, HtmlOverlayWindowSettings>(
             OverlayWindows ?? new Dictionary<string, HtmlOverlayWindowSettings>(
                 StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, HtmlOverlayWindowSettings> CreateDefaultOverlayWindows()
+        => new(StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+                HasBeenOpened = true,
+            },
+        };
+
+    private static HashSet<string> CreateDefaultDisabledActPluginIds()
+        => new(StringComparer.OrdinalIgnoreCase)
+        {
+            "silverdasher",
+        };
 }

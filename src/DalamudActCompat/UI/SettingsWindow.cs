@@ -31,14 +31,17 @@ public sealed class SettingsWindow : Window
     private readonly Action openCactbotOverlay;
     private readonly Action openCactbotSettings;
     private readonly Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates;
-    private readonly Action<string> openHtmlOverlay;
+    private readonly Func<string, bool> openHtmlOverlay;
     private readonly Action<string> closeHtmlOverlay;
+    private readonly Action<string> deleteHtmlOverlay;
     private readonly Action<string> applyOverlayWindowSettings;
     private readonly Action<string> openPluginConfiguration;
     private readonly Action openBundledPluginNotice;
     private ParserStatus parserStatus;
     private bool confirmFactoryReset;
     private string? resetResult;
+    private string? selectedUsedCactbotOverlay;
+    private string? selectedAvailableCactbotOverlay;
 
     public SettingsWindow(
         PluginConfiguration configuration,
@@ -58,8 +61,9 @@ public sealed class SettingsWindow : Window
         Action openCactbotOverlay,
         Action openCactbotSettings,
         Func<IReadOnlyList<ActOverlayTemplate>> getOverlayTemplates,
-        Action<string> openHtmlOverlay,
+        Func<string, bool> openHtmlOverlay,
         Action<string> closeHtmlOverlay,
+        Action<string> deleteHtmlOverlay,
         Action<string> applyOverlayWindowSettings,
         Action<string> openPluginConfiguration,
         Action openBundledPluginNotice)
@@ -84,6 +88,7 @@ public sealed class SettingsWindow : Window
         this.getOverlayTemplates = getOverlayTemplates;
         this.openHtmlOverlay = openHtmlOverlay;
         this.closeHtmlOverlay = closeHtmlOverlay;
+        this.deleteHtmlOverlay = deleteHtmlOverlay;
         this.applyOverlayWindowSettings = applyOverlayWindowSettings;
         this.openPluginConfiguration = openPluginConfiguration;
         this.openBundledPluginNotice = openBundledPluginNotice;
@@ -94,6 +99,7 @@ public sealed class SettingsWindow : Window
     public override void Draw()
     {
         var changed = false;
+        var hostConfigurationChanged = false;
         if (ImGui.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
         {
             if (ImGui.Selectable("简体中文", text.IsChinese))
@@ -145,6 +151,7 @@ public sealed class SettingsWindow : Window
                 }
 
                 changed = true;
+                hostConfigurationChanged = true;
             }
 
             ImGui.SameLine();
@@ -183,18 +190,15 @@ public sealed class SettingsWindow : Window
             saveConfiguration();
         }
 
-        ImGui.TextDisabled(text.Get("安装或启停扩展后请重启解析器。", "Restart the parser after installing or changing plugins."));
+        ImGui.TextDisabled(text.Get(
+            "安装扩展后请重启解析器；启停兼容扩展会自动重启独立 Host。",
+            "Restart the parser after installing an extension; enabling or disabling a compatibility extension restarts the independent Host automatically."));
         ImGui.Separator();
         ImGui.TextUnformatted("Cactbot（OverlayPlugin addon）");
         ImGui.TextDisabled(FormatCactbotStatus());
         if (ImGui.Button(text.Get("安装/更新 Cactbot...", "Install/update Cactbot...")))
         {
             selectCactbotPackage();
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("打开 Cactbot 窗口", "Open Cactbot window")))
-        {
-            openCactbotOverlay();
         }
         ImGui.SameLine();
         if (ImGui.Button(text.Get("Cactbot 设置", "Cactbot settings")))
@@ -207,16 +211,19 @@ public sealed class SettingsWindow : Window
             OpenUrl("https://github.com/OverlayPlugin/cactbot");
         }
 
-        var cactbotWindowChanged = DrawHtmlOverlaySettings(SelfHostedActRuntime.CactbotOverlayName);
-        changed |= cactbotWindowChanged;
-        if (cactbotWindowChanged)
-        {
-            applyOverlayWindowSettings(SelfHostedActRuntime.CactbotOverlayName);
-        }
+        var allTemplates = getOverlayTemplates();
+        var cactbotTemplates = allTemplates
+            .Where(static template => template.IsCactbot)
+            .OrderBy(template => GetCactbotOverlayOrder(template.Name))
+            .ThenBy(static template => template.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        changed |= DrawCactbotOverlayManager(cactbotTemplates, allTemplates.Count > 0);
 
         ImGui.TextUnformatted(text.Get("HTML 悬浮窗", "HTML overlays"));
-        var templates = getOverlayTemplates();
-        if (templates.Count == 0)
+        var templates = allTemplates
+            .Where(static template => !template.IsCactbot)
+            .ToArray();
+        if (templates.Length == 0)
         {
             ImGui.TextDisabled(text.Get(
                 "OverlayPlugin 尚未运行；启动或重启解析器后可选择模板。",
@@ -284,6 +291,11 @@ public sealed class SettingsWindow : Window
         DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；完整保留 7 个动作模块、15 个命令别名、HTTP、Triggernometry 与 OverlayPlugin 集成。启用完整权限后，原版进程附加、签名扫描和原生调用也会恢复。", "PostNamazu retains all 7 action modules, 15 command aliases, HTTP, Triggernometry, and OverlayPlugin integration. With full permissions enabled, the original process attachment, signature scanning, and native calls are also restored."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
         DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML、全部 29 种动作，以及日志/网络/区域/战斗/TTS/实体接口；其内置 BridgeNamazu 高级模块在鲶鱼精完整权限下使用原版原生运行时。", "Supports the DLL and translation XML, all 29 action types, and log/network/zone/combat/TTS/entity APIs. Its built-in advanced BridgeNamazu modules use the original native runtime when PostNamazu has full permissions."), "https://github.com/MnFeN/Triggernometry");
+        ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（始终最后加载）", "SilverDasher (always loaded last)"));
+        ImGui.SameLine();
+        ImGui.TextDisabled(text.Get(
+            "使用独立事件队列与专属内存权限上下文。",
+            "Uses an independent event queue and dedicated memory-permission context."));
 
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
@@ -299,6 +311,9 @@ public sealed class SettingsWindow : Window
         permissionsChanged |= DrawPluginPermissions(
             "triggernometry",
             BundledActPluginCapabilities.Triggernometry);
+        permissionsChanged |= DrawPluginPermissions(
+            "silverdasher",
+            BundledActPluginCapabilities.SilverDasher);
         changed |= permissionsChanged;
 
         ImGui.Separator();
@@ -441,7 +456,7 @@ public sealed class SettingsWindow : Window
             saveConfiguration();
         }
 
-        if (permissionsChanged)
+        if (permissionsChanged || hostConfigurationChanged)
         {
             applyPermissionChanges();
         }
@@ -482,9 +497,12 @@ public sealed class SettingsWindow : Window
         IReadOnlyList<ActCapability> capabilities)
     {
         var changed = false;
-        var displayName = string.Equals(pluginId, "postnamazu", StringComparison.OrdinalIgnoreCase)
-            ? text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu")
-            : pluginId;
+        var displayName = pluginId.ToLowerInvariant() switch
+        {
+            "postnamazu" => text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
+            "silverdasher" => text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
+            _ => pluginId,
+        };
         if (!ImGui.TreeNode($"{displayName}##permissions-{pluginId}"))
         {
             return false;
@@ -539,6 +557,219 @@ public sealed class SettingsWindow : Window
         return true;
     }
 
+    private bool DrawCactbotOverlayManager(
+        IReadOnlyList<ActOverlayTemplate> templates,
+        bool templateCatalogAvailable)
+    {
+        var changed = false;
+        configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase);
+        var templateNames = templates
+            .Select(static template => template.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var usedNames = configuration.OverlayWindows
+            .Where(pair =>
+                SelfHostedActRuntime.IsCactbotOverlayName(pair.Key) &&
+                pair.Value.HasBeenOpened)
+            .Select(static pair => pair.Key)
+            .OrderBy(GetCactbotOverlayOrder)
+            .ThenBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        ImGui.TextUnformatted(text.Get(
+            "打开过的 Cactbot 悬浮窗",
+            "Previously opened Cactbot overlays"));
+        if (usedNames.Length == 0)
+        {
+            ImGui.TextDisabled(text.Get(
+                "还没有打开过 Cactbot 悬浮窗。",
+                "No Cactbot overlays have been opened yet."));
+            selectedUsedCactbotOverlay = null;
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(selectedUsedCactbotOverlay) ||
+                !usedNames.Contains(selectedUsedCactbotOverlay, StringComparer.OrdinalIgnoreCase))
+            {
+                selectedUsedCactbotOverlay = usedNames[0];
+            }
+
+            foreach (var name in usedNames)
+            {
+                var settings = configuration.OverlayWindows[name];
+                var status = settings.IsVisible
+                    ? text.Get("已打开", "Open")
+                    : !templateCatalogAvailable
+                        ? text.Get("解析器未运行", "Parser stopped")
+                        : templateNames.Contains(name)
+                            ? text.Get("已关闭", "Closed")
+                            : text.Get("本地资源不可用", "Local asset unavailable");
+                if (ImGui.Selectable(
+                        $"{FormatCactbotOverlayName(name)}  [{status}]##advanced-used-cactbot-{name}",
+                        string.Equals(
+                            name,
+                            selectedUsedCactbotOverlay,
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    selectedUsedCactbotOverlay = name;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(selectedUsedCactbotOverlay) &&
+                configuration.OverlayWindows.TryGetValue(
+                    selectedUsedCactbotOverlay,
+                    out var selectedSettings))
+            {
+                var selectedName = selectedUsedCactbotOverlay;
+                var localTemplateAvailable = templateNames.Contains(selectedName);
+                ImGui.PushID($"advanced-used-cactbot-actions-{selectedName}");
+                if (localTemplateAvailable)
+                {
+                    if (ImGui.Button(selectedSettings.IsVisible
+                            ? text.Get("关闭", "Close")
+                            : text.Get("打开", "Open")))
+                    {
+                        if (selectedSettings.IsVisible)
+                        {
+                            closeHtmlOverlay(selectedName);
+                        }
+                        else
+                        {
+                            _ = openHtmlOverlay(selectedName);
+                        }
+                    }
+                }
+                else
+                {
+                    ImGui.TextDisabled(templateCatalogAvailable
+                        ? text.Get(
+                            "当前 Cactbot 包缺少该页面，不会回退到远程地址。",
+                            "The current Cactbot package does not contain this page; no online fallback will be used.")
+                        : text.Get(
+                            "启动解析器后才能打开该悬浮窗。",
+                            "Start the parser before opening this overlay."));
+                    if (selectedSettings.OpenOnStartup &&
+                        ImGui.Button(text.Get("停止自动打开", "Disable startup")))
+                    {
+                        selectedSettings.OpenOnStartup = false;
+                        changed = true;
+                    }
+                }
+
+                if (localTemplateAvailable)
+                {
+                    ImGui.SameLine();
+                }
+                if (ImGui.Button(text.Get("移除并重置", "Remove and reset")))
+                {
+                    deleteHtmlOverlay(selectedName);
+                    selectedUsedCactbotOverlay = null;
+                }
+                else if (localTemplateAvailable)
+                {
+                    var windowChanged = DrawHtmlOverlaySettings(selectedName);
+                    changed |= windowChanged;
+                    if (windowChanged)
+                    {
+                        applyOverlayWindowSettings(selectedName);
+                    }
+                }
+                ImGui.PopID();
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted(text.Get(
+            "从本地模板添加",
+            "Add from local template"));
+        if (!templateCatalogAvailable)
+        {
+            ImGui.TextDisabled(text.Get(
+                "启动解析器后会列出本地 Cactbot 悬浮窗。",
+                "Start the parser to list installed local Cactbot overlays."));
+        }
+        else
+        {
+            var availableTemplates = templates
+                .Where(template =>
+                    !configuration.OverlayWindows.TryGetValue(template.Name, out var settings) ||
+                    !settings.HasBeenOpened)
+                .ToArray();
+            if (availableTemplates.Length == 0)
+            {
+                ImGui.TextDisabled(text.Get(
+                    "所有可用模板都已加入上方列表。",
+                    "All available templates are already listed above."));
+                selectedAvailableCactbotOverlay = null;
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(selectedAvailableCactbotOverlay) ||
+                    !availableTemplates.Any(template => string.Equals(
+                        template.Name,
+                        selectedAvailableCactbotOverlay,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    selectedAvailableCactbotOverlay = availableTemplates[0].Name;
+                }
+
+                var selectedAvailableName = selectedAvailableCactbotOverlay!;
+                if (ImGui.BeginCombo(
+                        text.Get("本地模板", "Local template"),
+                        FormatCactbotOverlayName(selectedAvailableName)))
+                {
+                    foreach (var template in availableTemplates)
+                    {
+                        var selected = string.Equals(
+                            template.Name,
+                            selectedAvailableCactbotOverlay,
+                            StringComparison.OrdinalIgnoreCase);
+                        if (ImGui.Selectable(FormatCactbotOverlayName(template.Name), selected))
+                        {
+                            selectedAvailableCactbotOverlay = template.Name;
+                        }
+                    }
+                    ImGui.EndCombo();
+                }
+
+                if (ImGui.Button(text.Get("添加并打开", "Add and open")))
+                {
+                    configuration.SelectedCactbotOverlay = selectedAvailableName;
+                    openCactbotOverlay();
+                    selectedUsedCactbotOverlay = selectedAvailableName;
+                }
+            }
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "文字提醒和时间轴可以同时打开；它们与旧版组合窗口互斥。其他 Cactbot 窗口可自由多开。",
+            "Alerts and timeline can be open together; both conflict with the legacy combined window. Other Cactbot overlays can be opened together freely."));
+        return changed;
+    }
+
+    private string FormatCactbotOverlayName(string name)
+        => name switch
+        {
+            SelfHostedActRuntime.CactbotAlertsOverlayName =>
+                text.Get("文字提醒", "Raidboss alerts"),
+            SelfHostedActRuntime.CactbotTimelineOverlayName =>
+                text.Get("时间轴", "Raidboss timeline"),
+            SelfHostedActRuntime.CactbotOverlayName =>
+                text.Get("文字提醒 + 时间轴（旧版组合）", "Alerts + timeline (legacy combined)"),
+            _ => name.StartsWith("Cactbot ", StringComparison.OrdinalIgnoreCase)
+                ? name["Cactbot ".Length..]
+                : name,
+        };
+
+    private static int GetCactbotOverlayOrder(string name)
+        => name switch
+        {
+            SelfHostedActRuntime.CactbotAlertsOverlayName => 0,
+            SelfHostedActRuntime.CactbotTimelineOverlayName => 1,
+            SelfHostedActRuntime.CactbotOverlayName => 2,
+            _ => 100,
+        };
+
     private bool DrawHtmlOverlaySettings(string name)
     {
         var changed = false;
@@ -550,8 +781,12 @@ public sealed class SettingsWindow : Window
                     ? $"{text.Get("完成并操作网页", "Finish and interact with page")}###{name}-edit-mode"
                     : $"{text.Get("编辑位置和大小", "Edit position and size")}###{name}-edit-mode"))
         {
-            settings.SetEditing(!editing);
-            changed = true;
+            var beginEditing = !editing;
+            if (!beginEditing || settings.IsVisible || openHtmlOverlay(name))
+            {
+                settings.SetEditing(beginEditing);
+                changed = true;
+            }
         }
 
         ImGui.SameLine();

@@ -15,10 +15,10 @@ own plugin configuration directory; on a later DalamudActCompat update, it
 upgrades older bundled Cactbot versions without overwriting files under
 `cactbot/user/`.
 
-- OverlayPlugin/cactbot 0.37.4
+- OverlayPlugin/cactbot 0.37.5
   - Project/source: <https://github.com/OverlayPlugin/cactbot>
-  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.4>
-  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.4/cactbot-0.37.4.zip>
+  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.5>
+  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.5/cactbot-0.37.5.zip>
   - License: Apache-2.0; the license text is included with the bundled package.
 
 `FFXIV_ACT_Plugin` and its SDK assemblies are official binary dependencies.
@@ -26,14 +26,15 @@ They are not authored by the DalamudActCompat project. Their upstream project
 and releases are maintained at
 <https://github.com/ravahn/FFXIV_ACT_Plugin>.
 
-The release archive also bundles the following optional ACT plugin DLLs with
-permission from their authors/maintainers. DalamudActCompat displays the same
-author, version, license/permission, project URL, source URL, download URL, and
-SHA-256 details in game on first install and again after every
-DalamudActCompat update. The DLLs are not loaded until that notice is
-acknowledged. DalamudActCompat also checks the author sources at startup and
-uses the same notice and load gate before installing an upstream update. URLs
-are displayed for attribution and verification; the notice does not open them.
+The release archive also bundles optional ACT extensions. DalamudActCompat
+displays their author, version, license/permission status, project URL, source
+URL, download URL, and SHA-256 details in game on first install and again after
+every DalamudActCompat update. The extensions are not loaded until that notice
+is acknowledged. Triggernometry, ACT.FoxTTS, and PostNamazu use registered
+author sources for update checks. SilverDasher remains on the disclosed,
+hash-pinned complete package. URLs are displayed for attribution and
+verification; the notice does not open them. SilverDasher is installed disabled
+and is loaded only after the user explicitly enables it.
 
 - Triggernometry CN Maintained Edition 2.1.2.2
   - Original author/copyright holder: Paissa Heavy Industries
@@ -52,6 +53,15 @@ are displayed for attribution and verification; the notice does not open them.
   - DLL release asset: <https://github.com/Natsukage/PostNamazu/releases/download/1.3.6.6/PostNamazu.zip>
   - Redistribution is authorized by the author; the upstream repository does
     not declare an SPDX license.
+- SilverDasher 0.6.0.4
+  - Author/copyright: The Players / SilverDasher
+  - Support: QQ group `582145824`
+  - Project: <https://www.ffcafe.cn/act/>
+  - Complete package SHA-256: `8D73B14AF27CC4781DDF09B7926C5D99A11CD5B8A02B94FD90430ACF38371866`
+  - Entry DLL SHA-256: `A3F356743A438B49CC0796858CA3B127E79DE90E4D7E960177EBDA50A8568CF8`
+  - The supplied package contains no license file. Redistribution of this
+    bundled version was authorized by the upstream maintainer through direct
+    communication on 2026-08-10.
 
 SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
 runtime author-source update check. SharpCompress is distributed under the MIT

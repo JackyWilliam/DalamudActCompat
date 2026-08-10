@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Protocol;
@@ -14,11 +15,14 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private readonly CompatibilityHostProcess process;
     private readonly HostIpcClient ipc;
     private readonly PluginLogger logger;
+    private readonly Func<bool> silverDasherEventsEnabled;
     private readonly string hostExecutable;
     private readonly string pluginDirectory;
     private readonly string configDirectory;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly ConcurrentQueue<HostLogEvent> pendingLogs = new();
+    private readonly Channel<HostSilverDasherNetworkEvent> silverDasherNetworkEvents;
+    private readonly Task silverDasherNetworkWorker;
     private readonly Timer logFlushTimer;
     private readonly Queue<DateTimeOffset> restartHistory = new();
     private CancellationTokenSource lifetime = new();
@@ -39,22 +43,35 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         string pluginDirectory,
         string configDirectory,
         HostIpcClient ipc,
-        PluginLogger logger)
+        PluginLogger logger,
+        Func<bool>? silverDasherEventsEnabled = null)
     {
         assets = new CompatibilityHostAssets(hostDirectory, logger);
         process = new CompatibilityHostProcess(logger);
         this.ipc = ipc;
         this.logger = logger;
+        this.silverDasherEventsEnabled = silverDasherEventsEnabled ?? (static () => false);
         hostExecutable = Path.Combine(hostDirectory, "DalamudActCompat.Host.exe");
         this.pluginDirectory = pluginDirectory;
         this.configDirectory = configDirectory;
         ipc.Faulted += OnIpcFaulted;
         ipc.CommandRequested += OnCommandRequested;
+        ipc.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         logFlushTimer = new Timer(
             _ => FlushLogs(),
             null,
             Timeout.InfiniteTimeSpan,
             Timeout.InfiniteTimeSpan);
+        silverDasherNetworkEvents = Channel.CreateBounded<HostSilverDasherNetworkEvent>(
+            new BoundedChannelOptions(HostProtocol.SilverDasherQueueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.DropOldest,
+                AllowSynchronousContinuations = false,
+            });
+        silverDasherNetworkWorker = Task.Run(
+            () => FlushSilverDasherNetworkAsync(lifetime.Token));
     }
 
     public HostSupervisorSnapshot Snapshot
@@ -77,6 +94,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             ipc.PluginStages);
 
     public event EventHandler<HostCommandInvocation>? CommandRequested;
+
+    public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -111,6 +130,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             await ipc.StopAsync(cancellationToken).ConfigureAwait(false);
             await process.StopAsync(cancellationToken).ConfigureAwait(false);
             ClearPendingLogs();
+            ClearPendingSilverDasherNetwork();
             state = HostSupervisorState.Stopped;
         }
         finally
@@ -135,6 +155,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             await ipc.StopAsync(cancellationToken).ConfigureAwait(false);
             await process.StopAsync(cancellationToken).ConfigureAwait(false);
             ClearPendingLogs();
+            ClearPendingSilverDasherNetwork();
             state = HostSupervisorState.Stopped;
 
             manuallyStopped = false;
@@ -179,7 +200,15 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     {
         lastZone = new HostZoneEvent(territoryId, zoneName, DateTimeOffset.UtcNow);
         TryPublishCritical(HostMessageTypes.ZoneChanged, lastZone);
+        PublishSilverDasherZone(lastZone);
     }
+
+    public bool PublishSilverDasherNetwork(string connection, long epoch, byte[] message)
+        => silverDasherEventsEnabled() &&
+           state == HostSupervisorState.Running &&
+           message.Length > 0 &&
+           silverDasherNetworkEvents.Writer.TryWrite(
+               new HostSilverDasherNetworkEvent(connection, epoch, message.ToArray()));
 
     public void PublishEncounter(bool finished)
     {
@@ -243,6 +272,14 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         lifetime.Cancel();
+        silverDasherNetworkEvents.Writer.TryComplete();
+        try
+        {
+            await silverDasherNetworkWorker.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
@@ -255,11 +292,36 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
         ipc.Faulted -= OnIpcFaulted;
         ipc.CommandRequested -= OnCommandRequested;
+        ipc.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
         logFlushTimer.Dispose();
         await ipc.DisposeAsync().ConfigureAwait(false);
         await process.DisposeAsync().ConfigureAwait(false);
         lifetime.Dispose();
         lifecycleLock.Dispose();
+    }
+
+    private async Task FlushSilverDasherNetworkAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var networkEvent in silverDasherNetworkEvents.Reader.ReadAllAsync(
+                           cancellationToken).ConfigureAwait(false))
+        {
+            if (state != HostSupervisorState.Running || !silverDasherEventsEnabled())
+            {
+                continue;
+            }
+
+            _ = ipc.TryEnqueue(
+                HostMessageTypes.SilverDasherNetworkReceived,
+                HostMessagePriority.SilverDasherData,
+                networkEvent);
+        }
+    }
+
+    private void ClearPendingSilverDasherNetwork()
+    {
+        while (silverDasherNetworkEvents.Reader.TryRead(out _))
+        {
+        }
     }
 
     private async Task StartUnlockedAsync(CancellationToken cancellationToken)
@@ -338,6 +400,14 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             {
                 Interlocked.Add(ref droppedPendingLogs, batch.Count);
             }
+
+            if (silverDasherEventsEnabled())
+            {
+                _ = ipc.TryEnqueue(
+                    HostMessageTypes.SilverDasherLogBatch,
+                    HostMessagePriority.SilverDasherData,
+                    batch);
+            }
         }
         finally
         {
@@ -359,6 +429,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     private void OnCommandRequested(object? sender, HostCommandInvocation command)
         => CommandRequested?.Invoke(this, command);
+
+    private void OnSilverDasherNotificationRequested(
+        object? sender,
+        HostSilverDasherNotification notification)
+        => SilverDasherNotificationRequested?.Invoke(this, notification);
 
     private async Task RestartAfterFaultAsync(Exception exception)
     {
@@ -447,6 +522,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         if (lastZone is not null)
         {
             TryPublishCritical(HostMessageTypes.ZoneChanged, lastZone);
+            PublishSilverDasherZone(lastZone);
         }
 
         if (combatStateKnown)
@@ -469,6 +545,19 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             logger.Warning(
                 $"Critical ACT Host event '{type}' was not queued; latest state will be replayed after reconnect.");
         }
+    }
+
+    private void PublishSilverDasherZone(HostZoneEvent zone)
+    {
+        if (!silverDasherEventsEnabled())
+        {
+            return;
+        }
+
+        _ = ipc.TryEnqueue(
+            HostMessageTypes.SilverDasherZoneChanged,
+            HostMessagePriority.SilverDasherState,
+            zone);
     }
 }
 

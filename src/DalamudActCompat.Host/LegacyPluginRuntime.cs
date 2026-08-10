@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Runtime.Loader;
@@ -24,6 +25,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private FormActMain? actMain;
     private Exception? startupFailure;
     private FFXIV_ACT_Plugin.FFXIV_ACT_Plugin? ffxivBridge;
+    private SilverDasherDataSubscription? silverDasherSubscription;
+    private SilverDasherWindowsNotifier? silverDasherWindowsNotifier;
     private long acceptedLogLines;
     private bool disposed;
 
@@ -310,10 +313,16 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
         disposed = true;
         HostPluginBridge.ConfigureTtsWriter(null);
+        HostPluginBridge.ConfigureSilverDasherNotificationWriter(null);
         for (var index = plugins.Count - 1; index >= 0; index--)
         {
             plugins[index].Dispose();
         }
+        silverDasherWindowsNotifier?.Dispose();
+        silverDasherWindowsNotifier = null;
+        HostPluginBridge.ConfigureSilverDasherSubscription(null);
+        silverDasherSubscription?.Dispose();
+        silverDasherSubscription = null;
         SetStage("postnamazu", "Unload test", "success", "DeInitPlugin was requested without blocking FFXIV.");
         plugins.Clear();
         var form = actMain;
@@ -453,6 +462,10 @@ internal sealed class LegacyPluginRuntime : IDisposable
             {
                 PreloadSystemSpeechRuntime();
             }
+            else if (id == "silverdasher")
+            {
+                PrepareSilverDasherContext(assemblyPath);
+            }
 
             var handle = LegacyPluginHandle.Load(id, assemblyPath, entryType);
             plugins.Add(handle);
@@ -471,6 +484,28 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     "success",
                     "The game-side OverlayPlugin event source forwards PostNamazu actions over bounded IPC.");
             }
+            else if (id == "silverdasher")
+            {
+                silverDasherWindowsNotifier = new SilverDasherWindowsNotifier(actMain!);
+                HostPluginBridge.ConfigureSilverDasherNotificationWriter(
+                    silverDasherWindowsNotifier.TryShow);
+                HostPluginBridge.ReplaySilverDasherState();
+                SetStage(
+                    id,
+                    "Isolated event channel",
+                    "success",
+                    "Loaded last with a dedicated bounded dispatcher and plugin-scoped subscription facade.");
+                SetStage(
+                    id,
+                    "Native game memory",
+                    "brokered",
+                    "The single process-access call is rewritten to the SilverDasher-only NativeGameMemory bridge.");
+                SetStage(
+                    id,
+                    "Windows notifications",
+                    "success",
+                    "SilverDasher uses the isolated Host Windows shell first and falls back to the existing game-side notification channel if unavailable.");
+            }
         }
         catch (Exception ex)
         {
@@ -482,6 +517,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
     private void LoadManifestPlugins()
     {
+        var deferredSilverDasher = new List<(string AssemblyPath, string EntryType)>();
         foreach (var manifestPath in Directory.EnumerateFiles(
                      pluginRoot,
                      "actcompat.plugin.json",
@@ -521,10 +557,20 @@ internal sealed class LegacyPluginRuntime : IDisposable
                         $"Plugin entry assembly escapes its install directory: {manifestPath}");
                 }
 
-                TryLoadPath(
-                    manifest.Id,
-                    assemblyPath,
-                    manifest.EntryType);
+                if (string.Equals(
+                        manifest.Id,
+                        "silverdasher",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    deferredSilverDasher.Add((assemblyPath, manifest.EntryType));
+                }
+                else
+                {
+                    TryLoadPath(
+                        manifest.Id,
+                        assemblyPath,
+                        manifest.EntryType);
+                }
             }
             catch (Exception ex)
             {
@@ -536,6 +582,30 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     ex);
             }
         }
+
+        foreach (var (assemblyPath, entryType) in deferredSilverDasher)
+        {
+            TryLoadPath("silverdasher", assemblyPath, entryType);
+        }
+    }
+
+    private void PrepareSilverDasherContext(string assemblyPath)
+    {
+        if (ffxivBridge is null)
+        {
+            throw new InvalidOperationException(
+                "FFXIV_ACT_Plugin facade is unavailable for SilverDasher initialization.");
+        }
+
+        silverDasherSubscription ??= new SilverDasherDataSubscription();
+        ffxivBridge.GetType()
+            .GetProperty(
+                "DataSubscription",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(ffxivBridge, silverDasherSubscription);
+        HostPluginBridge.ConfigureSilverDasherRoot(
+            Path.GetDirectoryName(Path.GetFullPath(assemblyPath))!);
+        HostPluginBridge.ConfigureSilverDasherSubscription(silverDasherSubscription);
     }
 
     private void SetStage(
@@ -741,7 +811,9 @@ internal sealed class LegacyPluginHandle : IDisposable
                     ? LegacyAssemblyRewriter.LoadTriggernometry(assemblyPath, loadContext)
                     : id == "postnamazu"
                         ? LegacyAssemblyRewriter.LoadPostNamazu(assemblyPath, loadContext)
-                        : loadContext.LoadFromAssemblyPath(assemblyPath);
+                        : id == "silverdasher"
+                            ? LegacyAssemblyRewriter.LoadSilverDasher(assemblyPath, loadContext)
+                            : loadContext.LoadFromAssemblyPath(assemblyPath);
                 var entryType = assembly.GetType(entryTypeName, throwOnError: true)!;
                 instance = Activator.CreateInstance(entryType)
                            ?? throw new InvalidOperationException($"Could not create {entryTypeName}.");

@@ -5,10 +5,11 @@ namespace DalamudActCompat.Protocol;
 
 public static class HostProtocol
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int ControlQueueCapacity = 256;
     public const int DataQueueCapacity = 8192;
+    public const int SilverDasherQueueCapacity = 512;
     public const long MaximumHostWorkingSetBytes = 1536L * 1024 * 1024;
     public const int MaximumHostThreadCount = 256;
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
@@ -22,6 +23,8 @@ public enum HostMessagePriority
     Critical,
     Data,
     State,
+    SilverDasherData,
+    SilverDasherState,
 }
 
 public static class HostMessageTypes
@@ -46,6 +49,10 @@ public static class HostMessageTypes
     public const string Permissions = "permission.snapshot";
     public const string FaultInject = "test.fault.inject";
     public const string Diagnostic = "diagnostic.exception";
+    public const string SilverDasherLogBatch = "silverdasher.event.log.batch";
+    public const string SilverDasherZoneChanged = "silverdasher.event.zone";
+    public const string SilverDasherNetworkReceived = "silverdasher.event.network.received";
+    public const string SilverDasherNotification = "silverdasher.notification";
 }
 
 public sealed record HostEnvelope(
@@ -128,6 +135,15 @@ public sealed record HostZoneEvent(
     uint TerritoryId,
     string ZoneName,
     DateTimeOffset Timestamp);
+
+public sealed record HostSilverDasherNetworkEvent(
+    string Connection,
+    long Epoch,
+    byte[] Message);
+
+public sealed record HostSilverDasherNotification(
+    string Message,
+    string Detail);
 
 public sealed record HostCombatEvent(
     bool InCombat,

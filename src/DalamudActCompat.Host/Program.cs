@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.IO;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using DalamudActCompat.Protocol;
@@ -288,6 +289,10 @@ internal static class Program
                                 envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? []);
                         }
                         break;
+                    case HostMessageTypes.SilverDasherLogBatch:
+                        HostPluginBridge.PublishSilverDasherLogs(
+                            envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? []);
+                        break;
                     case HostMessageTypes.ZoneChanged:
                         if (envelope.Payload.Deserialize<HostZoneEvent>() is { } zone)
                         {
@@ -296,6 +301,19 @@ internal static class Program
                                 pluginRuntime?.ChangeZone(zone.TerritoryId, zone.ZoneName);
                             }
                         }
+                        break;
+                    case HostMessageTypes.SilverDasherZoneChanged:
+                        if (envelope.Payload.Deserialize<HostZoneEvent>() is { } silverZone)
+                        {
+                            HostPluginBridge.PublishSilverDasherZone(silverZone);
+                        }
+                        break;
+                    case HostMessageTypes.SilverDasherNetworkReceived:
+                        var silverNetwork =
+                            envelope.Payload.Deserialize<HostSilverDasherNetworkEvent>()
+                            ?? throw new InvalidDataException(
+                                "SilverDasher network event payload is invalid.");
+                        HostPluginBridge.PublishSilverDasherNetwork(silverNetwork);
                         break;
                     case HostMessageTypes.CombatStarted:
                         if (Volatile.Read(ref pluginRuntimeReady) == 1)

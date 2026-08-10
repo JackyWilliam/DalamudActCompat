@@ -95,6 +95,29 @@ internal sealed class FfxivDataRepository : IDataRepository
         }
     }
 
+    internal Process? GetGameProcessForAuthorizedBridge()
+    {
+        int processId;
+        lock (syncRoot)
+        {
+            processId = gameProcessId;
+        }
+
+        if (processId <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Process.GetProcessById(processId);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
     public IDictionary<uint, string> GetResourceDictionary(ResourceType resourceType)
         => new Dictionary<uint, string>();
 
