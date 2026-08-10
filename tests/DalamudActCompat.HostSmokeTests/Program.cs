@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using Advanced_Combat_Tracker;
 using DalamudActCompat.Host;
 using DalamudActCompat.Protocol;
 using Mono.Cecil;
@@ -55,6 +56,12 @@ if (triggernometryAssembly is not null)
 {
     ValidateTriggernometryAssemblyRewrite(triggernometryAssembly);
 }
+var silverDasherRoot = Environment.GetEnvironmentVariable("ACTCOMPAT_SILVERDASHER_ROOT");
+if (!string.IsNullOrWhiteSpace(silverDasherRoot) && Directory.Exists(silverDasherRoot))
+{
+    ValidateSilverDasherAssemblyRewrite(silverDasherRoot);
+    await ValidateSilverDasherLoadsOutOfProcessAsync(silverDasherRoot);
+}
 if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
@@ -66,6 +73,10 @@ var completion =
 if (triggernometryAssembly is not null)
 {
     completion += " The real Triggernometry assembly rewrite test passed.";
+}
+if (!string.IsNullOrWhiteSpace(silverDasherRoot))
+{
+    completion += " The original SilverDasher loader/core rewrite test passed without changing its DLLs.";
 }
 if (pluginRoot is not null)
 {
@@ -289,13 +300,19 @@ void ValidatePostNamazuNativeProcessPermissionGate()
                 new Dictionary<string, IReadOnlyList<string>>
                 {
                     ["postnamazu"] = ["GameCommand", "NativeGameMemory"],
+                    ["silverdasher"] = ["NativeGameMemory"],
                 },
-                ["postnamazu"]),
+                ["postnamazu", "silverdasher"]),
         ]);
     var allowed = (Process?)getProcess.Invoke(repository, null);
+    using var silverDasherProcess = HostPluginBridge.GetSilverDasherGameProcess();
     Assert(
         allowed?.Id == Environment.ProcessId,
         "PostNamazu full permission did not expose the exact game process to its original runtime.");
+    Assert(
+        silverDasherProcess?.Id == Environment.ProcessId &&
+        !ReferenceEquals(allowed, silverDasherProcess),
+        "SilverDasher did not receive a plugin-scoped Process facade independent from PostNamazu.");
 
     configurePermissions.Invoke(
         null,
@@ -1605,6 +1622,301 @@ void ValidateTriggernometryLaunchProcessPatch()
         $"realChecks={realAdministratorChecks}.");
 }
 
+void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
+{
+    var loaderPath = Directory.EnumerateFiles(
+            sourceRoot,
+            "SilverDasher.dll",
+            SearchOption.AllDirectories)
+        .Single();
+    var corePath = Directory.EnumerateFiles(
+            sourceRoot,
+            "SilverDasher.Core.dll",
+            SearchOption.AllDirectories)
+        .Single();
+    var loaderHash = Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(loaderPath)));
+    var coreHash = Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath)));
+
+    _ = LegacyAssemblyRewriter.LoadSilverDasher(loaderPath, AssemblyLoadContext.Default);
+    _ = LegacyAssemblyRewriter.LoadSilverDasherCore(corePath);
+
+    var cacheRoot = Path.Combine(Path.GetTempPath(), "DalamudActCompat", "silverdasher");
+    var patchedLoader = new DirectoryInfo(cacheRoot)
+        .EnumerateFiles("SilverDasher.Loader-*.dll")
+        .OrderByDescending(file => file.LastWriteTimeUtc)
+        .FirstOrDefault()
+        ?? throw new FileNotFoundException("No patched SilverDasher loader was produced.", cacheRoot);
+    var patchedCore = new DirectoryInfo(cacheRoot)
+        .EnumerateFiles("SilverDasher.Core-*.dll")
+        .OrderByDescending(file => file.LastWriteTimeUtc)
+        .FirstOrDefault()
+        ?? throw new FileNotFoundException("No patched SilverDasher core was produced.", cacheRoot);
+
+    using (var loader = AssemblyDefinition.ReadAssembly(patchedLoader.FullName))
+    {
+        var load = loader.MainModule.GetType("SilverDasher.Loader.Loader")
+                       ?.Methods.Single(method =>
+                           method.Name == "Load" &&
+                           !method.IsStatic &&
+                           method.Parameters.Count == 1)
+                   ?? throw new MissingMethodException("SilverDasher.Loader.Loader", "Load(string)");
+        var bridgeCalls = load.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+            called.Name == nameof(HostPluginBridge.LoadSilverDasherAssembly));
+        var directLoads = load.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == typeof(Assembly).FullName &&
+            called.Name == nameof(Assembly.Load));
+        Assert(
+            bridgeCalls == 1 && directLoads == 0,
+            $"SilverDasher dependency loader did not route through its scoped bridge: bridge={bridgeCalls}, direct={directLoads}.");
+    }
+
+    using (var core = AssemblyDefinition.ReadAssembly(patchedCore.FullName))
+    {
+        var methods = core.MainModule.Types
+            .SelectMany(EnumerateCecilTypes)
+            .SelectMany(type => type.Methods)
+            .Where(method => method.HasBody)
+            .ToArray();
+        var calls = methods
+            .SelectMany(method => method.Body.Instructions)
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .ToArray();
+        var processBridgeCalls = calls.Count(called =>
+            called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+            called.Name == nameof(HostPluginBridge.GetSilverDasherGameProcess));
+        var legacyProcessCalls = calls.Count(called =>
+            called.DeclaringType.FullName == "FFXIV_ACT_Plugin.Common.IDataRepository" &&
+            called.Name == "GetCurrentFFXIVProcess");
+        var ttsBridgeCalls = calls.Count(called =>
+            called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+            called.Name == nameof(HostPluginBridge.SendSilverDasherTts));
+        var legacyTtsCalls = calls.Count(called =>
+            called.DeclaringType.FullName == "Advanced_Combat_Tracker.FormActMain" &&
+            called.Name == "TTS");
+        var wpfDispatchCalls = calls.Count(called =>
+            called.DeclaringType.FullName == "System.Windows.Threading.Dispatcher" &&
+            called.Name == "Invoke" &&
+            called.Parameters.Count == 1);
+        var winFormsUiDispatchCalls = calls.Count(called =>
+            called.DeclaringType.FullName == "System.Windows.Forms.Control" &&
+            called.Name is "get_InvokeRequired" or "Invoke");
+        Assert(
+            processBridgeCalls == 1 && legacyProcessCalls == 0 &&
+            ttsBridgeCalls == 2 && legacyTtsCalls == 0 &&
+            wpfDispatchCalls >= 4 && winFormsUiDispatchCalls == 0,
+            "SilverDasher core did not isolate its exact process/TTS call sites: " +
+            $"processBridge={processBridgeCalls}, processLegacy={legacyProcessCalls}, " +
+            $"ttsBridge={ttsBridgeCalls}, ttsLegacy={legacyTtsCalls}, " +
+            $"wpfDispatch={wpfDispatchCalls}, winFormsDispatch={winFormsUiDispatchCalls}.");
+    }
+
+    Assert(
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(loaderPath))) == loaderHash &&
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath))) == coreHash,
+        "SilverDasher runtime rewriting changed the user's original DLL files.");
+}
+
+async Task ValidateSilverDasherLoadsOutOfProcessAsync(string sourceRoot)
+{
+    var temporaryRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-SilverDasher-Host-{Guid.NewGuid():N}");
+    var temporaryPluginRoot = Path.Combine(temporaryRoot, "plugins");
+    var temporaryConfigRoot = Path.Combine(temporaryRoot, "config");
+    var silverInstallRoot = Path.Combine(temporaryPluginRoot, "silverdasher");
+    var probeInstallRoot = Path.Combine(temporaryPluginRoot, "zz-load-order-probe");
+    Directory.CreateDirectory(silverInstallRoot);
+    Directory.CreateDirectory(probeInstallRoot);
+    Directory.CreateDirectory(temporaryConfigRoot);
+    try
+    {
+        foreach (var directory in Directory.EnumerateDirectories(
+                     sourceRoot,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(
+                silverInstallRoot,
+                Path.GetRelativePath(sourceRoot, directory)));
+        }
+        foreach (var file in Directory.EnumerateFiles(
+                     sourceRoot,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            var destination = Path.Combine(
+                silverInstallRoot,
+                Path.GetRelativePath(sourceRoot, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(file, destination);
+        }
+
+        var installedLoader = Directory.EnumerateFiles(
+                silverInstallRoot,
+                "SilverDasher.dll",
+                SearchOption.AllDirectories)
+            .Single();
+        await File.WriteAllTextAsync(
+            Path.Combine(silverInstallRoot, "actcompat.plugin.json"),
+            JsonSerializer.Serialize(new
+            {
+                id = "silverdasher",
+                name = "SilverDasher",
+                version = "0.6.0.4",
+                entryAssembly = Path.GetRelativePath(silverInstallRoot, installedLoader),
+                entryType = "SilverDasher.Loader.Loader",
+                hostApiVersion = 1,
+            }));
+        var probeAssembly = Assembly.GetExecutingAssembly().Location;
+        var installedProbe = Path.Combine(probeInstallRoot, Path.GetFileName(probeAssembly));
+        File.Copy(probeAssembly, installedProbe);
+        await File.WriteAllTextAsync(
+            Path.Combine(probeInstallRoot, "actcompat.plugin.json"),
+            JsonSerializer.Serialize(new
+            {
+                id = "zz-load-order-probe",
+                name = "ZZ load order probe",
+                version = "1.0.0",
+                entryAssembly = Path.GetFileName(installedProbe),
+                entryType = typeof(SilverDasherLoadOrderProbe).FullName,
+                hostApiVersion = 1,
+            }));
+
+        var (host, pipe, session) = await StartConnectedHostAsync(
+            loadPlugins: true,
+            pluginRootOverride: temporaryPluginRoot,
+            configRootOverride: temporaryConfigRoot);
+        await using (pipe)
+        using (host)
+        {
+            try
+            {
+                _ = await ReadWithTimeoutAsync(pipe);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        1,
+                        HostMessageTypes.Hello,
+                        HostMessagePriority.Control,
+                        new HostHello("test", "1", Environment.ProcessId, [HostProtocol.CurrentVersion])),
+                    CancellationToken.None);
+                await ReadUntilAsync(pipe, HostMessageTypes.HelloAck);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        2,
+                        HostMessageTypes.Permissions,
+                        HostMessagePriority.Control,
+                        new HostPermissionSnapshot(
+                            new Dictionary<string, IReadOnlyList<string>>
+                            {
+                                ["zz-load-order-probe"] = [],
+                                ["silverdasher"] =
+                                [
+                                    "ReadCombatLogs",
+                                    "ReadLocalConfiguration",
+                                    "TextToSpeech",
+                                    "NetworkRequest",
+                                    "WriteFiles",
+                                    "NativeGameMemory",
+                                ],
+                            },
+                            ["zz-load-order-probe", "silverdasher"])),
+                    CancellationToken.None);
+                var healthEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
+                var health = healthEnvelope.Payload.Deserialize<HostHealth>()
+                             ?? throw new InvalidDataException("SilverDasher Host returned no health state.");
+                Assert(
+                    health.Detail.Contains(
+                        "zz-load-order-probe, silverdasher",
+                        StringComparison.OrdinalIgnoreCase),
+                    $"SilverDasher did not initialize in the isolated Host: {health.State}: {health.Detail}");
+
+                var message = new byte[64];
+                message[18] = 0xff;
+                message[19] = 0xff;
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        3,
+                        HostMessageTypes.SilverDasherNetworkReceived,
+                        HostMessagePriority.SilverDasherData,
+                        new HostSilverDasherNetworkEvent("down", 1, message)),
+                    CancellationToken.None);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        4,
+                        HostMessageTypes.SilverDasherZoneChanged,
+                        HostMessagePriority.SilverDasherState,
+                        new HostZoneEvent(777, "SilverDasher smoke", DateTimeOffset.UtcNow)),
+                    CancellationToken.None);
+                var heartbeat = await ReadUntilAsync(pipe, HostMessageTypes.Heartbeat);
+                var heartbeatState = heartbeat.Payload.Deserialize<HostHeartbeat>()
+                                     ?? throw new InvalidDataException(
+                                         "SilverDasher Host returned no heartbeat state.");
+                Assert(
+                    heartbeatState.LastReceivedSequence >= 4 &&
+                    heartbeatState.Stages.Any(stage =>
+                        stage.PluginId == "silverdasher" &&
+                        stage.Stage == "InitPlugin" &&
+                        stage.State == "success") &&
+                    heartbeatState.Stages.Any(stage =>
+                        stage.PluginId == "silverdasher" &&
+                        stage.Stage == "Isolated event channel" &&
+                        stage.State == "success") &&
+                    heartbeatState.Stages.All(stage =>
+                        stage.PluginId != "silverdasher" || stage.State != "failed"),
+                    "SilverDasher dedicated event frames did not reach the isolated Host.");
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        5,
+                        HostMessageTypes.Shutdown,
+                        HostMessagePriority.Control,
+                        new HostHealth("stopping", "SilverDasher smoke", DateTimeOffset.UtcNow)),
+                    CancellationToken.None);
+                await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex)
+            {
+                if (!host.HasExited)
+                {
+                    host.Kill(entireProcessTree: true);
+                }
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                var (output, errors) = ReadProcessLog(host);
+                throw new InvalidOperationException(
+                    $"SilverDasher isolated Host load failed.{Environment.NewLine}" +
+                    $"stdout:{Environment.NewLine}{output}{Environment.NewLine}" +
+                    $"stderr:{Environment.NewLine}{errors}",
+                    ex);
+            }
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(temporaryRoot))
+        {
+            Directory.Delete(temporaryRoot, recursive: true);
+        }
+    }
+}
+
 IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)
 {
     yield return type;
@@ -1819,7 +2131,9 @@ async Task<string> WaitForPostNamazuListenerAsync()
 
 async Task<(Process Host, HostTestPipe Pipe, string Session)> StartConnectedHostAsync(
     bool loadPlugins = false,
-    bool faultInjection = false)
+    bool faultInjection = false,
+    string? pluginRootOverride = null,
+    string? configRootOverride = null)
 {
     var session = Guid.NewGuid().ToString("N");
     var pipeName = $"DalamudActCompat-Test-{session}";
@@ -1838,9 +2152,9 @@ async Task<(Process Host, HostTestPipe Pipe, string Session)> StartConnectedHost
     if (loadPlugins)
     {
         startInfo.ArgumentList.Add("--plugin-root");
-        startInfo.ArgumentList.Add(pluginRoot!);
+        startInfo.ArgumentList.Add(pluginRootOverride ?? pluginRoot!);
         startInfo.ArgumentList.Add("--config-root");
-        startInfo.ArgumentList.Add(configRoot!);
+        startInfo.ArgumentList.Add(configRootOverride ?? configRoot!);
     }
     if (faultInjection)
     {
@@ -2034,6 +2348,19 @@ internal sealed class BlockingPostNamazuPlugin
     {
         Started.Set();
         Release.Wait();
+    }
+}
+
+public sealed class SilverDasherLoadOrderProbe : IActPluginV1
+{
+    public void InitPlugin(TabPage pluginScreenSpace, Label pluginStatusText)
+    {
+        pluginScreenSpace.Text = "Load order probe";
+        pluginStatusText.Text = "probe ready";
+    }
+
+    public void DeInitPlugin()
+    {
     }
 }
 

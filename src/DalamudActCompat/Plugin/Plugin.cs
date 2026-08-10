@@ -64,6 +64,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
     private readonly HashSet<Task> cactbotTasks = [];
     private readonly ActHostSupervisor hostSupervisor;
+    private int silverDasherEventsEnabled;
     private readonly PictoActOverlayService pictoActOverlay;
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
@@ -157,7 +158,8 @@ public sealed class Plugin : IDalamudPlugin
             paths.ActPluginDirectory,
             paths.ConfigDirectory,
             hostIpcClient,
-            logger);
+            logger,
+            () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
@@ -213,6 +215,7 @@ public sealed class Plugin : IDalamudPlugin
                 }));
         actRuntime.RawLogLineReceived += OnRawLogLineForHost;
         actRuntime.ZoneChanged += OnZoneChangedForHost;
+        actRuntime.NetworkReceived += OnNetworkReceivedForHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;
         framework.Update += OnFrameworkUpdateForHost;
         parserEngine = new ParserEngine(new IinactAdapter(
@@ -419,6 +422,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.RemoveAllWindows();
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
+        actRuntime.NetworkReceived -= OnNetworkReceivedForHost;
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
@@ -1527,7 +1531,17 @@ public sealed class Plugin : IDalamudPlugin
     private HostPermissionSnapshot BuildHostPermissionSnapshot()
     {
         var capabilities = Enum.GetValues<ActCapability>();
-        string[] pluginIds = ["triggernometry", "postnamazu"];
+        string[] pluginIds = ["triggernometry", "postnamazu", "silverdasher"];
+        var allowedPluginIds = packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin =>
+                plugin.Enabled &&
+                bundledPluginManager.IsAllowedToLoad(plugin))
+            .Select(plugin => plugin.Manifest.Id)
+            .ToArray();
+        Volatile.Write(
+            ref silverDasherEventsEnabled,
+            allowedPluginIds.Contains("silverdasher", StringComparer.OrdinalIgnoreCase) ? 1 : 0);
         var allowed = pluginIds.ToDictionary(
             pluginId => pluginId,
             pluginId => (IReadOnlyList<string>)capabilities
@@ -1538,13 +1552,7 @@ public sealed class Plugin : IDalamudPlugin
             StringComparer.OrdinalIgnoreCase);
         return new HostPermissionSnapshot(
             allowed,
-            packageInstaller
-                .Discover(configuration.DisabledActPluginIds)
-                .Where(plugin =>
-                    plugin.Enabled &&
-                    bundledPluginManager.IsAllowedToLoad(plugin))
-                .Select(plugin => plugin.Manifest.Id)
-                .ToArray());
+            allowedPluginIds);
     }
 
     private async Task DisposeComponentsAsync(bool factoryResetCompleted)
@@ -1616,6 +1624,9 @@ public sealed class Plugin : IDalamudPlugin
             zoneNameLocalizer.Localize(territoryId, zoneName));
         hostSupervisor.PublishZone(territoryId, zoneName);
     }
+
+    private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
+        => _ = hostSupervisor.PublishSilverDasherNetwork(connection, epoch, message);
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
         => hostSupervisor.PublishEncounter(finished);

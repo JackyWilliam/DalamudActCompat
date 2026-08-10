@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -37,6 +38,7 @@ public static class HostPluginBridge
     private static readonly object TriggerZoneListenerLock = new();
     private static readonly object PostNamazuQueueLock = new();
     private static readonly object PostNamazuTaskLock = new();
+    private static readonly object SilverDasherContextLock = new();
     private static readonly List<string> PostNamazuQueueIds = [];
     private static readonly HashSet<Task> PostNamazuQueueTasks = [];
     private static readonly CancellationTokenSource PostNamazuQueueShutdown = new();
@@ -48,6 +50,9 @@ public static class HostPluginBridge
     private static int pendingOverlayCallCount;
     private static bool postNamazuShutdownStarted;
     private static Task<bool>? postNamazuShutdownTask;
+    private static SilverDasherDataSubscription? silverDasherSubscription;
+    private static HostZoneEvent? silverDasherZone;
+    private static string? silverDasherRoot;
 
     internal static void Configure(
         Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> messageSender)
@@ -74,6 +79,152 @@ public static class HostPluginBridge
     {
         FfxivRepositoryInstance.SetGameProcessId(processId);
         Console.WriteLine($"game process registered for ACT compatibility: pid={processId}");
+    }
+
+    internal static void ConfigureSilverDasherRoot(string root)
+    {
+        var fullRoot = Path.GetFullPath(root);
+        if (!Directory.Exists(fullRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"SilverDasher plugin root does not exist: {fullRoot}");
+        }
+
+        lock (SilverDasherContextLock)
+        {
+            silverDasherRoot = fullRoot;
+        }
+    }
+
+    internal static void ConfigureSilverDasherSubscription(
+        SilverDasherDataSubscription? subscription)
+    {
+        lock (SilverDasherContextLock)
+        {
+            silverDasherSubscription = subscription;
+        }
+    }
+
+    public static Assembly LoadSilverDasherAssembly(string assemblyPath)
+    {
+        DemandSilverDasherCapability("ReadLocalConfiguration");
+        var fullPath = Path.GetFullPath(assemblyPath);
+        string root;
+        lock (SilverDasherContextLock)
+        {
+            root = silverDasherRoot
+                   ?? throw new InvalidOperationException(
+                       "SilverDasher runtime root has not been configured.");
+        }
+
+        var rootPrefix = root + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetExtension(fullPath), ".dll", StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(fullPath))
+        {
+            throw new UnauthorizedAccessException(
+                $"SilverDasher dependency path is outside its plugin root: {fullPath}");
+        }
+
+        return string.Equals(
+            Path.GetFileName(fullPath),
+            "SilverDasher.Core.dll",
+            StringComparison.OrdinalIgnoreCase)
+            ? LegacyAssemblyRewriter.LoadSilverDasherCore(fullPath)
+            : Assembly.Load(File.ReadAllBytes(fullPath));
+    }
+
+    public static Process GetSilverDasherGameProcess()
+    {
+        DemandSilverDasherCapability("NativeGameMemory");
+        return FfxivRepositoryInstance.GetGameProcessForAuthorizedBridge()!;
+    }
+
+    public static void SendSilverDasherTts(string text)
+    {
+        DemandSilverDasherCapability("TextToSpeech");
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (text.Length > 2000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(text),
+                "TTS text exceeds 2000 characters.");
+        }
+
+        var writer = Volatile.Read(ref ttsWriter)
+                     ?? throw new InvalidOperationException(
+                         "No isolated ACT TTS provider is loaded in the external Host.");
+        writer(text);
+    }
+
+    public static void DemandSilverDasherCapability(string capability)
+        => Demand("silverdasher", capability);
+
+    internal static void PublishSilverDasherNetwork(
+        HostSilverDasherNetworkEvent networkEvent)
+    {
+        if (!IsAllowed("silverdasher", "ReadCombatLogs"))
+        {
+            return;
+        }
+
+        Volatile.Read(ref silverDasherSubscription)?.PublishNetwork(
+            networkEvent.Connection,
+            networkEvent.Epoch,
+            networkEvent.Message);
+    }
+
+    internal static void PublishSilverDasherLogs(IReadOnlyList<HostLogEvent> logs)
+    {
+        if (IsAllowed("silverdasher", "ReadCombatLogs"))
+        {
+            Volatile.Read(ref silverDasherSubscription)?.PublishLogs(logs);
+        }
+    }
+
+    internal static void PublishSilverDasherZone(HostZoneEvent zone)
+    {
+        lock (SilverDasherContextLock)
+        {
+            silverDasherZone = zone;
+        }
+
+        if (IsAllowed("silverdasher", "ReadCombatLogs"))
+        {
+            Volatile.Read(ref silverDasherSubscription)?.PublishZone(
+                zone.TerritoryId,
+                zone.ZoneName);
+        }
+    }
+
+    internal static void ReplaySilverDasherState()
+    {
+        var subscription = Volatile.Read(ref silverDasherSubscription);
+        if (subscription is null)
+        {
+            return;
+        }
+
+        HostZoneEvent? zone;
+        lock (SilverDasherContextLock)
+        {
+            zone = silverDasherZone;
+        }
+
+        if (zone is not null && IsAllowed("silverdasher", "ReadCombatLogs"))
+        {
+            subscription.PublishZone(zone.TerritoryId, zone.ZoneName);
+        }
+
+        if (IsAllowed("silverdasher", "NativeGameMemory") &&
+            FfxivRepositoryInstance.GetGameProcessForAuthorizedBridge() is { } process)
+        {
+            subscription.PublishProcess(process);
+        }
     }
 
     public static bool IsPostNamazuNativeRuntimeAllowed()

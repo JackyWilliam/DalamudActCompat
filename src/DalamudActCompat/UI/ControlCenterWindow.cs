@@ -1170,6 +1170,11 @@ public sealed class ControlCenterWindow : Window
             "triggernometry",
             "Triggernometry",
             text.Get("触发器、时间轴、TTS 与绘图", "Triggers, timelines, TTS, and drawing"));
+        changed |= DrawExtensionEntry(
+            installedPlugins,
+            "silverdasher",
+            text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
+            text.Get("狩猎、临危受命与跨区状态提醒", "Hunts, FATEs, and cross-world status alerts"));
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -1218,6 +1223,10 @@ public sealed class ControlCenterWindow : Window
             "triggernometry",
             "Triggernometry",
             BundledActPluginCapabilities.Triggernometry);
+        permissionsChanged |= DrawPluginPermissions(
+            "silverdasher",
+            text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
+            BundledActPluginCapabilities.SilverDasher);
         changed |= permissionsChanged;
         return changed;
     }

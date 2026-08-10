@@ -287,6 +287,11 @@ public sealed class SettingsWindow : Window
         DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；完整保留 7 个动作模块、15 个命令别名、HTTP、Triggernometry 与 OverlayPlugin 集成。启用完整权限后，原版进程附加、签名扫描和原生调用也会恢复。", "PostNamazu retains all 7 action modules, 15 command aliases, HTTP, Triggernometry, and OverlayPlugin integration. With full permissions enabled, the original process attachment, signature scanning, and native calls are also restored."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
         DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML、全部 29 种动作，以及日志/网络/区域/战斗/TTS/实体接口；其内置 BridgeNamazu 高级模块在鲶鱼精完整权限下使用原版原生运行时。", "Supports the DLL and translation XML, all 29 action types, and log/network/zone/combat/TTS/entity APIs. Its built-in advanced BridgeNamazu modules use the original native runtime when PostNamazu has full permissions."), "https://github.com/MnFeN/Triggernometry");
+        ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（始终最后加载）", "SilverDasher (always loaded last)"));
+        ImGui.SameLine();
+        ImGui.TextDisabled(text.Get(
+            "使用独立事件队列与专属内存权限上下文。",
+            "Uses an independent event queue and dedicated memory-permission context."));
 
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
@@ -302,6 +307,9 @@ public sealed class SettingsWindow : Window
         permissionsChanged |= DrawPluginPermissions(
             "triggernometry",
             BundledActPluginCapabilities.Triggernometry);
+        permissionsChanged |= DrawPluginPermissions(
+            "silverdasher",
+            BundledActPluginCapabilities.SilverDasher);
         changed |= permissionsChanged;
 
         ImGui.Separator();
@@ -485,9 +493,12 @@ public sealed class SettingsWindow : Window
         IReadOnlyList<ActCapability> capabilities)
     {
         var changed = false;
-        var displayName = string.Equals(pluginId, "postnamazu", StringComparison.OrdinalIgnoreCase)
-            ? text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu")
-            : pluginId;
+        var displayName = pluginId.ToLowerInvariant() switch
+        {
+            "postnamazu" => text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
+            "silverdasher" => text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
+            _ => pluginId,
+        };
         if (!ImGui.TreeNode($"{displayName}##permissions-{pluginId}"))
         {
             return false;

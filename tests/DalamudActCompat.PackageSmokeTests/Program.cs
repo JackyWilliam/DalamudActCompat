@@ -53,6 +53,7 @@ try
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
+    ValidateSilverDasherPermissionIsolation();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
@@ -171,6 +172,83 @@ try
     var knownPlugin = await installer.InstallAsync(knownPackagePath, CancellationToken.None);
     Assert(knownPlugin.Manifest.Id == "postnamazu", "Known third-party package was not recognized.");
     Assert(knownPlugin.Manifest.EntryType == "PostNamazu.PostNamazu", "Known plugin entry type is incorrect.");
+
+    var silverDasherSource = Environment.GetEnvironmentVariable("ACTCOMPAT_SILVERDASHER_ROOT");
+    if (!string.IsNullOrWhiteSpace(silverDasherSource) && Directory.Exists(silverDasherSource))
+    {
+        var silverDasherPackage = Path.Combine(testRoot, "silverdasher.zip");
+        ZipFile.CreateFromDirectory(silverDasherSource, silverDasherPackage);
+        var loaderPath = Directory.EnumerateFiles(
+                silverDasherSource,
+                "SilverDasher.dll",
+                SearchOption.AllDirectories)
+            .Single();
+        var corePath = Directory.EnumerateFiles(
+                silverDasherSource,
+                "SilverDasher.Core.dll",
+                SearchOption.AllDirectories)
+            .Single();
+        var originalLoaderHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(loaderPath)));
+        var originalCoreHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath)));
+        var silverDasher = await installer.InstallAsync(
+            silverDasherPackage,
+            CancellationToken.None);
+        Assert(
+            silverDasher.Manifest is
+            {
+                Id: "silverdasher",
+                Version: "0.6.0.4",
+                EntryType: "SilverDasher.Loader.Loader",
+            } &&
+            silverDasher.Manifest.EntryAssembly.EndsWith(
+                "SilverDasher.dll",
+                StringComparison.OrdinalIgnoreCase),
+            "The original SilverDasher 0.6.0.4 package did not produce the required compatibility manifest.");
+        Assert(
+            File.Exists(Path.Combine(
+                silverDasher.InstallDirectory,
+                Path.GetRelativePath(silverDasherSource, corePath))) &&
+            Directory.EnumerateFiles(
+                silverDasher.InstallDirectory,
+                "fates.json",
+                SearchOption.AllDirectories).Any(),
+            "SilverDasher libs or data files were not preserved during ZIP installation.");
+        Assert(
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(loaderPath))) == originalLoaderHash &&
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath))) == originalCoreHash,
+            "Installing SilverDasher modified the user's original DLL files.");
+        try
+        {
+            await installer.InstallAsync(loaderPath, CancellationToken.None);
+            throw new InvalidOperationException("A loose SilverDasher loader DLL was accepted without libs and data.");
+        }
+        catch (InvalidDataException)
+        {
+        }
+        var incompleteSilverDasherPackage = Path.Combine(
+            testRoot,
+            "silverdasher-incomplete.zip");
+        using (var archive = ZipFile.Open(
+                   incompleteSilverDasherPackage,
+                   ZipArchiveMode.Create))
+        {
+            var entry = archive.CreateEntry("SilverDasher.dll");
+            await using var source = File.OpenRead(loaderPath);
+            await using var destination = entry.Open();
+            await source.CopyToAsync(destination);
+        }
+        try
+        {
+            await installer.InstallAsync(
+                incompleteSilverDasherPackage,
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "An incomplete SilverDasher ZIP was accepted without sibling libs and data.");
+        }
+        catch (InvalidDataException)
+        {
+        }
+    }
 
     var loosePluginDirectory = Path.Combine(testRoot, "loose-plugin");
     Directory.CreateDirectory(loosePluginDirectory);
@@ -405,6 +483,29 @@ static void ValidateBoundedHostQueue()
     Assert(
         queue.DroppedDataMessages == 1,
         "Data queue did not record its dropped oldest item.");
+
+    var existingDataCount = queue.DataCount;
+    var existingDropCount = queue.DroppedDataMessages;
+    for (var index = 0; index <= HostProtocol.SilverDasherQueueCapacity; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                HostProtocol.DataQueueCapacity + index + 2,
+                HostMessageTypes.SilverDasherNetworkReceived,
+                HostMessagePriority.SilverDasherData,
+                new HostSilverDasherNetworkEvent("down", index, [1, 2, 3]))),
+            "SilverDasher queue rejected a low-priority event instead of dropping its own oldest event.");
+    }
+
+    Assert(
+        queue.SilverDasherCount == HostProtocol.SilverDasherQueueCapacity &&
+        queue.DroppedSilverDasherMessages == 1,
+        "SilverDasher event queue did not apply its independent bound.");
+    Assert(
+        queue.DataCount == existingDataCount &&
+        queue.DroppedDataMessages == existingDropCount,
+        "SilverDasher backpressure changed the existing ACT plugin data queue.");
     queue.Clear();
     Assert(
         queue.TryEnqueue(HostEnvelope.Create(
@@ -2213,6 +2314,21 @@ static void ValidateParserDependencyVersions()
         chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
         chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
         "OverlayPlugin Chinese 7.55h opcodes are stale.");
+}
+
+static void ValidateSilverDasherPermissionIsolation()
+{
+    string[] existingPermissionGroup =
+        BundledActPluginCapabilities.All.Select(entry => entry.PluginId).ToArray();
+    Assert(
+        existingPermissionGroup.SequenceEqual(
+            new[] { "act.foxtts", "postnamazu", "triggernometry" },
+            StringComparer.Ordinal),
+        "SilverDasher changed the existing FoxTTS/PostNamazu/Triggernometry permission workflow.");
+    Assert(
+        BundledActPluginCapabilities.SilverDasher.Contains(ActCapability.ReadCombatLogs) &&
+        BundledActPluginCapabilities.SilverDasher.Contains(ActCapability.NativeGameMemory),
+        "SilverDasher does not expose its independent event and memory capability declarations.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -5010,6 +5126,22 @@ static void ValidateActPluginDataCompatibility()
     Assert(
         type.GetField("btnXButton")?.FieldType == typeof(Button),
         "ActPluginData.btnXButton compatibility field is missing.");
+    Assert(
+        typeof(FormActMain).GetMethod(
+            "PluginGetSelfData",
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(IActPluginV1)],
+            null)?.ReturnType == typeof(ActPluginData),
+        "FormActMain does not expose the exact PluginGetSelfData(IActPluginV1) ABI required by SilverDasher.");
+    Assert(
+        typeof(FormActMain).GetMethod(
+            "PluginGetSelfData",
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(object)],
+            null)?.ReturnType == typeof(ActPluginData),
+        "The existing PluginGetSelfData(object) compatibility overload was replaced.");
 }
 
 static ZipArchiveEntry? FindArchiveEntry(ZipArchive archive, string normalizedPath)

@@ -495,6 +495,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public event Action<uint, string>? ZoneChanged;
 
+    public event Action<string, long, byte[]>? NetworkReceived;
+
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
 
@@ -551,6 +553,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             // so the external ACT Host receives both the raw pipe line and ACT's legacy line.
             ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
             parser.Subscription.ZoneChanged += OnZoneChangedForHost;
+            parser.Subscription.NetworkReceived += OnNetworkReceivedForHost;
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
                 "FFXIV_ACT_Plugin.dll");
@@ -1274,6 +1277,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             if (parser is not null)
             {
                 parser.Subscription.ZoneChanged -= OnZoneChangedForHost;
+                parser.Subscription.NetworkReceived -= OnNetworkReceivedForHost;
             }
             parser?.Dispose();
         }
@@ -1700,6 +1704,9 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
         => ZoneChanged?.Invoke(territoryId, zoneName);
+
+    private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
+        => NetworkReceived?.Invoke(connection, epoch, message);
 
     private void PublishEncounter(EncounterData encounter, bool finished)
     {

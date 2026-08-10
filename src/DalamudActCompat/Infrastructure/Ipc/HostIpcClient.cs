@@ -66,6 +66,10 @@ public sealed class HostIpcClient : IAsyncDisposable
 
     public long DroppedDataMessages => outbound.DroppedDataMessages;
 
+    internal int SilverDasherQueueLength => outbound.SilverDasherCount;
+
+    internal long DroppedSilverDasherMessages => outbound.DroppedSilverDasherMessages;
+
     public long LastWrittenSequence => Volatile.Read(ref lastWrittenSequence);
 
     public long HostLastReceivedSequence => Volatile.Read(ref hostLastReceivedSequence);
@@ -537,8 +541,11 @@ internal sealed class BoundedHostMessageQueue : IDisposable
     private readonly Queue<HostEnvelope> control = new();
     private readonly Queue<HostEnvelope> data = new();
     private readonly Dictionary<string, HostEnvelope> state = new(StringComparer.Ordinal);
+    private readonly Queue<HostEnvelope> silverDasherData = new();
+    private readonly Dictionary<string, HostEnvelope> silverDasherState = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim available = new(0);
     private long droppedDataMessages;
+    private long droppedSilverDasherMessages;
     private bool disposed;
 
     public int ControlCount
@@ -565,6 +572,20 @@ internal sealed class BoundedHostMessageQueue : IDisposable
 
     public long DroppedDataMessages => Interlocked.Read(ref droppedDataMessages);
 
+    public int SilverDasherCount
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return silverDasherData.Count + silverDasherState.Count;
+            }
+        }
+    }
+
+    public long DroppedSilverDasherMessages
+        => Interlocked.Read(ref droppedSilverDasherMessages);
+
     public bool TryEnqueue(HostEnvelope envelope)
     {
         var added = false;
@@ -586,6 +607,23 @@ internal sealed class BoundedHostMessageQueue : IDisposable
                 case HostMessagePriority.State:
                     added = !state.ContainsKey(envelope.Type);
                     state[envelope.Type] = envelope;
+                    break;
+                case HostMessagePriority.SilverDasherState:
+                    added = !silverDasherState.ContainsKey(envelope.Type);
+                    silverDasherState[envelope.Type] = envelope;
+                    break;
+                case HostMessagePriority.SilverDasherData:
+                    if (silverDasherData.Count >= HostProtocol.SilverDasherQueueCapacity)
+                    {
+                        silverDasherData.Dequeue();
+                        Interlocked.Increment(ref droppedSilverDasherMessages);
+                    }
+                    else
+                    {
+                        added = true;
+                    }
+
+                    silverDasherData.Enqueue(envelope);
                     break;
                 default:
                     if (data.Count >= HostProtocol.DataQueueCapacity)
@@ -634,6 +672,18 @@ internal sealed class BoundedHostMessageQueue : IDisposable
                 {
                     return dataMessage;
                 }
+
+                if (silverDasherState.Count > 0)
+                {
+                    var pair = silverDasherState.First();
+                    silverDasherState.Remove(pair.Key);
+                    return pair.Value;
+                }
+
+                if (silverDasherData.TryDequeue(out var silverDasherMessage))
+                {
+                    return silverDasherMessage;
+                }
             }
         }
     }
@@ -645,6 +695,8 @@ internal sealed class BoundedHostMessageQueue : IDisposable
             control.Clear();
             data.Clear();
             state.Clear();
+            silverDasherData.Clear();
+            silverDasherState.Clear();
             while (available.Wait(0))
             {
             }
