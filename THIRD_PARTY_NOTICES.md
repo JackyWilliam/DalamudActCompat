@@ -31,10 +31,11 @@ displays their author, version, license/permission status, project URL, source
 URL, download URL, and SHA-256 details in game on first install and again after
 every DalamudActCompat update. The extensions are not loaded until that notice
 is acknowledged. Triggernometry, ACT.FoxTTS, and PostNamazu use registered
-author sources for update checks. SilverDasher remains on the disclosed,
-hash-pinned complete package. URLs are displayed for attribution and
-verification; the notice does not open them. SilverDasher is installed disabled
-and is loaded only after the user explicitly enables it.
+author sources for update checks. SilverDasher and Cafe.Matcha remain on their
+disclosed, hash-pinned complete packages. URLs are displayed for attribution
+and verification; the notice does not open them. SilverDasher is installed
+disabled and is loaded only after the user explicitly enables it. Cafe.Matcha
+is enabled after installation and starts last in its own dedicated Host process.
 
 - Triggernometry CN Maintained Edition 2.1.2.2
   - Original author/copyright holder: Paissa Heavy Industries
@@ -62,6 +63,26 @@ and is loaded only after the user explicitly enables it.
   - The supplied package contains no license file. Redistribution of this
     bundled version was authorized by the upstream maintainer through direct
     communication on 2026-08-10.
+- Cafe.Matcha 26.8.10.829
+  - Author/copyright: FFCafe and Cafe.Matcha contributors
+  - Project: <https://github.com/thewakingsands/matcha>
+  - Exact source commit: <https://github.com/thewakingsands/matcha/tree/6cf242b59475aa77e4c2deee61e1b9191be5ba13>
+  - Upstream Actions run: <https://github.com/thewakingsands/matcha/actions/runs/31370163458>
+  - DACT compatibility patch/build instructions:
+    `vendor/BundledActPlugins/matcha/dact-compat.patch` and `BUILD.md`
+  - Complete package SHA-256: `9737B120C795EA207A651FE15D7A390F732AAB377CEEECAD959AD88BB621AC1C`
+  - Entry DLL SHA-256: `D55D7D8BEDFA90665422C42B86B1CA102896D360C7D077E4DFB2248A1CB2E8B5`
+  - Hash-pinned upstream Actions companion SHA-256:
+    `EF485B027FE84150768A8498331BEFCE5C997047FADF7B38B766EC9703818ED6`
+  - License: AGPL-3.0; the license text is included with the bundled package.
+  - The bundled DLL is a source-built DACT compatibility variant of the exact
+    commit above. Its small published patch routes configuration writes,
+    external links, network permission checks, and notifications through the
+    dedicated Matcha Host. The original Actions DLL is retained as a non-entry
+    companion so the compatibility build can preserve the upstream-injected
+    Universalis/runtime constants through a sealed, authenticated data file
+    without publishing them in source or logs.
+    The Host rejects either binary if its registered hash changes.
 
 SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
 runtime author-source update check. SharpCompress is distributed under the MIT

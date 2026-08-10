@@ -65,7 +65,13 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
     private readonly HashSet<Task> cactbotTasks = [];
     private readonly ActHostSupervisor hostSupervisor;
+    private readonly ActHostSupervisor matchaHostSupervisor;
+    private readonly SemaphoreSlim hostTopologyLock = new(1, 1);
+    private readonly object permissionSnapshotLock = new();
+    private string? activeHostPermissionFingerprint;
+    private string? activeMatchaPermissionFingerprint;
     private int silverDasherEventsEnabled;
+    private int matchaEventsEnabled;
     private readonly PictoActOverlayService pictoActOverlay;
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
@@ -163,6 +169,20 @@ public sealed class Plugin : IDalamudPlugin
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
+        var matchaIpcClient = new HostIpcClient(
+            stateStore,
+            logger,
+            BuildMatchaHostPermissionSnapshot);
+        matchaHostSupervisor = new ActHostSupervisor(
+            paths.HostDirectory,
+            paths.ActPluginDirectory,
+            paths.ConfigDirectory,
+            matchaIpcClient,
+            logger,
+            matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1);
+        matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
+        matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
+        matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
             CancellationToken.None);
@@ -218,6 +238,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.RawLogLineReceived += OnRawLogLineForHost;
         actRuntime.ZoneChanged += OnZoneChangedForHost;
         actRuntime.NetworkReceived += OnNetworkReceivedForHost;
+        actRuntime.NetworkSent += OnNetworkSentForMatchaHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;
         framework.Update += OnFrameworkUpdateForHost;
         parserEngine = new ParserEngine(new IinactAdapter(
@@ -327,8 +348,11 @@ public sealed class Plugin : IDalamudPlugin
             text,
             logoTexture,
             () => hostSupervisor.Snapshot,
+            () => matchaHostSupervisor.Snapshot,
             RestartHostFromUi,
-            StopHostFromUi);
+            StopHostFromUi,
+            RestartMatchaHostFromUi,
+            StopMatchaHostFromUi);
         settingsWindow = new ControlCenterWindow(
             configuration,
             parserEngine,
@@ -425,10 +449,14 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
         actRuntime.NetworkReceived -= OnNetworkReceivedForHost;
+        actRuntime.NetworkSent -= OnNetworkSentForMatchaHost;
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
         hostSupervisor.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
+        matchaHostSupervisor.MatchaNotificationRequested -= OnMatchaNotificationRequested;
+        matchaHostSupervisor.MatchaLogLineRequested -= OnMatchaLogLineRequested;
+        matchaHostSupervisor.MatchaTtsRequested -= OnMatchaTtsRequested;
 
         if (factoryResetCompleted)
         {
@@ -853,16 +881,77 @@ public sealed class Plugin : IDalamudPlugin
     private async Task<string> FactoryResetCoreAsync(CancellationToken shutdownToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
         await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+        var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+        var matchaWasRunning =
+            matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
         try
         {
-            return await factoryResetService
-                .ResetAsync(timeout.Token, shutdownToken)
-                .ConfigureAwait(false);
+            try
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                if (matchaWasRunning)
+                {
+                    await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (hostWasRunning)
+                {
+                    await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+
+                return await factoryResetService
+                    .ResetAsync(timeout.Token, shutdownToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception resetFailure)
+            {
+                var restoreFailures = new List<Exception>();
+                if (hostWasRunning && !shutdownToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                        await hostSupervisor.WaitForPluginStartupAsync(timeout.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        restoreFailures.Add(ex);
+                    }
+                }
+                if (matchaWasRunning &&
+                    hostSupervisor.Snapshot.State == HostSupervisorState.Running &&
+                    !shutdownToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await StartMatchaAfterSharedHostAsync(
+                                timeout.Token,
+                                throwOnFailure: true)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        restoreFailures.Add(ex);
+                    }
+                }
+
+                if (restoreFailures.Count > 0)
+                {
+                    throw new AggregateException(
+                        "Factory reset failed and one or more Host processes could not be restored.",
+                        [resetFailure, .. restoreFailures]);
+                }
+
+                throw;
+            }
         }
         finally
         {
+            hostTopologyLock.Release();
             cactbotFileOperationGate.Release();
         }
     }
@@ -886,7 +975,8 @@ public sealed class Plugin : IDalamudPlugin
                 configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
                 SaveConfiguration();
                 logger.Information(
-                    $"Installed ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}. Restart the ACT host to load it.");
+                    $"Installed ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}; its assigned Host will refresh.");
+                ApplyActPermissionChanges();
             }
             catch (Exception ex)
             {
@@ -901,32 +991,84 @@ public sealed class Plugin : IDalamudPlugin
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             bundledUpdateCancellation.Token);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
-        var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
-        var parserWasRunning = parserEngine.Status.State == ParserState.Running;
-        await BundledPluginInstallCoordinator.ExecuteAsync(
-                hostWasRunning,
-                parserWasRunning,
-                hostSupervisor.StopAsync,
-                parserEngine.StopAsync,
-                async cancellationToken =>
-                {
-                    await bundledPluginManager
-                        .InstallAndAcknowledgeAsync(plugins, cancellationToken)
-                        .ConfigureAwait(false);
-                    SaveConfiguration();
-                },
-                hostSupervisor.StartAsync,
-                parserEngine.StartAsync,
-                () => !bundledUpdateCancellation.IsCancellationRequested,
-                timeout.Token,
-                TimeSpan.FromSeconds(20))
-            .ConfigureAwait(false);
-
-        services.NotificationManager.AddNotification(new()
+        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+        try
         {
-            Title = "ACT 兼容",
-            Content = "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。",
-        });
+            var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var parserWasRunning = parserEngine.Status.State == ParserState.Running;
+            var matchaWasRunning =
+                matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            try
+            {
+                if (matchaWasRunning)
+                {
+                    Volatile.Write(ref matchaEventsEnabled, 0);
+                    actRuntime.SetNetworkSentCaptureEnabled(false);
+                    await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+
+                await BundledPluginInstallCoordinator.ExecuteAsync(
+                        hostWasRunning,
+                        parserWasRunning,
+                        hostSupervisor.StopAsync,
+                        parserEngine.StopAsync,
+                        async cancellationToken =>
+                        {
+                            await bundledPluginManager
+                                .InstallAndAcknowledgeAsync(plugins, cancellationToken)
+                                .ConfigureAwait(false);
+                            SaveConfiguration();
+                        },
+                        hostSupervisor.StartAsync,
+                        parserEngine.StartAsync,
+                        () => !bundledUpdateCancellation.IsCancellationRequested,
+                        timeout.Token,
+                        TimeSpan.FromSeconds(20))
+                    .ConfigureAwait(false);
+            }
+            catch (Exception installFailure)
+            {
+                try
+                {
+                    if (matchaWasRunning &&
+                        hostSupervisor.Snapshot.State == HostSupervisorState.Running)
+                    {
+                        await hostSupervisor.WaitForPluginStartupAsync(timeout.Token)
+                            .ConfigureAwait(false);
+                        await StartMatchaAfterSharedHostAsync(
+                                timeout.Token,
+                                throwOnFailure: true)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception restoreFailure)
+                {
+                    throw new AggregateException(
+                        "Bundled plugin installation failed and the Matcha Host could not be restored.",
+                        installFailure,
+                        restoreFailure);
+                }
+
+                throw;
+            }
+
+            if (hostWasRunning &&
+                hostSupervisor.Snapshot.State == HostSupervisorState.Running)
+            {
+                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+                await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+            }
+
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = "ACT 兼容",
+                Content = "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。",
+            });
+        }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
     }
 
     private void StartBundledPluginUpdateCheck(bool openWindow)
@@ -1261,7 +1403,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         SaveConfiguration();
         logger.Information(enableFullFunctionality
-            ? "All declared capabilities were enabled for bundled ACT plugins, including SilverDasher, by user choice."
+            ? "All declared capabilities were enabled for bundled ACT plugins, including SilverDasher and Matcha, by user choice."
             : "Bundled ACT plugin permissions were reset to safe defaults by user choice.");
     }
 
@@ -1309,16 +1451,19 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenActPluginConfiguration(string pluginId)
     {
-        if (hostSupervisor.OpenPluginUi(pluginId))
+        var target = string.Equals(pluginId, "matcha", StringComparison.OrdinalIgnoreCase)
+            ? matchaHostSupervisor
+            : hostSupervisor;
+        if (target.OpenPluginUi(pluginId))
         {
             return;
         }
 
-        logger.Warning($"ACT plugin '{pluginId}' is not running in the independent Host.");
+        logger.Warning($"ACT plugin '{pluginId}' is not running in its assigned Host.");
         services.NotificationManager.AddNotification(new()
         {
             Title = "ACT 兼容",
-            Content = $"扩展 {pluginId} 未在独立 Host 中成功加载，请重启 Host 并查看状态日志。",
+            Content = $"扩展 {pluginId} 未在分配的 Host 中成功加载，请重启对应 Host 并查看状态日志。",
         });
     }
 
@@ -1428,10 +1573,13 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StartIndependentHostAsync()
     {
+        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+            await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+            await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1440,12 +1588,55 @@ public sealed class Plugin : IDalamudPlugin
                 "Independent ACT Host did not start. In-process parsing and overlays remain available, " +
                 "but traditional ACT plugins stay unloaded because hard crash isolation is not active.");
         }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
+    }
+
+    private async Task StartMatchaAfterSharedHostAsync(
+        CancellationToken cancellationToken,
+        bool throwOnFailure = false)
+    {
+        if (!IsMatchaConfiguredToRun())
+        {
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+            {
+                await matchaHostSupervisor.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+            return;
+        }
+
+        try
+        {
+            Volatile.Write(ref matchaEventsEnabled, 1);
+            actRuntime.SetNetworkSentCaptureEnabled(true);
+            await matchaHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+            await matchaHostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
+            logger.Information(
+                "Matcha dedicated Host started after the shared ACT Host completed plugin initialization.");
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            logger.Error(
+                ex,
+                "Matcha dedicated Host did not start. The shared ACT Host and all existing extensions remain untouched.");
+            if (throwOnFailure)
+            {
+                throw;
+            }
+        }
     }
 
     private void RestartHostFromUi()
     {
         _ = Task.Run(async () =>
         {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -1456,6 +1647,44 @@ public sealed class Plugin : IDalamudPlugin
             {
                 logger.Error(ex, "ACT Host UI restart failed.");
             }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
+        });
+    }
+
+    private void RestartMatchaHostFromUi()
+    {
+        _ = Task.Run(async () =>
+        {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                if (hostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                {
+                    logger.Warning(
+                        "Matcha Host was not restarted because the shared ACT Host is not running.");
+                    return;
+                }
+
+                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+                await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                logger.Error(ex, "Matcha Host UI restart failed; the shared ACT Host was not restarted.");
+            }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
         });
     }
 
@@ -1463,6 +1692,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         _ = Task.Run(async () =>
         {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -1489,10 +1719,60 @@ public sealed class Plugin : IDalamudPlugin
                     return;
                 }
 
-                if (await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
+                var desiredHost = CreateHostPermissionSnapshot();
+                var desiredMatcha = CreateMatchaHostPermissionSnapshot();
+                string? activeHost;
+                string? activeMatcha;
+                lock (permissionSnapshotLock)
                 {
+                    activeHost = activeHostPermissionFingerprint;
+                    activeMatcha = activeMatchaPermissionFingerprint;
+                }
+
+                if (!string.Equals(
+                        activeHost,
+                        BuildPermissionFingerprint(desiredHost),
+                        StringComparison.Ordinal) &&
+                    await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
+                {
+                    logger.Information("Shared ACT Host restarted after its configuration changed.");
+                }
+
+                if (!IsMatchaConfiguredToRun())
+                {
+                    Volatile.Write(ref matchaEventsEnabled, 0);
+                    actRuntime.SetNetworkSentCaptureEnabled(false);
+                    if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                    {
+                        await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    }
                     logger.Information(
-                        "ACT Host restarted once after the permission group was saved.");
+                        "Matcha was disabled without restarting the shared ACT Host.");
+                    return;
+                }
+
+                if (hostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                {
+                    logger.Warning(
+                        "Matcha configuration was saved, but its Host remains stopped because the shared ACT Host is not running.");
+                    return;
+                }
+
+                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+                var matchaChanged = !string.Equals(
+                    activeMatcha,
+                    BuildPermissionFingerprint(desiredMatcha),
+                    StringComparison.Ordinal);
+                if (matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running && matchaChanged)
+                {
+                    Volatile.Write(ref matchaEventsEnabled, 0);
+                    actRuntime.SetNetworkSentCaptureEnabled(false);
+                    await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+
+                if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                {
+                    await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -1512,6 +1792,10 @@ public sealed class Plugin : IDalamudPlugin
                         })).ConfigureAwait(false);
                 }
             }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
         });
     }
 
@@ -1519,6 +1803,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         _ = Task.Run(async () =>
         {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -1528,10 +1813,52 @@ public sealed class Plugin : IDalamudPlugin
             {
                 logger.Error(ex, "ACT Host UI stop failed.");
             }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
+        });
+    }
+
+    private void StopMatchaHostFromUi()
+    {
+        _ = Task.Run(async () =>
+        {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Matcha Host UI stop failed.");
+            }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
         });
     }
 
     private HostPermissionSnapshot BuildHostPermissionSnapshot()
+    {
+        var snapshot = CreateHostPermissionSnapshot();
+        Volatile.Write(
+            ref silverDasherEventsEnabled,
+            snapshot.AllowedPluginIds.Contains(
+                "silverdasher",
+                StringComparer.OrdinalIgnoreCase) ? 1 : 0);
+        lock (permissionSnapshotLock)
+        {
+            activeHostPermissionFingerprint = BuildPermissionFingerprint(snapshot);
+        }
+        return snapshot;
+    }
+
+    private HostPermissionSnapshot CreateHostPermissionSnapshot()
     {
         var capabilities = Enum.GetValues<ActCapability>();
         string[] pluginIds = ["triggernometry", "postnamazu", "silverdasher"];
@@ -1539,12 +1866,10 @@ public sealed class Plugin : IDalamudPlugin
             .Discover(configuration.DisabledActPluginIds)
             .Where(plugin =>
                 plugin.Enabled &&
-                bundledPluginManager.IsAllowedToLoad(plugin))
+                bundledPluginManager.IsAllowedToLoad(plugin) &&
+                !string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
             .Select(plugin => plugin.Manifest.Id)
             .ToArray();
-        Volatile.Write(
-            ref silverDasherEventsEnabled,
-            allowedPluginIds.Contains("silverdasher", StringComparer.OrdinalIgnoreCase) ? 1 : 0);
         var allowed = pluginIds.ToDictionary(
             pluginId => pluginId,
             pluginId => (IReadOnlyList<string>)capabilities
@@ -1557,6 +1882,64 @@ public sealed class Plugin : IDalamudPlugin
             allowed,
             allowedPluginIds);
     }
+
+    private HostPermissionSnapshot BuildMatchaHostPermissionSnapshot()
+    {
+        var snapshot = CreateMatchaHostPermissionSnapshot();
+        Volatile.Write(
+            ref matchaEventsEnabled,
+            snapshot.AllowedPluginIds.Contains(
+                "matcha",
+                StringComparer.OrdinalIgnoreCase) ? 1 : 0);
+        lock (permissionSnapshotLock)
+        {
+            activeMatchaPermissionFingerprint = BuildPermissionFingerprint(snapshot);
+        }
+        return snapshot;
+    }
+
+    private HostPermissionSnapshot CreateMatchaHostPermissionSnapshot()
+    {
+        var allowedPluginIds = packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin =>
+                plugin.Enabled &&
+                bundledPluginManager.IsAllowedToLoad(plugin) &&
+                string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
+            .Select(plugin => plugin.Manifest.Id)
+            .ToArray();
+        var allowed = new Dictionary<string, IReadOnlyList<string>>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["matcha"] = Enum.GetValues<ActCapability>()
+                .Where(capability =>
+                    configuration.IsActCapabilityAllowed("matcha", capability))
+                .Select(capability => capability.ToString())
+                .ToArray(),
+        };
+        return new HostPermissionSnapshot(allowed, allowedPluginIds);
+    }
+
+    private static string BuildPermissionFingerprint(HostPermissionSnapshot snapshot)
+    {
+        var plugins = string.Join(",", snapshot.AllowedPluginIds
+            .OrderBy(static id => id, StringComparer.OrdinalIgnoreCase));
+        var capabilities = string.Join(
+            ";",
+            snapshot.AllowedCapabilities
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair =>
+                    $"{pair.Key}:{string.Join(',', pair.Value.OrderBy(static value => value, StringComparer.OrdinalIgnoreCase))}"));
+        return $"{plugins}|{capabilities}";
+    }
+
+    private bool IsMatchaConfiguredToRun()
+        => packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .Any(plugin =>
+                plugin.Enabled &&
+                bundledPluginManager.IsAllowedToLoad(plugin) &&
+                string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase));
 
     private async Task DisposeComponentsAsync(bool factoryResetCompleted)
     {
@@ -1601,10 +1984,21 @@ public sealed class Plugin : IDalamudPlugin
     {
         await ShutdownCactbotOperationsAsync().ConfigureAwait(false);
         await fflogsEstimateService.DisposeAsync().ConfigureAwait(false);
-        await lifecycle.DisposeAsync().ConfigureAwait(false);
-        await parserEngine.DisposeAsync().ConfigureAwait(false);
-        await encounterService.DisposeAsync().ConfigureAwait(false);
-        await hostSupervisor.DisposeAsync().ConfigureAwait(false);
+        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await lifecycle.DisposeAsync().ConfigureAwait(false);
+            await parserEngine.DisposeAsync().ConfigureAwait(false);
+            await encounterService.DisposeAsync().ConfigureAwait(false);
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            await matchaHostSupervisor.DisposeAsync().ConfigureAwait(false);
+            await hostSupervisor.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
     }
 
     private void OnRawLogLineForHost(
@@ -1629,7 +2023,70 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
-        => _ = hostSupervisor.PublishSilverDasherNetwork(connection, epoch, message);
+    {
+        _ = hostSupervisor.PublishSilverDasherNetwork(connection, epoch, message);
+        if (Volatile.Read(ref matchaEventsEnabled) == 1)
+        {
+            _ = matchaHostSupervisor.PublishMatchaNetworkReceived(
+                connection,
+                epoch,
+                message);
+        }
+    }
+
+    private void OnNetworkSentForMatchaHost(string connection, long epoch, byte[] message)
+    {
+        if (Volatile.Read(ref matchaEventsEnabled) == 1)
+        {
+            _ = matchaHostSupervisor.PublishMatchaNetworkSent(connection, epoch, message);
+        }
+    }
+
+    private void OnMatchaLogLineRequested(object? sender, HostMatchaLogLine logLine)
+        => hostSupervisor.PublishLog(
+            DateTimeOffset.Now,
+            logLine.Line,
+            logLine.Line,
+            isImport: false);
+
+    private void OnMatchaTtsRequested(object? sender, HostTtsRequest request)
+    {
+        if (!hostSupervisor.RequestTts(request.Text, "matcha"))
+        {
+            logger.Warning(
+                "Matcha TTS request was not accepted by the shared ACT Host; other extensions remain unaffected.");
+        }
+    }
+
+    private void OnMatchaNotificationRequested(
+        object? sender,
+        HostMatchaNotification notification)
+    {
+        try
+        {
+            _ = services.Framework.RunOnFrameworkThread(() =>
+            {
+                try
+                {
+                    services.NotificationManager.AddNotification(new()
+                    {
+                        Title = "抹茶 / Cafe.Matcha",
+                        Content = notification.Message,
+                    });
+                }
+                catch (Exception exception)
+                {
+                    logger.Error(
+                        exception,
+                        "Could not display the Matcha fallback notification.");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Could not display the Matcha fallback notification.");
+        }
+    }
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
         => hostSupervisor.PublishEncounter(finished);
@@ -1645,12 +2102,17 @@ public sealed class Plugin : IDalamudPlugin
         nextHostEntitySnapshotAt = now.AddMilliseconds(500);
         try
         {
-            hostSupervisor.PublishFfxivEntities(FfxivEntitySnapshotBuilder.Build(
+            var snapshot = FfxivEntitySnapshotBuilder.Build(
                 objectTable,
                 partyList,
                 services.ClientState,
                 playerState,
-                now));
+                now);
+            hostSupervisor.PublishFfxivEntities(snapshot);
+            if (Volatile.Read(ref matchaEventsEnabled) == 1)
+            {
+                matchaHostSupervisor.PublishFfxivEntities(snapshot);
+            }
         }
         catch (Exception ex)
         {

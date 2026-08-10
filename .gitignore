@@ -9,4 +9,5 @@ obj/
 *.zip
 !vendor/BundledCactbot/*.zip
 !vendor/BundledActPlugins/silverdasher/*.zip
+!vendor/BundledActPlugins/matcha/*.zip
 artifacts/

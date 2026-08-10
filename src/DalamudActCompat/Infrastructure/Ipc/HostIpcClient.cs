@@ -60,6 +60,12 @@ public sealed class HostIpcClient : IAsyncDisposable
 
     public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
 
+    public event EventHandler<HostMatchaNotification>? MatchaNotificationRequested;
+
+    public event EventHandler<HostMatchaLogLine>? MatchaLogLineRequested;
+
+    public event EventHandler<HostTtsRequest>? MatchaTtsRequested;
+
     public HostConnectionStatus Status => status;
 
     public int ControlQueueLength => outbound.ControlCount;
@@ -521,6 +527,43 @@ public sealed class HostIpcClient : IAsyncDisposable
                 }
 
                 SilverDasherNotificationRequested?.Invoke(this, notification);
+                break;
+            case HostMessageTypes.MatchaNotification:
+                var matchaNotification = envelope.Payload.Deserialize<HostMatchaNotification>();
+                if (matchaNotification is null ||
+                    string.IsNullOrWhiteSpace(matchaNotification.Message) ||
+                    matchaNotification.Message.Length > 1024)
+                {
+                    logger.Warning("Matcha Host sent an invalid notification; request denied.");
+                    break;
+                }
+
+                MatchaNotificationRequested?.Invoke(this, matchaNotification);
+                break;
+            case HostMessageTypes.MatchaLogLine:
+                var matchaLogLine = envelope.Payload.Deserialize<HostMatchaLogLine>();
+                if (matchaLogLine is null ||
+                    string.IsNullOrWhiteSpace(matchaLogLine.Line) ||
+                    matchaLogLine.Line.Length > 64 * 1024)
+                {
+                    logger.Warning("Matcha Host sent an invalid log line; request denied.");
+                    break;
+                }
+
+                MatchaLogLineRequested?.Invoke(this, matchaLogLine);
+                break;
+            case HostMessageTypes.MatchaTtsRequest:
+                var matchaTts = envelope.Payload.Deserialize<HostTtsRequest>();
+                if (matchaTts is null ||
+                    !string.Equals(matchaTts.Source, "matcha", StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(matchaTts.Text) ||
+                    matchaTts.Text.Length > 2000)
+                {
+                    logger.Warning("Matcha Host sent an invalid TTS request; request denied.");
+                    break;
+                }
+
+                MatchaTtsRequested?.Invoke(this, matchaTts);
                 break;
         }
     }

@@ -59,6 +59,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Func<bool> debugMode;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
+    private readonly object networkCaptureSync = new();
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator = new();
@@ -103,6 +104,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private string chatZone = string.Empty;
     private bool activeEncounterPublished;
     private bool activeEncounterNamesLogged;
+    private bool networkSentCaptureRequested;
+    private bool networkSentSubscribed;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -497,6 +500,17 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public event Action<string, long, byte[]>? NetworkReceived;
 
+    public event Action<string, long, byte[]>? NetworkSent;
+
+    public void SetNetworkSentCaptureEnabled(bool enabled)
+    {
+        lock (networkCaptureSync)
+        {
+            networkSentCaptureRequested = enabled;
+            UpdateNetworkSentSubscriptionLocked();
+        }
+    }
+
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
 
@@ -554,6 +568,10 @@ public sealed class SelfHostedActRuntime : IDisposable
             ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
             parser.Subscription.ZoneChanged += OnZoneChangedForHost;
             parser.Subscription.NetworkReceived += OnNetworkReceivedForHost;
+            lock (networkCaptureSync)
+            {
+                UpdateNetworkSentSubscriptionLocked();
+            }
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
                 "FFXIV_ACT_Plugin.dll");
@@ -561,6 +579,14 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
         catch
         {
+            lock (networkCaptureSync)
+            {
+                if (parser is not null && networkSentSubscribed)
+                {
+                    parser.Subscription.NetworkSent -= OnNetworkSentForHost;
+                }
+                networkSentSubscribed = false;
+            }
             RemovePluginData(parserPluginData);
             parserPluginData = null;
             parser?.Dispose();
@@ -1278,6 +1304,14 @@ public sealed class SelfHostedActRuntime : IDisposable
             {
                 parser.Subscription.ZoneChanged -= OnZoneChangedForHost;
                 parser.Subscription.NetworkReceived -= OnNetworkReceivedForHost;
+                lock (networkCaptureSync)
+                {
+                    if (networkSentSubscribed)
+                    {
+                        parser.Subscription.NetworkSent -= OnNetworkSentForHost;
+                        networkSentSubscribed = false;
+                    }
+                }
             }
             parser?.Dispose();
         }
@@ -1707,6 +1741,34 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
         => NetworkReceived?.Invoke(connection, epoch, message);
+
+    private void OnNetworkSentForHost(string connection, long epoch, byte[] message)
+        => NetworkSent?.Invoke(connection, epoch, message);
+
+    private void UpdateNetworkSentSubscriptionLocked()
+    {
+        if (parser is null)
+        {
+            networkSentSubscribed = false;
+            return;
+        }
+
+        if (networkSentCaptureRequested == networkSentSubscribed)
+        {
+            return;
+        }
+
+        if (networkSentCaptureRequested)
+        {
+            parser.Subscription.NetworkSent += OnNetworkSentForHost;
+        }
+        else
+        {
+            parser.Subscription.NetworkSent -= OnNetworkSentForHost;
+        }
+
+        networkSentSubscribed = networkSentCaptureRequested;
+    }
 
     private void PublishEncounter(EncounterData encounter, bool finished)
     {

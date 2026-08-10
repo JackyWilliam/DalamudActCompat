@@ -36,6 +36,16 @@ internal static class BundledActPluginCapabilities
         ActCapability.NativeGameMemory,
     ];
 
+    public static IReadOnlyList<ActCapability> Matcha { get; } =
+    [
+        ActCapability.ReadCombatLogs,
+        ActCapability.ReadLocalConfiguration,
+        ActCapability.TextToSpeech,
+        ActCapability.NetworkRequest,
+        ActCapability.LaunchExternalProcess,
+        ActCapability.WriteFiles,
+    ];
+
     public static IReadOnlyList<(string PluginId, IReadOnlyList<ActCapability> Capabilities)> All { get; } =
     [
         ("act.foxtts", FoxTts),
@@ -47,5 +57,6 @@ internal static class BundledActPluginCapabilities
     [
         .. All,
         ("silverdasher", SilverDasher),
+        ("matcha", Matcha),
     ];
 }

@@ -13,6 +13,8 @@ using System.Runtime.Loader;
 using System.Runtime.Serialization;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Windows.Forms;
 using DalamudActCompat.Protocol;
 using Mono.Cecil;
@@ -23,12 +25,230 @@ namespace DalamudActCompat.Host;
 
 public static class LegacyAssemblyRewriter
 {
+    private const string MatchaUpstreamFileName = "Cafe.Matcha.Upstream.dll";
+    private const string MatchaUpstreamSha256 =
+        "EF485B027FE84150768A8498331BEFCE5C997047FADF7B38B766EC9703818ED6";
+    private const string MatchaRuntimeDataFileName = "Cafe.Matcha.Runtime.bin";
+    private const string MatchaRuntimeDataSha256 =
+        "D8D134DDBBE60E82C6C3C28C8058446380F5C6BABD73A2666E9575E1E0C44200";
     private const string SilverDasherWeaverFileName = "SilverDasher.Weaver.dll";
     private const string SilverDasherWeaverSha256 =
         "20FE1491A9B35BB5096F25D1115A3E51F2C8BBAE2B741C204C2069ADDA507ECC";
     private const string SilverDasherCompatibleWeaverSha256 =
         "CD77EC62F7802C50BE02EC99AA83DFD5DE6CED7A41A4A866F80FB8A7509E26E1";
     private const int SilverDasherWeaverProcessAttachJumpOffset = 0x3254;
+
+    public static Assembly LoadMatcha(
+        string assemblyPath,
+        AssemblyLoadContext loadContext)
+    {
+        using var input = File.OpenRead(assemblyPath);
+        using var definition = AssemblyDefinition.ReadAssembly(input);
+        if (!string.Equals(definition.Name.Name, "Cafe.Matcha", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Unexpected Matcha assembly identity: {definition.Name.FullName}.");
+        }
+
+        var module = definition.MainModule;
+        var bridgeType = module.GetType("Cafe.Matcha.Utils.DactBridge")
+                         ?? throw new TypeLoadException(
+                             "Matcha DACT compatibility bridge is missing.");
+        var contractVersion = bridgeType.Fields.SingleOrDefault(field =>
+            field.Name == "ContractVersion" &&
+            field.IsLiteral &&
+            field.FieldType.MetadataType == MetadataType.String);
+        if (!string.Equals(contractVersion?.Constant as string, "1", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Matcha DACT compatibility contract is missing or unsupported.");
+        }
+
+        var methods = module.Types
+            .SelectMany(EnumerateTypes)
+            .Where(type => !type.FullName.StartsWith("<Module>", StringComparison.Ordinal))
+            .SelectMany(type => type.Methods)
+            .Where(method => method.HasBody)
+            .ToArray();
+
+        var callsOutsideBridge = methods
+            .Where(method => method.DeclaringType != bridgeType)
+            .SelectMany(method => method.Body.Instructions)
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .ToArray();
+        var expectedBridgeCalls = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["ReadAllText"] = 2,
+            ["WriteAllText"] = 1,
+            ["ReadUserTextFile"] = 1,
+            ["WriteUserTextFile"] = 1,
+            ["StartProcess"] = 4,
+            ["Demand"] = 1,
+            ["SendNotification"] = 1,
+        };
+        foreach (var (methodName, expectedCount) in expectedBridgeCalls)
+        {
+            var actualCount = callsOutsideBridge.Count(call =>
+                call.DeclaringType.FullName == bridgeType.FullName &&
+                call.Name == methodName);
+            if (actualCount != expectedCount)
+            {
+                throw new InvalidOperationException(
+                    $"Matcha DACT bridge surface changed for {methodName}; " +
+                    $"expected {expectedCount}, found {actualCount}.");
+            }
+        }
+
+        var directFileIo = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == typeof(File).FullName &&
+            call.Name is nameof(File.ReadAllText) or nameof(File.WriteAllText));
+        var directProcessStarts = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == typeof(Process).FullName &&
+            call.Name == nameof(Process.Start));
+        if (directFileIo != 0 || directProcessStarts != 0)
+        {
+            throw new InvalidOperationException(
+                "Matcha bypasses its DACT permission bridge: " +
+                $"file={directFileIo}, process={directProcessStarts}.");
+        }
+
+        var upstreamPath = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(assemblyPath))!,
+            "upstream",
+            MatchaUpstreamFileName);
+        var runtimeDataPath = Path.Combine(
+            Path.GetDirectoryName(upstreamPath)!,
+            MatchaRuntimeDataFileName);
+        var secrets = ExtractMatchaUpstreamSecrets(upstreamPath, runtimeDataPath);
+        using var assemblyImage = new MemoryStream(
+            File.ReadAllBytes(assemblyPath),
+            writable: false);
+        var assembly = loadContext.LoadFromStream(assemblyImage);
+        ApplyMatchaUpstreamSecrets(assembly, secrets);
+        return assembly;
+    }
+
+    private static MatchaUpstreamSecrets ExtractMatchaUpstreamSecrets(
+        string assemblyPath,
+        string runtimeDataPath)
+    {
+        if (!File.Exists(assemblyPath))
+        {
+            throw new FileNotFoundException(
+                "The hash-pinned upstream Matcha companion is missing.",
+                assemblyPath);
+        }
+
+        var upstreamImage = File.ReadAllBytes(assemblyPath);
+        var upstreamHash = SHA256.HashData(upstreamImage);
+        var actualHash = Convert.ToHexString(upstreamHash);
+        if (!string.Equals(actualHash, MatchaUpstreamSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Upstream Matcha companion hash changed; expected " +
+                $"{MatchaUpstreamSha256}, got {actualHash}.");
+        }
+
+        if (!File.Exists(runtimeDataPath))
+        {
+            throw new FileNotFoundException(
+                "The sealed upstream Matcha runtime data is missing.",
+                runtimeDataPath);
+        }
+
+        var payload = File.ReadAllBytes(runtimeDataPath);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(payload));
+        if (!string.Equals(
+                payloadHash,
+                MatchaRuntimeDataSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Matcha runtime data hash changed; expected " +
+                $"{MatchaRuntimeDataSha256}, got {payloadHash}.");
+        }
+
+        const int magicLength = 4;
+        const int tagLength = 32;
+        if (payload.Length <= magicLength + tagLength ||
+            !payload.AsSpan(0, magicLength).SequenceEqual("DMR1"u8))
+        {
+            throw new InvalidDataException("Matcha runtime data header is invalid.");
+        }
+
+        var plainText = new byte[payload.Length - magicLength - tagLength];
+        try
+        {
+            var cipherText = payload.AsSpan(magicLength + tagLength);
+            for (var index = 0; index < cipherText.Length; index++)
+            {
+                plainText[index] = (byte)(cipherText[index] ^ upstreamHash[index % upstreamHash.Length]);
+            }
+
+            using var hmac = new HMACSHA256(upstreamHash);
+            var expectedTag = hmac.ComputeHash(plainText);
+            if (!CryptographicOperations.FixedTimeEquals(
+                    expectedTag,
+                    payload.AsSpan(magicLength, tagLength)))
+            {
+                throw new InvalidDataException(
+                    "Matcha runtime data authentication failed.");
+            }
+
+            var values = JsonSerializer.Deserialize<string[]>(plainText)
+                         ?? throw new InvalidDataException(
+                             "Matcha runtime data is empty.");
+            if (values.Length != 4 ||
+                !Uri.TryCreate(values[0], UriKind.Absolute, out var telemetryRoot) ||
+                telemetryRoot.Scheme != Uri.UriSchemeHttps ||
+                string.IsNullOrWhiteSpace(values[1]) ||
+                !Guid.TryParse(values[2], out _) ||
+                !Guid.TryParse(values[3], out _))
+            {
+                throw new InvalidDataException(
+                    "The hash-pinned upstream Matcha runtime constants are incomplete.");
+            }
+
+            return new MatchaUpstreamSecrets(
+                values[0],
+                values[1],
+                values[2],
+                values[3]);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plainText);
+            CryptographicOperations.ZeroMemory(upstreamHash);
+            CryptographicOperations.ZeroMemory(upstreamImage);
+        }
+    }
+
+    private static void ApplyMatchaUpstreamSecrets(
+        Assembly assembly,
+        MatchaUpstreamSecrets secrets)
+    {
+        var secretType = assembly.GetType(
+                             "Cafe.Matcha.Constant.Secret",
+                             throwOnError: true)!
+                         ?? throw new TypeLoadException(
+                             "Matcha runtime constant holder is missing.");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["TelemetryRoot"] = secrets.TelemetryRoot,
+            ["UniversalisKey"] = secrets.UniversalisKey,
+            ["TelemetryFate"] = secrets.TelemetryFate,
+            ["TelemetryNpc"] = secrets.TelemetryNpc,
+        };
+        foreach (var (fieldName, value) in values)
+        {
+            var field = secretType.GetField(
+                            fieldName,
+                            BindingFlags.Public | BindingFlags.Static)
+                        ?? throw new MissingFieldException(secretType.FullName, fieldName);
+            field.SetValue(null, value);
+        }
+    }
 
     public static Assembly LoadSilverDasher(
         string assemblyPath,
@@ -2452,4 +2672,10 @@ public static class LegacyAssemblyRewriter
             yield return nested;
         }
     }
+
+    private sealed record MatchaUpstreamSecrets(
+        string TelemetryRoot,
+        string UniversalisKey,
+        string TelemetryFate,
+        string TelemetryNpc);
 }

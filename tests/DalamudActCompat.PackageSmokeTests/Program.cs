@@ -55,6 +55,8 @@ try
     ValidateBoundedHostQueue();
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
+    ValidateMatchaPermissionIsolation();
+    await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
@@ -2369,9 +2371,27 @@ static void ValidateSilverDasherPermissionIsolation()
         BundledActPluginCapabilities.FullPermissionConfirmation
             .Select(entry => entry.PluginId)
             .SequenceEqual(
-                new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher" },
+                new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher", "matcha" },
                 StringComparer.Ordinal),
-        "The explicit full-permission confirmation does not enable every SilverDasher declaration last.");
+        "The explicit full-permission confirmation does not preserve SilverDasher before the dedicated Matcha group.");
+}
+
+static void ValidateMatchaPermissionIsolation()
+{
+    Assert(
+        BundledActPluginCapabilities.All.Select(entry => entry.PluginId).SequenceEqual(
+            new[] { "act.foxtts", "postnamazu", "triggernometry" },
+            StringComparer.Ordinal),
+        "Matcha changed the existing shared Host permission workflow.");
+    Assert(
+        BundledActPluginCapabilities.Matcha.Contains(ActCapability.ReadCombatLogs) &&
+        BundledActPluginCapabilities.Matcha.Contains(ActCapability.NetworkRequest) &&
+        BundledActPluginCapabilities.Matcha.Contains(ActCapability.WriteFiles) &&
+        !BundledActPluginCapabilities.Matcha.Contains(ActCapability.NativeGameMemory),
+        "Matcha does not expose its dedicated least-privilege capability declaration.");
+    Assert(
+        BundledActPluginCapabilities.FullPermissionConfirmation[^1].PluginId == "matcha",
+        "Matcha is not the final independently confirmed permission group.");
 }
 
 static async Task ValidateSilverDasherNotificationIpcAsync()
@@ -2405,6 +2425,49 @@ static async Task ValidateSilverDasherNotificationIpcAsync()
             HostMessageTypes.CommandRequest,
             StringComparison.Ordinal),
         "SilverDasher notification did not use its independent typed Host IPC channel.");
+}
+
+static async Task ValidateMatchaTypedIpcAsync()
+{
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var client = new HostIpcClient(
+        new EncounterStateStore(),
+        new PluginLogger(log));
+    HostMatchaNotification? notification = null;
+    HostMatchaLogLine? logLine = null;
+    HostTtsRequest? tts = null;
+    client.MatchaNotificationRequested += (_, value) => notification = value;
+    client.MatchaLogLineRequested += (_, value) => logLine = value;
+    client.MatchaTtsRequested += (_, value) => tts = value;
+    var applyMessage = typeof(HostIpcClient).GetMethod(
+                           "ApplyMessage",
+                           BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostIpcClient).FullName,
+                           "ApplyMessage");
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "matcha-typed-ipc-smoke",
+        1,
+        HostMessageTypes.MatchaNotification,
+        HostMessagePriority.Critical,
+        new HostMatchaNotification("Windows fallback"))]);
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "matcha-typed-ipc-smoke",
+        2,
+        HostMessageTypes.MatchaLogLine,
+        HostMessagePriority.Data,
+        new HostMatchaLogLine("00|matcha"))]);
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "matcha-typed-ipc-smoke",
+        3,
+        HostMessageTypes.MatchaTtsRequest,
+        HostMessagePriority.Control,
+        new HostTtsRequest("matcha speech", "matcha"))]);
+    Assert(
+        notification?.Message == "Windows fallback" &&
+        logLine?.Line == "00|matcha" &&
+        tts is { Text: "matcha speech", Source: "matcha" },
+        "Matcha notification, log, or TTS crossed an untyped/shared command channel.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -2586,9 +2649,9 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         configuration);
 
     var pending = manager.GetPendingDisclosures();
-    Assert(pending.Count == 4, "A new install did not require all four bundled extension disclosures.");
+    Assert(pending.Count == 5, "A new install did not require all five bundled extension disclosures.");
     Assert(
-        manager.GetDisclosures().Count == 4,
+        manager.GetDisclosures().Count == 5,
         "The third-party notice did not expose every bundled extension source.");
     Assert(
         pending.Any(plugin =>
@@ -2619,19 +2682,33 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
             File.Exists(plugin.PackagePath)),
         "SilverDasher complete-package version, support group, fixed hash, or bundled artifact is missing.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "matcha" &&
+            plugin.Version == "26.8.10.829" &&
+            plugin.License == "AGPL-3.0" &&
+            plugin.DisableOnlineUpdates &&
+            plugin.EnableAfterInstall &&
+            plugin.SourceUrl.EndsWith(
+                "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
+                StringComparison.Ordinal) &&
+            plugin.PackageSha256 == "9737b120c795ea207a651fe15d7a390f732aab377ceeecad959ad88bb621ac1c" &&
+            plugin.Sha256 == "d55d7d8bedfa90665422c42b86b1ca102896d360c7d077e4dfb2248a1cb2e8b5" &&
+            File.Exists(plugin.PackagePath)),
+        "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
     await manager.InstallAndAcknowledgeAsync(pending, CancellationToken.None);
     Assert(
         manager.GetPendingDisclosures().Count == 0,
         "Acknowledged current bundled DLLs still required disclosure.");
     Assert(
-        manager.GetDisclosures().Count == 4 &&
+        manager.GetDisclosures().Count == 5 &&
         manager.GetDisclosures().All(plugin =>
             !string.IsNullOrWhiteSpace(plugin.Author) &&
             Uri.TryCreate(plugin.ProjectUrl, UriKind.Absolute, out _)),
         "Acknowledged DLL author and project URL disclosures disappeared from the notice.");
     var installed = installer.Discover(configuration.DisabledActPluginIds);
-    Assert(installed.Count == 4, "Not all bundled extensions were installed.");
+    Assert(installed.Count == 5, "Not all bundled extensions were installed.");
     var installedSilverDasher = installed.Single(plugin =>
         plugin.Manifest.Id == "silverdasher");
     Assert(
@@ -2640,6 +2717,34 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         installed.Where(plugin => plugin.Manifest.Id != "silverdasher").All(plugin => plugin.Enabled),
         "Installing SilverDasher unexpectedly changed another bundled extension's enabled state.");
+    var installedMatcha = installed.Single(plugin => plugin.Manifest.Id == "matcha");
+    Assert(
+        installedMatcha.Enabled &&
+        installed[^1].Manifest.Id == "matcha" &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "Cafe.Matcha.dll")) &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "data",
+            "fate.json")) &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "upstream",
+            "Cafe.Matcha.Upstream.dll")) &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "upstream",
+            "Cafe.Matcha.Runtime.bin")),
+        "The complete Matcha package was not installed enabled and ordered after SilverDasher.");
     Assert(
         File.Exists(Path.Combine(
             installedSilverDasher.InstallDirectory,
@@ -2703,7 +2808,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             installed.All(plugin => onlineUpdateIds.Contains(plugin.Manifest.Id)
                 ? !manager.IsAllowedToLoad(plugin)
                 : manager.IsAllowedToLoad(plugin)),
-            "Online-updated DLLs were not gated, or the hash-fixed SilverDasher package was unnecessarily disabled.");
+            "Online-updated DLLs were not gated, or a hash-fixed complete package was unnecessarily disabled.");
 
         await manager.InstallAndAcknowledgeAsync(
             onlinePending,
@@ -2741,7 +2846,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         installer,
         configuration);
     Assert(
-        nextRelease.GetPendingDisclosures().Count == 4,
+        nextRelease.GetPendingDisclosures().Count == 5,
         "A DalamudActCompat update did not require every bundled extension disclosure again.");
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
@@ -5347,6 +5452,11 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.8.10.829-dact1.zip",
+        "BundledActPlugins/matcha/LICENSE.txt",
+        "BundledActPlugins/matcha/BUILD.md",
+        "BundledActPlugins/matcha/dact-compat.patch",
+        "BundledActPlugins/matcha/GenerateRuntimeData.ps1",
     };
     foreach (var required in requiredBundledPluginFiles)
     {

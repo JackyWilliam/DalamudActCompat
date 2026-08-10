@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO.Compression;
 using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
@@ -42,6 +43,7 @@ ValidateFoxTtsDefaultConfiguration();
 await ValidateSequenceRegressionTerminatesHostAsync();
 await ValidateExpiredMessageIsDroppedAsync();
 await ValidateHostCrashBreaksOnlyPipeAsync();
+await ValidateDedicatedHostCrashDoesNotAffectSharedHostAsync();
 await ValidateAbruptClientDisconnectAsync();
 await ValidateBlockedReaderRemainsOutOfProcessAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
@@ -63,6 +65,17 @@ if (!string.IsNullOrWhiteSpace(silverDasherRoot) && Directory.Exists(silverDashe
     ValidateSilverDasherAssemblyRewrite(silverDasherRoot);
     await ValidateSilverDasherLoadsOutOfProcessAsync(silverDasherRoot);
 }
+var matchaPackage = Path.Combine(
+    FindProjectRoot(),
+    "vendor",
+    "BundledActPlugins",
+    "matcha",
+    "Cafe.Matcha-26.8.10.829-dact1.zip");
+if (File.Exists(matchaPackage))
+{
+    ValidateMatchaAssemblyContract(matchaPackage);
+    await ValidateMatchaLoadsOutOfProcessAsync(matchaPackage);
+}
 if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
@@ -78,6 +91,10 @@ if (triggernometryAssembly is not null)
 if (!string.IsNullOrWhiteSpace(silverDasherRoot))
 {
     completion += " The original SilverDasher loader/core rewrite test passed without changing its DLLs.";
+}
+if (File.Exists(matchaPackage))
+{
+    completion += " The hash-pinned Matcha source bridge, real dedicated-Host load, bidirectional network, notification, and unload tests passed.";
 }
 if (pluginRoot is not null)
 {
@@ -824,6 +841,91 @@ async Task ValidateHostCrashBreaksOnlyPipeAsync()
         {
             // A broken pipe is the expected alternate result.
         }
+    }
+}
+
+async Task ValidateDedicatedHostCrashDoesNotAffectSharedHostAsync()
+{
+    var (sharedHost, sharedPipe, sharedSession) = await StartConnectedHostAsync();
+    var (dedicatedHost, dedicatedPipe, dedicatedSession) = await StartConnectedHostAsync();
+    await using (sharedPipe)
+    await using (dedicatedPipe)
+    using (sharedHost)
+    using (dedicatedHost)
+    {
+        _ = await ReadWithTimeoutAsync(sharedPipe);
+        await HostFrameCodec.WriteAsync(
+            sharedPipe.Writer,
+            HostEnvelope.Create(
+                sharedSession,
+                1,
+                HostMessageTypes.Hello,
+                HostMessagePriority.Control,
+                new HostHello(
+                    "shared-host-smoke",
+                    "1",
+                    Environment.ProcessId,
+                    [HostProtocol.CurrentVersion])),
+            CancellationToken.None);
+        await ReadUntilAsync(sharedPipe, HostMessageTypes.HelloAck);
+
+        _ = await ReadWithTimeoutAsync(dedicatedPipe);
+        await HostFrameCodec.WriteAsync(
+            dedicatedPipe.Writer,
+            HostEnvelope.Create(
+                dedicatedSession,
+                1,
+                HostMessageTypes.Hello,
+                HostMessagePriority.Control,
+                new HostHello(
+                    "matcha-host-smoke",
+                    "1",
+                    Environment.ProcessId,
+                    [HostProtocol.CurrentVersion])),
+            CancellationToken.None);
+        await ReadUntilAsync(dedicatedPipe, HostMessageTypes.HelloAck);
+
+        dedicatedHost.Kill(entireProcessTree: true);
+        await dedicatedHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
+
+        await HostFrameCodec.WriteAsync(
+            sharedPipe.Writer,
+            HostEnvelope.Create(
+                sharedSession,
+                2,
+                HostMessageTypes.CommandRequest,
+                HostMessagePriority.Control,
+                new HostCommandRequest(
+                    "untrusted.matcha-crash-smoke",
+                    "powershell",
+                    new Dictionary<string, string>()),
+                "shared-after-matcha-crash"),
+            CancellationToken.None);
+        var response = await ReadUntilAsync(sharedPipe, HostMessageTypes.CommandResult);
+        var result = response.Payload.Deserialize<HostCommandResult>()
+                     ?? throw new InvalidDataException(
+                         "Shared Host returned no command result after the Matcha Host crash.");
+        Assert(
+            !result.Success && result.Status == "denied",
+            "The shared Host stopped responding after the dedicated Matcha Host crashed.");
+
+        await HostFrameCodec.WriteAsync(
+            sharedPipe.Writer,
+            HostEnvelope.Create(
+                sharedSession,
+                3,
+                HostMessageTypes.Shutdown,
+                HostMessagePriority.Control,
+                new HostHealth(
+                    "stopping",
+                    "dual-host crash isolation smoke",
+                    DateTimeOffset.UtcNow)),
+            CancellationToken.None);
+        await ReadUntilAsync(sharedPipe, HostMessageTypes.ShutdownAck);
+        await sharedHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        Assert(
+            sharedHost.ExitCode == 0,
+            $"Shared Host exit code after Matcha crash was {sharedHost.ExitCode}.");
     }
 }
 
@@ -1623,6 +1725,287 @@ void ValidateTriggernometryLaunchProcessPatch()
         $"realChecks={realAdministratorChecks}.");
 }
 
+void ValidateMatchaAssemblyContract(string packagePath)
+{
+    var temporaryRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-Matcha-Rewrite-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(temporaryRoot);
+    try
+    {
+        ZipFile.ExtractToDirectory(packagePath, temporaryRoot);
+        var assemblyPath = Path.Combine(
+            temporaryRoot,
+            "Plugins",
+            "Cafe.Matcha",
+            "Cafe.Matcha.dll");
+        var upstreamPath = Path.Combine(
+            temporaryRoot,
+            "Plugins",
+            "Cafe.Matcha",
+            "upstream",
+            "Cafe.Matcha.Upstream.dll");
+        var runtimeDataPath = Path.Combine(
+            temporaryRoot,
+            "Plugins",
+            "Cafe.Matcha",
+            "upstream",
+            "Cafe.Matcha.Runtime.bin");
+        var originalHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assemblyPath)));
+        Assert(
+            originalHash == "D55D7D8BEDFA90665422C42B86B1CA102896D360C7D077E4DFB2248A1CB2E8B5",
+            "The bundled Matcha entry DLL does not match its disclosed fixed hash.");
+        Assert(
+            Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(upstreamPath))) ==
+            "EF485B027FE84150768A8498331BEFCE5C997047FADF7B38B766EC9703818ED6",
+            "The bundled Matcha upstream companion does not match its disclosed fixed hash.");
+        Assert(
+            Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(runtimeDataPath))) ==
+            "D8D134DDBBE60E82C6C3C28C8058446380F5C6BABD73A2666E9575E1E0C44200",
+            "The sealed Matcha runtime data does not match its disclosed fixed hash.");
+
+        ValidateLoadedMatchaRuntime(assemblyPath);
+
+        using var definition = AssemblyDefinition.ReadAssembly(assemblyPath);
+        var bridgeType = definition.MainModule.Types
+            .SelectMany(EnumerateCecilTypes)
+            .Single(type => type.FullName == "Cafe.Matcha.Utils.DactBridge");
+        Assert(
+            bridgeType.Fields.Any(field =>
+                field.Name == "ContractVersion" &&
+                field.IsLiteral &&
+                string.Equals(field.Constant as string, "1", StringComparison.Ordinal)),
+            "Matcha does not disclose the expected DACT bridge contract.");
+        var methods = definition.MainModule.Types
+            .SelectMany(EnumerateCecilTypes)
+            .SelectMany(type => type.Methods)
+            .Where(method => method.HasBody)
+            .ToArray();
+        var callsOutsideBridge = methods
+            .Where(method => method.DeclaringType != bridgeType)
+            .SelectMany(method => method.Body.Instructions)
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .ToArray();
+        var readBridge = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "ReadAllText");
+        var writeBridge = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "WriteAllText");
+        var userReadBridge = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "ReadUserTextFile");
+        var userWriteBridge = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "WriteUserTextFile");
+        var processBridge = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "StartProcess");
+        var networkDemand = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "Demand");
+        var notificationBridge = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == bridgeType.FullName &&
+            call.Name == "SendNotification");
+        var directFileIo = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == typeof(File).FullName &&
+            call.Name is nameof(File.ReadAllText) or nameof(File.WriteAllText));
+        var directProcessStarts = callsOutsideBridge.Count(call =>
+            call.DeclaringType.FullName == typeof(Process).FullName &&
+            call.Name == nameof(Process.Start));
+        Assert(
+            readBridge == 2 && writeBridge == 1 &&
+            userReadBridge == 1 && userWriteBridge == 1 && processBridge == 4 &&
+            networkDemand == 1 && notificationBridge == 1 &&
+            directFileIo == 0 && directProcessStarts == 0,
+            "Matcha did not preserve its exact source bridge surface: " +
+            $"read={readBridge}, write={writeBridge}, " +
+            $"userRead={userReadBridge}, userWrite={userWriteBridge}, process={processBridge}, " +
+            $"network={networkDemand}, notification={notificationBridge}, " +
+            $"directFile={directFileIo}, directProcess={directProcessStarts}.");
+        Assert(
+            Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assemblyPath))) ==
+            originalHash,
+            "Matcha compatibility validation changed the installed DLL.");
+
+        ValidateMatchaNotificationRouting();
+        ValidateMatchaUserTemplateFileBoundary();
+    }
+    finally
+    {
+        Directory.Delete(temporaryRoot, recursive: true);
+    }
+
+    static void ValidateLoadedMatchaRuntime(string assemblyPath)
+    {
+        var context = new AssemblyLoadContext(
+            $"matcha-contract-{Guid.NewGuid():N}",
+            isCollectible: true);
+        var loadedAssembly = LegacyAssemblyRewriter.LoadMatcha(assemblyPath, context);
+        if (loadedAssembly.GetName().Name != "Cafe.Matcha" ||
+            !string.IsNullOrEmpty(loadedAssembly.Location))
+        {
+            throw new InvalidOperationException(
+                "Matcha was not loaded from its validated non-locking image.");
+        }
+
+        var runtimeConstants = loadedAssembly
+            .GetType("Cafe.Matcha.Constant.Secret", throwOnError: true)!
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.FieldType == typeof(string))
+            .ToDictionary(
+                field => field.Name,
+                field => field.GetValue(null) as string ?? string.Empty,
+                StringComparer.Ordinal);
+        if (!runtimeConstants.TryGetValue("TelemetryRoot", out var telemetryRoot) ||
+            !Uri.TryCreate(telemetryRoot, UriKind.Absolute, out var telemetryUri) ||
+            telemetryUri.Scheme != Uri.UriSchemeHttps ||
+            !runtimeConstants.TryGetValue("UniversalisKey", out var universalisKey) ||
+            string.IsNullOrWhiteSpace(universalisKey) ||
+            !runtimeConstants.TryGetValue("TelemetryFate", out var telemetryFate) ||
+            !Guid.TryParse(telemetryFate, out _) ||
+            !runtimeConstants.TryGetValue("TelemetryNpc", out var telemetryNpc) ||
+            !Guid.TryParse(telemetryNpc, out _))
+        {
+            throw new InvalidOperationException(
+                "Matcha did not receive the hash-pinned upstream runtime constants.");
+        }
+
+        context.Unload();
+    }
+}
+
+void ValidateMatchaNotificationRouting()
+{
+    var configurePermissions = typeof(HostPluginBridge).GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   typeof(HostPluginBridge).FullName,
+                                   "ConfigurePermissions");
+    var configureWindowsWriter = typeof(HostPluginBridge).GetMethod(
+                                     "ConfigureMatchaNotificationWriter",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new MissingMethodException(
+                                     typeof(HostPluginBridge).FullName,
+                                     "ConfigureMatchaNotificationWriter");
+    var configureSender = typeof(HostPluginBridge).GetMethod(
+                              "Configure",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new MissingMethodException(
+                              typeof(HostPluginBridge).FullName,
+                              "Configure");
+    configurePermissions.Invoke(null, [new HostPermissionSnapshot(
+        new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["matcha"] = ["ReadCombatLogs"],
+        },
+        ["matcha"])]);
+
+    var windowsCalls = 0;
+    var fallbackCalls = 0;
+    string? fallbackType = null;
+    object? fallbackPayload = null;
+    Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> sender =
+        (type, _, payload, _, _) =>
+        {
+            fallbackCalls++;
+            fallbackType = type;
+            fallbackPayload = payload;
+            return true;
+        };
+    configureSender.Invoke(null, [sender]);
+    configureWindowsWriter.Invoke(null, [(Func<string, bool>)(_ =>
+    {
+        windowsCalls++;
+        return true;
+    })]);
+    Assert(
+        HostPluginBridge.SendMatchaNotification("Windows first") &&
+        windowsCalls == 1 && fallbackCalls == 0,
+        "Matcha notification did not prefer its dedicated Host Windows channel.");
+
+    configureWindowsWriter.Invoke(null, [(Func<string, bool>)(_ => false)]);
+    Assert(
+        HostPluginBridge.SendMatchaNotification("Typed fallback") &&
+        fallbackCalls == 1 &&
+        fallbackType == HostMessageTypes.MatchaNotification &&
+        fallbackPayload is HostMatchaNotification { Message: "Typed fallback" },
+        "Matcha notification did not use its typed game-side fallback channel.");
+    configureWindowsWriter.Invoke(null, [null]);
+}
+
+void ValidateMatchaUserTemplateFileBoundary()
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-Matcha-Template-{Guid.NewGuid():N}");
+    var pluginRoot = Path.Combine(root, "plugin");
+    var configRoot = Path.Combine(root, "config");
+    var userRoot = Path.Combine(root, "user-selected");
+    Directory.CreateDirectory(pluginRoot);
+    Directory.CreateDirectory(configRoot);
+    Directory.CreateDirectory(userRoot);
+    var configurePermissions = typeof(HostPluginBridge).GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   typeof(HostPluginBridge).FullName,
+                                   "ConfigurePermissions");
+    var configureContext = typeof(HostPluginBridge).GetMethod(
+                               "ConfigureMatchaContext",
+                               BindingFlags.Static | BindingFlags.NonPublic)
+                           ?? throw new MissingMethodException(
+                               typeof(HostPluginBridge).FullName,
+                               "ConfigureMatchaContext");
+    var clearContext = typeof(HostPluginBridge).GetMethod(
+                           "ClearMatchaContext",
+                           BindingFlags.Static | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostPluginBridge).FullName,
+                           "ClearMatchaContext");
+    try
+    {
+        configurePermissions.Invoke(null, [new HostPermissionSnapshot(
+            new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["matcha"] = ["ReadLocalConfiguration", "WriteFiles"],
+            },
+            ["matcha"])]);
+        configureContext.Invoke(null, [pluginRoot, configRoot, null]);
+
+        var templatePath = Path.Combine(userRoot, "watch-list.json");
+        HostPluginBridge.WriteMatchaUserTextFile(templatePath, "[1,2,3]");
+        Assert(
+            HostPluginBridge.ReadMatchaUserTextFile(templatePath) == "[1,2,3]",
+            "Matcha could not round-trip a JSON template explicitly selected by the user.");
+
+        AssertThrows<UnauthorizedAccessException>(
+            () => HostPluginBridge.WriteMatchaUserTextFile(
+                Path.Combine(userRoot, "watch-list.txt"),
+                "not-json"),
+            "Matcha user-selected file bridge accepted a non-JSON path.");
+        AssertThrows<UnauthorizedAccessException>(
+            () => HostPluginBridge.WriteMatchaTextFile(
+                Path.Combine(userRoot, "generic-write.json"),
+                "{}"),
+            "Matcha generic configuration bridge escaped its assigned config root.");
+    }
+    finally
+    {
+        clearContext.Invoke(null, null);
+        configurePermissions.Invoke(null, [new HostPermissionSnapshot(
+            new Dictionary<string, IReadOnlyList<string>>(),
+            [])]);
+        Directory.Delete(root, recursive: true);
+    }
+}
+
 void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
 {
     var loaderPath = Directory.EnumerateFiles(
@@ -1955,6 +2338,202 @@ void ValidateSilverDasherNotificationRouting()
     {
         configureWindowsWriter.Invoke(null, [null]);
         configureSender.Invoke(null, [null]);
+    }
+}
+
+async Task ValidateMatchaLoadsOutOfProcessAsync(string packagePath)
+{
+    var temporaryRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-Matcha-Host-{Guid.NewGuid():N}");
+    var temporaryPluginRoot = Path.Combine(temporaryRoot, "plugins");
+    var temporaryConfigRoot = Path.Combine(temporaryRoot, "config");
+    var matchaInstallRoot = Path.Combine(temporaryPluginRoot, "matcha");
+    Directory.CreateDirectory(matchaInstallRoot);
+    Directory.CreateDirectory(Path.Combine(temporaryConfigRoot, "Config"));
+    try
+    {
+        ZipFile.ExtractToDirectory(packagePath, matchaInstallRoot);
+        var entryAssembly = Path.Combine(
+            matchaInstallRoot,
+            "Plugins",
+            "Cafe.Matcha",
+            "Cafe.Matcha.dll");
+        await File.WriteAllTextAsync(
+            Path.Combine(matchaInstallRoot, "actcompat.plugin.json"),
+            JsonSerializer.Serialize(new
+            {
+                id = "matcha",
+                name = "Cafe.Matcha",
+                version = "26.8.10.829",
+                entryAssembly = Path.GetRelativePath(matchaInstallRoot, entryAssembly),
+                entryType = "Cafe.Matcha.MatchaInit",
+                hostApiVersion = 1,
+            }));
+
+        var pluginDirectory = Path.GetDirectoryName(entryAssembly)!;
+        var pathHash = Convert.ToHexString(
+            System.Security.Cryptography.MD5.HashData(
+                Encoding.UTF8.GetBytes(pluginDirectory)));
+        await File.WriteAllTextAsync(
+            Path.Combine(temporaryConfigRoot, "Config", "Cafe.Matcha.config"),
+            JsonSerializer.Serialize(new
+            {
+                Hash = pathHash,
+                telemetry = new
+                {
+                    enable = false,
+                    uuid = (string?)null,
+                    agreement = "no",
+                },
+                output = new
+                {
+                    toast = false,
+                    tts = false,
+                },
+            }));
+
+        var (host, pipe, session) = await StartConnectedHostAsync(
+            loadPlugins: true,
+            pluginRootOverride: temporaryPluginRoot,
+            configRootOverride: temporaryConfigRoot);
+        await using (pipe)
+        using (host)
+        {
+            try
+            {
+                _ = await ReadWithTimeoutAsync(pipe);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        1,
+                        HostMessageTypes.Hello,
+                        HostMessagePriority.Control,
+                        new HostHello(
+                            "game-bridge",
+                            "1",
+                            Environment.ProcessId,
+                            [HostProtocol.CurrentVersion])),
+                    CancellationToken.None);
+                await ReadUntilAsync(pipe, HostMessageTypes.HelloAck);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        2,
+                        HostMessageTypes.Permissions,
+                        HostMessagePriority.Control,
+                        new HostPermissionSnapshot(
+                            new Dictionary<string, IReadOnlyList<string>>
+                            {
+                                ["matcha"] =
+                                [
+                                    "ReadCombatLogs",
+                                    "ReadLocalConfiguration",
+                                    "TextToSpeech",
+                                    "NetworkRequest",
+                                    "LaunchExternalProcess",
+                                    "WriteFiles",
+                                ],
+                            },
+                            ["matcha"])),
+                    CancellationToken.None);
+
+                var healthEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
+                var health = healthEnvelope.Payload.Deserialize<HostHealth>()
+                             ?? throw new InvalidDataException(
+                                 "Matcha Host returned no health state.");
+                Assert(
+                    health.State == "plugins.ready" &&
+                    health.Detail.Contains("matcha", StringComparison.OrdinalIgnoreCase),
+                    $"Matcha did not initialize in its dedicated Host: {health.State}: {health.Detail}");
+
+                var packet = new byte[64];
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        3,
+                        HostMessageTypes.MatchaNetworkReceived,
+                        HostMessagePriority.Data,
+                        new HostMatchaNetworkEvent("down", 1, packet)),
+                    CancellationToken.None);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        4,
+                        HostMessageTypes.MatchaNetworkSent,
+                        HostMessagePriority.Data,
+                        new HostMatchaNetworkEvent("up", 2, packet)),
+                    CancellationToken.None);
+
+                HostHeartbeat? heartbeatState = null;
+                for (var attempt = 0; attempt < 5; attempt++)
+                {
+                    var heartbeat = await ReadUntilAsync(pipe, HostMessageTypes.Heartbeat);
+                    heartbeatState = heartbeat.Payload.Deserialize<HostHeartbeat>();
+                    if (heartbeatState?.LastReceivedSequence >= 4)
+                    {
+                        break;
+                    }
+                }
+                Assert(
+                    heartbeatState is not null &&
+                    heartbeatState.LastReceivedSequence >= 4 &&
+                    heartbeatState.Stages.Any(stage =>
+                        stage.PluginId == "matcha" &&
+                        stage.Stage == "InitPlugin" &&
+                        stage.State == "success") &&
+                    heartbeatState.Stages.Any(stage =>
+                        stage.PluginId == "matcha" &&
+                        stage.Stage == "Bidirectional network" &&
+                        stage.State == "success") &&
+                    heartbeatState.Stages.All(stage =>
+                        stage.PluginId != "matcha" || stage.State != "failed"),
+                    "Matcha RX/TX frames or dedicated compatibility stages failed.");
+
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        5,
+                        HostMessageTypes.Shutdown,
+                        HostMessagePriority.Control,
+                        new HostHealth(
+                            "stopping",
+                            "Matcha smoke",
+                            DateTimeOffset.UtcNow)),
+                    CancellationToken.None);
+                await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert(
+                    host.ExitCode == 0,
+                    $"Matcha dedicated Host exited with code {host.ExitCode}.");
+            }
+            catch (Exception ex)
+            {
+                if (!host.HasExited)
+                {
+                    host.Kill(entireProcessTree: true);
+                }
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                var (output, errors) = ReadProcessLog(host);
+                throw new InvalidOperationException(
+                    $"Matcha dedicated Host load failed.{Environment.NewLine}" +
+                    $"stdout:{Environment.NewLine}{output}{Environment.NewLine}" +
+                    $"stderr:{Environment.NewLine}{errors}",
+                    ex);
+            }
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(temporaryRoot))
+        {
+            Directory.Delete(temporaryRoot, recursive: true);
+        }
     }
 }
 
@@ -2549,6 +3128,21 @@ string FindProjectRoot()
     }
 
     throw new DirectoryNotFoundException("Could not locate the DalamudActCompat repository root.");
+}
+
+static void AssertThrows<TException>(Action action, string message)
+    where TException : Exception
+{
+    try
+    {
+        action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
 }
 
 static void Assert(bool condition, string message)

@@ -1188,6 +1188,15 @@ public sealed class ControlCenterWindow : Window
                 "Hunts, FATEs, and cross-world status alerts"),
             out extensionChanged);
         hostConfigurationChanged |= extensionChanged;
+        changed |= DrawExtensionEntry(
+            installedPlugins,
+            "matcha",
+            text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
+            text.Get(
+                "狩猎与临危受命提醒；默认自启动并独占专属 Host",
+                "Hunt and FATE alerts; starts by default in its dedicated Host"),
+            out extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -1240,6 +1249,10 @@ public sealed class ControlCenterWindow : Window
             "silverdasher",
             text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
             BundledActPluginCapabilities.SilverDasher);
+        hostConfigurationChanged |= DrawPluginPermissions(
+            "matcha",
+            text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
+            BundledActPluginCapabilities.Matcha);
         changed |= hostConfigurationChanged;
         return changed;
     }

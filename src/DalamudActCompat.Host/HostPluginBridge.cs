@@ -39,12 +39,14 @@ public static class HostPluginBridge
     private static readonly object PostNamazuQueueLock = new();
     private static readonly object PostNamazuTaskLock = new();
     private static readonly object SilverDasherContextLock = new();
+    private static readonly object MatchaContextLock = new();
     private static readonly List<string> PostNamazuQueueIds = [];
     private static readonly HashSet<Task> PostNamazuQueueTasks = [];
     private static readonly CancellationTokenSource PostNamazuQueueShutdown = new();
     private static WeakReference<object>? triggerZoneListener;
     private static Action<string>? ttsWriter;
     private static Func<string, string, bool>? silverDasherNotificationWriter;
+    private static Func<string, bool>? matchaNotificationWriter;
     private static Action<string>? clipboardWriterForTests;
     private static long triggerEventDrops;
     private static int pendingTtsCount;
@@ -54,6 +56,9 @@ public static class HostPluginBridge
     private static SilverDasherDataSubscription? silverDasherSubscription;
     private static HostZoneEvent? silverDasherZone;
     private static string? silverDasherRoot;
+    private static MatchaDataSubscription? matchaSubscription;
+    private static string? matchaRoot;
+    private static string? matchaConfigRoot;
 
     internal static void Configure(
         Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> messageSender)
@@ -103,6 +108,38 @@ public static class HostPluginBridge
         lock (SilverDasherContextLock)
         {
             silverDasherSubscription = subscription;
+        }
+    }
+
+    internal static void ConfigureMatchaContext(
+        string pluginRoot,
+        string configRoot,
+        MatchaDataSubscription? subscription)
+    {
+        var fullPluginRoot = Path.GetFullPath(pluginRoot);
+        var fullConfigRoot = Path.GetFullPath(configRoot);
+        if (!Directory.Exists(fullPluginRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"Matcha plugin root does not exist: {fullPluginRoot}");
+        }
+
+        Directory.CreateDirectory(fullConfigRoot);
+        lock (MatchaContextLock)
+        {
+            matchaRoot = fullPluginRoot;
+            matchaConfigRoot = fullConfigRoot;
+            matchaSubscription = subscription;
+        }
+    }
+
+    internal static void ClearMatchaContext()
+    {
+        lock (MatchaContextLock)
+        {
+            matchaSubscription = null;
+            matchaRoot = null;
+            matchaConfigRoot = null;
         }
     }
 
@@ -259,6 +296,198 @@ public static class HostPluginBridge
     public static void DemandSilverDasherCapability(string capability)
         => Demand("silverdasher", capability);
 
+    public static void DemandMatchaCapability(string capability)
+        => Demand("matcha", capability);
+
+    public static string ReadMatchaTextFile(string path)
+    {
+        DemandMatchaCapability("ReadLocalConfiguration");
+        var fullPath = ValidateMatchaPath(path, write: false);
+        return File.ReadAllText(fullPath);
+    }
+
+    public static void WriteMatchaTextFile(string path, string contents)
+    {
+        DemandMatchaCapability("WriteFiles");
+        ArgumentNullException.ThrowIfNull(contents);
+        if (contents.Length > 8 * 1024 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(contents),
+                "Matcha file output exceeds 8 MiB.");
+        }
+
+        var fullPath = ValidateMatchaPath(path, write: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        File.WriteAllText(fullPath, contents);
+    }
+
+    public static string ReadMatchaUserTextFile(string path)
+    {
+        DemandMatchaCapability("ReadLocalConfiguration");
+        var fullPath = ValidateMatchaUserJsonPath(path);
+        var file = new FileInfo(fullPath);
+        if (!file.Exists)
+        {
+            throw new FileNotFoundException(
+                "The Matcha template selected by the user does not exist.",
+                fullPath);
+        }
+        if (file.Length > 8 * 1024 * 1024)
+        {
+            throw new InvalidDataException(
+                "The Matcha template selected by the user exceeds 8 MiB.");
+        }
+
+        return File.ReadAllText(fullPath);
+    }
+
+    public static void WriteMatchaUserTextFile(string path, string contents)
+    {
+        DemandMatchaCapability("WriteFiles");
+        ArgumentNullException.ThrowIfNull(contents);
+        if (contents.Length > 8 * 1024 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(contents),
+                "Matcha template output exceeds 8 MiB.");
+        }
+
+        var fullPath = ValidateMatchaUserJsonPath(path);
+        var directory = Path.GetDirectoryName(fullPath)
+                        ?? throw new InvalidDataException(
+                            "The Matcha template path has no parent directory.");
+        if (!Directory.Exists(directory))
+        {
+            throw new DirectoryNotFoundException(
+                $"The Matcha template directory does not exist: {directory}");
+        }
+
+        File.WriteAllText(fullPath, contents);
+    }
+
+    public static Process? StartMatchaProcess(ProcessStartInfo startInfo)
+    {
+        DemandMatchaCapability("LaunchExternalProcess");
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!Uri.TryCreate(startInfo.FileName, UriKind.Absolute, out var uri) ||
+            (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new UnauthorizedAccessException(
+                "Matcha may launch only an explicit HTTP or HTTPS project link.");
+        }
+
+        startInfo.UseShellExecute = true;
+        startInfo.RedirectStandardInput = false;
+        startInfo.RedirectStandardOutput = false;
+        startInfo.RedirectStandardError = false;
+        return Process.Start(startInfo);
+    }
+
+    public static void SendMatchaTts(string text)
+    {
+        DemandMatchaCapability("TextToSpeech");
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (text.Length > 2000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(text));
+        }
+
+        if (sender?.Invoke(
+                HostMessageTypes.MatchaTtsRequest,
+                HostMessagePriority.Control,
+                new HostTtsRequest(text, "matcha"),
+                null,
+                DateTimeOffset.UtcNow.AddSeconds(2)) != true)
+        {
+            throw new InvalidOperationException("Matcha TTS IPC queue rejected the request.");
+        }
+    }
+
+    public static bool SendMatchaNotification(string message)
+    {
+        DemandMatchaCapability("ReadCombatLogs");
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        if (message.Length > 1024)
+        {
+            throw new ArgumentOutOfRangeException(nameof(message));
+        }
+
+        var windowsWriter = Volatile.Read(ref matchaNotificationWriter);
+        if (windowsWriter is not null)
+        {
+            try
+            {
+                if (windowsWriter(message))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                ReportException("matcha", "Windows notification", ex);
+            }
+        }
+
+        return sender?.Invoke(
+                   HostMessageTypes.MatchaNotification,
+                   HostMessagePriority.Critical,
+                   new HostMatchaNotification(message),
+                   null,
+                   DateTimeOffset.UtcNow.AddSeconds(2)) == true;
+    }
+
+    internal static void RelayMatchaLogLine(string line)
+    {
+        DemandMatchaCapability("ReadCombatLogs");
+        ArgumentException.ThrowIfNullOrWhiteSpace(line);
+        if (line.Length > 64 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(nameof(line));
+        }
+
+        if (sender?.Invoke(
+                HostMessageTypes.MatchaLogLine,
+                HostMessagePriority.Data,
+                new HostMatchaLogLine(line),
+                null,
+                DateTimeOffset.UtcNow.AddSeconds(2)) != true)
+        {
+            throw new InvalidOperationException("Matcha log IPC queue rejected the line.");
+        }
+    }
+
+    internal static void PublishMatchaNetwork(
+        HostMatchaNetworkEvent networkEvent,
+        bool sent)
+    {
+        if (!IsAllowed("matcha", "ReadCombatLogs"))
+        {
+            return;
+        }
+
+        var subscription = Volatile.Read(ref matchaSubscription);
+        if (sent)
+        {
+            subscription?.PublishSent(
+                networkEvent.Connection,
+                networkEvent.Epoch,
+                networkEvent.Message);
+        }
+        else
+        {
+            subscription?.PublishReceived(
+                networkEvent.Connection,
+                networkEvent.Epoch,
+                networkEvent.Message);
+        }
+    }
+
     internal static void PublishSilverDasherNetwork(
         HostSilverDasherNetworkEvent networkEvent)
     {
@@ -335,6 +564,9 @@ public static class HostPluginBridge
     internal static void ConfigureSilverDasherNotificationWriter(
         Func<string, string, bool>? writer)
         => Volatile.Write(ref silverDasherNotificationWriter, writer);
+
+    internal static void ConfigureMatchaNotificationWriter(Func<string, bool>? writer)
+        => Volatile.Write(ref matchaNotificationWriter, writer);
 
     public static void PlayTtsFromGame(string text)
     {
@@ -1367,6 +1599,54 @@ public static class HostPluginBridge
     private static bool IsWebAddress(string? value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    private static string ValidateMatchaPath(string path, bool write)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        string pluginRoot;
+        string configRoot;
+        lock (MatchaContextLock)
+        {
+            pluginRoot = matchaRoot
+                         ?? throw new InvalidOperationException(
+                             "Matcha plugin root has not been configured.");
+            configRoot = matchaConfigRoot
+                         ?? throw new InvalidOperationException(
+                             "Matcha config root has not been configured.");
+        }
+
+        static bool IsInside(string candidate, string root)
+            => candidate.StartsWith(
+                root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+
+        if (write ? !IsInside(fullPath, configRoot) :
+            !IsInside(fullPath, configRoot) && !IsInside(fullPath, pluginRoot))
+        {
+            throw new UnauthorizedAccessException(
+                $"Matcha {(write ? "write" : "read")} path is outside its assigned roots: {fullPath}");
+        }
+
+        return fullPath;
+    }
+
+    private static string ValidateMatchaUserJsonPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        if (!string.Equals(
+                Path.GetExtension(fullPath),
+                ".json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException(
+                "Matcha template import and export accepts only JSON files selected by the user.");
+        }
+
+        return fullPath;
+    }
 
     private static Thread CreateClipboardThread()
     {

@@ -21,6 +21,7 @@ public sealed partial class ActPluginPackageInstaller
         new("act.foxtts", "ACT.FoxTTS", "ACT.FoxTTS.dll", "ACT.FoxTTS.FoxTTSPlugin"),
         new("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
         new("silverdasher", "银山雀儿 / SilverDasher", "SilverDasher.dll", "SilverDasher.Loader.Loader"),
+        new("matcha", "抹茶 / Cafe.Matcha", "Cafe.Matcha.dll", "Cafe.Matcha.MatchaInit"),
     ];
 
     public ActPluginPackageInstaller(PluginPaths paths)
@@ -136,8 +137,19 @@ public sealed partial class ActPluginPackageInstaller
             }
         }
 
-        return plugins.OrderBy(plugin => plugin.Manifest.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        return plugins
+            .OrderBy(plugin => GetPluginOrder(plugin.Manifest.Id))
+            .ThenBy(plugin => plugin.Manifest.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
+
+    private static int GetPluginOrder(string pluginId)
+        => pluginId.ToLowerInvariant() switch
+        {
+            "silverdasher" => 1,
+            "matcha" => 2,
+            _ => 0,
+        };
 
     private static void ExtractSafely(ZipArchive archive, string stagingDirectory)
     {
@@ -218,7 +230,7 @@ public sealed partial class ActPluginPackageInstaller
         }
 
         throw new InvalidDataException(
-            $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, Triggernometry, or SilverDasher release.");
+            $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, Triggernometry, SilverDasher, or Matcha release.");
     }
 
     private static void StageLooseDll(string dllPath, string stagingDirectory)
@@ -232,10 +244,10 @@ public sealed partial class ActPluginPackageInstaller
                 $"Unknown ACT plugin DLL '{fileName}'. Supported DLLs: {string.Join(", ", KnownPlugins.Select(plugin => plugin.AssemblyName))}.");
         }
 
-        if (known.Id == "silverdasher")
+        if (known.Id is "silverdasher" or "matcha")
         {
             throw new InvalidDataException(
-                "SilverDasher must be installed from its complete ZIP package so libs and data files are preserved.");
+                $"{known.Name} must be installed from its complete ZIP package so companion data files are preserved.");
         }
 
         File.Copy(dllPath, Path.Combine(stagingDirectory, fileName));
@@ -387,6 +399,33 @@ public sealed partial class ActPluginPackageInstaller
             {
                 throw new InvalidDataException(
                     "SilverDasher package must preserve its loader plus the sibling libs and data directories.");
+            }
+        }
+        else if (string.Equals(manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
+        {
+            var entryDirectory = Path.GetDirectoryName(entryAssembly)!;
+            string[] requiredFiles =
+            [
+                Path.Combine(entryDirectory, "data", "dynamic-event.json"),
+                Path.Combine(entryDirectory, "data", "fate.json"),
+                Path.Combine(entryDirectory, "data", "instance.json"),
+                Path.Combine(entryDirectory, "data", "patch.json"),
+                Path.Combine(entryDirectory, "data", "roulette.json"),
+                Path.Combine(entryDirectory, "data", "template.json"),
+                Path.Combine(entryDirectory, "data", "territory.json"),
+                Path.Combine(entryDirectory, "data", "type.json"),
+                Path.Combine(entryDirectory, "data", "world.json"),
+                Path.Combine(entryDirectory, "upstream", "Cafe.Matcha.Upstream.dll"),
+                Path.Combine(entryDirectory, "upstream", "Cafe.Matcha.Runtime.bin"),
+            ];
+            if (!string.Equals(
+                    Path.GetFileName(entryAssembly),
+                    "Cafe.Matcha.dll",
+                    StringComparison.OrdinalIgnoreCase) ||
+                requiredFiles.Any(path => !File.Exists(path)))
+            {
+                throw new InvalidDataException(
+                    "Matcha package must preserve its entry assembly, complete data directory, and upstream compatibility companions.");
             }
         }
     }

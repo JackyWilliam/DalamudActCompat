@@ -5,11 +5,12 @@ namespace DalamudActCompat.Protocol;
 
 public static class HostProtocol
 {
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int ControlQueueCapacity = 256;
     public const int DataQueueCapacity = 8192;
     public const int SilverDasherQueueCapacity = 512;
+    public const int MatchaNetworkQueueCapacity = 1024;
     public const long MaximumHostWorkingSetBytes = 1536L * 1024 * 1024;
     public const int MaximumHostThreadCount = 256;
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
@@ -53,6 +54,11 @@ public static class HostMessageTypes
     public const string SilverDasherZoneChanged = "silverdasher.event.zone";
     public const string SilverDasherNetworkReceived = "silverdasher.event.network.received";
     public const string SilverDasherNotification = "silverdasher.notification";
+    public const string MatchaNetworkReceived = "matcha.event.network.received";
+    public const string MatchaNetworkSent = "matcha.event.network.sent";
+    public const string MatchaNotification = "matcha.notification";
+    public const string MatchaLogLine = "matcha.log-line";
+    public const string MatchaTtsRequest = "matcha.tts.request";
 }
 
 public sealed record HostEnvelope(
@@ -144,6 +150,15 @@ public sealed record HostSilverDasherNetworkEvent(
 public sealed record HostSilverDasherNotification(
     string Message,
     string Detail);
+
+public sealed record HostMatchaNetworkEvent(
+    string Connection,
+    long Epoch,
+    byte[] Message);
+
+public sealed record HostMatchaNotification(string Message);
+
+public sealed record HostMatchaLogLine(string Line);
 
 public sealed record HostCombatEvent(
     bool InCombat,

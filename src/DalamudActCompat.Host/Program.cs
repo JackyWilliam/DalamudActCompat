@@ -315,6 +315,16 @@ internal static class Program
                                 "SilverDasher network event payload is invalid.");
                         HostPluginBridge.PublishSilverDasherNetwork(silverNetwork);
                         break;
+                    case HostMessageTypes.MatchaNetworkReceived:
+                    case HostMessageTypes.MatchaNetworkSent:
+                        var matchaNetwork =
+                            envelope.Payload.Deserialize<HostMatchaNetworkEvent>()
+                            ?? throw new InvalidDataException(
+                                "Matcha network event payload is invalid.");
+                        HostPluginBridge.PublishMatchaNetwork(
+                            matchaNetwork,
+                            envelope.Type == HostMessageTypes.MatchaNetworkSent);
+                        break;
                     case HostMessageTypes.CombatStarted:
                         if (Volatile.Read(ref pluginRuntimeReady) == 1)
                         {
