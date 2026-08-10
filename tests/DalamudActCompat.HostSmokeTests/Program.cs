@@ -14,6 +14,7 @@ using DalamudActCompat.Host;
 using DalamudActCompat.Protocol;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Newtonsoft.Json.Linq;
 
 if (args.Length is not (1 or 2 or 3))
 {
@@ -1669,10 +1670,25 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
             new HostPermissionSnapshot(
                 new Dictionary<string, IReadOnlyList<string>>
                 {
-                    ["silverdasher"] = ["NativeGameMemory"],
+                    ["silverdasher"] =
+                    [
+                        "NativeGameMemory",
+                        "ReadCombatLogs",
+                        "NetworkRequest",
+                    ],
                 },
                 ["silverdasher"]),
         ]);
+    var normalizedPayload = JObject.Parse(
+        HostPluginBridge.NormalizeSilverDasherMqttPayload(
+            "{\"i\":\"0\",\"hp\":\"100\",\"m\":\"816\",\"c\":{\"x\":\"958\",\"y\":\"3112\"}}"));
+    Assert(
+        normalizedPayload["i"]?.Type == JTokenType.Integer &&
+        normalizedPayload["hp"]?.Type == JTokenType.Integer &&
+        normalizedPayload["m"]?.Type == JTokenType.Integer &&
+        normalizedPayload["c"]?["x"]?.Type == JTokenType.Integer &&
+        normalizedPayload["c"]?["y"]?.Type == JTokenType.Integer,
+        "SilverDasher MQTT integer-string compatibility did not normalize the exact known fields.");
     var judge = rewrittenCore
                        .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
                        .GetMethod(
@@ -1775,6 +1791,29 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         var legacyTtsCalls = calls.Count(called =>
             called.DeclaringType.FullName == "Advanced_Combat_Tracker.FormActMain" &&
             called.Name == "TTS");
+        var notificationBridgeCalls = calls.Count(called =>
+            called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+            called.Name == nameof(HostPluginBridge.SendSilverDasherNotification));
+        var nativeNotificationCalls = calls.Count(called =>
+            called.DeclaringType.FullName is
+                "Windows.UI.Notifications.ToastNotificationManager" or
+                "Windows.UI.Notifications.ToastNotifier" or
+                "Microsoft.Toolkit.Uwp.Notifications.ToastContentBuilder");
+        var scanMobs = core.MainModule
+            .GetType("SilverDasher.ACT.Doppelgangers.Negotiator")
+            .Methods.Single(method => method.Name == "ScanMobs" && method.Parameters.Count == 0);
+        var combatantRepositoryCalls = scanMobs.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == "FFXIV_ACT_Plugin.Common.IDataRepository" &&
+            called.Name == "GetCombatantList" &&
+            called.Parameters.Count == 0);
+        var mqttNormalizationCalls = calls.Count(called =>
+            called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+            called.Name == nameof(HostPluginBridge.NormalizeSilverDasherMqttPayload));
+        var dynamicCombatantNames = scanMobs.Body.Instructions.Count(instruction =>
+                instruction.OpCode.Code == Code.Ldstr &&
+                instruction.Operand is string name &&
+                name is "DataRepository" or "GetCombatantList");
         var wpfDispatchCalls = calls.Count(called =>
             called.DeclaringType.FullName == "System.Windows.Threading.Dispatcher" &&
             called.Name == "Invoke" &&
@@ -1796,11 +1835,17 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         Assert(
             processBridgeCalls == 1 && legacyProcessCalls == 0 &&
             ttsBridgeCalls == 2 && legacyTtsCalls == 0 &&
+            notificationBridgeCalls == 1 && nativeNotificationCalls == 0 &&
+            combatantRepositoryCalls == 1 && dynamicCombatantNames == 0 &&
+            mqttNormalizationCalls == 1 &&
             wpfDispatchCalls >= 4 && winFormsUiDispatchCalls == 0 &&
             unknownOpcodeGuard,
-            "SilverDasher core did not isolate its exact process/TTS call sites: " +
+            "SilverDasher core did not isolate its exact process/TTS/notification/data call sites: " +
             $"processBridge={processBridgeCalls}, processLegacy={legacyProcessCalls}, " +
             $"ttsBridge={ttsBridgeCalls}, ttsLegacy={legacyTtsCalls}, " +
+            $"notificationBridge={notificationBridgeCalls}, notificationNative={nativeNotificationCalls}, " +
+            $"combatantRepository={combatantRepositoryCalls}, dynamicCombatant={dynamicCombatantNames}, " +
+            $"mqttNormalization={mqttNormalizationCalls}, " +
             $"wpfDispatch={wpfDispatchCalls}, winFormsDispatch={winFormsUiDispatchCalls}, " +
             $"unknownOpcodeGuard={unknownOpcodeGuard}.");
     }

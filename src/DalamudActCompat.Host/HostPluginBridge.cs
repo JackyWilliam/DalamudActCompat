@@ -163,6 +163,79 @@ public static class HostPluginBridge
         writer(text);
     }
 
+    public static bool SendSilverDasherNotification(string message, string detail)
+    {
+        DemandSilverDasherCapability("ReadCombatLogs");
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(detail);
+        if (message.Length is 0 or > 512 || detail.Length > 512)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(message),
+                "SilverDasher notification text must contain at most 512 characters per field.");
+        }
+
+        return sender?.Invoke(
+                   HostMessageTypes.SilverDasherNotification,
+                   HostMessagePriority.Critical,
+                   new HostSilverDasherNotification(message, detail),
+                   null,
+                   DateTimeOffset.UtcNow.AddSeconds(2)) == true;
+    }
+
+    public static string NormalizeSilverDasherMqttPayload(string payload)
+    {
+        DemandSilverDasherCapability("NetworkRequest");
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length == 0 || payload.Length > 64 * 1024)
+        {
+            return payload;
+        }
+
+        JObject root;
+        try
+        {
+            root = JObject.Parse(payload);
+        }
+        catch (Newtonsoft.Json.JsonException)
+        {
+            return payload;
+        }
+
+        var changed = NormalizeInteger(root, "i") |
+                      NormalizeInteger(root, "hp") |
+                      NormalizeInteger(root, "m");
+        if (root["c"] is JObject coordinates)
+        {
+            changed |= NormalizeInteger(coordinates, "x") |
+                       NormalizeInteger(coordinates, "y");
+        }
+
+        return changed
+            ? root.ToString(Newtonsoft.Json.Formatting.None)
+            : payload;
+    }
+
+    private static bool NormalizeInteger(JObject value, string propertyName)
+    {
+        if (value[propertyName] is not JValue
+            {
+                Type: JTokenType.String,
+                Value: string text,
+            } token ||
+            !int.TryParse(
+                text,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var number))
+        {
+            return false;
+        }
+
+        token.Value = number;
+        return true;
+    }
+
     public static void DemandSilverDasherCapability(string capability)
         => Demand("silverdasher", capability);
 

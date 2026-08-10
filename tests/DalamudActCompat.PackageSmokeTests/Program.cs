@@ -54,6 +54,7 @@ try
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
     ValidateSilverDasherPermissionIsolation();
+    await ValidateSilverDasherNotificationIpcAsync();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
@@ -2336,6 +2337,39 @@ static void ValidateSilverDasherPermissionIsolation()
                 new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher" },
                 StringComparer.Ordinal),
         "The explicit full-permission confirmation does not enable every SilverDasher declaration last.");
+}
+
+static async Task ValidateSilverDasherNotificationIpcAsync()
+{
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var client = new HostIpcClient(
+        new EncounterStateStore(),
+        new PluginLogger(log));
+    HostSilverDasherNotification? received = null;
+    client.SilverDasherNotificationRequested += (_, notification) => received = notification;
+    var applyMessage = typeof(HostIpcClient).GetMethod(
+                           "ApplyMessage",
+                           BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostIpcClient).FullName,
+                           "ApplyMessage");
+    applyMessage.Invoke(
+        client,
+        [
+            HostEnvelope.Create(
+                "silverdasher-notification-smoke",
+                1,
+                HostMessageTypes.SilverDasherNotification,
+                HostMessagePriority.Critical,
+                new HostSilverDasherNotification("测试通知", "坐标与状态")),
+        ]);
+    Assert(
+        received is { Message: "测试通知", Detail: "坐标与状态" } &&
+        !string.Equals(
+            HostMessageTypes.SilverDasherNotification,
+            HostMessageTypes.CommandRequest,
+            StringComparison.Ordinal),
+        "SilverDasher notification did not use its independent typed Host IPC channel.");
 }
 
 static void ValidateUnscramblerSupportPolicy()

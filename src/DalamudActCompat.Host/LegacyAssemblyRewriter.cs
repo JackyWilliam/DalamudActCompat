@@ -197,6 +197,9 @@ public static class LegacyAssemblyRewriter
             instruction.Operand = sendTts;
         }
 
+        RewriteSilverDasherNotifications(module);
+        RewriteSilverDasherCombatantLookup(module);
+        RewriteSilverDasherMqttPayload(module);
         RewriteSilverDasherUnknownOpcodeGuard(module);
         RewriteSilverDasherWpfDispatch(module);
 
@@ -410,6 +413,245 @@ public static class LegacyAssemblyRewriter
             "silverdasher",
             "SilverDasher.ManagedZodiark",
             output.ToArray());
+    }
+
+    private static void RewriteSilverDasherNotifications(ModuleDefinition module)
+    {
+        var notifier = module.GetType("SilverDasher.ACT.Doppelgangers.Notifier")
+                       ?? throw new TypeLoadException(
+                           "SilverDasher notification compatibility target is missing.");
+        var sendToast = notifier.Methods.SingleOrDefault(method =>
+            method.Name == "SendToast" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 4 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String &&
+            method.Parameters[1].ParameterType.FullName == "SilverDasher.ACT.Models.HuntState" &&
+            method.Parameters[2].ParameterType.MetadataType == MetadataType.String &&
+            method.Parameters[3].ParameterType.MetadataType == MetadataType.Boolean &&
+            method.ReturnType.MetadataType == MetadataType.Boolean &&
+            method.HasBody)
+                        ?? throw new MissingMethodException(
+                            notifier.FullName,
+                            "SendToast(string,HuntState,string,bool)");
+        var calls = sendToast.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .ToArray();
+        var uniqueCalls = calls
+            .DistinctBy(called => called.FullName)
+            .ToArray();
+        var configField = sendToast.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<FieldReference>()
+            .DistinctBy(field => field.FullName)
+            .SingleOrDefault(field =>
+                field.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Keeper" &&
+                field.Name == "Config")
+                          ?? throw new MissingFieldException(
+                              "SilverDasher.ACT.Doppelgangers.Keeper",
+                              "Config");
+        var mobsField = sendToast.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<FieldReference>()
+            .DistinctBy(field => field.FullName)
+            .SingleOrDefault(field =>
+                field.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Keeper" &&
+                field.Name == "Mobs")
+                        ?? throw new MissingFieldException(
+                            "SilverDasher.ACT.Doppelgangers.Keeper",
+                            "Mobs");
+        var getSystemToast = uniqueCalls.SingleOrDefault(called =>
+                                 called.DeclaringType.FullName == "SilverDasher.ACT.Models.Config" &&
+                                 called.Name == "get_SystemToast" &&
+                                 called.Parameters.Count == 0)
+                             ?? throw new MissingMethodException(
+                                 "SilverDasher.ACT.Models.Config",
+                                 "get_SystemToast");
+        var statusPushable = uniqueCalls.SingleOrDefault(called =>
+                                 called.DeclaringType.FullName == "SilverDasher.ACT.Models.Config" &&
+                                 called.Name == "StatusPushable" &&
+                                 called.Parameters.Count == 2)
+                             ?? throw new MissingMethodException(
+                                 "SilverDasher.ACT.Models.Config",
+                                 "StatusPushable");
+        var getKeeper = uniqueCalls.SingleOrDefault(called =>
+                            called.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Doppelganger" &&
+                            called.Name == "get_Keeper" &&
+                            called.Parameters.Count == 0)
+                        ?? throw new MissingMethodException(
+                            "SilverDasher.ACT.Doppelgangers.Doppelganger",
+                            "get_Keeper");
+        var getStateName = uniqueCalls.SingleOrDefault(called =>
+                               called.DeclaringType.FullName == "SilverDasher.ACT.Storages.MobStorage" &&
+                               called.Name == "GetStateName" &&
+                               called.Parameters.Count == 1)
+                           ?? throw new MissingMethodException(
+                               "SilverDasher.ACT.Storages.MobStorage",
+                               "GetStateName");
+        var concat = uniqueCalls.SingleOrDefault(called =>
+                         called.DeclaringType.FullName == typeof(string).FullName &&
+                         called.Name == nameof(string.Concat) &&
+                         called.Parameters.Count == 2 &&
+                         called.Parameters.All(parameter =>
+                             parameter.ParameterType.MetadataType == MetadataType.String))
+                     ?? throw new MissingMethodException(typeof(string).FullName, "Concat(string,string)");
+        var nativeNotificationCalls = calls.Count(called =>
+            called.DeclaringType.FullName is
+                "Windows.UI.Notifications.ToastNotificationManager" or
+                "Windows.UI.Notifications.ToastNotifier" or
+                "Microsoft.Toolkit.Uwp.Notifications.ToastContentBuilder");
+        if (nativeNotificationCalls != 7)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher toast surface changed; expected 7 native calls, found {nativeNotificationCalls}.");
+        }
+
+        var bridge = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.SendSilverDasherNotification),
+                BindingFlags.Public | BindingFlags.Static)!);
+        sendToast.Body = new Mono.Cecil.Cil.MethodBody(sendToast)
+        {
+            InitLocals = false,
+        };
+        var il = sendToast.Body.GetILProcessor();
+        var checkStatus = il.Create(OpCodes.Ldsfld, configField);
+        var dispatch = il.Create(OpCodes.Ldarg_1);
+        il.Append(il.Create(OpCodes.Ldarg, sendToast.Parameters[3]));
+        il.Append(il.Create(OpCodes.Brfalse_S, dispatch));
+        il.Append(il.Create(OpCodes.Ldsfld, configField));
+        il.Append(il.Create(OpCodes.Callvirt, getSystemToast));
+        il.Append(il.Create(OpCodes.Brtrue_S, checkStatus));
+        il.Append(il.Create(OpCodes.Ldc_I4_0));
+        il.Append(il.Create(OpCodes.Ret));
+        il.Append(checkStatus);
+        il.Append(il.Create(OpCodes.Ldstr, "Toast"));
+        il.Append(il.Create(OpCodes.Ldarg_2));
+        il.Append(il.Create(OpCodes.Callvirt, statusPushable));
+        il.Append(il.Create(OpCodes.Brtrue_S, dispatch));
+        il.Append(il.Create(OpCodes.Ldc_I4_0));
+        il.Append(il.Create(OpCodes.Ret));
+        il.Append(dispatch);
+        il.Append(il.Create(OpCodes.Ldarg_3));
+        il.Append(il.Create(OpCodes.Ldarg_0));
+        il.Append(il.Create(OpCodes.Call, getKeeper));
+        il.Append(il.Create(OpCodes.Ldfld, mobsField));
+        il.Append(il.Create(OpCodes.Ldarg_2));
+        il.Append(il.Create(OpCodes.Callvirt, getStateName));
+        il.Append(il.Create(OpCodes.Call, concat));
+        il.Append(il.Create(OpCodes.Call, bridge));
+        il.Append(il.Create(OpCodes.Ret));
+    }
+
+    private static void RewriteSilverDasherCombatantLookup(ModuleDefinition module)
+    {
+        var negotiator = module.GetType("SilverDasher.ACT.Doppelgangers.Negotiator")
+                         ?? throw new TypeLoadException(
+                             "SilverDasher combatant compatibility target is missing.");
+        var scanMobs = negotiator.Methods.SingleOrDefault(method =>
+            method.Name == "ScanMobs" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 0 &&
+            method.HasBody)
+                       ?? throw new MissingMethodException(negotiator.FullName, "ScanMobs()");
+        var ffdata = negotiator.Fields.SingleOrDefault(field =>
+                         field.Name == "ffdata" &&
+                         field.FieldType.FullName == "FFXIV_ACT_Plugin.Common.IDataRepository")
+                     ?? throw new MissingFieldException(negotiator.FullName, "ffdata");
+        var dynamicNames = scanMobs.Body.Instructions
+            .Where(instruction => instruction.OpCode.Code == Code.Ldstr)
+            .Select(instruction => instruction.Operand as string)
+            .Where(name => name is "DataRepository" or "GetCombatantList")
+            .ToArray();
+        var storeCombatants = scanMobs.Body.Instructions.SingleOrDefault(instruction =>
+            instruction.Offset == 0x00F4 && instruction.OpCode.Code == Code.Stloc_3);
+        var dynamicStart = scanMobs.Body.Instructions.SingleOrDefault(instruction =>
+            instruction.Offset == 0x001F &&
+            instruction.OpCode.Code == Code.Ldsfld &&
+            instruction.Operand is FieldReference field &&
+            field.DeclaringType.FullName == "SilverDasher.ACT.Doppelgangers.Negotiator/<>o__9");
+        if (dynamicNames.Length != 2 ||
+            !dynamicNames.Contains("DataRepository", StringComparer.Ordinal) ||
+            !dynamicNames.Contains("GetCombatantList", StringComparer.Ordinal) ||
+            dynamicStart is null ||
+            storeCombatants is null)
+        {
+            throw new InvalidOperationException(
+                "SilverDasher dynamic combatant lookup surface changed; refusing a broad rewrite.");
+        }
+
+        var block = scanMobs.Body.Instructions
+            .SkipWhile(instruction => instruction != dynamicStart)
+            .TakeWhile(instruction => instruction != storeCombatants)
+            .ToArray();
+        if (block.Length < 3 || scanMobs.Body.ExceptionHandlers.Any(handler =>
+                block.Contains(handler.TryStart) ||
+                block.Contains(handler.TryEnd) ||
+                block.Contains(handler.HandlerStart) ||
+                block.Contains(handler.HandlerEnd) ||
+                (handler.FilterStart is not null && block.Contains(handler.FilterStart))))
+        {
+            throw new InvalidOperationException(
+                "SilverDasher dynamic combatant lookup control flow changed; refusing a broad rewrite.");
+        }
+
+        var getCombatants = module.ImportReference(
+            typeof(FFXIV_ACT_Plugin.Common.IDataRepository).GetMethod(
+                nameof(FFXIV_ACT_Plugin.Common.IDataRepository.GetCombatantList),
+                BindingFlags.Public | BindingFlags.Instance,
+                null,
+                Type.EmptyTypes,
+                null)!);
+        foreach (var instruction in block)
+        {
+            instruction.OpCode = OpCodes.Nop;
+            instruction.Operand = null;
+        }
+
+        block[0].OpCode = OpCodes.Ldarg_0;
+        block[1].OpCode = OpCodes.Ldfld;
+        block[1].Operand = ffdata;
+        block[2].OpCode = OpCodes.Callvirt;
+        block[2].Operand = getCombatants;
+    }
+
+    private static void RewriteSilverDasherMqttPayload(ModuleDefinition module)
+    {
+        var notifier = module.GetType("SilverDasher.ACT.Doppelgangers.Notifier")
+                       ?? throw new TypeLoadException(
+                           "SilverDasher MQTT compatibility target is missing.");
+        var unpack = notifier.Methods.SingleOrDefault(method =>
+            method.Name == "Unpack" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 2 &&
+            method.Parameters.All(parameter =>
+                parameter.ParameterType.MetadataType == MetadataType.String) &&
+            method.ReturnType.MetadataType == MetadataType.Void &&
+            method.HasBody)
+                     ?? throw new MissingMethodException(
+                         notifier.FullName,
+                         "Unpack(string,string)");
+        var deserializeCalls = unpack.Body.Instructions.Count(instruction =>
+            instruction.Operand is GenericInstanceMethod called &&
+            called.DeclaringType.FullName == "Newtonsoft.Json.JsonConvert" &&
+            called.Name == "DeserializeObject" &&
+            called.GenericArguments.Count == 1 &&
+            called.GenericArguments[0].FullName == "Newtonsoft.Json.Linq.JObject");
+        if (deserializeCalls != 1)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher MQTT payload surface changed; expected 1 JSON parse, found {deserializeCalls}.");
+        }
+
+        var normalize = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.NormalizeSilverDasherMqttPayload),
+                BindingFlags.Public | BindingFlags.Static)!);
+        var first = unpack.Body.Instructions[0];
+        var il = unpack.Body.GetILProcessor();
+        il.InsertBefore(first, il.Create(OpCodes.Ldarg_2));
+        il.InsertBefore(first, il.Create(OpCodes.Call, normalize));
+        il.InsertBefore(first, il.Create(OpCodes.Starg, unpack.Parameters[1]));
     }
 
     private static void RewriteSilverDasherUnknownOpcodeGuard(ModuleDefinition module)

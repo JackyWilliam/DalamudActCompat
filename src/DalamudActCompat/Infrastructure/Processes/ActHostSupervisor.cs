@@ -56,6 +56,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         this.configDirectory = configDirectory;
         ipc.Faulted += OnIpcFaulted;
         ipc.CommandRequested += OnCommandRequested;
+        ipc.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         logFlushTimer = new Timer(
             _ => FlushLogs(),
             null,
@@ -93,6 +94,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             ipc.PluginStages);
 
     public event EventHandler<HostCommandInvocation>? CommandRequested;
+
+    public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -289,6 +292,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
         ipc.Faulted -= OnIpcFaulted;
         ipc.CommandRequested -= OnCommandRequested;
+        ipc.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
         logFlushTimer.Dispose();
         await ipc.DisposeAsync().ConfigureAwait(false);
         await process.DisposeAsync().ConfigureAwait(false);
@@ -425,6 +429,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     private void OnCommandRequested(object? sender, HostCommandInvocation command)
         => CommandRequested?.Invoke(this, command);
+
+    private void OnSilverDasherNotificationRequested(
+        object? sender,
+        HostSilverDasherNotification notification)
+        => SilverDasherNotificationRequested?.Invoke(this, notification);
 
     private async Task RestartAfterFaultAsync(Exception exception)
     {

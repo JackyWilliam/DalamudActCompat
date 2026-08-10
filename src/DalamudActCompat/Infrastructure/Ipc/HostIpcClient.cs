@@ -58,6 +58,8 @@ public sealed class HostIpcClient : IAsyncDisposable
 
     public event EventHandler<HostCommandInvocation>? CommandRequested;
 
+    public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
+
     public HostConnectionStatus Status => status;
 
     public int ControlQueueLength => outbound.ControlCount;
@@ -505,6 +507,20 @@ public sealed class HostIpcClient : IAsyncDisposable
                 CommandRequested?.Invoke(
                     this,
                     new HostCommandInvocation(envelope.CorrelationId, request));
+                break;
+            case HostMessageTypes.SilverDasherNotification:
+                var notification = envelope.Payload.Deserialize<HostSilverDasherNotification>();
+                if (notification is null ||
+                    string.IsNullOrWhiteSpace(notification.Message) ||
+                    notification.Message.Length > 512 ||
+                    notification.Detail is null ||
+                    notification.Detail.Length > 512)
+                {
+                    logger.Warning("ACT Host sent an invalid SilverDasher notification; request denied.");
+                    break;
+                }
+
+                SilverDasherNotificationRequested?.Invoke(this, notification);
                 break;
         }
     }

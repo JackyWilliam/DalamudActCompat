@@ -1,6 +1,7 @@
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.ImGuiFileDialog;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
@@ -162,6 +163,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
+        hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
             CancellationToken.None);
@@ -427,6 +429,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
+        hostSupervisor.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
 
         if (factoryResetCompleted)
         {
@@ -1783,6 +1786,39 @@ public sealed class Plugin : IDalamudPlugin
             false,
             "busy",
             "The bounded game-side command broker queue is full.");
+    }
+
+    private void OnSilverDasherNotificationRequested(
+        object? sender,
+        HostSilverDasherNotification notification)
+    {
+        try
+        {
+            _ = services.Framework.RunOnFrameworkThread(() =>
+            {
+                try
+                {
+                    services.NotificationManager.AddNotification(new Notification
+                    {
+                        Title = "银山雀儿 / SilverDasher",
+                        Content = string.IsNullOrWhiteSpace(notification.Detail)
+                            ? notification.Message
+                            : $"{notification.Message}\n{notification.Detail}",
+                        Type = NotificationType.Info,
+                    });
+                }
+                catch (Exception exception)
+                {
+                    logger.Error(
+                        exception,
+                        "Could not display the SilverDasher game-side notification.");
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            logger.Error(exception, "Could not display the SilverDasher game-side notification.");
+        }
     }
 
     private async Task RunHostCommandBrokerAsync(CancellationToken cancellationToken)

@@ -52,6 +52,7 @@ public static class HostMessageTypes
     public const string SilverDasherLogBatch = "silverdasher.event.log.batch";
     public const string SilverDasherZoneChanged = "silverdasher.event.zone";
     public const string SilverDasherNetworkReceived = "silverdasher.event.network.received";
+    public const string SilverDasherNotification = "silverdasher.notification";
 }
 
 public sealed record HostEnvelope(
@@ -139,6 +140,10 @@ public sealed record HostSilverDasherNetworkEvent(
     string Connection,
     long Epoch,
     byte[] Message);
+
+public sealed record HostSilverDasherNotification(
+    string Message,
+    string Detail);
 
 public sealed record HostCombatEvent(
     bool InCombat,
