@@ -51,7 +51,8 @@ be terminated without terminating FFXIV.
   release. Their author, maintainer, version, permission/license status,
   project/source URL, and SHA-256 are shown on first install and after every
   DalamudActCompat update. The first three use their registered author sources
-  for update checks; SilverDasher stays on the disclosed fixed package.
+  for update checks; SilverDasher stays on the disclosed fixed package and is
+  installed disabled until the user explicitly enables it.
 - Optional ACT plugin packages with manifest validation, safe ZIP extraction, atomic installation, upgrade backup, enable/disable composition, and isolated load contexts.
 - Recoverable factory reset: mutable state is moved to a timestamped backup before default system plugins and settings are restored.
 

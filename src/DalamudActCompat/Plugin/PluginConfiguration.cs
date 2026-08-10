@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 6;
+    private const int CurrentVersion = 7;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -53,7 +53,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
 
-    public HashSet<string> DisabledActPluginIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> DisabledActPluginIds { get; set; } =
+        CreateDefaultDisabledActPluginIds();
 
     public Dictionary<string, string> BundledPluginDisclosureKeys { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
@@ -180,6 +181,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 6;
             changed = true;
         }
+        if (Version < 7)
+        {
+            DisabledActPluginIds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            DisabledActPluginIds.Add("silverdasher");
+            Version = 7;
+            changed = true;
+        }
 
         return changed;
     }
@@ -206,7 +214,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         Meter = new MeterSettings();
         Fflogs = new FflogsSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
-        DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        DisabledActPluginIds = CreateDefaultDisabledActPluginIds();
         BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         BundledPluginUpdateRecords =
             new Dictionary<string, BundledActPluginUpdateRecord>(StringComparer.OrdinalIgnoreCase);
@@ -318,5 +326,11 @@ public sealed class PluginConfiguration : IPluginConfiguration
                 OpenOnStartup = true,
                 HasBeenOpened = true,
             },
+        };
+
+    private static HashSet<string> CreateDefaultDisabledActPluginIds()
+        => new(StringComparer.OrdinalIgnoreCase)
+        {
+            "silverdasher",
         };
 }

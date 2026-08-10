@@ -199,7 +199,10 @@ public sealed class BundledActPluginManager
             {
                 configuration.BundledPluginDisclosureKeys[plugin.Id] =
                     GetDisclosureKey(plugin);
-                configuration.DisabledActPluginIds.Remove(plugin.Id);
+                if (plugin.EnableAfterInstall)
+                {
+                    configuration.DisabledActPluginIds.Remove(plugin.Id);
+                }
                 if (plugin.IsOnlineUpdate)
                 {
                     configuration.BundledPluginUpdateRecords[plugin.Id] =
@@ -268,6 +271,7 @@ public sealed class BundledActPluginManager
             RelativeAssembly = bundled.RelativeAssembly,
             Sha256 = record.Sha256,
             DisableOnlineUpdates = bundled.DisableOnlineUpdates,
+            EnableAfterInstall = bundled.EnableAfterInstall,
             IsOnlineUpdate = true,
         };
     }

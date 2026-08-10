@@ -43,6 +43,8 @@ public sealed class BundledActPluginDescriptor
 
     public bool DisableOnlineUpdates { get; set; }
 
+    public bool EnableAfterInstall { get; set; } = true;
+
     [JsonIgnore]
     public string AssemblyPath { get; internal set; } = string.Empty;
 

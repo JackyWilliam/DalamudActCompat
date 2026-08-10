@@ -227,6 +227,7 @@ $plugins = @(
         licenseFile = "triggernometry/LICENSE.txt"
         relativeAssembly = "triggernometry/Triggernometry.dll"
         sha256 = Get-Sha256 $triggerDll
+        enableAfterInstall = $true
     },
     [ordered]@{
         id = "act.foxtts"
@@ -242,6 +243,7 @@ $plugins = @(
         licenseFile = "act.foxtts/LICENSE.txt"
         relativeAssembly = "act.foxtts/ACT.FoxTTS.dll"
         sha256 = Get-Sha256 $foxDll
+        enableAfterInstall = $true
     },
     [ordered]@{
         id = "postnamazu"
@@ -257,6 +259,7 @@ $plugins = @(
         licenseFile = ""
         relativeAssembly = "postnamazu/PostNamazu.dll"
         sha256 = Get-Sha256 $postNamazuDll.FullName
+        enableAfterInstall = $true
     },
     [ordered]@{
         id = "silverdasher"
@@ -268,13 +271,14 @@ $plugins = @(
         projectUrl = "https://www.ffcafe.cn/act/"
         downloadUrl = "https://www.ffcafe.cn/act/"
         sourceUrl = "https://www.ffcafe.cn/act/"
-        license = "The supplied package contains no license file; redistribution authorization is required before public release"
+        license = "The supplied package contains no license file; redistribution of this bundled version was authorized by the upstream maintainer on 2026-08-10"
         licenseFile = ""
         relativeAssembly = $silverAssemblyPath
         sha256 = $silverAssemblySha256
         relativePackage = "silverdasher/SilverDasher-0.6.0.4-cafe.zip"
         packageSha256 = $silverPackageSha256
         disableOnlineUpdates = $true
+        enableAfterInstall = $false
     }
 )
 
@@ -334,6 +338,11 @@ if ($Check) {
         } else {
             $false
         }
+        $expectedEnableAfterInstall = if ($plugin.Contains("enableAfterInstall")) {
+            [bool] $plugin.enableAfterInstall
+        } else {
+            $true
+        }
         if ($null -eq $actual -or
             $actual.version -ne $plugin.version -or
             $actual.downloadUrl -ne $plugin.downloadUrl -or
@@ -341,7 +350,8 @@ if ($Check) {
             $actual.sha256 -ne $plugin.sha256 -or
             [string] $actual.relativePackage -ne $expectedRelativePackage -or
             [string] $actual.packageSha256 -ne $expectedPackageSha256 -or
-            [bool] $actual.disableOnlineUpdates -ne $expectedDisableOnlineUpdates) {
+            [bool] $actual.disableOnlineUpdates -ne $expectedDisableOnlineUpdates -or
+            [bool] $actual.enableAfterInstall -ne $expectedEnableAfterInstall) {
             throw "Bundled plugin lock is not current for $($plugin.id)."
         }
     }

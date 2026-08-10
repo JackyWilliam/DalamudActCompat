@@ -684,7 +684,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 6 &&
+        legacyConfiguration.Version == 7 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -714,7 +714,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 6 &&
+        parserMigration.Version == 7 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -728,7 +728,8 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 6 &&
+        newConfiguration.Version == 7 &&
+        newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser &&
@@ -736,7 +737,23 @@ static void ValidateMeterRows()
             SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
-        "A new installation does not default to rDPS or start the parser independently of third-party confirmation.");
+        "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
+
+    var previousV6Configuration = new PluginConfiguration
+    {
+        Version = 6,
+        DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    };
+    Assert(
+        previousV6Configuration.ApplyMigrations() &&
+        previousV6Configuration.Version == 7 &&
+        previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
+        "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
+    previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
+    Assert(
+        !previousV6Configuration.ApplyMigrations() &&
+        !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
+        "A post-migration manual SilverDasher enable choice was overwritten.");
 
     var previousEdpsUser = new PluginConfiguration
     {
@@ -745,7 +762,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 6 &&
+        previousEdpsUser.Version == 7 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -761,7 +778,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 6 &&
+        previousCustomMetricUser.Version == 7 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -790,7 +807,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 6 &&
+        previousTimelineUser.Version == 7 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -879,7 +896,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 6 &&
+        previousV5CactbotUser.Version == 7 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1922,8 +1939,9 @@ static void ValidateControlCenterPresentation()
     Assert(
         !ttsPromptConfiguration.SuppressFoxTtsProPrompt &&
         ttsPromptConfiguration.EnableParsing &&
-        ttsPromptConfiguration.AutoStartParser,
-        "Factory reset does not restore the FoxTTS prompt or independent parser startup defaults.");
+        ttsPromptConfiguration.AutoStartParser &&
+        ttsPromptConfiguration.DisabledActPluginIds.Contains("silverdasher"),
+        "Factory reset does not restore the FoxTTS prompt, SilverDasher disabled state, or independent parser startup defaults.");
 
     var combatant = new Combatant(
         "local",
@@ -2191,8 +2209,10 @@ static void ValidateControlCenterPresentation()
         finalPermissionRestartIndex > completeBundledSetupIndex &&
         Regex.Matches(
             pluginSource,
-            @"ApplyActPermissionChanges\(\s*choice == FoxTtsProChoice\.EnablePro,\s*pluginToOpen\);",
+            @"ApplyActPermissionChanges\(choice == FoxTtsProChoice\.EnablePro\);",
             RegexOptions.CultureInvariant).Count == 1 &&
+        !pluginSource.Contains("autoOpenSilverDasherAfterSetup", StringComparison.Ordinal) &&
+        !pluginSource.Contains("OpenPluginConfigurationAfterRestartAsync", StringComparison.Ordinal) &&
         permissionRefreshMethodIndex > finalPermissionRestartIndex &&
         stopHostBeforeFoxTtsIndex > permissionRefreshMethodIndex &&
         setFoxTtsProIndex > stopHostBeforeFoxTtsIndex &&
@@ -2595,6 +2615,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.Version == "0.6.0.4" &&
             plugin.Maintainer.Contains("582145824", StringComparison.Ordinal) &&
             plugin.DisableOnlineUpdates &&
+            !plugin.EnableAfterInstall &&
             plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
             File.Exists(plugin.PackagePath)),
         "SilverDasher complete-package version, support group, fixed hash, or bundled artifact is missing.");
@@ -2613,6 +2634,12 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(installed.Count == 4, "Not all bundled extensions were installed.");
     var installedSilverDasher = installed.Single(plugin =>
         plugin.Manifest.Id == "silverdasher");
+    Assert(
+        !installedSilverDasher.Enabled,
+        "The bundled SilverDasher install did not preserve its disabled default.");
+    Assert(
+        installed.Where(plugin => plugin.Manifest.Id != "silverdasher").All(plugin => plugin.Enabled),
+        "Installing SilverDasher unexpectedly changed another bundled extension's enabled state.");
     Assert(
         File.Exists(Path.Combine(
             installedSilverDasher.InstallDirectory,
