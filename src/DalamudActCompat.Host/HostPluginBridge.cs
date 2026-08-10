@@ -44,6 +44,7 @@ public static class HostPluginBridge
     private static readonly CancellationTokenSource PostNamazuQueueShutdown = new();
     private static WeakReference<object>? triggerZoneListener;
     private static Action<string>? ttsWriter;
+    private static Func<string, string, bool>? silverDasherNotificationWriter;
     private static Action<string>? clipboardWriterForTests;
     private static long triggerEventDrops;
     private static int pendingTtsCount;
@@ -173,6 +174,25 @@ public static class HostPluginBridge
             throw new ArgumentOutOfRangeException(
                 nameof(message),
                 "SilverDasher notification text must contain at most 512 characters per field.");
+        }
+
+        var windowsWriter = Volatile.Read(ref silverDasherNotificationWriter);
+        if (windowsWriter is not null)
+        {
+            try
+            {
+                if (windowsWriter(message, detail))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                ReportException(
+                    "silverdasher",
+                    "Windows notification",
+                    ex);
+            }
         }
 
         return sender?.Invoke(
@@ -311,6 +331,10 @@ public static class HostPluginBridge
 
     internal static void ConfigureTtsWriter(Action<string>? writer)
         => Volatile.Write(ref ttsWriter, writer);
+
+    internal static void ConfigureSilverDasherNotificationWriter(
+        Func<string, string, bool>? writer)
+        => Volatile.Write(ref silverDasherNotificationWriter, writer);
 
     public static void PlayTtsFromGame(string text)
     {

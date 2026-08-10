@@ -1679,6 +1679,7 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
                 },
                 ["silverdasher"]),
         ]);
+    ValidateSilverDasherNotificationRouting();
     var normalizedPayload = JObject.Parse(
         HostPluginBridge.NormalizeSilverDasherMqttPayload(
             "{\"i\":\"0\",\"hp\":\"100\",\"m\":\"816\",\"c\":{\"x\":\"958\",\"y\":\"3112\"}}"));
@@ -1893,6 +1894,68 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(weaverPath))) == weaverHash,
         "SilverDasher runtime rewriting changed the user's original DLL files.");
+}
+
+void ValidateSilverDasherNotificationRouting()
+{
+    var configureWindowsWriter = typeof(HostPluginBridge).GetMethod(
+                                     "ConfigureSilverDasherNotificationWriter",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new MissingMethodException(
+                                     typeof(HostPluginBridge).FullName,
+                                     "ConfigureSilverDasherNotificationWriter");
+    var configureSender = typeof(HostPluginBridge).GetMethod(
+                              "Configure",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new MissingMethodException(
+                              typeof(HostPluginBridge).FullName,
+                              "Configure");
+    var windowsCalls = 0;
+    var fallbackCalls = 0;
+    string? fallbackType = null;
+    HostSilverDasherNotification? fallbackPayload = null;
+    Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> fallback =
+        (type, _, payload, _, _) =>
+        {
+            fallbackCalls++;
+            fallbackType = type;
+            fallbackPayload = payload as HostSilverDasherNotification;
+            return true;
+        };
+
+    try
+    {
+        configureSender.Invoke(null, [fallback]);
+        configureWindowsWriter.Invoke(
+            null,
+            [
+                (Func<string, string, bool>)((message, detail) =>
+                {
+                    windowsCalls++;
+                    return message == "Windows first" && detail == "detail";
+                }),
+            ]);
+        Assert(
+            HostPluginBridge.SendSilverDasherNotification("Windows first", "detail") &&
+            windowsCalls == 1 &&
+            fallbackCalls == 0,
+            "SilverDasher notification did not prefer its Host-only Windows notification writer.");
+
+        configureWindowsWriter.Invoke(
+            null,
+            [(Func<string, string, bool>)((_, _) => false)]);
+        Assert(
+            HostPluginBridge.SendSilverDasherNotification("Fallback", "game") &&
+            fallbackCalls == 1 &&
+            fallbackType == HostMessageTypes.SilverDasherNotification &&
+            fallbackPayload is { Message: "Fallback", Detail: "game" },
+            "SilverDasher notification did not preserve its typed game-side fallback channel.");
+    }
+    finally
+    {
+        configureWindowsWriter.Invoke(null, [null]);
+        configureSender.Invoke(null, [null]);
+    }
 }
 
 async Task ValidateSilverDasherLoadsOutOfProcessAsync(string sourceRoot)

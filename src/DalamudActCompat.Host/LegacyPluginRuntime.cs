@@ -26,6 +26,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private Exception? startupFailure;
     private FFXIV_ACT_Plugin.FFXIV_ACT_Plugin? ffxivBridge;
     private SilverDasherDataSubscription? silverDasherSubscription;
+    private SilverDasherWindowsNotifier? silverDasherWindowsNotifier;
     private long acceptedLogLines;
     private bool disposed;
 
@@ -312,10 +313,13 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
         disposed = true;
         HostPluginBridge.ConfigureTtsWriter(null);
+        HostPluginBridge.ConfigureSilverDasherNotificationWriter(null);
         for (var index = plugins.Count - 1; index >= 0; index--)
         {
             plugins[index].Dispose();
         }
+        silverDasherWindowsNotifier?.Dispose();
+        silverDasherWindowsNotifier = null;
         HostPluginBridge.ConfigureSilverDasherSubscription(null);
         silverDasherSubscription?.Dispose();
         silverDasherSubscription = null;
@@ -482,6 +486,9 @@ internal sealed class LegacyPluginRuntime : IDisposable
             }
             else if (id == "silverdasher")
             {
+                silverDasherWindowsNotifier = new SilverDasherWindowsNotifier(actMain!);
+                HostPluginBridge.ConfigureSilverDasherNotificationWriter(
+                    silverDasherWindowsNotifier.TryShow);
                 HostPluginBridge.ReplaySilverDasherState();
                 SetStage(
                     id,
@@ -493,6 +500,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     "Native game memory",
                     "brokered",
                     "The single process-access call is rewritten to the SilverDasher-only NativeGameMemory bridge.");
+                SetStage(
+                    id,
+                    "Windows notifications",
+                    "success",
+                    "SilverDasher uses the isolated Host Windows shell first and falls back to the existing game-side notification channel if unavailable.");
             }
         }
         catch (Exception ex)
