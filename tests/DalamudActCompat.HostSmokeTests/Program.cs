@@ -967,8 +967,8 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                                 ?? throw new InvalidDataException(
                                     "Triggernometry persisted configuration has no root element.");
             Assert(
-                persistedRoot.GetAttribute("PreviousNotifiedPluginVersion") == "2.1.2.1" &&
-                persistedRoot.GetAttribute("PluginVersion") == "2.1.2.1",
+                persistedRoot.GetAttribute("PreviousNotifiedPluginVersion") == "2.1.2.2" &&
+                persistedRoot.GetAttribute("PluginVersion") == "2.1.2.2",
                 "Triggernometry did not persist its acknowledged version state during startup.");
             var hasFoxTts = File.Exists(Path.Combine(
                 pluginRoot!,

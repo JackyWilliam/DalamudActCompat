@@ -8,6 +8,8 @@ public sealed class HtmlOverlayWindowSettings
 
     public bool OpenOnStartup { get; set; }
 
+    public bool HasBeenOpened { get; set; }
+
     public bool IsClickThrough { get; set; } = true;
 
     public bool IsLocked { get; set; } = true;
@@ -39,5 +41,20 @@ public sealed class HtmlOverlayWindowSettings
         // Keep browser input enabled after positioning. Users can explicitly
         // enable click-through when they want mouse input to reach the game.
         IsLocked = true;
+    }
+
+    public void ResetRegistration()
+    {
+        IsVisible = false;
+        OpenOnStartup = false;
+        HasBeenOpened = false;
+        IsClickThrough = true;
+        IsLocked = true;
+        ZoomFactor = 1.0f;
+        SourceUrl = string.Empty;
+        Left = null;
+        Top = null;
+        Width = null;
+        Height = null;
     }
 }

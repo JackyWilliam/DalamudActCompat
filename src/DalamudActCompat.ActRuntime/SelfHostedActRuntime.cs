@@ -371,6 +371,36 @@ public sealed class SelfHostedActRuntime : IDisposable
                    out _);
     }
 
+    public bool ResetCactbotOverlayWindow(string name)
+    {
+        name = NormalizeCactbotOverlayName(name);
+        if (!IsCactbotOverlayName(name))
+        {
+            return false;
+        }
+
+        var settings = getOverlayWindowSettings(name);
+        HtmlOverlayForm? window;
+        if (string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        {
+            window = cactbotOverlay;
+        }
+        else
+        {
+            htmlOverlays.TryGetValue(name, out window);
+        }
+
+        if (window is null)
+        {
+            settings.ResetRegistration();
+        }
+        else
+        {
+            window.ResetRegistrationAndLayout();
+        }
+        return true;
+    }
+
     private void CloseConflictingRaidbossWindows(string openingName)
     {
         openingName = NormalizeCactbotOverlayName(openingName);

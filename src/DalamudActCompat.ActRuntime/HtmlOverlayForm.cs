@@ -458,6 +458,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private readonly bool debugMode;
     private readonly IPluginLog log;
     private readonly Action<string>? failureNotification;
+    private readonly object settingsSync = new();
     private readonly ManualResetEventSlim ready = new();
     private readonly SemaphoreSlim initializationGate = new(1, 1);
     private readonly CancellationTokenSource lifecycleCancellation = new();
@@ -493,6 +494,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private int browserRecoveryCount;
     private int disposeStarted;
     private int shutdownFinalized;
+    private int resetLayoutPending;
     private Task? initializationTask;
     private bool navigationStarted;
     private long regionRebuildWindowStarted = Stopwatch.GetTimestamp();
@@ -625,18 +627,105 @@ internal sealed class HtmlOverlayForm : IDisposable
             settings.IsVisible = false;
         }
 
-        if (form is null)
+        var targetForm = form;
+        if (targetForm is null)
         {
             return;
         }
 
-        form.BeginInvoke(() =>
+        try
         {
-            StopEditMonitor();
-            inputProxy?.Hide();
-            editChrome?.Hide();
-            form.Hide();
-        });
+            targetForm.BeginInvoke(() =>
+            {
+                StopEditMonitor();
+                inputProxy?.Hide();
+                editChrome?.Hide();
+                targetForm.Hide();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (!disposing)
+            {
+                log.Warning(ex, $"Could not hide {title}; its window handle is unavailable.");
+            }
+        }
+    }
+
+    public void ResetRegistrationAndLayout()
+    {
+        Interlocked.Exchange(ref resetLayoutPending, 1);
+        visible = false;
+        lock (settingsSync)
+        {
+            settings?.ResetRegistration();
+        }
+        var targetForm = form;
+        if (!overlayMode || targetForm is null)
+        {
+            Volatile.Write(ref resetLayoutPending, 0);
+            return;
+        }
+
+        try
+        {
+            targetForm.BeginInvoke(() =>
+            {
+                try
+                {
+                    if (disposing || targetForm.IsDisposed)
+                    {
+                        return;
+                    }
+
+                    StopEditMonitor();
+                    inputProxy?.Hide();
+                    editChrome?.Hide();
+                    targetForm.Hide();
+                    applyingSettings = true;
+                    try
+                    {
+                        targetForm.ClientSize = ClientSize;
+                        var workingArea = Screen.FromRectangle(targetForm.Bounds).WorkingArea;
+                        targetForm.Location = new Point(
+                            workingArea.Left + Math.Max(0, (workingArea.Width - targetForm.Width) / 2),
+                            workingArea.Top + Math.Max(0, (workingArea.Height - targetForm.Height) / 2));
+                    }
+                    finally
+                    {
+                        applyingSettings = false;
+                    }
+
+                    ApplyOverlaySettings();
+                }
+                catch (Exception) when (disposing)
+                {
+                }
+                catch (Exception ex)
+                {
+                    log.Warning(ex, $"Could not reset the saved layout for {title}.");
+                }
+                finally
+                {
+                    Volatile.Write(ref resetLayoutPending, 0);
+                }
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            Volatile.Write(ref resetLayoutPending, 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Volatile.Write(ref resetLayoutPending, 0);
+            if (!disposing)
+            {
+                log.Warning(ex, $"Could not queue the saved-layout reset for {title}.");
+            }
+        }
     }
 
     public void ApplySettings()
@@ -1975,16 +2064,34 @@ internal sealed class HtmlOverlayForm : IDisposable
         applyingSettings = true;
         try
         {
-            if (settings.Width is > 0 && settings.Height is > 0)
+            int? savedWidth;
+            int? savedHeight;
+            int? savedLeft;
+            int? savedTop;
+            float zoomFactor;
+            bool isClickThrough;
+            bool isEditing;
+            lock (settingsSync)
             {
-                form.ClientSize = new Size(settings.Width.Value, settings.Height.Value);
+                savedWidth = settings.Width;
+                savedHeight = settings.Height;
+                savedLeft = settings.Left;
+                savedTop = settings.Top;
+                zoomFactor = settings.ZoomFactor;
+                isClickThrough = settings.IsClickThrough;
+                isEditing = settings.IsEditing;
             }
 
-            if (settings.Left is not null && settings.Top is not null)
+            if (savedWidth is > 0 && savedHeight is > 0)
+            {
+                form.ClientSize = new Size(savedWidth.Value, savedHeight.Value);
+            }
+
+            if (savedLeft is not null && savedTop is not null)
             {
                 var candidate = new Rectangle(
-                    settings.Left.Value,
-                    settings.Top.Value,
+                    savedLeft.Value,
+                    savedTop.Value,
                     form.Width,
                     form.Height);
                 if (Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(candidate)))
@@ -1995,17 +2102,17 @@ internal sealed class HtmlOverlayForm : IDisposable
 
             if (webView is not null)
             {
-                webView.ZoomFactor = Math.Clamp(settings.ZoomFactor, 0.25f, 5.0f);
+                webView.ZoomFactor = Math.Clamp(zoomFactor, 0.25f, 5.0f);
                 // Native cursor polling owns drag and resize independently of WebView2.
                 // Keeping WebView2 enabled while editing lets a click without a drag
                 // continue to activate controls in the overlay page.
-                webView.Enabled = ShouldEnableBrowserInput(settings);
+                webView.Enabled = !isClickThrough;
             }
 
             var currentStyle = GetWindowLongPtr(form.Handle, GwlExStyle);
             var extendedStyle = CalculateOverlayExtendedStyle(
                 currentStyle,
-                settings.IsClickThrough);
+                isClickThrough);
             if (currentStyle != extendedStyle)
             {
                 SetWindowLongPtr(form.Handle, GwlExStyle, extendedStyle);
@@ -2021,7 +2128,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                     0,
                     SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged);
             }
-            if (settings.IsEditing)
+            if (isEditing)
             {
                 StartEditMonitor();
             }
@@ -2092,10 +2199,18 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
-        settings.Left = form.Left;
-        settings.Top = form.Top;
-        settings.Width = form.ClientSize.Width;
-        settings.Height = form.ClientSize.Height;
+        lock (settingsSync)
+        {
+            if (Volatile.Read(ref resetLayoutPending) != 0)
+            {
+                return;
+            }
+
+            settings.Left = form.Left;
+            settings.Top = form.Top;
+            settings.Width = form.ClientSize.Width;
+            settings.Height = form.ClientSize.Height;
+        }
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs args)

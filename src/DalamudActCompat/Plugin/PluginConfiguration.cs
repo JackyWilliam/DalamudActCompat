@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 5;
+    private const int CurrentVersion = 6;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -145,6 +145,41 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 5;
             changed = true;
         }
+        if (Version < 6)
+        {
+            OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, settings) in OverlayWindows)
+            {
+                if (!SelfHostedActRuntime.IsCactbotOverlayName(name))
+                {
+                    continue;
+                }
+
+                var normalizedName = SelfHostedActRuntime.NormalizeCactbotOverlayName(name);
+                var isCombined = string.Equals(
+                    normalizedName,
+                    SelfHostedActRuntime.CactbotOverlayName,
+                    StringComparison.OrdinalIgnoreCase);
+                var hasUsageEvidence = settings.HasBeenOpened ||
+                                       settings.OpenOnStartup ||
+                                       !string.IsNullOrWhiteSpace(settings.SourceUrl) ||
+                                       settings.Left is not null ||
+                                       settings.Top is not null ||
+                                       settings.Width is not null ||
+                                       settings.Height is not null ||
+                                       Math.Abs(settings.ZoomFactor - 1.0f) > 0.0001f ||
+                                       !settings.IsClickThrough ||
+                                       !settings.IsLocked;
+                if (isCombined || hasUsageEvidence)
+                {
+                    settings.HasBeenOpened = true;
+                }
+            }
+
+            Version = 6;
+            changed = true;
+        }
 
         return changed;
     }
@@ -262,6 +297,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
         return settings;
     }
 
+    public HtmlOverlayWindowSettings RegisterOverlayWindow(string name)
+    {
+        var settings = GetOverlayWindowSettings(name);
+        settings.HasBeenOpened = true;
+        return settings;
+    }
+
     public IReadOnlyDictionary<string, HtmlOverlayWindowSettings> GetOverlayWindowSettingsSnapshot()
         => new Dictionary<string, HtmlOverlayWindowSettings>(
             OverlayWindows ?? new Dictionary<string, HtmlOverlayWindowSettings>(
@@ -274,6 +316,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
             [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
             {
                 OpenOnStartup = true,
+                HasBeenOpened = true,
             },
         };
 }

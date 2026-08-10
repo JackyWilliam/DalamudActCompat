@@ -313,6 +313,7 @@ public sealed class Plugin : IDalamudPlugin
             () => actRuntime.OverlayTemplates,
             OpenHtmlOverlay,
             CloseHtmlOverlay,
+            DeleteHtmlOverlay,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             OpenActPluginConfiguration,
             () => StartBundledPluginUpdateCheck(openWindow: true));
@@ -1315,7 +1316,7 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OpenCactbotOverlay()
-        => OpenHtmlOverlay(configuration.SelectedCactbotOverlay);
+        => _ = OpenHtmlOverlay(configuration.SelectedCactbotOverlay);
 
     private void OpenCactbotSettings()
     {
@@ -1326,14 +1327,14 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void OpenHtmlOverlay(string name)
+    private bool OpenHtmlOverlay(string name)
     {
         name = SelfHostedActRuntime.NormalizeCactbotOverlayName(name);
         try
         {
             if (actRuntime.ShowHtmlOverlay(name))
             {
-                configuration.GetOverlayWindowSettings(name).OpenOnStartup = true;
+                configuration.RegisterOverlayWindow(name).OpenOnStartup = true;
                 var template = actRuntime.OverlayTemplates.FirstOrDefault(candidate =>
                     string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (template?.IsCactbot == true)
@@ -1345,15 +1346,17 @@ public sealed class Plugin : IDalamudPlugin
                     configuration.SelectedOverlayTemplate = name;
                 }
                 SaveConfiguration();
-                return;
+                return true;
             }
 
             logger.Warning(
                 $"HTML overlay '{name}' is unavailable. Enable OverlayPlugin, restart the parser, and select a listed template or saved custom URL.");
+            return false;
         }
         catch (Exception ex)
         {
             logger.Error(ex, $"HTML overlay '{name}' could not be opened.");
+            return false;
         }
     }
 
@@ -1372,10 +1375,22 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DeleteHtmlOverlay(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) ||
-            SelfHostedActRuntime.IsCactbotOverlayName(name))
+        if (string.IsNullOrWhiteSpace(name))
         {
-            logger.Warning("The Cactbot overlay is managed separately and cannot be deleted.");
+            return;
+        }
+
+        if (SelfHostedActRuntime.IsCactbotOverlayName(name))
+        {
+            if (!actRuntime.ResetCactbotOverlayWindow(name))
+            {
+                logger.Warning($"Cactbot overlay '{name}' could not be reset.");
+                return;
+            }
+
+            SaveConfiguration();
+            logger.Information(
+                $"Removed Cactbot overlay '{name}' from the opened list and reset its saved layout.");
             return;
         }
 

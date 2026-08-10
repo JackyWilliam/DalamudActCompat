@@ -582,7 +582,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 5 &&
+        legacyConfiguration.Version == 6 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -612,7 +612,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 5 &&
+        parserMigration.Version == 6 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -626,12 +626,14 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 5 &&
+        newConfiguration.Version == 6 &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser &&
         newConfiguration.GetOverlayWindowSettings(
-            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup,
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
+        newConfiguration.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
         "A new installation does not default to rDPS or start the parser independently of third-party confirmation.");
 
     var previousEdpsUser = new PluginConfiguration
@@ -641,7 +643,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 5 &&
+        previousEdpsUser.Version == 6 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -657,7 +659,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 5 &&
+        previousCustomMetricUser.Version == 6 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -686,12 +688,14 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 5 &&
+        previousTimelineUser.Version == 6 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
         previousTimelineUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotTimelineOverlayName).OpenOnStartup &&
+        previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).HasBeenOpened &&
         previousTimelineUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotTimelineOverlayName).Left == 640 &&
         !previousTimelineUser.GetOverlayWindowSettings(
@@ -719,6 +723,8 @@ static void ValidateMeterRows()
             SelfHostedActRuntime.CactbotCombinedTemplateName) &&
         previousCombinedTemplateUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         previousCombinedTemplateUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).Left == 321 &&
         previousCombinedTemplateUser.GetOverlayWindowSettings(
@@ -748,6 +754,63 @@ static void ValidateMeterRows()
         previousCustomCactbotPrefixUser.GetOverlayWindowSettings(
             "Cactbot Personal").Left == 456,
         "The Cactbot split migration swallowed an existing custom overlay that only shared the prefix.");
+
+    var previousV5CactbotUser = new PluginConfiguration
+    {
+        Version = 5,
+        SelectedCactbotOverlay = SelfHostedActRuntime.CactbotOverlayName,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            [SelfHostedActRuntime.CactbotAlertsOverlayName] = new HtmlOverlayWindowSettings(),
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] = new HtmlOverlayWindowSettings(),
+            ["Cactbot DPS Xephero"] = new HtmlOverlayWindowSettings(),
+            ["Cactbot Personal"] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+        },
+    };
+    Assert(
+        previousV5CactbotUser.ApplyMigrations() &&
+        previousV5CactbotUser.Version == 6 &&
+        previousV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotAlertsOverlayName).HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            "Cactbot DPS Xephero").HasBeenOpened &&
+        !previousV5CactbotUser.GetOverlayWindowSettings(
+            "Cactbot Personal").HasBeenOpened,
+        "The Cactbot usage migration listed a selection/conflict ghost or captured a custom prefix overlay.");
+    var selectedOnlyV5CactbotUser = new PluginConfiguration
+    {
+        Version = 5,
+        SelectedCactbotOverlay = SelfHostedActRuntime.CactbotTimelineOverlayName,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] =
+                new HtmlOverlayWindowSettings(),
+            ["Cactbot DPS Rdmty"] = new HtmlOverlayWindowSettings
+            {
+                Left = 240,
+            },
+        },
+    };
+    Assert(
+        selectedOnlyV5CactbotUser.ApplyMigrations() &&
+        !selectedOnlyV5CactbotUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).HasBeenOpened &&
+        selectedOnlyV5CactbotUser.GetOverlayWindowSettings(
+            "Cactbot DPS Rdmty").HasBeenOpened,
+        "A selected-only Cactbot template became false history or a customized closed layout was lost.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -3568,6 +3631,14 @@ static void ValidateHtmlOverlayDefaults()
             null)?.ReturnType == typeof(bool),
         "The HTML overlay runtime no longer exposes explicit window deletion.");
     Assert(
+        typeof(SelfHostedActRuntime).GetMethod(
+            nameof(SelfHostedActRuntime.ResetCactbotOverlayWindow),
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(string)],
+            null)?.ReturnType == typeof(bool),
+        "The Cactbot manager no longer exposes an in-place window reset.");
+    Assert(
         typeof(ControlCenterWindow).GetConstructors()
             .Single()
             .GetParameters()
@@ -3575,6 +3646,20 @@ static void ValidateHtmlOverlayDefaults()
                 parameter.Name == "deleteHtmlOverlay" &&
                 parameter.ParameterType == typeof(Action<string>)),
         "The control center no longer exposes the created-overlay delete action.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "openHtmlOverlay" &&
+                parameter.ParameterType == typeof(Func<string, bool>)) &&
+        typeof(SettingsWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "deleteHtmlOverlay" &&
+                parameter.ParameterType == typeof(Action<string>)),
+        "Overlay editing cannot verify preview startup or the advanced Cactbot list cannot reset an entry.");
     Assert(
         typeof(ControlCenterWindow).GetConstructors()
             .Single()
@@ -3596,8 +3681,21 @@ static void ValidateHtmlOverlayDefaults()
     var templateOverlayIndex = controlCenterSource.IndexOf(
         "从模板创建",
         StringComparison.Ordinal);
+    var usedCactbotIndex = controlCenterSource.IndexOf(
+        "打开过的 Cactbot 悬浮窗",
+        StringComparison.Ordinal);
+    var availableCactbotIndex = controlCenterSource.IndexOf(
+        "从本地模板添加",
+        StringComparison.Ordinal);
+    var settingsWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "SettingsWindow.cs"));
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
+        usedCactbotIndex >= 0 && availableCactbotIndex > usedCactbotIndex &&
         controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
         controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
         controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
@@ -3608,16 +3706,13 @@ static void ValidateHtmlOverlayDefaults()
             "!SelfHostedActRuntime.IsCactbotOverlayName(name)",
             StringComparison.Ordinal) &&
         controlCenterSource.Contains(
-            "本地资源不可用的旧配置",
+            "pair.Value.HasBeenOpened",
             StringComparison.Ordinal) &&
-        File.ReadAllText(Path.Combine(
-                FindProjectRoot(),
-                "src",
-                "DalamudActCompat",
-                "UI",
-                "SettingsWindow.cs"))
-            .Contains("以下保存项缺少本地页面", StringComparison.Ordinal),
-        "Created/custom HTML overlays are not listed above the template form or the trust warning regressed.");
+        controlCenterSource.Contains("deleteHtmlOverlay(selectedName)", StringComparison.Ordinal) &&
+        settingsWindowSource.Contains("打开过的 Cactbot 悬浮窗", StringComparison.Ordinal) &&
+        settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
+        settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
+        "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
     Assert(
         controlCenterSource.Contains(
             "private const int ResetConfirmationMilliseconds = 10_000;",
@@ -3674,6 +3769,7 @@ static void ValidateHtmlOverlayDefaults()
         "Finishing HTML overlay editing did not lock the layout while preserving page input.");
 
     settings.OpenOnStartup = true;
+    settings.HasBeenOpened = true;
     var serializedOverlaySettings = Newtonsoft.Json.JsonConvert.SerializeObject(settings);
     var restoredOverlaySettings = Newtonsoft.Json.JsonConvert.DeserializeObject<HtmlOverlayWindowSettings>(
                                       serializedOverlaySettings)
@@ -3681,9 +3777,47 @@ static void ValidateHtmlOverlayDefaults()
                                       "HTML overlay settings did not deserialize.");
     Assert(
         serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.OpenOnStartup), StringComparison.Ordinal) &&
+        serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.HasBeenOpened), StringComparison.Ordinal) &&
         !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsVisible), StringComparison.Ordinal) &&
-        restoredOverlaySettings.OpenOnStartup,
-        "The user-requested HTML overlay startup state was not persisted independently of runtime visibility.");
+        restoredOverlaySettings.OpenOnStartup &&
+        restoredOverlaySettings.HasBeenOpened,
+        "The overlay usage/startup state was not persisted independently of runtime visibility.");
+    var resetSettings = new HtmlOverlayWindowSettings
+    {
+        OpenOnStartup = true,
+        HasBeenOpened = true,
+        IsClickThrough = false,
+        IsLocked = false,
+        ZoomFactor = 1.5f,
+        SourceUrl = "https://example.com/overlay",
+        Left = 10,
+        Top = 20,
+        Width = 700,
+        Height = 300,
+    };
+    resetSettings.ResetRegistration();
+    Assert(
+        !resetSettings.OpenOnStartup &&
+        !resetSettings.HasBeenOpened &&
+        resetSettings.IsClickThrough &&
+        resetSettings.IsLocked &&
+        resetSettings.ZoomFactor == 1.0f &&
+        string.IsNullOrEmpty(resetSettings.SourceUrl) &&
+        resetSettings.Left is null &&
+        resetSettings.Top is null &&
+        resetSettings.Width is null &&
+        resetSettings.Height is null,
+        "Removing a Cactbot overlay did not reset its saved layout and display state in place.");
+    var registrationConfiguration = new PluginConfiguration();
+    var registeredSettings = registrationConfiguration.RegisterOverlayWindow(
+        SelfHostedActRuntime.CactbotTimelineOverlayName);
+    Assert(
+        registeredSettings.HasBeenOpened &&
+        ReferenceEquals(
+            registeredSettings,
+            registrationConfiguration.GetOverlayWindowSettings(
+                SelfHostedActRuntime.CactbotTimelineOverlayName)),
+        "A successful overlay open did not register persistent usage on the existing settings object.");
     var overlaysToRestore = SelfHostedActRuntime.SelectHtmlOverlaysToRestore(
         new Dictionary<string, HtmlOverlayWindowSettings>(StringComparer.OrdinalIgnoreCase)
         {
