@@ -99,6 +99,7 @@ public sealed class SettingsWindow : Window
     public override void Draw()
     {
         var changed = false;
+        var hostConfigurationChanged = false;
         if (ImGui.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
         {
             if (ImGui.Selectable("简体中文", text.IsChinese))
@@ -150,6 +151,7 @@ public sealed class SettingsWindow : Window
                 }
 
                 changed = true;
+                hostConfigurationChanged = true;
             }
 
             ImGui.SameLine();
@@ -188,7 +190,9 @@ public sealed class SettingsWindow : Window
             saveConfiguration();
         }
 
-        ImGui.TextDisabled(text.Get("安装或启停扩展后请重启解析器。", "Restart the parser after installing or changing plugins."));
+        ImGui.TextDisabled(text.Get(
+            "安装扩展后请重启解析器；启停兼容扩展会自动重启独立 Host。",
+            "Restart the parser after installing an extension; enabling or disabling a compatibility extension restarts the independent Host automatically."));
         ImGui.Separator();
         ImGui.TextUnformatted("Cactbot（OverlayPlugin addon）");
         ImGui.TextDisabled(FormatCactbotStatus());
@@ -290,8 +294,8 @@ public sealed class SettingsWindow : Window
         ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（始终最后加载）", "SilverDasher (always loaded last)"));
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get(
-            "使用独立事件队列与专属内存权限上下文；QQ 群：582145824。",
-            "Uses an independent event queue and dedicated memory-permission context; QQ group: 582145824."));
+            "使用独立事件队列与专属内存权限上下文。",
+            "Uses an independent event queue and dedicated memory-permission context."));
 
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
@@ -452,7 +456,7 @@ public sealed class SettingsWindow : Window
             saveConfiguration();
         }
 
-        if (permissionsChanged)
+        if (permissionsChanged || hostConfigurationChanged)
         {
             applyPermissionChanges();
         }

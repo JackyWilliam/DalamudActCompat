@@ -1980,6 +1980,21 @@ static void ValidateControlCenterPresentation()
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
         "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
+    Assert(
+        !controlCenterSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
+        !settingsSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
+        thirdPartySource.Contains(
+            "DrawMetadata(text.Get(\"当前维护者\", \"Current maintainer\"), plugin.Maintainer);",
+            StringComparison.Ordinal),
+        "SilverDasher support information leaked into its introduction or disappeared from the third-party extension card.");
+    Assert(
+        controlCenterSource.Contains("out bool hostConfigurationChanged", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("hostConfigurationChanged |= extensionChanged", StringComparison.Ordinal) &&
+        settingsSource.Contains("hostConfigurationChanged = true;", StringComparison.Ordinal) &&
+        settingsSource.Contains(
+            "permissionsChanged || hostConfigurationChanged",
+            StringComparison.Ordinal),
+        "Compatibility-extension enable/disable changes no longer restart the isolated Host immediately.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -2165,7 +2180,7 @@ static void ValidateControlCenterPresentation()
             Regex.Escape("applyPermissionChanges();"),
             RegexOptions.CultureInvariant).Count == 1 &&
         controlCenterSource.Contains(
-            "changed |= permissionsChanged;",
+            "changed |= hostConfigurationChanged;",
             StringComparison.Ordinal) &&
         settingsSource.Contains(
             "changed |= permissionsChanged;",

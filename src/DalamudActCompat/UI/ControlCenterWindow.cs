@@ -271,13 +271,13 @@ public sealed class ControlCenterWindow : Window
             ImGui.Spacing();
             if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, -1), true))
             {
-                var permissionsChanged = false;
+                var hostConfigurationChanged = false;
                 var changed = selectedPage switch
                 {
                     Page.Overview => DrawOverview(),
                     Page.Meter => DrawMeter(),
                     Page.Overlays => DrawOverlays(),
-                    Page.Extensions => DrawExtensions(out permissionsChanged),
+                    Page.Extensions => DrawExtensions(out hostConfigurationChanged),
                     Page.Diagnostics => DrawDiagnostics(),
                     _ => false,
                 };
@@ -287,7 +287,7 @@ public sealed class ControlCenterWindow : Window
                     saveConfiguration();
                 }
 
-                if (permissionsChanged)
+                if (hostConfigurationChanged)
                 {
                     applyPermissionChanges();
                 }
@@ -1133,7 +1133,7 @@ public sealed class ControlCenterWindow : Window
         customOverlayFeedbackIsError = isError;
     }
 
-    private bool DrawExtensions(out bool permissionsChanged)
+    private bool DrawExtensions(out bool hostConfigurationChanged)
     {
         DrawPageHeader(
             text.Get("扩展", "Extensions"),
@@ -1148,35 +1148,46 @@ public sealed class ControlCenterWindow : Window
             "OverlayPlugin",
             configuration.EmbeddedPlugins.OverlayPluginEnabled,
             value => configuration.EmbeddedPlugins.OverlayPluginEnabled = value);
-        ImGui.TextDisabled(text.Get("改变插件启用状态后需要重启解析器。", "Restart the parser after changing plugin state."));
+        ImGui.TextDisabled(text.Get(
+            "改变系统插件状态后需要重启解析器；兼容扩展启停后会自动重启独立 Host。",
+            "Restart the parser after changing a system plugin; compatibility-extension changes restart the independent Host automatically."));
 
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("兼容扩展", "Compatibility extensions"));
         var installedPlugins = discoverPlugins();
+        hostConfigurationChanged = false;
         changed |= DrawExtensionEntry(
             installedPlugins,
             "act.foxtts",
             "ACT.FoxTTS",
-            text.Get("TTS 语音合成与播报", "TTS speech synthesis and announcements"));
+            text.Get("TTS 语音合成与播报", "TTS speech synthesis and announcements"),
+            out var extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
         changed |= DrawExtensionEntry(
             installedPlugins,
             "postnamazu",
             text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
-            text.Get("游戏命令、标点与本地桥接", "Game commands, markers, and local bridge"));
+            text.Get("游戏命令、标点与本地桥接", "Game commands, markers, and local bridge"),
+            out extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
         changed |= DrawExtensionEntry(
             installedPlugins,
             "triggernometry",
             "Triggernometry",
-            text.Get("触发器、时间轴、TTS 与绘图", "Triggers, timelines, TTS, and drawing"));
+            text.Get("触发器、时间轴、TTS 与绘图", "Triggers, timelines, TTS, and drawing"),
+            out extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
         changed |= DrawExtensionEntry(
             installedPlugins,
             "silverdasher",
             text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
             text.Get(
-                "狩猎、临危受命与跨区状态提醒；QQ 群：582145824",
-                "Hunts, FATEs, and cross-world status alerts; QQ group: 582145824"));
+                "狩猎、临危受命与跨区状态提醒",
+                "Hunts, FATEs, and cross-world status alerts"),
+            out extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -1217,19 +1228,19 @@ public sealed class ControlCenterWindow : Window
         ImGui.TextWrapped(text.Get(
             "高风险能力默认关闭，授权按扩展和能力分别保存；权限组保存后会自动重启 Host 一次，使完整功能立即生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
             "High-risk capabilities are denied by default. Grants are stored per extension and capability; after a permission group is saved, the Host restarts once so the complete feature set takes effect immediately. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
-        permissionsChanged = DrawPluginPermissions(
+        hostConfigurationChanged |= DrawPluginPermissions(
             "postnamazu",
             text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
             BundledActPluginCapabilities.PostNamazu);
-        permissionsChanged |= DrawPluginPermissions(
+        hostConfigurationChanged |= DrawPluginPermissions(
             "triggernometry",
             "Triggernometry",
             BundledActPluginCapabilities.Triggernometry);
-        permissionsChanged |= DrawPluginPermissions(
+        hostConfigurationChanged |= DrawPluginPermissions(
             "silverdasher",
             text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
             BundledActPluginCapabilities.SilverDasher);
-        changed |= permissionsChanged;
+        changed |= hostConfigurationChanged;
         return changed;
     }
 
@@ -1268,11 +1279,13 @@ public sealed class ControlCenterWindow : Window
         IReadOnlyList<InstalledActPlugin> installedPlugins,
         string pluginId,
         string displayName,
-        string description)
+        string description,
+        out bool enabledChanged)
     {
         var installed = installedPlugins.FirstOrDefault(plugin =>
             string.Equals(plugin.Manifest.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         var changed = false;
+        enabledChanged = false;
         ImGui.PushID($"extension-{pluginId}");
         if (installed is null)
         {
@@ -1294,6 +1307,7 @@ public sealed class ControlCenterWindow : Window
                     configuration.DisabledActPluginIds.Add(pluginId);
                 }
                 changed = true;
+                enabledChanged = true;
             }
 
             ImGui.SameLine();
