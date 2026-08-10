@@ -16,7 +16,7 @@
     "DownloadLinkTesting":  null,
     "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.8.1/DalamudActCompat.zip",
     "LastUpdate":  1786352115623,
-    "Changelog":  "v0.3.8.1 新增 SilverDasher 原版 DLL 兼容，通过独立事件队列、专属权限上下文和最后加载保持现有 ACT 扩展链路不变。",
+    "Changelog":  "v0.3.8.1 将 Cactbot 文字提醒与时间轴拆分为可独立管理的悬浮窗；随包安装默认关闭的 SilverDasher，并通过独立事件与权限通道保持现有扩展链路不变。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

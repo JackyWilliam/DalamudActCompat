@@ -15,10 +15,10 @@ own plugin configuration directory; on a later DalamudActCompat update, it
 upgrades older bundled Cactbot versions without overwriting files under
 `cactbot/user/`.
 
-- OverlayPlugin/cactbot 0.37.4
+- OverlayPlugin/cactbot 0.37.5
   - Project/source: <https://github.com/OverlayPlugin/cactbot>
-  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.4>
-  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.4/cactbot-0.37.4.zip>
+  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.5>
+  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.5/cactbot-0.37.5.zip>
   - License: Apache-2.0; the license text is included with the bundled package.
 
 `FFXIV_ACT_Plugin` and its SDK assemblies are official binary dependencies.
@@ -33,7 +33,8 @@ every DalamudActCompat update. The extensions are not loaded until that notice
 is acknowledged. Triggernometry, ACT.FoxTTS, and PostNamazu use registered
 author sources for update checks. SilverDasher remains on the disclosed,
 hash-pinned complete package. URLs are displayed for attribution and
-verification; the notice does not open them.
+verification; the notice does not open them. SilverDasher is installed disabled
+and is loaded only after the user explicitly enables it.
 
 - Triggernometry CN Maintained Edition 2.1.2.2
   - Original author/copyright holder: Paissa Heavy Industries
@@ -58,8 +59,9 @@ verification; the notice does not open them.
   - Project: <https://www.ffcafe.cn/act/>
   - Complete package SHA-256: `8D73B14AF27CC4781DDF09B7926C5D99A11CD5B8A02B94FD90430ACF38371866`
   - Entry DLL SHA-256: `A3F356743A438B49CC0796858CA3B127E79DE90E4D7E960177EBDA50A8568CF8`
-  - The supplied package contains no license file. Redistribution
-    authorization must be obtained before any public release containing it.
+  - The supplied package contains no license file. Redistribution of this
+    bundled version was authorized by the upstream maintainer through direct
+    communication on 2026-08-10.
 
 SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
 runtime author-source update check. SharpCompress is distributed under the MIT

@@ -1,8 +1,8 @@
 ﻿{
     "schemaVersion":  1,
-    "version":  "0.37.4",
+    "version":  "0.37.5",
     "projectUrl":  "https://github.com/OverlayPlugin/cactbot",
-    "downloadUrl":  "https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.4/cactbot-0.37.4.zip",
-    "relativeArchive":  "cactbot-0.37.4.zip",
-    "sha256":  "50828db108b81e9f868101eb50a49746109f19c092e7e49510716ba19f5cb774"
+    "downloadUrl":  "https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.5/cactbot-0.37.5.zip",
+    "relativeArchive":  "cactbot-0.37.5.zip",
+    "sha256":  "1a9a277982259e370304ebfda3e81434fbbc039d0ddf5ec299fd776a5d3477f9"
 }
