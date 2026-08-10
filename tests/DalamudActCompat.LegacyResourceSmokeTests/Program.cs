@@ -19,8 +19,10 @@ if (!File.Exists(assemblyPath))
 
 LegacyResourceCompatibility.EnsureLegacyResourceDecoderAvailable();
 var overlayTemplates = SelfHostedActRuntime.ProbeOverlayTemplates();
-if (!overlayTemplates.Any(template => template.Name == "Kagerou") ||
-    !overlayTemplates.Any(template => template.Name.Contains("Cactbot DPS", StringComparison.Ordinal)))
+if (!overlayTemplates.Any(template => template.Name == "Kagerou" && !template.IsCactbot) ||
+    !overlayTemplates.Any(template =>
+        template.Name.Contains("Cactbot DPS", StringComparison.Ordinal) &&
+        template.IsCactbot))
 {
     throw new InvalidOperationException(
         "OverlayPlugin built-in HTML templates were not exposed by the runtime.");

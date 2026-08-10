@@ -1,8 +1,10 @@
 using Advanced_Combat_Tracker;
 using Dalamud.Interface.ImGuiFileDialog;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -17,6 +19,28 @@ namespace DalamudActCompat.ActRuntime;
 public sealed class SelfHostedActRuntime : IDisposable
 {
     public const string CactbotOverlayName = "Cactbot Raidboss";
+    public const string CactbotAlertsOverlayName = "Cactbot Raidboss Alerts only";
+    public const string CactbotTimelineOverlayName = "Cactbot Raidboss Timeline only";
+    public const string CactbotCombinedTemplateName =
+        "Cactbot Raidboss (Combined Alerts & Timeline)";
+    private static readonly IReadOnlySet<string> ManagedCactbotOverlayNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            CactbotOverlayName,
+            CactbotAlertsOverlayName,
+            CactbotTimelineOverlayName,
+            CactbotCombinedTemplateName,
+            "Cactbot Configuration",
+            "Cactbot DPS Xephero",
+            "Cactbot DPS Rdmty",
+            "Cactbot Eureka",
+            "Cactbot Fisher",
+            "Cactbot Jobs",
+            "Cactbot OopsyRaidsy",
+            "Cactbot PullCounter",
+            "Cactbot Radar",
+            "Cactbot Test",
+        };
 
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
@@ -49,6 +73,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IReadOnlyList<ActOverlayTemplate> overlayTemplates = [];
     private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
     private string? overlayWebSocketUri;
+    private FileStream? webViewSessionLock;
     private HttpClient? httpClient;
     private Func<string, bool>? externalTtsDispatcher;
     private Func<string, string, bool>? externalPostNamazuDispatcher;
@@ -151,15 +176,7 @@ public sealed class SelfHostedActRuntime : IDisposable
            htmlOverlays.Values.Any(static window => window.IsVisibleEditing);
 
     public bool ShowCactbotOverlay()
-    {
-        if (cactbotOverlay is null)
-        {
-            return false;
-        }
-
-        cactbotOverlay.Show();
-        return true;
-    }
+        => ShowHtmlOverlay(CactbotOverlayName);
 
     public bool ShowCactbotSettings()
     {
@@ -187,6 +204,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public bool ApplyOverlayWindowSettings(string name)
     {
+        name = NormalizeCactbotOverlayName(name);
         if (string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
         {
             cactbotOverlay?.ApplySettings();
@@ -204,6 +222,19 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public bool ShowHtmlOverlay(string name)
     {
+        name = NormalizeCactbotOverlayName(name);
+        if (string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (cactbotOverlay is null)
+            {
+                return false;
+            }
+
+            cactbotOverlay.Show();
+            CloseConflictingRaidbossWindows(name);
+            return true;
+        }
+
         var template = overlayTemplates.FirstOrDefault(
             candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
         if (overlayWebSocketUri is null)
@@ -220,7 +251,23 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             var source = overlayTemplateSources.First(
                 candidate => string.Equals(candidate.Name, template.Name, StringComparison.OrdinalIgnoreCase));
-            pageUri = BuildTemplateUri(source, new Uri(overlayWebSocketUri));
+            if (template.IsCactbot)
+            {
+                if (!TryBuildLocalCactbotOverlayUri(
+                        source.Uri,
+                        Path.Combine(pluginInterface.ConfigDirectory.FullName, "cactbot"),
+                        new Uri(overlayWebSocketUri),
+                        out pageUri))
+                {
+                    log.Warning(
+                        $"Cactbot overlay '{name}' is unavailable in the installed local package.");
+                    return false;
+                }
+            }
+            else
+            {
+                pageUri = BuildTemplateUri(source, new Uri(overlayWebSocketUri));
+            }
             clientSize = new Size(template.Width, template.Height);
             windowName = template.Name;
             userDataDirectory = Path.Combine(
@@ -258,7 +305,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                 settings,
                 clientSize,
                 debugMode(),
-                log);
+                log,
+                NotifyOverlayBrowserFailure);
             if (!htmlOverlays.TryAdd(windowName, window))
             {
                 window.Dispose();
@@ -267,13 +315,26 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         window.Show();
+        CloseConflictingRaidbossWindows(windowName);
         return true;
     }
 
     public bool HideHtmlOverlay(string name)
     {
+        name = NormalizeCactbotOverlayName(name);
         var settings = getOverlayWindowSettings(name);
         settings.IsVisible = false;
+        if (string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (cactbotOverlay is null)
+            {
+                return false;
+            }
+
+            cactbotOverlay.Hide();
+            return true;
+        }
+
         if (!htmlOverlays.TryGetValue(name, out var window))
         {
             return overlayTemplates.Any(candidate => string.Equals(
@@ -289,8 +350,8 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public bool DeleteHtmlOverlay(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) ||
-            string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        name = NormalizeCactbotOverlayName(name);
+        if (string.IsNullOrWhiteSpace(name) || IsCactbotOverlayName(name))
         {
             return false;
         }
@@ -308,6 +369,67 @@ public sealed class SelfHostedActRuntime : IDisposable
                TryNormalizeCustomOverlayUri(
                    getOverlayWindowSettings(name).SourceUrl,
                    out _);
+    }
+
+    private void CloseConflictingRaidbossWindows(string openingName)
+    {
+        openingName = NormalizeCactbotOverlayName(openingName);
+        if (string.Equals(
+                openingName,
+                CactbotOverlayName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            CloseOverlayWindow(CactbotAlertsOverlayName);
+            CloseOverlayWindow(CactbotTimelineOverlayName);
+            return;
+        }
+
+        if (string.Equals(
+                openingName,
+                CactbotAlertsOverlayName,
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                openingName,
+                CactbotTimelineOverlayName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            CloseOverlayWindow(CactbotOverlayName);
+        }
+    }
+
+    private void CloseOverlayWindow(string name)
+    {
+        var settings = getOverlayWindowSettings(name);
+        settings.OpenOnStartup = false;
+        settings.IsVisible = false;
+        if (string.Equals(name, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
+        {
+            cactbotOverlay?.Hide();
+            return;
+        }
+
+        if (htmlOverlays.TryGetValue(name, out var window))
+        {
+            window.Hide();
+        }
+    }
+
+    private void NotifyOverlayBrowserFailure(string message)
+    {
+        try
+        {
+            _ = framework.RunOnFrameworkThread(() =>
+                notificationManager.AddNotification(new Notification
+                {
+                    Title = "HTML 悬浮窗",
+                    Content = message,
+                    Type = NotificationType.Error,
+                }));
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Could not display the HTML overlay failure notification.");
+        }
     }
 
     public IReadOnlyList<string> LoadedCustomPluginIds
@@ -430,22 +552,27 @@ public sealed class SelfHostedActRuntime : IDisposable
             throw new InvalidOperationException("FFXIV_ACT_Plugin must be running before OverlayPlugin.");
         }
 
-        httpClient = new HttpClient();
-        var container = new RainbowMage.OverlayPlugin.TinyIoCContainer();
-        var overlayLogger = new RainbowMage.OverlayPlugin.Logger(log);
-        container.Register(overlayLogger);
-        container.Register<RainbowMage.OverlayPlugin.ILogger>(overlayLogger);
-        gameStateProvider.Update(
-            playerIdentities(),
-            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
-        container.Register<RainbowMage.OverlayPlugin.MemoryProcessors.IDalamudGameStateProvider>(
-            gameStateProvider);
-        container.Register(httpClient);
-        container.Register(new FileDialogManager());
-        container.Register(pluginInterface);
-
         try
         {
+            webViewSessionLock = AcquireWebViewSessionLock(
+                Path.Combine(
+                    pluginInterface.ConfigDirectory.FullName,
+                    "webview2-session.lock"),
+                TimeSpan.FromSeconds(8));
+            httpClient = new HttpClient();
+            var container = new RainbowMage.OverlayPlugin.TinyIoCContainer();
+            var overlayLogger = new RainbowMage.OverlayPlugin.Logger(log);
+            container.Register(overlayLogger);
+            container.Register<RainbowMage.OverlayPlugin.ILogger>(overlayLogger);
+            gameStateProvider.Update(
+                playerIdentities(),
+                condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
+            container.Register<RainbowMage.OverlayPlugin.MemoryProcessors.IDalamudGameStateProvider>(
+                gameStateProvider);
+            container.Register(httpClient);
+            container.Register(new FileDialogManager());
+            container.Register(pluginInterface);
+
             overlay = new RainbowMage.OverlayPlugin.PluginMain(
                 pluginInterface.AssemblyLocation.Directory!.FullName,
                 overlayLogger,
@@ -471,23 +598,44 @@ public sealed class SelfHostedActRuntime : IDisposable
                 .Split("OVERLAY_WS=", 2)[1];
             overlayWebSocketUri = webSocketUri;
             overlayTemplateSources = LoadOverlayTemplateConfig().Overlays;
-            overlayTemplates = overlayTemplateSources
+            var cactbotDirectory = Path.Combine(
+                pluginInterface.ConfigDirectory.FullName,
+                "cactbot");
+            var raidbossHtml = Path.Combine(
+                cactbotDirectory,
+                "ui",
+                "raidboss",
+                "raidboss.html");
+            var availableTemplates = overlayTemplateSources
                 .Where(template => !template.Features.Contains("system"))
+                .Where(template => !string.Equals(
+                    template.Name,
+                    CactbotCombinedTemplateName,
+                    StringComparison.OrdinalIgnoreCase))
+                .Where(template =>
+                    !template.Features.Contains("cactbot") ||
+                    TryBuildLocalCactbotOverlayUri(
+                        template.Uri,
+                        cactbotDirectory,
+                        new Uri(webSocketUri),
+                        out _))
                 .Select(template => new ActOverlayTemplate(
                     template.Name,
                     template.Uri,
                     template.SuggestedWidth ?? 900,
-                    template.SuggestedHeight ?? 500))
-                .ToArray();
-
-            var raidbossHtml = Path.Combine(
-                pluginInterface.ConfigDirectory.FullName,
-                "cactbot",
-                "ui",
-                "raidboss",
-                "raidboss.html");
+                    template.SuggestedHeight ?? 500,
+                    template.Features.Contains("cactbot")))
+                .ToList();
             if (File.Exists(raidbossHtml))
             {
+                availableTemplates.Insert(
+                    0,
+                    new ActOverlayTemplate(
+                        CactbotOverlayName,
+                        new Uri(raidbossHtml).AbsoluteUri,
+                        900,
+                        320,
+                        true));
                 cactbotOverlay = new HtmlOverlayForm(
                     BuildOverlayUri(new Uri(raidbossHtml), "OVERLAY_WS", webSocketUri),
                     Path.Combine(pluginInterface.ConfigDirectory.FullName, "webview2"),
@@ -499,8 +647,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                     getOverlayWindowSettings(CactbotOverlayName),
                     new Size(900, 320),
                     debugMode(),
-                    log);
-                cactbotOverlay.Show();
+                    log,
+                    NotifyOverlayBrowserFailure);
 
                 var configHtml = Path.Combine(
                     pluginInterface.ConfigDirectory.FullName,
@@ -521,37 +669,48 @@ public sealed class SelfHostedActRuntime : IDisposable
                         null,
                         new Size(1100, 760),
                         debugMode(),
-                        log);
+                        log,
+                        NotifyOverlayBrowserFailure);
                 }
             }
+
+            overlayTemplates = availableTemplates.ToArray();
 
             RestoreHtmlOverlays();
         }
         catch
         {
-            cactbotOverlay?.Dispose();
-            cactbotOverlay = null;
-            cactbotSettings?.Dispose();
-            cactbotSettings = null;
-            foreach (var window in htmlOverlays.Values)
-            {
-                window.Dispose();
-            }
-            htmlOverlays.Clear();
-            overlayWebSocketUri = null;
-            overlayTemplates = [];
-            overlayTemplateSources = [];
+            var windowsShutdown = Task.CompletedTask;
             try
             {
-                overlay?.DeInitPlugin();
+                try
+                {
+                    windowsShutdown = DisposeOverlayWindows();
+                }
+                catch (Exception ex)
+                {
+                    log.Error(ex, "Failed to close HTML overlay windows after startup failure.");
+                }
+
+                overlayWebSocketUri = null;
+                overlayTemplates = [];
+                overlayTemplateSources = [];
+                try
+                {
+                    overlay?.DeInitPlugin();
+                }
+                catch (Exception ex)
+                {
+                    log.Error(ex, "Failed to roll back OverlayPlugin after startup failure.");
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                log.Error(ex, "Failed to roll back OverlayPlugin after startup failure.");
+                overlay = null;
+                httpClient?.Dispose();
+                httpClient = null;
+                ReleaseWebViewSessionLockWhenSafe(windowsShutdown);
             }
-            overlay = null;
-            httpClient.Dispose();
-            httpClient = null;
             throw;
         }
     }
@@ -585,7 +744,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                 template.Name,
                 template.Uri,
                 template.SuggestedWidth ?? 900,
-                template.SuggestedHeight ?? 500))
+                template.SuggestedHeight ?? 500,
+                template.Features.Contains("cactbot")))
             .ToArray();
     }
 
@@ -609,6 +769,66 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         return pageUri;
+    }
+
+    public static bool IsCactbotOverlayName(string? name)
+        => !string.IsNullOrWhiteSpace(name) &&
+           ManagedCactbotOverlayNames.Contains(name);
+
+    public static string NormalizeCactbotOverlayName(string name)
+        => string.Equals(
+            name,
+            CactbotCombinedTemplateName,
+            StringComparison.OrdinalIgnoreCase)
+            ? CactbotOverlayName
+            : name;
+
+    internal static bool TryBuildLocalCactbotOverlayUri(
+        string templateUri,
+        string cactbotDirectory,
+        Uri webSocketUri,
+        out Uri pageUri)
+    {
+        pageUri = null!;
+        if (!Uri.TryCreate(templateUri, UriKind.Absolute, out var remoteUri) ||
+            string.IsNullOrWhiteSpace(cactbotDirectory))
+        {
+            return false;
+        }
+
+        const string cactbotPathMarker = "/cactbot/";
+        var markerIndex = remoteUri.AbsolutePath.IndexOf(
+            cactbotPathMarker,
+            StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var relativePath = Uri.UnescapeDataString(
+                remoteUri.AbsolutePath[(markerIndex + cactbotPathMarker.Length)..])
+            .Replace('/', Path.DirectorySeparatorChar);
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var root = Path.GetFullPath(cactbotDirectory);
+        var localPath = Path.GetFullPath(Path.Combine(root, relativePath));
+        var rootPrefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!localPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(localPath))
+        {
+            return false;
+        }
+
+        var localUri = new Uri(
+            new Uri(localPath).AbsoluteUri + remoteUri.Query + remoteUri.Fragment);
+        pageUri = BuildOverlayUri(
+            localUri,
+            "OVERLAY_WS",
+            webSocketUri.ToString());
+        return true;
     }
 
     private static Uri BuildOverlayUri(Uri pageUri, string parameter, string value)
@@ -734,26 +954,140 @@ public sealed class SelfHostedActRuntime : IDisposable
            status.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
            status.Contains("exception", StringComparison.OrdinalIgnoreCase);
 
+    private static FileStream AcquireWebViewSessionLock(string path, TimeSpan timeout)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var timer = Stopwatch.StartNew();
+        Exception? lastFailure = null;
+        while (timer.Elapsed < timeout)
+        {
+            try
+            {
+                return new FileStream(
+                    path,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            }
+            catch (IOException ex)
+            {
+                lastFailure = ex;
+                Thread.Sleep(100);
+            }
+        }
+
+        throw new TimeoutException(
+            "The previous WebView2 overlay session did not finish shutting down within " +
+            $"{timeout.TotalSeconds:0.#} seconds.",
+            lastFailure);
+    }
+
+    private Task DisposeOverlayWindows()
+    {
+        var windows = new List<HtmlOverlayForm>();
+        if (cactbotOverlay is not null)
+        {
+            windows.Add(cactbotOverlay);
+        }
+        if (cactbotSettings is not null)
+        {
+            windows.Add(cactbotSettings);
+        }
+        windows.AddRange(htmlOverlays.Values);
+
+        var browserProcessIds = windows
+            .SelectMany(static window => window.BrowserProcessIds)
+            .ToHashSet();
+        foreach (var window in windows)
+        {
+            try
+            {
+                window.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Failed to close an HTML overlay window cleanly.");
+            }
+            finally
+            {
+                browserProcessIds.UnionWith(window.BrowserProcessIds);
+            }
+        }
+
+        cactbotOverlay = null;
+        cactbotSettings = null;
+        htmlOverlays.Clear();
+        return CompleteOverlayWindowShutdownAsync(windows, browserProcessIds);
+    }
+
+    private async Task CompleteOverlayWindowShutdownAsync(
+        IReadOnlyList<HtmlOverlayForm> windows,
+        HashSet<int> browserProcessIds)
+    {
+        await Task.WhenAll(windows.Select(static window => window.ShutdownCompletion))
+            .ConfigureAwait(false);
+        foreach (var window in windows)
+        {
+            browserProcessIds.UnionWith(window.BrowserProcessIds);
+        }
+
+        HtmlOverlayForm.WaitForBrowserProcessesExit(
+            browserProcessIds,
+            TimeSpan.FromSeconds(3),
+            log);
+    }
+
+    private void ReleaseWebViewSessionLockWhenSafe(Task windowsShutdown)
+    {
+        var sessionLock = webViewSessionLock;
+        webViewSessionLock = null;
+        if (sessionLock is null)
+        {
+            return;
+        }
+
+        if (!windowsShutdown.IsCompleted)
+        {
+            log.Warning(
+                "HTML overlay shutdown is still completing; retaining the WebView2 session lock " +
+                "until every overlay UI thread has exited.");
+        }
+
+        _ = windowsShutdown.ContinueWith(
+            static (_, state) => ((FileStream)state!).Dispose(),
+            sessionLock,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     public void StopOverlay()
     {
         externalPostNamazuEventSource?.SetAction(null);
         externalPostNamazuEventSource = null;
-        cactbotOverlay?.Dispose();
-        cactbotOverlay = null;
-        cactbotSettings?.Dispose();
-        cactbotSettings = null;
-        foreach (var window in htmlOverlays.Values)
+        var windowsShutdown = Task.CompletedTask;
+        try
         {
-            window.Dispose();
+            try
+            {
+                windowsShutdown = DisposeOverlayWindows();
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Failed to finish HTML overlay browser shutdown cleanly.");
+            }
+            overlayTemplates = [];
+            overlayTemplateSources = [];
+            overlayWebSocketUri = null;
+            overlay?.DeInitPlugin();
         }
-        htmlOverlays.Clear();
-        overlayTemplates = [];
-        overlayTemplateSources = [];
-        overlayWebSocketUri = null;
-        overlay?.DeInitPlugin();
-        overlay = null;
-        httpClient?.Dispose();
-        httpClient = null;
+        finally
+        {
+            overlay = null;
+            httpClient?.Dispose();
+            httpClient = null;
+            ReleaseWebViewSessionLockWhenSafe(windowsShutdown);
+        }
     }
 
     public async Task<string?> CallOverlayHandlerAsync(
@@ -1570,14 +1904,23 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     internal static IReadOnlyList<string> SelectHtmlOverlaysToRestore(
         IReadOnlyDictionary<string, HtmlOverlayWindowSettings> settings)
-        => settings
+    {
+        var names = settings
             .Where(pair =>
                 pair.Value.OpenOnStartup &&
-                !string.IsNullOrWhiteSpace(pair.Key) &&
-                !string.Equals(pair.Key, CactbotOverlayName, StringComparison.OrdinalIgnoreCase))
-            .Select(static pair => pair.Key)
+                !string.IsNullOrWhiteSpace(pair.Key))
+            .Select(static pair => NormalizeCactbotOverlayName(pair.Key))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (names.Contains(CactbotAlertsOverlayName) ||
+            names.Contains(CactbotTimelineOverlayName))
+        {
+            names.Remove(CactbotOverlayName);
+        }
+
+        return names
             .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
 
     private void CacheActiveEncounterIdentities(IReadOnlyList<ActPlayerIdentity> identities)
     {

@@ -582,7 +582,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 4 &&
+        legacyConfiguration.Version == 5 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -612,7 +612,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 4 &&
+        parserMigration.Version == 5 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -626,10 +626,12 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 4 &&
+        newConfiguration.Version == 5 &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
-        newConfiguration.AutoStartParser,
+        newConfiguration.AutoStartParser &&
+        newConfiguration.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup,
         "A new installation does not default to rDPS or start the parser independently of third-party confirmation.");
 
     var previousEdpsUser = new PluginConfiguration
@@ -639,7 +641,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 4 &&
+        previousEdpsUser.Version == 5 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -655,9 +657,97 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 4 &&
+        previousCustomMetricUser.Version == 5 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
+
+    var previousTimelineUser = new PluginConfiguration
+    {
+        Version = 4,
+        SelectedOverlayTemplate = SelfHostedActRuntime.CactbotTimelineOverlayName,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                Left = 100,
+                Top = 120,
+            },
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] =
+                new HtmlOverlayWindowSettings
+                {
+                    OpenOnStartup = true,
+                    Left = 640,
+                    Top = 180,
+                    Width = 720,
+                    Height = 360,
+                },
+        },
+    };
+    Assert(
+        previousTimelineUser.ApplyMigrations() &&
+        previousTimelineUser.Version == 5 &&
+        previousTimelineUser.SelectedCactbotOverlay ==
+            SelfHostedActRuntime.CactbotTimelineOverlayName &&
+        previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
+        previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).OpenOnStartup &&
+        previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotTimelineOverlayName).Left == 640 &&
+        !previousTimelineUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup,
+        "The Cactbot split migration lost an existing Timeline-only layout or reopened the combined window.");
+
+    var previousCombinedTemplateUser = new PluginConfiguration
+    {
+        Version = 4,
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotCombinedTemplateName] =
+                new HtmlOverlayWindowSettings
+                {
+                    OpenOnStartup = true,
+                    Left = 321,
+                    Width = 876,
+                },
+        },
+    };
+    Assert(
+        previousCombinedTemplateUser.ApplyMigrations() &&
+        !previousCombinedTemplateUser.OverlayWindows.ContainsKey(
+            SelfHostedActRuntime.CactbotCombinedTemplateName) &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).Left == 321 &&
+        previousCombinedTemplateUser.GetOverlayWindowSettings(
+            SelfHostedActRuntime.CactbotOverlayName).Width == 876,
+        "The legacy combined template was not normalized without losing its saved layout.");
+
+    var previousCustomCactbotPrefixUser = new PluginConfiguration
+    {
+        Version = 4,
+        SelectedOverlayTemplate = "Cactbot Personal",
+        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["Cactbot Personal"] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+                SourceUrl = "https://example.com/personal-overlay",
+                Left = 456,
+            },
+        },
+    };
+    Assert(
+        previousCustomCactbotPrefixUser.ApplyMigrations() &&
+        previousCustomCactbotPrefixUser.SelectedOverlayTemplate == "Cactbot Personal" &&
+        previousCustomCactbotPrefixUser.GetOverlayWindowSettings(
+            "Cactbot Personal").OpenOnStartup &&
+        previousCustomCactbotPrefixUser.GetOverlayWindowSettings(
+            "Cactbot Personal").Left == 456,
+        "The Cactbot split migration swallowed an existing custom overlay that only shared the prefix.");
 
     var start = DateTimeOffset.UtcNow.AddSeconds(-10);
     var encounter = new Encounter(
@@ -3510,7 +3600,23 @@ static void ValidateHtmlOverlayDefaults()
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
         controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
         controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal),
+        controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            ".Where(static template => template.IsCactbot)",
+            StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "!SelfHostedActRuntime.IsCactbotOverlayName(name)",
+            StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "本地资源不可用的旧配置",
+            StringComparison.Ordinal) &&
+        File.ReadAllText(Path.Combine(
+                FindProjectRoot(),
+                "src",
+                "DalamudActCompat",
+                "UI",
+                "SettingsWindow.cs"))
+            .Contains("以下保存项缺少本地页面", StringComparison.Ordinal),
         "Created/custom HTML overlays are not listed above the template form or the trust warning regressed.");
     Assert(
         controlCenterSource.Contains(
@@ -3589,8 +3695,91 @@ static void ValidateHtmlOverlayDefaults()
             },
         });
     Assert(
-        overlaysToRestore.SequenceEqual(["Skills"]),
-        "HTML overlay startup restoration did not preserve only the user-open custom windows.");
+        overlaysToRestore.SequenceEqual(
+            [SelfHostedActRuntime.CactbotOverlayName, "Skills"]),
+        "HTML overlay startup restoration did not preserve Cactbot and user-open custom windows.");
+    var conflictingRaidbossWindowsToRestore = SelfHostedActRuntime.SelectHtmlOverlaysToRestore(
+        new Dictionary<string, HtmlOverlayWindowSettings>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            [SelfHostedActRuntime.CactbotAlertsOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            [SelfHostedActRuntime.CactbotTimelineOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+            ["Skills"] = restoredOverlaySettings,
+        });
+    Assert(
+        conflictingRaidbossWindowsToRestore.SequenceEqual(
+            [
+                SelfHostedActRuntime.CactbotAlertsOverlayName,
+                SelfHostedActRuntime.CactbotTimelineOverlayName,
+                "Skills",
+            ]) &&
+        !SelfHostedActRuntime.IsCactbotOverlayName("Cactbot Personal"),
+        "Conflicting Raidboss startup state was not normalized or a custom Cactbot-prefixed name was captured.");
+
+    var probedTemplates = SelfHostedActRuntime.ProbeOverlayTemplates();
+    Assert(
+        probedTemplates.Single(template => template.Name == "Kagerou").IsCactbot == false &&
+        probedTemplates.Single(template =>
+            template.Name == SelfHostedActRuntime.CactbotTimelineOverlayName).IsCactbot &&
+        probedTemplates
+            .Where(static template => template.IsCactbot)
+            .All(template => SelfHostedActRuntime.IsCactbotOverlayName(template.Name)),
+        "Overlay templates lost their Cactbot classification.");
+
+    var localCactbotRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"actcompat-cactbot-uri-{Guid.NewGuid():N}");
+    var localRaidboss = Path.Combine(localCactbotRoot, "ui", "raidboss", "raidboss.html");
+    var outsideCactbotPage = Path.Combine(
+        Path.GetDirectoryName(localCactbotRoot)!,
+        $"{Path.GetFileName(localCactbotRoot)}-outside.html");
+    Directory.CreateDirectory(Path.GetDirectoryName(localRaidboss)!);
+    File.WriteAllText(localRaidboss, "<html></html>");
+    File.WriteAllText(outsideCactbotPage, "<html></html>");
+    try
+    {
+        Assert(
+            SelfHostedActRuntime.TryBuildLocalCactbotOverlayUri(
+                "https://overlayplugin.github.io/cactbot/ui/raidboss/raidboss.html?alerts=0&timeline=1",
+                localCactbotRoot,
+                new Uri("ws://127.0.0.1:10501/ws"),
+                out var localTimelineUri) &&
+            localTimelineUri.IsFile &&
+            localTimelineUri.AbsoluteUri.Contains("alerts=0&timeline=1", StringComparison.Ordinal) &&
+            localTimelineUri.AbsoluteUri.Contains(
+                "OVERLAY_WS=ws://127.0.0.1:10501/ws",
+                StringComparison.Ordinal) &&
+            !localTimelineUri.AbsoluteUri.Contains("proxy.iinact.com", StringComparison.Ordinal),
+            "Timeline-only did not resolve to the installed local Cactbot page with its mode and WebSocket parameters.");
+        Assert(
+            !SelfHostedActRuntime.TryBuildLocalCactbotOverlayUri(
+                "https://overlayplugin.github.io/cactbot/ui/fisher/fisher.html",
+                localCactbotRoot,
+                new Uri("ws://127.0.0.1:10501/ws"),
+                out _),
+            "A missing local Cactbot page silently fell back to a remote template.");
+        Assert(
+            !SelfHostedActRuntime.TryBuildLocalCactbotOverlayUri(
+                $"https://overlayplugin.github.io/cactbot/%2e%2e%2f{Uri.EscapeDataString(Path.GetFileName(outsideCactbotPage))}",
+                localCactbotRoot,
+                new Uri("ws://127.0.0.1:10501/ws"),
+                out _),
+            "An encoded Cactbot template path escaped the installed local package root.");
+    }
+    finally
+    {
+        Directory.Delete(localCactbotRoot, recursive: true);
+        File.Delete(outsideCactbotPage);
+    }
 
     Assert(
         SelfHostedActRuntime.TryBuildCustomOverlayUri(
@@ -3613,6 +3802,26 @@ static void ValidateHtmlOverlayDefaults()
     var formType = typeof(HtmlOverlayWindowSettings).Assembly.GetType(
                        "DalamudActCompat.ActRuntime.HtmlOverlayForm")
                    ?? throw new InvalidOperationException("HTML overlay form was not found.");
+    var combineInitializationTasks = formType.GetMethod(
+                                         "CombineInitializationTasks",
+                                         BindingFlags.Static | BindingFlags.NonPublic)
+                                     ?? throw new InvalidOperationException(
+                                         "WebView2 in-flight initialization combiner was not found.");
+    var firstInitialization = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var combinedInitialization = combineInitializationTasks.Invoke(
+                                     null,
+                                     [firstInitialization.Task, Task.CompletedTask]) as Task
+                                 ?? throw new InvalidOperationException(
+                                     "WebView2 initialization combiner did not return a Task.");
+    Assert(
+        !combinedInitialization.IsCompleted,
+        "A newer completed WebView2 attempt hid an older in-flight initialization.");
+    firstInitialization.SetResult(true);
+    combinedInitialization.GetAwaiter().GetResult();
+    Assert(
+        combinedInitialization.IsCompletedSuccessfully,
+        "The combined WebView2 initialization did not finish after every attempt completed.");
     var isRaidbossPage = formType.GetMethod(
                              "IsCactbotRaidbossPage",
                              BindingFlags.Static | BindingFlags.NonPublic)
@@ -3656,18 +3865,6 @@ static void ValidateHtmlOverlayDefaults()
             "#container.hide-alerts.dalamud-act-compat-alert-repair",
             StringComparison.Ordinal),
         "The Cactbot visibility repair can override a user's explicit disabled-alert setting.");
-    var editIndicatorScript = formType.GetField(
-                                  "OverlayEditIndicatorScript",
-                                  BindingFlags.Static | BindingFlags.NonPublic)
-                              ?.GetRawConstantValue() as string;
-    Assert(
-        editIndicatorScript?.Contains(
-            "data-dalamud-act-compat-editing='true'",
-            StringComparison.Ordinal) == true &&
-        editIndicatorScript.Contains("编辑模式", StringComparison.Ordinal) &&
-        editIndicatorScript.Contains("repeating-linear-gradient", StringComparison.Ordinal) &&
-        editIndicatorScript.Contains("cursor: nwse-resize", StringComparison.Ordinal),
-        "Transparent HTML overlays no longer expose a visible edit boundary and resize grip.");
     var isTransientWebViewFailure = formType.GetMethod(
                                         "IsTransientWebViewInitializationFailure",
                                         BindingFlags.Static | BindingFlags.NonPublic)
@@ -3681,8 +3878,35 @@ static void ValidateHtmlOverlayDefaults()
                 unchecked((int)0x80004004))]) as bool? == true &&
         isTransientWebViewFailure.Invoke(
             null,
+            [new System.Runtime.InteropServices.COMException(
+                "The profile is busy.",
+                unchecked((int)0x800700AA))]) as bool? == true &&
+        isTransientWebViewFailure.Invoke(
+            null,
             [new InvalidOperationException("permanent")]) as bool? == false,
-        "Cactbot WebView2 startup no longer retries only the transient E_ABORT failure.");
+        "Cactbot WebView2 startup no longer retries transient abort/profile-busy failures only.");
+    var describeWebViewFailure = formType.GetMethod(
+                                     "DescribeWebViewInitializationFailure",
+                                     BindingFlags.Static | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "WebView2 initialization failure classifier was not found.");
+    Assert(
+        (describeWebViewFailure.Invoke(
+             null,
+             [new FileNotFoundException("missing")]) as string)?.Contains(
+            "WebView2Loader.dll",
+            StringComparison.Ordinal) == true &&
+        (describeWebViewFailure.Invoke(
+             null,
+             [new UnauthorizedAccessException("denied")]) as string)?.Contains(
+            "权限",
+            StringComparison.Ordinal) == true &&
+        (describeWebViewFailure.Invoke(
+             null,
+             [new InvalidOperationException("unknown")]) as string)?.Contains(
+            "Dalamud 日志",
+            StringComparison.Ordinal) == true,
+        "WebView2 failures are still collapsed into the misleading Runtime-missing prompt.");
 
     var interactionType = formType.GetNestedType(
                               "OverlayInteraction",
@@ -3832,8 +4056,43 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         htmlOverlayFormSource.Contains(
             "SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged",
-            StringComparison.Ordinal),
-        "HTML overlay style changes are no longer flushed through SWP_FRAMECHANGED.");
+            StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("sealed class EditChromeForm", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("WsExTransparent", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains(
+            "MaximumWebViewInitializationAttempts = 6",
+            StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("ReplaceWebViewControl();", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("RetryFailedWebViewAsync", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("pendingInitialization", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("ShutdownCompletion", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("form.BeginInvoke(async () =>", StringComparison.Ordinal) &&
+        !htmlOverlayFormSource.Contains("form.Invoke(() =>", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains(
+            "WaitForBrowserProcessesExit",
+            StringComparison.Ordinal) &&
+        !htmlOverlayFormSource.Contains("MessageBox.Show", StringComparison.Ordinal),
+        "HTML overlays lost native edit chrome, bounded WebView2 recovery, shutdown waiting, or restored a blocking error popup.");
+    var selfHostedRuntimeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    Assert(
+        selfHostedRuntimeSource.Contains("webview2-session.lock", StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains(
+            "TryBuildLocalCactbotOverlayUri",
+            StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains(
+            "CloseConflictingRaidbossWindows",
+            StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains(
+            "ReleaseWebViewSessionLockWhenSafe",
+            StringComparison.Ordinal) &&
+        Regex.Matches(
+            selfHostedRuntimeSource,
+            Regex.Escape("cactbotOverlay.Show();")).Count == 1,
+        "Cactbot windows are no longer lifecycle-locked, local-only, conflict-safe, or startup-intent driven.");
     var calculateBrowserInputPoint = formType.GetMethod(
                                          "CalculateBrowserInputPoint",
                                          BindingFlags.Static | BindingFlags.NonPublic)
@@ -3997,6 +4256,7 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                            new System.Drawing.Size(320, 200),
                            false,
                            log,
+                           null,
                        ],
                        culture: null)
                    ?? throw new InvalidOperationException("HTML overlay input smoke form was not created.");
@@ -4006,11 +4266,43 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                     ?? throw new InvalidOperationException("HTML overlay host form field was not found.");
     var proxyField = formType.GetField("inputProxy", BindingFlags.Instance | BindingFlags.NonPublic)
                      ?? throw new InvalidOperationException("HTML overlay input proxy field was not found.");
+    var editChromeField = formType.GetField(
+                              "editChrome",
+                              BindingFlags.Instance | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Native HTML overlay edit chrome field was not found.");
+    var browserStateField = formType.GetField(
+                                "browserState",
+                                BindingFlags.Instance | BindingFlags.NonPublic)
+                            ?? throw new InvalidOperationException(
+                             "HTML overlay browser state field was not found.");
+    var navigationStartedField = formType.GetField(
+                                     "navigationStarted",
+                                     BindingFlags.Instance | BindingFlags.NonPublic)
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay navigation state field was not found.");
     var show = formType.GetMethod("Show", BindingFlags.Instance | BindingFlags.Public)
                ?? throw new InvalidOperationException("HTML overlay show method was not found.");
+    var hide = formType.GetMethod("Hide", BindingFlags.Instance | BindingFlags.Public)
+               ?? throw new InvalidOperationException("HTML overlay hide method was not found.");
     var applySettings = formType.GetMethod("ApplySettings", BindingFlags.Instance | BindingFlags.Public)
                         ?? throw new InvalidOperationException(
                             "HTML overlay ApplySettings method was not found.");
+    var browserProcessIdsProperty = formType.GetProperty(
+                                        "BrowserProcessIds",
+                                        BindingFlags.Instance | BindingFlags.Public)
+                                    ?? throw new InvalidOperationException(
+                                     "HTML overlay browser process list was not found.");
+    var shutdownCompletionProperty = formType.GetProperty(
+                                         "ShutdownCompletion",
+                                         BindingFlags.Instance | BindingFlags.Public)
+                                     ?? throw new InvalidOperationException(
+                                         "HTML overlay shutdown completion was not exposed.");
+    var waitForBrowserProcessesExit = formType.GetMethod(
+                                          "WaitForBrowserProcessesExit",
+                                          BindingFlags.Static | BindingFlags.Public)
+                                      ?? throw new InvalidOperationException(
+                                          "HTML overlay browser shutdown waiter was not found.");
 
     NativeInputProbe.GetCursorPos(out var originalCursor);
     try
@@ -4126,16 +4418,31 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
             collapsedRegionReady,
             "The live HTML input proxy did not shrink after the visible page content collapsed.");
 
+        await InvokeControlAsync(liveWebView, () =>
+        {
+            liveWebView.Visible = false;
+            return true;
+        });
         settings.SetEditing(true);
         applySettings.Invoke(instance, null);
         var editingUsesFullRegion = false;
+        var nativeEditChromeVisible = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
             editingUsesFullRegion =
                 await WindowAtProxyPointAsync(liveProxy, new System.Drawing.Point(280, 160)) ==
                 proxyHandle;
-            if (editingUsesFullRegion)
+            if (editChromeField.GetValue(instance) is Form chrome && chrome.IsHandleCreated)
+            {
+                nativeEditChromeVisible = await InvokeControlAsync(
+                    chrome,
+                    () => chrome.Visible && chrome.Bounds == liveHostForm.Bounds &&
+                          (NativeInputProbe.GetWindowLongPtr(
+                               chrome.Handle,
+                               NativeInputProbe.GwlExStyle) & (nint)0x00000020) != nint.Zero);
+            }
+            if (editingUsesFullRegion && nativeEditChromeVisible)
             {
                 break;
             }
@@ -4144,9 +4451,52 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(
-            editingUsesFullRegion,
-            "HTML overlay editing mode did not restore the full drag and resize region.");
+            editingUsesFullRegion && nativeEditChromeVisible,
+            "HTML overlay editing mode did not restore the full input region and independent native edit boundary.");
 
+        var beforeMove = await InvokeControlAsync(liveHostForm, () => liveHostForm.Bounds);
+        var moveStart = await InvokeControlAsync(
+            liveHostForm,
+            () => liveHostForm.PointToScreen(new System.Drawing.Point(
+                liveHostForm.ClientSize.Width / 2,
+                liveHostForm.ClientSize.Height / 2)));
+        NativeInputProbe.SetCursorPos(moveStart.X, moveStart.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.SetCursorPos(moveStart.X + 45, moveStart.Y + 30);
+        await Task.Delay(180);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftUp, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(120);
+        var movedBounds = await InvokeControlAsync(liveHostForm, () => liveHostForm.Bounds);
+        Assert(
+            movedBounds.Left >= beforeMove.Left + 35 &&
+            movedBounds.Top >= beforeMove.Top + 20,
+            "A physical drag over the native edit boundary did not move the blank-capable overlay host.");
+
+        var beforeResize = movedBounds;
+        var resizeStart = await InvokeControlAsync(
+            liveHostForm,
+            () => liveHostForm.PointToScreen(new System.Drawing.Point(
+                liveHostForm.ClientSize.Width - 8,
+                liveHostForm.ClientSize.Height - 8)));
+        NativeInputProbe.SetCursorPos(resizeStart.X, resizeStart.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.SetCursorPos(resizeStart.X + 35, resizeStart.Y + 25);
+        await Task.Delay(180);
+        NativeInputProbe.MouseEvent(NativeInputProbe.LeftUp, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(120);
+        var resizedBounds = await InvokeControlAsync(liveHostForm, () => liveHostForm.Bounds);
+        Assert(
+            resizedBounds.Width >= beforeResize.Width + 25 &&
+            resizedBounds.Height >= beforeResize.Height + 15,
+            "A physical drag on the native bottom-right grip did not resize the overlay host.");
+
+        await InvokeControlAsync(liveWebView, () =>
+        {
+            liveWebView.Visible = true;
+            return true;
+        });
         settings.SetEditing(false);
         applySettings.Invoke(instance, null);
         var lockedRestoresContentRegion = false;
@@ -4169,11 +4519,84 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         Assert(
             lockedRestoresContentRegion,
             "HTML overlay locking did not restore the collapsed content-shaped input region.");
+        if (editChromeField.GetValue(instance) is Form hiddenChrome)
+        {
+            Assert(
+                !await InvokeControlAsync(hiddenChrome, () => hiddenChrome.Visible),
+                "The native HTML overlay edit boundary remained visible after locking.");
+        }
+
+        hide.Invoke(instance, null);
+        browserStateField.SetValue(
+            instance,
+            Enum.Parse(browserStateField.FieldType, "Failed"));
+        show.Invoke(instance, null);
+        var reopenedAfterFailure = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            reopenedAfterFailure = string.Equals(
+                browserStateField.GetValue(instance)?.ToString(),
+                "Loaded",
+                StringComparison.Ordinal);
+            if (reopenedAfterFailure)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            reopenedAfterFailure,
+            "Closing and reopening a failed HTML overlay did not retry its WebView2 page.");
+
+        hide.Invoke(instance, null);
+        var webViewBeforePreNavigationRetry = webViewField.GetValue(instance);
+        navigationStartedField.SetValue(instance, false);
+        browserStateField.SetValue(
+            instance,
+            Enum.Parse(browserStateField.FieldType, "Failed"));
+        show.Invoke(instance, null);
+        var rebuiltBeforeNavigation = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            rebuiltBeforeNavigation =
+                !ReferenceEquals(webViewField.GetValue(instance), webViewBeforePreNavigationRetry) &&
+                string.Equals(
+                    browserStateField.GetValue(instance)?.ToString(),
+                    "Loaded",
+                    StringComparison.Ordinal);
+            if (rebuiltBeforeNavigation)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            rebuiltBeforeNavigation,
+            "A failed WebView2 that had not begun navigation reloaded about:blank instead of rebuilding.");
     }
     finally
     {
         NativeInputProbe.SetCursorPos(originalCursor.X, originalCursor.Y);
+        var browserProcessIds =
+            (browserProcessIdsProperty.GetValue(instance) as IEnumerable<int> ?? [])
+            .ToHashSet();
         ((IDisposable)instance).Dispose();
+        var shutdownCompletion = shutdownCompletionProperty.GetValue(instance) as Task
+                                 ?? throw new InvalidOperationException(
+                                     "HTML overlay shutdown completion was not a Task.");
+        await shutdownCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert(shutdownCompletion.IsCompletedSuccessfully, "HTML overlay shutdown did not complete cleanly.");
+        browserProcessIds.UnionWith(
+            browserProcessIdsProperty.GetValue(instance) as IEnumerable<int> ?? []);
+        waitForBrowserProcessesExit.Invoke(
+            null,
+            [browserProcessIds, TimeSpan.FromSeconds(5), log]);
     }
 }
 

@@ -1,6 +1,7 @@
 using Dalamud.Plugin.Services;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -28,12 +29,20 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const int MinimumOverlayWidth = 120;
     private const int MinimumOverlayHeight = 80;
     private const int MaximumBrowserInputRegions = 2048;
+    private const int MaximumWebViewInitializationAttempts = 6;
+    private const int WindowMessageNonClientHitTest = 0x0084;
+    private const int HitTestTransparent = -1;
     private const string CactbotRenderMessagePrefix = "dalamud-act-compat:cactbot-render:";
     private const string InputRegionMessagePrefix = "dalamud-act-compat:input-regions:";
     private const string InputRegionDiagnosticMessagePrefix =
         "dalamud-act-compat:input-region-diagnostic:";
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
+    private static readonly SemaphoreSlim WebViewInitializationGate = new(1, 1);
+    private static readonly object LoaderSync = new();
     private static nint interactionOwner;
+    private static nint loaderHandle;
+    private static string? loadedLoaderPath;
+    private static int loaderUserCount;
     internal const string CactbotResponsiveAlertLayoutScript =
         """
         (() => {
@@ -147,54 +156,6 @@ internal sealed class HtmlOverlayForm : IDisposable
                 }
               }).observe(holder, { childList: true });
             }
-          };
-          if (document.readyState === 'loading')
-            document.addEventListener('DOMContentLoaded', install, { once: true });
-          else
-            install();
-        })();
-        """;
-    internal const string OverlayEditIndicatorScript =
-        """
-        (() => {
-          const install = () => {
-            if (document.getElementById('dalamud-act-compat-edit-indicator'))
-              return;
-            const style = document.createElement('style');
-            style.id = 'dalamud-act-compat-edit-indicator';
-            style.textContent = `
-              html[data-dalamud-act-compat-editing='true'] body::after {
-                content: 'ACT Overlay · 编辑模式';
-                position: fixed;
-                inset: 0;
-                box-sizing: border-box;
-                border: 2px solid rgba(232, 196, 91, 0.96);
-                padding: 5px 8px;
-                color: #f7dfa0;
-                background: rgba(14, 22, 34, 0.10);
-                font: 13px/1.4 sans-serif;
-                text-shadow: 0 1px 3px #000;
-                pointer-events: none;
-                z-index: 2147483647;
-              }
-              html[data-dalamud-act-compat-editing='true'] body::before {
-                content: '';
-                position: fixed;
-                right: 4px;
-                bottom: 4px;
-                width: 28px;
-                height: 28px;
-                box-sizing: border-box;
-                background: repeating-linear-gradient(
-                  135deg,
-                  transparent 0 5px,
-                  rgba(247, 223, 160, 0.96) 5px 7px);
-                cursor: nwse-resize;
-                pointer-events: auto;
-                z-index: 2147483647;
-              }
-            `;
-            (document.head || document.documentElement).appendChild(style);
           };
           if (document.readyState === 'loading')
             document.addEventListener('DOMContentLoaded', install, { once: true });
@@ -496,10 +457,17 @@ internal sealed class HtmlOverlayForm : IDisposable
     private readonly HtmlOverlayWindowSettings? settings;
     private readonly bool debugMode;
     private readonly IPluginLog log;
+    private readonly Action<string>? failureNotification;
     private readonly ManualResetEventSlim ready = new();
+    private readonly SemaphoreSlim initializationGate = new(1, 1);
+    private readonly CancellationTokenSource lifecycleCancellation = new();
+    private readonly TaskCompletionSource<bool> shutdownCompletion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly ConcurrentDictionary<int, byte> browserProcessIds = new();
     private Thread? uiThread;
     private Form? form;
     private Form? inputProxy;
+    private EditChromeForm? editChrome;
     private WebView2? webView;
     private BrowserInputRegion? browserInputRegion;
     private CoreWebView2DevToolsProtocolEventReceiver? consoleEventReceiver;
@@ -517,7 +485,16 @@ internal sealed class HtmlOverlayForm : IDisposable
     private volatile bool visible;
     private bool disposing;
     private bool applyingSettings;
+    private bool loaderAcquired;
     private Exception? startupFailure;
+    private BrowserState browserState;
+    private string browserStateDetail = string.Empty;
+    private int recoveryScheduled;
+    private int browserRecoveryCount;
+    private int disposeStarted;
+    private int shutdownFinalized;
+    private Task? initializationTask;
+    private bool navigationStarted;
     private long regionRebuildWindowStarted = Stopwatch.GetTimestamp();
     private int regionRebuildCount;
     private int regionRebuildRectangleCount;
@@ -534,7 +511,8 @@ internal sealed class HtmlOverlayForm : IDisposable
         HtmlOverlayWindowSettings? settings,
         Size clientSize,
         bool debugMode,
-        IPluginLog log)
+        IPluginLog log,
+        Action<string>? failureNotification = null)
     {
         this.pageUri = pageUri;
         this.userDataDirectory = userDataDirectory;
@@ -545,12 +523,17 @@ internal sealed class HtmlOverlayForm : IDisposable
         ClientSize = clientSize;
         this.debugMode = debugMode;
         this.log = log;
+        this.failureNotification = failureNotification;
     }
 
     private Size ClientSize { get; }
 
     public bool IsVisibleEditing
         => visible && settings?.IsEditing == true;
+
+    public IReadOnlyCollection<int> BrowserProcessIds => browserProcessIds.Keys.ToArray();
+
+    public Task ShutdownCompletion => shutdownCompletion.Task;
 
     public void Show()
     {
@@ -600,7 +583,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         try
         {
-            form.BeginInvoke(() =>
+            form.BeginInvoke(async () =>
             {
                 form.Show();
                 visible = true;
@@ -616,6 +599,11 @@ internal sealed class HtmlOverlayForm : IDisposable
                 else
                 {
                     form.Activate();
+                }
+
+                if (browserState == BrowserState.Failed)
+                {
+                    await RetryFailedWebViewAsync();
                 }
             });
         }
@@ -646,6 +634,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             StopEditMonitor();
             inputProxy?.Hide();
+            editChrome?.Hide();
             form.Hide();
         });
     }
@@ -688,16 +677,12 @@ internal sealed class HtmlOverlayForm : IDisposable
                 }
             }
 
-            webView = new WebView2
-            {
-                Dock = DockStyle.Fill,
-                DefaultBackgroundColor = Color.Transparent,
-            };
-            webView.NavigationCompleted += OnNavigationCompleted;
+            webView = CreateWebViewControl();
             form.Controls.Add(webView);
             if (overlayMode)
             {
                 inputProxy = CreateInputProxy();
+                editChrome = CreateEditChrome();
             }
             form.FormClosing += OnFormClosing;
             form.LocationChanged += OnOverlayBoundsChanged;
@@ -710,13 +695,23 @@ internal sealed class HtmlOverlayForm : IDisposable
                     settings.IsVisible = true;
                 }
                 ready.Set();
+                if (disposing)
+                {
+                    form.Close();
+                    return;
+                }
                 if (overlayMode)
                 {
                     ApplyOverlaySettings();
                 }
 
-                await InitializeWebViewAsync();
+                await TrackInitializationAsync();
             };
+            if (disposing)
+            {
+                ready.Set();
+                return;
+            }
             Application.Run(form);
         }
         catch (Exception ex)
@@ -727,56 +722,241 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
         finally
         {
-            visible = false;
-            if (settings is not null)
+            try
             {
-                settings.IsVisible = false;
+                visible = false;
+                if (settings is not null)
+                {
+                    settings.IsVisible = false;
+                }
+                StopEditMonitor();
+                DetachWebViewEvents(webView);
+
+                if (inputProxy is not null)
+                {
+                    inputProxy.MouseClick -= OnInputProxyMouseClick;
+                    var inputRegion = inputProxy.Region;
+                    inputProxy.Region = null;
+                    inputRegion?.Dispose();
+                    inputProxy.Dispose();
+                }
+                editChrome?.Dispose();
+                webView?.Dispose();
+                form?.Dispose();
+                inputProxy = null;
+                editChrome = null;
+                webView = null;
+                form = null;
+                browserInputRegion = null;
             }
-            StopEditMonitor();
-            if (webView is not null)
+            finally
             {
-                webView.NavigationCompleted -= OnNavigationCompleted;
-                if (webView.CoreWebView2 is not null)
+                CompleteShutdownAfterInitialization();
+            }
+        }
+    }
+
+    private WebView2 CreateWebViewControl()
+    {
+        var control = new WebView2
+        {
+            Dock = DockStyle.Fill,
+            DefaultBackgroundColor = Color.Transparent,
+        };
+        control.NavigationCompleted += OnNavigationCompleted;
+        return control;
+    }
+
+    private void ReplaceWebViewControl()
+    {
+        if (disposing || form is null)
+        {
+            throw new OperationCanceledException(lifecycleCancellation.Token);
+        }
+
+        var previous = webView;
+        DetachWebViewEvents(previous);
+        if (previous is not null)
+        {
+            form.Controls.Remove(previous);
+            previous.Dispose();
+        }
+
+        browserInputRegion = null;
+        navigationStarted = false;
+        webView = CreateWebViewControl();
+        form.Controls.Add(webView);
+        webView.BringToFront();
+        ApplyInputProxySettings();
+    }
+
+    private void DetachWebViewEvents(WebView2? control)
+    {
+        if (control is not null)
+        {
+            control.NavigationCompleted -= OnNavigationCompleted;
+            if (control.CoreWebView2 is not null)
+            {
+                control.CoreWebView2.ProcessFailed -= OnProcessFailed;
+                control.CoreWebView2.WebMessageReceived -= OnBrowserWebMessage;
+            }
+        }
+
+        if (consoleEventReceiver is not null)
+        {
+            consoleEventReceiver.DevToolsProtocolEventReceived -= OnBrowserConsoleMessage;
+            consoleEventReceiver = null;
+        }
+        if (exceptionEventReceiver is not null)
+        {
+            exceptionEventReceiver.DevToolsProtocolEventReceived -= OnBrowserException;
+            exceptionEventReceiver = null;
+        }
+    }
+
+    private void AcquireLoader()
+    {
+        if (loaderAcquired)
+        {
+            return;
+        }
+
+        lock (LoaderSync)
+        {
+            var fullPath = Path.GetFullPath(loaderPath);
+            if (loaderHandle == nint.Zero)
+            {
+                loaderHandle = NativeLibrary.Load(fullPath);
+                loadedLoaderPath = fullPath;
+            }
+            else if (!string.Equals(
+                         loadedLoaderPath,
+                         fullPath,
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"WebView2Loader.dll is already loaded from '{loadedLoaderPath}'.");
+            }
+
+            loaderUserCount++;
+            loaderAcquired = true;
+        }
+    }
+
+    private void ReleaseLoader()
+    {
+        if (!loaderAcquired)
+        {
+            return;
+        }
+
+        lock (LoaderSync)
+        {
+            loaderAcquired = false;
+            loaderUserCount = Math.Max(0, loaderUserCount - 1);
+            if (loaderUserCount != 0 || loaderHandle == nint.Zero)
+            {
+                return;
+            }
+
+            NativeLibrary.Free(loaderHandle);
+            loaderHandle = nint.Zero;
+            loadedLoaderPath = null;
+        }
+    }
+
+    private void SetBrowserState(BrowserState state, string detail)
+    {
+        browserState = state;
+        browserStateDetail = detail;
+        ApplyInputProxySettings();
+        ApplyEditChromeSettings();
+    }
+
+    private Task TrackInitializationAsync()
+    {
+        var task = InitializeWebViewAsync();
+        while (true)
+        {
+            var previousInitialization = Volatile.Read(ref initializationTask);
+            var trackedInitialization = CombineInitializationTasks(previousInitialization, task);
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(
+                        ref initializationTask,
+                        trackedInitialization,
+                        previousInitialization),
+                    previousInitialization))
+            {
+                return task;
+            }
+        }
+    }
+
+    internal static Task CombineInitializationTasks(Task? previousInitialization, Task currentInitialization)
+        => previousInitialization is { IsCompleted: false }
+            ? Task.WhenAll(previousInitialization, currentInitialization)
+            : currentInitialization;
+
+    private async Task RetryFailedWebViewAsync()
+    {
+        if (disposing || browserState != BrowserState.Failed ||
+            Volatile.Read(ref recoveryScheduled) != 0)
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref browserRecoveryCount, 0);
+        try
+        {
+            var core = webView?.CoreWebView2;
+            if (core is not null && navigationStarted)
+            {
+                try
                 {
-                    webView.CoreWebView2.ProcessFailed -= OnProcessFailed;
-                    webView.CoreWebView2.WebMessageReceived -= OnBrowserWebMessage;
+                    core.Reload();
+                    SetBrowserState(BrowserState.Navigating, "正在重新加载页面");
+                    return;
                 }
-                if (consoleEventReceiver is not null)
+                catch (Exception ex)
                 {
-                    consoleEventReceiver.DevToolsProtocolEventReceived -= OnBrowserConsoleMessage;
-                }
-                if (exceptionEventReceiver is not null)
-                {
-                    exceptionEventReceiver.DevToolsProtocolEventReceived -= OnBrowserException;
+                    log.Warning(ex, $"Could not reload the failed page for {title}; rebuilding WebView2.");
                 }
             }
 
-            if (inputProxy is not null)
-            {
-                inputProxy.MouseClick -= OnInputProxyMouseClick;
-                var inputRegion = inputProxy.Region;
-                inputProxy.Region = null;
-                inputRegion?.Dispose();
-                inputProxy.Dispose();
-            }
-            webView?.Dispose();
-            form?.Dispose();
-            inputProxy = null;
-            webView = null;
-            form = null;
-            browserInputRegion = null;
+            ReplaceWebViewControl();
+            await TrackInitializationAsync();
+        }
+        catch (OperationCanceledException) when (disposing)
+        {
+        }
+        catch (Exception ex)
+        {
+            var message = DescribeWebViewInitializationFailure(ex);
+            SetBrowserState(BrowserState.Failed, message);
+            log.Error(ex, $"HTML overlay WebView2 retry failed for {title}: {message}");
+            failureNotification?.Invoke($"{title}：{message}");
         }
     }
 
     private async Task InitializeWebViewAsync()
     {
-        if (webView is null || webView.CoreWebView2 is not null)
+        if (disposing)
         {
             return;
         }
 
+        var cancellationToken = lifecycleCancellation.Token;
+        var gateAcquired = false;
         try
         {
+            await initializationGate.WaitAsync(cancellationToken);
+            gateAcquired = true;
+            if (disposing || webView?.CoreWebView2 is not null)
+            {
+                return;
+            }
+
+            SetBrowserState(BrowserState.Initializing, "正在初始化浏览器");
             if (!File.Exists(loaderPath))
             {
                 throw new FileNotFoundException(
@@ -784,34 +964,52 @@ internal sealed class HtmlOverlayForm : IDisposable
                     loaderPath);
             }
 
-            NativeLibrary.Load(loaderPath);
+            AcquireLoader();
             Directory.CreateDirectory(userDataDirectory);
-            const int maximumAttempts = 3;
-            for (var attempt = 1; ; attempt++)
+            for (var attempt = 1; attempt <= MaximumWebViewInitializationAttempts; attempt++)
             {
+                Exception? retryFailure = null;
+                await WebViewInitializationGate.WaitAsync(cancellationToken);
                 try
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var currentWebView = webView
+                        ?? throw new OperationCanceledException(cancellationToken);
                     var options = new CoreWebView2EnvironmentOptions(
                         "--autoplay-policy=no-user-gesture-required");
                     var environment = await CoreWebView2Environment.CreateAsync(
                         userDataFolder: userDataDirectory,
                         options: options);
-                    await webView.EnsureCoreWebView2Async(environment);
+                    await currentWebView.EnsureCoreWebView2Async(environment);
                     break;
                 }
                 catch (Exception ex) when (
-                    attempt < maximumAttempts && IsTransientWebViewInitializationFailure(ex))
+                    attempt < MaximumWebViewInitializationAttempts &&
+                    IsTransientWebViewInitializationFailure(ex))
+                {
+                    retryFailure = ex;
+                }
+                finally
+                {
+                    WebViewInitializationGate.Release();
+                }
+
+                if (retryFailure is not null)
                 {
                     log.Warning(
-                        ex,
+                        retryFailure,
                         $"HTML overlay WebView2 initialization was interrupted for {title}; " +
-                        $"retrying ({attempt}/{maximumAttempts - 1}).");
-                    await Task.Delay(TimeSpan.FromMilliseconds(400 * attempt));
+                        $"recreating the control and retrying " +
+                        $"({attempt}/{MaximumWebViewInitializationAttempts - 1}).");
+                    ReplaceWebViewControl();
+                    var delayMilliseconds = 250 * (1 << Math.Min(attempt - 1, 4));
+                    await Task.Delay(delayMilliseconds, cancellationToken);
                 }
             }
 
-            var core = webView.CoreWebView2
+            var core = webView?.CoreWebView2
                 ?? throw new InvalidOperationException("WebView2 initialized without a CoreWebView2 instance.");
+            browserProcessIds.TryAdd(checked((int)core.BrowserProcessId), 0);
             core.ProcessFailed += OnProcessFailed;
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreDevToolsEnabled = debugMode;
@@ -835,8 +1033,6 @@ internal sealed class HtmlOverlayForm : IDisposable
             {
                 core.WebMessageReceived += OnBrowserWebMessage;
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
-                    OverlayEditIndicatorScript);
-                await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     $"window.__dalamudActCompatInputRegionDiagnostics = " +
                     $"{(debugMode ? "true" : "false")};");
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
@@ -848,26 +1044,94 @@ internal sealed class HtmlOverlayForm : IDisposable
                     CactbotResponsiveAlertLayoutScript);
             }
 
-            webView.Source = pageUri;
+            SetBrowserState(BrowserState.Ready, "浏览器已就绪");
+            webView!.Source = pageUri;
+            navigationStarted = true;
+            SetBrowserState(BrowserState.Navigating, "页面加载中");
+            ApplyInputProxySettings();
             log.Information($"Opened {title}: {webView.Source}");
+        }
+        catch (OperationCanceledException) when (disposing || cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            log.Error(
-                ex,
-                $"HTML overlay WebView2 initialization failed for {title}. Ensure the WebView2 Runtime is installed.");
-            MessageBox.Show(
-                $"{title} 浏览器初始化失败。请确认 Microsoft Edge WebView2 Runtime 已安装，并查看 Dalamud 日志。",
-                "Dalamud ACT Compat",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            var message = DescribeWebViewInitializationFailure(ex);
+            SetBrowserState(BrowserState.Failed, message);
+            log.Error(ex, $"HTML overlay WebView2 initialization failed for {title}: {message}");
+            failureNotification?.Invoke($"{title}：{message}");
+        }
+        finally
+        {
+            if (gateAcquired)
+            {
+                initializationGate.Release();
+            }
         }
     }
 
     internal static bool IsTransientWebViewInitializationFailure(Exception exception)
-        => exception is COMException { HResult: unchecked((int)0x80004004) } ||
-           exception.InnerException is not null &&
-           IsTransientWebViewInitializationFailure(exception.InnerException);
+        => ExceptionChainAny(
+            exception,
+            static candidate => candidate is COMException
+            {
+                HResult: unchecked((int)0x80004004) or
+                         unchecked((int)0x80070020) or
+                         unchecked((int)0x800700AA) or
+                         unchecked((int)0x8007139F),
+            });
+
+    internal static string DescribeWebViewInitializationFailure(Exception exception)
+    {
+        if (ExceptionChainAny(
+                exception,
+                static candidate => candidate is FileNotFoundException))
+        {
+            return "插件随包的 WebView2Loader.dll 缺失，请重新安装插件";
+        }
+
+        if (ExceptionChainAny(
+                exception,
+                static candidate => candidate is WebView2RuntimeNotFoundException))
+        {
+            return "未检测到 Microsoft Edge WebView2 Runtime";
+        }
+
+        if (ExceptionChainAny(
+                exception,
+                static candidate => candidate is UnauthorizedAccessException or
+                    COMException { HResult: unchecked((int)0x80070005) }))
+        {
+            return "无法访问浏览器配置目录，请检查目录权限或安全软件拦截";
+        }
+
+        if (IsTransientWebViewInitializationFailure(exception))
+        {
+            return "旧浏览器进程仍在退出或配置暂时占用，自动恢复已达到上限；请稍后重开窗口";
+        }
+
+        return "浏览器初始化失败，详情已写入 Dalamud 日志";
+    }
+
+    private static bool ExceptionChainAny(
+        Exception exception,
+        Func<Exception, bool> predicate)
+    {
+        if (predicate(exception))
+        {
+            return true;
+        }
+
+        if (exception is AggregateException aggregate &&
+            aggregate.InnerExceptions.Any(inner => ExceptionChainAny(inner, predicate)))
+        {
+            return true;
+        }
+
+        return exception.InnerException is not null &&
+               !ReferenceEquals(exception.InnerException, exception) &&
+               ExceptionChainAny(exception.InnerException, predicate);
+    }
 
     private async void OnNavigationCompleted(
         object? sender,
@@ -875,11 +1139,14 @@ internal sealed class HtmlOverlayForm : IDisposable
     {
         if (args.IsSuccess)
         {
+            Interlocked.Exchange(ref browserRecoveryCount, 0);
+            SetBrowserState(BrowserState.Loaded, "页面已加载");
             log.Information($"HTML overlay navigation completed: {webView?.Source}");
             await NotifyOverlayStateAsync();
             return;
         }
 
+        SetBrowserState(BrowserState.Failed, $"页面加载失败：{args.WebErrorStatus}");
         log.Error(
             $"HTML overlay navigation failed: {args.WebErrorStatus}; URI: {webView?.Source}");
     }
@@ -887,6 +1154,85 @@ internal sealed class HtmlOverlayForm : IDisposable
     private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args)
     {
         log.Error($"HTML overlay browser process failed: {args.ProcessFailedKind}; {args.Reason}");
+        if (disposing)
+        {
+            return;
+        }
+
+        if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+        {
+            SetBrowserState(BrowserState.Failed, $"浏览器进程异常：{args.ProcessFailedKind}");
+            ScheduleBrowserRecovery();
+            return;
+        }
+
+        if (args.ProcessFailedKind is
+            CoreWebView2ProcessFailedKind.RenderProcessExited or
+            CoreWebView2ProcessFailedKind.FrameRenderProcessExited)
+        {
+            SetBrowserState(BrowserState.Failed, $"浏览器进程异常：{args.ProcessFailedKind}");
+            try
+            {
+                webView?.CoreWebView2?.Reload();
+                SetBrowserState(BrowserState.Navigating, "渲染进程已重启，正在重新加载");
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, $"Could not reload {title} after a renderer failure.");
+                ScheduleBrowserRecovery();
+            }
+        }
+    }
+
+    private void ScheduleBrowserRecovery()
+    {
+        if (disposing || form is null ||
+            Interlocked.CompareExchange(ref recoveryScheduled, 1, 0) != 0)
+        {
+            return;
+        }
+
+        var recoveryAttempt = Interlocked.Increment(ref browserRecoveryCount);
+        if (recoveryAttempt > 3)
+        {
+            Interlocked.Exchange(ref recoveryScheduled, 0);
+            var message = "浏览器进程连续异常，自动恢复已达到上限；请重新打开悬浮窗";
+            SetBrowserState(BrowserState.Failed, message);
+            failureNotification?.Invoke($"{title}：{message}");
+            return;
+        }
+
+        try
+        {
+            form.BeginInvoke(async () =>
+            {
+                try
+                {
+                    if (disposing)
+                    {
+                        return;
+                    }
+
+                    ReplaceWebViewControl();
+                    await TrackInitializationAsync();
+                }
+                catch (Exception ex)
+                {
+                    if (!disposing)
+                    {
+                        log.Error(ex, $"HTML overlay browser recovery failed for {title}.");
+                    }
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref recoveryScheduled, 0);
+                }
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            Interlocked.Exchange(ref recoveryScheduled, 0);
+        }
     }
 
     private async Task EnableBrowserDiagnosticsAsync(CoreWebView2 core)
@@ -1205,6 +1551,40 @@ internal sealed class HtmlOverlayForm : IDisposable
         return proxy;
     }
 
+    private EditChromeForm CreateEditChrome()
+        => new(title, TransparencyColor);
+
+    private void ApplyEditChromeSettings()
+    {
+        if (editChrome is null || form is null || settings is null)
+        {
+            return;
+        }
+
+        editChrome.Bounds = form.Bounds;
+        editChrome.SetStatus(browserState, browserStateDetail);
+        if (!form.Visible || !settings.IsEditing)
+        {
+            editChrome.Hide();
+            return;
+        }
+
+        if (!editChrome.Visible)
+        {
+            editChrome.Show(form);
+        }
+
+        SetWindowPos(
+            editChrome.Handle,
+            HwndTopMost,
+            form.Left,
+            form.Top,
+            form.Width,
+            form.Height,
+            SwpNoActivate);
+        editChrome.Invalidate();
+    }
+
     private void ApplyInputProxySettings()
     {
         if (inputProxy is null || form is null || settings is null)
@@ -1214,7 +1594,8 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         inputProxy.Bounds = form.Bounds;
         ApplyInputProxyRegion();
-        if (!form.Visible || settings.IsClickThrough)
+        if (!form.Visible || settings.IsClickThrough ||
+            !settings.IsEditing && browserState != BrowserState.Loaded)
         {
             inputProxy.Hide();
             return;
@@ -1649,6 +2030,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 StopEditMonitor();
             }
             ApplyInputProxySettings();
+            ApplyEditChromeSettings();
             _ = NotifyOverlayStateAsync();
         }
         finally
@@ -1698,6 +2080,10 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             inputProxy.Bounds = form.Bounds;
             ApplyInputProxyRegion();
+            if (editChrome is not null)
+            {
+                editChrome.Bounds = form.Bounds;
+            }
         }
 
         if (!overlayMode || settings is null || form is null || applyingSettings ||
@@ -1721,6 +2107,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
         StopEditMonitor();
         inputProxy?.Hide();
+        editChrome?.Hide();
         if (disposing)
         {
             return;
@@ -1730,26 +2117,181 @@ internal sealed class HtmlOverlayForm : IDisposable
         form?.Hide();
     }
 
+    private void CompleteShutdownAfterInitialization()
+    {
+        var pendingInitialization = Volatile.Read(ref initializationTask);
+        if (pendingInitialization is { IsCompleted: false })
+        {
+            _ = pendingInitialization.ContinueWith(
+                static (_, state) => ((HtmlOverlayForm)state!).FinalizeShutdown(),
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return;
+        }
+
+        FinalizeShutdown();
+    }
+
+    private void FinalizeShutdown()
+    {
+        if (Interlocked.Exchange(ref shutdownFinalized, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            ReleaseLoader();
+            initializationGate.Dispose();
+            lifecycleCancellation.Dispose();
+            ready.Dispose();
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, $"Failed to release all HTML overlay resources for {title}.");
+        }
+        finally
+        {
+            shutdownCompletion.TrySetResult(true);
+        }
+    }
+
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref disposeStarted, 1) != 0)
+        {
+            return;
+        }
+
         disposing = true;
+        browserState = BrowserState.Disposing;
+        browserStateDetail = "正在关闭";
+        lifecycleCancellation.Cancel();
         if (form is not null)
         {
             try
             {
-                form.Invoke(() =>
+                form.BeginInvoke(async () =>
                 {
-                    inputProxy?.Close();
-                    form.Close();
+                    try
+                    {
+                        var pendingInitialization = Volatile.Read(ref initializationTask);
+                        if (pendingInitialization is not null)
+                        {
+                            try
+                            {
+                                await pendingInitialization;
+                            }
+                            catch (Exception ex)
+                            {
+                                if (ex is not OperationCanceledException and not ObjectDisposedException)
+                                {
+                                    log.Warning(
+                                        ex,
+                                        $"Initialization ended unexpectedly while closing {title}.");
+                                }
+                            }
+                        }
+
+                        inputProxy?.Close();
+                        editChrome?.Close();
+                        form.Close();
+                    }
+                    catch (Exception ex)
+                    {
+                        if (ex is not InvalidOperationException and not ObjectDisposedException)
+                        {
+                            log.Warning(ex, $"Could not finish closing {title} on its UI thread.");
+                        }
+                    }
                 });
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
             {
             }
         }
+        else if (uiThread is null)
+        {
+            FinalizeShutdown();
+        }
 
-        uiThread?.Join(TimeSpan.FromSeconds(5));
-        ready.Dispose();
+        var uiThreadStopped = uiThread is null ||
+                              ReferenceEquals(Thread.CurrentThread, uiThread) ||
+                              uiThread.Join(TimeSpan.FromSeconds(5));
+        var pendingInitialization = Volatile.Read(ref initializationTask);
+        if (!uiThreadStopped || !shutdownCompletion.Task.IsCompleted)
+        {
+            log.Warning(
+                $"{title} did not finish its WebView2 shutdown within 5 seconds; " +
+                (pendingInitialization is { IsCompleted: false }
+                    ? "initialization is still completing; "
+                    : string.Empty) +
+                "its loader and session lock will be released after the UI thread exits safely.");
+        }
+    }
+
+    public static void WaitForBrowserProcessesExit(
+        IEnumerable<int> processIds,
+        TimeSpan timeout,
+        IPluginLog log)
+    {
+        var pending = processIds
+            .Where(static processId => processId > 0)
+            .Distinct()
+            .ToArray();
+        var timer = Stopwatch.StartNew();
+        foreach (var processId in pending)
+        {
+            var remaining = timeout - timer.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                if (!process.HasExited)
+                {
+                    process.WaitForExit((int)Math.Max(1, remaining.TotalMilliseconds));
+                }
+            }
+            catch (ArgumentException)
+            {
+                // The browser exited before Process.GetProcessById observed it.
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited while its state was being queried.
+            }
+        }
+
+        var survivors = pending.Where(IsProcessRunning).ToArray();
+        if (survivors.Length > 0)
+        {
+            log.Warning(
+                $"WebView2 browser shutdown exceeded {timeout.TotalSeconds:0.#} seconds; " +
+                $"still running: {string.Join(", ", survivors)}.");
+        }
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
@@ -1798,6 +2340,134 @@ internal sealed class HtmlOverlayForm : IDisposable
         None,
         Move,
         Resize,
+    }
+
+    private enum BrowserState
+    {
+        NotStarted,
+        Initializing,
+        Ready,
+        Navigating,
+        Loaded,
+        Failed,
+        Disposing,
+    }
+
+    private sealed class EditChromeForm : Form
+    {
+        private readonly string overlayTitle;
+        private BrowserState state;
+        private string detail = string.Empty;
+
+        public EditChromeForm(string overlayTitle, Color transparencyColor)
+        {
+            this.overlayTitle = overlayTitle;
+            Text = $"{overlayTitle} Edit Boundary";
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            TopMost = true;
+            BackColor = transparencyColor;
+            TransparencyKey = transparencyColor;
+            DoubleBuffered = true;
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var parameters = base.CreateParams;
+                parameters.ExStyle |= unchecked((int)(
+                    WsExLayered |
+                    WsExTransparent |
+                    WsExNoActivate |
+                    WsExToolWindow));
+                parameters.ExStyle &= unchecked((int)~WsExAppWindow);
+                return parameters;
+            }
+        }
+
+        public void SetStatus(BrowserState nextState, string nextDetail)
+        {
+            if (state == nextState && string.Equals(detail, nextDetail, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            state = nextState;
+            detail = nextDetail;
+            Invalidate();
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == WindowMessageNonClientHitTest)
+            {
+                message.Result = HitTestTransparent;
+                return;
+            }
+
+            base.WndProc(ref message);
+        }
+
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            base.OnPaint(args);
+            if (ClientSize.Width <= 1 || ClientSize.Height <= 1)
+            {
+                return;
+            }
+
+            args.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var borderColor = state == BrowserState.Failed
+                ? Color.FromArgb(255, 240, 80, 80)
+                : Color.FromArgb(255, 255, 190, 70);
+            using var borderPen = new Pen(borderColor, 3);
+            args.Graphics.DrawRectangle(
+                borderPen,
+                1.5f,
+                1.5f,
+                ClientSize.Width - 3,
+                ClientSize.Height - 3);
+
+            var headerWidth = Math.Min(ClientSize.Width - 6, 520);
+            var headerHeight = Math.Min(ClientSize.Height - 6, 48);
+            if (headerWidth > 0 && headerHeight > 0)
+            {
+                using var headerBrush = new SolidBrush(Color.FromArgb(235, 24, 28, 36));
+                args.Graphics.FillRectangle(headerBrush, 3, 3, headerWidth, headerHeight);
+                var statusText = string.IsNullOrWhiteSpace(detail)
+                    ? state.ToString()
+                    : detail;
+                TextRenderer.DrawText(
+                    args.Graphics,
+                    $"{overlayTitle} · 编辑模式",
+                    Font,
+                    new Rectangle(10, 7, Math.Max(1, headerWidth - 16), 18),
+                    Color.White,
+                    TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(
+                    args.Graphics,
+                    $"拖动窗口；右下角缩放 · {statusText}",
+                    Font,
+                    new Rectangle(10, 25, Math.Max(1, headerWidth - 16), 18),
+                    borderColor,
+                    TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            }
+
+            using var gripPen = new Pen(borderColor, 3);
+            for (var offset = 8; offset <= ResizeGripSize; offset += 8)
+            {
+                args.Graphics.DrawLine(
+                    gripPen,
+                    ClientSize.Width - offset,
+                    ClientSize.Height - 3,
+                    ClientSize.Width - 3,
+                    ClientSize.Height - offset);
+            }
+        }
     }
 
     private sealed class BrowserInputRegionPayload

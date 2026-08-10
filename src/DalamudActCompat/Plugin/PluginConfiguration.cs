@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 4;
+    private const int CurrentVersion = 5;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -41,8 +41,11 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string SelectedOverlayTemplate { get; set; } = "Kagerou";
 
+    public string SelectedCactbotOverlay { get; set; } =
+        SelfHostedActRuntime.CactbotOverlayName;
+
     public Dictionary<string, HtmlOverlayWindowSettings> OverlayWindows { get; set; } =
-        new(StringComparer.OrdinalIgnoreCase);
+        CreateDefaultOverlayWindows();
 
     public MeterSettings Meter { get; set; } = new();
 
@@ -91,6 +94,57 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 4;
             changed = true;
         }
+        if (Version < 5)
+        {
+            OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
+                StringComparer.OrdinalIgnoreCase);
+            if (OverlayWindows.Remove(
+                    SelfHostedActRuntime.CactbotCombinedTemplateName,
+                    out var combinedTemplateSettings))
+            {
+                if (!OverlayWindows.TryGetValue(
+                        SelfHostedActRuntime.CactbotOverlayName,
+                        out var existingCombinedSettings) ||
+                    combinedTemplateSettings.OpenOnStartup)
+                {
+                    OverlayWindows[SelfHostedActRuntime.CactbotOverlayName] =
+                        combinedTemplateSettings;
+                }
+                else
+                {
+                    existingCombinedSettings.OpenOnStartup |=
+                        combinedTemplateSettings.OpenOnStartup;
+                }
+            }
+
+            var independentRaidbossOpen =
+                OverlayWindows.TryGetValue(
+                    SelfHostedActRuntime.CactbotAlertsOverlayName,
+                    out var alertsSettings) && alertsSettings.OpenOnStartup ||
+                OverlayWindows.TryGetValue(
+                    SelfHostedActRuntime.CactbotTimelineOverlayName,
+                    out var timelineSettings) && timelineSettings.OpenOnStartup;
+            if (!OverlayWindows.TryGetValue(
+                    SelfHostedActRuntime.CactbotOverlayName,
+                    out var combinedSettings))
+            {
+                combinedSettings = new HtmlOverlayWindowSettings();
+                OverlayWindows[SelfHostedActRuntime.CactbotOverlayName] = combinedSettings;
+            }
+
+            // The legacy built-in window always opened. Preserve that behavior unless the
+            // user had explicitly opened one of the independent Raidboss templates.
+            combinedSettings.OpenOnStartup = !independentRaidbossOpen;
+            if (SelfHostedActRuntime.IsCactbotOverlayName(SelectedOverlayTemplate))
+            {
+                SelectedCactbotOverlay =
+                    SelfHostedActRuntime.NormalizeCactbotOverlayName(SelectedOverlayTemplate);
+                SelectedOverlayTemplate = "Kagerou";
+            }
+
+            Version = 5;
+            changed = true;
+        }
 
         return changed;
     }
@@ -112,8 +166,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LauncherPositionX = 80;
         LauncherPositionY = 160;
         SelectedOverlayTemplate = "Kagerou";
-        OverlayWindows = new Dictionary<string, HtmlOverlayWindowSettings>(
-            StringComparer.OrdinalIgnoreCase);
+        SelectedCactbotOverlay = SelfHostedActRuntime.CactbotOverlayName;
+        OverlayWindows = CreateDefaultOverlayWindows();
         Meter = new MeterSettings();
         Fflogs = new FflogsSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
@@ -147,6 +201,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LauncherPositionX = snapshot.LauncherPositionX;
         LauncherPositionY = snapshot.LauncherPositionY;
         SelectedOverlayTemplate = snapshot.SelectedOverlayTemplate;
+        SelectedCactbotOverlay = snapshot.SelectedCactbotOverlay;
         OverlayWindows = snapshot.OverlayWindows;
         Meter = snapshot.Meter;
         Fflogs = snapshot.Fflogs;
@@ -212,4 +267,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
             OverlayWindows ?? new Dictionary<string, HtmlOverlayWindowSettings>(
                 StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, HtmlOverlayWindowSettings> CreateDefaultOverlayWindows()
+        => new(StringComparer.OrdinalIgnoreCase)
+        {
+            [SelfHostedActRuntime.CactbotOverlayName] = new HtmlOverlayWindowSettings
+            {
+                OpenOnStartup = true,
+            },
+        };
 }
