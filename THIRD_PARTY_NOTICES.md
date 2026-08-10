@@ -54,6 +54,7 @@ verification; the notice does not open them.
     not declare an SPDX license.
 - SilverDasher 0.6.0.4
   - Author/copyright: The Players / SilverDasher
+  - Support: QQ group `582145824`
   - Project: <https://www.ffcafe.cn/act/>
   - Complete package SHA-256: `8D73B14AF27CC4781DDF09B7926C5D99A11CD5B8A02B94FD90430ACF38371866`
   - Entry DLL SHA-256: `A3F356743A438B49CC0796858CA3B127E79DE90E4D7E960177EBDA50A8568CF8`

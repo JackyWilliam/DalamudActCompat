@@ -7,6 +7,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Resources;
 using System.Runtime.Loader;
 using System.Runtime.Serialization;
@@ -22,6 +23,13 @@ namespace DalamudActCompat.Host;
 
 public static class LegacyAssemblyRewriter
 {
+    private const string SilverDasherWeaverFileName = "SilverDasher.Weaver.dll";
+    private const string SilverDasherWeaverSha256 =
+        "20FE1491A9B35BB5096F25D1115A3E51F2C8BBAE2B741C204C2069ADDA507ECC";
+    private const string SilverDasherCompatibleWeaverSha256 =
+        "CD77EC62F7802C50BE02EC99AA83DFD5DE6CED7A41A4A866F80FB8A7509E26E1";
+    private const int SilverDasherWeaverProcessAttachJumpOffset = 0x3254;
+
     public static Assembly LoadSilverDasher(
         string assemblyPath,
         AssemblyLoadContext loadContext)
@@ -194,10 +202,133 @@ public static class LegacyAssemblyRewriter
 
         using var output = new MemoryStream();
         definition.Write(output);
-        return LoadContentAddressedAssembly(
+        var assembly = LoadContentAddressedAssembly(
             "silverdasher",
             "SilverDasher.Core",
             output.ToArray());
+        RegisterSilverDasherWeaverResolver(assembly, assemblyPath);
+        return assembly;
+    }
+
+    private static void RegisterSilverDasherWeaverResolver(
+        Assembly coreAssembly,
+        string coreAssemblyPath)
+    {
+        var coreDirectory = Path.GetDirectoryName(Path.GetFullPath(coreAssemblyPath))
+                            ?? throw new InvalidDataException(
+                                "SilverDasher core assembly has no parent directory.");
+        var weaverPath = Path.Combine(coreDirectory, SilverDasherWeaverFileName);
+        NativeLibrary.SetDllImportResolver(
+            coreAssembly,
+            (libraryName, _, _) =>
+            {
+                if (!string.Equals(
+                        libraryName,
+                        SilverDasherWeaverFileName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return IntPtr.Zero;
+                }
+
+                HostPluginBridge.DemandSilverDasherCapability("NativeGameMemory");
+                var compatiblePath = PrepareSilverDasherWeaverCompatibilityCopy(weaverPath);
+                var handle = NativeLibrary.Load(compatiblePath);
+                Console.WriteLine(
+                    "SilverDasher Weaver loaded through its hash-pinned DACT Host compatibility copy.");
+                return handle;
+            });
+    }
+
+    private static string PrepareSilverDasherWeaverCompatibilityCopy(string weaverPath)
+    {
+        if (!File.Exists(weaverPath))
+        {
+            throw new FileNotFoundException(
+                "SilverDasher Weaver native library is missing.",
+                weaverPath);
+        }
+
+        var image = File.ReadAllBytes(weaverPath);
+        var sourceHash = Convert.ToHexString(SHA256.HashData(image));
+        if (!string.Equals(sourceHash, SilverDasherWeaverSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"SilverDasher Weaver hash changed; expected {SilverDasherWeaverSha256}, got {sourceHash}.");
+        }
+
+        ReadOnlySpan<byte> expectedCode =
+        [
+            0x83, 0xEA, 0x01, 0x74, 0x0B, 0x83, 0xFA, 0x01,
+            0x74, 0x06, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3,
+            0xE9, 0x4B, 0xED, 0xFF, 0xFF,
+        ];
+        const int codeStart = SilverDasherWeaverProcessAttachJumpOffset - 4;
+        if (image.Length < codeStart + expectedCode.Length ||
+            !image.AsSpan(codeStart, expectedCode.Length).SequenceEqual(expectedCode))
+        {
+            throw new InvalidDataException(
+                "SilverDasher Weaver process-identity guard changed; refusing a broad native patch.");
+        }
+
+        // The original native DLL accepts only CafeACT/ACT executable names in DllMain.
+        // Retarget its process-attach branch to the existing success return. This changes
+        // one displacement byte and leaves its exports, hardware seal, and user package intact.
+        image[SilverDasherWeaverProcessAttachJumpOffset] = 0x05;
+        var compatibleHash = Convert.ToHexString(SHA256.HashData(image));
+        if (!string.Equals(
+                compatibleHash,
+                SilverDasherCompatibleWeaverSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"SilverDasher Weaver compatibility image is unexpected: {compatibleHash}.");
+        }
+
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            "silverdasher");
+        Directory.CreateDirectory(cacheDirectory);
+        var compatiblePath = Path.Combine(
+            cacheDirectory,
+            $"SilverDasher.Weaver-{compatibleHash}.dll");
+        if (!File.Exists(compatiblePath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.native.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, compatiblePath);
+                }
+                catch (IOException) when (File.Exists(compatiblePath))
+                {
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        var cachedHash = Convert.ToHexString(
+            SHA256.HashData(File.ReadAllBytes(compatiblePath)));
+        if (!string.Equals(
+                cachedHash,
+                SilverDasherCompatibleWeaverSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Cached SilverDasher Weaver compatibility image is invalid: {cachedHash}.");
+        }
+
+        return compatiblePath;
     }
 
     public static Assembly LoadSilverDasherManagedZodiark(string assemblyPath)

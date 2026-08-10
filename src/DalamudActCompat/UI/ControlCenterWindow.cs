@@ -1174,7 +1174,9 @@ public sealed class ControlCenterWindow : Window
             installedPlugins,
             "silverdasher",
             text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
-            text.Get("狩猎、临危受命与跨区状态提醒", "Hunts, FATEs, and cross-world status alerts"));
+            text.Get(
+                "狩猎、临危受命与跨区状态提醒；QQ 群：582145824",
+                "Hunts, FATEs, and cross-world status alerts; QQ group: 582145824"));
 
         ImGui.Spacing();
         ImGui.Separator();

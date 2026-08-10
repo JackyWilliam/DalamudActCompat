@@ -2544,10 +2544,11 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         pending.Any(plugin =>
             plugin.Id == "silverdasher" &&
             plugin.Version == "0.6.0.4" &&
+            plugin.Maintainer.Contains("582145824", StringComparison.Ordinal) &&
             plugin.DisableOnlineUpdates &&
             plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
             File.Exists(plugin.PackagePath)),
-        "SilverDasher complete-package version, fixed hash, or bundled artifact is missing.");
+        "SilverDasher complete-package version, support group, fixed hash, or bundled artifact is missing.");
 
     await manager.InstallAndAcknowledgeAsync(pending, CancellationToken.None);
     Assert(

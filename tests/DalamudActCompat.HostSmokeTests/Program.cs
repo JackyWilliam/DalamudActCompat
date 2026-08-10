@@ -1639,16 +1639,51 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
             "SilverDasher.ManagedZodiark.dll",
             SearchOption.AllDirectories)
         .Single();
+    var weaverPath = Directory.EnumerateFiles(
+            sourceRoot,
+            "SilverDasher.Weaver.dll",
+            SearchOption.AllDirectories)
+        .Single();
     var loaderHash = Convert.ToHexString(
         System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(loaderPath)));
     var coreHash = Convert.ToHexString(
         System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath)));
     var zodiarkHash = Convert.ToHexString(
         System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(zodiarkPath)));
+    var weaverHash = Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(weaverPath)));
 
     _ = LegacyAssemblyRewriter.LoadSilverDasher(loaderPath, AssemblyLoadContext.Default);
-    _ = LegacyAssemblyRewriter.LoadSilverDasherCore(corePath);
+    var rewrittenCore = LegacyAssemblyRewriter.LoadSilverDasherCore(corePath);
     _ = LegacyAssemblyRewriter.LoadSilverDasherManagedZodiark(zodiarkPath);
+
+    var configurePermissions = typeof(HostPluginBridge).GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   typeof(HostPluginBridge).FullName,
+                                   "ConfigurePermissions");
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["silverdasher"] = ["NativeGameMemory"],
+                },
+                ["silverdasher"]),
+        ]);
+    var judge = rewrittenCore
+                       .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
+                       .GetMethod(
+                           "Judge",
+                           BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                   ?? throw new MissingMethodException(
+                       "SilverDasher.ACT.Doppelgangers.Tailor",
+                       "Judge");
+    Assert(
+        judge.Invoke(null, null) is string { Length: > 0 },
+        "SilverDasher Weaver loaded but did not complete its managed authentication-seal entry point.");
 
     var cacheRoot = Path.Combine(Path.GetTempPath(), "DalamudActCompat", "silverdasher");
     var patchedLoader = new DirectoryInfo(cacheRoot)
@@ -1666,6 +1701,34 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         .OrderByDescending(file => file.LastWriteTimeUtc)
         .FirstOrDefault()
         ?? throw new FileNotFoundException("No patched SilverDasher Zodiark was produced.", cacheRoot);
+    var patchedWeaver = new FileInfo(Path.Combine(
+        cacheRoot,
+        "SilverDasher.Weaver-CD77EC62F7802C50BE02EC99AA83DFD5DE6CED7A41A4A866F80FB8A7509E26E1.dll"));
+    if (!patchedWeaver.Exists)
+    {
+        throw new FileNotFoundException(
+            "No exact hash-pinned SilverDasher Weaver compatibility copy was produced.",
+            patchedWeaver.FullName);
+    }
+
+    var originalWeaverImage = File.ReadAllBytes(weaverPath);
+    var patchedWeaverImage = File.ReadAllBytes(patchedWeaver.FullName);
+    Assert(
+        originalWeaverImage.Length == patchedWeaverImage.Length,
+        "SilverDasher Weaver compatibility changed the native image length.");
+    var changedWeaverOffsets = originalWeaverImage
+        .Select((value, index) => (value, index))
+        .Where(pair => pair.value != patchedWeaverImage[pair.index])
+        .Select(pair => pair.index)
+        .ToArray();
+    Assert(
+        changedWeaverOffsets.SequenceEqual([0x3254]) &&
+        originalWeaverImage[0x3254] == 0x0B &&
+        patchedWeaverImage[0x3254] == 0x05 &&
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(patchedWeaverImage)) ==
+        "CD77EC62F7802C50BE02EC99AA83DFD5DE6CED7A41A4A866F80FB8A7509E26E1",
+        "SilverDasher Weaver compatibility changed more than its exact process-attach branch.");
 
     using (var loader = AssemblyDefinition.ReadAssembly(patchedLoader.FullName))
     {
@@ -1781,7 +1844,9 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath))) == coreHash &&
         Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(zodiarkPath))) == zodiarkHash,
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(zodiarkPath))) == zodiarkHash &&
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(weaverPath))) == weaverHash,
         "SilverDasher runtime rewriting changed the user's original DLL files.");
 }
 

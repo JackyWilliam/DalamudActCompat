@@ -290,8 +290,8 @@ public sealed class SettingsWindow : Window
         ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（始终最后加载）", "SilverDasher (always loaded last)"));
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get(
-            "使用独立事件队列与专属内存权限上下文。",
-            "Uses an independent event queue and dedicated memory-permission context."));
+            "使用独立事件队列与专属内存权限上下文；QQ 群：582145824。",
+            "Uses an independent event queue and dedicated memory-permission context; QQ group: 582145824."));
 
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
