@@ -189,6 +189,7 @@ public static class LegacyAssemblyRewriter
             instruction.Operand = sendTts;
         }
 
+        RewriteSilverDasherUnknownOpcodeGuard(module);
         RewriteSilverDasherWpfDispatch(module);
 
         using var output = new MemoryStream();
@@ -197,6 +198,146 @@ public static class LegacyAssemblyRewriter
             "silverdasher",
             "SilverDasher.Core",
             output.ToArray());
+    }
+
+    public static Assembly LoadSilverDasherManagedZodiark(string assemblyPath)
+    {
+        using var input = File.OpenRead(assemblyPath);
+        using var definition = AssemblyDefinition.ReadAssembly(input);
+        if (!string.Equals(
+                definition.Name.Name,
+                "SilverDasher.ManagedZodiark",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Unexpected SilverDasher Zodiark identity: {definition.Name.FullName}.");
+        }
+
+        var zodiarkProcess = definition.MainModule.GetType("Zodiark.ZodiarkProcess")
+                             ?? throw new TypeLoadException(
+                                 "SilverDasher Zodiark process type is missing.");
+        var openProcess = zodiarkProcess.Methods.SingleOrDefault(method =>
+            method.Name == "OpenProcess" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType.FullName == typeof(Process).FullName &&
+            method.ReturnType.MetadataType == MetadataType.Void &&
+            method.HasBody)
+                          ?? throw new MissingMethodException(
+                              zodiarkProcess.FullName,
+                              "OpenProcess(Process)");
+        var enterDebugModeCalls = openProcess.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(Process).FullName &&
+                called.Name == nameof(Process.EnterDebugMode) &&
+                called.Parameters.Count == 0)
+            .ToArray();
+        var allAccessConstants = openProcess.Body.Instructions
+            .Where(instruction =>
+                instruction.OpCode.Code == Code.Ldc_I4 &&
+                instruction.Operand is int value &&
+                value == 0x001F0FFF)
+            .ToArray();
+        if (enterDebugModeCalls.Length != 1 || allAccessConstants.Length != 1)
+        {
+            throw new InvalidOperationException(
+                "SilverDasher Zodiark privilege surface changed; refusing a broad process-access rewrite.");
+        }
+
+        enterDebugModeCalls[0].OpCode = OpCodes.Nop;
+        enterDebugModeCalls[0].Operand = null;
+        // SilverDasher only scans the game process. Avoid PROCESS_ALL_ACCESS and
+        // request exactly PROCESS_QUERY_INFORMATION | PROCESS_VM_READ.
+        allAccessConstants[0].Operand = 0x0410;
+
+        var checkPrivilege = zodiarkProcess.Methods.SingleOrDefault(method =>
+            method.Name == "CheckSeDebugPrivilege" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType is ByReferenceType byReference &&
+            byReference.ElementType.MetadataType == MetadataType.Boolean &&
+            method.ReturnType.MetadataType == MetadataType.Int32 &&
+            method.HasBody)
+                             ?? throw new MissingMethodException(
+                                 zodiarkProcess.FullName,
+                                 "CheckSeDebugPrivilege(bool&)");
+        checkPrivilege.Body.ExceptionHandlers.Clear();
+        checkPrivilege.Body.Variables.Clear();
+        checkPrivilege.Body.InitLocals = false;
+        checkPrivilege.Body.Instructions.Clear();
+        var checkIl = checkPrivilege.Body.GetILProcessor();
+        checkIl.Append(checkIl.Create(OpCodes.Ldarg_1));
+        checkIl.Append(checkIl.Create(OpCodes.Ldc_I4_1));
+        checkIl.Append(checkIl.Create(OpCodes.Stind_I1));
+        checkIl.Append(checkIl.Create(OpCodes.Ldc_I4_0));
+        checkIl.Append(checkIl.Create(OpCodes.Ret));
+
+        using var output = new MemoryStream();
+        definition.Write(output);
+        return LoadContentAddressedAssembly(
+            "silverdasher",
+            "SilverDasher.ManagedZodiark",
+            output.ToArray());
+    }
+
+    private static void RewriteSilverDasherUnknownOpcodeGuard(ModuleDefinition module)
+    {
+        var opcodeType = module.GetType("SilverDasher.ACT.Enums.OpcodeType")
+                         ?? throw new TypeLoadException(
+                             "SilverDasher opcode type enum is missing.");
+        var unknown = opcodeType.Fields.SingleOrDefault(field =>
+            field.Name == "Unknown" &&
+            field.HasConstant &&
+            Convert.ToInt32(field.Constant, CultureInfo.InvariantCulture) == 0)
+                      ?? throw new InvalidOperationException(
+                          "SilverDasher Unknown opcode value changed.");
+        _ = unknown;
+
+        var overseer = module.GetType("SilverDasher.ACT.Doppelgangers.Overseer")
+                       ?? throw new TypeLoadException(
+                           "SilverDasher network overseer is missing.");
+        var receive = overseer.Methods.SingleOrDefault(method =>
+            method.Name == "OnNetworkReceive" &&
+            !method.IsStatic &&
+            method.Parameters.Count == 3 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String &&
+            method.Parameters[1].ParameterType.MetadataType == MetadataType.Int64 &&
+            method.Parameters[2].ParameterType is ArrayType array &&
+            array.ElementType.MetadataType == MetadataType.Byte &&
+            method.ReturnType.MetadataType == MetadataType.Void &&
+            method.HasBody)
+                      ?? throw new MissingMethodException(
+                          overseer.FullName,
+                          "OnNetworkReceive(string,long,byte[])");
+        var getOpcodeCalls = receive.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "SilverDasher.ACT.Storages.OpcodeStorage" &&
+                called.Name == "GetOpcode" &&
+                called.Parameters.Count == 1)
+            .ToArray();
+        var storeOpcodeType = receive.Body.Instructions.FirstOrDefault(instruction =>
+            instruction.OpCode.Code == Code.Stloc_0);
+        if (getOpcodeCalls.Length != 1 ||
+            storeOpcodeType is null ||
+            receive.Body.Variables.Count == 0 ||
+            receive.Body.Variables[0].VariableType.FullName != opcodeType.FullName)
+        {
+            throw new InvalidOperationException(
+                "SilverDasher network opcode surface changed; refusing a broad callback rewrite.");
+        }
+
+        var continueInstruction = storeOpcodeType.Next
+                                  ?? throw new InvalidOperationException(
+                                      "SilverDasher network callback has no opcode continuation.");
+        var il = receive.Body.GetILProcessor();
+        var loadOpcodeType = il.Create(OpCodes.Ldloc, receive.Body.Variables[0]);
+        var continueWhenKnown = il.Create(OpCodes.Brtrue_S, continueInstruction);
+        var returnUnknown = il.Create(OpCodes.Ret);
+        il.InsertAfter(storeOpcodeType, loadOpcodeType);
+        il.InsertAfter(loadOpcodeType, continueWhenKnown);
+        il.InsertAfter(continueWhenKnown, returnUnknown);
     }
 
     private static void RewriteSilverDasherWpfDispatch(ModuleDefinition module)

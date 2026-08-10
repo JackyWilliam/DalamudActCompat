@@ -2134,11 +2134,11 @@ static void ValidateControlCenterPresentation()
         "private void CompleteBundledPluginSetup",
         StringComparison.Ordinal);
     var finalPermissionRestartIndex = pluginSource.IndexOf(
-        "ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);",
+        "ApplyActPermissionChanges(",
         completeBundledSetupIndex,
         StringComparison.Ordinal);
     var permissionRefreshMethodIndex = pluginSource.IndexOf(
-        "private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)",
+        "private void ApplyActPermissionChanges(",
         StringComparison.Ordinal);
     var stopHostBeforeFoxTtsIndex = pluginSource.IndexOf(
         "await hostSupervisor.StopAsync(timeout.Token)",
@@ -2175,7 +2175,7 @@ static void ValidateControlCenterPresentation()
         finalPermissionRestartIndex > completeBundledSetupIndex &&
         Regex.Matches(
             pluginSource,
-            Regex.Escape("ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);"),
+            @"ApplyActPermissionChanges\(\s*choice == FoxTtsProChoice\.EnablePro,\s*pluginToOpen\);",
             RegexOptions.CultureInvariant).Count == 1 &&
         permissionRefreshMethodIndex > finalPermissionRestartIndex &&
         stopHostBeforeFoxTtsIndex > permissionRefreshMethodIndex &&
@@ -2329,6 +2329,13 @@ static void ValidateSilverDasherPermissionIsolation()
         BundledActPluginCapabilities.SilverDasher.Contains(ActCapability.ReadCombatLogs) &&
         BundledActPluginCapabilities.SilverDasher.Contains(ActCapability.NativeGameMemory),
         "SilverDasher does not expose its independent event and memory capability declarations.");
+    Assert(
+        BundledActPluginCapabilities.FullPermissionConfirmation
+            .Select(entry => entry.PluginId)
+            .SequenceEqual(
+                new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher" },
+                StringComparer.Ordinal),
+        "The explicit full-permission confirmation does not enable every SilverDasher declaration last.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -2510,10 +2517,10 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         configuration);
 
     var pending = manager.GetPendingDisclosures();
-    Assert(pending.Count == 3, "A new install did not require all three bundled DLL disclosures.");
+    Assert(pending.Count == 4, "A new install did not require all four bundled extension disclosures.");
     Assert(
-        manager.GetDisclosures().Count == 3,
-        "The third-party notice did not expose every bundled DLL source.");
+        manager.GetDisclosures().Count == 4,
+        "The third-party notice did not expose every bundled extension source.");
     Assert(
         pending.Any(plugin =>
             plugin.Id == "triggernometry" &&
@@ -2533,19 +2540,43 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.Author == "Natsukage" &&
             plugin.DownloadUrl.Contains("/releases/download/", StringComparison.Ordinal)),
         "PostNamazu author or DLL URL disclosure is incomplete.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "silverdasher" &&
+            plugin.Version == "0.6.0.4" &&
+            plugin.DisableOnlineUpdates &&
+            plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
+            File.Exists(plugin.PackagePath)),
+        "SilverDasher complete-package version, fixed hash, or bundled artifact is missing.");
 
     await manager.InstallAndAcknowledgeAsync(pending, CancellationToken.None);
     Assert(
         manager.GetPendingDisclosures().Count == 0,
         "Acknowledged current bundled DLLs still required disclosure.");
     Assert(
-        manager.GetDisclosures().Count == 3 &&
+        manager.GetDisclosures().Count == 4 &&
         manager.GetDisclosures().All(plugin =>
             !string.IsNullOrWhiteSpace(plugin.Author) &&
             Uri.TryCreate(plugin.ProjectUrl, UriKind.Absolute, out _)),
         "Acknowledged DLL author and project URL disclosures disappeared from the notice.");
     var installed = installer.Discover(configuration.DisabledActPluginIds);
-    Assert(installed.Count == 3, "Not all bundled DLLs were installed.");
+    Assert(installed.Count == 4, "Not all bundled extensions were installed.");
+    var installedSilverDasher = installed.Single(plugin =>
+        plugin.Manifest.Id == "silverdasher");
+    Assert(
+        File.Exists(Path.Combine(
+            installedSilverDasher.InstallDirectory,
+            "Plugins",
+            "SilverDasher",
+            "libs",
+            "SilverDasher.Core.dll")) &&
+        File.Exists(Path.Combine(
+            installedSilverDasher.InstallDirectory,
+            "Plugins",
+            "SilverDasher",
+            "data",
+            "opcodes.json")),
+        "The bundled SilverDasher install did not preserve its complete libs/data package.");
     Assert(
         installed.All(manager.IsAllowedToLoad),
         "Acknowledged current bundled DLLs were not enabled for runtime loading.");
@@ -2588,9 +2619,14 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             onlinePending.Count == 3 &&
             onlinePending.All(plugin => plugin.IsOnlineUpdate),
             "Online DLL updates did not require a new disclosure.");
+        var onlineUpdateIds = check.Updates
+            .Select(plugin => plugin.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         Assert(
-            installed.All(plugin => !manager.IsAllowedToLoad(plugin)),
-            "Old DLLs remained loadable after an online update was discovered.");
+            installed.All(plugin => onlineUpdateIds.Contains(plugin.Manifest.Id)
+                ? !manager.IsAllowedToLoad(plugin)
+                : manager.IsAllowedToLoad(plugin)),
+            "Online-updated DLLs were not gated, or the hash-fixed SilverDasher package was unnecessarily disabled.");
 
         await manager.InstallAndAcknowledgeAsync(
             onlinePending,
@@ -2628,8 +2664,8 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         installer,
         configuration);
     Assert(
-        nextRelease.GetPendingDisclosures().Count == 3,
-        "A DalamudActCompat update did not require the bundled DLL disclosure again.");
+        nextRelease.GetPendingDisclosures().Count == 4,
+        "A DalamudActCompat update did not require every bundled extension disclosure again.");
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
         "Bundled DLLs were loadable before acknowledging the new host release notice.");
@@ -5233,6 +5269,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/ACT.FoxTTS.dll",
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
+        "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
     };
     foreach (var required in requiredBundledPluginFiles)
     {
@@ -5257,13 +5294,58 @@ static void ValidateLegacyResourceRuntimeDependencies()
             ?? throw new InvalidDataException("Bundled ACT plugin assembly path is empty.");
         var expectedHash = plugin.GetProperty("sha256").GetString()
             ?? throw new InvalidDataException("Bundled ACT plugin SHA-256 is empty.");
-        var assemblyEntry = FindArchiveEntry(
-            archive,
-            $"BundledActPlugins/{relativeAssembly}")
-            ?? throw new InvalidDataException(
-                $"Bundled ACT plugin assembly is missing: {relativeAssembly}.");
-        using var assemblyStream = assemblyEntry.Open();
-        var actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        string actualHash;
+        if (plugin.TryGetProperty("relativePackage", out var relativePackageProperty) &&
+            !string.IsNullOrWhiteSpace(relativePackageProperty.GetString()))
+        {
+            var relativePackage = relativePackageProperty.GetString()!;
+            var expectedPackageHash = plugin.GetProperty("packageSha256").GetString()
+                ?? throw new InvalidDataException("Bundled ACT plugin package SHA-256 is empty.");
+            var packageEntry = FindArchiveEntry(
+                archive,
+                $"BundledActPlugins/{relativePackage}")
+                ?? throw new InvalidDataException(
+                    $"Bundled ACT plugin package is missing: {relativePackage}.");
+            using var packageMemory = new MemoryStream();
+            using (var packageStream = packageEntry.Open())
+            {
+                packageStream.CopyTo(packageMemory);
+            }
+
+            var actualPackageHash = Convert.ToHexString(
+                SHA256.HashData(packageMemory.ToArray()));
+            Assert(
+                string.Equals(
+                    actualPackageHash,
+                    expectedPackageHash,
+                    StringComparison.OrdinalIgnoreCase),
+                $"Bundled ACT plugin package does not match its locked SHA-256: {relativePackage}.");
+            packageMemory.Position = 0;
+            using var packageArchive = new ZipArchive(
+                packageMemory,
+                ZipArchiveMode.Read,
+                leaveOpen: true);
+            var assemblyEntry = packageArchive.Entries.SingleOrDefault(entry =>
+                string.Equals(
+                    entry.FullName.Replace('\\', '/'),
+                    relativeAssembly.Replace('\\', '/'),
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException(
+                    $"Bundled ACT plugin package entry assembly is missing: {relativeAssembly}.");
+            using var assemblyStream = assemblyEntry.Open();
+            actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        }
+        else
+        {
+            var assemblyEntry = FindArchiveEntry(
+                archive,
+                $"BundledActPlugins/{relativeAssembly}")
+                ?? throw new InvalidDataException(
+                    $"Bundled ACT plugin assembly is missing: {relativeAssembly}.");
+            using var assemblyStream = assemblyEntry.Open();
+            actualHash = Convert.ToHexString(SHA256.HashData(assemblyStream));
+        }
+
         Assert(
             string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase),
             $"Bundled ACT plugin does not match its locked SHA-256: {relativeAssembly}.");

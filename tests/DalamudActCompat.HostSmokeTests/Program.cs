@@ -1634,13 +1634,21 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
             "SilverDasher.Core.dll",
             SearchOption.AllDirectories)
         .Single();
+    var zodiarkPath = Directory.EnumerateFiles(
+            sourceRoot,
+            "SilverDasher.ManagedZodiark.dll",
+            SearchOption.AllDirectories)
+        .Single();
     var loaderHash = Convert.ToHexString(
         System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(loaderPath)));
     var coreHash = Convert.ToHexString(
         System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath)));
+    var zodiarkHash = Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(zodiarkPath)));
 
     _ = LegacyAssemblyRewriter.LoadSilverDasher(loaderPath, AssemblyLoadContext.Default);
     _ = LegacyAssemblyRewriter.LoadSilverDasherCore(corePath);
+    _ = LegacyAssemblyRewriter.LoadSilverDasherManagedZodiark(zodiarkPath);
 
     var cacheRoot = Path.Combine(Path.GetTempPath(), "DalamudActCompat", "silverdasher");
     var patchedLoader = new DirectoryInfo(cacheRoot)
@@ -1653,6 +1661,11 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         .OrderByDescending(file => file.LastWriteTimeUtc)
         .FirstOrDefault()
         ?? throw new FileNotFoundException("No patched SilverDasher core was produced.", cacheRoot);
+    var patchedZodiark = new DirectoryInfo(cacheRoot)
+        .EnumerateFiles("SilverDasher.ManagedZodiark-*.dll")
+        .OrderByDescending(file => file.LastWriteTimeUtc)
+        .FirstOrDefault()
+        ?? throw new FileNotFoundException("No patched SilverDasher Zodiark was produced.", cacheRoot);
 
     using (var loader = AssemblyDefinition.ReadAssembly(patchedLoader.FullName))
     {
@@ -1706,21 +1719,69 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         var winFormsUiDispatchCalls = calls.Count(called =>
             called.DeclaringType.FullName == "System.Windows.Forms.Control" &&
             called.Name is "get_InvokeRequired" or "Invoke");
+        var networkReceive = core.MainModule
+            .GetType("SilverDasher.ACT.Doppelgangers.Overseer")
+            .Methods.Single(method => method.Name == "OnNetworkReceive");
+        var opcodeStoreIndex = networkReceive.Body.Instructions
+            .Select((instruction, index) => (instruction, index))
+            .Single(pair => pair.instruction.OpCode.Code == Code.Stloc_0)
+            .index;
+        var unknownOpcodeGuard =
+            networkReceive.Body.Instructions[opcodeStoreIndex + 1].OpCode.Code == Code.Ldloc &&
+            networkReceive.Body.Instructions[opcodeStoreIndex + 2].OpCode.FlowControl == FlowControl.Cond_Branch &&
+            networkReceive.Body.Instructions[opcodeStoreIndex + 3].OpCode.Code == Code.Ret;
         Assert(
             processBridgeCalls == 1 && legacyProcessCalls == 0 &&
             ttsBridgeCalls == 2 && legacyTtsCalls == 0 &&
-            wpfDispatchCalls >= 4 && winFormsUiDispatchCalls == 0,
+            wpfDispatchCalls >= 4 && winFormsUiDispatchCalls == 0 &&
+            unknownOpcodeGuard,
             "SilverDasher core did not isolate its exact process/TTS call sites: " +
             $"processBridge={processBridgeCalls}, processLegacy={legacyProcessCalls}, " +
             $"ttsBridge={ttsBridgeCalls}, ttsLegacy={legacyTtsCalls}, " +
-            $"wpfDispatch={wpfDispatchCalls}, winFormsDispatch={winFormsUiDispatchCalls}.");
+            $"wpfDispatch={wpfDispatchCalls}, winFormsDispatch={winFormsUiDispatchCalls}, " +
+            $"unknownOpcodeGuard={unknownOpcodeGuard}.");
+    }
+
+    using (var zodiark = AssemblyDefinition.ReadAssembly(patchedZodiark.FullName))
+    {
+        var processType = zodiark.MainModule.GetType("Zodiark.ZodiarkProcess");
+        var openProcess = processType.Methods.Single(method =>
+            method.Name == "OpenProcess" && method.Parameters.Count == 1);
+        var privilegeCheck = processType.Methods.Single(method =>
+            method.Name == "CheckSeDebugPrivilege" && method.Parameters.Count == 1);
+        var enterDebugModeCalls = openProcess.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == typeof(Process).FullName &&
+            called.Name == nameof(Process.EnterDebugMode));
+        var readOnlyAccessConstants = openProcess.Body.Instructions.Count(instruction =>
+            instruction.OpCode.Code == Code.Ldc_I4 &&
+            instruction.Operand is int value &&
+            value == 0x0410);
+        var allAccessConstants = openProcess.Body.Instructions.Count(instruction =>
+            instruction.OpCode.Code == Code.Ldc_I4 &&
+            instruction.Operand is int value &&
+            value == 0x001F0FFF);
+        var privilegeInstructions = privilegeCheck.Body.Instructions;
+        Assert(
+            enterDebugModeCalls == 0 &&
+            readOnlyAccessConstants == 1 &&
+            allAccessConstants == 0 &&
+            privilegeInstructions.Count == 5 &&
+            privilegeInstructions[0].OpCode.Code == Code.Ldarg_1 &&
+            privilegeInstructions[1].OpCode.Code == Code.Ldc_I4_1 &&
+            privilegeInstructions[2].OpCode.Code == Code.Stind_I1 &&
+            privilegeInstructions[3].OpCode.Code == Code.Ldc_I4_0 &&
+            privilegeInstructions[4].OpCode.Code == Code.Ret,
+            "SilverDasher Zodiark retained debug privilege or process-all-access requirements.");
     }
 
     Assert(
         Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(loaderPath))) == loaderHash &&
         Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath))) == coreHash,
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(corePath))) == coreHash &&
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(zodiarkPath))) == zodiarkHash,
         "SilverDasher runtime rewriting changed the user's original DLL files.");
 }
 

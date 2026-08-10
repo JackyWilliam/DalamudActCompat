@@ -45,6 +45,24 @@
                         "licenseFile":  "",
                         "relativeAssembly":  "postnamazu/PostNamazu.dll",
                         "sha256":  "f8f0e09b6eec83d52f76556b289ba7448b56609b1c4d232a0729eac8e0239097"
+                    },
+                    {
+                        "id":  "silverdasher",
+                        "name":  "银山雀儿 / SilverDasher",
+                        "version":  "0.6.0.4",
+                        "author":  "The Players / SilverDasher",
+                        "maintainer":  "SilverDasher maintainers",
+                        "copyright":  "Copyright © The Players 2022-2025",
+                        "projectUrl":  "https://www.ffcafe.cn/act/",
+                        "downloadUrl":  "https://www.ffcafe.cn/act/",
+                        "sourceUrl":  "https://www.ffcafe.cn/act/",
+                        "license":  "The supplied package contains no license file; redistribution authorization is required before public release",
+                        "licenseFile":  "",
+                        "relativeAssembly":  "Plugins/SilverDasher/SilverDasher.dll",
+                        "sha256":  "a3f356743a438b49cc0796858ca3b127e79de90e4d7e960177ebda50a8568cf8",
+                        "relativePackage":  "silverdasher/SilverDasher-0.6.0.4-cafe.zip",
+                        "packageSha256":  "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866",
+                        "disableOnlineUpdates":  true
                     }
                 ]
 }

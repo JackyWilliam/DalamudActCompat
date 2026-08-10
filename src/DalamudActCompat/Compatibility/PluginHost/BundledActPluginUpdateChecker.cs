@@ -63,6 +63,7 @@ public sealed partial class BundledActPluginUpdateChecker : IDisposable
     {
         Directory.CreateDirectory(cacheDirectory);
         var checks = bundledPlugins
+            .Where(plugin => !plugin.DisableOnlineUpdates)
             .Select(plugin => CheckSafelyAsync(plugin, cancellationToken))
             .ToArray();
         var outcomes = await Task.WhenAll(checks).ConfigureAwait(false);

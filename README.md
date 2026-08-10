@@ -46,12 +46,12 @@ be terminated without terminating FFXIV.
   The Chinese 7.55h client combines the complete 7.55h1 opcode definitions with
   its runtime-discovered regional key table; unsupported future versions raise an
   explicit warning before fallback parsing.
-- Triggernometry CN 2.1.1.2, ACT.FoxTTS 3.3.1.189, and PostNamazu 1.3.6.6 are
-  bundled with the release. Their author, maintainer, version, permission,
-  project/source URL, exact DLL download URL, and SHA-256 are shown on first
-  install and after every DalamudActCompat update. The plugin also checks the
-  author sources at startup and presents the same notice before installing a
-  newer upstream DLL; affected DLLs remain unloaded until it is acknowledged.
+- Triggernometry CN 2.1.2.2, ACT.FoxTTS 3.3.1.189, PostNamazu 1.3.6.6, and the
+  complete hash-pinned SilverDasher 0.6.0.4 package are bundled with the
+  release. Their author, maintainer, version, permission/license status,
+  project/source URL, and SHA-256 are shown on first install and after every
+  DalamudActCompat update. The first three use their registered author sources
+  for update checks; SilverDasher stays on the disclosed fixed package.
 - Optional ACT plugin packages with manifest validation, safe ZIP extraction, atomic installation, upgrade backup, enable/disable composition, and isolated load contexts.
 - Recoverable factory reset: mutable state is moved to a timestamped backup before default system plugins and settings are restored.
 

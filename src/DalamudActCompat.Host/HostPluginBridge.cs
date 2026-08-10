@@ -126,12 +126,14 @@ public static class HostPluginBridge
                 $"SilverDasher dependency path is outside its plugin root: {fullPath}");
         }
 
-        return string.Equals(
-            Path.GetFileName(fullPath),
-            "SilverDasher.Core.dll",
-            StringComparison.OrdinalIgnoreCase)
-            ? LegacyAssemblyRewriter.LoadSilverDasherCore(fullPath)
-            : Assembly.Load(File.ReadAllBytes(fullPath));
+        return Path.GetFileName(fullPath).ToLowerInvariant() switch
+        {
+            "silverdasher.core.dll" =>
+                LegacyAssemblyRewriter.LoadSilverDasherCore(fullPath),
+            "silverdasher.managedzodiark.dll" =>
+                LegacyAssemblyRewriter.LoadSilverDasherManagedZodiark(fullPath),
+            _ => Assembly.Load(File.ReadAllBytes(fullPath)),
+        };
     }
 
     public static Process GetSilverDasherGameProcess()

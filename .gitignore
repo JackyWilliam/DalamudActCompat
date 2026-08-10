@@ -8,4 +8,5 @@ obj/
 *.snupkg
 *.zip
 !vendor/BundledCactbot/*.zip
+!vendor/BundledActPlugins/silverdasher/*.zip
 artifacts/

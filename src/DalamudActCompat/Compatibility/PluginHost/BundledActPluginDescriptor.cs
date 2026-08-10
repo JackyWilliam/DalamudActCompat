@@ -37,8 +37,17 @@ public sealed class BundledActPluginDescriptor
 
     public string Sha256 { get; set; } = string.Empty;
 
+    public string RelativePackage { get; set; } = string.Empty;
+
+    public string PackageSha256 { get; set; } = string.Empty;
+
+    public bool DisableOnlineUpdates { get; set; }
+
     [JsonIgnore]
     public string AssemblyPath { get; internal set; } = string.Empty;
+
+    [JsonIgnore]
+    public string PackagePath { get; internal set; } = string.Empty;
 
     [JsonIgnore]
     public bool IsOnlineUpdate { get; internal set; }

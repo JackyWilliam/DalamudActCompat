@@ -65,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HashSet<Task> cactbotTasks = [];
     private readonly ActHostSupervisor hostSupervisor;
     private int silverDasherEventsEnabled;
+    private int autoOpenSilverDasherAfterSetup;
     private readonly PictoActOverlayService pictoActOverlay;
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
@@ -895,6 +896,15 @@ public sealed class Plugin : IDalamudPlugin
     private async Task InstallBundledPluginsAsync(
         IReadOnlyList<BundledActPluginDescriptor> plugins)
     {
+        var includesSilverDasher = plugins.Any(plugin => string.Equals(
+            plugin.Id,
+            "silverdasher",
+            StringComparison.OrdinalIgnoreCase));
+        if (includesSilverDasher)
+        {
+            Interlocked.Exchange(ref autoOpenSilverDasherAfterSetup, 0);
+        }
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             bundledUpdateCancellation.Token);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
@@ -910,6 +920,10 @@ public sealed class Plugin : IDalamudPlugin
                     await bundledPluginManager
                         .InstallAndAcknowledgeAsync(plugins, cancellationToken)
                         .ConfigureAwait(false);
+                    if (includesSilverDasher)
+                    {
+                        Interlocked.Exchange(ref autoOpenSilverDasherAfterSetup, 1);
+                    }
                     SaveConfiguration();
                 },
                 hostSupervisor.StartAsync,
@@ -942,8 +956,8 @@ public sealed class Plugin : IDalamudPlugin
                             {
                                 Title = text.Get("扩展更新", "Extension updates"),
                                 Content = text.Get(
-                                    "正在检查三项 DLL 的作者上游版本。",
-                                    "Checking the author sources for all three DLLs."),
+                                    "正在检查三项已注册在线来源的 DLL。",
+                                    "Checking the three DLLs with registered online sources."),
                             });
                         })
                     .ConfigureAwait(false);
@@ -1246,7 +1260,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ConfigureBundledPluginPermissions(bool enableFullFunctionality)
     {
-        foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.All)
+        foreach (var (pluginId, capabilities) in BundledActPluginCapabilities.FullPermissionConfirmation)
         {
             foreach (var capability in capabilities)
             {
@@ -1256,9 +1270,13 @@ public sealed class Plugin : IDalamudPlugin
                     ShouldEnableBundledCapability(enableFullFunctionality, capability));
             }
         }
+        if (!enableFullFunctionality)
+        {
+            Interlocked.Exchange(ref autoOpenSilverDasherAfterSetup, 0);
+        }
         SaveConfiguration();
         logger.Information(enableFullFunctionality
-            ? "All declared capabilities were enabled for bundled ACT plugins by user choice."
+            ? "All declared capabilities were enabled for bundled ACT plugins, including SilverDasher, by user choice."
             : "Bundled ACT plugin permissions were reset to safe defaults by user choice.");
     }
 
@@ -1301,7 +1319,14 @@ public sealed class Plugin : IDalamudPlugin
             logger.Information("Future FoxTTS Cafe TTS Pro prompts were disabled by user choice.");
         }
 
-        ApplyActPermissionChanges(choice == FoxTtsProChoice.EnablePro);
+        var pluginToOpen = Interlocked.Exchange(
+            ref autoOpenSilverDasherAfterSetup,
+            0) == 1
+                ? "silverdasher"
+                : null;
+        ApplyActPermissionChanges(
+            choice == FoxTtsProChoice.EnablePro,
+            pluginToOpen);
     }
 
     private void OpenActPluginConfiguration(string pluginId)
@@ -1456,7 +1481,9 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
-    private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)
+    private void ApplyActPermissionChanges(
+        bool switchFoxTtsToPro = false,
+        string? pluginToOpen = null)
     {
         _ = Task.Run(async () =>
         {
@@ -1477,6 +1504,13 @@ public sealed class Plugin : IDalamudPlugin
 
                     logger.Information(
                         "ACT Host stopped before FoxTTS was switched to Cafe TTS Pro, then started again.");
+                    if (pluginToOpen is not null)
+                    {
+                        await OpenPluginConfigurationAfterRestartAsync(
+                                pluginToOpen,
+                                timeout.Token)
+                            .ConfigureAwait(false);
+                    }
                     await services.Framework.RunOnFrameworkThread(() =>
                         services.NotificationManager.AddNotification(new()
                         {
@@ -1490,6 +1524,13 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     logger.Information(
                         "ACT Host restarted once after the permission group was saved.");
+                    if (pluginToOpen is not null)
+                    {
+                        await OpenPluginConfigurationAfterRestartAsync(
+                                pluginToOpen,
+                                timeout.Token)
+                            .ConfigureAwait(false);
+                    }
                 }
             }
             catch (Exception ex)
@@ -1510,6 +1551,74 @@ public sealed class Plugin : IDalamudPlugin
                 }
             }
         });
+    }
+
+    private async Task OpenPluginConfigurationAfterRestartAsync(
+        string pluginId,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var stage = hostSupervisor.Snapshot.PluginStages
+                .LastOrDefault(candidate =>
+                    string.Equals(
+                        candidate.PluginId,
+                        pluginId,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        candidate.Stage,
+                        "InitPlugin",
+                        StringComparison.OrdinalIgnoreCase));
+            if (stage is not null &&
+                string.Equals(stage.State, "success", StringComparison.OrdinalIgnoreCase))
+            {
+                if (hostSupervisor.OpenPluginUi(pluginId))
+                {
+                    logger.Information(
+                        $"Opened ACT plugin '{pluginId}' configuration after bundled setup.");
+                    return;
+                }
+
+                break;
+            }
+
+            if (stage is not null &&
+                string.Equals(stage.State, "failed", StringComparison.OrdinalIgnoreCase))
+            {
+                await NotifyPluginOpenFailureAsync(
+                        pluginId,
+                        stage.Detail,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+
+        await NotifyPluginOpenFailureAsync(
+                pluginId,
+                "独立 Host 未在十秒内报告插件初始化成功。",
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task NotifyPluginOpenFailureAsync(
+        string pluginId,
+        string detail,
+        CancellationToken cancellationToken)
+    {
+        var conciseDetail = detail.Length > 240 ? $"{detail[..240]}…" : detail;
+        logger.Warning(
+            $"ACT plugin '{pluginId}' configuration was not opened after setup: {conciseDetail}");
+        await services.Framework.RunOnFrameworkThread(() =>
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = "ACT 兼容",
+                Content = $"扩展 {pluginId} 初始化失败，未打开配置：{conciseDetail}",
+            })).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private void StopHostFromUi()

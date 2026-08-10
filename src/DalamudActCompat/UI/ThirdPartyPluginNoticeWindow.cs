@@ -244,8 +244,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     {
         updateCheckInProgress = true;
         result = text.Get(
-            "正在检查三项 DLL 的作者上游版本……",
-            "Checking the author sources for all three DLLs...");
+            "正在检查三项已注册在线来源的 DLL……",
+            "Checking the three DLLs with registered online sources...");
         if (userInitiated)
         {
             openMode = ThirdPartyNoticeOpenMode.ManualUpdateCheck;
@@ -324,7 +324,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     {
         ImGui.PushID($"third-party-card-{plugin.Id}");
         ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-        if (ImGui.BeginChild("card", new Vector2(-1, 356), true))
+        if (ImGui.BeginChild("card", new Vector2(-1, 388), true))
         {
             ImGui.TextColored(Gold, plugin.Name);
             ImGui.SameLine();
@@ -352,8 +352,15 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             DrawUrl(text.Get("项目", "Project"), plugin.ProjectUrl);
             DrawUrl(text.Get("源码", "Source"), plugin.SourceUrl);
             DrawUrl(text.Get("下载", "Download"), plugin.DownloadUrl);
-            ImGui.TextDisabled("SHA-256");
+            ImGui.TextDisabled(string.IsNullOrWhiteSpace(plugin.PackageSha256)
+                ? "SHA-256"
+                : text.Get("入口 DLL SHA-256", "Entry DLL SHA-256"));
             ImGui.TextWrapped(plugin.Sha256);
+            if (!string.IsNullOrWhiteSpace(plugin.PackageSha256))
+            {
+                ImGui.TextDisabled(text.Get("完整包 SHA-256", "Complete package SHA-256"));
+                ImGui.TextWrapped(plugin.PackageSha256);
+            }
         }
         ImGui.EndChild();
         ImGui.PopStyleColor();
@@ -433,8 +440,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
         ImGui.TextColored(Gold, text.Get("是否启用扩展的完整功能？", "Enable full extension functionality?"));
         ImGui.TextWrapped(text.Get(
-            "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry 与鲶鱼精邮差功能因此不可用。你可以现在一次性启用三项随包扩展已声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
-            "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry and PostNamazu features will remain unavailable. You can enable every declared capability for the three bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
+            "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry、鲶鱼精邮差和银山雀儿功能因此不可用。你可以现在一次性启用四项随包扩展各自声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
+            "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry, PostNamazu, and SilverDasher features will remain unavailable. You can enable every capability declared by the four bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
         ImGui.TextColored(IceBlue, text.Get(
             "请选择“同意完整权限”或“不同意并保持安全模式”；作出选择前此窗口无法关闭。",
             "Choose either full permissions or safe mode; this window cannot close until you make a choice."));

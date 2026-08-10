@@ -26,14 +26,14 @@ They are not authored by the DalamudActCompat project. Their upstream project
 and releases are maintained at
 <https://github.com/ravahn/FFXIV_ACT_Plugin>.
 
-The release archive also bundles the following optional ACT plugin DLLs with
-permission from their authors/maintainers. DalamudActCompat displays the same
-author, version, license/permission, project URL, source URL, download URL, and
-SHA-256 details in game on first install and again after every
-DalamudActCompat update. The DLLs are not loaded until that notice is
-acknowledged. DalamudActCompat also checks the author sources at startup and
-uses the same notice and load gate before installing an upstream update. URLs
-are displayed for attribution and verification; the notice does not open them.
+The release archive also bundles optional ACT extensions. DalamudActCompat
+displays their author, version, license/permission status, project URL, source
+URL, download URL, and SHA-256 details in game on first install and again after
+every DalamudActCompat update. The extensions are not loaded until that notice
+is acknowledged. Triggernometry, ACT.FoxTTS, and PostNamazu use registered
+author sources for update checks. SilverDasher remains on the disclosed,
+hash-pinned complete package. URLs are displayed for attribution and
+verification; the notice does not open them.
 
 - Triggernometry CN Maintained Edition 2.1.2.2
   - Original author/copyright holder: Paissa Heavy Industries
@@ -52,6 +52,13 @@ are displayed for attribution and verification; the notice does not open them.
   - DLL release asset: <https://github.com/Natsukage/PostNamazu/releases/download/1.3.6.6/PostNamazu.zip>
   - Redistribution is authorized by the author; the upstream repository does
     not declare an SPDX license.
+- SilverDasher 0.6.0.4
+  - Author/copyright: The Players / SilverDasher
+  - Project: <https://www.ffcafe.cn/act/>
+  - Complete package SHA-256: `8D73B14AF27CC4781DDF09B7926C5D99A11CD5B8A02B94FD90430ACF38371866`
+  - Entry DLL SHA-256: `A3F356743A438B49CC0796858CA3B127E79DE90E4D7E960177EBDA50A8568CF8`
+  - The supplied package contains no license file. Redistribution
+    authorization must be obtained before any public release containing it.
 
 SharpCompress 0.50.1 is used to read the ACT.FoxTTS 7z release during the
 runtime author-source update check. SharpCompress is distributed under the MIT

@@ -42,4 +42,10 @@ internal static class BundledActPluginCapabilities
         ("postnamazu", PostNamazu),
         ("triggernometry", Triggernometry),
     ];
+
+    public static IReadOnlyList<(string PluginId, IReadOnlyList<ActCapability> Capabilities)> FullPermissionConfirmation { get; } =
+    [
+        .. All,
+        ("silverdasher", SilverDasher),
+    ];
 }
