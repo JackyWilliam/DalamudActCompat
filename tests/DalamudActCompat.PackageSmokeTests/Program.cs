@@ -1997,12 +1997,31 @@ static void ValidateControlCenterPresentation()
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
     Assert(
         ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
-            ThirdPartyNoticeOpenMode.ManualDisclosure) &&
-        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
-            ThirdPartyNoticeOpenMode.ManualUpdateCheck) &&
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
         !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
-            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate),
-        "The required post-update third-party acknowledgement is not separated from manually opened DLL windows.");
+            installInProgress: true,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            installInProgress: false,
+            permissionChoicePending: true,
+            ttsProChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: true) &&
+        ThirdPartyPluginNoticeWindow.CanAdvanceToPermissionChoice(0) &&
+        !ThirdPartyPluginNoticeWindow.CanAdvanceToPermissionChoice(1),
+        "The third-party notice can become uncloseable while idle or can advance while disclosures remain pending.");
+    var degradedInstall = BundledPluginInstallOutcome.RuntimeRecoveryPending(
+        new InvalidOperationException("expected runtime recovery warning"));
+    Assert(
+        BundledPluginInstallOutcome.Ready.RuntimeReady &&
+        !degradedInstall.RuntimeReady &&
+        degradedInstall.RuntimeWarning == "expected runtime recovery warning",
+        "Bundled installation no longer distinguishes a durable install from runtime recovery.");
     Assert(
         Plugin.ShouldEnableBundledCapability(
             enableFullFunctionality: false,
@@ -2202,8 +2221,11 @@ static void ValidateControlCenterPresentation()
         permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
         !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
         ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(openMode)", StringComparison.Ordinal) &&
-        !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("未确认的扩展保持禁用", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("BeginPermissionChoice();", StringComparison.Ordinal) &&
+        pluginSource.Contains("installCommitted = true;", StringComparison.Ordinal) &&
+        pluginSource.Contains("BundledPluginInstallOutcome.RuntimeRecoveryPending", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
         pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenManualDisclosure", StringComparison.Ordinal) &&
         pluginSource.Contains("OpenRequiredAfterPluginUpdateWhenPending();", StringComparison.Ordinal) &&
@@ -2214,7 +2236,7 @@ static void ValidateControlCenterPresentation()
         pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
         "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");
     var installBundledPluginsIndex = pluginSource.IndexOf(
-        "private async Task InstallBundledPluginsAsync",
+        "private async Task<BundledPluginInstallOutcome> InstallBundledPluginsAsync",
         StringComparison.Ordinal);
     var startBundledUpdateCheckIndex = pluginSource.IndexOf(
         "private void StartBundledPluginUpdateCheck",

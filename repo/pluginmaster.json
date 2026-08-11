@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.1",
+    "AssemblyVersion":  "0.3.9.2",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.1/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.2/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.1/DalamudActCompat.zip",
-    "LastUpdate":  1786463478136,
-    "Changelog":  "v0.3.9.1 战斗统计严格限定为本队最多 8 名玩家，过滤 NPC、宠物和联盟其他小队；团队极限技仍作为唯一允许的额外独立行。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.2/DalamudActCompat.zip",
+    "LastUpdate":  1786465149219,
+    "Changelog":  "v0.3.9.2 战斗统计严格限定为本队最多 8 名玩家，过滤 NPC、宠物和联盟其他小队；团队极限技仍作为唯一允许的额外独立行；修复三方声明已保存但 Host 首次恢复失败时窗口卡住且不进入权限选择的问题。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

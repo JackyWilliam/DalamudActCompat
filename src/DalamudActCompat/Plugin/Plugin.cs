@@ -1399,7 +1399,7 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
-    private async Task InstallBundledPluginsAsync(
+    private async Task<BundledPluginInstallOutcome> InstallBundledPluginsAsync(
         IReadOnlyList<BundledActPluginDescriptor> plugins)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
@@ -1412,6 +1412,8 @@ public sealed class Plugin : IDalamudPlugin
             var parserWasRunning = parserEngine.Status.State == ParserState.Running;
             var matchaWasRunning =
                 matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var installCommitted = false;
+            Exception? runtimeRecoveryFailure = null;
             try
             {
                 if (matchaWasRunning)
@@ -1432,6 +1434,9 @@ public sealed class Plugin : IDalamudPlugin
                                 .InstallAndAcknowledgeAsync(plugins, cancellationToken)
                                 .ConfigureAwait(false);
                             SaveConfiguration();
+                            // The packages and disclosure keys are durable at this point. A later
+                            // Host fault is a runtime recovery problem, not an installation rollback.
+                            installCommitted = true;
                         },
                         hostSupervisor.StartAsync,
                         parserEngine.StartAsync,
@@ -1439,6 +1444,10 @@ public sealed class Plugin : IDalamudPlugin
                         timeout.Token,
                         TimeSpan.FromSeconds(20))
                     .ConfigureAwait(false);
+            }
+            catch (Exception recoveryFailure) when (installCommitted)
+            {
+                runtimeRecoveryFailure = recoveryFailure;
             }
             catch (Exception installFailure)
             {
@@ -1466,22 +1475,54 @@ public sealed class Plugin : IDalamudPlugin
                 throw;
             }
 
-            if (hostWasRunning &&
+            if (runtimeRecoveryFailure is null &&
+                hostWasRunning &&
                 hostSupervisor.Snapshot.State == HostSupervisorState.Running)
             {
-                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
-                await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+                try
+                {
+                    await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+                    await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+                }
+                catch (Exception recoveryFailure)
+                {
+                    runtimeRecoveryFailure = recoveryFailure;
+                }
             }
 
-            services.NotificationManager.AddNotification(new()
+            if (runtimeRecoveryFailure is not null)
             {
-                Title = "ACT 兼容",
-                Content = "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。",
-            });
+                logger.Warning(
+                    $"Bundled ACT plugins were installed and acknowledged, but runtime recovery is pending: {runtimeRecoveryFailure.GetBaseException().Message}");
+                TryNotifyBundledPluginInstall(
+                    "第三方 DLL 和来源声明已保存；兼容 Host 未完全恢复，将由监督器继续重试。");
+                return BundledPluginInstallOutcome.RuntimeRecoveryPending(runtimeRecoveryFailure);
+            }
+
+            TryNotifyBundledPluginInstall(
+                "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。");
+            return BundledPluginInstallOutcome.Ready;
         }
         finally
         {
             hostTopologyLock.Release();
+        }
+    }
+
+    private void TryNotifyBundledPluginInstall(string content)
+    {
+        try
+        {
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = "ACT 兼容",
+                Content = content,
+            });
+        }
+        catch (Exception ex)
+        {
+            // Notification delivery must not reinterpret a durable installation as failed.
+            logger.Warning($"Could not show the bundled ACT plugin completion notification: {ex.Message}");
         }
     }
 
