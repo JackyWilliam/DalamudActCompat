@@ -37,6 +37,10 @@ public sealed class HtmlOverlayWindowSettings
 
     public float ZoomFactor { get; set; } = 1.0f;
 
+    // Runtime lookup still uses the stable overlay key so renaming a template-backed
+    // instance cannot detach it from its source or saved browser profile.
+    public string DisplayName { get; set; } = string.Empty;
+
     public string SourceUrl { get; set; } = string.Empty;
 
     public OverlayConnectionMode ConnectionMode { get; set; } = OverlayConnectionMode.Auto;
@@ -107,6 +111,7 @@ public sealed class HtmlOverlayWindowSettings
         IsClickThrough = true;
         IsLocked = true;
         ZoomFactor = 1.0f;
+        DisplayName = string.Empty;
         SourceUrl = string.Empty;
         ConnectionMode = OverlayConnectionMode.Auto;
         DetectedConnectionMode = null;

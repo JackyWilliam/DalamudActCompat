@@ -4067,6 +4067,14 @@ static void ValidateHtmlOverlayDefaults()
             .Single()
             .GetParameters()
             .Any(parameter =>
+                parameter.Name == "dismissPluginInstallFailure" &&
+                parameter.ParameterType == typeof(Action)),
+        "The control center can no longer clear a dismissed plugin-import failure.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
                 parameter.Name == "openHtmlOverlay" &&
                 parameter.ParameterType == typeof(Func<string, bool>)) &&
         typeof(SettingsWindow).GetConstructors()
@@ -4109,11 +4117,22 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "SettingsWindow.cs"));
+    var helpIconPath = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Assets",
+        "HelpIcon.png");
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
         usedCactbotIndex >= 0 && availableCactbotIndex > usedCactbotIndex &&
         controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
         controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("html-overlay-create-tabs", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("html-overlay-template-tab", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("html-overlay-url-tab", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ResolveOverlayDisplayName", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("保存名称", StringComparison.Ordinal) &&
         controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
         controlCenterSource.Contains(
             ".Where(static template => template.IsCactbot)",
@@ -4129,6 +4148,31 @@ static void ValidateHtmlOverlayDefaults()
         settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
         "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
+    Assert(
+        File.Exists(helpIconPath) && new FileInfo(helpIconPath).Length > 0 &&
+        controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("control-center-help-tabs", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawNotificationAndTroubleshootingHelp", StringComparison.Ordinal),
+        "The overview help entry, supplied icon, or built-in help topics are missing.");
+    Assert(
+        controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse",
+            StringComparison.Ordinal),
+        "Overview or Combat Meter settings regained a nested scrolling region.");
+    var pluginFailure = new ThirdPartyPluginInstallStatus(
+        ThirdPartyPluginInstallState.Failed,
+        "FishersIntuition",
+        Detail: "No compatible plugin entry point was found.",
+        Diagnostic: "System.InvalidOperationException: preflight failed");
+    var pluginFailureLog = ControlCenterWindow.BuildPluginInstallFailureLog(pluginFailure);
+    Assert(
+        controlCenterSource.Contains("PluginInstallFailurePopupId", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("复制日志", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("关闭并清除记录", StringComparison.Ordinal) &&
+        pluginFailureLog.Contains("FishersIntuition", StringComparison.Ordinal) &&
+        pluginFailureLog.Contains("preflight failed", StringComparison.Ordinal),
+        "Plugin import failures no longer open a dismissible dialog with copyable diagnostics.");
     Assert(
         controlCenterSource.Contains(
             "private const int ResetConfirmationMilliseconds = 10_000;",
@@ -4192,6 +4236,7 @@ static void ValidateHtmlOverlayDefaults()
 
     settings.OpenOnStartup = true;
     settings.HasBeenOpened = true;
+    settings.DisplayName = "团队统计";
     var serializedOverlaySettings = Newtonsoft.Json.JsonConvert.SerializeObject(settings);
     var restoredOverlaySettings = Newtonsoft.Json.JsonConvert.DeserializeObject<HtmlOverlayWindowSettings>(
                                       serializedOverlaySettings)
@@ -4203,8 +4248,10 @@ static void ValidateHtmlOverlayDefaults()
         !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsVisible), StringComparison.Ordinal) &&
         !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsEditing), StringComparison.Ordinal) &&
         restoredOverlaySettings.OpenOnStartup &&
-        restoredOverlaySettings.HasBeenOpened,
-        "The overlay usage/startup state was not persisted independently of runtime visibility.");
+        restoredOverlaySettings.HasBeenOpened &&
+        restoredOverlaySettings.DisplayName == "团队统计" &&
+        ControlCenterWindow.ResolveOverlayDisplayName("Kagerou", restoredOverlaySettings) == "团队统计",
+        "The overlay usage, startup state, or user-visible name was not persisted independently of runtime identity.");
     var resetSettings = new HtmlOverlayWindowSettings
     {
         OpenOnStartup = true,
@@ -4212,6 +4259,7 @@ static void ValidateHtmlOverlayDefaults()
         IsClickThrough = false,
         IsLocked = false,
         ZoomFactor = 1.5f,
+        DisplayName = "旧名称",
         SourceUrl = "https://example.com/overlay",
         Left = 10,
         Top = 20,
@@ -4225,6 +4273,7 @@ static void ValidateHtmlOverlayDefaults()
         resetSettings.IsClickThrough &&
         resetSettings.IsLocked &&
         resetSettings.ZoomFactor == 1.0f &&
+        string.IsNullOrEmpty(resetSettings.DisplayName) &&
         string.IsNullOrEmpty(resetSettings.SourceUrl) &&
         resetSettings.Left is null &&
         resetSettings.Top is null &&
@@ -4911,6 +4960,30 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         var liveWebView = webView!;
         var liveHostForm = hostForm!;
         var liveProxy = proxy!;
+        settings.DisplayName = "Renamed HTML Overlay";
+        applySettings.Invoke(instance, null);
+        var renamedWindows = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var hostRenamed = await InvokeControlAsync(
+                liveHostForm,
+                () => liveHostForm.Text == settings.DisplayName);
+            var proxyRenamed = await InvokeControlAsync(
+                liveProxy,
+                () => liveProxy.Text == $"{settings.DisplayName} Input");
+            renamedWindows = hostRenamed && proxyRenamed;
+            if (renamedWindows)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            renamedWindows,
+            "Renaming an open HTML overlay did not update its host and input-window titles.");
         var proxyHandle = await InvokeControlAsync(liveProxy, () => liveProxy.Handle);
         var hostHandle = await InvokeControlAsync(liveHostForm, () => liveHostForm.Handle);
         var hostStyle = NativeInputProbe.GetWindowLongPtr(hostHandle, NativeInputProbe.GwlExStyle);
@@ -5045,6 +5118,7 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                 nativeEditChromeVisible = await InvokeControlAsync(
                     chrome,
                     () => chrome.Visible && chrome.Bounds == liveHostForm.Bounds &&
+                          chrome.Text == $"{settings.DisplayName} Edit Boundary" &&
                           (NativeInputProbe.GetWindowLongPtr(
                                chrome.Handle,
                                NativeInputProbe.GwlExStyle) & (nint)0x00000020) != nint.Zero);

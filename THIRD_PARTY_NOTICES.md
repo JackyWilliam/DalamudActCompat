@@ -101,6 +101,10 @@ PostNamazu's mixed-mode GreyMagic native image while replacing one obsolete
 The release archive also contains 96 FINAL FANTASY XIV class/job icon PNGs,
 used non-commercially as combat-meter UI indicators.
 
+The overview help entry also uses the unmodified FINAL FANTASY XIV sidequest
+icon supplied by the project maintainer. It is covered by the same Square Enix
+material attribution and usage conditions below.
+
 - Source/reference and attribution:
   <https://ffxiv.gamerescape.com/wiki/Dictionary_of_Icons#Disciple_of_War.2FMagic_Class_Icons>
 - FINAL FANTASY XIV Materials Usage License:

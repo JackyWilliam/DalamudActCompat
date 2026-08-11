@@ -811,7 +811,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 settings?.Width is > 0 ? settings.Width.Value : ClientSize.Width,
                 settings?.Height is > 0 ? settings.Height.Value : ClientSize.Height);
             form = overlayMode ? new OverlayHostForm() : new Form();
-            form.Text = title;
+            form.Text = ResolveDisplayTitle();
             form.ClientSize = initialSize;
             form.MinimumSize = new Size(MinimumOverlayWidth, MinimumOverlayHeight);
             form.StartPosition = overlayMode && settings?.Left is not null && settings.Top is not null
@@ -1730,7 +1730,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     {
         var proxy = new InputProxyForm
         {
-            Text = $"{title} Input",
+            Text = $"{ResolveDisplayTitle()} Input",
             FormBorderStyle = FormBorderStyle.None,
             ShowInTaskbar = false,
             StartPosition = FormStartPosition.Manual,
@@ -1744,7 +1744,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     }
 
     private EditChromeForm CreateEditChrome()
-        => new(title, TransparencyColor);
+        => new(ResolveDisplayTitle(), TransparencyColor);
 
     private void ApplyEditChromeSettings()
     {
@@ -2223,6 +2223,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             float zoomFactor;
             bool isClickThrough;
             bool isEditing;
+            string displayTitle;
             lock (settingsSync)
             {
                 savedWidth = settings.Width;
@@ -2232,7 +2233,15 @@ internal sealed class HtmlOverlayForm : IDisposable
                 zoomFactor = settings.ZoomFactor;
                 isClickThrough = settings.IsClickThrough;
                 isEditing = settings.IsEditing;
+                displayTitle = ResolveDisplayTitle();
             }
+
+            form.Text = displayTitle;
+            if (inputProxy is not null)
+            {
+                inputProxy.Text = $"{displayTitle} Input";
+            }
+            editChrome?.SetOverlayTitle(displayTitle);
 
             if (savedWidth is > 0 && savedHeight is > 0)
             {
@@ -2297,6 +2306,11 @@ internal sealed class HtmlOverlayForm : IDisposable
             applyingSettings = false;
         }
     }
+
+    private string ResolveDisplayTitle()
+        => string.IsNullOrWhiteSpace(settings?.DisplayName)
+            ? title
+            : settings.DisplayName.Trim();
 
     private async Task NotifyOverlayStateAsync()
     {
@@ -2622,7 +2636,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private sealed class EditChromeForm : Form
     {
-        private readonly string overlayTitle;
+        private string overlayTitle;
         private BrowserState state;
         private string detail = string.Empty;
 
@@ -2637,6 +2651,13 @@ internal sealed class HtmlOverlayForm : IDisposable
             BackColor = transparencyColor;
             TransparencyKey = transparencyColor;
             DoubleBuffered = true;
+        }
+
+        public void SetOverlayTitle(string value)
+        {
+            overlayTitle = value;
+            Text = $"{value} Edit Boundary";
+            Invalidate();
         }
 
         protected override bool ShowWithoutActivation => true;

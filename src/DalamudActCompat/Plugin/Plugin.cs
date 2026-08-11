@@ -297,6 +297,8 @@ public sealed class Plugin : IDalamudPlugin
             "Assets");
         var logoTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-logo.jpg"));
+        var helpTexture = textureProvider.GetFromFile(
+            Path.Combine(assetDirectory, "HelpIcon.png"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
         var jobIcons = new JobIconTextureSet(
@@ -397,6 +399,7 @@ public sealed class Plugin : IDalamudPlugin
             fflogsEstimateService,
             () => stateStore.GetSnapshot().Current,
             logoTexture,
+            helpTexture,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
             SetMeterVisible,
@@ -410,6 +413,7 @@ public sealed class Plugin : IDalamudPlugin
             DenyPendingGenericPlugin,
             RequestGenericPluginAuthorization,
             UninstallGenericActPlugin,
+            DismissPluginInstallFailure,
             OpenPluginDirectory,
             thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
@@ -1067,7 +1071,8 @@ public sealed class Plugin : IDalamudPlugin
                 SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
                     ThirdPartyPluginInstallState.Failed,
                     Path.GetFileNameWithoutExtension(normalizedPackagePath),
-                    Detail: ex.GetBaseException().Message));
+                    Detail: ex.GetBaseException().Message,
+                    Diagnostic: ex.ToString()));
                 logger.Error(ex, "ACT plugin package installation failed.");
             }
         });
@@ -1089,6 +1094,20 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         QueuePluginInstallFeedback(status);
+    }
+
+    private void DismissPluginInstallFailure()
+    {
+        lock (pluginInstallStatusLock)
+        {
+            if (pluginInstallStatus.State == ThirdPartyPluginInstallState.Failed)
+            {
+                // Dismissing removes only transient UI feedback; installed files and the
+                // package selected by the user are outside this in-memory status object.
+                pluginInstallStatus = new ThirdPartyPluginInstallStatus(
+                    ThirdPartyPluginInstallState.Idle);
+            }
+        }
     }
 
     private void QueuePluginInstallFeedback(ThirdPartyPluginInstallStatus status)
@@ -1114,10 +1133,11 @@ public sealed class Plugin : IDalamudPlugin
         {
             _ = services.Framework.RunOnFrameworkThread(() =>
             {
-                if (status.State == ThirdPartyPluginInstallState.AwaitingPermission)
+                if (status.State is ThirdPartyPluginInstallState.AwaitingPermission or
+                    ThirdPartyPluginInstallState.Failed)
                 {
-                    // Authorization is a blocking installation decision, so place its modal
-                    // in front of the user instead of leaving it below a scrollable page.
+                    // Authorization and import failures both require a user decision, so place
+                    // their modal in front instead of leaving feedback below a scrollable page.
                     settingsWindow.ShowExtensionsPage();
                 }
 
@@ -1288,6 +1308,7 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     State = ThirdPartyPluginInstallState.Failed,
                     Detail = $"运行时预检失败，插件已重新禁用：{ex.GetBaseException().Message}{cleanupDetail}",
+                    Diagnostic = ex.ToString(),
                 });
                 logger.Error(ex, $"Generic ACT plugin runtime preflight failed: {pending.PluginId}.");
             }
@@ -1361,7 +1382,8 @@ public sealed class Plugin : IDalamudPlugin
                     installed.Manifest.Name,
                     installed.Manifest.Id,
                     installed.Manifest.Version,
-                    Detail: $"删除失败：{ex.GetBaseException().Message}"));
+                    Detail: $"删除失败：{ex.GetBaseException().Message}",
+                    Diagnostic: ex.ToString()));
                 logger.Error(ex, $"Could not uninstall generic ACT plugin {installed.Manifest.Id}.");
             }
         });

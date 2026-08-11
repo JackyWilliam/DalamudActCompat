@@ -21,7 +21,8 @@ public sealed record ThirdPartyPluginInstallStatus(
     string PluginId = "",
     string Version = "",
     IReadOnlyList<ActCapability>? RequestedCapabilities = null,
-    string Detail = "")
+    string Detail = "",
+    string Diagnostic = "")
 {
     public IReadOnlyList<ActCapability> Capabilities => RequestedCapabilities ?? [];
 }

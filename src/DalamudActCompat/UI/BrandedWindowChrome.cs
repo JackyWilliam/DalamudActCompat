@@ -193,12 +193,18 @@ internal static class BrandedWindowChrome
         return Math.Abs(target - next) < 0.001f ? target : next;
     }
 
-    public static bool BeginGoldCard(string id, float height)
+    public static bool BeginGoldCard(
+        string id,
+        float height,
+        bool allowScrolling = true)
     {
         ImGui.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
         ImGui.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
-        return ImGui.BeginChild(id, new Vector2(-1, height), true);
+        var flags = allowScrolling
+            ? ImGuiWindowFlags.None
+            : ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+        return ImGui.BeginChild(id, new Vector2(-1, height), true, flags);
     }
 
     public static void EndGoldCard()
