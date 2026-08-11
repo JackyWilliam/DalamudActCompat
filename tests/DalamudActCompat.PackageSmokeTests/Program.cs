@@ -1613,6 +1613,10 @@ static void ValidateEncounterParticipantsSurvivePartyDeparture()
     var allies = Enumerable.Range(1, 8)
         .Select(index => new CombatantData($"Player {index}", encounter))
         .ToList();
+    allies.Add(new CombatantData("Player 9", encounter));
+    allies.Add(new CombatantData("Escort NPC", encounter));
+    allies.Add(new CombatantData("Alliance Player", encounter));
+    allies.Add(new CombatantData(ChineseCombatChatContext.LimitBreakActorName, encounter));
     encounter.SetAllies(allies);
 
     var cachedIdentities = Enumerable.Range(1, 8)
@@ -1634,23 +1638,65 @@ static void ValidateEncounterParticipantsSurvivePartyDeparture()
         cachedIdentities);
 
     Assert(
-        resolved.Count == 8,
-        "A completed eight-player encounter lost combatants who left the live party before publication.");
+        resolved.Count == 9 &&
+        resolved.Count(static item => item.Identity is not null) == 8,
+        "Combat statistics did not contain exactly eight party players plus one Limit Break row.");
     Assert(
-        resolved.All(static item => item.Identity is not null),
-        "An encounter-scoped player identity was not retained after a party departure.");
+        resolved.All(static item =>
+            item.Identity is not null ||
+            item.Combatant.Name == ChineseCombatChatContext.LimitBreakActorName),
+        "An ACT ally without a player identity leaked into combat statistics.");
     Assert(
         resolved.Skip(5).Select(static item => item.Identity!.Name)
+            .Take(3)
             .SequenceEqual(["Player 6", "Player 7", "Player 8"]),
         "The departed players were not restored from the encounter identity cache.");
+    Assert(
+        resolved.All(static item =>
+            item.Combatant.Name is not ("Escort NPC" or "Alliance Player")),
+        "A friendly NPC or non-party alliance player was included in combat statistics.");
+    Assert(
+        resolved.Count(static item =>
+            item.Combatant.Name == ChineseCombatChatContext.LimitBreakActorName &&
+            item.Identity is null) == 1,
+        "The synthetic Limit Break row was removed with non-player ACT allies.");
+    Assert(
+        resolved.All(static item => item.Combatant.Name != "Player 9"),
+        "A ninth player outside the encounter's local party was included in combat statistics.");
+
+    var replacementIdentity = new ActPlayerIdentity(
+        "Player 9",
+        "Test World",
+        "DPS",
+        false,
+        false)
+    {
+        ContentId = 9,
+    };
+    var replacementParty = liveIdentities
+        .Take(7)
+        .Append(replacementIdentity)
+        .ToArray();
+    var afterReplacement = SelfHostedActRuntime.ResolveEncounterCombatants(
+        encounter,
+        replacementParty,
+        cachedIdentities);
+    Assert(
+        afterReplacement.Count == 9 &&
+        afterReplacement.Any(static item => item.Combatant.Name == "Player 9") &&
+        afterReplacement.All(static item => item.Combatant.Name != "Player 8"),
+        "A live replacement did not take priority over a departed cached party player.");
 
     var withoutMetadata = SelfHostedActRuntime.ResolveEncounterCombatants(
         encounter,
         liveIdentities,
         []);
     Assert(
-        withoutMetadata.Count == 8 && withoutMetadata.Skip(5).All(static item => item.Identity is null),
-        "ACT allies without live identity metadata were silently removed from the encounter.");
+        withoutMetadata.Count == 6 &&
+        withoutMetadata.Count(static item => item.Identity is not null) == 5 &&
+        withoutMetadata.All(static item =>
+            item.Combatant.Name is not ("Escort NPC" or "Alliance Player")),
+        "ACT allies without authoritative player metadata were included in combat statistics.");
 }
 
 static void ValidateEmptyEncounterFiltering()

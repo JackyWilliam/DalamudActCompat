@@ -2328,25 +2328,59 @@ public sealed class SelfHostedActRuntime : IDisposable
             IReadOnlyList<ActPlayerIdentity> liveIdentities,
             IReadOnlyList<ActPlayerIdentity> cachedIdentities)
     {
+        var partyIdentities = ResolveLocalPartyIdentities(liveIdentities, cachedIdentities);
         var allies = encounter.GetAllies();
         if (allies.Count == 0)
         {
-            // Preserve the previous behavior while ACT is still building its ally graph,
-            // but allow identities captured earlier in this encounter to survive a party leave.
-            allies = encounter.Items.Values
-                .Where(combatant =>
-                    ActPlayerIdentityResolver.Resolve(liveIdentities, combatant.Name) is not null ||
-                    ActPlayerIdentityResolver.Resolve(cachedIdentities, combatant.Name) is not null)
-                .ToList();
+            allies = encounter.Items.Values.ToList();
         }
 
+        // ACT's relationship-based ally graph can contain pets and friendly NPCs. Dalamud's
+        // live and encounter-scoped party identities are the authoritative player whitelist.
+        // Limit Break remains a separate synthetic team-damage row for compatibility.
         return allies
-            .Select(combatant => (
-                Combatant: combatant,
-                Identity: ActPlayerIdentityResolver.Resolve(liveIdentities, combatant.Name) ??
-                          ActPlayerIdentityResolver.Resolve(cachedIdentities, combatant.Name)))
+            .Select(combatant =>
+            {
+                var identity = ActPlayerIdentityResolver.Resolve(partyIdentities, combatant.Name);
+                return (Combatant: combatant, Identity: identity);
+            })
+            .Where(item =>
+                item.Identity is not null ||
+                string.Equals(
+                    item.Combatant.Name,
+                    ChineseCombatChatContext.LimitBreakActorName,
+                    StringComparison.OrdinalIgnoreCase))
             .ToArray();
     }
+
+    private static IReadOnlyList<ActPlayerIdentity> ResolveLocalPartyIdentities(
+        IReadOnlyList<ActPlayerIdentity> liveIdentities,
+        IReadOnlyList<ActPlayerIdentity> cachedIdentities)
+    {
+        var resolved = new List<ActPlayerIdentity>(8);
+        foreach (var identity in liveIdentities.Concat(cachedIdentities))
+        {
+            if (resolved.Any(existing => IsSamePlayerIdentity(existing, identity)))
+            {
+                continue;
+            }
+
+            resolved.Add(identity);
+            if (resolved.Count == 8)
+            {
+                break;
+            }
+        }
+
+        return resolved;
+    }
+
+    private static bool IsSamePlayerIdentity(
+        ActPlayerIdentity left,
+        ActPlayerIdentity right)
+        => (left.ContentId != 0 && left.ContentId == right.ContentId) ||
+           (left.EntityId != 0 && left.EntityId == right.EntityId) ||
+           string.Equals(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase);
 
     private CombatantHitCounts GetDamageHitCounts(CombatantData combatant)
     {

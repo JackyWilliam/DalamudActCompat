@@ -2981,7 +2981,7 @@ public sealed class Plugin : IDalamudPlugin
             identities[identity.DisplayName] = identity;
         }
 
-        foreach (var member in partyList)
+        foreach (var member in EnumerateLocalPartyMembers(partyList))
         {
             var name = member.Name.TextValue;
             if (string.IsNullOrWhiteSpace(name))
@@ -3015,5 +3015,22 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return identities.Values.ToArray();
+    }
+
+    private static IEnumerable<Dalamud.Game.ClientState.Party.IPartyMember>
+        EnumerateLocalPartyMembers(IPartyList partyList)
+    {
+        for (var index = 0; index < 8; index++)
+        {
+            // In alliance duties IPartyList's normal indexer switches to AllianceList.
+            // MainGroup remains the authoritative source for the local eight-player party.
+            var member = partyList.IsAlliance
+                ? partyList.CreatePartyMemberReference(partyList.GetPartyMemberAddress(index))
+                : partyList[index];
+            if (member is not null)
+            {
+                yield return member;
+            }
+        }
     }
 }
