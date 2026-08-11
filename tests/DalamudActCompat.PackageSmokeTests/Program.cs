@@ -2692,8 +2692,8 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.SourceUrl.EndsWith(
                 "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
                 StringComparison.Ordinal) &&
-            plugin.PackageSha256 == "9737b120c795ea207a651fe15d7a390f732aab377ceeecad959ad88bb621ac1c" &&
-            plugin.Sha256 == "d55d7d8bedfa90665422c42b86b1ca102896d360c7d077e4dfb2248a1cb2e8b5" &&
+            plugin.PackageSha256 == "ac607e9f2f56726e6ccfb279f5e1265a6373c9b673e6f48c43d57306efb534c6" &&
+            plugin.Sha256 == "13564df8f69c6c983c8c57f1a711ce128aff879eb2c32decba09ede9c906ea25" &&
             File.Exists(plugin.PackagePath)),
         "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
@@ -5452,7 +5452,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
-        "BundledActPlugins/matcha/Cafe.Matcha-26.8.10.829-dact1.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.8.10.829-dact2.zip",
         "BundledActPlugins/matcha/LICENSE.txt",
         "BundledActPlugins/matcha/BUILD.md",
         "BundledActPlugins/matcha/dact-compat.patch",

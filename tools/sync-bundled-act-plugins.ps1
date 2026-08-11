@@ -170,6 +170,18 @@ if (-not (Test-Path -LiteralPath $silverPackage) -or
     throw "The bundled SilverDasher 0.6.0.4 complete package no longer matches its fixed hashes."
 }
 
+# Matcha updates require a source-diff and license review, so sync only verifies
+# the audited local package instead of replacing it from an ephemeral artifact.
+$matchaPackage = Join-Path $destinationRoot "matcha/Cafe.Matcha-26.8.10.829-dact2.zip"
+$matchaPackageSha256 = "ac607e9f2f56726e6ccfb279f5e1265a6373c9b673e6f48c43d57306efb534c6"
+$matchaAssemblyPath = "Plugins/Cafe.Matcha/Cafe.Matcha.dll"
+$matchaAssemblySha256 = "13564df8f69c6c983c8c57f1a711ce128aff879eb2c32decba09ede9c906ea25"
+if (-not (Test-Path -LiteralPath $matchaPackage) -or
+    (Get-Sha256 $matchaPackage) -ne $matchaPackageSha256 -or
+    (Get-ZipEntrySha256 $matchaPackage $matchaAssemblyPath) -ne $matchaAssemblySha256) {
+    throw "The bundled Matcha 26.8.10.829 DACT2 package no longer matches its fixed hashes."
+}
+
 $triggerDllUrl = "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/Triggernometry.dll"
 $triggerTranslationUrl = "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/zh-CN.triglations.xml"
 $triggerDll = Join-Path $triggerDirectory "Triggernometry.dll"
@@ -279,6 +291,25 @@ $plugins = @(
         packageSha256 = $silverPackageSha256
         disableOnlineUpdates = $true
         enableAfterInstall = $false
+    },
+    [ordered]@{
+        id = "matcha"
+        name = "抹茶 / Cafe.Matcha"
+        version = "26.8.10.829"
+        author = "FFCafe / The Waking Sands"
+        maintainer = "The Waking Sands contributors; DACT compatibility build maintained by DalamudActCompat"
+        copyright = "Copyright © FFCafe and Cafe.Matcha contributors"
+        projectUrl = "https://github.com/thewakingsands/matcha"
+        downloadUrl = "https://github.com/thewakingsands/matcha/actions/runs/31370163458"
+        sourceUrl = "https://github.com/thewakingsands/matcha/tree/6cf242b59475aa77e4c2deee61e1b9191be5ba13"
+        license = "AGPL-3.0"
+        licenseFile = "matcha/LICENSE.txt"
+        relativeAssembly = $matchaAssemblyPath
+        sha256 = $matchaAssemblySha256
+        relativePackage = "matcha/Cafe.Matcha-26.8.10.829-dact2.zip"
+        packageSha256 = $matchaPackageSha256
+        disableOnlineUpdates = $true
+        enableAfterInstall = $true
     }
 )
 

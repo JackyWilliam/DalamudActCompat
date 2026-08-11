@@ -70,7 +70,7 @@ var matchaPackage = Path.Combine(
     "vendor",
     "BundledActPlugins",
     "matcha",
-    "Cafe.Matcha-26.8.10.829-dact1.zip");
+    "Cafe.Matcha-26.8.10.829-dact2.zip");
 if (File.Exists(matchaPackage))
 {
     ValidateMatchaAssemblyContract(matchaPackage);
@@ -1754,7 +1754,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
         var originalHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assemblyPath)));
         Assert(
-            originalHash == "D55D7D8BEDFA90665422C42B86B1CA102896D360C7D077E4DFB2248A1CB2E8B5",
+            originalHash == "13564DF8F69C6C983C8C57F1A711CE128AFF879EB2C32DECBA09EDE9C906EA25",
             "The bundled Matcha entry DLL does not match its disclosed fixed hash.");
         Assert(
             Convert.ToHexString(
@@ -1777,7 +1777,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
             bridgeType.Fields.Any(field =>
                 field.Name == "ContractVersion" &&
                 field.IsLiteral &&
-                string.Equals(field.Constant as string, "1", StringComparison.Ordinal)),
+                string.Equals(field.Constant as string, "2", StringComparison.Ordinal)),
             "Matcha does not disclose the expected DACT bridge contract.");
         var methods = definition.MainModule.Types
             .SelectMany(EnumerateCecilTypes)
@@ -1937,6 +1937,29 @@ void ValidateMatchaNotificationRouting()
         fallbackType == HostMessageTypes.MatchaNotification &&
         fallbackPayload is HostMatchaNotification { Message: "Typed fallback" },
         "Matcha notification did not use its typed game-side fallback channel.");
+
+    Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> rejectingSender =
+        (_, _, _, _, _) => false;
+    configureSender.Invoke(null, [rejectingSender]);
+    var previousError = Console.Error;
+    using var errorOutput = new StringWriter();
+    try
+    {
+        Console.SetError(errorOutput);
+        Assert(
+            !HostPluginBridge.SendMatchaNotification("Rejected fallback") &&
+            errorOutput.ToString().Contains(
+                "typed game-side notification fallback rejected",
+                StringComparison.Ordinal),
+            "Matcha did not log a rejected typed notification fallback.");
+    }
+    finally
+    {
+        // Console.Error is process-wide, so restore it before later smoke checks run.
+        Console.SetError(previousError);
+    }
+
+    configureSender.Invoke(null, [sender]);
     configureWindowsWriter.Invoke(null, [null]);
 }
 

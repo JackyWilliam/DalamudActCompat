@@ -58,7 +58,7 @@ public static class LegacyAssemblyRewriter
             field.Name == "ContractVersion" &&
             field.IsLiteral &&
             field.FieldType.MetadataType == MetadataType.String);
-        if (!string.Equals(contractVersion?.Constant as string, "1", StringComparison.Ordinal))
+        if (!string.Equals(contractVersion?.Constant as string, "2", StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "Matcha DACT compatibility contract is missing or unsupported.");
@@ -98,6 +98,28 @@ public static class LegacyAssemblyRewriter
                     $"Matcha DACT bridge surface changed for {methodName}; " +
                     $"expected {expectedCount}, found {actualCount}.");
             }
+        }
+
+        var notificationCall = methods
+            .SelectMany(method => method.Body.Instructions.Select(instruction => (method, instruction)))
+            .Single(candidate =>
+                candidate.instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == bridgeType.FullName &&
+                called.Name == "SendNotification");
+        var instructions = notificationCall.method.Body.Instructions;
+        var notificationIndex = instructions.IndexOf(notificationCall.instruction);
+        var notificationTail = instructions
+            .Skip(notificationIndex + 1)
+            .Where(instruction => instruction.OpCode.Code != Code.Nop)
+            .Take(2)
+            .Select(instruction => instruction.OpCode.Code)
+            .ToArray();
+        // DACT owns the Windows and typed IPC routes. Ignoring the bool result here
+        // prevents Matcha's outer catch from reaching its blocking MessageBox fallback.
+        if (!notificationTail.SequenceEqual([Code.Pop, Code.Ret]))
+        {
+            throw new InvalidOperationException(
+                "Matcha DACT notification path can still enter the blocking dialog fallback.");
         }
 
         var directFileIo = callsOutsideBridge.Count(call =>

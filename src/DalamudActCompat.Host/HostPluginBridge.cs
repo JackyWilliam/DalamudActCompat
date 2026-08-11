@@ -434,12 +434,21 @@ public static class HostPluginBridge
             }
         }
 
-        return sender?.Invoke(
-                   HostMessageTypes.MatchaNotification,
-                   HostMessagePriority.Critical,
-                   new HostMatchaNotification(message),
-                   null,
-                   DateTimeOffset.UtcNow.AddSeconds(2)) == true;
+        var fallbackAccepted = sender?.Invoke(
+            HostMessageTypes.MatchaNotification,
+            HostMessagePriority.Critical,
+            new HostMatchaNotification(message),
+            null,
+            DateTimeOffset.UtcNow.AddSeconds(2)) == true;
+        if (!fallbackAccepted)
+        {
+            // Matcha's patched caller deliberately suppresses its blocking MessageBox;
+            // keep the rejected real-time alert observable in the Host diagnostics.
+            Console.Error.WriteLine(
+                "Matcha typed game-side notification fallback rejected the message.");
+        }
+
+        return fallbackAccepted;
     }
 
     internal static void RelayMatchaLogLine(string line)

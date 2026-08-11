@@ -81,9 +81,9 @@
                         "license":  "AGPL-3.0",
                         "licenseFile":  "matcha/LICENSE.txt",
                         "relativeAssembly":  "Plugins/Cafe.Matcha/Cafe.Matcha.dll",
-                        "sha256":  "d55d7d8bedfa90665422c42b86b1ca102896d360c7d077e4dfb2248a1cb2e8b5",
-                        "relativePackage":  "matcha/Cafe.Matcha-26.8.10.829-dact1.zip",
-                        "packageSha256":  "9737b120c795ea207a651fe15d7a390f732aab377ceeecad959ad88bb621ac1c",
+                        "sha256":  "13564df8f69c6c983c8c57f1a711ce128aff879eb2c32decba09ede9c906ea25",
+                        "relativePackage":  "matcha/Cafe.Matcha-26.8.10.829-dact2.zip",
+                        "packageSha256":  "ac607e9f2f56726e6ccfb279f5e1265a6373c9b673e6f48c43d57306efb534c6",
                         "disableOnlineUpdates":  true,
                         "enableAfterInstall":  true
                     }

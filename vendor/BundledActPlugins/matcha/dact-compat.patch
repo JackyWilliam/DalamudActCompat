@@ -92,16 +92,15 @@ diff --git a/Cafe.Matcha/Utils/Output.cs b/Cafe.Matcha/Utils/Output.cs
 index 865c135..bd51ef6 100644
 --- a/Cafe.Matcha/Utils/Output.cs
 +++ b/Cafe.Matcha/Utils/Output.cs
-@@ -21,6 +21,15 @@ namespace Cafe.Matcha.Utils
+@@ -21,6 +21,14 @@ namespace Cafe.Matcha.Utils
 
          private static void SendNativeToast(string message)
          {
 +            if (DactBridge.IsAvailable)
 +            {
-+                if (!DactBridge.SendNotification(message))
-+                {
-+                    throw new InvalidOperationException("DACT notification channel rejected the message.");
-+                }
++                // DACT owns both non-blocking notification routes; never re-enter the
++                // upstream MessageBox fallback when neither route accepts a message.
++                _ = DactBridge.SendNotification(message);
 +                return;
 +            }
 +
@@ -173,7 +172,7 @@ new file mode 100644
 index 0000000..910a467
 --- /dev/null
 +++ b/Cafe.Matcha/Utils/DactBridge.cs
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,114 @@
 +// DACT compatibility bridge. Outside DACT every operation preserves the
 +// upstream implementation; inside DACT the dedicated Host supplies scoped
 +// permission and notification methods through reflection.
@@ -187,7 +186,7 @@ index 0000000..910a467
 +
 +    internal static class DactBridge
 +    {
-+        public const string ContractVersion = "1";
++        public const string ContractVersion = "2";
 +
 +        private static readonly Type BridgeType = Type.GetType(
 +            "DalamudActCompat.Host.HostPluginBridge, DalamudActCompat.Host",
@@ -256,7 +255,19 @@ index 0000000..910a467
 +        }
 +
 +        public static bool SendNotification(string message)
-+            => IsAvailable && (bool)Invoke("SendMatchaNotification", message);
++        {
++            try
++            {
++                return IsAvailable && (bool)Invoke("SendMatchaNotification", message);
++            }
++            catch (Exception exception)
++            {
++                // Real-time alerts must not fall through to Matcha's blocking dialog;
++                // stderr is collected by the dedicated Host for later diagnostics.
++                Console.Error.WriteLine($"DACT notification delivery failed: {exception}");
++                return false;
++            }
++        }
 +
 +        private static object Invoke(string methodName, params object[] arguments)
 +        {
