@@ -34,6 +34,12 @@ public sealed class ControlCenterWindow : Window
         Diagnostics,
     }
 
+    private enum HtmlOverlayCreatorPage
+    {
+        Template,
+        Url,
+    }
+
     private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
@@ -49,7 +55,6 @@ public sealed class ControlCenterWindow : Window
         "删除第三方 ACT 插件###DalamudActCompatGenericDelete";
     private const string PluginInstallFailurePopupId =
         "第三方插件导入失败###DalamudActCompatPluginInstallFailure";
-    private const string HelpPopupId = "使用帮助###DalamudActCompatHelp";
     private const string ResetEncounterPopupId = "重置当前战斗###DalamudActCompatResetEncounter";
 
     private readonly PluginConfiguration configuration;
@@ -60,6 +65,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
     private readonly ISharedImmediateTexture helpTexture;
+    private readonly Action openHelp;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
     private readonly Action<bool> setMeterVisible;
@@ -95,6 +101,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<Task<string>> factoryReset;
     private readonly Action resetCurrentEncounter;
     private Page selectedPage;
+    private HtmlOverlayCreatorPage selectedHtmlOverlayCreatorPage;
     private ParserStatus parserStatus;
     private string? selectedCreatedOverlay;
     private string? selectedUsedCactbotOverlay;
@@ -132,6 +139,7 @@ public sealed class ControlCenterWindow : Window
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
         ISharedImmediateTexture helpTexture,
+        Action openHelp,
         Action saveConfiguration,
         Action applyPermissionChanges,
         Action<bool> setMeterVisible,
@@ -176,6 +184,7 @@ public sealed class ControlCenterWindow : Window
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
         this.helpTexture = helpTexture;
+        this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
         this.setMeterVisible = setMeterVisible;
@@ -547,228 +556,48 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.Spacing();
         DrawHelpEntry();
-        DrawHelpModal();
         return changed;
     }
 
     private void DrawHelpEntry()
     {
-        const float iconSize = 38;
-        const float buttonHeight = 52;
-        var buttonWidth = Math.Min(340, ImGui.GetContentRegionAvail().X);
+        var label = text.Get("需要更多帮助吗？", "Need more help?");
+        var labelSize = ImGui.CalcTextSize(label);
+        var wrap = helpTexture.GetWrapOrEmpty();
+        var hasIcon = wrap.Handle.Handle != 0 && wrap.Width > 0 && wrap.Height > 0;
+        var iconHeight = ImGui.GetTextLineHeight();
+        var iconWidth = hasIcon
+            ? iconHeight * wrap.Width / wrap.Height
+            : 0;
+        var iconSpacing = hasIcon ? 8 : 0;
+        var entrySize = new Vector2(
+            iconWidth + iconSpacing + labelSize.X,
+            Math.Max(iconHeight, labelSize.Y));
         if (ImGui.InvisibleButton(
                 "overview-help-entry",
-                new Vector2(buttonWidth, buttonHeight)))
+                entrySize))
         {
-            ImGui.OpenPopup(HelpPopupId);
+            openHelp();
         }
 
         var itemMin = ImGui.GetItemRectMin();
-        var itemMax = ImGui.GetItemRectMax();
         var hovered = ImGui.IsItemHovered();
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(
-            itemMin,
-            itemMax,
-            ImGui.GetColorU32(hovered ? NavyHover : NavyRaised),
-            8);
-        drawList.AddRect(
-            itemMin,
-            itemMax,
-            ImGui.GetColorU32(Gold),
-            8);
-
-        var iconTop = itemMin.Y + ((buttonHeight - iconSize) * 0.5f);
-        var iconLeft = itemMin.X + 8;
-        var wrap = helpTexture.GetWrapOrEmpty();
-        if (wrap.Handle.Handle != 0)
+        if (hasIcon)
         {
+            var iconTop = itemMin.Y + ((entrySize.Y - iconHeight) * 0.5f);
             drawList.AddImage(
                 wrap.Handle,
-                new Vector2(iconLeft, iconTop),
-                new Vector2(iconLeft + iconSize, iconTop + iconSize));
+                new Vector2(itemMin.X, iconTop),
+                new Vector2(itemMin.X + iconWidth, iconTop + iconHeight));
         }
 
-        var label = text.Get("需要更多帮助吗？", "Need more help?");
         drawList.AddText(
             new Vector2(
-                iconLeft + iconSize + 10,
-                itemMin.Y + ((buttonHeight - ImGui.GetTextLineHeight()) * 0.5f)),
+                itemMin.X + iconWidth + iconSpacing,
+                itemMin.Y + ((entrySize.Y - labelSize.Y) * 0.5f)),
             ImGui.GetColorU32(hovered ? IceBlue : new Vector4(0.82f, 0.86f, 0.92f, 1)),
             label);
-    }
-
-    private void DrawHelpModal()
-    {
-        ImGui.SetNextWindowSize(new Vector2(760, 560), ImGuiCond.Appearing);
-        if (!ImGui.BeginPopupModal(
-                HelpPopupId,
-                ImGuiWindowFlags.NoResize))
-        {
-            return;
-        }
-
-        ImGui.TextColored(Gold, text.Get("Dalamud ACT Compat 使用帮助", "Dalamud ACT Compat help"));
-        ImGui.TextDisabled(text.Get(
-            "这里集中说明常用功能、自动行为与排错入口。",
-            "This guide explains common features, automatic behavior, and troubleshooting entry points."));
-        ImGui.Separator();
-
-        ImGui.PushTextWrapPos(0);
-        if (ImGui.BeginTabBar("control-center-help-tabs"))
-        {
-            DrawGettingStartedHelp();
-            DrawCombatMeterHelp();
-            DrawOverlayHelp();
-            DrawExtensionHelp();
-            DrawNotificationAndTroubleshootingHelp();
-            ImGui.EndTabBar();
-        }
-        ImGui.PopTextWrapPos();
-
-        ImGui.Separator();
-        if (ImGui.Button(
-                text.Get("关闭帮助", "Close help"),
-                new Vector2(140, 34)))
-        {
-            ImGui.CloseCurrentPopup();
-        }
-        ImGui.EndPopup();
-    }
-
-    private void DrawGettingStartedHelp()
-    {
-        if (!ImGui.BeginTabItem(text.Get("快速开始", "Getting started")))
-        {
-            return;
-        }
-
-        DrawHelpHeading(text.Get("第一次使用", "First use"));
-        ImGui.BulletText(text.Get(
-            "保持“启用解析”和“自动启动解析器”开启，状态显示“运行中”后即可记录战斗。",
-            "Keep Enable parsing and Auto start parser on. Combat recording is ready when the status is Running."));
-        ImGui.BulletText(text.Get(
-            "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开设置，右键打开战斗统计，中键拖动。",
-            "Show ACT quick button controls the in-game shortcut: left-click settings, right-click Combat Meter, middle-drag to move."));
-        ImGui.BulletText(text.Get(
-            "概览页的“运行状态”会打开详细诊断窗口；“战斗历史”查看已经结束的战斗。",
-            "Runtime status opens detailed diagnostics; Encounter history shows completed encounters."));
-        DrawHelpHeading(text.Get("数据与日志", "Data and logs"));
-        ImGui.TextWrapped(text.Get(
-            "战斗数据由内置 FFXIV_ACT_Plugin 解析。“打开 FFLogs 上传日志”会打开原始 Network 日志目录并复制路径，不会自动上传任何文件。",
-            "Combat data is parsed by the bundled FFXIV_ACT_Plugin. Open FFLogs upload logs opens the raw Network log folder and copies its path; it never uploads files automatically."));
-        ImGui.EndTabItem();
-    }
-
-    private void DrawCombatMeterHelp()
-    {
-        if (!ImGui.BeginTabItem(text.Get("战斗统计", "Combat Meter")))
-        {
-            return;
-        }
-
-        DrawHelpHeading(text.Get("显示与交互", "Display and interaction"));
-        ImGui.BulletText(text.Get(
-            "锁定窗口用于固定位置；只有同时开启“锁定时鼠标穿透”时，点击才会传给游戏。",
-            "Lock window fixes its position. Clicks pass through to the game only when Click-through when locked is also enabled."));
-        ImGui.BulletText(text.Get(
-            "“脱战自动隐藏”只控制显示，不会停止解析或删除战斗数据。",
-            "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
-        DrawHelpHeading(text.Get("数值口径", "Metrics"));
-        ImGui.TextWrapped(text.Get(
-            "排序可选择 DPS 或 HPS；DPS 口径决定主数值使用个人动作时长、整场时长或 FF Logs 团队贡献估算。带“估算”的项目不是官方上传后的最终排名。",
-            "Sort by DPS or HPS. The DPS metric chooses personal active time, full encounter time, or an estimated FF Logs contribution metric. Estimated values are not final uploaded rankings."));
-        ImGui.TextWrapped(text.Get(
-            "“重置当前战斗”只清空当前显示，历史记录和已经写入磁盘的原始日志不受影响。",
-            "Reset current encounter clears only the current display; history and raw logs already written to disk are unaffected."));
-        ImGui.EndTabItem();
-    }
-
-    private void DrawOverlayHelp()
-    {
-        if (!ImGui.BeginTabItem(text.Get("悬浮窗", "Overlays")))
-        {
-            return;
-        }
-
-        DrawHelpHeading("Cactbot");
-        ImGui.TextWrapped(text.Get(
-            "Cactbot 使用插件安装到本地的页面。文字提醒与时间轴可以同时打开；它们与旧版组合窗口互斥。",
-            "Cactbot uses pages installed locally by the plugin. Alerts and Timeline may run together; both conflict with the legacy combined window."));
-        DrawHelpHeading(text.Get("HTML 悬浮窗", "HTML overlays"));
-        ImGui.BulletText(text.Get(
-            "可从解析器模板或完整的 http、https、file 地址创建；只添加你信任的页面。",
-            "Create from parser templates or complete http, https, and file URLs. Add only pages you trust."));
-        ImGui.BulletText(text.Get(
-            "自定义页面默认先检测现代 OverlayPlugin 协议，再尝试旧 ACTWS 协议；插件不会改写保存的网址。",
-            "Custom pages first detect the modern OverlayPlugin protocol, then try legacy ACTWS. The saved URL is never rewritten."));
-        ImGui.BulletText(text.Get(
-            "“编辑位置和大小”是临时编辑模式；锁定、穿透、缩放和显示名称会按每个悬浮窗分别保存。",
-            "Edit position and size is temporary. Lock, click-through, zoom, and display name are stored per overlay."));
-        ImGui.BulletText(text.Get(
-            "网页本身支持滚轮时，未穿透状态下可直接滚动；检测失败可重试或在高级选项中手动微调协议。",
-            "When the page supports wheel input, scroll while click-through is off. Failed detection can be retried or adjusted manually in advanced options."));
-        ImGui.EndTabItem();
-    }
-
-    private void DrawExtensionHelp()
-    {
-        if (!ImGui.BeginTabItem(text.Get("扩展与权限", "Extensions and permissions")))
-        {
-            return;
-        }
-
-        DrawHelpHeading(text.Get("安装 DLL / ZIP", "Install DLL / ZIP"));
-        ImGui.BulletText(text.Get(
-            "选择文件后先进行静态预检；此阶段不会执行 DLL，并会生成需要的权限清单。",
-            "After file selection, static preflight runs without executing the DLL and generates its requested permission list."));
-        ImGui.BulletText(text.Get(
-            "普通第三方插件共用一个按需启动的通用 Host，不会为每个插件常驻一个进程。",
-            "Generic third-party plugins share one on-demand Host; one persistent process is not created per plugin."));
-        ImGui.BulletText(text.Get(
-            "同意授权后才会启动 Host 做运行时检查；拒绝后插件保留但禁用，可稍后重新授权。",
-            "The Host runtime check starts only after consent. Denied plugins remain installed but disabled and can be authorized later."));
-        ImGui.BulletText(text.Get(
-            "DLL 仍是桌面代码，权限清单约束兼容接口，但不能拦截 DLL 直接调用 Windows API。",
-            "A DLL remains desktop code. The permission list governs compatibility APIs but cannot intercept direct Windows API calls."));
-        DrawHelpHeading(text.Get("失败与删除", "Failures and removal"));
-        ImGui.TextWrapped(text.Get(
-            "导入失败会显示原因并允许复制完整诊断。关闭失败对话框只清除提示缓存；删除已安装插件需要使用扩展条目中的删除操作。",
-            "Import failures show the reason and allow copying full diagnostics. Closing the dialog clears only its notice; remove installed plugins through their extension entry."));
-        ImGui.EndTabItem();
-    }
-
-    private void DrawNotificationAndTroubleshootingHelp()
-    {
-        if (!ImGui.BeginTabItem(text.Get("通知与排错", "Notifications and troubleshooting")))
-        {
-            return;
-        }
-
-        DrawHelpHeading(text.Get("通知策略", "Notification routing"));
-        ImGui.TextWrapped(text.Get(
-            "抹茶和银山雀儿在游戏位于前台时使用游戏内卫月通知；切到其他应用时使用 Windows 通知中心。Windows 投递失败时会回退到游戏内通知。",
-            "Matcha and SilverDasher use Dalamud notifications while the game is foreground. When another app is foreground, they use Windows Notification Center and fall back to Dalamud if Windows delivery fails."));
-        DrawHelpHeading(text.Get("没有数据或功能失败", "Missing data or failed features"));
-        ImGui.BulletText(text.Get(
-            "先确认概览状态为“运行中”，再打开“运行状态”查看解析器和各 Host 是否成功启动。",
-            "First confirm Overview says Running, then open Runtime status to check the parser and each Host."));
-        ImGui.BulletText(text.Get(
-            "悬浮窗有画面但无数据时，查看自动协议检测状态并执行“重新检测”。",
-            "If an overlay renders but has no data, inspect automatic protocol detection and use Detect again."));
-        ImGui.BulletText(text.Get(
-            "第三方扩展失败时复制失败对话框日志；其他问题可在设置页复制诊断日志。",
-            "For extension failures, copy the failure dialog log. For other issues, copy the diagnostic log from Settings."));
-        ImGui.BulletText(text.Get(
-            "需要上传 FFLogs 时使用原始 Network 日志；诊断日志与战斗日志用途不同。",
-            "Use raw Network logs for FFLogs uploads. Diagnostic logs and combat logs serve different purposes."));
-        ImGui.EndTabItem();
-    }
-
-    private static void DrawHelpHeading(string value)
-    {
-        ImGui.Spacing();
-        ImGui.TextColored(IceBlue, value);
     }
 
     private void OpenCombatLogDirectoryForUpload()
@@ -1044,30 +873,25 @@ public sealed class ControlCenterWindow : Window
 
     private bool DrawHtmlOverlayCreators(IReadOnlyList<ActOverlayTemplate> allTemplates)
     {
-        var changed = false;
-        if (!ImGui.BeginTabBar("html-overlay-create-tabs"))
+        var labels = new[]
         {
-            return false;
-        }
+            text.Get("从模板创建", "Create from template"),
+            text.Get("从网址创建", "Create from URL"),
+        };
+        var selectedIndex = BrandedWindowChrome.DrawNavigationRail(
+            "html-overlay-create-tabs",
+            labels,
+            (int)selectedHtmlOverlayCreatorPage,
+            height: 34);
+        selectedHtmlOverlayCreatorPage = (HtmlOverlayCreatorPage)selectedIndex;
+        ImGui.Spacing();
 
-        if (ImGui.BeginTabItem(text.Get(
-                "从模板创建###html-overlay-template-tab",
-                "Create from template###html-overlay-template-tab")))
+        return selectedHtmlOverlayCreatorPage switch
         {
-            changed |= DrawTemplateHtmlOverlayCreator(allTemplates);
-            ImGui.EndTabItem();
-        }
-
-        if (ImGui.BeginTabItem(text.Get(
-                "从网址创建###html-overlay-url-tab",
-                "Create from URL###html-overlay-url-tab")))
-        {
-            changed |= DrawCustomHtmlOverlayCreator();
-            ImGui.EndTabItem();
-        }
-
-        ImGui.EndTabBar();
-        return changed;
+            HtmlOverlayCreatorPage.Template => DrawTemplateHtmlOverlayCreator(allTemplates),
+            HtmlOverlayCreatorPage.Url => DrawCustomHtmlOverlayCreator(),
+            _ => false,
+        };
     }
 
     private bool DrawTemplateHtmlOverlayCreator(IReadOnlyList<ActOverlayTemplate> allTemplates)

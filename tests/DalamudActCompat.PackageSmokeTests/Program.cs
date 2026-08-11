@@ -4117,6 +4117,12 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "SettingsWindow.cs"));
+    var helpWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "HelpWindow.cs"));
     var helpIconPath = Path.Combine(
         FindProjectRoot(),
         "src",
@@ -4129,8 +4135,10 @@ static void ValidateHtmlOverlayDefaults()
         controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
         controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
         controlCenterSource.Contains("html-overlay-create-tabs", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("html-overlay-template-tab", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("html-overlay-url-tab", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "BrandedWindowChrome.DrawNavigationRail(",
+            StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("BeginTabBar(\"html-overlay-create-tabs\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ResolveOverlayDisplayName", StringComparison.Ordinal) &&
         controlCenterSource.Contains("保存名称", StringComparison.Ordinal) &&
         controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
@@ -4148,12 +4156,30 @@ static void ValidateHtmlOverlayDefaults()
         settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
         "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
+    var helpEntryStart = controlCenterSource.IndexOf(
+        "private void DrawHelpEntry()",
+        StringComparison.Ordinal);
+    var helpEntryEnd = controlCenterSource.IndexOf(
+        "private void OpenCombatLogDirectoryForUpload()",
+        StringComparison.Ordinal);
+    var helpEntrySource = helpEntryStart >= 0 && helpEntryEnd > helpEntryStart
+        ? controlCenterSource[helpEntryStart..helpEntryEnd]
+        : string.Empty;
     Assert(
         File.Exists(helpIconPath) && new FileInfo(helpIconPath).Length > 0 &&
         controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("control-center-help-tabs", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("DrawNotificationAndTroubleshootingHelp", StringComparison.Ordinal),
-        "The overview help entry, supplied icon, or built-in help topics are missing.");
+        controlCenterSource.Contains("openHelp();", StringComparison.Ordinal) &&
+        helpEntrySource.Contains("iconHeight * wrap.Width / wrap.Height", StringComparison.Ordinal) &&
+        !helpEntrySource.Contains("AddRect", StringComparison.Ordinal) &&
+        typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("不要去绿玩面前跳脸。", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("一经发现立刻踢出！", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
+        !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),
+        "The flat overview help entry or independent branded help document regressed.");
     Assert(
         controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
         controlCenterSource.Contains(

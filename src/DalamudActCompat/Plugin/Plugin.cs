@@ -46,6 +46,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterWindow encounterWindow;
     private readonly ControlCenterWindow settingsWindow;
+    private readonly HelpWindow helpWindow;
     private readonly SettingsWindow advancedSettingsWindow;
     private readonly StatusWindow statusWindow;
     private readonly LauncherWindow launcherWindow;
@@ -391,6 +392,13 @@ public sealed class Plugin : IDalamudPlugin
             StopMatchaHostFromUi,
             RestartGenericHostFromUi,
             StopGenericHostFromUi);
+        helpWindow = new HelpWindow(
+            text,
+            logoTexture,
+            logger,
+            () => statusWindow.IsOpen = true,
+            OpenLogDirectory,
+            thirdPartyPluginNoticeWindow.OpenManualDisclosure);
         settingsWindow = new ControlCenterWindow(
             configuration,
             parserEngine,
@@ -400,6 +408,7 @@ public sealed class Plugin : IDalamudPlugin
             () => stateStore.GetSnapshot().Current,
             logoTexture,
             helpTexture,
+            () => helpWindow.IsOpen = true,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
             SetMeterVisible,
@@ -447,6 +456,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(settingsWindow);
+        windowSystem.AddWindow(helpWindow);
         windowSystem.AddWindow(advancedSettingsWindow);
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
