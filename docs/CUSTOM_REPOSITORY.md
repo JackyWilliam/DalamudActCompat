@@ -14,7 +14,9 @@ Use a small public repository for the custom repository file:
 
 ```text
 DalamudActCompatRepo/
-└── pluginmaster.json
+├── pluginmaster.json
+├── tools/sync-latest-release.ps1
+└── .github/workflows/sync-latest-release.yml
 ```
 
 Use the source repository for code and release artifacts:
@@ -28,23 +30,22 @@ DalamudActCompat/
 
 ## Release Steps
 
-1. Build the plugin on a machine with .NET 10 SDK and Dalamud v14 development dependencies.
-2. Publish `DalamudActCompat.zip` to `https://github.com/JackyWilliam/DalamudActCompat/releases`.
-3. Update `repo/pluginmaster.json` with the new `AssemblyVersion`, download links, changelog, and Unix `LastUpdate`.
-4. Copy `repo/pluginmaster.json` to the separate `DalamudActCompatRepo` repository root.
-5. Confirm the raw URL returns JSON in a browser.
-6. Add the raw URL to Dalamud custom plugin repositories and test install/update.
+1. Run `.github/workflows/release.yml` with a numeric tag such as `v0.3.9.0`.
+2. Confirm the Windows self-hosted runner published `DalamudActCompat.zip` to `https://github.com/JackyWilliam/DalamudActCompat/releases`.
+3. Wait for `DalamudActCompatRepo` to detect the latest stable Release and update its own `pluginmaster.json`.
+4. Confirm the raw URL returns the new version in a browser.
+5. Add the raw URL to Dalamud custom plugin repositories and test install/update.
 
 ## Automated Flow
 
-After pushing the source repository to GitHub:
+The distribution repository owns the synchronization process:
 
-1. Create a public repository named `JackyWilliam/DalamudActCompatRepo`.
-2. Add a repository secret named `DALAMUD_REPO_TOKEN` to the source repository. The token needs write access to `JackyWilliam/DalamudActCompatRepo`.
-3. Push a tag such as `v0.1.0` to create the release ZIP from `.github/workflows/release.yml`.
-4. Run `.github/workflows/sync-custom-repo.yml` manually with `version = 0.1.0` and a changelog.
+1. The source repository's manually triggered `.github/workflows/release.yml` creates the requested stable Release.
+2. `DalamudActCompatRepo/.github/workflows/sync-latest-release.yml` checks the latest stable Release every 15 minutes.
+3. The workflow validates the version, ZIP metadata, download URL, and release notes before changing `pluginmaster.json`.
+4. The distribution repository commits the result to its own `main` branch with its scoped `GITHUB_TOKEN`.
 5. Verify `https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json`.
 
-## Current Safety Note
+No personal access token or cross-repository secret is required. To verify or repair the current metadata immediately, manually run the distribution repository's `Sync latest release` workflow with `force` enabled.
 
-This project provides a distribution template only. The parser is not live yet, FFXIV_ACT_Plugin is not loaded yet, and actual game behavior is unverified.
+The source-side `repo/pluginmaster.json` remains a local validation template. The user-facing metadata is the file on the distribution repository's `main` branch.
