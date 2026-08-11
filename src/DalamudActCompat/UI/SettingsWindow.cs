@@ -817,12 +817,12 @@ public sealed class SettingsWindow : Window
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
             settings.IsClickThrough,
-            value => settings.IsClickThrough = value);
+            settings.SetClickThrough);
         ImGui.SameLine();
         changed |= Checkbox(
             $"{text.Get("锁定位置和大小", "Lock position and size")}###{name}-locked",
             settings.IsLocked,
-            value => settings.IsLocked = value);
+            settings.SetLocked);
         var zoomFactor = settings.ZoomFactor;
         if (ImGui.SliderFloat(
                 $"{text.Get("页面缩放", "Page zoom")}###{name}-zoom",

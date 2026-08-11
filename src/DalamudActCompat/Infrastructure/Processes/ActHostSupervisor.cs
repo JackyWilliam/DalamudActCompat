@@ -400,6 +400,44 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
     }
 
+    public async Task<HostPluginStage> WaitForPluginStageAsync(
+        string pluginId,
+        string stageName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stageName);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (state is HostSupervisorState.Faulted or HostSupervisorState.CircuitOpen or
+                HostSupervisorState.Stopped)
+            {
+                throw new InvalidOperationException(
+                    $"ACT Host stopped before {pluginId}/{stageName} was reported: {state}.");
+            }
+
+            var stage = ipc.PluginStages.LastOrDefault(candidate =>
+                string.Equals(candidate.PluginId, pluginId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.Stage, stageName, StringComparison.OrdinalIgnoreCase));
+            if (stage is not null)
+            {
+                return stage;
+            }
+
+            if (ipc.HostHealthState == "plugins.failed")
+            {
+                throw new InvalidOperationException(
+                    $"ACT Host plugin startup failed: {ipc.HostHealthDetail}");
+            }
+
+            // Health is sent immediately, while per-plugin stages arrive on the next
+            // heartbeat. Waiting here prevents every generic plugin from being rejected
+            // merely because those two valid messages crossed the process boundary apart.
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private bool PublishMatchaNetwork(
         bool sent,
         string connection,

@@ -1776,7 +1776,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
         var originalHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assemblyPath)));
         Assert(
-            originalHash == "13564DF8F69C6C983C8C57F1A711CE128AFF879EB2C32DECBA09EDE9C906EA25",
+            originalHash == "F0EFA181486FFC2C773D0A2B422935E305EAAE32800E35BD398B8A37E92EFF64",
             "The bundled Matcha entry DLL does not match its disclosed fixed hash.");
         Assert(
             Convert.ToHexString(
@@ -1897,6 +1897,65 @@ void ValidateMatchaAssemblyContract(string packagePath)
             throw new InvalidOperationException(
                 "Matcha did not receive the hash-pinned upstream runtime constants.");
         }
+
+        var bridge = loadedAssembly.GetType(
+                         "Cafe.Matcha.Utils.DactBridge",
+                         throwOnError: true)!
+                     ?? throw new TypeLoadException("Matcha DACT bridge was not loaded.");
+        var isAvailable = bridge.GetProperty(
+                              "IsAvailable",
+                              BindingFlags.Public | BindingFlags.Static)
+                          ?? throw new MissingMemberException(
+                              bridge.FullName,
+                              "IsAvailable");
+        Assert(
+            isAvailable.GetValue(null) is true,
+            "Matcha loaded from a byte image could not find the already-running Host bridge.");
+
+        var configurePermissions = typeof(HostPluginBridge).GetMethod(
+                                       "ConfigurePermissions",
+                                       BindingFlags.Static | BindingFlags.NonPublic)
+                                   ?? throw new MissingMethodException(
+                                       typeof(HostPluginBridge).FullName,
+                                       "ConfigurePermissions");
+        var configureSender = typeof(HostPluginBridge).GetMethod(
+                                  "Configure",
+                                  BindingFlags.Static | BindingFlags.NonPublic)
+                              ?? throw new MissingMethodException(
+                                  typeof(HostPluginBridge).FullName,
+                                  "Configure");
+        configurePermissions.Invoke(null, [new HostPermissionSnapshot(
+            new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["matcha"] = ["ReadCombatLogs"],
+            },
+            ["matcha"])]);
+        object? notificationPayload = null;
+        Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> sender =
+            (type, _, payload, _, _) =>
+            {
+                if (type == HostMessageTypes.MatchaNotification)
+                {
+                    notificationPayload = payload;
+                }
+                return true;
+            };
+        configureSender.Invoke(null, [sender]);
+        var sendNativeToast = loadedAssembly
+                                  .GetType("Cafe.Matcha.Utils.Output", throwOnError: true)!
+                                  .GetMethod(
+                                      "SendNativeToast",
+                                      BindingFlags.Static | BindingFlags.NonPublic)
+                              ?? throw new MissingMethodException(
+                                  "Cafe.Matcha.Utils.Output",
+                                  "SendNativeToast");
+        sendNativeToast.Invoke(null, ["Matcha bridge smoke"]);
+        Assert(
+            notificationPayload is HostMatchaNotification
+            {
+                Message: "Matcha bridge smoke",
+            },
+            "Matcha's real native-toast entry point did not reach the typed Host notification route.");
 
         context.Unload();
     }

@@ -409,6 +409,7 @@ public sealed class Plugin : IDalamudPlugin
             ApprovePendingGenericPlugin,
             DenyPendingGenericPlugin,
             RequestGenericPluginAuthorization,
+            UninstallGenericActPlugin,
             OpenPluginDirectory,
             thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
@@ -1040,6 +1041,7 @@ public sealed class Plugin : IDalamudPlugin
                     // A changed DLL needs fresh consent even when an older version was trusted.
                     configuration.DisabledActPluginIds.Add(installed.Manifest.Id);
                     configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
+                    configuration.ActPluginPermissions.Remove(installed.Manifest.Id);
                     SaveConfiguration();
                     SetPluginInstallStatus(CreatePermissionPrompt(installed));
                     ApplyActPermissionChanges();
@@ -1085,6 +1087,54 @@ public sealed class Plugin : IDalamudPlugin
         {
             pluginInstallStatus = status;
         }
+
+        QueuePluginInstallFeedback(status);
+    }
+
+    private void QueuePluginInstallFeedback(ThirdPartyPluginInstallStatus status)
+    {
+        var content = status.State switch
+        {
+            ThirdPartyPluginInstallState.AwaitingPermission =>
+                $"{status.DisplayName} 预检完成，请查看权限并决定是否启用。",
+            ThirdPartyPluginInstallState.Ready =>
+                $"{status.DisplayName} 已通过运行时预检并启用。",
+            ThirdPartyPluginInstallState.Removed =>
+                $"{status.DisplayName} 已删除，原文件保存在备份目录。",
+            ThirdPartyPluginInstallState.Failed =>
+                $"{status.DisplayName} 操作失败：{status.Detail}",
+            _ => null,
+        };
+        if (content is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = services.Framework.RunOnFrameworkThread(() =>
+            {
+                if (status.State == ThirdPartyPluginInstallState.AwaitingPermission)
+                {
+                    // Authorization is a blocking installation decision, so place its modal
+                    // in front of the user instead of leaving it below a scrollable page.
+                    settingsWindow.ShowExtensionsPage();
+                }
+
+                services.NotificationManager.AddNotification(new Notification
+                {
+                    Title = "第三方 ACT 插件",
+                    Content = content,
+                    Type = status.State == ThirdPartyPluginInstallState.Failed
+                        ? NotificationType.Error
+                        : NotificationType.Info,
+                });
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Could not display third-party ACT plugin install feedback.");
+        }
     }
 
     private static ThirdPartyPluginInstallStatus CreatePermissionPrompt(
@@ -1124,6 +1174,7 @@ public sealed class Plugin : IDalamudPlugin
 
         configuration.DisabledActPluginIds.Add(pending.PluginId);
         configuration.TrustedGenericActPluginIds.Remove(pending.PluginId);
+        configuration.ActPluginPermissions.Remove(pending.PluginId);
         SaveConfiguration();
         SetPluginInstallStatus(pending with
         {
@@ -1151,6 +1202,9 @@ public sealed class Plugin : IDalamudPlugin
         {
             try
             {
+                // Consent applies to this preflight's exact capability list, not grants
+                // retained from an older DLL or manifest with the same plugin id.
+                configuration.ActPluginPermissions.Remove(pending.PluginId);
                 foreach (var capability in pending.Capabilities)
                 {
                     configuration.SetActCapability(pending.PluginId, capability, true);
@@ -1172,17 +1226,18 @@ public sealed class Plugin : IDalamudPlugin
                     await genericHostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
                     await genericHostSupervisor.WaitForPluginStartupAsync(timeout.Token)
                         .ConfigureAwait(false);
-                    var initStage = genericHostSupervisor.Snapshot.PluginStages
-                        .LastOrDefault(stage =>
-                            string.Equals(stage.PluginId, pending.PluginId, StringComparison.OrdinalIgnoreCase) &&
-                            string.Equals(stage.Stage, "InitPlugin", StringComparison.OrdinalIgnoreCase));
-                    if (initStage is null || !string.Equals(
+                    var initStage = await genericHostSupervisor.WaitForPluginStageAsync(
+                            pending.PluginId,
+                            "InitPlugin",
+                            timeout.Token)
+                        .ConfigureAwait(false);
+                    if (!string.Equals(
                             initStage.State,
                             "success",
                             StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidOperationException(
-                            initStage?.Detail ?? "通用 Host 未报告插件初始化成功。");
+                            initStage.Detail ?? "通用 Host 未报告插件初始化成功。");
                     }
                 }
                 finally
@@ -1235,6 +1290,79 @@ public sealed class Plugin : IDalamudPlugin
                     Detail = $"运行时预检失败，插件已重新禁用：{ex.GetBaseException().Message}{cleanupDetail}",
                 });
                 logger.Error(ex, $"Generic ACT plugin runtime preflight failed: {pending.PluginId}.");
+            }
+        });
+    }
+
+    private void UninstallGenericActPlugin(string pluginId)
+    {
+        var installed = packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .FirstOrDefault(plugin => string.Equals(
+                plugin.Manifest.Id,
+                pluginId,
+                StringComparison.OrdinalIgnoreCase));
+        if (installed is null ||
+            ActPluginPackageInstaller.IsSpecializedPluginId(installed.Manifest.Id))
+        {
+            return;
+        }
+
+        SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
+            ThirdPartyPluginInstallState.Removing,
+            installed.Manifest.Name,
+            installed.Manifest.Id,
+            installed.Manifest.Version,
+            Detail: "正在安全停止通用 Host 并删除插件。"));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                string? backupDirectory;
+                await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                    {
+                        await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    }
+
+                    backupDirectory = await packageInstaller.UninstallAsync(
+                            installed.Manifest.Id,
+                            timeout.Token)
+                        .ConfigureAwait(false);
+                    configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
+                    configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
+                    configuration.ActPluginPermissions.Remove(installed.Manifest.Id);
+                    SaveConfiguration();
+                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    hostTopologyLock.Release();
+                }
+
+                SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
+                    ThirdPartyPluginInstallState.Removed,
+                    installed.Manifest.Name,
+                    installed.Manifest.Id,
+                    installed.Manifest.Version,
+                    Detail: backupDirectory is null
+                        ? "插件目录已不存在，相关授权记录已清理。"
+                        : "插件已从扩展列表移除，原文件保存在插件备份目录。"));
+                logger.Information(
+                    $"Uninstalled generic ACT plugin {installed.Manifest.Id}; backup={backupDirectory ?? "none"}.");
+            }
+            catch (Exception ex)
+            {
+                SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
+                    ThirdPartyPluginInstallState.Failed,
+                    installed.Manifest.Name,
+                    installed.Manifest.Id,
+                    installed.Manifest.Version,
+                    Detail: $"删除失败：{ex.GetBaseException().Message}"));
+                logger.Error(ex, $"Could not uninstall generic ACT plugin {installed.Manifest.Id}.");
             }
         });
     }
@@ -2433,11 +2561,23 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OnMatchaLogLineRequested(object? sender, HostMatchaLogLine logLine)
-        => hostSupervisor.PublishLog(
-            DateTimeOffset.Now,
-            logLine.Line,
-            logLine.Line,
-            isImport: false);
+    {
+        try
+        {
+            _ = services.Framework.RunOnFrameworkThread(() =>
+            {
+                if (!actRuntime.InjectExternalPluginLogLine(logLine.Line))
+                {
+                    logger.Warning(
+                        "Matcha produced an overlay log line while the game-side ACT parser was stopped.");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Could not relay a Matcha log line to OverlayPlugin.");
+        }
+    }
 
     private void OnMatchaTtsRequested(object? sender, HostTtsRequest request)
     {

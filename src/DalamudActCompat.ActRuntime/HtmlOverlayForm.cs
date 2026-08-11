@@ -889,6 +889,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 if (inputProxy is not null)
                 {
                     inputProxy.MouseClick -= OnInputProxyMouseClick;
+                    inputProxy.MouseWheel -= OnInputProxyMouseWheel;
                     var inputRegion = inputProxy.Region;
                     inputProxy.Region = null;
                     inputRegion?.Dispose();
@@ -1738,6 +1739,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             Opacity = 0.01,
         };
         proxy.MouseClick += OnInputProxyMouseClick;
+        proxy.MouseWheel += OnInputProxyMouseWheel;
         return proxy;
     }
 
@@ -1952,6 +1954,39 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
     }
 
+    private async void OnInputProxyMouseWheel(object? sender, MouseEventArgs args)
+    {
+        if (settings?.IsClickThrough != false || inputProxy is null ||
+            webView?.CoreWebView2 is not { } core || interaction != OverlayInteraction.None)
+        {
+            return;
+        }
+
+        try
+        {
+            var viewportJson = await core.ExecuteScriptAsync(
+                "[window.innerWidth, window.innerHeight]");
+            var viewport = JsonSerializer.Deserialize<float[]>(viewportJson);
+            if (viewport is not [> 0, > 0])
+            {
+                return;
+            }
+
+            var point = CalculateBrowserInputPoint(
+                inputProxy.ClientSize,
+                new SizeF(viewport[0], viewport[1]),
+                args.Location);
+            await DispatchBrowserWheelEventAsync(core, point, args.Delta);
+        }
+        catch (Exception) when (disposing)
+        {
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, $"Failed to forward an input-proxy wheel event to {title}.");
+        }
+    }
+
     private static Task<string> DispatchBrowserMouseEventAsync(
         CoreWebView2 core,
         string type,
@@ -1969,6 +2004,22 @@ internal sealed class HtmlOverlayForm : IDisposable
                 button,
                 buttons,
                 clickCount,
+            }));
+
+    private static Task<string> DispatchBrowserWheelEventAsync(
+        CoreWebView2 core,
+        PointF point,
+        int windowsDelta)
+        => core.CallDevToolsProtocolMethodAsync(
+            "Input.dispatchMouseEvent",
+            JsonSerializer.Serialize(new
+            {
+                type = "mouseWheel",
+                x = point.X,
+                y = point.Y,
+                deltaX = 0,
+                // WinForms reports wheel-up as positive; Chromium uses negative Y for up.
+                deltaY = -windowsDelta,
             }));
 
     private void StartEditMonitor()

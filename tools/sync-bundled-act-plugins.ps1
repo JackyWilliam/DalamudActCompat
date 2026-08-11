@@ -173,9 +173,9 @@ if (-not (Test-Path -LiteralPath $silverPackage) -or
 # Matcha updates require a source-diff and license review, so sync only verifies
 # the audited local package instead of replacing it from an ephemeral artifact.
 $matchaPackage = Join-Path $destinationRoot "matcha/Cafe.Matcha-26.8.10.829-dact2.zip"
-$matchaPackageSha256 = "ac607e9f2f56726e6ccfb279f5e1265a6373c9b673e6f48c43d57306efb534c6"
+$matchaPackageSha256 = "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d"
 $matchaAssemblyPath = "Plugins/Cafe.Matcha/Cafe.Matcha.dll"
-$matchaAssemblySha256 = "13564df8f69c6c983c8c57f1a711ce128aff879eb2c32decba09ede9c906ea25"
+$matchaAssemblySha256 = "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64"
 if (-not (Test-Path -LiteralPath $matchaPackage) -or
     (Get-Sha256 $matchaPackage) -ne $matchaPackageSha256 -or
     (Get-ZipEntrySha256 $matchaPackage $matchaAssemblyPath) -ne $matchaAssemblySha256) {

@@ -89,13 +89,14 @@ index 4af89b2..e4ff7ca 100644
      }
  }
 diff --git a/Cafe.Matcha/Utils/Output.cs b/Cafe.Matcha/Utils/Output.cs
-index 865c135..bd51ef6 100644
+index 865c135..19adfd5 100644
 --- a/Cafe.Matcha/Utils/Output.cs
 +++ b/Cafe.Matcha/Utils/Output.cs
-@@ -21,6 +21,14 @@ namespace Cafe.Matcha.Utils
+@@ -20,6 +20,21 @@ namespace Cafe.Matcha.Utils
+         private static bool Compat => Matcha.Config.Instance.Logger.Compat;
 
          private static void SendNativeToast(string message)
-         {
++        {
 +            if (DactBridge.IsAvailable)
 +            {
 +                // DACT owns both non-blocking notification routes; never re-enter the
@@ -104,6 +105,13 @@ index 865c135..bd51ef6 100644
 +                return;
 +            }
 +
++            // Keep WinRT types out of the DACT entry method. The external Host can reject
++            // those types while JIT-compiling this method even when the bridge branch wins.
++            SendWindowsNativeToast(message);
++        }
++
++        private static void SendWindowsNativeToast(string message)
+         {
              Version currentVersion = Environment.OSVersion.Version;
              Version compareToVersion = new Version("6.2");
              if (currentVersion.CompareTo(compareToVersion) >= 0)
@@ -188,9 +196,24 @@ index 0000000..910a467
 +    {
 +        public const string ContractVersion = "2";
 +
-+        private static readonly Type BridgeType = Type.GetType(
-+            "DalamudActCompat.Host.HostPluginBridge, DalamudActCompat.Host",
-+            false);
++        private static readonly Type BridgeType = FindBridgeType();
++
++        private static Type FindBridgeType()
++        {
++            const string bridgeTypeName = "DalamudActCompat.Host.HostPluginBridge";
++            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
++            {
++                var bridgeType = assembly.GetType(bridgeTypeName, false);
++                if (bridgeType != null)
++                {
++                    // A plugin assembly loaded from a byte image cannot resolve the Host by
++                    // assembly-qualified name reliably, but the Host is already in this process.
++                    return bridgeType;
++                }
++            }
++
++            return Type.GetType($"{bridgeTypeName}, DalamudActCompat.Host", false);
++        }
 +
 +        public static bool IsAvailable => BridgeType != null;
 +

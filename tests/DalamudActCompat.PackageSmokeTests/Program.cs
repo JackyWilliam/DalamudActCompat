@@ -299,6 +299,19 @@ try
         ActPluginPackageInstaller.GetRequestedCapabilities(genericPlugin.Manifest)
             .Contains(ActCapability.ReadCombatLogs),
         "Generic plugin static preflight did not generate its baseline permission list.");
+    var removedGenericPlugin = await installer.UninstallAsync(
+        genericPlugin.Manifest.Id,
+        CancellationToken.None);
+    Assert(
+        removedGenericPlugin is not null &&
+        Directory.Exists(removedGenericPlugin) &&
+        !Directory.Exists(genericPlugin.InstallDirectory) &&
+        installer.Discover(new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+            .All(plugin => !string.Equals(
+                plugin.Manifest.Id,
+                genericPlugin.Manifest.Id,
+                StringComparison.OrdinalIgnoreCase)),
+        "A generic plugin uninstall was not removed from discovery or retained as a recoverable backup.");
 
     var unsafePackagePath = Path.Combine(testRoot, "unsafe.zip");
     using (var archive = ZipFile.Open(unsafePackagePath, ZipArchiveMode.Create))
@@ -2060,6 +2073,14 @@ static void ValidateControlCenterPresentation()
         !matchaNotifierSource.Contains("ShowBalloonTip", StringComparison.Ordinal) &&
         !silverNotifierSource.Contains("ShowBalloonTip", StringComparison.Ordinal),
         "Matcha or SilverDasher notification routing regressed to a transient shell balloon or stopped checking game focus.");
+    Assert(
+        controlCenterSource.Contains("GenericPermissionPopupId", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawGenericDeleteModal", StringComparison.Ordinal) &&
+        pluginSource.Contains("QueuePluginInstallFeedback", StringComparison.Ordinal) &&
+        pluginSource.Contains("InjectExternalPluginLogLine(logLine.Line)", StringComparison.Ordinal) &&
+        Regex.Matches(pluginSource, Regex.Escape("ActPluginPermissions.Remove")).Count >= 3 &&
+        hostSupervisorSource.Contains("WaitForPluginStageAsync", StringComparison.Ordinal),
+        "Generic plugin consent/uninstall feedback, exact permission replacement, startup-stage waiting, or Matcha overlay log relay is missing.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -2737,8 +2758,8 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.SourceUrl.EndsWith(
                 "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
                 StringComparison.Ordinal) &&
-            plugin.PackageSha256 == "ac607e9f2f56726e6ccfb279f5e1265a6373c9b673e6f48c43d57306efb534c6" &&
-            plugin.Sha256 == "13564df8f69c6c983c8c57f1a711ce128aff879eb2c32decba09ede9c906ea25" &&
+            plugin.PackageSha256 == "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d" &&
+            plugin.Sha256 == "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64" &&
             File.Exists(plugin.PackagePath)),
         "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
@@ -4011,6 +4032,14 @@ static void ValidateHtmlOverlayDefaults()
         "The HTML overlay runtime no longer exposes explicit window deletion.");
     Assert(
         typeof(SelfHostedActRuntime).GetMethod(
+            nameof(SelfHostedActRuntime.InjectExternalPluginLogLine),
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(string)],
+            null)?.ReturnType == typeof(bool),
+        "Host-generated plugin log lines can no longer re-enter the game-side OverlayPlugin pipeline.");
+    Assert(
+        typeof(SelfHostedActRuntime).GetMethod(
             nameof(SelfHostedActRuntime.ResetCactbotOverlayWindow),
             BindingFlags.Instance | BindingFlags.Public,
             null,
@@ -4025,6 +4054,14 @@ static void ValidateHtmlOverlayDefaults()
                 parameter.Name == "deleteHtmlOverlay" &&
                 parameter.ParameterType == typeof(Action<string>)),
         "The control center no longer exposes the created-overlay delete action.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "uninstallGenericPlugin" &&
+                parameter.ParameterType == typeof(Action<string>)),
+        "The control center no longer exposes the generic ACT plugin uninstall action.");
     Assert(
         typeof(ControlCenterWindow).GetConstructors()
             .Single()
@@ -4144,8 +4181,14 @@ static void ValidateHtmlOverlayDefaults()
         "HTML overlay editing mode did not disable click-through and locking together.");
     settings.SetEditing(false);
     Assert(
-        !settings.IsEditing && !settings.IsClickThrough && settings.IsLocked,
-        "Finishing HTML overlay editing did not lock the layout while preserving page input.");
+        !settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
+        "Finishing HTML overlay editing changed the user's unlocked interactive state.");
+    settings.SetEditing(true);
+    settings.SetLocked(true);
+    Assert(
+        !settings.IsEditing && settings.IsLocked && !settings.IsClickThrough,
+        "Locking an HTML overlay did not leave temporary editing mode cleanly.");
+    settings.SetLocked(false);
 
     settings.OpenOnStartup = true;
     settings.HasBeenOpened = true;
@@ -4158,6 +4201,7 @@ static void ValidateHtmlOverlayDefaults()
         serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.OpenOnStartup), StringComparison.Ordinal) &&
         serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.HasBeenOpened), StringComparison.Ordinal) &&
         !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsVisible), StringComparison.Ordinal) &&
+        !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsEditing), StringComparison.Ordinal) &&
         restoredOverlaySettings.OpenOnStartup &&
         restoredOverlaySettings.HasBeenOpened,
         "The overlay usage/startup state was not persisted independently of runtime visibility.");
@@ -4661,7 +4705,9 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         htmlOverlayFormSource.Contains("Opacity = 0.01", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Show(form)", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("proxy.MouseWheel += OnInputProxyMouseWheel", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("type = \"mouseWheel\"", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Region = nextRegion", StringComparison.Ordinal) &&
         inputRegionScript.Contains("ResizeObserver", StringComparison.Ordinal) &&
         inputRegionScript.Contains("MutationObserver", StringComparison.Ordinal) &&
@@ -4743,9 +4789,10 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         <html>
         <body style="margin:0;background:transparent">
           <div id="panel" style="position:absolute;left:20px;top:20px;width:200px;height:100px;
-                                 background:rgba(20,30,40,.9)">
+                                 overflow:auto;background:rgba(20,30,40,.9)">
             <button id="probe" style="position:absolute;left:20px;top:20px;width:120px;height:50px"
                     onclick="document.documentElement.dataset.clicked='true'">Click</button>
+            <div style="height:600px"></div>
           </div>
           <script>
             window.collapseProbe = () => {
@@ -4786,6 +4833,7 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                            new System.Drawing.Size(320, 200),
                            false,
                            log,
+                           null,
                            null,
                        ],
                        culture: null)
@@ -4922,6 +4970,35 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
 
         Assert(clicked, "A physical proxy click did not reach the live WebView2 button.");
 
+        var onMouseWheel = typeof(Control).GetMethod(
+                               "OnMouseWheel",
+                               BindingFlags.Instance | BindingFlags.NonPublic)
+                           ?? throw new InvalidOperationException(
+                               "The WinForms mouse-wheel dispatcher was not found.");
+        await InvokeControlAsync(liveProxy, () =>
+        {
+            onMouseWheel.Invoke(
+                liveProxy,
+                [new MouseEventArgs(MouseButtons.None, 0, 100, 65, -120)]);
+            return true;
+        });
+        var scrolled = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            scrolled = await ExecuteBrowserScriptAsync(
+                           liveWebView,
+                           "document.getElementById('panel').scrollTop") != "0";
+            if (scrolled)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(scrolled, "An input-proxy wheel event did not scroll the live WebView2 page.");
+
         await ExecuteBrowserScriptAsync(liveWebView, "window.collapseProbe(); true");
         var collapsedRegionReady = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
@@ -5029,16 +5106,16 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         });
         settings.SetEditing(false);
         applySettings.Invoke(instance, null);
-        var lockedRestoresContentRegion = false;
+        var normalInteractionRestoresContentRegion = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
-            var lockedWindow = await WindowAtProxyPointAsync(
+            var interactiveWindow = await WindowAtProxyPointAsync(
                 liveProxy,
                 new System.Drawing.Point(100, 65));
-            lockedRestoresContentRegion = lockedWindow != proxyHandle &&
-                                          lockedWindow != hostHandle;
-            if (lockedRestoresContentRegion)
+            normalInteractionRestoresContentRegion = interactiveWindow != proxyHandle &&
+                                                      interactiveWindow != hostHandle;
+            if (normalInteractionRestoresContentRegion)
             {
                 break;
             }
@@ -5047,13 +5124,16 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(
-            lockedRestoresContentRegion,
-            "HTML overlay locking did not restore the collapsed content-shaped input region.");
+            normalInteractionRestoresContentRegion &&
+            !settings.IsLocked &&
+            !settings.IsClickThrough &&
+            !settings.IsEditing,
+            "Finishing HTML overlay editing did not restore transparent unlocked page interaction.");
         if (editChromeField.GetValue(instance) is Form hiddenChrome)
         {
             Assert(
                 !await InvokeControlAsync(hiddenChrome, () => hiddenChrome.Visible),
-                "The native HTML overlay edit boundary remained visible after locking.");
+                "The native HTML overlay edit boundary remained visible after editing finished.");
         }
 
         hide.Invoke(instance, null);

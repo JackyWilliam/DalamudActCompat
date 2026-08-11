@@ -30,7 +30,7 @@ dotnet msbuild Cafe.Matcha.sln -p:Configuration=Release -p:DactCompatBuild=true 
 ```
 
 The expected entry DLL SHA-256 is
-`13564DF8F69C6C983C8C57F1A711CE128AFF879EB2C32DECBA09EDE9C906EA25`.
+`F0EFA181486FFC2C773D0A2B422935E305EAAE32800E35BD398B8A37E92EFF64`.
 
 The complete package also keeps the unmodified upstream Actions DLL as
 `Plugins/Cafe.Matcha/upstream/Cafe.Matcha.Upstream.dll` (SHA-256

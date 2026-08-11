@@ -10,6 +10,8 @@ public enum ThirdPartyPluginInstallState
     StartingHost,
     Ready,
     Denied,
+    Removing,
+    Removed,
     Failed,
 }
 

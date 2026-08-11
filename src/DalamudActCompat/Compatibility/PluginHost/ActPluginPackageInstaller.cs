@@ -167,6 +167,56 @@ public sealed partial class ActPluginPackageInstaller
             .ToArray();
     }
 
+    public async Task<string?> UninstallAsync(
+        string pluginId,
+        CancellationToken cancellationToken)
+    {
+        if (!PluginIdPattern().IsMatch(pluginId))
+        {
+            throw new ArgumentException("Plugin id is invalid.", nameof(pluginId));
+        }
+
+        await installLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            paths.EnsureCreated();
+            var installDirectory = Path.GetFullPath(
+                Path.Combine(paths.ActPluginDirectory, pluginId));
+            var pluginRoot = Path.GetFullPath(paths.ActPluginDirectory)
+                             + Path.DirectorySeparatorChar;
+            if (!installDirectory.StartsWith(
+                    pluginRoot,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !Directory.Exists(installDirectory))
+            {
+                return null;
+            }
+
+            var manifest = ReadManifest(installDirectory);
+            ValidateManifest(manifest, installDirectory);
+            if (!string.Equals(
+                    manifest.Id,
+                    pluginId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "Plugin directory and manifest ids do not match.");
+            }
+
+            var backupDirectory = Path.Combine(
+                paths.PluginBackupDirectory,
+                $"{manifest.Id}-removed-{DateTimeOffset.Now:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}");
+            // Moving instead of deleting keeps an explicit user uninstall recoverable while
+            // immediately removing the package from discovery and Host startup.
+            Directory.Move(installDirectory, backupDirectory);
+            return backupDirectory;
+        }
+        finally
+        {
+            installLock.Release();
+        }
+    }
+
     public static IReadOnlyList<ActCapability> GetRequestedCapabilities(
         ActPluginManifest manifest)
         => (manifest.RequestedCapabilities ?? [])

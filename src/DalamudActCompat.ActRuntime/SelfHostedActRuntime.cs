@@ -209,6 +209,19 @@ public sealed class SelfHostedActRuntime : IDisposable
         return true;
     }
 
+    public bool InjectExternalPluginLogLine(string line)
+    {
+        if (!IsParserRunning || string.IsNullOrWhiteSpace(line))
+        {
+            return false;
+        }
+
+        // Host-generated ACT lines must re-enter the game-side ACT event pipeline so
+        // OverlayPlugin subscribers see the same LogLine events as native ACT overlays.
+        ActGlobals.oFormActMain.ParseRawLogLine(false, DateTime.Now, line);
+        return true;
+    }
+
     public IReadOnlyList<ActOverlayTemplate> OverlayTemplates => overlayTemplates;
 
     public bool ApplyOverlayWindowSettings(string name)

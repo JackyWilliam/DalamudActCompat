@@ -31,8 +31,9 @@ public sealed class HtmlOverlayWindowSettings
 
     public bool IsLocked { get; set; } = true;
 
-    public bool IsEditing
-        => !IsClickThrough && !IsLocked;
+    [System.Text.Json.Serialization.JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
+    public bool IsEditing { get; private set; }
 
     public float ZoomFactor { get; set; } = 1.0f;
 
@@ -60,16 +61,34 @@ public sealed class HtmlOverlayWindowSettings
 
     public void SetEditing(bool editing)
     {
+        IsEditing = editing;
         if (editing)
         {
+            // Positioning needs both browser input and native drag handling. Keep this
+            // temporary mode separate from the user's normal lock/click-through choices.
             IsClickThrough = false;
             IsLocked = false;
-            return;
         }
+    }
 
-        // Keep browser input enabled after positioning. Users can explicitly
-        // enable click-through when they want mouse input to reach the game.
-        IsLocked = true;
+    public void SetClickThrough(bool clickThrough)
+    {
+        IsClickThrough = clickThrough;
+        if (clickThrough)
+        {
+            // An input-transparent window cannot also expose native edit gestures.
+            IsEditing = false;
+        }
+    }
+
+    public void SetLocked(bool locked)
+    {
+        IsLocked = locked;
+        if (locked)
+        {
+            // Locking is a user preference, while edit mode is only a temporary tool.
+            IsEditing = false;
+        }
     }
 
     public void ResetConnectionDetection()
@@ -84,6 +103,7 @@ public sealed class HtmlOverlayWindowSettings
         IsVisible = false;
         OpenOnStartup = false;
         HasBeenOpened = false;
+        IsEditing = false;
         IsClickThrough = true;
         IsLocked = true;
         ZoomFactor = 1.0f;
