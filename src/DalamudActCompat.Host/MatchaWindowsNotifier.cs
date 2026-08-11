@@ -2,23 +2,21 @@ using System.Windows.Forms;
 
 namespace DalamudActCompat.Host;
 
-internal sealed class SilverDasherWindowsNotifier : IDisposable
+internal sealed class MatchaWindowsNotifier : IDisposable
 {
-    private const string NotificationTitle = "银山雀儿 / SilverDasher";
+    private const string NotificationTitle = "抹茶 / Cafe.Matcha";
     private readonly Control dispatcher;
     private readonly Func<bool> isGameForeground;
     private readonly WindowsNotificationCenter notificationCenter = new();
     private int disposed;
 
-    public SilverDasherWindowsNotifier(
-        Control dispatcher,
-        Func<bool>? isGameForeground = null)
+    public MatchaWindowsNotifier(Control dispatcher, Func<bool>? isGameForeground = null)
     {
         this.dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         this.isGameForeground = isGameForeground ?? HostPluginBridge.IsGameForeground;
     }
 
-    public bool TryShow(string message, string detail)
+    public bool TryShow(string message)
     {
         if (Volatile.Read(ref disposed) != 0 ||
             dispatcher.IsDisposed ||
@@ -33,15 +31,12 @@ internal sealed class SilverDasherWindowsNotifier : IDisposable
         {
             return dispatcher.InvokeRequired
                 ? (bool)dispatcher.Invoke(
-                    (Func<bool>)(() => notificationCenter.TryShow(
-                        NotificationTitle,
-                        message,
-                        detail)))
-                : notificationCenter.TryShow(NotificationTitle, message, detail);
+                    (Func<bool>)(() => notificationCenter.TryShow(NotificationTitle, message)))
+                : notificationCenter.TryShow(NotificationTitle, message);
         }
         catch (Exception ex)
         {
-            HostPluginBridge.ReportException("silverdasher", "Windows notification", ex);
+            HostPluginBridge.ReportException("matcha", "Windows notification", ex);
             return false;
         }
     }

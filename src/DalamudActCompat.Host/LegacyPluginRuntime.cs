@@ -17,6 +17,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private readonly string configRoot;
     private readonly HashSet<string> allowedPluginIds;
     private readonly bool suppressTtsOutput;
+    private readonly bool matchaOnly;
+    private readonly bool genericOnly;
     private readonly List<LegacyPluginHandle> plugins = [];
     private readonly ConcurrentDictionary<string, HostPluginStage> stages =
         new(StringComparer.OrdinalIgnoreCase);
@@ -27,6 +29,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private FFXIV_ACT_Plugin.FFXIV_ACT_Plugin? ffxivBridge;
     private SilverDasherDataSubscription? silverDasherSubscription;
     private SilverDasherWindowsNotifier? silverDasherWindowsNotifier;
+    private MatchaDataSubscription? matchaSubscription;
+    private MatchaWindowsNotifier? matchaWindowsNotifier;
     private long acceptedLogLines;
     private bool disposed;
 
@@ -41,6 +45,43 @@ internal sealed class LegacyPluginRuntime : IDisposable
         this.allowedPluginIds = allowedPluginIds.ToHashSet(
             StringComparer.OrdinalIgnoreCase);
         this.suppressTtsOutput = suppressTtsOutput;
+        matchaOnly = this.allowedPluginIds.SetEquals(["matcha"]);
+        genericOnly = this.allowedPluginIds.Count > 0 && this.allowedPluginIds.All(
+            static id => id is not (
+                "cactbotself" or "postnamazu" or "act.foxtts" or
+                "triggernometry" or "silverdasher" or "matcha"));
+        if (matchaOnly)
+        {
+            SetStage("matcha", "ACT Host", "pending", "Waiting for the dedicated ACT UI host.");
+            SetStage("matcha", "Host IPC", "pending", "Waiting for the dedicated game-side bridge.");
+            SetStage("matcha", "FFXIV_ACT_Plugin discovery", "pending", "Waiting for the Matcha-only facade.");
+            SetStage("matcha", "InitPlugin", "pending", "Waiting for the hash-pinned assembly.");
+            SetStage("matcha", "Bidirectional network", "pending", "Waiting for isolated RX/TX queues.");
+            SetStage("matcha", "Unload test", "pending", "Dedicated Host is still running.");
+            return;
+        }
+
+        if (genericOnly)
+        {
+            SetStage("act-host", "ACT Host", "pending", "Waiting for the generic ACT UI host.");
+            SetStage("act-host", "Host IPC", "pending", "Waiting for the game-side bridge.");
+            SetStage(
+                "act-host",
+                "FFXIV_ACT_Plugin discovery",
+                "pending",
+                "Waiting for the shared read-only FFXIV facade.");
+            foreach (var pluginId in this.allowedPluginIds)
+            {
+                SetStage(
+                    pluginId,
+                    "InitPlugin",
+                    "pending",
+                    "Waiting for explicit-consent generic Host initialization.");
+            }
+
+            return;
+        }
+
         SetStage("postnamazu", "Assembly load", "pending", "Waiting for Host startup.");
         SetStage("postnamazu", "InitPlugin", "pending", "Waiting for assembly load.");
         SetStage("postnamazu", "ACT Host", "pending", "Waiting for ACT UI host.");
@@ -149,7 +190,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         Directory.CreateDirectory(pluginRoot);
         Directory.CreateDirectory(configRoot);
         Directory.CreateDirectory(Path.Combine(configRoot, "Config"));
-        if (FoxTtsConfigurationDefaults.Ensure(configRoot))
+        if (!matchaOnly && !genericOnly && FoxTtsConfigurationDefaults.Ensure(configRoot))
         {
             Console.WriteLine(
                 "Created ACT.FoxTTS defaults with Cafe TTS Pro selected; existing user settings are never overwritten.");
@@ -171,11 +212,36 @@ internal sealed class LegacyPluginRuntime : IDisposable
             ExceptionDispatchInfo.Capture(startupFailure).Throw();
         }
 
-        SetStage("postnamazu", "ACT Host", "success", "External STA ACT UI host is active.");
-        SetStage("postnamazu", "Host IPC", "success", "Versioned named-pipe bridge is connected.");
-        SetStage("postnamazu", "Log system", "success", "Bounded IPC log batches route through FormActMain.");
+        var stagePluginId = matchaOnly
+            ? "matcha"
+            : genericOnly
+                ? "act-host"
+                : "postnamazu";
+        SetStage(stagePluginId, "ACT Host", "success", "External STA ACT UI host is active.");
+        SetStage(stagePluginId, "Host IPC", "success", "Versioned named-pipe bridge is connected.");
 
         RegisterFfxivPluginIdentity();
+        if (matchaOnly)
+        {
+            actMain!.BeforeLogLineRead += OnMatchaLogLine;
+            actMain.PlayTtsMethod = HostPluginBridge.SendMatchaTts;
+            LoadManifestPlugins();
+            SetStage(
+                "matcha",
+                "Bidirectional network",
+                plugins.Any(plugin => plugin.Id == "matcha") ? "success" : "failed",
+                "Received and sent packets use a Matcha-only bounded dispatcher in a separate process.");
+            return;
+        }
+        if (genericOnly)
+        {
+            LoadManifestPlugins();
+            HostPluginBridge.ConfigureTtsWriter(null);
+            actMain!.PlayTtsMethod = HostPluginBridge.SendGenericTts;
+            return;
+        }
+
+        SetStage("postnamazu", "Log system", "success", "Bounded IPC log batches route through FormActMain.");
         RegisterOverlayPluginIdentity();
         TryLoad(
             "triggernometry",
@@ -314,6 +380,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
         disposed = true;
         HostPluginBridge.ConfigureTtsWriter(null);
         HostPluginBridge.ConfigureSilverDasherNotificationWriter(null);
+        HostPluginBridge.ConfigureMatchaNotificationWriter(null);
+        if (matchaOnly && actMain is not null)
+        {
+            actMain.BeforeLogLineRead -= OnMatchaLogLine;
+        }
         for (var index = plugins.Count - 1; index >= 0; index--)
         {
             plugins[index].Dispose();
@@ -323,7 +394,16 @@ internal sealed class LegacyPluginRuntime : IDisposable
         HostPluginBridge.ConfigureSilverDasherSubscription(null);
         silverDasherSubscription?.Dispose();
         silverDasherSubscription = null;
-        SetStage("postnamazu", "Unload test", "success", "DeInitPlugin was requested without blocking FFXIV.");
+        matchaWindowsNotifier?.Dispose();
+        matchaWindowsNotifier = null;
+        HostPluginBridge.ClearMatchaContext();
+        matchaSubscription?.Dispose();
+        matchaSubscription = null;
+        SetStage(
+            matchaOnly ? "matcha" : "postnamazu",
+            "Unload test",
+            "success",
+            "DeInitPlugin was requested without blocking FFXIV.");
         plugins.Clear();
         var form = actMain;
         if (form is not null && form.IsHandleCreated)
@@ -398,7 +478,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
         ActGlobals.oFormActMain.ActPlugins.Add(
             new ActPluginData(new FileInfo(assemblyPath), ffxivBridge, tab, status));
         SetStage(
-            "postnamazu",
+            matchaOnly
+                ? "matcha"
+                : genericOnly
+                    ? "act-host"
+                    : "postnamazu",
             "FFXIV_ACT_Plugin discovery",
             "success",
             "Official plugin type identity is present with a read-only game-side entity repository.");
@@ -466,6 +550,10 @@ internal sealed class LegacyPluginRuntime : IDisposable
             {
                 PrepareSilverDasherContext(assemblyPath);
             }
+            else if (id == "matcha")
+            {
+                PrepareMatchaContext(assemblyPath);
+            }
 
             var handle = LegacyPluginHandle.Load(id, assemblyPath, entryType);
             plugins.Add(handle);
@@ -504,7 +592,23 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     id,
                     "Windows notifications",
                     "success",
-                    "SilverDasher uses the isolated Host Windows shell first and falls back to the existing game-side notification channel if unavailable.");
+                    "SilverDasher uses Dalamud while the game owns the foreground; otherwise it uses Windows Notification Center with a typed Dalamud fallback.");
+            }
+            else if (id == "matcha")
+            {
+                matchaWindowsNotifier = new MatchaWindowsNotifier(actMain!);
+                HostPluginBridge.ConfigureMatchaNotificationWriter(
+                    matchaWindowsNotifier.TryShow);
+                SetStage(
+                    id,
+                    "Dedicated process isolation",
+                    "success",
+                    "Matcha is the only third-party plugin allowed in this Host process.");
+                SetStage(
+                    id,
+                    "Windows notifications",
+                    "success",
+                    "Matcha uses Dalamud while the game owns the foreground; otherwise it uses Windows Notification Center with a typed Dalamud fallback.");
             }
         }
         catch (Exception ex)
@@ -543,6 +647,24 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
                 if (manifest.Id is "triggernometry" or "postnamazu")
                 {
+                    continue;
+                }
+
+                if (genericOnly && !allowedPluginIds.Contains(manifest.Id))
+                {
+                    // Untrusted manifests stay installed but must not influence the
+                    // shared generic Host's health or assembly-loading surface.
+                    continue;
+                }
+
+                var isMatcha = string.Equals(
+                    manifest.Id,
+                    "matcha",
+                    StringComparison.OrdinalIgnoreCase);
+                if (isMatcha != matchaOnly)
+                {
+                    // Matcha never enters the process shared by the existing extensions,
+                    // and the Matcha-only Host ignores every other third-party manifest.
                     continue;
                 }
 
@@ -606,6 +728,34 @@ internal sealed class LegacyPluginRuntime : IDisposable
         HostPluginBridge.ConfigureSilverDasherRoot(
             Path.GetDirectoryName(Path.GetFullPath(assemblyPath))!);
         HostPluginBridge.ConfigureSilverDasherSubscription(silverDasherSubscription);
+    }
+
+    private void PrepareMatchaContext(string assemblyPath)
+    {
+        if (ffxivBridge is null)
+        {
+            throw new InvalidOperationException(
+                "FFXIV_ACT_Plugin facade is unavailable for Matcha initialization.");
+        }
+
+        matchaSubscription ??= new MatchaDataSubscription();
+        ffxivBridge.GetType()
+            .GetProperty(
+                "DataSubscription",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(ffxivBridge, matchaSubscription);
+        HostPluginBridge.ConfigureMatchaContext(
+            Path.GetDirectoryName(Path.GetFullPath(assemblyPath))!,
+            configRoot,
+            matchaSubscription);
+    }
+
+    private static void OnMatchaLogLine(bool isImport, LogLineEventArgs args)
+    {
+        if (!isImport)
+        {
+            HostPluginBridge.RelayMatchaLogLine(args.logLine);
+        }
     }
 
     private void SetStage(
@@ -813,6 +963,8 @@ internal sealed class LegacyPluginHandle : IDisposable
                         ? LegacyAssemblyRewriter.LoadPostNamazu(assemblyPath, loadContext)
                         : id == "silverdasher"
                             ? LegacyAssemblyRewriter.LoadSilverDasher(assemblyPath, loadContext)
+                            : id == "matcha"
+                                ? LegacyAssemblyRewriter.LoadMatcha(assemblyPath, loadContext)
                             : loadContext.LoadFromAssemblyPath(assemblyPath);
                 var entryType = assembly.GetType(entryTypeName, throwOnError: true)!;
                 instance = Activator.CreateInstance(entryType)

@@ -16,6 +16,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private readonly HostIpcClient ipc;
     private readonly PluginLogger logger;
     private readonly Func<bool> silverDasherEventsEnabled;
+    private readonly Func<bool> matchaEventsEnabled;
     private readonly string hostExecutable;
     private readonly string pluginDirectory;
     private readonly string configDirectory;
@@ -23,6 +24,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private readonly ConcurrentQueue<HostLogEvent> pendingLogs = new();
     private readonly Channel<HostSilverDasherNetworkEvent> silverDasherNetworkEvents;
     private readonly Task silverDasherNetworkWorker;
+    private readonly Channel<MatchaNetworkDispatch> matchaNetworkEvents;
+    private readonly Task matchaNetworkWorker;
     private readonly Timer logFlushTimer;
     private readonly Queue<DateTimeOffset> restartHistory = new();
     private CancellationTokenSource lifetime = new();
@@ -31,6 +34,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private int pendingLogCount;
     private int logFlushActive;
     private long droppedPendingLogs;
+    private long droppedMatchaNetworkEvents;
     private int restartScheduled;
     private volatile bool manuallyStopped = true;
     private volatile HostSupervisorState state = HostSupervisorState.Stopped;
@@ -44,19 +48,24 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         string configDirectory,
         HostIpcClient ipc,
         PluginLogger logger,
-        Func<bool>? silverDasherEventsEnabled = null)
+        Func<bool>? silverDasherEventsEnabled = null,
+        Func<bool>? matchaEventsEnabled = null)
     {
         assets = new CompatibilityHostAssets(hostDirectory, logger);
         process = new CompatibilityHostProcess(logger);
         this.ipc = ipc;
         this.logger = logger;
         this.silverDasherEventsEnabled = silverDasherEventsEnabled ?? (static () => false);
+        this.matchaEventsEnabled = matchaEventsEnabled ?? (static () => false);
         hostExecutable = Path.Combine(hostDirectory, "DalamudActCompat.Host.exe");
         this.pluginDirectory = pluginDirectory;
         this.configDirectory = configDirectory;
         ipc.Faulted += OnIpcFaulted;
         ipc.CommandRequested += OnCommandRequested;
         ipc.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
+        ipc.MatchaNotificationRequested += OnMatchaNotificationRequested;
+        ipc.MatchaLogLineRequested += OnMatchaLogLineRequested;
+        ipc.MatchaTtsRequested += OnMatchaTtsRequested;
         logFlushTimer = new Timer(
             _ => FlushLogs(),
             null,
@@ -72,6 +81,16 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             });
         silverDasherNetworkWorker = Task.Run(
             () => FlushSilverDasherNetworkAsync(lifetime.Token));
+        matchaNetworkEvents = Channel.CreateBounded<MatchaNetworkDispatch>(
+            new BoundedChannelOptions(HostProtocol.MatchaNetworkQueueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.DropOldest,
+                AllowSynchronousContinuations = false,
+            });
+        matchaNetworkWorker = Task.Run(
+            () => FlushMatchaNetworkAsync(lifetime.Token));
     }
 
     public HostSupervisorSnapshot Snapshot
@@ -91,11 +110,21 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             ipc.HostHealthDetail,
             ipc.PluginHealth,
             ipc.Diagnostics,
-            ipc.PluginStages);
+            ipc.PluginStages)
+        {
+            MatchaNetworkQueueLength = matchaNetworkEvents.Reader.Count,
+            DroppedMatchaNetworkMessages = Interlocked.Read(ref droppedMatchaNetworkEvents),
+        };
 
     public event EventHandler<HostCommandInvocation>? CommandRequested;
 
     public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
+
+    public event EventHandler<HostMatchaNotification>? MatchaNotificationRequested;
+
+    public event EventHandler<HostMatchaLogLine>? MatchaLogLineRequested;
+
+    public event EventHandler<HostTtsRequest>? MatchaTtsRequested;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -131,6 +160,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             await process.StopAsync(cancellationToken).ConfigureAwait(false);
             ClearPendingLogs();
             ClearPendingSilverDasherNetwork();
+            ClearPendingMatchaNetwork();
             state = HostSupervisorState.Stopped;
         }
         finally
@@ -156,6 +186,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             await process.StopAsync(cancellationToken).ConfigureAwait(false);
             ClearPendingLogs();
             ClearPendingSilverDasherNetwork();
+            ClearPendingMatchaNetwork();
             state = HostSupervisorState.Stopped;
 
             manuallyStopped = false;
@@ -209,6 +240,12 @@ public sealed class ActHostSupervisor : IAsyncDisposable
            message.Length > 0 &&
            silverDasherNetworkEvents.Writer.TryWrite(
                new HostSilverDasherNetworkEvent(connection, epoch, message.ToArray()));
+
+    public bool PublishMatchaNetworkReceived(string connection, long epoch, byte[] message)
+        => PublishMatchaNetwork(sent: false, connection, epoch, message);
+
+    public bool PublishMatchaNetworkSent(string connection, long epoch, byte[] message)
+        => PublishMatchaNetwork(sent: true, connection, epoch, message);
 
     public void PublishEncounter(bool finished)
     {
@@ -273,9 +310,17 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     {
         lifetime.Cancel();
         silverDasherNetworkEvents.Writer.TryComplete();
+        matchaNetworkEvents.Writer.TryComplete();
         try
         {
             await silverDasherNetworkWorker.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        try
+        {
+            await matchaNetworkWorker.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -293,6 +338,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         ipc.Faulted -= OnIpcFaulted;
         ipc.CommandRequested -= OnCommandRequested;
         ipc.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
+        ipc.MatchaNotificationRequested -= OnMatchaNotificationRequested;
+        ipc.MatchaLogLineRequested -= OnMatchaLogLineRequested;
+        ipc.MatchaTtsRequested -= OnMatchaTtsRequested;
         logFlushTimer.Dispose();
         await ipc.DisposeAsync().ConfigureAwait(false);
         await process.DisposeAsync().ConfigureAwait(false);
@@ -320,6 +368,125 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private void ClearPendingSilverDasherNetwork()
     {
         while (silverDasherNetworkEvents.Reader.TryRead(out _))
+        {
+        }
+    }
+
+    public async Task WaitForPluginStartupAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (state is HostSupervisorState.Faulted or HostSupervisorState.CircuitOpen or
+                HostSupervisorState.Stopped)
+            {
+                throw new InvalidOperationException(
+                    $"ACT Host stopped before plugin startup completed: {state}.");
+            }
+
+            var health = ipc.HostHealthState;
+            if (health is "plugins.ready" or "plugins.degraded")
+            {
+                return;
+            }
+
+            if (health == "plugins.failed")
+            {
+                throw new InvalidOperationException(
+                    $"ACT Host plugin startup failed: {ipc.HostHealthDetail}");
+            }
+
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<HostPluginStage> WaitForPluginStageAsync(
+        string pluginId,
+        string stageName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stageName);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (state is HostSupervisorState.Faulted or HostSupervisorState.CircuitOpen or
+                HostSupervisorState.Stopped)
+            {
+                throw new InvalidOperationException(
+                    $"ACT Host stopped before {pluginId}/{stageName} was reported: {state}.");
+            }
+
+            var stage = ipc.PluginStages.LastOrDefault(candidate =>
+                string.Equals(candidate.PluginId, pluginId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.Stage, stageName, StringComparison.OrdinalIgnoreCase));
+            if (stage is not null)
+            {
+                return stage;
+            }
+
+            if (ipc.HostHealthState == "plugins.failed")
+            {
+                throw new InvalidOperationException(
+                    $"ACT Host plugin startup failed: {ipc.HostHealthDetail}");
+            }
+
+            // Health is sent immediately, while per-plugin stages arrive on the next
+            // heartbeat. Waiting here prevents every generic plugin from being rejected
+            // merely because those two valid messages crossed the process boundary apart.
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private bool PublishMatchaNetwork(
+        bool sent,
+        string connection,
+        long epoch,
+        byte[] message)
+    {
+        if (!matchaEventsEnabled() ||
+            state != HostSupervisorState.Running ||
+            message.Length == 0)
+        {
+            return false;
+        }
+
+        if (matchaNetworkEvents.Reader.Count >= HostProtocol.MatchaNetworkQueueCapacity)
+        {
+            Interlocked.Increment(ref droppedMatchaNetworkEvents);
+        }
+
+        return matchaNetworkEvents.Writer.TryWrite(
+            new MatchaNetworkDispatch(
+                sent,
+                new HostMatchaNetworkEvent(connection, epoch, message.ToArray())));
+    }
+
+    private async Task FlushMatchaNetworkAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var item in matchaNetworkEvents.Reader.ReadAllAsync(
+                           cancellationToken).ConfigureAwait(false))
+        {
+            if (state != HostSupervisorState.Running || !matchaEventsEnabled())
+            {
+                continue;
+            }
+
+            if (!ipc.TryEnqueue(
+                    item.Sent
+                        ? HostMessageTypes.MatchaNetworkSent
+                        : HostMessageTypes.MatchaNetworkReceived,
+                    HostMessagePriority.Data,
+                    item.Event))
+            {
+                Interlocked.Increment(ref droppedMatchaNetworkEvents);
+            }
+        }
+    }
+
+    private void ClearPendingMatchaNetwork()
+    {
+        while (matchaNetworkEvents.Reader.TryRead(out _))
         {
         }
     }
@@ -434,6 +601,21 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         object? sender,
         HostSilverDasherNotification notification)
         => SilverDasherNotificationRequested?.Invoke(this, notification);
+
+    private void OnMatchaNotificationRequested(
+        object? sender,
+        HostMatchaNotification notification)
+        => MatchaNotificationRequested?.Invoke(this, notification);
+
+    private void OnMatchaLogLineRequested(
+        object? sender,
+        HostMatchaLogLine logLine)
+        => MatchaLogLineRequested?.Invoke(this, logLine);
+
+    private void OnMatchaTtsRequested(
+        object? sender,
+        HostTtsRequest request)
+        => MatchaTtsRequested?.Invoke(this, request);
 
     private async Task RestartAfterFaultAsync(Exception exception)
     {
@@ -559,6 +741,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             HostMessagePriority.SilverDasherState,
             zone);
     }
+
+    private sealed record MatchaNetworkDispatch(
+        bool Sent,
+        HostMatchaNetworkEvent Event);
 }
 
 public enum HostSupervisorState
@@ -587,4 +773,9 @@ public sealed record HostSupervisorSnapshot(
     string HealthDetail,
     IReadOnlyList<HostPluginHealth> PluginHealth,
     IReadOnlyList<HostDiagnostic> Diagnostics,
-    IReadOnlyList<HostPluginStage> PluginStages);
+    IReadOnlyList<HostPluginStage> PluginStages)
+{
+    public int MatchaNetworkQueueLength { get; init; }
+
+    public long DroppedMatchaNetworkMessages { get; init; }
+}

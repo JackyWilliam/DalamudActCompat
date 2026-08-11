@@ -34,6 +34,12 @@ public sealed class ControlCenterWindow : Window
         Diagnostics,
     }
 
+    private enum HtmlOverlayCreatorPage
+    {
+        Template,
+        Url,
+    }
+
     private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
@@ -43,6 +49,12 @@ public sealed class ControlCenterWindow : Window
     private const int OpenAnimationMilliseconds = 180;
     private const int CloseAnimationMilliseconds = 160;
     private const int ResetConfirmationMilliseconds = 10_000;
+    private const string GenericPermissionPopupId =
+        "第三方 ACT 插件授权###DalamudActCompatGenericPermission";
+    private const string GenericDeletePopupId =
+        "删除第三方 ACT 插件###DalamudActCompatGenericDelete";
+    private const string PluginInstallFailurePopupId =
+        "第三方插件导入失败###DalamudActCompatPluginInstallFailure";
     private const string ResetEncounterPopupId = "重置当前战斗###DalamudActCompatResetEncounter";
 
     private readonly PluginConfiguration configuration;
@@ -52,6 +64,8 @@ public sealed class ControlCenterWindow : Window
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
+    private readonly ISharedImmediateTexture helpTexture;
+    private readonly Action openHelp;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
     private readonly Action<bool> setMeterVisible;
@@ -60,6 +74,12 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<bool> isStatusVisible;
     private readonly Action<bool> setStatusVisible;
     private readonly Action selectPluginPackage;
+    private readonly Func<ThirdPartyPluginInstallStatus> getPluginInstallStatus;
+    private readonly Action approvePendingPlugin;
+    private readonly Action denyPendingPlugin;
+    private readonly Action<string> requestPluginAuthorization;
+    private readonly Action<string> uninstallGenericPlugin;
+    private readonly Action dismissPluginInstallFailure;
     private readonly Action openPluginDirectory;
     private readonly Action openBundledPluginNotice;
     private readonly Action checkBundledPluginUpdates;
@@ -81,6 +101,7 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<Task<string>> factoryReset;
     private readonly Action resetCurrentEncounter;
     private Page selectedPage;
+    private HtmlOverlayCreatorPage selectedHtmlOverlayCreatorPage;
     private ParserStatus parserStatus;
     private string? selectedCreatedOverlay;
     private string? selectedUsedCactbotOverlay;
@@ -89,6 +110,9 @@ public sealed class ControlCenterWindow : Window
     private string customOverlayUrl = string.Empty;
     private string? customOverlayFeedback;
     private bool customOverlayFeedbackIsError;
+    private string? overlayBeingRenamed;
+    private string overlayRenameValue = string.Empty;
+    private string? overlayRenameFeedback;
     private string? diagnosticCopyFeedback;
     private bool diagnosticCopyFeedbackIsError;
     private string? combatLogFolderFeedback;
@@ -99,6 +123,12 @@ public sealed class ControlCenterWindow : Window
     private long resetEncounterConfirmationExpiresAt;
     private bool confirmFactoryReset;
     private string? factoryResetResult;
+    private string? openedGenericPermissionKey;
+    private ThirdPartyPluginInstallStatus? openedPluginFailureStatus;
+    private bool pluginFailureLogCopied;
+    private string? genericPluginToDeleteId;
+    private string? genericPluginToDeleteName;
+    private bool genericDeletePopupRequested;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -108,6 +138,8 @@ public sealed class ControlCenterWindow : Window
         FflogsEstimateService fflogsEstimateService,
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
+        ISharedImmediateTexture helpTexture,
+        Action openHelp,
         Action saveConfiguration,
         Action applyPermissionChanges,
         Action<bool> setMeterVisible,
@@ -116,6 +148,12 @@ public sealed class ControlCenterWindow : Window
         Func<bool> isStatusVisible,
         Action<bool> setStatusVisible,
         Action selectPluginPackage,
+        Func<ThirdPartyPluginInstallStatus> getPluginInstallStatus,
+        Action approvePendingPlugin,
+        Action denyPendingPlugin,
+        Action<string> requestPluginAuthorization,
+        Action<string> uninstallGenericPlugin,
+        Action dismissPluginInstallFailure,
         Action openPluginDirectory,
         Action openBundledPluginNotice,
         Action checkBundledPluginUpdates,
@@ -145,6 +183,8 @@ public sealed class ControlCenterWindow : Window
         this.fflogsEstimateService = fflogsEstimateService;
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
+        this.helpTexture = helpTexture;
+        this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
         this.setMeterVisible = setMeterVisible;
@@ -153,6 +193,12 @@ public sealed class ControlCenterWindow : Window
         this.isStatusVisible = isStatusVisible;
         this.setStatusVisible = setStatusVisible;
         this.selectPluginPackage = selectPluginPackage;
+        this.getPluginInstallStatus = getPluginInstallStatus;
+        this.approvePendingPlugin = approvePendingPlugin;
+        this.denyPendingPlugin = denyPendingPlugin;
+        this.requestPluginAuthorization = requestPluginAuthorization;
+        this.uninstallGenericPlugin = uninstallGenericPlugin;
+        this.dismissPluginInstallFailure = dismissPluginInstallFailure;
         this.openPluginDirectory = openPluginDirectory;
         this.openBundledPluginNotice = openBundledPluginNotice;
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
@@ -216,6 +262,12 @@ public sealed class ControlCenterWindow : Window
         {
             ShowAnimated();
         }
+    }
+
+    public void ShowExtensionsPage()
+    {
+        selectedPage = Page.Extensions;
+        ShowAnimated();
     }
 
     public override void PreDraw()
@@ -377,8 +429,23 @@ public sealed class ControlCenterWindow : Window
             text.Get("常用状态和入口集中在这里。", "Status and common actions in one place."),
             showDivider: false);
 
-        var parserCardHeight = string.IsNullOrWhiteSpace(parserStatus.Detail) ? 108 : 142;
-        if (BrandedWindowChrome.BeginGoldCard("overview-parser-card", parserCardHeight))
+        var cardContentWidth = Math.Max(
+            1,
+            ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().WindowPadding.X * 2));
+        var parserMessageHeight = ImGui.CalcTextSize(
+            parserStatus.Message,
+            false,
+            cardContentWidth).Y;
+        var parserCardHeight =
+            (ImGui.GetStyle().WindowPadding.Y * 2) +
+            (ImGui.GetTextLineHeightWithSpacing() *
+             (string.IsNullOrWhiteSpace(parserStatus.Detail) ? 2 : 3)) +
+            parserMessageHeight +
+            ImGui.GetStyle().ItemSpacing.Y;
+        if (BrandedWindowChrome.BeginGoldCard(
+                "overview-parser-card",
+                parserCardHeight,
+                allowScrolling: false))
         {
             ImGui.TextColored(Gold, text.Get("解析器", "Parser"));
             ImGui.TextColored(IceBlue, LocalizeState(parserStatus.State));
@@ -391,7 +458,18 @@ public sealed class ControlCenterWindow : Window
         BrandedWindowChrome.EndGoldCard();
 
         ImGui.Spacing();
-        if (BrandedWindowChrome.BeginGoldCard("overview-quick-actions-card", 140))
+        var quickActionsCardHeight =
+            (ImGui.GetStyle().WindowPadding.Y * 2) +
+            ImGui.GetTextLineHeightWithSpacing() +
+            72 +
+            (ImGui.GetStyle().ItemSpacing.Y * 3) +
+            (string.IsNullOrWhiteSpace(combatLogFolderFeedback)
+                ? 0
+                : ImGui.GetTextLineHeightWithSpacing());
+        if (BrandedWindowChrome.BeginGoldCard(
+                "overview-quick-actions-card",
+                quickActionsCardHeight,
+                allowScrolling: false))
         {
             ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
             var meterVisible = configuration.Meter.IsVisible;
@@ -445,7 +523,19 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.Spacing();
         var changed = false;
-        if (BrandedWindowChrome.BeginGoldCard("overview-general-card", 142))
+        var generalHint = text.Get(
+            "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
+            "Quick button: left settings, right Combat Meter, hold middle mouse to move.");
+        var generalCardHeight =
+            (ImGui.GetStyle().WindowPadding.Y * 2) +
+            ImGui.GetTextLineHeightWithSpacing() +
+            (ImGui.GetFrameHeightWithSpacing() * 3) +
+            ImGui.CalcTextSize(generalHint, false, cardContentWidth).Y +
+            (ImGui.GetStyle().ItemSpacing.Y * 2);
+        if (BrandedWindowChrome.BeginGoldCard(
+                "overview-general-card",
+                generalCardHeight,
+                allowScrolling: false))
         {
             ImGui.TextColored(Gold, text.Get("基础设置", "General"));
             changed |= Checkbox(
@@ -460,12 +550,54 @@ public sealed class ControlCenterWindow : Window
                 text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
                 configuration.ShowLauncherButton,
                 value => configuration.ShowLauncherButton = value);
-            ImGui.TextDisabled(text.Get(
-                "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
-                "Quick button: left settings, right Combat Meter, hold middle mouse to move."));
+            ImGui.TextDisabled(generalHint);
         }
         BrandedWindowChrome.EndGoldCard();
+
+        ImGui.Spacing();
+        DrawHelpEntry();
         return changed;
+    }
+
+    private void DrawHelpEntry()
+    {
+        var label = text.Get("需要更多帮助吗？", "Need more help?");
+        var labelSize = ImGui.CalcTextSize(label);
+        var wrap = helpTexture.GetWrapOrEmpty();
+        var hasIcon = wrap.Handle.Handle != 0 && wrap.Width > 0 && wrap.Height > 0;
+        var iconHeight = ImGui.GetTextLineHeight();
+        var iconWidth = hasIcon
+            ? iconHeight * wrap.Width / wrap.Height
+            : 0;
+        var iconSpacing = hasIcon ? 8 : 0;
+        var entrySize = new Vector2(
+            iconWidth + iconSpacing + labelSize.X,
+            Math.Max(iconHeight, labelSize.Y));
+        if (ImGui.InvisibleButton(
+                "overview-help-entry",
+                entrySize))
+        {
+            openHelp();
+        }
+
+        var itemMin = ImGui.GetItemRectMin();
+        var hovered = ImGui.IsItemHovered();
+        var drawList = ImGui.GetWindowDrawList();
+        if (hasIcon)
+        {
+            var iconTop = itemMin.Y + ((entrySize.Y - iconHeight) * 0.5f);
+            drawList.AddImage(
+                wrap.Handle,
+                new Vector2(itemMin.X, iconTop),
+                new Vector2(itemMin.X + iconWidth, iconTop + iconHeight));
+        }
+
+        drawList.AddText(
+            new Vector2(
+                itemMin.X + iconWidth + iconSpacing,
+                itemMin.Y + ((entrySize.Y - labelSize.Y) * 0.5f)),
+            ImGui.GetColorU32(hovered ? IceBlue : new Vector4(0.82f, 0.86f, 0.92f, 1)),
+            label);
     }
 
     private void OpenCombatLogDirectoryForUpload()
@@ -525,12 +657,25 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        if (ImGui.BeginChild("meter-display-controls", new Vector2(-1, 270), true))
+        var meterDisplayDescription = text.Get(
+            "每名玩家固定一行；排序仅支持 DPS 与 HPS。",
+            "Each player uses one row; sorting supports only DPS and HPS.");
+        var meterDisplayHint = text.Get(
+            "每名玩家固定显示当前 DPS/HPS、占比、暴击率、直暴率和死亡数。",
+            "Every player always shows current DPS/HPS, percentage, critical rate, critical-direct rate, and deaths.");
+        var meterDisplayHeight =
+            (ImGui.GetStyle().WindowPadding.Y * 2) +
+            (ImGui.GetFrameHeightWithSpacing() * 8) +
+            (ImGui.GetTextLineHeightWithSpacing() * 4) +
+            (ImGui.GetStyle().ItemSpacing.Y * 3);
+        if (ImGui.BeginChild(
+                "meter-display-controls",
+                new Vector2(-1, meterDisplayHeight),
+                true,
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             ImGui.TextColored(IceBlue, text.Get("战斗统计显示", "Combat Meter display"));
-            ImGui.TextDisabled(text.Get(
-                "每名玩家固定一行；排序仅支持 DPS 与 HPS。",
-                "Each player uses one row; sorting supports only DPS and HPS."));
+            ImGui.TextDisabled(meterDisplayDescription);
 
             var sortMode = MeterSortModeOptions.Normalize(configuration.Meter.SortMode);
             if (ImGui.BeginCombo(
@@ -600,9 +745,7 @@ public sealed class ControlCenterWindow : Window
                 changed = true;
             }
 
-            ImGui.TextDisabled(text.Get(
-                "每名玩家固定显示当前 DPS/HPS、占比、暴击率、直暴率和死亡数。",
-                "Every player always shows current DPS/HPS, percentage, critical rate, critical-direct rate, and deaths."));
+            ImGui.TextDisabled(meterDisplayHint);
 
             ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
             ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
@@ -721,12 +864,39 @@ public sealed class ControlCenterWindow : Window
         changed |= DrawCreatedHtmlOverlays();
 
         ImGui.Spacing();
-        changed |= DrawCustomHtmlOverlayCreator();
-
-        ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(IceBlue, text.Get("从模板创建", "Create from template"));
+        changed |= DrawHtmlOverlayCreators(allTemplates);
+
+        return changed;
+    }
+
+    private bool DrawHtmlOverlayCreators(IReadOnlyList<ActOverlayTemplate> allTemplates)
+    {
+        var labels = new[]
+        {
+            text.Get("从模板创建", "Create from template"),
+            text.Get("从网址创建", "Create from URL"),
+        };
+        var selectedIndex = BrandedWindowChrome.DrawNavigationRail(
+            "html-overlay-create-tabs",
+            labels,
+            (int)selectedHtmlOverlayCreatorPage,
+            height: 34);
+        selectedHtmlOverlayCreatorPage = (HtmlOverlayCreatorPage)selectedIndex;
+        ImGui.Spacing();
+
+        return selectedHtmlOverlayCreatorPage switch
+        {
+            HtmlOverlayCreatorPage.Template => DrawTemplateHtmlOverlayCreator(allTemplates),
+            HtmlOverlayCreatorPage.Url => DrawCustomHtmlOverlayCreator(),
+            _ => false,
+        };
+    }
+
+    private bool DrawTemplateHtmlOverlayCreator(IReadOnlyList<ActOverlayTemplate> allTemplates)
+    {
+        var changed = false;
         var templates = allTemplates
             .Where(static template => !template.IsCactbot)
             .ToArray();
@@ -772,10 +942,6 @@ public sealed class ControlCenterWindow : Window
                 {
                     openHtmlOverlay(configuration.SelectedOverlayTemplate);
                 }
-            }
-            if (selectedSettings is not null)
-            {
-                changed |= DrawOverlayWindowSettings(configuration.SelectedOverlayTemplate);
             }
         }
 
@@ -990,7 +1156,11 @@ public sealed class ControlCenterWindow : Window
         ImGui.TextColored(IceBlue, text.Get("已创建的悬浮窗", "Created overlays"));
         var createdNames = configuration.OverlayWindows.Keys
             .Where(name => !SelfHostedActRuntime.IsCactbotOverlayName(name))
-            .OrderBy(name => name)
+            .OrderBy(
+                name => ResolveOverlayDisplayName(
+                    name,
+                    configuration.OverlayWindows[name]),
+                StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (createdNames.Length == 0)
         {
@@ -1001,9 +1171,23 @@ public sealed class ControlCenterWindow : Window
             selectedCreatedOverlay ??= createdNames[0];
             foreach (var name in createdNames)
             {
-                if (ImGui.Selectable($"{name}##created-overlay-{name}", string.Equals(name, selectedCreatedOverlay, StringComparison.OrdinalIgnoreCase)))
+                var settings = configuration.OverlayWindows[name];
+                var displayName = ResolveOverlayDisplayName(name, settings);
+                if (ImGui.Selectable(
+                        $"{displayName}##created-overlay-{name}",
+                        string.Equals(
+                            name,
+                            selectedCreatedOverlay,
+                            StringComparison.OrdinalIgnoreCase)))
                 {
                     selectedCreatedOverlay = name;
+                    if (!string.Equals(
+                            overlayBeingRenamed,
+                            name,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        CancelOverlayRename();
+                    }
                 }
             }
 
@@ -1030,6 +1214,15 @@ public sealed class ControlCenterWindow : Window
                     }
                 }
                 ImGui.SameLine();
+                if (ImGui.Button(text.Get("重命名", "Rename")))
+                {
+                    overlayBeingRenamed = selectedCreatedOverlay;
+                    overlayRenameValue = ResolveOverlayDisplayName(
+                        selectedCreatedOverlay,
+                        createdSettings);
+                    overlayRenameFeedback = null;
+                }
+                ImGui.SameLine();
                 ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
                 ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
                 ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
@@ -1047,9 +1240,19 @@ public sealed class ControlCenterWindow : Window
                     var deletedName = selectedCreatedOverlay;
                     deleteHtmlOverlay(deletedName);
                     selectedCreatedOverlay = null;
+                    CancelOverlayRename();
                 }
                 else
                 {
+                    if (string.Equals(
+                            overlayBeingRenamed,
+                            selectedCreatedOverlay,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        changed |= DrawOverlayRenameEditor(
+                            selectedCreatedOverlay,
+                            createdSettings);
+                    }
                     changed |= DrawOverlayWindowSettings(selectedCreatedOverlay);
                 }
             }
@@ -1058,10 +1261,98 @@ public sealed class ControlCenterWindow : Window
         return changed;
     }
 
+    private bool DrawOverlayRenameEditor(
+        string overlayKey,
+        HtmlOverlayWindowSettings settings)
+    {
+        var changed = false;
+        ImGui.Spacing();
+        ImGui.SetNextItemWidth(280);
+        ImGui.InputText(
+            text.Get("新名称###overlay-rename-value", "New name###overlay-rename-value"),
+            ref overlayRenameValue,
+            80);
+        if (ImGui.Button(text.Get("保存名称", "Save name")))
+        {
+            var candidate = overlayRenameValue.Trim();
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                overlayRenameFeedback = text.Get(
+                    "名称不能为空。",
+                    "The name cannot be empty.");
+            }
+            else if (SelfHostedActRuntime.IsCactbotOverlayName(candidate) ||
+                     HasOverlayDisplayNameConflict(overlayKey, candidate))
+            {
+                overlayRenameFeedback = text.Get(
+                    "该名称已被使用或属于系统保留名称。",
+                    "That name is already in use or reserved by the system.");
+            }
+            else
+            {
+                settings.DisplayName = string.Equals(
+                    overlayKey,
+                    candidate,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? string.Empty
+                    : candidate;
+                applyOverlayWindowSettings(overlayKey);
+                saveConfiguration();
+                CancelOverlayRename();
+                changed = true;
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("取消重命名", "Cancel rename")))
+        {
+            CancelOverlayRename();
+        }
+
+        if (!string.IsNullOrWhiteSpace(overlayRenameFeedback))
+        {
+            ImGui.TextColored(
+                new Vector4(0.96f, 0.42f, 0.38f, 1),
+                overlayRenameFeedback);
+        }
+
+        return changed;
+    }
+
+    private bool HasOverlayDisplayNameConflict(string overlayKey, string candidate)
+    {
+        if (getOverlayTemplates().Any(template =>
+                !string.Equals(template.Name, overlayKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(template.Name, candidate, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return configuration.OverlayWindows.Any(pair =>
+            !string.Equals(pair.Key, overlayKey, StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(pair.Key, candidate, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 ResolveOverlayDisplayName(pair.Key, pair.Value),
+                 candidate,
+                 StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private void CancelOverlayRename()
+    {
+        overlayBeingRenamed = null;
+        overlayRenameValue = string.Empty;
+        overlayRenameFeedback = null;
+    }
+
+    internal static string ResolveOverlayDisplayName(
+        string overlayKey,
+        HtmlOverlayWindowSettings settings)
+        => string.IsNullOrWhiteSpace(settings.DisplayName)
+            ? overlayKey
+            : settings.DisplayName.Trim();
+
     private bool DrawCustomHtmlOverlayCreator()
     {
         var changed = false;
-        ImGui.TextColored(IceBlue, text.Get("从网址创建", "Create from URL"));
         ImGui.SetNextItemWidth(280);
         ImGui.InputText(
             text.Get("名称###custom-overlay-name", "Name###custom-overlay-name"),
@@ -1089,7 +1380,8 @@ public sealed class ControlCenterWindow : Window
                          template.Name,
                          name,
                          StringComparison.OrdinalIgnoreCase)) ||
-                     configuration.OverlayWindows.ContainsKey(name))
+                     configuration.OverlayWindows.ContainsKey(name) ||
+                     HasOverlayDisplayNameConflict(name, name))
             {
                 SetCustomOverlayFeedback(text.Get("该名称已被使用。", "That name is already in use."), true);
             }
@@ -1188,6 +1480,36 @@ public sealed class ControlCenterWindow : Window
                 "Hunts, FATEs, and cross-world status alerts"),
             out extensionChanged);
         hostConfigurationChanged |= extensionChanged;
+        changed |= DrawExtensionEntry(
+            installedPlugins,
+            "matcha",
+            text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
+            text.Get(
+                "狩猎与临危受命提醒；默认自启动并独占专属 Host",
+                "Hunt and FATE alerts; starts by default in its dedicated Host"),
+            out extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
+
+        var genericPlugins = installedPlugins
+            .Where(plugin => !ActPluginPackageInstaller.IsSpecializedPluginId(
+                plugin.Manifest.Id))
+            .ToArray();
+        if (genericPlugins.Length > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(
+                IceBlue,
+                text.Get("用户安装的普通 ACT 插件", "User-installed generic ACT plugins"));
+            ImGui.TextDisabled(text.Get(
+                "这些插件共用一个按需启动的通用 Host，不会为每个插件创建常驻进程。",
+                "These plugins share one on-demand generic Host; no persistent process is created per plugin."));
+            foreach (var plugin in genericPlugins)
+            {
+                changed |= DrawGenericExtensionEntry(plugin, out extensionChanged);
+                hostConfigurationChanged |= extensionChanged;
+            }
+        }
+        DrawGenericDeleteModal();
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -1207,6 +1529,7 @@ public sealed class ControlCenterWindow : Window
         {
             checkBundledPluginUpdates();
         }
+        DrawPluginInstallStatus();
         var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
         if (ImGui.Checkbox(
                 text.Get(
@@ -1240,8 +1563,227 @@ public sealed class ControlCenterWindow : Window
             "silverdasher",
             text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
             BundledActPluginCapabilities.SilverDasher);
+        hostConfigurationChanged |= DrawPluginPermissions(
+            "matcha",
+            text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
+            BundledActPluginCapabilities.Matcha);
         changed |= hostConfigurationChanged;
         return changed;
+    }
+
+    private void DrawPluginInstallStatus()
+    {
+        var status = getPluginInstallStatus();
+        if (status.State == ThirdPartyPluginInstallState.Idle)
+        {
+            return;
+        }
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted(string.IsNullOrWhiteSpace(status.DisplayName)
+            ? text.Get("第三方插件", "Third-party plugin")
+            : status.DisplayName);
+        ImGui.SameLine();
+        var (labelZh, labelEn) = status.State switch
+        {
+            ThirdPartyPluginInstallState.Preflighting => ("正在预检…", "Preflighting…"),
+            ThirdPartyPluginInstallState.AwaitingPermission => ("等待权限确认", "Awaiting permission"),
+            ThirdPartyPluginInstallState.StartingHost => ("正在启动通用 Host…", "Starting generic Host…"),
+            ThirdPartyPluginInstallState.Ready => ("已可用", "Ready"),
+            ThirdPartyPluginInstallState.Denied => ("已安装，未授权", "Installed, not authorized"),
+            ThirdPartyPluginInstallState.Removing => ("正在删除…", "Removing…"),
+            ThirdPartyPluginInstallState.Removed => ("已删除", "Removed"),
+            ThirdPartyPluginInstallState.Failed => ("失败", "Failed"),
+            _ => ("", ""),
+        };
+        var statusColor = status.State is ThirdPartyPluginInstallState.Failed
+            ? new Vector4(0.95f, 0.38f, 0.38f, 1)
+            : status.State is ThirdPartyPluginInstallState.Ready
+                ? new Vector4(0.42f, 0.88f, 0.56f, 1)
+                : Gold;
+        ImGui.TextColored(statusColor, text.Get(labelZh, labelEn));
+        if (!string.IsNullOrWhiteSpace(status.Detail))
+        {
+            ImGui.TextWrapped(status.Detail);
+        }
+
+        if (status.State == ThirdPartyPluginInstallState.Failed)
+        {
+            openedGenericPermissionKey = null;
+            if (!ReferenceEquals(openedPluginFailureStatus, status))
+            {
+                openedPluginFailureStatus = status;
+                pluginFailureLogCopied = false;
+                ImGui.OpenPopup(PluginInstallFailurePopupId);
+            }
+
+            if (ImGui.Button(text.Get("查看失败原因", "View failure details")))
+            {
+                ImGui.OpenPopup(PluginInstallFailurePopupId);
+            }
+            DrawPluginInstallFailureModal(status);
+            return;
+        }
+
+        openedPluginFailureStatus = null;
+        pluginFailureLogCopied = false;
+        if (status.State != ThirdPartyPluginInstallState.AwaitingPermission)
+        {
+            openedGenericPermissionKey = null;
+            return;
+        }
+
+        var permissionKey = $"{status.PluginId}|{status.Version}";
+        if (!string.Equals(
+                openedGenericPermissionKey,
+                permissionKey,
+                StringComparison.Ordinal))
+        {
+            openedGenericPermissionKey = permissionKey;
+            ImGui.OpenPopup(GenericPermissionPopupId);
+        }
+
+        if (ImGui.Button(text.Get("查看授权", "Review permissions")))
+        {
+            ImGui.OpenPopup(GenericPermissionPopupId);
+        }
+        DrawGenericPermissionModal(status);
+    }
+
+    private void DrawPluginInstallFailureModal(ThirdPartyPluginInstallStatus status)
+    {
+        ImGui.SetNextWindowSize(new Vector2(640, 0), ImGuiCond.Appearing);
+        if (!ImGui.BeginPopupModal(
+                PluginInstallFailurePopupId,
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
+        {
+            return;
+        }
+
+        ImGui.TextColored(
+            new Vector4(0.95f, 0.38f, 0.38f, 1),
+            text.Get("插件导入失败", "Plugin import failed"));
+        ImGui.TextUnformatted(string.IsNullOrWhiteSpace(status.DisplayName)
+            ? text.Get("第三方插件", "Third-party plugin")
+            : status.DisplayName);
+        if (!string.IsNullOrWhiteSpace(status.Version))
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled($"v{status.Version}");
+        }
+
+        ImGui.Separator();
+        ImGui.TextWrapped(string.IsNullOrWhiteSpace(status.Detail)
+            ? text.Get("导入过程没有返回具体原因。", "The import did not return a specific reason.")
+            : status.Detail);
+        ImGui.Spacing();
+        if (ImGui.Button(
+                text.Get("复制日志", "Copy log"),
+                new Vector2(140, 34)))
+        {
+            ImGui.SetClipboardText(BuildPluginInstallFailureLog(status));
+            pluginFailureLogCopied = true;
+        }
+        if (pluginFailureLogCopied)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(
+                new Vector4(0.45f, 0.88f, 0.62f, 1),
+                text.Get("已复制", "Copied"));
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button(
+                text.Get("关闭并清除记录", "Close and clear"),
+                new Vector2(180, 34)))
+        {
+            ImGui.CloseCurrentPopup();
+            openedPluginFailureStatus = null;
+            pluginFailureLogCopied = false;
+            dismissPluginInstallFailure();
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "关闭只会清除本次失败提示，不会删除原始 DLL / ZIP 或已安装插件。",
+            "Closing clears only this failure notice; it does not delete the original DLL / ZIP or installed plugins."));
+        ImGui.EndPopup();
+    }
+
+    internal static string BuildPluginInstallFailureLog(
+        ThirdPartyPluginInstallStatus status)
+    {
+        var lines = new List<string>
+        {
+            $"Plugin: {status.DisplayName}",
+            $"Plugin ID: {status.PluginId}",
+            $"Version: {status.Version}",
+            $"Reason: {status.Detail}",
+        };
+        if (!string.IsNullOrWhiteSpace(status.Diagnostic) &&
+            !string.Equals(status.Diagnostic, status.Detail, StringComparison.Ordinal))
+        {
+            lines.Add("Diagnostic:");
+            lines.Add(status.Diagnostic);
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private void DrawGenericPermissionModal(ThirdPartyPluginInstallStatus status)
+    {
+        ImGui.SetNextWindowSize(new Vector2(620, 0), ImGuiCond.Appearing);
+        if (!ImGui.BeginPopupModal(
+                GenericPermissionPopupId,
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
+        {
+            return;
+        }
+
+        ImGui.TextColored(Gold, text.Get("第三方 ACT 插件授权", "Third-party ACT plugin authorization"));
+        ImGui.TextUnformatted(status.DisplayName);
+        if (!string.IsNullOrWhiteSpace(status.Version))
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled($"v{status.Version}");
+        }
+
+        ImGui.Separator();
+        ImGui.TextWrapped(text.Get(
+            "静态预检已经完成。该 DLL 会作为桌面代码运行；以下清单约束兼容接口，但无法拦截插件自身直接调用 Windows API。",
+            "Static preflight is complete. This DLL runs as desktop code; the list below governs compatibility APIs but cannot intercept direct Windows API calls made by the plugin."));
+        ImGui.TextDisabled(text.Get(
+            "预检生成的权限清单：",
+            "Permissions generated by preflight:"));
+        if (status.Capabilities.Count == 0)
+        {
+            ImGui.BulletText(text.Get("未检测到额外兼容接口权限", "No additional compatibility API permissions detected"));
+        }
+        else
+        {
+            foreach (var capability in status.Capabilities)
+            {
+                ImGui.BulletText(ActCapabilityDisplay.Label(capability, text));
+            }
+        }
+
+        ImGui.Spacing();
+        if (ImGui.Button(
+                text.Get("授权并启用", "Authorize and enable"),
+                new Vector2(170, 34)))
+        {
+            ImGui.CloseCurrentPopup();
+            approvePendingPlugin();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(
+                text.Get("暂不授权", "Do not authorize"),
+                new Vector2(150, 34)))
+        {
+            ImGui.CloseCurrentPopup();
+            denyPendingPlugin();
+        }
+
+        ImGui.EndPopup();
     }
 
     private bool DrawPluginPermissions(
@@ -1273,6 +1815,126 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.TreePop();
         return changed;
+    }
+
+    private bool DrawGenericExtensionEntry(
+        InstalledActPlugin plugin,
+        out bool enabledChanged)
+    {
+        var pluginId = plugin.Manifest.Id;
+        var changed = false;
+        enabledChanged = false;
+        ImGui.PushID($"generic-extension-{pluginId}");
+        var trusted = configuration.TrustedGenericActPluginIds.Contains(pluginId);
+        var enabled = plugin.Enabled && trusted;
+        if (ImGui.Checkbox(plugin.Manifest.Name, ref enabled))
+        {
+            if (enabled && !configuration.TrustedGenericActPluginIds.Contains(pluginId))
+            {
+                // Enabling an untrusted DLL opens the same informed-consent flow as installation.
+                requestPluginAuthorization(pluginId);
+                enabled = false;
+            }
+            else
+            {
+                if (enabled)
+                {
+                    configuration.DisabledActPluginIds.Remove(pluginId);
+                }
+                else
+                {
+                    configuration.DisabledActPluginIds.Add(pluginId);
+                }
+
+                changed = true;
+                enabledChanged = true;
+            }
+        }
+
+        ImGui.SameLine();
+        ImGui.TextColored(
+            enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
+            enabled
+                ? text.Get("已启用", "Enabled")
+                : trusted
+                    ? text.Get("已禁用", "Disabled")
+                    : text.Get("未授权", "Not authorized"));
+        ImGui.SameLine();
+        ImGui.TextDisabled($"v{plugin.Manifest.Version}");
+        if (!trusted)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton(text.Get("查看并授权", "Review and authorize")))
+            {
+                requestPluginAuthorization(pluginId);
+            }
+        }
+        else if (enabled)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+            {
+                openPluginConfiguration(pluginId);
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton(text.Get("删除", "Delete")))
+        {
+            genericPluginToDeleteId = pluginId;
+            genericPluginToDeleteName = plugin.Manifest.Name;
+            genericDeletePopupRequested = true;
+        }
+
+        var requested = ActPluginPackageInstaller.GetRequestedCapabilities(plugin.Manifest);
+        if (trusted && requested.Count > 0)
+        {
+            enabledChanged |= DrawPluginPermissions(pluginId, plugin.Manifest.Name, requested);
+        }
+
+        ImGui.PopID();
+        return changed;
+    }
+
+    private void DrawGenericDeleteModal()
+    {
+        if (genericDeletePopupRequested)
+        {
+            ImGui.OpenPopup(GenericDeletePopupId);
+            genericDeletePopupRequested = false;
+        }
+
+        ImGui.SetNextWindowSize(new Vector2(520, 0), ImGuiCond.Appearing);
+        if (!ImGui.BeginPopupModal(
+                GenericDeletePopupId,
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
+        {
+            return;
+        }
+
+        ImGui.TextColored(Gold, text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"));
+        ImGui.TextWrapped(text.Get(
+            $"确定删除 {genericPluginToDeleteName} 吗？运行中的通用 Host 会先安全停止，插件文件将移入备份目录，以便需要时恢复。",
+            $"Delete {genericPluginToDeleteName}? The generic Host will stop safely first, and plugin files will be moved to the backup directory for recovery."));
+        if (ImGui.Button(text.Get("确认删除", "Delete"), new Vector2(140, 34)))
+        {
+            var pluginId = genericPluginToDeleteId;
+            ImGui.CloseCurrentPopup();
+            genericPluginToDeleteId = null;
+            genericPluginToDeleteName = null;
+            if (!string.IsNullOrWhiteSpace(pluginId))
+            {
+                uninstallGenericPlugin(pluginId);
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(120, 34)))
+        {
+            ImGui.CloseCurrentPopup();
+            genericPluginToDeleteId = null;
+            genericPluginToDeleteName = null;
+        }
+
+        ImGui.EndPopup();
     }
 
     private bool DrawExtensionEntry(
@@ -1509,8 +2171,56 @@ public sealed class ControlCenterWindow : Window
     private bool DrawOverlayWindowSettings(string name)
     {
         var changed = false;
+        var connectionChanged = false;
         var settings = configuration.GetOverlayWindowSettings(name);
         ImGui.PushID(name);
+        if (!string.IsNullOrWhiteSpace(settings.SourceUrl))
+        {
+            var connectionDetail = string.IsNullOrWhiteSpace(settings.ConnectionStateDetail)
+                ? text.Get("打开后自动检测连接", "Connection will be detected when opened")
+                : settings.ConnectionStateDetail;
+            var connectionColor = settings.ConnectionState switch
+            {
+                OverlayConnectionState.Connected => new Vector4(0.45f, 0.88f, 0.62f, 1),
+                OverlayConnectionState.Failed => new Vector4(0.96f, 0.42f, 0.38f, 1),
+                _ => IceBlue,
+            };
+            ImGui.TextColored(connectionColor, connectionDetail);
+            if (ImGui.TreeNode(text.Get("连接高级设置", "Advanced connection settings")))
+            {
+                var selectedMode = settings.ConnectionMode;
+                if (ImGui.BeginCombo(
+                        text.Get("连接方式", "Connection mode"),
+                        GetOverlayConnectionModeLabel(selectedMode)))
+                {
+                    foreach (var mode in Enum.GetValues<OverlayConnectionMode>())
+                    {
+                        var selected = mode == selectedMode;
+                        if (ImGui.Selectable(GetOverlayConnectionModeLabel(mode), selected))
+                        {
+                            settings.ConnectionMode = mode;
+                            settings.ResetConnectionDetection();
+                            connectionChanged = true;
+                            changed = true;
+                        }
+                    }
+                    ImGui.EndCombo();
+                }
+
+                ImGui.TextDisabled(text.Get(
+                    "默认自动检测；手动模式只用于检测失败时微调。",
+                    "Automatic detection is the default. Manual modes are only for troubleshooting."));
+                if (ImGui.Button(text.Get("重新检测", "Detect again")))
+                {
+                    settings.ConnectionMode = OverlayConnectionMode.Auto;
+                    settings.ResetConnectionDetection();
+                    connectionChanged = true;
+                    changed = true;
+                }
+                ImGui.TreePop();
+            }
+        }
+
         ImGui.TextDisabled(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
         if (ImGui.Button(settings.IsEditing
                 ? text.Get("完成并操作网页", "Finish and interact with page")
@@ -1524,9 +2234,9 @@ public sealed class ControlCenterWindow : Window
             }
         }
         ImGui.SameLine();
-        changed |= Checkbox(text.Get("鼠标穿透", "Click-through"), settings.IsClickThrough, value => settings.IsClickThrough = value);
+        changed |= Checkbox(text.Get("鼠标穿透", "Click-through"), settings.IsClickThrough, settings.SetClickThrough);
         ImGui.SameLine();
-        changed |= Checkbox(text.Get("锁定", "Locked"), settings.IsLocked, value => settings.IsLocked = value);
+        changed |= Checkbox(text.Get("锁定", "Locked"), settings.IsLocked, settings.SetLocked);
         changed |= SliderFloat(text.Get("页面缩放", "Page zoom"), settings.ZoomFactor, 0.5f, 2, value => settings.ZoomFactor = value);
         ImGui.TextDisabled(settings.IsEditing
             ? text.Get(
@@ -1541,8 +2251,22 @@ public sealed class ControlCenterWindow : Window
         {
             applyOverlayWindowSettings(name);
         }
+        if (connectionChanged && settings.IsVisible)
+        {
+            openHtmlOverlay(name);
+        }
         return changed;
     }
+
+    private string GetOverlayConnectionModeLabel(OverlayConnectionMode mode)
+        => mode switch
+        {
+            OverlayConnectionMode.Auto => text.Get("自动检测（推荐）", "Automatic (recommended)"),
+            OverlayConnectionMode.OverlayPlugin => text.Get("现代悬浮窗", "Modern overlay"),
+            OverlayConnectionMode.ActWebSocket => text.Get("旧版 ACTWS", "Legacy ACTWS"),
+            OverlayConnectionMode.Original => text.Get("原样打开（高级）", "Open URL unchanged (advanced)"),
+            _ => mode.ToString(),
+        };
 
     private void RestartParser()
     {

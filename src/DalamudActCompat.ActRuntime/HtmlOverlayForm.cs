@@ -36,6 +36,8 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const string InputRegionMessagePrefix = "dalamud-act-compat:input-regions:";
     private const string InputRegionDiagnosticMessagePrefix =
         "dalamud-act-compat:input-region-diagnostic:";
+    private const string WebSocketProbeMessagePrefix =
+        "dalamud-act-compat:websocket:";
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
     private static readonly SemaphoreSlim WebViewInitializationGate = new(1, 1);
     private static readonly object LoaderSync = new();
@@ -449,7 +451,35 @@ internal sealed class HtmlOverlayForm : IDisposable
         })();
         """;
 
-    private readonly Uri pageUri;
+    internal const string WebSocketProbeScript =
+        """
+        (() => {
+          if (window.__dalamudActCompatWebSocketProbeInstalled || !window.WebSocket)
+            return;
+          window.__dalamudActCompatWebSocketProbeInstalled = true;
+          const NativeWebSocket = window.WebSocket;
+          const report = (event, url) => {
+            try {
+              window.chrome?.webview?.postMessage(
+                'dalamud-act-compat:websocket:' + JSON.stringify({ event, url: String(url) }));
+            } catch (_) {
+            }
+          };
+          window.WebSocket = new Proxy(NativeWebSocket, {
+            construct(target, argumentsList, newTarget) {
+              const socket = Reflect.construct(target, argumentsList, newTarget);
+              const url = argumentsList[0];
+              report('created', url);
+              socket.addEventListener('open', () => report('open', socket.url), { once: true });
+              socket.addEventListener('error', () => report('error', socket.url), { once: true });
+              socket.addEventListener('close', () => report('close', socket.url), { once: true });
+              return socket;
+            },
+          });
+        })();
+        """;
+
+    private Uri pageUri;
     private readonly string userDataDirectory;
     private readonly string loaderPath;
     private readonly string title;
@@ -458,6 +488,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private readonly bool debugMode;
     private readonly IPluginLog log;
     private readonly Action<string>? failureNotification;
+    private readonly Action<Uri>? webSocketConnected;
     private readonly object settingsSync = new();
     private readonly ManualResetEventSlim ready = new();
     private readonly SemaphoreSlim initializationGate = new(1, 1);
@@ -514,7 +545,8 @@ internal sealed class HtmlOverlayForm : IDisposable
         Size clientSize,
         bool debugMode,
         IPluginLog log,
-        Action<string>? failureNotification = null)
+        Action<string>? failureNotification = null,
+        Action<Uri>? webSocketConnected = null)
     {
         this.pageUri = pageUri;
         this.userDataDirectory = userDataDirectory;
@@ -526,6 +558,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         this.debugMode = debugMode;
         this.log = log;
         this.failureNotification = failureNotification;
+        this.webSocketConnected = webSocketConnected;
     }
 
     private Size ClientSize { get; }
@@ -536,6 +569,38 @@ internal sealed class HtmlOverlayForm : IDisposable
     public IReadOnlyCollection<int> BrowserProcessIds => browserProcessIds.Keys.ToArray();
 
     public Task ShutdownCompletion => shutdownCompletion.Task;
+
+    public bool Navigate(Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        var targetForm = form;
+        if (disposing || targetForm is null || targetForm.IsDisposed)
+        {
+            return false;
+        }
+
+        pageUri = uri;
+        try
+        {
+            targetForm.BeginInvoke(() =>
+            {
+                if (disposing || webView?.CoreWebView2 is null)
+                {
+                    return;
+                }
+
+                webView.Source = uri;
+                navigationStarted = true;
+                SetBrowserState(BrowserState.Navigating, "页面加载中");
+                log.Information($"Reloading {title} for connection detection: {uri}");
+            });
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
 
     public void Show()
     {
@@ -746,7 +811,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 settings?.Width is > 0 ? settings.Width.Value : ClientSize.Width,
                 settings?.Height is > 0 ? settings.Height.Value : ClientSize.Height);
             form = overlayMode ? new OverlayHostForm() : new Form();
-            form.Text = title;
+            form.Text = ResolveDisplayTitle();
             form.ClientSize = initialSize;
             form.MinimumSize = new Size(MinimumOverlayWidth, MinimumOverlayHeight);
             form.StartPosition = overlayMode && settings?.Left is not null && settings.Top is not null
@@ -824,6 +889,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 if (inputProxy is not null)
                 {
                     inputProxy.MouseClick -= OnInputProxyMouseClick;
+                    inputProxy.MouseWheel -= OnInputProxyMouseWheel;
                     var inputRegion = inputProxy.Region;
                     inputProxy.Region = null;
                     inputRegion?.Dispose();
@@ -1122,6 +1188,8 @@ internal sealed class HtmlOverlayForm : IDisposable
             {
                 core.WebMessageReceived += OnBrowserWebMessage;
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    WebSocketProbeScript);
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     $"window.__dalamudActCompatInputRegionDiagnostics = " +
                     $"{(debugMode ? "true" : "false")};");
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
@@ -1366,6 +1434,12 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
+        if (message.StartsWith(WebSocketProbeMessagePrefix, StringComparison.Ordinal))
+        {
+            HandleWebSocketProbe(message[WebSocketProbeMessagePrefix.Length..]);
+            return;
+        }
+
         if (message.StartsWith(InputRegionMessagePrefix, StringComparison.Ordinal))
         {
             UpdateBrowserInputRegion(message[InputRegionMessagePrefix.Length..]);
@@ -1396,6 +1470,34 @@ internal sealed class HtmlOverlayForm : IDisposable
                 0,
                 SwpNoSize | SwpNoMove | SwpNoActivate);
         }
+    }
+
+    private void HandleWebSocketProbe(string json)
+    {
+        if (json.Length > 8192)
+        {
+            return;
+        }
+
+        WebSocketProbePayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<WebSocketProbePayload>(json);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (payload is null ||
+            !string.Equals(payload.Event, "open", StringComparison.Ordinal) ||
+            !Uri.TryCreate(payload.Url, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("ws" or "wss"))
+        {
+            return;
+        }
+
+        webSocketConnected?.Invoke(uri);
     }
 
     private void LogBrowserInputRegionDiagnostic(string json)
@@ -1628,7 +1730,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     {
         var proxy = new InputProxyForm
         {
-            Text = $"{title} Input",
+            Text = $"{ResolveDisplayTitle()} Input",
             FormBorderStyle = FormBorderStyle.None,
             ShowInTaskbar = false,
             StartPosition = FormStartPosition.Manual,
@@ -1637,11 +1739,12 @@ internal sealed class HtmlOverlayForm : IDisposable
             Opacity = 0.01,
         };
         proxy.MouseClick += OnInputProxyMouseClick;
+        proxy.MouseWheel += OnInputProxyMouseWheel;
         return proxy;
     }
 
     private EditChromeForm CreateEditChrome()
-        => new(title, TransparencyColor);
+        => new(ResolveDisplayTitle(), TransparencyColor);
 
     private void ApplyEditChromeSettings()
     {
@@ -1851,6 +1954,39 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
     }
 
+    private async void OnInputProxyMouseWheel(object? sender, MouseEventArgs args)
+    {
+        if (settings?.IsClickThrough != false || inputProxy is null ||
+            webView?.CoreWebView2 is not { } core || interaction != OverlayInteraction.None)
+        {
+            return;
+        }
+
+        try
+        {
+            var viewportJson = await core.ExecuteScriptAsync(
+                "[window.innerWidth, window.innerHeight]");
+            var viewport = JsonSerializer.Deserialize<float[]>(viewportJson);
+            if (viewport is not [> 0, > 0])
+            {
+                return;
+            }
+
+            var point = CalculateBrowserInputPoint(
+                inputProxy.ClientSize,
+                new SizeF(viewport[0], viewport[1]),
+                args.Location);
+            await DispatchBrowserWheelEventAsync(core, point, args.Delta);
+        }
+        catch (Exception) when (disposing)
+        {
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, $"Failed to forward an input-proxy wheel event to {title}.");
+        }
+    }
+
     private static Task<string> DispatchBrowserMouseEventAsync(
         CoreWebView2 core,
         string type,
@@ -1868,6 +2004,22 @@ internal sealed class HtmlOverlayForm : IDisposable
                 button,
                 buttons,
                 clickCount,
+            }));
+
+    private static Task<string> DispatchBrowserWheelEventAsync(
+        CoreWebView2 core,
+        PointF point,
+        int windowsDelta)
+        => core.CallDevToolsProtocolMethodAsync(
+            "Input.dispatchMouseEvent",
+            JsonSerializer.Serialize(new
+            {
+                type = "mouseWheel",
+                x = point.X,
+                y = point.Y,
+                deltaX = 0,
+                // WinForms reports wheel-up as positive; Chromium uses negative Y for up.
+                deltaY = -windowsDelta,
             }));
 
     private void StartEditMonitor()
@@ -2071,6 +2223,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             float zoomFactor;
             bool isClickThrough;
             bool isEditing;
+            string displayTitle;
             lock (settingsSync)
             {
                 savedWidth = settings.Width;
@@ -2080,7 +2233,15 @@ internal sealed class HtmlOverlayForm : IDisposable
                 zoomFactor = settings.ZoomFactor;
                 isClickThrough = settings.IsClickThrough;
                 isEditing = settings.IsEditing;
+                displayTitle = ResolveDisplayTitle();
             }
+
+            form.Text = displayTitle;
+            if (inputProxy is not null)
+            {
+                inputProxy.Text = $"{displayTitle} Input";
+            }
+            editChrome?.SetOverlayTitle(displayTitle);
 
             if (savedWidth is > 0 && savedHeight is > 0)
             {
@@ -2145,6 +2306,11 @@ internal sealed class HtmlOverlayForm : IDisposable
             applyingSettings = false;
         }
     }
+
+    private string ResolveDisplayTitle()
+        => string.IsNullOrWhiteSpace(settings?.DisplayName)
+            ? title
+            : settings.DisplayName.Trim();
 
     private async Task NotifyOverlayStateAsync()
     {
@@ -2470,7 +2636,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private sealed class EditChromeForm : Form
     {
-        private readonly string overlayTitle;
+        private string overlayTitle;
         private BrowserState state;
         private string detail = string.Empty;
 
@@ -2485,6 +2651,13 @@ internal sealed class HtmlOverlayForm : IDisposable
             BackColor = transparencyColor;
             TransparencyKey = transparencyColor;
             DoubleBuffered = true;
+        }
+
+        public void SetOverlayTitle(string value)
+        {
+            overlayTitle = value;
+            Text = $"{value} Edit Boundary";
+            Invalidate();
         }
 
         protected override bool ShowWithoutActivation => true;
@@ -2595,6 +2768,15 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         [System.Text.Json.Serialization.JsonPropertyName("rectangles")]
         public float[][]? Rectangles { get; init; }
+    }
+
+    private sealed class WebSocketProbePayload
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("event")]
+        public string Event { get; init; } = string.Empty;
+
+        [System.Text.Json.Serialization.JsonPropertyName("url")]
+        public string Url { get; init; } = string.Empty;
     }
 
     private sealed class BrowserInputRegionDiagnosticPayload

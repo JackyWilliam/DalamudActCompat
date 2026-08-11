@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.8.1",
+    [string] $ExpectedAssemblyVersion = "0.3.9.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -344,6 +344,7 @@ $requiredRuntimeFiles = @(
     "LICENSE.md",
     "LICENSES/IINACT-GPL-3.0.txt",
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
+    "LICENSES/WindowsCommunityToolkit-MIT.md",
     "THIRD_PARTY_NOTICES.md",
     "BundledActPlugins/bundled-plugins.lock.json",
     "BundledActPlugins/triggernometry/zh-CN.triglations.xml",

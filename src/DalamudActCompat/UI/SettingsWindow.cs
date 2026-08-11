@@ -136,12 +136,24 @@ public sealed class SettingsWindow : Window
 
         foreach (var plugin in installedPlugins)
         {
-            var enabled = plugin.Enabled;
+            var isGeneric = !ActPluginPackageInstaller.IsSpecializedPluginId(
+                plugin.Manifest.Id);
+            var enabled = plugin.Enabled &&
+                          (!isGeneric || configuration.TrustedGenericActPluginIds.Contains(
+                              plugin.Manifest.Id));
             if (ImGui.Checkbox(
                     $"{plugin.Manifest.Name} {plugin.Manifest.Version}###{plugin.Manifest.Id}",
                     ref enabled))
             {
-                if (enabled)
+                var genericNeedsConsent = enabled && isGeneric &&
+                    !configuration.TrustedGenericActPluginIds.Contains(plugin.Manifest.Id);
+                if (genericNeedsConsent)
+                {
+                    // The compact legacy settings page must not bypass the main consent card.
+                    logger.Warning(
+                        $"Generic ACT plugin '{plugin.Manifest.Id}' must be authorized from the main Extensions page before it can be enabled.");
+                }
+                else if (enabled)
                 {
                     configuration.DisabledActPluginIds.Remove(plugin.Manifest.Id);
                 }
@@ -150,8 +162,11 @@ public sealed class SettingsWindow : Window
                     configuration.DisabledActPluginIds.Add(plugin.Manifest.Id);
                 }
 
-                changed = true;
-                hostConfigurationChanged = true;
+                if (!genericNeedsConsent)
+                {
+                    changed = true;
+                    hostConfigurationChanged = true;
+                }
             }
 
             ImGui.SameLine();
@@ -277,13 +292,6 @@ public sealed class SettingsWindow : Window
                 }
             }
 
-            var overlayWindowChanged = DrawHtmlOverlaySettings(
-                configuration.SelectedOverlayTemplate);
-            changed |= overlayWindowChanged;
-            if (overlayWindowChanged)
-            {
-                applyOverlayWindowSettings(configuration.SelectedOverlayTemplate);
-            }
         }
 
         ImGui.TextUnformatted(text.Get("可选 ACT 扩展（与 Cactbot 本体分开）", "Optional ACT extensions (separate from Cactbot)"));
@@ -291,11 +299,16 @@ public sealed class SettingsWindow : Window
         DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；完整保留 7 个动作模块、15 个命令别名、HTTP、Triggernometry 与 OverlayPlugin 集成。启用完整权限后，原版进程附加、签名扫描和原生调用也会恢复。", "PostNamazu retains all 7 action modules, 15 command aliases, HTTP, Triggernometry, and OverlayPlugin integration. With full permissions enabled, the original process attachment, signature scanning, and native calls are also restored."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
         DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML、全部 29 种动作，以及日志/网络/区域/战斗/TTS/实体接口；其内置 BridgeNamazu 高级模块在鲶鱼精完整权限下使用原版原生运行时。", "Supports the DLL and translation XML, all 29 action types, and log/network/zone/combat/TTS/entity APIs. Its built-in advanced BridgeNamazu modules use the original native runtime when PostNamazu has full permissions."), "https://github.com/MnFeN/Triggernometry");
-        ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（始终最后加载）", "SilverDasher (always loaded last)"));
+        ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（共享 Host 最后加载）", "SilverDasher (loaded last in the shared Host)"));
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get(
             "使用独立事件队列与专属内存权限上下文。",
             "Uses an independent event queue and dedicated memory-permission context."));
+        ImGui.BulletText(text.Get("抹茶 / Cafe.Matcha（最后启动）", "Cafe.Matcha (started last)"));
+        ImGui.SameLine();
+        ImGui.TextDisabled(text.Get(
+            "默认自启动，并单独运行在第二个 Host；不会进入现有四个扩展的共享进程。",
+            "Starts by default in a second dedicated Host and never enters the process shared by the existing four extensions."));
 
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
@@ -314,6 +327,9 @@ public sealed class SettingsWindow : Window
         permissionsChanged |= DrawPluginPermissions(
             "silverdasher",
             BundledActPluginCapabilities.SilverDasher);
+        permissionsChanged |= DrawPluginPermissions(
+            "matcha",
+            BundledActPluginCapabilities.Matcha);
         changed |= permissionsChanged;
 
         ImGui.Separator();
@@ -501,6 +517,7 @@ public sealed class SettingsWindow : Window
         {
             "postnamazu" => text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
             "silverdasher" => text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
+            "matcha" => text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
             _ => pluginId,
         };
         if (!ImGui.TreeNode($"{displayName}##permissions-{pluginId}"))
@@ -800,12 +817,12 @@ public sealed class SettingsWindow : Window
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
             settings.IsClickThrough,
-            value => settings.IsClickThrough = value);
+            settings.SetClickThrough);
         ImGui.SameLine();
         changed |= Checkbox(
             $"{text.Get("锁定位置和大小", "Lock position and size")}###{name}-locked",
             settings.IsLocked,
-            value => settings.IsLocked = value);
+            settings.SetLocked);
         var zoomFactor = settings.ZoomFactor;
         if (ImGui.SliderFloat(
                 $"{text.Get("页面缩放", "Page zoom")}###{name}-zoom",

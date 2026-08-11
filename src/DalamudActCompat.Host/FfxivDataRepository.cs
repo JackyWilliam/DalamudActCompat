@@ -118,6 +118,14 @@ internal sealed class FfxivDataRepository : IDataRepository
         }
     }
 
+    internal int GetGameProcessId()
+    {
+        lock (syncRoot)
+        {
+            return gameProcessId;
+        }
+    }
+
     public IDictionary<uint, string> GetResourceDictionary(ResourceType resourceType)
         => new Dictionary<uint, string>();
 

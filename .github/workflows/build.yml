@@ -56,13 +56,13 @@ jobs:
       - name: Run Release Package smoke
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.PackageSmokeTests.exe"
+          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.PackageSmokeTests.exe"
 
       - name: Run Host smoke
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe"
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe"
 
       - name: Run Legacy Resource smoke
         shell: pwsh

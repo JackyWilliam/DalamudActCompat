@@ -18,6 +18,7 @@ namespace DalamudActCompat.ActRuntime;
 
 public sealed class SelfHostedActRuntime : IDisposable
 {
+    private static readonly TimeSpan CustomOverlayConnectionTimeout = TimeSpan.FromSeconds(8);
     public const string CactbotOverlayName = "Cactbot Raidboss";
     public const string CactbotAlertsOverlayName = "Cactbot Raidboss Alerts only";
     public const string CactbotTimelineOverlayName = "Cactbot Raidboss Timeline only";
@@ -56,9 +57,11 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings;
     private readonly Func<IReadOnlyDictionary<string, HtmlOverlayWindowSettings>>
         getOverlayWindowSettingsSnapshot;
+    private readonly Action persistOverlaySettings;
     private readonly Func<bool> debugMode;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
+    private readonly object networkCaptureSync = new();
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator = new();
@@ -70,6 +73,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private HtmlOverlayForm? cactbotSettings;
     private readonly ConcurrentDictionary<string, HtmlOverlayForm> htmlOverlays =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, OverlayConnectionAttempt>
+        overlayConnectionAttempts = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<ActOverlayTemplate> overlayTemplates = [];
     private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
     private string? overlayWebSocketUri;
@@ -103,6 +108,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private string chatZone = string.Empty;
     private bool activeEncounterPublished;
     private bool activeEncounterNamesLogged;
+    private bool networkSentCaptureRequested;
+    private bool networkSentSubscribed;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -120,6 +127,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         Func<bool> localDeathWhilePartyContinues,
         Func<string, HtmlOverlayWindowSettings> getOverlayWindowSettings,
         Func<IReadOnlyDictionary<string, HtmlOverlayWindowSettings>> getOverlayWindowSettingsSnapshot,
+        Action persistOverlaySettings,
         Func<bool> debugMode,
         Func<string, ActCapability, bool> permissionCheck)
     {
@@ -136,6 +144,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
         this.getOverlayWindowSettings = getOverlayWindowSettings;
         this.getOverlayWindowSettingsSnapshot = getOverlayWindowSettingsSnapshot;
+        this.persistOverlaySettings = persistOverlaySettings;
         this.debugMode = debugMode;
         HashSet<string> limitBreakActionNames;
         try
@@ -200,6 +209,19 @@ public sealed class SelfHostedActRuntime : IDisposable
         return true;
     }
 
+    public bool InjectExternalPluginLogLine(string line)
+    {
+        if (!IsParserRunning || string.IsNullOrWhiteSpace(line))
+        {
+            return false;
+        }
+
+        // Host-generated ACT lines must re-enter the game-side ACT event pipeline so
+        // OverlayPlugin subscribers see the same LogLine events as native ACT overlays.
+        ActGlobals.oFormActMain.ParseRawLogLine(false, DateTime.Now, line);
+        return true;
+    }
+
     public IReadOnlyList<ActOverlayTemplate> OverlayTemplates => overlayTemplates;
 
     public bool ApplyOverlayWindowSettings(string name)
@@ -247,6 +269,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         Size clientSize;
         string windowName;
         string userDataDirectory;
+        var customOverlay = false;
+        var initialConnectionMode = OverlayConnectionMode.Original;
         if (template is not null)
         {
             var source = overlayTemplateSources.First(
@@ -275,11 +299,19 @@ public sealed class SelfHostedActRuntime : IDisposable
                 "webview2",
                 SanitizePath(template.Name));
         }
-        else if (TryBuildCustomOverlayUri(
-                     settings.SourceUrl,
-                     new Uri(overlayWebSocketUri),
-                     out pageUri))
+        else
         {
+            customOverlay = true;
+            initialConnectionMode = ResolveInitialConnectionMode(settings);
+            if (!TryBuildCustomOverlayUri(
+                    settings.SourceUrl,
+                    new Uri(overlayWebSocketUri),
+                    initialConnectionMode,
+                    out pageUri))
+            {
+                return false;
+            }
+
             clientSize = new Size(900, 500);
             windowName = name;
             userDataDirectory = Path.Combine(
@@ -287,13 +319,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                 "webview2",
                 BuildCustomOverlayProfileName(name));
         }
-        else
-        {
-            return false;
-        }
-
+        var created = false;
         if (!htmlOverlays.TryGetValue(windowName, out var window))
         {
+            created = true;
             window = new HtmlOverlayForm(
                 pageUri,
                 userDataDirectory,
@@ -306,7 +335,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                 clientSize,
                 debugMode(),
                 log,
-                NotifyOverlayBrowserFailure);
+                NotifyOverlayBrowserFailure,
+                customOverlay
+                    ? uri => OnCustomOverlayWebSocketConnected(windowName, uri)
+                    : null);
             if (!htmlOverlays.TryAdd(windowName, window))
             {
                 window.Dispose();
@@ -314,7 +346,23 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
         }
 
+        if (customOverlay && !created &&
+            settings.ConnectionState is OverlayConnectionState.None or
+                OverlayConnectionState.Failed)
+        {
+            window.Navigate(pageUri);
+        }
         window.Show();
+        if (customOverlay &&
+            (created || settings.ConnectionState is OverlayConnectionState.None or
+                OverlayConnectionState.Failed))
+        {
+            StartCustomOverlayConnectionDetection(
+                windowName,
+                window,
+                new Uri(overlayWebSocketUri),
+                initialConnectionMode);
+        }
         CloseConflictingRaidbossWindows(windowName);
         return true;
     }
@@ -354,6 +402,12 @@ public sealed class SelfHostedActRuntime : IDisposable
         if (string.IsNullOrWhiteSpace(name) || IsCactbotOverlayName(name))
         {
             return false;
+        }
+
+        if (overlayConnectionAttempts.TryRemove(name, out var attempt))
+        {
+            attempt.Cancel();
+            attempt.Dispose();
         }
 
         if (htmlOverlays.TryRemove(name, out var window))
@@ -497,6 +551,17 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public event Action<string, long, byte[]>? NetworkReceived;
 
+    public event Action<string, long, byte[]>? NetworkSent;
+
+    public void SetNetworkSentCaptureEnabled(bool enabled)
+    {
+        lock (networkCaptureSync)
+        {
+            networkSentCaptureRequested = enabled;
+            UpdateNetworkSentSubscriptionLocked();
+        }
+    }
+
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
 
@@ -554,6 +619,10 @@ public sealed class SelfHostedActRuntime : IDisposable
             ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
             parser.Subscription.ZoneChanged += OnZoneChangedForHost;
             parser.Subscription.NetworkReceived += OnNetworkReceivedForHost;
+            lock (networkCaptureSync)
+            {
+                UpdateNetworkSentSubscriptionLocked();
+            }
             parserPluginData = RegisterSystemPlugin(
                 parser.ActPluginInstance,
                 "FFXIV_ACT_Plugin.dll");
@@ -561,6 +630,14 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
         catch
         {
+            lock (networkCaptureSync)
+            {
+                if (parser is not null && networkSentSubscribed)
+                {
+                    parser.Subscription.NetworkSent -= OnNetworkSentForHost;
+                }
+                networkSentSubscribed = false;
+            }
             RemovePluginData(parserPluginData);
             parserPluginData = null;
             parser?.Dispose();
@@ -878,6 +955,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     internal static bool TryBuildCustomOverlayUri(
         string sourceUrl,
         Uri webSocketUri,
+        OverlayConnectionMode connectionMode,
         out Uri pageUri)
     {
         if (!TryNormalizeCustomOverlayUri(sourceUrl, out pageUri))
@@ -885,14 +963,25 @@ public sealed class SelfHostedActRuntime : IDisposable
             return false;
         }
 
-        if (!HasOverlayParameter(pageUri, "OVERLAY_WS"))
+        if (connectionMode == OverlayConnectionMode.Original)
+        {
+            return true;
+        }
+
+        // Retry modes must not inherit a stale parameter for the other protocol.
+        // The saved source URL itself is never changed, so manual recovery remains reversible.
+        pageUri = RemoveOverlayConnectionParameters(pageUri);
+
+        if (connectionMode is OverlayConnectionMode.Auto or OverlayConnectionMode.OverlayPlugin &&
+            !HasOverlayParameter(pageUri, "OVERLAY_WS"))
         {
             pageUri = BuildOverlayUri(
                 pageUri,
                 "OVERLAY_WS",
                 webSocketUri.ToString());
         }
-        if (!HasOverlayParameter(pageUri, "HOST_PORT"))
+        if (connectionMode == OverlayConnectionMode.ActWebSocket &&
+            !HasOverlayParameter(pageUri, "HOST_PORT"))
         {
             pageUri = BuildOverlayUri(
                 pageUri,
@@ -904,6 +993,211 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         return true;
     }
+
+    private static Uri RemoveOverlayConnectionParameters(Uri pageUri)
+    {
+        var absolute = pageUri.AbsoluteUri;
+        var fragmentIndex = absolute.IndexOf('#');
+        var basePart = fragmentIndex >= 0 ? absolute[..fragmentIndex] : absolute;
+        var fragment = fragmentIndex >= 0 ? absolute[(fragmentIndex + 1)..] : null;
+        basePart = RemoveQueryParameters(basePart);
+        if (fragment is not null)
+        {
+            fragment = RemoveQueryParameters(fragment);
+        }
+
+        return new Uri(fragment is null ? basePart : $"{basePart}#{fragment}");
+    }
+
+    private static string RemoveQueryParameters(string value)
+    {
+        var queryIndex = value.IndexOf('?');
+        if (queryIndex < 0)
+        {
+            return value;
+        }
+
+        var retained = value[(queryIndex + 1)..]
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Where(parameter =>
+            {
+                var equalsIndex = parameter.IndexOf('=');
+                var key = equalsIndex >= 0 ? parameter[..equalsIndex] : parameter;
+                return !key.Equals("OVERLAY_WS", StringComparison.OrdinalIgnoreCase) &&
+                       !key.Equals("HOST_PORT", StringComparison.OrdinalIgnoreCase);
+            })
+            .ToArray();
+        return retained.Length == 0
+            ? value[..queryIndex]
+            : $"{value[..queryIndex]}?{string.Join('&', retained)}";
+    }
+
+    internal static bool TryBuildCustomOverlayUri(
+        string sourceUrl,
+        Uri webSocketUri,
+        out Uri pageUri)
+        => TryBuildCustomOverlayUri(
+            sourceUrl,
+            webSocketUri,
+            OverlayConnectionMode.OverlayPlugin,
+            out pageUri);
+
+    internal static OverlayConnectionMode ResolveInitialConnectionMode(
+        HtmlOverlayWindowSettings settings)
+        => settings.ConnectionMode == OverlayConnectionMode.Auto
+            ? settings.DetectedConnectionMode is
+                OverlayConnectionMode.OverlayPlugin or OverlayConnectionMode.ActWebSocket
+                ? settings.DetectedConnectionMode.Value
+                : OverlayConnectionMode.OverlayPlugin
+            : settings.ConnectionMode;
+
+    internal static OverlayConnectionMode GetFallbackConnectionMode(
+        OverlayConnectionMode mode)
+        => mode == OverlayConnectionMode.ActWebSocket
+            ? OverlayConnectionMode.OverlayPlugin
+            : OverlayConnectionMode.ActWebSocket;
+
+    private void StartCustomOverlayConnectionDetection(
+        string name,
+        HtmlOverlayForm window,
+        Uri webSocketUri,
+        OverlayConnectionMode initialMode)
+    {
+        if (overlayConnectionAttempts.TryRemove(name, out var previousAttempt))
+        {
+            previousAttempt.Cancel();
+            previousAttempt.Dispose();
+        }
+
+        var settings = getOverlayWindowSettings(name);
+        if (initialMode == OverlayConnectionMode.Original)
+        {
+            settings.ConnectionState = OverlayConnectionState.None;
+            settings.ConnectionStateDetail = "原样打开，不检测解析器连接";
+            return;
+        }
+
+        var attempt = new OverlayConnectionAttempt(initialMode);
+        overlayConnectionAttempts[name] = attempt;
+        settings.ConnectionState = OverlayConnectionState.Detecting;
+        settings.ConnectionStateDetail = DescribeConnectionMode(initialMode);
+        _ = DetectCustomOverlayConnectionAsync(
+            name,
+            window,
+            webSocketUri,
+            settings,
+            attempt);
+    }
+
+    private async Task DetectCustomOverlayConnectionAsync(
+        string name,
+        HtmlOverlayForm window,
+        Uri webSocketUri,
+        HtmlOverlayWindowSettings settings,
+        OverlayConnectionAttempt attempt)
+    {
+        try
+        {
+            await Task.Delay(CustomOverlayConnectionTimeout, attempt.Token).ConfigureAwait(false);
+            if (settings.ConnectionMode != OverlayConnectionMode.Auto)
+            {
+                settings.ConnectionState = OverlayConnectionState.Failed;
+                settings.ConnectionStateDetail = "未检测到解析器连接";
+                return;
+            }
+
+            var fallbackMode = GetFallbackConnectionMode(attempt.Mode);
+            if (!TryBuildCustomOverlayUri(
+                    settings.SourceUrl,
+                    webSocketUri,
+                    fallbackMode,
+                    out var fallbackUri))
+            {
+                settings.ConnectionState = OverlayConnectionState.Failed;
+                settings.ConnectionStateDetail = "网址无效";
+                return;
+            }
+
+            attempt.Mode = fallbackMode;
+            settings.ConnectionState = OverlayConnectionState.Retrying;
+            settings.ConnectionStateDetail = $"正在尝试{DescribeConnectionMode(fallbackMode)}";
+            if (!window.Navigate(fallbackUri))
+            {
+                settings.ConnectionState = OverlayConnectionState.Failed;
+                settings.ConnectionStateDetail = "悬浮窗已经关闭";
+                return;
+            }
+
+            await Task.Delay(CustomOverlayConnectionTimeout, attempt.Token).ConfigureAwait(false);
+            settings.ConnectionState = OverlayConnectionState.Failed;
+            settings.ConnectionStateDetail = "两种连接方式均未建立数据通道";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (overlayConnectionAttempts.TryGetValue(name, out var current) &&
+                ReferenceEquals(current, attempt) &&
+                settings.ConnectionState is OverlayConnectionState.Connected or
+                    OverlayConnectionState.Failed)
+            {
+                overlayConnectionAttempts.TryRemove(name, out _);
+                attempt.Dispose();
+            }
+        }
+    }
+
+    private void OnCustomOverlayWebSocketConnected(string name, Uri connectedUri)
+    {
+        if (overlayWebSocketUri is null ||
+            !Uri.TryCreate(overlayWebSocketUri, UriKind.Absolute, out var expectedUri) ||
+            !string.Equals(connectedUri.Host, expectedUri.Host, StringComparison.OrdinalIgnoreCase) ||
+            connectedUri.Port != expectedUri.Port)
+        {
+            return;
+        }
+
+        var detectedMode = connectedUri.AbsolutePath.Equals(
+            "/ws",
+            StringComparison.OrdinalIgnoreCase)
+            ? OverlayConnectionMode.OverlayPlugin
+            : connectedUri.AbsolutePath is "/MiniParse" or "/BeforeLogLineRead"
+                ? OverlayConnectionMode.ActWebSocket
+                : (OverlayConnectionMode?)null;
+        if (detectedMode is null)
+        {
+            return;
+        }
+
+        var settings = getOverlayWindowSettings(name);
+        if (settings.ConnectionMode == OverlayConnectionMode.Auto)
+        {
+            if (settings.DetectedConnectionMode != detectedMode)
+            {
+                settings.DetectedConnectionMode = detectedMode;
+                // Transient probe state is ignored; only a proven strategy is persisted.
+                persistOverlaySettings();
+            }
+        }
+
+        settings.ConnectionState = OverlayConnectionState.Connected;
+        settings.ConnectionStateDetail = $"已连接（{DescribeConnectionMode(detectedMode.Value)}）";
+        if (overlayConnectionAttempts.TryRemove(name, out var attempt))
+        {
+            attempt.Cancel();
+            attempt.Dispose();
+        }
+    }
+
+    private static string DescribeConnectionMode(OverlayConnectionMode mode)
+        => mode switch
+        {
+            OverlayConnectionMode.OverlayPlugin => "现代悬浮窗协议",
+            OverlayConnectionMode.ActWebSocket => "旧版 ACTWS 协议",
+            OverlayConnectionMode.Original => "原样网址",
+            _ => "自动检测",
+        };
 
     public static bool TryNormalizeCustomOverlayUri(string sourceUrl, out Uri uri)
     {
@@ -1017,6 +1311,13 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private Task DisposeOverlayWindows()
     {
+        foreach (var attempt in overlayConnectionAttempts.Values)
+        {
+            attempt.Cancel();
+            attempt.Dispose();
+        }
+        overlayConnectionAttempts.Clear();
+
         var windows = new List<HtmlOverlayForm>();
         if (cactbotOverlay is not null)
         {
@@ -1278,6 +1579,14 @@ public sealed class SelfHostedActRuntime : IDisposable
             {
                 parser.Subscription.ZoneChanged -= OnZoneChangedForHost;
                 parser.Subscription.NetworkReceived -= OnNetworkReceivedForHost;
+                lock (networkCaptureSync)
+                {
+                    if (networkSentSubscribed)
+                    {
+                        parser.Subscription.NetworkSent -= OnNetworkSentForHost;
+                        networkSentSubscribed = false;
+                    }
+                }
             }
             parser?.Dispose();
         }
@@ -1708,6 +2017,34 @@ public sealed class SelfHostedActRuntime : IDisposable
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
         => NetworkReceived?.Invoke(connection, epoch, message);
 
+    private void OnNetworkSentForHost(string connection, long epoch, byte[] message)
+        => NetworkSent?.Invoke(connection, epoch, message);
+
+    private void UpdateNetworkSentSubscriptionLocked()
+    {
+        if (parser is null)
+        {
+            networkSentSubscribed = false;
+            return;
+        }
+
+        if (networkSentCaptureRequested == networkSentSubscribed)
+        {
+            return;
+        }
+
+        if (networkSentCaptureRequested)
+        {
+            parser.Subscription.NetworkSent += OnNetworkSentForHost;
+        }
+        else
+        {
+            parser.Subscription.NetworkSent -= OnNetworkSentForHost;
+        }
+
+        networkSentSubscribed = networkSentCaptureRequested;
+    }
+
     private void PublishEncounter(EncounterData encounter, bool finished)
     {
         try
@@ -2056,6 +2393,20 @@ public sealed class SelfHostedActRuntime : IDisposable
         public int ProcessedSwings { get; set; }
 
         public int CriticalDirectHits { get; set; }
+    }
+
+    private sealed class OverlayConnectionAttempt(
+        OverlayConnectionMode mode) : IDisposable
+    {
+        private readonly CancellationTokenSource cancellation = new();
+
+        public OverlayConnectionMode Mode { get; set; } = mode;
+
+        public CancellationToken Token => cancellation.Token;
+
+        public void Cancel() => cancellation.Cancel();
+
+        public void Dispose() => cancellation.Dispose();
     }
 
     private readonly record struct CombatantHitCounts(

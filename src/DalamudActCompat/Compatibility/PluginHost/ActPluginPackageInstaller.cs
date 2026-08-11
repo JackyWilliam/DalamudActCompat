@@ -1,9 +1,11 @@
 using System.IO.Compression;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Infrastructure.Storage;
 
 namespace DalamudActCompat.Compatibility.PluginHost;
@@ -21,12 +23,19 @@ public sealed partial class ActPluginPackageInstaller
         new("act.foxtts", "ACT.FoxTTS", "ACT.FoxTTS.dll", "ACT.FoxTTS.FoxTTSPlugin"),
         new("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
         new("silverdasher", "银山雀儿 / SilverDasher", "SilverDasher.dll", "SilverDasher.Loader.Loader"),
+        new("matcha", "抹茶 / Cafe.Matcha", "Cafe.Matcha.dll", "Cafe.Matcha.MatchaInit"),
     ];
 
     public ActPluginPackageInstaller(PluginPaths paths)
     {
         this.paths = paths;
     }
+
+    public static bool IsSpecializedPluginId(string pluginId)
+        => KnownPlugins.Any(plugin => string.Equals(
+            plugin.Id,
+            pluginId,
+            StringComparison.OrdinalIgnoreCase));
 
     public async Task<InstalledActPlugin> InstallAsync(
         string packagePath,
@@ -71,9 +80,25 @@ public sealed partial class ActPluginPackageInstaller
                     throw new InvalidDataException("Select an ACT plugin .dll or .zip file.");
             }
 
-            CreateKnownManifestWhenMissing(stagingDirectory);
+            CreateManifestWhenMissing(stagingDirectory);
             var manifest = await ReadManifestAsync(stagingDirectory, cancellationToken).ConfigureAwait(false);
             ValidateManifest(manifest, stagingDirectory);
+            if (!IsSpecializedPluginId(manifest.Id))
+            {
+                var entryAssembly = Path.Combine(stagingDirectory, manifest.EntryAssembly);
+                ValidateGenericEntryPoint(manifest, stagingDirectory);
+                manifest.RequestedCapabilities = GetRequestedCapabilities(manifest)
+                    .Concat(InferCapabilities(entryAssembly))
+                    .Distinct()
+                    .OrderBy(static capability => capability)
+                    .Select(static capability => capability.ToString())
+                    .ToArray();
+                await File.WriteAllTextAsync(
+                        Path.Combine(stagingDirectory, ActPluginManifest.FileName),
+                        JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             installDirectory = Path.Combine(paths.ActPluginDirectory, manifest.Id);
             if (Directory.Exists(installDirectory))
@@ -136,8 +161,81 @@ public sealed partial class ActPluginPackageInstaller
             }
         }
 
-        return plugins.OrderBy(plugin => plugin.Manifest.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        return plugins
+            .OrderBy(plugin => GetPluginOrder(plugin.Manifest.Id))
+            .ThenBy(plugin => plugin.Manifest.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
+
+    public async Task<string?> UninstallAsync(
+        string pluginId,
+        CancellationToken cancellationToken)
+    {
+        if (!PluginIdPattern().IsMatch(pluginId))
+        {
+            throw new ArgumentException("Plugin id is invalid.", nameof(pluginId));
+        }
+
+        await installLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            paths.EnsureCreated();
+            var installDirectory = Path.GetFullPath(
+                Path.Combine(paths.ActPluginDirectory, pluginId));
+            var pluginRoot = Path.GetFullPath(paths.ActPluginDirectory)
+                             + Path.DirectorySeparatorChar;
+            if (!installDirectory.StartsWith(
+                    pluginRoot,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !Directory.Exists(installDirectory))
+            {
+                return null;
+            }
+
+            var manifest = ReadManifest(installDirectory);
+            ValidateManifest(manifest, installDirectory);
+            if (!string.Equals(
+                    manifest.Id,
+                    pluginId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "Plugin directory and manifest ids do not match.");
+            }
+
+            var backupDirectory = Path.Combine(
+                paths.PluginBackupDirectory,
+                $"{manifest.Id}-removed-{DateTimeOffset.Now:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}");
+            // Moving instead of deleting keeps an explicit user uninstall recoverable while
+            // immediately removing the package from discovery and Host startup.
+            Directory.Move(installDirectory, backupDirectory);
+            return backupDirectory;
+        }
+        finally
+        {
+            installLock.Release();
+        }
+    }
+
+    public static IReadOnlyList<ActCapability> GetRequestedCapabilities(
+        ActPluginManifest manifest)
+        => (manifest.RequestedCapabilities ?? [])
+            .Select(value => Enum.TryParse<ActCapability>(value, ignoreCase: true, out var capability)
+                ? capability
+                : (ActCapability?)null)
+            .Where(static capability => capability.HasValue)
+            .Select(static capability => capability!.Value)
+            .Distinct()
+            .OrderBy(static capability => capability)
+            .ToArray();
+
+    private static int GetPluginOrder(string pluginId)
+        => pluginId.ToLowerInvariant() switch
+        {
+            "silverdasher" => 1,
+            "matcha" => 2,
+            _ => 0,
+        };
 
     private static void ExtractSafely(ZipArchive archive, string stagingDirectory)
     {
@@ -172,7 +270,7 @@ public sealed partial class ActPluginPackageInstaller
         }
     }
 
-    private static void CreateKnownManifestWhenMissing(string stagingDirectory)
+    private static void CreateManifestWhenMissing(string stagingDirectory)
     {
         var manifestPath = Path.Combine(stagingDirectory, ActPluginManifest.FileName);
         if (File.Exists(manifestPath))
@@ -217,8 +315,33 @@ public sealed partial class ActPluginPackageInstaller
             return;
         }
 
-        throw new InvalidDataException(
-            $"Package has no {ActPluginManifest.FileName} and is not a recognized CactbotSelf, PostNamazu, ACT.FoxTTS, Triggernometry, or SilverDasher release.");
+        var candidates = DiscoverActPluginEntryPoints(stagingDirectory);
+        if (candidates.Count != 1)
+        {
+            throw new InvalidDataException(
+                candidates.Count == 0
+                    ? $"Package has no {ActPluginManifest.FileName} and no managed type implementing Advanced_Combat_Tracker.IActPluginV1 was found."
+                    : $"Package contains {candidates.Count} ACT plugin entry points. Add {ActPluginManifest.FileName} to select one explicitly.");
+        }
+
+        var candidate = candidates[0];
+        var generatedManifest = new ActPluginManifest
+        {
+            Id = CreatePluginId(candidate.AssemblyName),
+            Name = candidate.AssemblyName,
+            Version = candidate.Version,
+            SourceSha256 = ComputeSha256(candidate.AssemblyPath),
+            HostApiVersion = 1,
+            EntryAssembly = Path.GetRelativePath(stagingDirectory, candidate.AssemblyPath),
+            EntryType = candidate.EntryType,
+            RequestedCapabilities = InferCapabilities(candidate.AssemblyPath)
+                .Select(static capability => capability.ToString())
+                .ToArray(),
+        };
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(generatedManifest, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+        }));
     }
 
     private static void StageLooseDll(string dllPath, string stagingDirectory)
@@ -226,16 +349,10 @@ public sealed partial class ActPluginPackageInstaller
         var fileName = Path.GetFileName(dllPath);
         var known = KnownPlugins.FirstOrDefault(
             plugin => string.Equals(plugin.AssemblyName, fileName, StringComparison.OrdinalIgnoreCase));
-        if (known is null)
+        if (known?.Id is "silverdasher" or "matcha")
         {
             throw new InvalidDataException(
-                $"Unknown ACT plugin DLL '{fileName}'. Supported DLLs: {string.Join(", ", KnownPlugins.Select(plugin => plugin.AssemblyName))}.");
-        }
-
-        if (known.Id == "silverdasher")
-        {
-            throw new InvalidDataException(
-                "SilverDasher must be installed from its complete ZIP package so libs and data files are preserved.");
+                $"{known.Name} must be installed from its complete ZIP package so companion data files are preserved.");
         }
 
         File.Copy(dllPath, Path.Combine(stagingDirectory, fileName));
@@ -247,7 +364,7 @@ public sealed partial class ActPluginPackageInstaller
             stagingDirectory,
             $"{Path.GetFileNameWithoutExtension(fileName)}.pdb");
 
-        if (known.Id == "triggernometry")
+        if (known?.Id == "triggernometry")
         {
             foreach (var translation in Directory.EnumerateFiles(sourceDirectory, "*.triglations.xml"))
             {
@@ -257,6 +374,268 @@ public sealed partial class ActPluginPackageInstaller
                     overwrite: false);
             }
         }
+    }
+
+    private static IReadOnlyList<ActPluginEntryPoint> DiscoverActPluginEntryPoints(
+        string stagingDirectory)
+    {
+        var candidates = new List<ActPluginEntryPoint>();
+        foreach (var assemblyPath in Directory.EnumerateFiles(
+                     stagingDirectory,
+                     "*.dll",
+                     SearchOption.AllDirectories))
+        {
+            try
+            {
+                using var stream = File.OpenRead(assemblyPath);
+                using var peReader = new PEReader(stream);
+                if (!peReader.HasMetadata)
+                {
+                    continue;
+                }
+
+                var metadata = peReader.GetMetadataReader();
+                var assembly = metadata.GetAssemblyDefinition();
+                var assemblyName = metadata.GetString(assembly.Name);
+                foreach (var typeHandle in metadata.TypeDefinitions)
+                {
+                    var type = metadata.GetTypeDefinition(typeHandle);
+                    if ((type.Attributes & System.Reflection.TypeAttributes.Abstract) != 0 ||
+                        !ImplementsActPluginInterface(metadata, typeHandle, []))
+                    {
+                        continue;
+                    }
+
+                    var typeNamespace = metadata.GetString(type.Namespace);
+                    var typeName = metadata.GetString(type.Name);
+                    candidates.Add(new ActPluginEntryPoint(
+                        Path.GetFullPath(assemblyPath),
+                        assemblyName,
+                        assembly.Version.ToString(),
+                        JoinTypeName(typeNamespace, typeName)));
+                }
+            }
+            catch (Exception ex) when (ex is BadImageFormatException or InvalidOperationException)
+            {
+                // Native DLLs and managed netmodules are package data, not ACT entry assemblies.
+            }
+        }
+
+        return candidates;
+    }
+
+    private static bool IsActPluginInterface(
+        MetadataReader metadata,
+        InterfaceImplementationHandle implementationHandle)
+    {
+        var implementation = metadata.GetInterfaceImplementation(implementationHandle);
+        return GetTypeName(metadata, implementation.Interface) ==
+               "Advanced_Combat_Tracker.IActPluginV1";
+    }
+
+    private static bool ImplementsActPluginInterface(
+        MetadataReader metadata,
+        TypeDefinitionHandle typeHandle,
+        HashSet<TypeDefinitionHandle> visited)
+    {
+        if (!visited.Add(typeHandle))
+        {
+            return false;
+        }
+
+        var type = metadata.GetTypeDefinition(typeHandle);
+        if (type.GetInterfaceImplementations().Any(handle =>
+                IsActPluginInterface(metadata, handle)))
+        {
+            return true;
+        }
+
+        return !type.BaseType.IsNil &&
+               type.BaseType.Kind == HandleKind.TypeDefinition &&
+               ImplementsActPluginInterface(
+                   metadata,
+                   (TypeDefinitionHandle)type.BaseType,
+                   visited);
+    }
+
+    private static void ValidateGenericEntryPoint(
+        ActPluginManifest manifest,
+        string stagingDirectory)
+    {
+        var entryAssembly = Path.GetFullPath(Path.Combine(
+            stagingDirectory,
+            manifest.EntryAssembly));
+        var candidates = DiscoverActPluginEntryPoints(stagingDirectory);
+        var matchingEntryPoint = candidates.Any(candidate =>
+            string.Equals(candidate.AssemblyPath, entryAssembly, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.EntryType, manifest.EntryType, StringComparison.Ordinal));
+        if (!matchingEntryPoint)
+        {
+            var discovered = candidates.Count == 0
+                ? "none"
+                : string.Join(", ", candidates.Select(static candidate => candidate.EntryType));
+            var interfaceDetail = DescribeEntryTypeInterfaces(entryAssembly, manifest.EntryType);
+            throw new InvalidDataException(
+                $"Generic plugin entry type '{manifest.EntryType}' does not implement Advanced_Combat_Tracker.IActPluginV1 in '{manifest.EntryAssembly}'. Discovered: {discovered}. Interfaces: {interfaceDetail}.");
+        }
+    }
+
+    private static string DescribeEntryTypeInterfaces(string assemblyPath, string entryType)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        foreach (var handle in metadata.TypeDefinitions)
+        {
+            var type = metadata.GetTypeDefinition(handle);
+            var name = JoinTypeName(
+                metadata.GetString(type.Namespace),
+                metadata.GetString(type.Name));
+            if (!string.Equals(name, entryType, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return string.Join(", ", type.GetInterfaceImplementations().Select(implementationHandle =>
+            {
+                var implementation = metadata.GetInterfaceImplementation(implementationHandle);
+                return $"{implementation.Interface.Kind}:{GetTypeName(metadata, implementation.Interface)}";
+            }));
+        }
+
+        return "entry type not found";
+    }
+
+    private static string GetTypeName(MetadataReader metadata, EntityHandle handle)
+    {
+        return handle.Kind switch
+        {
+            HandleKind.TypeReference => GetTypeReferenceName(
+                metadata,
+                (TypeReferenceHandle)handle),
+            HandleKind.TypeDefinition => GetTypeDefinitionName(
+                metadata,
+                (TypeDefinitionHandle)handle),
+            _ => string.Empty,
+        };
+    }
+
+    private static string GetTypeReferenceName(
+        MetadataReader metadata,
+        TypeReferenceHandle handle)
+    {
+        var type = metadata.GetTypeReference(handle);
+        return JoinTypeName(metadata.GetString(type.Namespace), metadata.GetString(type.Name));
+    }
+
+    private static string GetTypeDefinitionName(
+        MetadataReader metadata,
+        TypeDefinitionHandle handle)
+    {
+        var type = metadata.GetTypeDefinition(handle);
+        return JoinTypeName(metadata.GetString(type.Namespace), metadata.GetString(type.Name));
+    }
+
+    private static string JoinTypeName(string typeNamespace, string typeName)
+        => string.IsNullOrWhiteSpace(typeNamespace)
+            ? typeName
+            : $"{typeNamespace}.{typeName}";
+
+    private static string CreatePluginId(string assemblyName)
+    {
+        var id = Regex.Replace(
+                assemblyName.ToLowerInvariant(),
+                "[^a-z0-9._-]+",
+                "-",
+                RegexOptions.CultureInvariant)
+            .Trim('.', '-', '_');
+        if (id.Length < 2)
+        {
+            id = $"plugin-{id}";
+        }
+
+        return id.Length <= 64 ? id : id[..64].TrimEnd('.', '-', '_');
+    }
+
+    private static IReadOnlyList<ActCapability> InferCapabilities(string assemblyPath)
+    {
+        var inferred = new HashSet<ActCapability>
+        {
+            // These are inherent to the ACT plugin contract, not guesses from implementation details.
+            ActCapability.ReadCombatLogs,
+            ActCapability.ReadLocalConfiguration,
+        };
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var referencedTypes = metadata.TypeReferences
+            .Select(handle => GetTypeName(metadata, handle))
+            .ToArray();
+        var referencedMembers = metadata.MemberReferences
+            .Select(handle => metadata.GetString(metadata.GetMemberReference(handle).Name))
+            .ToArray();
+        if (referencedTypes.Any(static name => name.StartsWith("System.Net.", StringComparison.Ordinal)))
+        {
+            inferred.Add(ActCapability.NetworkRequest);
+        }
+
+        if (referencedTypes.Any(static name =>
+                name is "System.Diagnostics.Process" or "System.Diagnostics.ProcessStartInfo"))
+        {
+            inferred.Add(ActCapability.LaunchExternalProcess);
+        }
+
+        if (referencedTypes.Any(static name => name.StartsWith("System.Speech.", StringComparison.Ordinal)) ||
+            referencedMembers.Any(static name => name.Contains("PlayTts", StringComparison.OrdinalIgnoreCase)))
+        {
+            inferred.Add(ActCapability.TextToSpeech);
+        }
+
+        if (referencedTypes.Any(static name => name is "System.Windows.Forms.Clipboard"))
+        {
+            inferred.Add(ActCapability.Clipboard);
+        }
+
+        if (referencedTypes.Any(static name => name is "System.Windows.Forms.SendKeys"))
+        {
+            inferred.Add(ActCapability.GameCommand);
+        }
+
+        if (referencedTypes.Any(static name =>
+                name is "System.IO.File" or "System.IO.Directory" or
+                    "System.IO.FileStream" or "System.IO.StreamWriter" or
+                    "System.IO.FileSystemWatcher"))
+        {
+            inferred.Add(ActCapability.WriteFiles);
+        }
+
+        if (referencedTypes.Any(static name =>
+                name.StartsWith("System.Reflection.Emit.", StringComparison.Ordinal) ||
+                name.Contains("CodeDomProvider", StringComparison.Ordinal) ||
+                name.StartsWith("System.Management.Automation.", StringComparison.Ordinal)))
+        {
+            inferred.Add(ActCapability.HighRiskScript);
+        }
+
+        var nativeMethods = metadata.MethodDefinitions
+            .Where(handle =>
+                (metadata.GetMethodDefinition(handle).Attributes &
+                 System.Reflection.MethodAttributes.PinvokeImpl) != 0)
+            .Select(handle => metadata.GetString(metadata.GetMethodDefinition(handle).Name))
+            .ToArray();
+        if (nativeMethods.Length > 0)
+        {
+            inferred.Add(ActCapability.NativeSystemAccess);
+        }
+
+        if (nativeMethods.Any(static name => name is
+                "OpenProcess" or "ReadProcessMemory" or "WriteProcessMemory" or
+                "VirtualQueryEx" or "VirtualProtectEx"))
+        {
+            inferred.Add(ActCapability.NativeGameMemory);
+        }
+
+        return inferred.OrderBy(static capability => capability).ToArray();
     }
 
     private static void CopyManagedDependencies(
@@ -298,6 +677,27 @@ public sealed partial class ActPluginPackageInstaller
 
                     File.Copy(dependencyPath, destinationPath);
                     pending.Enqueue(dependencyPath);
+                }
+
+                for (var row = 1; row <= metadata.GetTableRowCount(TableIndex.ModuleRef); row++)
+                {
+                    var moduleHandle = MetadataTokens.ModuleReferenceHandle(row);
+                    var moduleName = metadata.GetString(
+                        metadata.GetModuleReference(moduleHandle).Name);
+                    if (string.IsNullOrWhiteSpace(moduleName) ||
+                        Path.GetFileName(moduleName) != moduleName)
+                    {
+                        continue;
+                    }
+
+                    var modulePath = Path.Combine(sourceDirectory, moduleName);
+                    var destinationPath = Path.Combine(stagingDirectory, moduleName);
+                    if (File.Exists(modulePath) && !File.Exists(destinationPath))
+                    {
+                        // P/Invoke companions are not AssemblyReferences but are still
+                        // required when a standalone DLL was usable in the ACT folder.
+                        File.Copy(modulePath, destinationPath);
+                    }
                 }
             }
             catch (BadImageFormatException)
@@ -389,10 +789,43 @@ public sealed partial class ActPluginPackageInstaller
                     "SilverDasher package must preserve its loader plus the sibling libs and data directories.");
             }
         }
+        else if (string.Equals(manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
+        {
+            var entryDirectory = Path.GetDirectoryName(entryAssembly)!;
+            string[] requiredFiles =
+            [
+                Path.Combine(entryDirectory, "data", "dynamic-event.json"),
+                Path.Combine(entryDirectory, "data", "fate.json"),
+                Path.Combine(entryDirectory, "data", "instance.json"),
+                Path.Combine(entryDirectory, "data", "patch.json"),
+                Path.Combine(entryDirectory, "data", "roulette.json"),
+                Path.Combine(entryDirectory, "data", "template.json"),
+                Path.Combine(entryDirectory, "data", "territory.json"),
+                Path.Combine(entryDirectory, "data", "type.json"),
+                Path.Combine(entryDirectory, "data", "world.json"),
+                Path.Combine(entryDirectory, "upstream", "Cafe.Matcha.Upstream.dll"),
+                Path.Combine(entryDirectory, "upstream", "Cafe.Matcha.Runtime.bin"),
+            ];
+            if (!string.Equals(
+                    Path.GetFileName(entryAssembly),
+                    "Cafe.Matcha.dll",
+                    StringComparison.OrdinalIgnoreCase) ||
+                requiredFiles.Any(path => !File.Exists(path)))
+            {
+                throw new InvalidDataException(
+                    "Matcha package must preserve its entry assembly, complete data directory, and upstream compatibility companions.");
+            }
+        }
     }
 
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{1,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex PluginIdPattern();
 
     private sealed record KnownPlugin(string Id, string Name, string AssemblyName, string EntryType);
+
+    private sealed record ActPluginEntryPoint(
+        string AssemblyPath,
+        string AssemblyName,
+        string Version,
+        string EntryType);
 }

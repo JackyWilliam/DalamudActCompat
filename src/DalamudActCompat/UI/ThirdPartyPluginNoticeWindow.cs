@@ -440,8 +440,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
         ImGui.TextColored(Gold, text.Get("是否启用扩展的完整功能？", "Enable full extension functionality?"));
         ImGui.TextWrapped(text.Get(
-            "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry、鲶鱼精邮差和银山雀儿功能因此不可用。你可以现在一次性启用四项随包扩展各自声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
-            "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry, PostNamazu, and SilverDasher features will remain unavailable. You can enable every capability declared by the four bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
+            "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry、鲶鱼精邮差、银山雀儿和抹茶功能因此不可用。你可以现在一次性启用五项随包扩展各自声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
+            "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry, PostNamazu, SilverDasher, and Matcha features will remain unavailable. You can enable every capability declared by the five bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
         ImGui.TextColored(IceBlue, text.Get(
             "请选择“同意完整权限”或“不同意并保持安全模式”；作出选择前此窗口无法关闭。",
             "Choose either full permissions or safe mode; this window cannot close until you make a choice."));

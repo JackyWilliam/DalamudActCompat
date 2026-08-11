@@ -55,6 +55,8 @@ try
     ValidateBoundedHostQueue();
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
+    ValidateMatchaPermissionIsolation();
+    await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidatePlayerIdentityResolution();
@@ -285,6 +287,31 @@ try
     catch (InvalidDataException)
     {
     }
+
+    var genericDllPath = Path.Combine(loosePluginDirectory, "CommunityExample.dll");
+    File.Copy(typeof(GenericActPluginFixture).Assembly.Location, genericDllPath);
+    var genericPlugin = await installer.InstallAsync(genericDllPath, CancellationToken.None);
+    Assert(
+        genericPlugin.Manifest.Id == "dalamudactcompat.packagesmoketests" &&
+        genericPlugin.Manifest.EntryType == typeof(GenericActPluginFixture).FullName,
+        "A valid unknown IActPluginV1 DLL did not receive an automatic generic manifest.");
+    Assert(
+        ActPluginPackageInstaller.GetRequestedCapabilities(genericPlugin.Manifest)
+            .Contains(ActCapability.ReadCombatLogs),
+        "Generic plugin static preflight did not generate its baseline permission list.");
+    var removedGenericPlugin = await installer.UninstallAsync(
+        genericPlugin.Manifest.Id,
+        CancellationToken.None);
+    Assert(
+        removedGenericPlugin is not null &&
+        Directory.Exists(removedGenericPlugin) &&
+        !Directory.Exists(genericPlugin.InstallDirectory) &&
+        installer.Discover(new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+            .All(plugin => !string.Equals(
+                plugin.Manifest.Id,
+                genericPlugin.Manifest.Id,
+                StringComparison.OrdinalIgnoreCase)),
+        "A generic plugin uninstall was not removed from discovery or retained as a recoverable backup.");
 
     var unsafePackagePath = Path.Combine(testRoot, "unsafe.zip");
     using (var archive = ZipFile.Open(unsafePackagePath, ZipArchiveMode.Create))
@@ -684,7 +711,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 7 &&
+        legacyConfiguration.Version == 8 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -714,7 +741,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 7 &&
+        parserMigration.Version == 8 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -728,7 +755,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 7 &&
+        newConfiguration.Version == 8 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -746,7 +773,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 7 &&
+        previousV6Configuration.Version == 8 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -755,6 +782,26 @@ static void ValidateMeterRows()
         !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "A post-migration manual SilverDasher enable choice was overwritten.");
 
+    var previousGenericPluginUser = new PluginConfiguration
+    {
+        Version = 7,
+        DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        ActPluginPermissions = new Dictionary<string, Dictionary<ActCapability, bool>>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["community.plugin"] = new()
+            {
+                [ActCapability.ReadCombatLogs] = true,
+            },
+        },
+    };
+    Assert(
+        previousGenericPluginUser.ApplyMigrations() &&
+        previousGenericPluginUser.Version == 8 &&
+        previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
+        previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
+        "A pre-consent generic plugin was allowed to remain active during configuration migration.");
+
     var previousEdpsUser = new PluginConfiguration
     {
         Version = 3,
@@ -762,7 +809,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 7 &&
+        previousEdpsUser.Version == 8 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -778,7 +825,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 7 &&
+        previousCustomMetricUser.Version == 8 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -807,7 +854,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 7 &&
+        previousTimelineUser.Version == 8 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -896,7 +943,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 7 &&
+        previousV5CactbotUser.Version == 8 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1984,6 +2031,12 @@ static void ValidateControlCenterPresentation()
         "Infrastructure",
         "Processes",
         "ActHostSupervisor.cs"));
+    var matchaNotifierSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat.Host", "MatchaWindowsNotifier.cs"));
+    var silverNotifierSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat.Host", "SilverDasherWindowsNotifier.cs"));
+    var notificationCenterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat.Host", "WindowsNotificationCenter.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
@@ -2013,6 +2066,21 @@ static void ValidateControlCenterPresentation()
             "permissionsChanged || hostConfigurationChanged",
             StringComparison.Ordinal),
         "Compatibility-extension enable/disable changes no longer restart the isolated Host immediately.");
+    Assert(
+        matchaNotifierSource.Contains("isGameForeground()", StringComparison.Ordinal) &&
+        silverNotifierSource.Contains("isGameForeground()", StringComparison.Ordinal) &&
+        notificationCenterSource.Contains("ToastContentBuilder", StringComparison.Ordinal) &&
+        !matchaNotifierSource.Contains("ShowBalloonTip", StringComparison.Ordinal) &&
+        !silverNotifierSource.Contains("ShowBalloonTip", StringComparison.Ordinal),
+        "Matcha or SilverDasher notification routing regressed to a transient shell balloon or stopped checking game focus.");
+    Assert(
+        controlCenterSource.Contains("GenericPermissionPopupId", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawGenericDeleteModal", StringComparison.Ordinal) &&
+        pluginSource.Contains("QueuePluginInstallFeedback", StringComparison.Ordinal) &&
+        pluginSource.Contains("InjectExternalPluginLogLine(logLine.Line)", StringComparison.Ordinal) &&
+        Regex.Matches(pluginSource, Regex.Escape("ActPluginPermissions.Remove")).Count >= 3 &&
+        hostSupervisorSource.Contains("WaitForPluginStageAsync", StringComparison.Ordinal),
+        "Generic plugin consent/uninstall feedback, exact permission replacement, startup-stage waiting, or Matcha overlay log relay is missing.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -2369,9 +2437,27 @@ static void ValidateSilverDasherPermissionIsolation()
         BundledActPluginCapabilities.FullPermissionConfirmation
             .Select(entry => entry.PluginId)
             .SequenceEqual(
-                new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher" },
+                new[] { "act.foxtts", "postnamazu", "triggernometry", "silverdasher", "matcha" },
                 StringComparer.Ordinal),
-        "The explicit full-permission confirmation does not enable every SilverDasher declaration last.");
+        "The explicit full-permission confirmation does not preserve SilverDasher before the dedicated Matcha group.");
+}
+
+static void ValidateMatchaPermissionIsolation()
+{
+    Assert(
+        BundledActPluginCapabilities.All.Select(entry => entry.PluginId).SequenceEqual(
+            new[] { "act.foxtts", "postnamazu", "triggernometry" },
+            StringComparer.Ordinal),
+        "Matcha changed the existing shared Host permission workflow.");
+    Assert(
+        BundledActPluginCapabilities.Matcha.Contains(ActCapability.ReadCombatLogs) &&
+        BundledActPluginCapabilities.Matcha.Contains(ActCapability.NetworkRequest) &&
+        BundledActPluginCapabilities.Matcha.Contains(ActCapability.WriteFiles) &&
+        !BundledActPluginCapabilities.Matcha.Contains(ActCapability.NativeGameMemory),
+        "Matcha does not expose its dedicated least-privilege capability declaration.");
+    Assert(
+        BundledActPluginCapabilities.FullPermissionConfirmation[^1].PluginId == "matcha",
+        "Matcha is not the final independently confirmed permission group.");
 }
 
 static async Task ValidateSilverDasherNotificationIpcAsync()
@@ -2405,6 +2491,49 @@ static async Task ValidateSilverDasherNotificationIpcAsync()
             HostMessageTypes.CommandRequest,
             StringComparison.Ordinal),
         "SilverDasher notification did not use its independent typed Host IPC channel.");
+}
+
+static async Task ValidateMatchaTypedIpcAsync()
+{
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var client = new HostIpcClient(
+        new EncounterStateStore(),
+        new PluginLogger(log));
+    HostMatchaNotification? notification = null;
+    HostMatchaLogLine? logLine = null;
+    HostTtsRequest? tts = null;
+    client.MatchaNotificationRequested += (_, value) => notification = value;
+    client.MatchaLogLineRequested += (_, value) => logLine = value;
+    client.MatchaTtsRequested += (_, value) => tts = value;
+    var applyMessage = typeof(HostIpcClient).GetMethod(
+                           "ApplyMessage",
+                           BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostIpcClient).FullName,
+                           "ApplyMessage");
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "matcha-typed-ipc-smoke",
+        1,
+        HostMessageTypes.MatchaNotification,
+        HostMessagePriority.Critical,
+        new HostMatchaNotification("Windows fallback"))]);
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "matcha-typed-ipc-smoke",
+        2,
+        HostMessageTypes.MatchaLogLine,
+        HostMessagePriority.Data,
+        new HostMatchaLogLine("00|matcha"))]);
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "matcha-typed-ipc-smoke",
+        3,
+        HostMessageTypes.MatchaTtsRequest,
+        HostMessagePriority.Control,
+        new HostTtsRequest("matcha speech", "matcha"))]);
+    Assert(
+        notification?.Message == "Windows fallback" &&
+        logLine?.Line == "00|matcha" &&
+        tts is { Text: "matcha speech", Source: "matcha" },
+        "Matcha notification, log, or TTS crossed an untyped/shared command channel.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -2586,9 +2715,9 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         configuration);
 
     var pending = manager.GetPendingDisclosures();
-    Assert(pending.Count == 4, "A new install did not require all four bundled extension disclosures.");
+    Assert(pending.Count == 5, "A new install did not require all five bundled extension disclosures.");
     Assert(
-        manager.GetDisclosures().Count == 4,
+        manager.GetDisclosures().Count == 5,
         "The third-party notice did not expose every bundled extension source.");
     Assert(
         pending.Any(plugin =>
@@ -2619,19 +2748,33 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
             File.Exists(plugin.PackagePath)),
         "SilverDasher complete-package version, support group, fixed hash, or bundled artifact is missing.");
+    Assert(
+        pending.Any(plugin =>
+            plugin.Id == "matcha" &&
+            plugin.Version == "26.8.10.829" &&
+            plugin.License == "AGPL-3.0" &&
+            plugin.DisableOnlineUpdates &&
+            plugin.EnableAfterInstall &&
+            plugin.SourceUrl.EndsWith(
+                "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
+                StringComparison.Ordinal) &&
+            plugin.PackageSha256 == "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d" &&
+            plugin.Sha256 == "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64" &&
+            File.Exists(plugin.PackagePath)),
+        "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
     await manager.InstallAndAcknowledgeAsync(pending, CancellationToken.None);
     Assert(
         manager.GetPendingDisclosures().Count == 0,
         "Acknowledged current bundled DLLs still required disclosure.");
     Assert(
-        manager.GetDisclosures().Count == 4 &&
+        manager.GetDisclosures().Count == 5 &&
         manager.GetDisclosures().All(plugin =>
             !string.IsNullOrWhiteSpace(plugin.Author) &&
             Uri.TryCreate(plugin.ProjectUrl, UriKind.Absolute, out _)),
         "Acknowledged DLL author and project URL disclosures disappeared from the notice.");
     var installed = installer.Discover(configuration.DisabledActPluginIds);
-    Assert(installed.Count == 4, "Not all bundled extensions were installed.");
+    Assert(installed.Count == 5, "Not all bundled extensions were installed.");
     var installedSilverDasher = installed.Single(plugin =>
         plugin.Manifest.Id == "silverdasher");
     Assert(
@@ -2640,6 +2783,34 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         installed.Where(plugin => plugin.Manifest.Id != "silverdasher").All(plugin => plugin.Enabled),
         "Installing SilverDasher unexpectedly changed another bundled extension's enabled state.");
+    var installedMatcha = installed.Single(plugin => plugin.Manifest.Id == "matcha");
+    Assert(
+        installedMatcha.Enabled &&
+        installed[^1].Manifest.Id == "matcha" &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "Cafe.Matcha.dll")) &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "data",
+            "fate.json")) &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "upstream",
+            "Cafe.Matcha.Upstream.dll")) &&
+        File.Exists(Path.Combine(
+            installedMatcha.InstallDirectory,
+            "Plugins",
+            "Cafe.Matcha",
+            "upstream",
+            "Cafe.Matcha.Runtime.bin")),
+        "The complete Matcha package was not installed enabled and ordered after SilverDasher.");
     Assert(
         File.Exists(Path.Combine(
             installedSilverDasher.InstallDirectory,
@@ -2703,7 +2874,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             installed.All(plugin => onlineUpdateIds.Contains(plugin.Manifest.Id)
                 ? !manager.IsAllowedToLoad(plugin)
                 : manager.IsAllowedToLoad(plugin)),
-            "Online-updated DLLs were not gated, or the hash-fixed SilverDasher package was unnecessarily disabled.");
+            "Online-updated DLLs were not gated, or a hash-fixed complete package was unnecessarily disabled.");
 
         await manager.InstallAndAcknowledgeAsync(
             onlinePending,
@@ -2741,7 +2912,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         installer,
         configuration);
     Assert(
-        nextRelease.GetPendingDisclosures().Count == 4,
+        nextRelease.GetPendingDisclosures().Count == 5,
         "A DalamudActCompat update did not require every bundled extension disclosure again.");
     Assert(
         installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
@@ -3861,6 +4032,14 @@ static void ValidateHtmlOverlayDefaults()
         "The HTML overlay runtime no longer exposes explicit window deletion.");
     Assert(
         typeof(SelfHostedActRuntime).GetMethod(
+            nameof(SelfHostedActRuntime.InjectExternalPluginLogLine),
+            BindingFlags.Instance | BindingFlags.Public,
+            null,
+            [typeof(string)],
+            null)?.ReturnType == typeof(bool),
+        "Host-generated plugin log lines can no longer re-enter the game-side OverlayPlugin pipeline.");
+    Assert(
+        typeof(SelfHostedActRuntime).GetMethod(
             nameof(SelfHostedActRuntime.ResetCactbotOverlayWindow),
             BindingFlags.Instance | BindingFlags.Public,
             null,
@@ -3875,6 +4054,22 @@ static void ValidateHtmlOverlayDefaults()
                 parameter.Name == "deleteHtmlOverlay" &&
                 parameter.ParameterType == typeof(Action<string>)),
         "The control center no longer exposes the created-overlay delete action.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "uninstallGenericPlugin" &&
+                parameter.ParameterType == typeof(Action<string>)),
+        "The control center no longer exposes the generic ACT plugin uninstall action.");
+    Assert(
+        typeof(ControlCenterWindow).GetConstructors()
+            .Single()
+            .GetParameters()
+            .Any(parameter =>
+                parameter.Name == "dismissPluginInstallFailure" &&
+                parameter.ParameterType == typeof(Action)),
+        "The control center can no longer clear a dismissed plugin-import failure.");
     Assert(
         typeof(ControlCenterWindow).GetConstructors()
             .Single()
@@ -3922,11 +4117,30 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "SettingsWindow.cs"));
+    var helpWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "HelpWindow.cs"));
+    var helpIconPath = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Assets",
+        "HelpIcon.png");
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
         usedCactbotIndex >= 0 && availableCactbotIndex > usedCactbotIndex &&
         controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
         controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("html-overlay-create-tabs", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "BrandedWindowChrome.DrawNavigationRail(",
+            StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("BeginTabBar(\"html-overlay-create-tabs\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ResolveOverlayDisplayName", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("保存名称", StringComparison.Ordinal) &&
         controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
         controlCenterSource.Contains(
             ".Where(static template => template.IsCactbot)",
@@ -3942,6 +4156,49 @@ static void ValidateHtmlOverlayDefaults()
         settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
         "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
+    var helpEntryStart = controlCenterSource.IndexOf(
+        "private void DrawHelpEntry()",
+        StringComparison.Ordinal);
+    var helpEntryEnd = controlCenterSource.IndexOf(
+        "private void OpenCombatLogDirectoryForUpload()",
+        StringComparison.Ordinal);
+    var helpEntrySource = helpEntryStart >= 0 && helpEntryEnd > helpEntryStart
+        ? controlCenterSource[helpEntryStart..helpEntryEnd]
+        : string.Empty;
+    Assert(
+        File.Exists(helpIconPath) && new FileInfo(helpIconPath).Length > 0 &&
+        controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("openHelp();", StringComparison.Ordinal) &&
+        helpEntrySource.Contains("iconHeight * wrap.Width / wrap.Height", StringComparison.Ordinal) &&
+        !helpEntrySource.Contains("AddRect", StringComparison.Ordinal) &&
+        typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("不要去绿玩面前跳脸。", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("一经发现立刻踢出！", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
+        !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),
+        "The flat overview help entry or independent branded help document regressed.");
+    Assert(
+        controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse",
+            StringComparison.Ordinal),
+        "Overview or Combat Meter settings regained a nested scrolling region.");
+    var pluginFailure = new ThirdPartyPluginInstallStatus(
+        ThirdPartyPluginInstallState.Failed,
+        "FishersIntuition",
+        Detail: "No compatible plugin entry point was found.",
+        Diagnostic: "System.InvalidOperationException: preflight failed");
+    var pluginFailureLog = ControlCenterWindow.BuildPluginInstallFailureLog(pluginFailure);
+    Assert(
+        controlCenterSource.Contains("PluginInstallFailurePopupId", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("复制日志", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("关闭并清除记录", StringComparison.Ordinal) &&
+        pluginFailureLog.Contains("FishersIntuition", StringComparison.Ordinal) &&
+        pluginFailureLog.Contains("preflight failed", StringComparison.Ordinal),
+        "Plugin import failures no longer open a dismissible dialog with copyable diagnostics.");
     Assert(
         controlCenterSource.Contains(
             "private const int ResetConfirmationMilliseconds = 10_000;",
@@ -3994,11 +4251,18 @@ static void ValidateHtmlOverlayDefaults()
         "HTML overlay editing mode did not disable click-through and locking together.");
     settings.SetEditing(false);
     Assert(
-        !settings.IsEditing && !settings.IsClickThrough && settings.IsLocked,
-        "Finishing HTML overlay editing did not lock the layout while preserving page input.");
+        !settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
+        "Finishing HTML overlay editing changed the user's unlocked interactive state.");
+    settings.SetEditing(true);
+    settings.SetLocked(true);
+    Assert(
+        !settings.IsEditing && settings.IsLocked && !settings.IsClickThrough,
+        "Locking an HTML overlay did not leave temporary editing mode cleanly.");
+    settings.SetLocked(false);
 
     settings.OpenOnStartup = true;
     settings.HasBeenOpened = true;
+    settings.DisplayName = "团队统计";
     var serializedOverlaySettings = Newtonsoft.Json.JsonConvert.SerializeObject(settings);
     var restoredOverlaySettings = Newtonsoft.Json.JsonConvert.DeserializeObject<HtmlOverlayWindowSettings>(
                                       serializedOverlaySettings)
@@ -4008,9 +4272,12 @@ static void ValidateHtmlOverlayDefaults()
         serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.OpenOnStartup), StringComparison.Ordinal) &&
         serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.HasBeenOpened), StringComparison.Ordinal) &&
         !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsVisible), StringComparison.Ordinal) &&
+        !serializedOverlaySettings.Contains(nameof(HtmlOverlayWindowSettings.IsEditing), StringComparison.Ordinal) &&
         restoredOverlaySettings.OpenOnStartup &&
-        restoredOverlaySettings.HasBeenOpened,
-        "The overlay usage/startup state was not persisted independently of runtime visibility.");
+        restoredOverlaySettings.HasBeenOpened &&
+        restoredOverlaySettings.DisplayName == "团队统计" &&
+        ControlCenterWindow.ResolveOverlayDisplayName("Kagerou", restoredOverlaySettings) == "团队统计",
+        "The overlay usage, startup state, or user-visible name was not persisted independently of runtime identity.");
     var resetSettings = new HtmlOverlayWindowSettings
     {
         OpenOnStartup = true,
@@ -4018,6 +4285,7 @@ static void ValidateHtmlOverlayDefaults()
         IsClickThrough = false,
         IsLocked = false,
         ZoomFactor = 1.5f,
+        DisplayName = "旧名称",
         SourceUrl = "https://example.com/overlay",
         Left = 10,
         Top = 20,
@@ -4031,6 +4299,7 @@ static void ValidateHtmlOverlayDefaults()
         resetSettings.IsClickThrough &&
         resetSettings.IsLocked &&
         resetSettings.ZoomFactor == 1.0f &&
+        string.IsNullOrEmpty(resetSettings.DisplayName) &&
         string.IsNullOrEmpty(resetSettings.SourceUrl) &&
         resetSettings.Left is null &&
         resetSettings.Top is null &&
@@ -4150,9 +4419,26 @@ static void ValidateHtmlOverlayDefaults()
             new Uri("ws://127.0.0.1:10501/ws"),
             out var customOverlayUri) &&
         customOverlayUri.AbsoluteUri.Contains(
-            "#/teamWatch?OVERLAY_WS=ws://127.0.0.1:10501/ws&HOST_PORT=ws://127.0.0.1:10501",
-            StringComparison.Ordinal),
-        "Hash-routed custom overlays did not receive usable OverlayPlugin WebSocket parameters.");
+            "#/teamWatch?OVERLAY_WS=ws://127.0.0.1:10501/ws",
+            StringComparison.Ordinal) &&
+        !customOverlayUri.AbsoluteUri.Contains("HOST_PORT=", StringComparison.Ordinal),
+        "Hash-routed custom overlays did not receive the modern OverlayPlugin WebSocket parameter.");
+    Assert(
+        SelfHostedActRuntime.TryBuildCustomOverlayUri(
+            "https://example.invalid/overlay",
+            new Uri("ws://127.0.0.1:10501/ws"),
+            OverlayConnectionMode.ActWebSocket,
+            out var actWsOverlayUri) &&
+        actWsOverlayUri.Query.Contains(
+            "HOST_PORT=ws://127.0.0.1:10501",
+            StringComparison.Ordinal) &&
+        !actWsOverlayUri.Query.Contains("OVERLAY_WS=", StringComparison.Ordinal),
+        "The automatic fallback URI did not isolate the legacy ACTWS parameter.");
+    var overlaySettings = new HtmlOverlayWindowSettings();
+    Assert(
+        overlaySettings.ConnectionMode == OverlayConnectionMode.Auto &&
+        overlaySettings.DetectedConnectionMode is null,
+        "Custom overlays no longer default to automatic protocol detection.");
     Assert(
         !SelfHostedActRuntime.TryNormalizeCustomOverlayUri(
             "javascript:alert(1)",
@@ -4494,7 +4780,9 @@ static void ValidateHtmlOverlayDefaults()
     Assert(
         htmlOverlayFormSource.Contains("Opacity = 0.01", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Show(form)", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("proxy.MouseWheel += OnInputProxyMouseWheel", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("Input.dispatchMouseEvent", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("type = \"mouseWheel\"", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("inputProxy.Region = nextRegion", StringComparison.Ordinal) &&
         inputRegionScript.Contains("ResizeObserver", StringComparison.Ordinal) &&
         inputRegionScript.Contains("MutationObserver", StringComparison.Ordinal) &&
@@ -4576,9 +4864,10 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         <html>
         <body style="margin:0;background:transparent">
           <div id="panel" style="position:absolute;left:20px;top:20px;width:200px;height:100px;
-                                 background:rgba(20,30,40,.9)">
+                                 overflow:auto;background:rgba(20,30,40,.9)">
             <button id="probe" style="position:absolute;left:20px;top:20px;width:120px;height:50px"
                     onclick="document.documentElement.dataset.clicked='true'">Click</button>
+            <div style="height:600px"></div>
           </div>
           <script>
             window.collapseProbe = () => {
@@ -4619,6 +4908,7 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                            new System.Drawing.Size(320, 200),
                            false,
                            log,
+                           null,
                            null,
                        ],
                        culture: null)
@@ -4696,6 +4986,30 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         var liveWebView = webView!;
         var liveHostForm = hostForm!;
         var liveProxy = proxy!;
+        settings.DisplayName = "Renamed HTML Overlay";
+        applySettings.Invoke(instance, null);
+        var renamedWindows = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            var hostRenamed = await InvokeControlAsync(
+                liveHostForm,
+                () => liveHostForm.Text == settings.DisplayName);
+            var proxyRenamed = await InvokeControlAsync(
+                liveProxy,
+                () => liveProxy.Text == $"{settings.DisplayName} Input");
+            renamedWindows = hostRenamed && proxyRenamed;
+            if (renamedWindows)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(
+            renamedWindows,
+            "Renaming an open HTML overlay did not update its host and input-window titles.");
         var proxyHandle = await InvokeControlAsync(liveProxy, () => liveProxy.Handle);
         var hostHandle = await InvokeControlAsync(liveHostForm, () => liveHostForm.Handle);
         var hostStyle = NativeInputProbe.GetWindowLongPtr(hostHandle, NativeInputProbe.GwlExStyle);
@@ -4755,6 +5069,35 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
 
         Assert(clicked, "A physical proxy click did not reach the live WebView2 button.");
 
+        var onMouseWheel = typeof(Control).GetMethod(
+                               "OnMouseWheel",
+                               BindingFlags.Instance | BindingFlags.NonPublic)
+                           ?? throw new InvalidOperationException(
+                               "The WinForms mouse-wheel dispatcher was not found.");
+        await InvokeControlAsync(liveProxy, () =>
+        {
+            onMouseWheel.Invoke(
+                liveProxy,
+                [new MouseEventArgs(MouseButtons.None, 0, 100, 65, -120)]);
+            return true;
+        });
+        var scrolled = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            scrolled = await ExecuteBrowserScriptAsync(
+                           liveWebView,
+                           "document.getElementById('panel').scrollTop") != "0";
+            if (scrolled)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert(scrolled, "An input-proxy wheel event did not scroll the live WebView2 page.");
+
         await ExecuteBrowserScriptAsync(liveWebView, "window.collapseProbe(); true");
         var collapsedRegionReady = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
@@ -4801,6 +5144,7 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
                 nativeEditChromeVisible = await InvokeControlAsync(
                     chrome,
                     () => chrome.Visible && chrome.Bounds == liveHostForm.Bounds &&
+                          chrome.Text == $"{settings.DisplayName} Edit Boundary" &&
                           (NativeInputProbe.GetWindowLongPtr(
                                chrome.Handle,
                                NativeInputProbe.GwlExStyle) & (nint)0x00000020) != nint.Zero);
@@ -4862,16 +5206,16 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         });
         settings.SetEditing(false);
         applySettings.Invoke(instance, null);
-        var lockedRestoresContentRegion = false;
+        var normalInteractionRestoresContentRegion = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
-            var lockedWindow = await WindowAtProxyPointAsync(
+            var interactiveWindow = await WindowAtProxyPointAsync(
                 liveProxy,
                 new System.Drawing.Point(100, 65));
-            lockedRestoresContentRegion = lockedWindow != proxyHandle &&
-                                          lockedWindow != hostHandle;
-            if (lockedRestoresContentRegion)
+            normalInteractionRestoresContentRegion = interactiveWindow != proxyHandle &&
+                                                      interactiveWindow != hostHandle;
+            if (normalInteractionRestoresContentRegion)
             {
                 break;
             }
@@ -4880,13 +5224,16 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(
-            lockedRestoresContentRegion,
-            "HTML overlay locking did not restore the collapsed content-shaped input region.");
+            normalInteractionRestoresContentRegion &&
+            !settings.IsLocked &&
+            !settings.IsClickThrough &&
+            !settings.IsEditing,
+            "Finishing HTML overlay editing did not restore transparent unlocked page interaction.");
         if (editChromeField.GetValue(instance) is Form hiddenChrome)
         {
             Assert(
                 !await InvokeControlAsync(hiddenChrome, () => hiddenChrome.Visible),
-                "The native HTML overlay edit boundary remained visible after locking.");
+                "The native HTML overlay edit boundary remained visible after editing finished.");
         }
 
         hide.Invoke(instance, null);
@@ -5347,6 +5694,11 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.8.10.829-dact2.zip",
+        "BundledActPlugins/matcha/LICENSE.txt",
+        "BundledActPlugins/matcha/BUILD.md",
+        "BundledActPlugins/matcha/dact-compat.patch",
+        "BundledActPlugins/matcha/GenerateRuntimeData.ps1",
     };
     foreach (var required in requiredBundledPluginFiles)
     {
@@ -5902,14 +6254,15 @@ static async Task CreatePackageAsync(string packagePath, string id, string versi
             Name = "Example Plugin",
             Version = version,
             EntryAssembly = "Example.Plugin.dll",
-            EntryType = "Example.Plugin.EntryPoint",
+            EntryType = typeof(GenericActPluginFixture).FullName!,
             HostApiVersion = 1,
         });
     }
 
     var assemblyEntry = archive.CreateEntry("Example.Plugin.dll");
     await using var assemblyStream = assemblyEntry.Open();
-    await assemblyStream.WriteAsync(new byte[] { 0x4d, 0x5a });
+    await assemblyStream.WriteAsync(await File.ReadAllBytesAsync(
+        typeof(GenericActPluginFixture).Assembly.Location));
 }
 
 static async Task WriteArchiveEntryAsync(ZipArchive archive, string path, byte[] content)
@@ -5924,6 +6277,16 @@ static void Assert(bool condition, string message)
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+public sealed class GenericActPluginFixture : IActPluginV1
+{
+    public void InitPlugin(TabPage pluginScreenSpace, Label pluginStatusText)
+        => pluginStatusText.Text = "ready";
+
+    public void DeInitPlugin()
+    {
     }
 }
 

@@ -16,5 +16,7 @@ public sealed class ActPluginManifest
 
     public string EntryType { get; set; } = string.Empty;
 
+    public string[] RequestedCapabilities { get; set; } = [];
+
     public int HostApiVersion { get; set; } = 1;
 }

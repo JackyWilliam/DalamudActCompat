@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.8.1",
+    "AssemblyVersion":  "0.3.9.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +12,11 @@
     "DalamudApiLevel":  15,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.8.1/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.0/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.8.1/DalamudActCompat.zip",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.0/DalamudActCompat.zip",
     "LastUpdate":  1786352115623,
-    "Changelog":  "v0.3.8.1 将 Cactbot 文字提醒与时间轴拆分为可独立管理的悬浮窗；随包安装默认关闭的 SilverDasher，并通过独立事件与权限通道保持现有扩展链路不变。",
+    "Changelog":  "v0.3.9.0 随包加入默认启用的抹茶，并让它在现有扩展全部启动后进入独立 Host；新增收发网络桥、权限上下文、通知兼容和专属重启入口，抹茶故障不会带崩共享 Host 或游戏内核心。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

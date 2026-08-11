@@ -12,6 +12,7 @@ public enum ActCapability
     LaunchExternalProcess,
     WriteFiles,
     GameCommand,
+    NativeSystemAccess,
     NativeGameMemory,
     HighRiskScript,
 }
