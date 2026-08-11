@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
     <Version>0.3.9.0</Version>
@@ -12,7 +12,8 @@
     <RepoUrl>https://github.com/JackyWilliam/DalamudActCompat</RepoUrl>
     <MinimumDalamudVersion>15.0.0</MinimumDalamudVersion>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
-    <SystemSpeechRuntimeImplementation>..\DalamudActCompat.Host\bin\$(Configuration)\net10.0-windows\runtimes\win\lib\net10.0\System.Speech.dll</SystemSpeechRuntimeImplementation>
+    <CompatibilityHostTargetFramework>net10.0-windows10.0.17763.0</CompatibilityHostTargetFramework>
+    <SystemSpeechRuntimeImplementation>..\DalamudActCompat.Host\bin\$(Configuration)\$(CompatibilityHostTargetFramework)\runtimes\win\lib\net10.0\System.Speech.dll</SystemSpeechRuntimeImplementation>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,6 +26,7 @@
     <Content Include="../../vendor/IINACT/OverlayPlugin.Common/LICENSE.txt" Link="LICENSES/OverlayPlugin.Common-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/machina/LICENSE.md" Link="LICENSES/Machina-LICENSE.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/dnlib-LICENSE.txt" Link="LICENSES/dnlib-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/ThirdParty/WindowsCommunityToolkit-LICENSE.md" Link="LICENSES/WindowsCommunityToolkit-MIT.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/BundledActPlugins/**/*"
              Link="BundledActPlugins/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
@@ -40,10 +42,10 @@
 
   <Target Name="CopyCompatibilityHost" BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
     <ItemGroup>
-      <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/*.dll"
-                              Exclude="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/System.Speech.dll" />
-      <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/*.exe" />
-      <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/*.json" />
+      <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.dll"
+                              Exclude="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/System.Speech.dll" />
+      <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.exe" />
+      <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.json" />
       <CompatibilityHostFiles Include="$(SystemSpeechRuntimeImplementation)" />
     </ItemGroup>
     <MakeDir Directories="$(OutputPath)host" />
@@ -58,10 +60,10 @@
           AfterTargets="ResolveProjectReferences"
           BeforeTargets="PrepareResources">
     <ItemGroup>
-      <EmbeddedCompatibilityHostFile Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/*.dll"
-                                     Exclude="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/System.Speech.dll" />
-      <EmbeddedCompatibilityHostFile Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/*.exe" />
-      <EmbeddedCompatibilityHostFile Include="../DalamudActCompat.Host/bin/$(Configuration)/net10.0-windows/*.json" />
+      <EmbeddedCompatibilityHostFile Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.dll"
+                                     Exclude="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/System.Speech.dll" />
+      <EmbeddedCompatibilityHostFile Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.exe" />
+      <EmbeddedCompatibilityHostFile Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.json" />
       <EmbeddedCompatibilityHostFile Include="$(SystemSpeechRuntimeImplementation)" />
       <EmbeddedResource Include="@(EmbeddedCompatibilityHostFile)"
                         LogicalName="DalamudActCompat.HostAssets.%(Filename)%(Extension)" />

@@ -1,5 +1,22 @@
 namespace DalamudActCompat.ActRuntime;
 
+public enum OverlayConnectionMode
+{
+    Auto,
+    OverlayPlugin,
+    ActWebSocket,
+    Original,
+}
+
+public enum OverlayConnectionState
+{
+    None,
+    Detecting,
+    Retrying,
+    Connected,
+    Failed,
+}
+
 public sealed class HtmlOverlayWindowSettings
 {
     [System.Text.Json.Serialization.JsonIgnore]
@@ -20,6 +37,18 @@ public sealed class HtmlOverlayWindowSettings
     public float ZoomFactor { get; set; } = 1.0f;
 
     public string SourceUrl { get; set; } = string.Empty;
+
+    public OverlayConnectionMode ConnectionMode { get; set; } = OverlayConnectionMode.Auto;
+
+    public OverlayConnectionMode? DetectedConnectionMode { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
+    public OverlayConnectionState ConnectionState { get; internal set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
+    public string ConnectionStateDetail { get; internal set; } = string.Empty;
 
     public int? Left { get; set; }
 
@@ -43,6 +72,13 @@ public sealed class HtmlOverlayWindowSettings
         IsLocked = true;
     }
 
+    public void ResetConnectionDetection()
+    {
+        DetectedConnectionMode = null;
+        ConnectionState = OverlayConnectionState.None;
+        ConnectionStateDetail = string.Empty;
+    }
+
     public void ResetRegistration()
     {
         IsVisible = false;
@@ -52,6 +88,10 @@ public sealed class HtmlOverlayWindowSettings
         IsLocked = true;
         ZoomFactor = 1.0f;
         SourceUrl = string.Empty;
+        ConnectionMode = OverlayConnectionMode.Auto;
+        DetectedConnectionMode = null;
+        ConnectionState = OverlayConnectionState.None;
+        ConnectionStateDetail = string.Empty;
         Left = null;
         Top = null;
         Width = null;

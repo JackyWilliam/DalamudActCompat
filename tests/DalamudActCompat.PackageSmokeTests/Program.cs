@@ -288,6 +288,18 @@ try
     {
     }
 
+    var genericDllPath = Path.Combine(loosePluginDirectory, "CommunityExample.dll");
+    File.Copy(typeof(GenericActPluginFixture).Assembly.Location, genericDllPath);
+    var genericPlugin = await installer.InstallAsync(genericDllPath, CancellationToken.None);
+    Assert(
+        genericPlugin.Manifest.Id == "dalamudactcompat.packagesmoketests" &&
+        genericPlugin.Manifest.EntryType == typeof(GenericActPluginFixture).FullName,
+        "A valid unknown IActPluginV1 DLL did not receive an automatic generic manifest.");
+    Assert(
+        ActPluginPackageInstaller.GetRequestedCapabilities(genericPlugin.Manifest)
+            .Contains(ActCapability.ReadCombatLogs),
+        "Generic plugin static preflight did not generate its baseline permission list.");
+
     var unsafePackagePath = Path.Combine(testRoot, "unsafe.zip");
     using (var archive = ZipFile.Open(unsafePackagePath, ZipArchiveMode.Create))
     {
@@ -686,7 +698,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 7 &&
+        legacyConfiguration.Version == 8 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -716,7 +728,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 7 &&
+        parserMigration.Version == 8 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -730,7 +742,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 7 &&
+        newConfiguration.Version == 8 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -748,7 +760,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 7 &&
+        previousV6Configuration.Version == 8 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -757,6 +769,26 @@ static void ValidateMeterRows()
         !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "A post-migration manual SilverDasher enable choice was overwritten.");
 
+    var previousGenericPluginUser = new PluginConfiguration
+    {
+        Version = 7,
+        DisabledActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        ActPluginPermissions = new Dictionary<string, Dictionary<ActCapability, bool>>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["community.plugin"] = new()
+            {
+                [ActCapability.ReadCombatLogs] = true,
+            },
+        },
+    };
+    Assert(
+        previousGenericPluginUser.ApplyMigrations() &&
+        previousGenericPluginUser.Version == 8 &&
+        previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
+        previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
+        "A pre-consent generic plugin was allowed to remain active during configuration migration.");
+
     var previousEdpsUser = new PluginConfiguration
     {
         Version = 3,
@@ -764,7 +796,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 7 &&
+        previousEdpsUser.Version == 8 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -780,7 +812,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 7 &&
+        previousCustomMetricUser.Version == 8 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -809,7 +841,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 7 &&
+        previousTimelineUser.Version == 8 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -898,7 +930,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 7 &&
+        previousV5CactbotUser.Version == 8 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1986,6 +2018,12 @@ static void ValidateControlCenterPresentation()
         "Infrastructure",
         "Processes",
         "ActHostSupervisor.cs"));
+    var matchaNotifierSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat.Host", "MatchaWindowsNotifier.cs"));
+    var silverNotifierSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat.Host", "SilverDasherWindowsNotifier.cs"));
+    var notificationCenterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat.Host", "WindowsNotificationCenter.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
@@ -2015,6 +2053,13 @@ static void ValidateControlCenterPresentation()
             "permissionsChanged || hostConfigurationChanged",
             StringComparison.Ordinal),
         "Compatibility-extension enable/disable changes no longer restart the isolated Host immediately.");
+    Assert(
+        matchaNotifierSource.Contains("isGameForeground()", StringComparison.Ordinal) &&
+        silverNotifierSource.Contains("isGameForeground()", StringComparison.Ordinal) &&
+        notificationCenterSource.Contains("ToastContentBuilder", StringComparison.Ordinal) &&
+        !matchaNotifierSource.Contains("ShowBalloonTip", StringComparison.Ordinal) &&
+        !silverNotifierSource.Contains("ShowBalloonTip", StringComparison.Ordinal),
+        "Matcha or SilverDasher notification routing regressed to a transient shell balloon or stopped checking game focus.");
     var navigationIndex = controlCenterSource.IndexOf(
         "DrawPageTabs();",
         StringComparison.Ordinal);
@@ -4255,9 +4300,26 @@ static void ValidateHtmlOverlayDefaults()
             new Uri("ws://127.0.0.1:10501/ws"),
             out var customOverlayUri) &&
         customOverlayUri.AbsoluteUri.Contains(
-            "#/teamWatch?OVERLAY_WS=ws://127.0.0.1:10501/ws&HOST_PORT=ws://127.0.0.1:10501",
-            StringComparison.Ordinal),
-        "Hash-routed custom overlays did not receive usable OverlayPlugin WebSocket parameters.");
+            "#/teamWatch?OVERLAY_WS=ws://127.0.0.1:10501/ws",
+            StringComparison.Ordinal) &&
+        !customOverlayUri.AbsoluteUri.Contains("HOST_PORT=", StringComparison.Ordinal),
+        "Hash-routed custom overlays did not receive the modern OverlayPlugin WebSocket parameter.");
+    Assert(
+        SelfHostedActRuntime.TryBuildCustomOverlayUri(
+            "https://example.invalid/overlay",
+            new Uri("ws://127.0.0.1:10501/ws"),
+            OverlayConnectionMode.ActWebSocket,
+            out var actWsOverlayUri) &&
+        actWsOverlayUri.Query.Contains(
+            "HOST_PORT=ws://127.0.0.1:10501",
+            StringComparison.Ordinal) &&
+        !actWsOverlayUri.Query.Contains("OVERLAY_WS=", StringComparison.Ordinal),
+        "The automatic fallback URI did not isolate the legacy ACTWS parameter.");
+    var overlaySettings = new HtmlOverlayWindowSettings();
+    Assert(
+        overlaySettings.ConnectionMode == OverlayConnectionMode.Auto &&
+        overlaySettings.DetectedConnectionMode is null,
+        "Custom overlays no longer default to automatic protocol detection.");
     Assert(
         !SelfHostedActRuntime.TryNormalizeCustomOverlayUri(
             "javascript:alert(1)",
@@ -6012,14 +6074,15 @@ static async Task CreatePackageAsync(string packagePath, string id, string versi
             Name = "Example Plugin",
             Version = version,
             EntryAssembly = "Example.Plugin.dll",
-            EntryType = "Example.Plugin.EntryPoint",
+            EntryType = typeof(GenericActPluginFixture).FullName!,
             HostApiVersion = 1,
         });
     }
 
     var assemblyEntry = archive.CreateEntry("Example.Plugin.dll");
     await using var assemblyStream = assemblyEntry.Open();
-    await assemblyStream.WriteAsync(new byte[] { 0x4d, 0x5a });
+    await assemblyStream.WriteAsync(await File.ReadAllBytesAsync(
+        typeof(GenericActPluginFixture).Assembly.Location));
 }
 
 static async Task WriteArchiveEntryAsync(ZipArchive archive, string path, byte[] content)
@@ -6034,6 +6097,16 @@ static void Assert(bool condition, string message)
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+public sealed class GenericActPluginFixture : IActPluginV1
+{
+    public void InitPlugin(TabPage pluginScreenSpace, Label pluginStatusText)
+        => pluginStatusText.Text = "ready";
+
+    public void DeInitPlugin()
+    {
     }
 }
 

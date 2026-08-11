@@ -14,6 +14,7 @@ internal static class ActCapabilityDisplay
         ActCapability.LaunchExternalProcess => text.Get("启动外部程序", "Launch external processes"),
         ActCapability.WriteFiles => text.Get("写入文件", "Write files"),
         ActCapability.GameCommand => text.Get("发送游戏指令", "Send game commands"),
+        ActCapability.NativeSystemAccess => text.Get("调用 Windows 原生接口", "Call native Windows APIs"),
         ActCapability.NativeGameMemory => text.Get("访问游戏原生内存", "Access native game memory"),
         ActCapability.HighRiskScript => text.Get("运行高风险脚本", "Run high-risk scripts"),
         _ => capability.ToString(),

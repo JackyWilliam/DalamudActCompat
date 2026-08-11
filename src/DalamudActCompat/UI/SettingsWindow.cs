@@ -136,12 +136,24 @@ public sealed class SettingsWindow : Window
 
         foreach (var plugin in installedPlugins)
         {
-            var enabled = plugin.Enabled;
+            var isGeneric = !ActPluginPackageInstaller.IsSpecializedPluginId(
+                plugin.Manifest.Id);
+            var enabled = plugin.Enabled &&
+                          (!isGeneric || configuration.TrustedGenericActPluginIds.Contains(
+                              plugin.Manifest.Id));
             if (ImGui.Checkbox(
                     $"{plugin.Manifest.Name} {plugin.Manifest.Version}###{plugin.Manifest.Id}",
                     ref enabled))
             {
-                if (enabled)
+                var genericNeedsConsent = enabled && isGeneric &&
+                    !configuration.TrustedGenericActPluginIds.Contains(plugin.Manifest.Id);
+                if (genericNeedsConsent)
+                {
+                    // The compact legacy settings page must not bypass the main consent card.
+                    logger.Warning(
+                        $"Generic ACT plugin '{plugin.Manifest.Id}' must be authorized from the main Extensions page before it can be enabled.");
+                }
+                else if (enabled)
                 {
                     configuration.DisabledActPluginIds.Remove(plugin.Manifest.Id);
                 }
@@ -150,8 +162,11 @@ public sealed class SettingsWindow : Window
                     configuration.DisabledActPluginIds.Add(plugin.Manifest.Id);
                 }
 
-                changed = true;
-                hostConfigurationChanged = true;
+                if (!genericNeedsConsent)
+                {
+                    changed = true;
+                    hostConfigurationChanged = true;
+                }
             }
 
             ImGui.SameLine();
@@ -277,13 +292,6 @@ public sealed class SettingsWindow : Window
                 }
             }
 
-            var overlayWindowChanged = DrawHtmlOverlaySettings(
-                configuration.SelectedOverlayTemplate);
-            changed |= overlayWindowChanged;
-            if (overlayWindowChanged)
-            {
-                applyOverlayWindowSettings(configuration.SelectedOverlayTemplate);
-            }
         }
 
         ImGui.TextUnformatted(text.Get("可选 ACT 扩展（与 Cactbot 本体分开）", "Optional ACT extensions (separate from Cactbot)"));

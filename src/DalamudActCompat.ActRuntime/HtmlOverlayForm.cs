@@ -36,6 +36,8 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const string InputRegionMessagePrefix = "dalamud-act-compat:input-regions:";
     private const string InputRegionDiagnosticMessagePrefix =
         "dalamud-act-compat:input-region-diagnostic:";
+    private const string WebSocketProbeMessagePrefix =
+        "dalamud-act-compat:websocket:";
     private static readonly Color TransparencyColor = Color.FromArgb(255, 1, 0, 1);
     private static readonly SemaphoreSlim WebViewInitializationGate = new(1, 1);
     private static readonly object LoaderSync = new();
@@ -449,7 +451,35 @@ internal sealed class HtmlOverlayForm : IDisposable
         })();
         """;
 
-    private readonly Uri pageUri;
+    internal const string WebSocketProbeScript =
+        """
+        (() => {
+          if (window.__dalamudActCompatWebSocketProbeInstalled || !window.WebSocket)
+            return;
+          window.__dalamudActCompatWebSocketProbeInstalled = true;
+          const NativeWebSocket = window.WebSocket;
+          const report = (event, url) => {
+            try {
+              window.chrome?.webview?.postMessage(
+                'dalamud-act-compat:websocket:' + JSON.stringify({ event, url: String(url) }));
+            } catch (_) {
+            }
+          };
+          window.WebSocket = new Proxy(NativeWebSocket, {
+            construct(target, argumentsList, newTarget) {
+              const socket = Reflect.construct(target, argumentsList, newTarget);
+              const url = argumentsList[0];
+              report('created', url);
+              socket.addEventListener('open', () => report('open', socket.url), { once: true });
+              socket.addEventListener('error', () => report('error', socket.url), { once: true });
+              socket.addEventListener('close', () => report('close', socket.url), { once: true });
+              return socket;
+            },
+          });
+        })();
+        """;
+
+    private Uri pageUri;
     private readonly string userDataDirectory;
     private readonly string loaderPath;
     private readonly string title;
@@ -458,6 +488,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private readonly bool debugMode;
     private readonly IPluginLog log;
     private readonly Action<string>? failureNotification;
+    private readonly Action<Uri>? webSocketConnected;
     private readonly object settingsSync = new();
     private readonly ManualResetEventSlim ready = new();
     private readonly SemaphoreSlim initializationGate = new(1, 1);
@@ -514,7 +545,8 @@ internal sealed class HtmlOverlayForm : IDisposable
         Size clientSize,
         bool debugMode,
         IPluginLog log,
-        Action<string>? failureNotification = null)
+        Action<string>? failureNotification = null,
+        Action<Uri>? webSocketConnected = null)
     {
         this.pageUri = pageUri;
         this.userDataDirectory = userDataDirectory;
@@ -526,6 +558,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         this.debugMode = debugMode;
         this.log = log;
         this.failureNotification = failureNotification;
+        this.webSocketConnected = webSocketConnected;
     }
 
     private Size ClientSize { get; }
@@ -536,6 +569,38 @@ internal sealed class HtmlOverlayForm : IDisposable
     public IReadOnlyCollection<int> BrowserProcessIds => browserProcessIds.Keys.ToArray();
 
     public Task ShutdownCompletion => shutdownCompletion.Task;
+
+    public bool Navigate(Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        var targetForm = form;
+        if (disposing || targetForm is null || targetForm.IsDisposed)
+        {
+            return false;
+        }
+
+        pageUri = uri;
+        try
+        {
+            targetForm.BeginInvoke(() =>
+            {
+                if (disposing || webView?.CoreWebView2 is null)
+                {
+                    return;
+                }
+
+                webView.Source = uri;
+                navigationStarted = true;
+                SetBrowserState(BrowserState.Navigating, "页面加载中");
+                log.Information($"Reloading {title} for connection detection: {uri}");
+            });
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
 
     public void Show()
     {
@@ -1122,6 +1187,8 @@ internal sealed class HtmlOverlayForm : IDisposable
             {
                 core.WebMessageReceived += OnBrowserWebMessage;
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    WebSocketProbeScript);
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     $"window.__dalamudActCompatInputRegionDiagnostics = " +
                     $"{(debugMode ? "true" : "false")};");
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
@@ -1366,6 +1433,12 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
+        if (message.StartsWith(WebSocketProbeMessagePrefix, StringComparison.Ordinal))
+        {
+            HandleWebSocketProbe(message[WebSocketProbeMessagePrefix.Length..]);
+            return;
+        }
+
         if (message.StartsWith(InputRegionMessagePrefix, StringComparison.Ordinal))
         {
             UpdateBrowserInputRegion(message[InputRegionMessagePrefix.Length..]);
@@ -1396,6 +1469,34 @@ internal sealed class HtmlOverlayForm : IDisposable
                 0,
                 SwpNoSize | SwpNoMove | SwpNoActivate);
         }
+    }
+
+    private void HandleWebSocketProbe(string json)
+    {
+        if (json.Length > 8192)
+        {
+            return;
+        }
+
+        WebSocketProbePayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<WebSocketProbePayload>(json);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (payload is null ||
+            !string.Equals(payload.Event, "open", StringComparison.Ordinal) ||
+            !Uri.TryCreate(payload.Url, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("ws" or "wss"))
+        {
+            return;
+        }
+
+        webSocketConnected?.Invoke(uri);
     }
 
     private void LogBrowserInputRegionDiagnostic(string json)
@@ -2595,6 +2696,15 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         [System.Text.Json.Serialization.JsonPropertyName("rectangles")]
         public float[][]? Rectangles { get; init; }
+    }
+
+    private sealed class WebSocketProbePayload
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("event")]
+        public string Event { get; init; } = string.Empty;
+
+        [System.Text.Json.Serialization.JsonPropertyName("url")]
+        public string Url { get; init; } = string.Empty;
     }
 
     private sealed class BrowserInputRegionDiagnosticPayload

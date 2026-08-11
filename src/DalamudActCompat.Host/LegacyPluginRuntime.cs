@@ -18,6 +18,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private readonly HashSet<string> allowedPluginIds;
     private readonly bool suppressTtsOutput;
     private readonly bool matchaOnly;
+    private readonly bool genericOnly;
     private readonly List<LegacyPluginHandle> plugins = [];
     private readonly ConcurrentDictionary<string, HostPluginStage> stages =
         new(StringComparer.OrdinalIgnoreCase);
@@ -45,6 +46,10 @@ internal sealed class LegacyPluginRuntime : IDisposable
             StringComparer.OrdinalIgnoreCase);
         this.suppressTtsOutput = suppressTtsOutput;
         matchaOnly = this.allowedPluginIds.SetEquals(["matcha"]);
+        genericOnly = this.allowedPluginIds.Count > 0 && this.allowedPluginIds.All(
+            static id => id is not (
+                "cactbotself" or "postnamazu" or "act.foxtts" or
+                "triggernometry" or "silverdasher" or "matcha"));
         if (matchaOnly)
         {
             SetStage("matcha", "ACT Host", "pending", "Waiting for the dedicated ACT UI host.");
@@ -53,6 +58,27 @@ internal sealed class LegacyPluginRuntime : IDisposable
             SetStage("matcha", "InitPlugin", "pending", "Waiting for the hash-pinned assembly.");
             SetStage("matcha", "Bidirectional network", "pending", "Waiting for isolated RX/TX queues.");
             SetStage("matcha", "Unload test", "pending", "Dedicated Host is still running.");
+            return;
+        }
+
+        if (genericOnly)
+        {
+            SetStage("act-host", "ACT Host", "pending", "Waiting for the generic ACT UI host.");
+            SetStage("act-host", "Host IPC", "pending", "Waiting for the game-side bridge.");
+            SetStage(
+                "act-host",
+                "FFXIV_ACT_Plugin discovery",
+                "pending",
+                "Waiting for the shared read-only FFXIV facade.");
+            foreach (var pluginId in this.allowedPluginIds)
+            {
+                SetStage(
+                    pluginId,
+                    "InitPlugin",
+                    "pending",
+                    "Waiting for explicit-consent generic Host initialization.");
+            }
+
             return;
         }
 
@@ -164,7 +190,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         Directory.CreateDirectory(pluginRoot);
         Directory.CreateDirectory(configRoot);
         Directory.CreateDirectory(Path.Combine(configRoot, "Config"));
-        if (!matchaOnly && FoxTtsConfigurationDefaults.Ensure(configRoot))
+        if (!matchaOnly && !genericOnly && FoxTtsConfigurationDefaults.Ensure(configRoot))
         {
             Console.WriteLine(
                 "Created ACT.FoxTTS defaults with Cafe TTS Pro selected; existing user settings are never overwritten.");
@@ -186,7 +212,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
             ExceptionDispatchInfo.Capture(startupFailure).Throw();
         }
 
-        var stagePluginId = matchaOnly ? "matcha" : "postnamazu";
+        var stagePluginId = matchaOnly
+            ? "matcha"
+            : genericOnly
+                ? "act-host"
+                : "postnamazu";
         SetStage(stagePluginId, "ACT Host", "success", "External STA ACT UI host is active.");
         SetStage(stagePluginId, "Host IPC", "success", "Versioned named-pipe bridge is connected.");
 
@@ -201,6 +231,13 @@ internal sealed class LegacyPluginRuntime : IDisposable
                 "Bidirectional network",
                 plugins.Any(plugin => plugin.Id == "matcha") ? "success" : "failed",
                 "Received and sent packets use a Matcha-only bounded dispatcher in a separate process.");
+            return;
+        }
+        if (genericOnly)
+        {
+            LoadManifestPlugins();
+            HostPluginBridge.ConfigureTtsWriter(null);
+            actMain!.PlayTtsMethod = HostPluginBridge.SendGenericTts;
             return;
         }
 
@@ -441,7 +478,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
         ActGlobals.oFormActMain.ActPlugins.Add(
             new ActPluginData(new FileInfo(assemblyPath), ffxivBridge, tab, status));
         SetStage(
-            matchaOnly ? "matcha" : "postnamazu",
+            matchaOnly
+                ? "matcha"
+                : genericOnly
+                    ? "act-host"
+                    : "postnamazu",
             "FFXIV_ACT_Plugin discovery",
             "success",
             "Official plugin type identity is present with a read-only game-side entity repository.");
@@ -551,7 +592,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     id,
                     "Windows notifications",
                     "success",
-                    "SilverDasher uses the isolated Host Windows shell first and falls back to the existing game-side notification channel if unavailable.");
+                    "SilverDasher uses Dalamud while the game owns the foreground; otherwise it uses Windows Notification Center with a typed Dalamud fallback.");
             }
             else if (id == "matcha")
             {
@@ -567,7 +608,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
                     id,
                     "Windows notifications",
                     "success",
-                    "Notifications use the Matcha Host Windows shell and a typed game-side fallback.");
+                    "Matcha uses Dalamud while the game owns the foreground; otherwise it uses Windows Notification Center with a typed Dalamud fallback.");
             }
         }
         catch (Exception ex)
@@ -606,6 +647,13 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
                 if (manifest.Id is "triggernometry" or "postnamazu")
                 {
+                    continue;
+                }
+
+                if (genericOnly && !allowedPluginIds.Contains(manifest.Id))
+                {
+                    // Untrusted manifests stay installed but must not influence the
+                    // shared generic Host's health or assembly-loading surface.
                     continue;
                 }
 

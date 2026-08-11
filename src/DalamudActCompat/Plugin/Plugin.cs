@@ -66,10 +66,15 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HashSet<Task> cactbotTasks = [];
     private readonly ActHostSupervisor hostSupervisor;
     private readonly ActHostSupervisor matchaHostSupervisor;
+    private readonly ActHostSupervisor genericHostSupervisor;
     private readonly SemaphoreSlim hostTopologyLock = new(1, 1);
     private readonly object permissionSnapshotLock = new();
+    private readonly object pluginInstallStatusLock = new();
     private string? activeHostPermissionFingerprint;
     private string? activeMatchaPermissionFingerprint;
+    private string? activeGenericPermissionFingerprint;
+    private ThirdPartyPluginInstallStatus pluginInstallStatus = new(
+        ThirdPartyPluginInstallState.Idle);
     private int silverDasherEventsEnabled;
     private int matchaEventsEnabled;
     private readonly PictoActOverlayService pictoActOverlay;
@@ -156,6 +161,22 @@ public sealed class Plugin : IDalamudPlugin
             paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
         paths.EnsureCreated();
+        var disabledUntrustedPlugin = false;
+        foreach (var installed in packageInstaller.Discover(configuration.DisabledActPluginIds))
+        {
+            if (!ActPluginPackageInstaller.IsSpecializedPluginId(installed.Manifest.Id) &&
+                !configuration.TrustedGenericActPluginIds.Contains(installed.Manifest.Id))
+            {
+                disabledUntrustedPlugin |= configuration.DisabledActPluginIds.Add(
+                    installed.Manifest.Id);
+            }
+        }
+        if (disabledUntrustedPlugin)
+        {
+            // Old arbitrary manifests predate full-trust consent and must re-enter through the new review card.
+            pluginInterface.SavePluginConfig(configuration);
+        }
+
         var hostIpcClient = new HostIpcClient(
             stateStore,
             logger,
@@ -183,6 +204,17 @@ public sealed class Plugin : IDalamudPlugin
         matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
+        var genericIpcClient = new HostIpcClient(
+            stateStore,
+            logger,
+            BuildGenericHostPermissionSnapshot);
+        genericHostSupervisor = new ActHostSupervisor(
+            paths.HostDirectory,
+            paths.ActPluginDirectory,
+            paths.ConfigDirectory,
+            genericIpcClient,
+            logger);
+        genericHostSupervisor.MatchaTtsRequested += OnGenericTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
             CancellationToken.None);
@@ -223,6 +255,7 @@ public sealed class Plugin : IDalamudPlugin
             localDeathWhilePartyContinues,
             configuration.GetOverlayWindowSettings,
             configuration.GetOverlayWindowSettingsSnapshot,
+            () => _ = framework.RunOnFrameworkThread(SaveConfiguration),
             () => configuration.DebugMode,
             configuration.IsActCapabilityAllowed);
         actRuntime.ConfigureExternalPluginBridges(
@@ -349,10 +382,13 @@ public sealed class Plugin : IDalamudPlugin
             logoTexture,
             () => hostSupervisor.Snapshot,
             () => matchaHostSupervisor.Snapshot,
+            () => genericHostSupervisor.Snapshot,
             RestartHostFromUi,
             StopHostFromUi,
             RestartMatchaHostFromUi,
-            StopMatchaHostFromUi);
+            StopMatchaHostFromUi,
+            RestartGenericHostFromUi,
+            StopGenericHostFromUi);
         settingsWindow = new ControlCenterWindow(
             configuration,
             parserEngine,
@@ -369,6 +405,10 @@ public sealed class Plugin : IDalamudPlugin
             () => statusWindow.IsOpen,
             value => statusWindow.IsOpen = value,
             SelectPluginPackage,
+            GetPluginInstallStatus,
+            ApprovePendingGenericPlugin,
+            DenyPendingGenericPlugin,
+            RequestGenericPluginAuthorization,
             OpenPluginDirectory,
             thirdPartyPluginNoticeWindow.OpenManualDisclosure,
             () => StartBundledPluginUpdateCheck(openWindow: true),
@@ -457,6 +497,7 @@ public sealed class Plugin : IDalamudPlugin
         matchaHostSupervisor.MatchaNotificationRequested -= OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested -= OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested -= OnMatchaTtsRequested;
+        genericHostSupervisor.MatchaTtsRequested -= OnGenericTtsRequested;
 
         if (factoryResetCompleted)
         {
@@ -887,6 +928,8 @@ public sealed class Plugin : IDalamudPlugin
         var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
         var matchaWasRunning =
             matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+        var genericWasRunning =
+            genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
         try
         {
             try
@@ -896,6 +939,10 @@ public sealed class Plugin : IDalamudPlugin
                 if (matchaWasRunning)
                 {
                     await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (genericWasRunning)
+                {
+                    await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
                 }
                 if (hostWasRunning)
                 {
@@ -938,6 +985,17 @@ public sealed class Plugin : IDalamudPlugin
                         restoreFailures.Add(ex);
                     }
                 }
+                if (genericWasRunning && !shutdownToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        restoreFailures.Add(ex);
+                    }
+                }
 
                 if (restoreFailures.Count > 0)
                 {
@@ -964,23 +1022,219 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        var normalizedPackagePath = packagePath.Trim('"');
+        SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
+            ThirdPartyPluginInstallState.Preflighting,
+            Path.GetFileNameWithoutExtension(normalizedPackagePath),
+            Detail: "正在进行安全静态预检；此阶段不会执行 DLL。"));
         _ = Task.Run(async () =>
         {
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 var installed = await packageInstaller.InstallAsync(
-                    packagePath.Trim('"'),
+                    normalizedPackagePath,
                     timeout.Token).ConfigureAwait(false);
+                if (!ActPluginPackageInstaller.IsSpecializedPluginId(installed.Manifest.Id))
+                {
+                    // A changed DLL needs fresh consent even when an older version was trusted.
+                    configuration.DisabledActPluginIds.Add(installed.Manifest.Id);
+                    configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
+                    SaveConfiguration();
+                    SetPluginInstallStatus(CreatePermissionPrompt(installed));
+                    ApplyActPermissionChanges();
+                    logger.Information(
+                        $"Static preflight completed for generic ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}; waiting for user permission.");
+                    return;
+                }
+
                 configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
                 SaveConfiguration();
+                SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
+                    ThirdPartyPluginInstallState.Ready,
+                    installed.Manifest.Name,
+                    installed.Manifest.Id,
+                    installed.Manifest.Version,
+                    Detail: "预检与安装完成；该插件继续使用现有特化 Host 和权限设置。"));
                 logger.Information(
                     $"Installed ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}; its assigned Host will refresh.");
                 ApplyActPermissionChanges();
             }
             catch (Exception ex)
             {
+                SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
+                    ThirdPartyPluginInstallState.Failed,
+                    Path.GetFileNameWithoutExtension(normalizedPackagePath),
+                    Detail: ex.GetBaseException().Message));
                 logger.Error(ex, "ACT plugin package installation failed.");
+            }
+        });
+    }
+
+    private ThirdPartyPluginInstallStatus GetPluginInstallStatus()
+    {
+        lock (pluginInstallStatusLock)
+        {
+            return pluginInstallStatus;
+        }
+    }
+
+    private void SetPluginInstallStatus(ThirdPartyPluginInstallStatus status)
+    {
+        lock (pluginInstallStatusLock)
+        {
+            pluginInstallStatus = status;
+        }
+    }
+
+    private static ThirdPartyPluginInstallStatus CreatePermissionPrompt(
+        InstalledActPlugin installed)
+        => new(
+            ThirdPartyPluginInstallState.AwaitingPermission,
+            installed.Manifest.Name,
+            installed.Manifest.Id,
+            installed.Manifest.Version,
+            ActPluginPackageInstaller.GetRequestedCapabilities(installed.Manifest),
+            "静态预检已通过。允许后，该 DLL 将在所有普通第三方插件共用的通用 Host 中作为桌面代码运行。");
+
+    private void RequestGenericPluginAuthorization(string pluginId)
+    {
+        var installed = packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .FirstOrDefault(plugin => string.Equals(
+                plugin.Manifest.Id,
+                pluginId,
+                StringComparison.OrdinalIgnoreCase));
+        if (installed is null || ActPluginPackageInstaller.IsSpecializedPluginId(pluginId))
+        {
+            return;
+        }
+
+        SetPluginInstallStatus(CreatePermissionPrompt(installed));
+    }
+
+    private void DenyPendingGenericPlugin()
+    {
+        var pending = GetPluginInstallStatus();
+        if (pending.State != ThirdPartyPluginInstallState.AwaitingPermission ||
+            string.IsNullOrWhiteSpace(pending.PluginId))
+        {
+            return;
+        }
+
+        configuration.DisabledActPluginIds.Add(pending.PluginId);
+        configuration.TrustedGenericActPluginIds.Remove(pending.PluginId);
+        SaveConfiguration();
+        SetPluginInstallStatus(pending with
+        {
+            State = ThirdPartyPluginInstallState.Denied,
+            Detail = "已安装但未授权，因此保持禁用；可稍后在扩展列表中重新授权。",
+        });
+        ApplyActPermissionChanges();
+    }
+
+    private void ApprovePendingGenericPlugin()
+    {
+        var pending = GetPluginInstallStatus();
+        if (pending.State != ThirdPartyPluginInstallState.AwaitingPermission ||
+            string.IsNullOrWhiteSpace(pending.PluginId))
+        {
+            return;
+        }
+
+        SetPluginInstallStatus(pending with
+        {
+            State = ThirdPartyPluginInstallState.StartingHost,
+            Detail = "权限已确认，正在启动共享通用 Host 并执行运行时加载检查。",
+        });
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var capability in pending.Capabilities)
+                {
+                    configuration.SetActCapability(pending.PluginId, capability, true);
+                }
+
+                configuration.TrustedGenericActPluginIds.Add(pending.PluginId);
+                configuration.DisabledActPluginIds.Remove(pending.PluginId);
+                SaveConfiguration();
+
+                await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(35));
+                    if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                    {
+                        await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    }
+
+                    await genericHostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                    await genericHostSupervisor.WaitForPluginStartupAsync(timeout.Token)
+                        .ConfigureAwait(false);
+                    var initStage = genericHostSupervisor.Snapshot.PluginStages
+                        .LastOrDefault(stage =>
+                            string.Equals(stage.PluginId, pending.PluginId, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(stage.Stage, "InitPlugin", StringComparison.OrdinalIgnoreCase));
+                    if (initStage is null || !string.Equals(
+                            initStage.State,
+                            "success",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            initStage?.Detail ?? "通用 Host 未报告插件初始化成功。");
+                    }
+                }
+                finally
+                {
+                    hostTopologyLock.Release();
+                }
+
+                SetPluginInstallStatus(pending with
+                {
+                    State = ThirdPartyPluginInstallState.Ready,
+                    Detail = "运行时预检通过，插件已在共享通用 Host 中启用。",
+                });
+            }
+            catch (Exception ex)
+            {
+                configuration.DisabledActPluginIds.Add(pending.PluginId);
+                SaveConfiguration();
+                var cleanupDetail = string.Empty;
+                try
+                {
+                    await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                        if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                        {
+                            await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                        }
+
+                        // A failed InitPlugin can leave handlers behind, so only a fresh
+                        // process may continue serving the other trusted generic plugins.
+                        await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        hostTopologyLock.Release();
+                    }
+                }
+                catch (Exception cleanupFailure)
+                {
+                    cleanupDetail = $"；通用 Host 清理也失败：{cleanupFailure.GetBaseException().Message}";
+                    logger.Error(
+                        cleanupFailure,
+                        "Generic ACT Host cleanup failed after a plugin preflight error.");
+                }
+
+                SetPluginInstallStatus(pending with
+                {
+                    State = ThirdPartyPluginInstallState.Failed,
+                    Detail = $"运行时预检失败，插件已重新禁用：{ex.GetBaseException().Message}{cleanupDetail}",
+                });
+                logger.Error(ex, $"Generic ACT plugin runtime preflight failed: {pending.PluginId}.");
             }
         });
     }
@@ -1453,7 +1707,9 @@ public sealed class Plugin : IDalamudPlugin
     {
         var target = string.Equals(pluginId, "matcha", StringComparison.OrdinalIgnoreCase)
             ? matchaHostSupervisor
-            : hostSupervisor;
+            : ActPluginPackageInstaller.IsSpecializedPluginId(pluginId)
+                ? hostSupervisor
+                : genericHostSupervisor;
         if (target.OpenPluginUi(pluginId))
         {
             return;
@@ -1580,6 +1836,7 @@ public sealed class Plugin : IDalamudPlugin
             await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
             await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
             await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+            await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1630,6 +1887,24 @@ public sealed class Plugin : IDalamudPlugin
                 throw;
             }
         }
+    }
+
+    private async Task StartGenericHostAsync(CancellationToken cancellationToken)
+    {
+        if (!IsGenericHostConfiguredToRun())
+        {
+            if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+            {
+                await genericHostSupervisor.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
+        }
+
+        await genericHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+        await genericHostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
+        logger.Information(
+            "Generic ACT Host is running for user-installed non-specialized plugins.");
     }
 
     private void RestartHostFromUi()
@@ -1688,6 +1963,32 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
+    private void RestartGenericHostFromUi()
+    {
+        _ = Task.Run(async () =>
+        {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                {
+                    await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+
+                await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Generic ACT Host UI restart failed.");
+            }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
+        });
+    }
+
     private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)
     {
         _ = Task.Run(async () =>
@@ -1721,12 +2022,15 @@ public sealed class Plugin : IDalamudPlugin
 
                 var desiredHost = CreateHostPermissionSnapshot();
                 var desiredMatcha = CreateMatchaHostPermissionSnapshot();
+                var desiredGeneric = CreateGenericHostPermissionSnapshot();
                 string? activeHost;
                 string? activeMatcha;
+                string? activeGeneric;
                 lock (permissionSnapshotLock)
                 {
                     activeHost = activeHostPermissionFingerprint;
                     activeMatcha = activeMatchaPermissionFingerprint;
+                    activeGeneric = activeGenericPermissionFingerprint;
                 }
 
                 if (!string.Equals(
@@ -1736,6 +2040,28 @@ public sealed class Plugin : IDalamudPlugin
                     await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
                 {
                     logger.Information("Shared ACT Host restarted after its configuration changed.");
+                }
+
+                var genericChanged = !string.Equals(
+                    activeGeneric,
+                    BuildPermissionFingerprint(desiredGeneric),
+                    StringComparison.Ordinal);
+                if (!IsGenericHostConfiguredToRun())
+                {
+                    if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                    {
+                        await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    }
+                }
+                else if (genericHostSupervisor.Snapshot.State == HostSupervisorState.Running &&
+                         genericChanged)
+                {
+                    await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                }
+                else if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                {
+                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
                 }
 
                 if (!IsMatchaConfiguredToRun())
@@ -1843,6 +2169,27 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
+    private void StopGenericHostFromUi()
+    {
+        _ = Task.Run(async () =>
+        {
+            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Generic ACT Host UI stop failed.");
+            }
+            finally
+            {
+                hostTopologyLock.Release();
+            }
+        });
+    }
+
     private HostPermissionSnapshot BuildHostPermissionSnapshot()
     {
         var snapshot = CreateHostPermissionSnapshot();
@@ -1867,6 +2214,7 @@ public sealed class Plugin : IDalamudPlugin
             .Where(plugin =>
                 plugin.Enabled &&
                 bundledPluginManager.IsAllowedToLoad(plugin) &&
+                ActPluginPackageInstaller.IsSpecializedPluginId(plugin.Manifest.Id) &&
                 !string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
             .Select(plugin => plugin.Manifest.Id)
             .ToArray();
@@ -1920,6 +2268,42 @@ public sealed class Plugin : IDalamudPlugin
         return new HostPermissionSnapshot(allowed, allowedPluginIds);
     }
 
+    private HostPermissionSnapshot BuildGenericHostPermissionSnapshot()
+    {
+        var snapshot = CreateGenericHostPermissionSnapshot();
+        lock (permissionSnapshotLock)
+        {
+            activeGenericPermissionFingerprint = BuildPermissionFingerprint(snapshot);
+        }
+
+        return snapshot;
+    }
+
+    private HostPermissionSnapshot CreateGenericHostPermissionSnapshot()
+    {
+        var plugins = packageInstaller
+            .Discover(configuration.DisabledActPluginIds)
+            .Where(plugin =>
+                plugin.Enabled &&
+                bundledPluginManager.IsAllowedToLoad(plugin) &&
+                !ActPluginPackageInstaller.IsSpecializedPluginId(plugin.Manifest.Id) &&
+                configuration.TrustedGenericActPluginIds.Contains(plugin.Manifest.Id))
+            .ToArray();
+        var allowed = plugins.ToDictionary(
+            plugin => plugin.Manifest.Id,
+            plugin => (IReadOnlyList<string>)ActPluginPackageInstaller
+                .GetRequestedCapabilities(plugin.Manifest)
+                .Where(capability => configuration.IsActCapabilityAllowed(
+                    plugin.Manifest.Id,
+                    capability))
+                .Select(static capability => capability.ToString())
+                .ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+        return new HostPermissionSnapshot(
+            allowed,
+            plugins.Select(plugin => plugin.Manifest.Id).ToArray());
+    }
+
     private static string BuildPermissionFingerprint(HostPermissionSnapshot snapshot)
     {
         var plugins = string.Join(",", snapshot.AllowedPluginIds
@@ -1940,6 +2324,9 @@ public sealed class Plugin : IDalamudPlugin
                 plugin.Enabled &&
                 bundledPluginManager.IsAllowedToLoad(plugin) &&
                 string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase));
+
+    private bool IsGenericHostConfiguredToRun()
+        => CreateGenericHostPermissionSnapshot().AllowedPluginIds.Count > 0;
 
     private async Task DisposeComponentsAsync(bool factoryResetCompleted)
     {
@@ -1993,6 +2380,7 @@ public sealed class Plugin : IDalamudPlugin
             Volatile.Write(ref matchaEventsEnabled, 0);
             actRuntime.SetNetworkSentCaptureEnabled(false);
             await matchaHostSupervisor.DisposeAsync().ConfigureAwait(false);
+            await genericHostSupervisor.DisposeAsync().ConfigureAwait(false);
             await hostSupervisor.DisposeAsync().ConfigureAwait(false);
         }
         finally
@@ -2012,6 +2400,7 @@ public sealed class Plugin : IDalamudPlugin
             fflogsEstimateService.ObserveLogLine(actLine);
         }
         hostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
+        genericHostSupervisor.PublishLog(timestamp, rawLine, actLine, isImport);
     }
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
@@ -2020,6 +2409,7 @@ public sealed class Plugin : IDalamudPlugin
             territoryId,
             zoneNameLocalizer.Localize(territoryId, zoneName));
         hostSupervisor.PublishZone(territoryId, zoneName);
+        genericHostSupervisor.PublishZone(territoryId, zoneName);
     }
 
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
@@ -2058,6 +2448,15 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void OnGenericTtsRequested(object? sender, HostTtsRequest request)
+    {
+        if (!hostSupervisor.RequestTts(request.Text, request.Source))
+        {
+            logger.Warning(
+                "A generic ACT plugin requested TTS, but the shared Host has no available TTS provider.");
+        }
+    }
+
     private void OnMatchaNotificationRequested(
         object? sender,
         HostMatchaNotification notification)
@@ -2089,7 +2488,10 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
-        => hostSupervisor.PublishEncounter(finished);
+    {
+        hostSupervisor.PublishEncounter(finished);
+        genericHostSupervisor.PublishEncounter(finished);
+    }
 
     private void OnFrameworkUpdateForHost(IFramework _)
     {
@@ -2109,6 +2511,7 @@ public sealed class Plugin : IDalamudPlugin
                 playerState,
                 now);
             hostSupervisor.PublishFfxivEntities(snapshot);
+            genericHostSupervisor.PublishFfxivEntities(snapshot);
             if (Volatile.Read(ref matchaEventsEnabled) == 1)
             {
                 matchaHostSupervisor.PublishFfxivEntities(snapshot);

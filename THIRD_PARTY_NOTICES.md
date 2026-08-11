@@ -9,6 +9,10 @@ available from `vendor/IINACT` and
 The release archive includes the applicable upstream license texts under
 `LICENSES/`. Copyright remains with the respective upstream authors.
 
+Windows Notification Center delivery uses Microsoft.Toolkit.Uwp.Notifications
+7.1.3 from the Windows Community Toolkit. It is licensed under MIT; its license
+text is included as `LICENSES/WindowsCommunityToolkit-MIT.md`.
+
 The release archive also includes the official OverlayPlugin/cactbot release
 package. On first load, DalamudActCompat installs it into the current user's
 own plugin configuration directory; on a later DalamudActCompat update, it

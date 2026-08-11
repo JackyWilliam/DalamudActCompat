@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 7;
+    private const int CurrentVersion = 8;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -56,6 +56,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public HashSet<string> DisabledActPluginIds { get; set; } =
         CreateDefaultDisabledActPluginIds();
 
+    public HashSet<string> TrustedGenericActPluginIds { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public Dictionary<string, string> BundledPluginDisclosureKeys { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -68,6 +71,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool ApplyMigrations()
     {
         var changed = false;
+        DisabledActPluginIds = new HashSet<string>(
+            DisabledActPluginIds ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        TrustedGenericActPluginIds = new HashSet<string>(
+            TrustedGenericActPluginIds ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        ActPluginPermissions ??=
+            new Dictionary<string, Dictionary<ActCapability, bool>>(
+                StringComparer.OrdinalIgnoreCase);
         if (Meter is null)
         {
             Meter = new MeterSettings();
@@ -188,6 +200,19 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 7;
             changed = true;
         }
+        if (Version < 8)
+        {
+            // Existing unknown plugins remain disabled until their full-trust Host consent is explicit.
+            TrustedGenericActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pluginId in ActPluginPermissions.Keys.Where(
+                         pluginId => !ActPluginPackageInstaller.IsSpecializedPluginId(pluginId)))
+            {
+                DisabledActPluginIds.Add(pluginId);
+            }
+
+            Version = 8;
+            changed = true;
+        }
 
         return changed;
     }
@@ -215,6 +240,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         Fflogs = new FflogsSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = CreateDefaultDisabledActPluginIds();
+        TrustedGenericActPluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         BundledPluginDisclosureKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         BundledPluginUpdateRecords =
             new Dictionary<string, BundledActPluginUpdateRecord>(StringComparer.OrdinalIgnoreCase);
@@ -250,6 +276,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         Fflogs = snapshot.Fflogs;
         EmbeddedPlugins = snapshot.EmbeddedPlugins;
         DisabledActPluginIds = snapshot.DisabledActPluginIds;
+        TrustedGenericActPluginIds = snapshot.TrustedGenericActPluginIds;
         BundledPluginDisclosureKeys = snapshot.BundledPluginDisclosureKeys;
         BundledPluginUpdateRecords = snapshot.BundledPluginUpdateRecords;
         ActPluginPermissions = snapshot.ActPluginPermissions;

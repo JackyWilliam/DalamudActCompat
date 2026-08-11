@@ -344,6 +344,7 @@ $requiredRuntimeFiles = @(
     "LICENSE.md",
     "LICENSES/IINACT-GPL-3.0.txt",
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
+    "LICENSES/WindowsCommunityToolkit-MIT.md",
     "THIRD_PARTY_NOTICES.md",
     "BundledActPlugins/bundled-plugins.lock.json",
     "BundledActPlugins/triggernometry/zh-CN.triglations.xml",

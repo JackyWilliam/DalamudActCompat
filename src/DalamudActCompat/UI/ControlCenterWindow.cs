@@ -60,6 +60,10 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<bool> isStatusVisible;
     private readonly Action<bool> setStatusVisible;
     private readonly Action selectPluginPackage;
+    private readonly Func<ThirdPartyPluginInstallStatus> getPluginInstallStatus;
+    private readonly Action approvePendingPlugin;
+    private readonly Action denyPendingPlugin;
+    private readonly Action<string> requestPluginAuthorization;
     private readonly Action openPluginDirectory;
     private readonly Action openBundledPluginNotice;
     private readonly Action checkBundledPluginUpdates;
@@ -116,6 +120,10 @@ public sealed class ControlCenterWindow : Window
         Func<bool> isStatusVisible,
         Action<bool> setStatusVisible,
         Action selectPluginPackage,
+        Func<ThirdPartyPluginInstallStatus> getPluginInstallStatus,
+        Action approvePendingPlugin,
+        Action denyPendingPlugin,
+        Action<string> requestPluginAuthorization,
         Action openPluginDirectory,
         Action openBundledPluginNotice,
         Action checkBundledPluginUpdates,
@@ -153,6 +161,10 @@ public sealed class ControlCenterWindow : Window
         this.isStatusVisible = isStatusVisible;
         this.setStatusVisible = setStatusVisible;
         this.selectPluginPackage = selectPluginPackage;
+        this.getPluginInstallStatus = getPluginInstallStatus;
+        this.approvePendingPlugin = approvePendingPlugin;
+        this.denyPendingPlugin = denyPendingPlugin;
+        this.requestPluginAuthorization = requestPluginAuthorization;
         this.openPluginDirectory = openPluginDirectory;
         this.openBundledPluginNotice = openBundledPluginNotice;
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
@@ -773,10 +785,6 @@ public sealed class ControlCenterWindow : Window
                     openHtmlOverlay(configuration.SelectedOverlayTemplate);
                 }
             }
-            if (selectedSettings is not null)
-            {
-                changed |= DrawOverlayWindowSettings(configuration.SelectedOverlayTemplate);
-            }
         }
 
         return changed;
@@ -1198,6 +1206,26 @@ public sealed class ControlCenterWindow : Window
             out extensionChanged);
         hostConfigurationChanged |= extensionChanged;
 
+        var genericPlugins = installedPlugins
+            .Where(plugin => !ActPluginPackageInstaller.IsSpecializedPluginId(
+                plugin.Manifest.Id))
+            .ToArray();
+        if (genericPlugins.Length > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(
+                IceBlue,
+                text.Get("用户安装的普通 ACT 插件", "User-installed generic ACT plugins"));
+            ImGui.TextDisabled(text.Get(
+                "这些插件共用一个按需启动的通用 Host，不会为每个插件创建常驻进程。",
+                "These plugins share one on-demand generic Host; no persistent process is created per plugin."));
+            foreach (var plugin in genericPlugins)
+            {
+                changed |= DrawGenericExtensionEntry(plugin, out extensionChanged);
+                hostConfigurationChanged |= extensionChanged;
+            }
+        }
+
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -1216,6 +1244,7 @@ public sealed class ControlCenterWindow : Window
         {
             checkBundledPluginUpdates();
         }
+        DrawPluginInstallStatus();
         var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
         if (ImGui.Checkbox(
                 text.Get(
@@ -1257,6 +1286,70 @@ public sealed class ControlCenterWindow : Window
         return changed;
     }
 
+    private void DrawPluginInstallStatus()
+    {
+        var status = getPluginInstallStatus();
+        if (status.State == ThirdPartyPluginInstallState.Idle)
+        {
+            return;
+        }
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted(string.IsNullOrWhiteSpace(status.DisplayName)
+            ? text.Get("第三方插件", "Third-party plugin")
+            : status.DisplayName);
+        ImGui.SameLine();
+        var (labelZh, labelEn) = status.State switch
+        {
+            ThirdPartyPluginInstallState.Preflighting => ("正在预检…", "Preflighting…"),
+            ThirdPartyPluginInstallState.AwaitingPermission => ("等待权限确认", "Awaiting permission"),
+            ThirdPartyPluginInstallState.StartingHost => ("正在启动通用 Host…", "Starting generic Host…"),
+            ThirdPartyPluginInstallState.Ready => ("已可用", "Ready"),
+            ThirdPartyPluginInstallState.Denied => ("已安装，未授权", "Installed, not authorized"),
+            ThirdPartyPluginInstallState.Failed => ("失败", "Failed"),
+            _ => ("", ""),
+        };
+        var statusColor = status.State is ThirdPartyPluginInstallState.Failed
+            ? new Vector4(0.95f, 0.38f, 0.38f, 1)
+            : status.State is ThirdPartyPluginInstallState.Ready
+                ? new Vector4(0.42f, 0.88f, 0.56f, 1)
+                : Gold;
+        ImGui.TextColored(statusColor, text.Get(labelZh, labelEn));
+        if (!string.IsNullOrWhiteSpace(status.Detail))
+        {
+            ImGui.TextWrapped(status.Detail);
+        }
+
+        if (status.Capabilities.Count > 0)
+        {
+            ImGui.TextDisabled(text.Get(
+                "静态分析生成的权限清单：",
+                "Permission list generated by static analysis:"));
+            foreach (var capability in status.Capabilities)
+            {
+                ImGui.BulletText(ActCapabilityDisplay.Label(capability, text));
+            }
+        }
+
+        if (status.State != ThirdPartyPluginInstallState.AwaitingPermission)
+        {
+            return;
+        }
+
+        ImGui.TextWrapped(text.Get(
+            "该 DLL 会作为桌面代码运行。权限清单约束兼容接口，但无法拦截插件自身直接调用 Windows API。是否授权并启用？",
+            "This DLL runs as desktop code. The list governs compatibility APIs but cannot intercept direct Windows API calls made by the plugin. Authorize and enable it?"));
+        if (ImGui.Button(text.Get("是，授权并启用", "Yes, authorize and enable")))
+        {
+            approvePendingPlugin();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("否，保持禁用", "No, keep disabled")))
+        {
+            denyPendingPlugin();
+        }
+    }
+
     private bool DrawPluginPermissions(
         string pluginId,
         string displayName,
@@ -1285,6 +1378,77 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.TreePop();
+        return changed;
+    }
+
+    private bool DrawGenericExtensionEntry(
+        InstalledActPlugin plugin,
+        out bool enabledChanged)
+    {
+        var pluginId = plugin.Manifest.Id;
+        var changed = false;
+        enabledChanged = false;
+        ImGui.PushID($"generic-extension-{pluginId}");
+        var trusted = configuration.TrustedGenericActPluginIds.Contains(pluginId);
+        var enabled = plugin.Enabled && trusted;
+        if (ImGui.Checkbox(plugin.Manifest.Name, ref enabled))
+        {
+            if (enabled && !configuration.TrustedGenericActPluginIds.Contains(pluginId))
+            {
+                // Enabling an untrusted DLL opens the same informed-consent flow as installation.
+                requestPluginAuthorization(pluginId);
+                enabled = false;
+            }
+            else
+            {
+                if (enabled)
+                {
+                    configuration.DisabledActPluginIds.Remove(pluginId);
+                }
+                else
+                {
+                    configuration.DisabledActPluginIds.Add(pluginId);
+                }
+
+                changed = true;
+                enabledChanged = true;
+            }
+        }
+
+        ImGui.SameLine();
+        ImGui.TextColored(
+            enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
+            enabled
+                ? text.Get("已启用", "Enabled")
+                : trusted
+                    ? text.Get("已禁用", "Disabled")
+                    : text.Get("未授权", "Not authorized"));
+        ImGui.SameLine();
+        ImGui.TextDisabled($"v{plugin.Manifest.Version}");
+        if (!trusted)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton(text.Get("查看并授权", "Review and authorize")))
+            {
+                requestPluginAuthorization(pluginId);
+            }
+        }
+        else if (enabled)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+            {
+                openPluginConfiguration(pluginId);
+            }
+        }
+
+        var requested = ActPluginPackageInstaller.GetRequestedCapabilities(plugin.Manifest);
+        if (trusted && requested.Count > 0)
+        {
+            enabledChanged |= DrawPluginPermissions(pluginId, plugin.Manifest.Name, requested);
+        }
+
+        ImGui.PopID();
         return changed;
     }
 
@@ -1522,8 +1686,56 @@ public sealed class ControlCenterWindow : Window
     private bool DrawOverlayWindowSettings(string name)
     {
         var changed = false;
+        var connectionChanged = false;
         var settings = configuration.GetOverlayWindowSettings(name);
         ImGui.PushID(name);
+        if (!string.IsNullOrWhiteSpace(settings.SourceUrl))
+        {
+            var connectionDetail = string.IsNullOrWhiteSpace(settings.ConnectionStateDetail)
+                ? text.Get("打开后自动检测连接", "Connection will be detected when opened")
+                : settings.ConnectionStateDetail;
+            var connectionColor = settings.ConnectionState switch
+            {
+                OverlayConnectionState.Connected => new Vector4(0.45f, 0.88f, 0.62f, 1),
+                OverlayConnectionState.Failed => new Vector4(0.96f, 0.42f, 0.38f, 1),
+                _ => IceBlue,
+            };
+            ImGui.TextColored(connectionColor, connectionDetail);
+            if (ImGui.TreeNode(text.Get("连接高级设置", "Advanced connection settings")))
+            {
+                var selectedMode = settings.ConnectionMode;
+                if (ImGui.BeginCombo(
+                        text.Get("连接方式", "Connection mode"),
+                        GetOverlayConnectionModeLabel(selectedMode)))
+                {
+                    foreach (var mode in Enum.GetValues<OverlayConnectionMode>())
+                    {
+                        var selected = mode == selectedMode;
+                        if (ImGui.Selectable(GetOverlayConnectionModeLabel(mode), selected))
+                        {
+                            settings.ConnectionMode = mode;
+                            settings.ResetConnectionDetection();
+                            connectionChanged = true;
+                            changed = true;
+                        }
+                    }
+                    ImGui.EndCombo();
+                }
+
+                ImGui.TextDisabled(text.Get(
+                    "默认自动检测；手动模式只用于检测失败时微调。",
+                    "Automatic detection is the default. Manual modes are only for troubleshooting."));
+                if (ImGui.Button(text.Get("重新检测", "Detect again")))
+                {
+                    settings.ConnectionMode = OverlayConnectionMode.Auto;
+                    settings.ResetConnectionDetection();
+                    connectionChanged = true;
+                    changed = true;
+                }
+                ImGui.TreePop();
+            }
+        }
+
         ImGui.TextDisabled(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
         if (ImGui.Button(settings.IsEditing
                 ? text.Get("完成并操作网页", "Finish and interact with page")
@@ -1554,8 +1766,22 @@ public sealed class ControlCenterWindow : Window
         {
             applyOverlayWindowSettings(name);
         }
+        if (connectionChanged && settings.IsVisible)
+        {
+            openHtmlOverlay(name);
+        }
         return changed;
     }
+
+    private string GetOverlayConnectionModeLabel(OverlayConnectionMode mode)
+        => mode switch
+        {
+            OverlayConnectionMode.Auto => text.Get("自动检测（推荐）", "Automatic (recommended)"),
+            OverlayConnectionMode.OverlayPlugin => text.Get("现代悬浮窗", "Modern overlay"),
+            OverlayConnectionMode.ActWebSocket => text.Get("旧版 ACTWS", "Legacy ACTWS"),
+            OverlayConnectionMode.Original => text.Get("原样打开（高级）", "Open URL unchanged (advanced)"),
+            _ => mode.ToString(),
+        };
 
     private void RestartParser()
     {

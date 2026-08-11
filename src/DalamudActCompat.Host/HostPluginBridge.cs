@@ -81,6 +81,9 @@ public static class HostPluginBridge
 
     internal static FfxivDataRepository FfxivRepository => FfxivRepositoryInstance;
 
+    internal static bool IsGameForeground()
+        => GameForegroundDetector.IsGameForeground(FfxivRepositoryInstance.GetGameProcessId());
+
     internal static void ConfigureGameProcess(int processId)
     {
         FfxivRepositoryInstance.SetGameProcessId(processId);
@@ -406,6 +409,37 @@ public static class HostPluginBridge
                 DateTimeOffset.UtcNow.AddSeconds(2)) != true)
         {
             throw new InvalidOperationException("Matcha TTS IPC queue rejected the request.");
+        }
+    }
+
+    public static void SendGenericTts(string text)
+    {
+        if (!permissions.Values.Any(allowed => allowed.Contains("TextToSpeech")))
+        {
+            throw new UnauthorizedAccessException(
+                "No plugin in the generic ACT Host is authorized for TextToSpeech.");
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (text.Length > 2000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(text));
+        }
+
+        // Generic ACT's PlayTts delegate has no caller identity. The whole process is
+        // already explicitly trusted, so the request is audited at the Host boundary.
+        if (sender?.Invoke(
+                HostMessageTypes.MatchaTtsRequest,
+                HostMessagePriority.Control,
+                new HostTtsRequest(text, "generic"),
+                null,
+                DateTimeOffset.UtcNow.AddSeconds(2)) != true)
+        {
+            throw new InvalidOperationException("Generic ACT TTS IPC queue rejected the request.");
         }
     }
 

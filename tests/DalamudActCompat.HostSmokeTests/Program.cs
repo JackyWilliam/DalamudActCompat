@@ -39,6 +39,7 @@ if (!File.Exists(hostExecutable))
 }
 
 await ValidateHandshakeCommandBoundaryAndShutdownAsync();
+ValidateForegroundNotificationRouting();
 ValidateFoxTtsDefaultConfiguration();
 await ValidateSequenceRegressionTerminatesHostAsync();
 await ValidateExpiredMessageIsDroppedAsync();
@@ -46,6 +47,7 @@ await ValidateHostCrashBreaksOnlyPipeAsync();
 await ValidateDedicatedHostCrashDoesNotAffectSharedHostAsync();
 await ValidateAbruptClientDisconnectAsync();
 await ValidateBlockedReaderRemainsOutOfProcessAsync();
+await ValidateGenericPluginLoadsOnlyAfterConsentAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
 ValidatePostNamazuMarkPayloadNormalization();
@@ -104,6 +106,26 @@ if (pluginRoot is not null)
         "closed-loop tests passed.";
 }
 Console.WriteLine(completion);
+
+void ValidateForegroundNotificationRouting()
+{
+    var detector = typeof(HostPluginBridge).Assembly.GetType(
+                       "DalamudActCompat.Host.GameForegroundDetector")
+                   ?? throw new TypeLoadException("Game foreground detector was not found.");
+    var isForegroundProcess = detector.GetMethod(
+                                  "IsForegroundProcess",
+                                  BindingFlags.Static | BindingFlags.NonPublic)
+                              ?? throw new MissingMethodException(
+                                  detector.FullName,
+                                  "IsForegroundProcess");
+    bool Invoke(int gameProcessId, int foregroundProcessId)
+        => isForegroundProcess.Invoke(null, [gameProcessId, foregroundProcessId]) as bool? == true;
+    Assert(
+        Invoke(4242, 4242) &&
+        !Invoke(4242, 5252) &&
+        !Invoke(0, 0),
+        "Notification routing no longer selects the Dalamud channel only when the game process owns the foreground window.");
+}
 
 void ValidateFoxTtsDefaultConfiguration()
 {
@@ -1880,6 +1902,158 @@ void ValidateMatchaAssemblyContract(string packagePath)
     }
 }
 
+async Task ValidateGenericPluginLoadsOnlyAfterConsentAsync()
+{
+    var temporaryRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-Generic-Host-{Guid.NewGuid():N}");
+    var temporaryPluginRoot = Path.Combine(temporaryRoot, "plugins");
+    var temporaryConfigRoot = Path.Combine(temporaryRoot, "config");
+    Directory.CreateDirectory(temporaryPluginRoot);
+    Directory.CreateDirectory(Path.Combine(temporaryConfigRoot, "Config"));
+    try
+    {
+        foreach (var pluginId in new[] { "community.allowed", "community.denied" })
+        {
+            var installRoot = Path.Combine(temporaryPluginRoot, pluginId);
+            Directory.CreateDirectory(installRoot);
+            var entryAssembly = Path.Combine(
+                installRoot,
+                Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+            File.Copy(Assembly.GetExecutingAssembly().Location, entryAssembly);
+            await File.WriteAllTextAsync(
+                Path.Combine(installRoot, "actcompat.plugin.json"),
+                JsonSerializer.Serialize(new
+                {
+                    id = pluginId,
+                    name = pluginId,
+                    version = "1.0.0",
+                    entryAssembly = Path.GetFileName(entryAssembly),
+                    entryType = typeof(GenericActPluginHostFixture).FullName,
+                    hostApiVersion = 1,
+                }));
+        }
+
+        var (host, pipe, session) = await StartConnectedHostAsync(
+            loadPlugins: true,
+            pluginRootOverride: temporaryPluginRoot,
+            configRootOverride: temporaryConfigRoot);
+        await using (pipe)
+        using (host)
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    1,
+                    HostMessageTypes.Hello,
+                    HostMessagePriority.Control,
+                    new HostHello(
+                        "game-bridge",
+                        "1",
+                        Environment.ProcessId,
+                        [HostProtocol.CurrentVersion])),
+                CancellationToken.None);
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    2,
+                    HostMessageTypes.Permissions,
+                    HostMessagePriority.Control,
+                    new HostPermissionSnapshot(
+                        new Dictionary<string, IReadOnlyList<string>>
+                        {
+                            ["community.allowed"] =
+                            [
+                                "ReadCombatLogs",
+                                "ReadLocalConfiguration",
+                            ],
+                        },
+                        ["community.allowed"])),
+                CancellationToken.None);
+            var healthEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Health, 30);
+            var health = healthEnvelope.Payload.Deserialize<HostHealth>()
+                         ?? throw new InvalidDataException(
+                             "Generic Host returned no health state.");
+            Assert(
+                health.State == "plugins.ready" &&
+                health.Detail.Contains("community.allowed", StringComparison.OrdinalIgnoreCase),
+                $"Authorized generic plugin did not initialize: {health.State}: {health.Detail}");
+
+            var heartbeatEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Heartbeat, 30);
+            var heartbeat = heartbeatEnvelope.Payload.Deserialize<HostHeartbeat>()
+                            ?? throw new InvalidDataException(
+                                "Generic Host returned no heartbeat state.");
+            Assert(
+                heartbeat.Stages.Any(stage =>
+                    stage.PluginId == "community.allowed" &&
+                    stage.Stage == "InitPlugin" &&
+                    stage.State == "success"),
+                "Authorized generic plugin did not report a successful InitPlugin stage.");
+            Assert(
+                !heartbeat.Stages.Any(stage =>
+                    stage.PluginId == "community.denied" &&
+                    stage.State == "success"),
+                "Untrusted generic plugin entered the shared Host's successful stage set.");
+
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    3,
+                    HostMessageTypes.Shutdown,
+                    HostMessagePriority.Control,
+                    new HostHealth(
+                        "stopping",
+                        "generic plugin consent smoke",
+                        DateTimeOffset.UtcNow)),
+                CancellationToken.None);
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 30);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var (output, error) = ReadProcessLog(host);
+            Assert(
+                host.ExitCode == 0 &&
+                output.Contains(
+                    "Legacy plugin 'community.allowed' loaded out-of-process.",
+                    StringComparison.Ordinal) &&
+                !output.Contains(
+                    "Legacy plugin 'community.denied' loaded out-of-process.",
+                    StringComparison.Ordinal),
+                $"Generic Host consent boundary failed.{Environment.NewLine}{output}{Environment.NewLine}{error}");
+        }
+    }
+    finally
+    {
+        await DeleteTemporaryDirectoryWithRetryAsync(temporaryRoot);
+    }
+}
+
+static async Task DeleteTemporaryDirectoryWithRetryAsync(string path)
+{
+    for (var attempt = 0; attempt < 10; attempt++)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+            return;
+        }
+        catch (Exception ex) when (
+            attempt < 9 && ex is IOException or UnauthorizedAccessException)
+        {
+            // Windows can retain a just-unloaded plugin image briefly after Host exit.
+            await Task.Delay(100);
+        }
+    }
+}
+
 void ValidateMatchaNotificationRouting()
 {
     var configurePermissions = typeof(HostPluginBridge).GetMethod(
@@ -3208,6 +3382,19 @@ public sealed class SilverDasherLoadOrderProbe : IActPluginV1
     {
         pluginScreenSpace.Text = "Load order probe";
         pluginStatusText.Text = "probe ready";
+    }
+
+    public void DeInitPlugin()
+    {
+    }
+}
+
+public sealed class GenericActPluginHostFixture : IActPluginV1
+{
+    public void InitPlugin(TabPage pluginScreenSpace, Label pluginStatusText)
+    {
+        pluginScreenSpace.Text = "Generic Host fixture";
+        pluginStatusText.Text = "generic ready";
     }
 
     public void DeInitPlugin()
