@@ -156,7 +156,16 @@ public sealed record HostMatchaNetworkEvent(
     long Epoch,
     byte[] Message);
 
-public sealed record HostMatchaNotification(string Message);
+public enum HostMatchaNotificationKind
+{
+    General,
+    WorldChanged,
+    DutyEntered,
+}
+
+public sealed record HostMatchaNotification(
+    string Message,
+    HostMatchaNotificationKind Kind = HostMatchaNotificationKind.General);
 
 public sealed record HostMatchaLogLine(string Line);
 

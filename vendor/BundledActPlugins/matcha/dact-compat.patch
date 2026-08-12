@@ -1,186 +1,41 @@
 diff --git a/Cafe.Matcha/Cafe.Matcha.csproj b/Cafe.Matcha/Cafe.Matcha.csproj
-index fe154ab..9046640 100644
+index fe154ab..b1568a6 100644
 --- a/Cafe.Matcha/Cafe.Matcha.csproj
 +++ b/Cafe.Matcha/Cafe.Matcha.csproj
-@@ -5,7 +5,8 @@
-     <OutputType>Library</OutputType>
-     <TargetPlatformVersion>10.0.10240.0</TargetPlatformVersion>
-     <StartupObject></StartupObject>
+@@ -8 +8,2 @@
 -    <Obfuscate>true</Obfuscate>
 +    <Obfuscate Condition="'$(DactCompatBuild)' != 'true'">true</Obfuscate>
 +    <Obfuscate Condition="'$(DactCompatBuild)' == 'true'">false</Obfuscate>
-     <UseWindowsForms>true</UseWindowsForms>
-     <UseWPF>true</UseWPF>
-     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
-@@ -14,7 +15,8 @@
-   <PropertyGroup>
-     <Company>FFCafe</Company>
-     <Copyright>Copyright © FFCafe $([System.DateTime]::UtcNow.Year)</Copyright>
+@@ -17 +18,2 @@
 -    <Version>$([System.DateTime]::UtcNow.ToString("yy.M.d.Hmm"))</Version>
 +    <Version Condition="'$(DactCompatBuild)' != 'true'">$([System.DateTime]::UtcNow.ToString("yy.M.d.Hmm"))</Version>
-+    <Version Condition="'$(DactCompatBuild)' == 'true'">26.8.10.829</Version>
-   </PropertyGroup>
-   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-     <OutputPath>..\bin\Debug\</OutputPath>
-@@ -136,7 +138,7 @@
-       <Version>6.0.1</Version>
-     </PackageReference>
-   </ItemGroup>
++    <Version Condition="'$(DactCompatBuild)' == 'true'">26.8.12.1622</Version>
+@@ -139 +141 @@
 -  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
 +  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DactCompatBuild)' != 'true'">
-     <Exec Command="del $(OutDir) /F&#xD;&#xA;xcopy &quot;$(OutDir)confused\*.*&quot; &quot;$(OutDir)&quot; /E /Y /C&#xD;&#xA;$(OutDir)..\Cafe.Matcha.Packer $(ConfigurationName)" />
-   </Target>
- </Project>
 diff --git a/Cafe.Matcha/Config.cs b/Cafe.Matcha/Config.cs
 index f9bd07e..5ca76ae 100644
 --- a/Cafe.Matcha/Config.cs
 +++ b/Cafe.Matcha/Config.cs
-@@ -16,7 +16,7 @@ namespace Cafe.Matcha
-         {
-             try
-             {
+@@ -19 +19 @@ namespace Cafe.Matcha
 -                string content = File.ReadAllText(configPath);
 +                string content = DactBridge.ReadAllText(configPath);
-                 Instance = JsonConvert.DeserializeObject<Models.ConfigData>(content);
-             }
-             catch { }
-@@ -28,7 +28,7 @@ namespace Cafe.Matcha
-
-         public static void Save()
-         {
+@@ -31 +31 @@ namespace Cafe.Matcha
 -            File.WriteAllText(configPath, JsonConvert.SerializeObject(Instance, Formatting.Indented));
 +            DactBridge.WriteAllText(configPath, JsonConvert.SerializeObject(Instance, Formatting.Indented));
-         }
-
-         public static string GetLanguageString()
 diff --git a/Cafe.Matcha/Data.cs b/Cafe.Matcha/Data.cs
 index 21d7586..0e6534f 100644
 --- a/Cafe.Matcha/Data.cs
 +++ b/Cafe.Matcha/Data.cs
-@@ -34,7 +34,7 @@ namespace Cafe.Matcha
-         {
-             try
-             {
+@@ -37 +37 @@ namespace Cafe.Matcha
 -                string content = File.ReadAllText(Path.Combine(path, file));
 +                string content = DactBridge.ReadAllText(Path.Combine(path, file));
-                 dict = JsonConvert.DeserializeObject<T>(content);
-                 return true;
-             }
-diff --git a/Cafe.Matcha/Utils/FateManager.cs b/Cafe.Matcha/Utils/FateManager.cs
-index 4af89b2..e4ff7ca 100644
---- a/Cafe.Matcha/Utils/FateManager.cs
-+++ b/Cafe.Matcha/Utils/FateManager.cs
-@@ -13,7 +13,7 @@ namespace Cafe.Matcha.Utils
-         {
-             try
-             {
--                string content = File.ReadAllText(fileName);
-+                string content = DactBridge.ReadUserTextFile(fileName);
-                 return JsonConvert.DeserializeObject<List<int>>(content);
-             }
-             catch
-@@ -24,7 +24,7 @@ namespace Cafe.Matcha.Utils
-
-         public static void Save(string fileName, IList<int> fates)
-         {
--            File.WriteAllText(fileName, JsonConvert.SerializeObject(fates, Formatting.Indented));
-+            DactBridge.WriteUserTextFile(fileName, JsonConvert.SerializeObject(fates, Formatting.Indented));
-         }
-     }
- }
-diff --git a/Cafe.Matcha/Utils/Output.cs b/Cafe.Matcha/Utils/Output.cs
-index 865c135..19adfd5 100644
---- a/Cafe.Matcha/Utils/Output.cs
-+++ b/Cafe.Matcha/Utils/Output.cs
-@@ -20,6 +20,21 @@ namespace Cafe.Matcha.Utils
-         private static bool Compat => Matcha.Config.Instance.Logger.Compat;
-
-         private static void SendNativeToast(string message)
-+        {
-+            if (DactBridge.IsAvailable)
-+            {
-+                // DACT owns both non-blocking notification routes; never re-enter the
-+                // upstream MessageBox fallback when neither route accepts a message.
-+                _ = DactBridge.SendNotification(message);
-+                return;
-+            }
-+
-+            // Keep WinRT types out of the DACT entry method. The external Host can reject
-+            // those types while JIT-compiling this method even when the bridge branch wins.
-+            SendWindowsNativeToast(message);
-+        }
-+
-+        private static void SendWindowsNativeToast(string message)
-         {
-             Version currentVersion = Environment.OSVersion.Version;
-             Version compareToVersion = new Version("6.2");
-             if (currentVersion.CompareTo(compareToVersion) >= 0)
-diff --git a/Cafe.Matcha/Utils/Request.cs b/Cafe.Matcha/Utils/Request.cs
-index 1786d9e..862692e 100644
---- a/Cafe.Matcha/Utils/Request.cs
-+++ b/Cafe.Matcha/Utils/Request.cs
-@@ -126,6 +126,7 @@ namespace Cafe.Matcha.Utils
-             try
-             {
-                 var uri = new Uri(endpoint);
-+                DactBridge.Demand("NetworkRequest");
-                 using (HttpClient client = new HttpClient())
-                 {
-                     var request = new HttpRequestMessage()
-diff --git a/Cafe.Matcha/Views/License.xaml.cs b/Cafe.Matcha/Views/License.xaml.cs
-index 9462b55..23b9ca6 100644
---- a/Cafe.Matcha/Views/License.xaml.cs
-+++ b/Cafe.Matcha/Views/License.xaml.cs
-@@ -23,7 +23,7 @@ namespace Cafe.Matcha.Views
-
-         private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
-         {
--            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri));
-+            DactBridge.StartProcess(new ProcessStartInfo(e.Uri.AbsoluteUri));
-             e.Handled = true;
-         }
-
-diff --git a/Cafe.Matcha/Views/MainControl.xaml.cs b/Cafe.Matcha/Views/MainControl.xaml.cs
-index 1979fd7..67dcb21 100644
---- a/Cafe.Matcha/Views/MainControl.xaml.cs
-+++ b/Cafe.Matcha/Views/MainControl.xaml.cs
-@@ -430,7 +430,7 @@ namespace Cafe.Matcha.Views
-
-         private void BtnViewDetails_Click(object sender, RoutedEventArgs e)
-         {
--            Process.Start(new ProcessStartInfo("https://ffcafe.org/matcha/universalis/"));
-+            DactBridge.StartProcess(new ProcessStartInfo("https://ffcafe.org/matcha/universalis/"));
-         }
-
-         private void BNewWebhook_Click(object sender, RoutedEventArgs e)
-@@ -520,7 +520,7 @@ namespace Cafe.Matcha.Views
-
-         private void Image_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
-         {
--            Process.Start(new ProcessStartInfo("https://github.com/thewakingsands/matcha"));
-+            DactBridge.StartProcess(new ProcessStartInfo("https://github.com/thewakingsands/matcha"));
-             e.Handled = true;
-         }
-
-diff --git a/Cafe.Matcha/Views/TelemetrySetting.xaml.cs b/Cafe.Matcha/Views/TelemetrySetting.xaml.cs
-index b872e5e..0bae1c4 100644
---- a/Cafe.Matcha/Views/TelemetrySetting.xaml.cs
-+++ b/Cafe.Matcha/Views/TelemetrySetting.xaml.cs
-@@ -58,7 +58,7 @@ namespace Cafe.Matcha.Views
-
-         private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
-         {
--            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri));
-+            DactBridge.StartProcess(new ProcessStartInfo(e.Uri.AbsoluteUri));
-             e.Handled = true;
-         }
-
 diff --git a/Cafe.Matcha/Utils/DactBridge.cs b/Cafe.Matcha/Utils/DactBridge.cs
 new file mode 100644
-index 0000000..910a467
+index 0000000..be4e7f2
 --- /dev/null
 +++ b/Cafe.Matcha/Utils/DactBridge.cs
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,130 @@
 +// DACT compatibility bridge. Outside DACT every operation preserves the
 +// upstream implementation; inside DACT the dedicated Host supplies scoped
 +// permission and notification methods through reflection.
@@ -194,7 +49,7 @@ index 0000000..910a467
 +
 +    internal static class DactBridge
 +    {
-+        public const string ContractVersion = "2";
++        public const string ContractVersion = "3";
 +
 +        private static readonly Type BridgeType = FindBridgeType();
 +
@@ -277,11 +132,12 @@ index 0000000..910a467
 +            }
 +        }
 +
-+        public static bool SendNotification(string message)
++        public static bool SendNotification(string message, string notificationKind)
 +        {
 +            try
 +            {
-+                return IsAvailable && (bool)Invoke("SendMatchaNotification", message);
++                return IsAvailable &&
++                       (bool)Invoke("SendMatchaNotification", message, notificationKind);
 +            }
 +            catch (Exception exception)
 +            {
@@ -310,3 +166,90 @@ index 0000000..910a467
 +        }
 +    }
 +}
+diff --git a/Cafe.Matcha/Utils/FateManager.cs b/Cafe.Matcha/Utils/FateManager.cs
+index 4af89b2..5a0d61e 100644
+--- a/Cafe.Matcha/Utils/FateManager.cs
++++ b/Cafe.Matcha/Utils/FateManager.cs
+@@ -16 +16 @@ namespace Cafe.Matcha.Utils
+-                string content = File.ReadAllText(fileName);
++                string content = DactBridge.ReadUserTextFile(fileName);
+@@ -27 +27 @@ namespace Cafe.Matcha.Utils
+-            File.WriteAllText(fileName, JsonConvert.SerializeObject(fates, Formatting.Indented));
++            DactBridge.WriteUserTextFile(fileName, JsonConvert.SerializeObject(fates, Formatting.Indented));
+diff --git a/Cafe.Matcha/Utils/Output.cs b/Cafe.Matcha/Utils/Output.cs
+index 865c135..ff74629 100644
+--- a/Cafe.Matcha/Utils/Output.cs
++++ b/Cafe.Matcha/Utils/Output.cs
+@@ -22 +22,16 @@ namespace Cafe.Matcha.Utils
+-        private static void SendNativeToast(string message)
++        private static void SendNativeToast(string message, EventType eventType)
++        {
++            if (DactBridge.IsAvailable)
++            {
++                // DACT owns both non-blocking notification routes; never re-enter the
++                // upstream MessageBox fallback when neither route accepts a message.
++                _ = DactBridge.SendNotification(message, eventType.ToString());
++                return;
++            }
++
++            // Keep WinRT types out of the DACT entry method. The external Host can reject
++            // those types while JIT-compiling this method even when the bridge branch wins.
++            SendWindowsNativeToast(message);
++        }
++
++        private static void SendWindowsNativeToast(string message)
+@@ -75 +90 @@ namespace Cafe.Matcha.Utils
+-        public static void SendToast(string message)
++        public static void SendToast(string message, EventType eventType = EventType.None)
+@@ -84 +99 @@ namespace Cafe.Matcha.Utils
+-                SendNativeToast(message);
++                SendNativeToast(message, eventType);
+@@ -128 +143 @@ namespace Cafe.Matcha.Utils
+-            Send(Formatter.GetEventText(dto));
++            Send(Formatter.GetEventText(dto), dto.EventType);
+@@ -131,0 +147,5 @@ namespace Cafe.Matcha.Utils
++        {
++            Send(message, EventType.None);
++        }
++
++        private static void Send(string message, EventType eventType)
+@@ -136 +156 @@ namespace Cafe.Matcha.Utils
+-                SendToast(message);
++                SendToast(message, eventType);
+diff --git a/Cafe.Matcha/Utils/Request.cs b/Cafe.Matcha/Utils/Request.cs
+index 1786d9e..862692e 100644
+--- a/Cafe.Matcha/Utils/Request.cs
++++ b/Cafe.Matcha/Utils/Request.cs
+@@ -128,0 +129 @@ namespace Cafe.Matcha.Utils
++                DactBridge.Demand("NetworkRequest");
+diff --git a/Cafe.Matcha/Views/License.xaml.cs b/Cafe.Matcha/Views/License.xaml.cs
+index 9462b55..23b9ca6 100644
+--- a/Cafe.Matcha/Views/License.xaml.cs
++++ b/Cafe.Matcha/Views/License.xaml.cs
+@@ -26 +26 @@ namespace Cafe.Matcha.Views
+-            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri));
++            DactBridge.StartProcess(new ProcessStartInfo(e.Uri.AbsoluteUri));
+diff --git a/Cafe.Matcha/Views/MainControl.xaml.cs b/Cafe.Matcha/Views/MainControl.xaml.cs
+index 1979fd7..865d589 100644
+--- a/Cafe.Matcha/Views/MainControl.xaml.cs
++++ b/Cafe.Matcha/Views/MainControl.xaml.cs
+@@ -180,2 +180 @@ namespace Cafe.Matcha.Views
+-            var output = Formatter.GetEventText(dto);
+-            Output.Send(output);
++            Output.Send(dto);
+@@ -338 +337 @@ namespace Cafe.Matcha.Views
+-                Output.Send(Formatter.GetEventText(new MatchAlertDTO { Roulette = 0, Instance = instId }));
++                Output.Send(new MatchAlertDTO { Roulette = 0, Instance = instId });
+@@ -433 +432 @@ namespace Cafe.Matcha.Views
+-            Process.Start(new ProcessStartInfo("https://ffcafe.org/matcha/universalis/"));
++            DactBridge.StartProcess(new ProcessStartInfo("https://ffcafe.org/matcha/universalis/"));
+@@ -523 +522 @@ namespace Cafe.Matcha.Views
+-            Process.Start(new ProcessStartInfo("https://github.com/thewakingsands/matcha"));
++            DactBridge.StartProcess(new ProcessStartInfo("https://github.com/thewakingsands/matcha"));
+diff --git a/Cafe.Matcha/Views/TelemetrySetting.xaml.cs b/Cafe.Matcha/Views/TelemetrySetting.xaml.cs
+index b872e5e..0bae1c4 100644
+--- a/Cafe.Matcha/Views/TelemetrySetting.xaml.cs
++++ b/Cafe.Matcha/Views/TelemetrySetting.xaml.cs
+@@ -61 +61 @@ namespace Cafe.Matcha.Views
+-            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri));
++            DactBridge.StartProcess(new ProcessStartInfo(e.Uri.AbsoluteUri));

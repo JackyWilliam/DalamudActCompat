@@ -172,14 +172,14 @@ if (-not (Test-Path -LiteralPath $silverPackage) -or
 
 # Matcha updates require a source-diff and license review, so sync only verifies
 # the audited local package instead of replacing it from an ephemeral artifact.
-$matchaPackage = Join-Path $destinationRoot "matcha/Cafe.Matcha-26.8.10.829-dact2.zip"
-$matchaPackageSha256 = "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d"
+$matchaPackage = Join-Path $destinationRoot "matcha/Cafe.Matcha-26.8.12.1622-dact3.zip"
+$matchaPackageSha256 = "da2037d3fb75914fd980f72978debf83fc761f693adfff939dbf386f0196a89b"
 $matchaAssemblyPath = "Plugins/Cafe.Matcha/Cafe.Matcha.dll"
-$matchaAssemblySha256 = "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64"
+$matchaAssemblySha256 = "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa"
 if (-not (Test-Path -LiteralPath $matchaPackage) -or
     (Get-Sha256 $matchaPackage) -ne $matchaPackageSha256 -or
     (Get-ZipEntrySha256 $matchaPackage $matchaAssemblyPath) -ne $matchaAssemblySha256) {
-    throw "The bundled Matcha 26.8.10.829 DACT2 package no longer matches its fixed hashes."
+    throw "The bundled Matcha 26.8.12.1622 DACT3 package no longer matches its fixed hashes."
 }
 
 $triggerDllUrl = "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/Triggernometry.dll"
@@ -295,7 +295,7 @@ $plugins = @(
     [ordered]@{
         id = "matcha"
         name = "抹茶 / Cafe.Matcha"
-        version = "26.8.10.829"
+        version = "26.8.12.1622"
         author = "FFCafe / The Waking Sands"
         maintainer = "The Waking Sands contributors; DACT compatibility build maintained by DalamudActCompat"
         copyright = "Copyright © FFCafe and Cafe.Matcha contributors"
@@ -306,7 +306,7 @@ $plugins = @(
         licenseFile = "matcha/LICENSE.txt"
         relativeAssembly = $matchaAssemblyPath
         sha256 = $matchaAssemblySha256
-        relativePackage = "matcha/Cafe.Matcha-26.8.10.829-dact2.zip"
+        relativePackage = "matcha/Cafe.Matcha-26.8.12.1622-dact3.zip"
         packageSha256 = $matchaPackageSha256
         disableOnlineUpdates = $true
         enableAfterInstall = $true

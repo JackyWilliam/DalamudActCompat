@@ -1265,31 +1265,14 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     private async Task DisposeCoreAsync(Task[] tasks)
     {
-        var completion = Task.WhenAll(tasks);
         try
         {
-            await completion.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            // Dispose owns these tasks; a bounded wait would only move their continuations
+            // past the plugin assembly-load-context lifetime.
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
         {
-            logger.Warning(
-                "FFLogs background tasks did not stop within five seconds; resources will be released after they exit.");
-            _ = completion.ContinueWith(
-                completedTask =>
-                {
-                    if (completedTask.IsFaulted)
-                    {
-                        logger.Error(
-                            completedTask.Exception?.GetBaseException()
-                            ?? new InvalidOperationException("Unknown FFLogs shutdown failure."),
-                            "FFLogs background shutdown failed.");
-                    }
-                    DisposeResources();
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            return;
         }
         catch (Exception ex)
         {

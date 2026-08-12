@@ -32,7 +32,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getPending;
-    private readonly Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install;
+    private readonly Func<IReadOnlyList<BundledActPluginDescriptor>, Task<BundledPluginInstallOutcome>> install;
     private readonly Action<bool> configureFullPermissions;
     private readonly Func<bool> shouldOfferTtsPro;
     private readonly Action<FoxTtsProChoice> completeSetup;
@@ -41,7 +41,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private readonly ISharedImmediateTexture logoTexture;
     private IReadOnlyList<BundledActPluginDescriptor> disclosures = [];
     private IReadOnlyList<BundledActPluginDescriptor> pending = [];
-    private Task? installTask;
+    private Task<BundledPluginInstallOutcome>? installTask;
     private string result = string.Empty;
     private bool showPermissionChoice;
     private bool permissionPopupRequested;
@@ -54,7 +54,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     public ThirdPartyPluginNoticeWindow(
         Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures,
         Func<IReadOnlyList<BundledActPluginDescriptor>> getPending,
-        Func<IReadOnlyList<BundledActPluginDescriptor>, Task> install,
+        Func<IReadOnlyList<BundledActPluginDescriptor>, Task<BundledPluginInstallOutcome>> install,
         Action<bool> configureFullPermissions,
         Func<bool> shouldOfferTtsPro,
         Action<FoxTtsProChoice> completeSetup,
@@ -126,7 +126,12 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
                     "third-party-notice",
-                    showCloseButton: ShouldShowCloseButton(openMode)))
+                    showCloseButton: ShouldShowCloseButton(
+                        openMode,
+                        pending.Count,
+                        installTask is not null,
+                        showPermissionChoice,
+                        showTtsProChoice)))
             {
                 IsOpen = false;
             }
@@ -209,9 +214,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ImGui.PopStyleColor();
 
                     ImGui.SameLine();
-                    ImGui.TextDisabled(text.Get(
-                        "必须确认来源并完成安装后才能继续权限设置。",
-                        "Acknowledge the sources and finish installation to continue to permissions."));
+                    ImGui.TextDisabled(openMode is ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate
+                        ? text.Get(
+                            "必须确认来源并完成安装后才能继续权限设置。",
+                            "Acknowledge the sources and finish installation to continue to permissions.")
+                        : text.Get(
+                            "可关闭后稍后处理；未确认的扩展保持禁用。确认来源并完成安装后才能继续权限设置。",
+                            "You may close and defer this step; unacknowledged extensions remain disabled. Acknowledge the sources and finish installation to continue to permissions."));
                 }
 
             }
@@ -277,8 +286,21 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         bool userInitiated)
         => pendingCount > 0 || (failed && userInitiated);
 
-    internal static bool ShouldShowCloseButton(ThirdPartyNoticeOpenMode openMode)
-        => openMode is not ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate;
+    internal static bool ShouldShowCloseButton(
+        ThirdPartyNoticeOpenMode openMode,
+        int pendingCount,
+        bool installInProgress,
+        bool permissionChoicePending,
+        bool ttsProChoicePending)
+        // Required post-update disclosures must remain visible until acknowledged. Manually
+        // opened disclosures may still be deferred because unacknowledged DLLs fail closed.
+        => !installInProgress &&
+           !permissionChoicePending &&
+           !ttsProChoicePending &&
+           (pendingCount == 0 || openMode is not ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate);
+
+    internal static bool CanAdvanceToPermissionChoice(int pendingCount)
+        => pendingCount == 0;
 
     private void CompleteInstallWhenReady()
     {
@@ -289,18 +311,28 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
         try
         {
-            installTask.GetAwaiter().GetResult();
-            result = text.Get(
-                "内置 DLL 已安装/更新，告知记录已保存。",
-                "Bundled DLLs were installed/updated and the notice acknowledgement was saved.");
+            var outcome = installTask.GetAwaiter().GetResult();
             updateCheckInProgress = false;
             Refresh(openWhenPending: false);
-            showPermissionChoice = true;
-            permissionPopupRequested = true;
-            IsOpen = true;
+            if (!CanAdvanceToPermissionChoice(pending.Count))
+            {
+                throw new InvalidOperationException(
+                    "Bundled plugin installation returned successfully, but one or more disclosures remain pending.");
+            }
+
+            result = outcome.RuntimeReady
+                ? text.Get(
+                    "内置 DLL 已安装/更新，告知记录已保存。",
+                    "Bundled DLLs were installed/updated and the notice acknowledgement was saved.")
+                : text.Get(
+                    $"内置 DLL 和告知记录已保存；兼容 Host 正在后台恢复：{outcome.RuntimeWarning}",
+                    $"Bundled DLLs and acknowledgements were saved; the compatibility Host is recovering in the background: {outcome.RuntimeWarning}");
+            BeginPermissionChoice();
         }
         catch (Exception ex)
         {
+            updateCheckInProgress = false;
+            Refresh(openWhenPending: false);
             logger.Error(ex, "Bundled ACT plugin installation failed.");
             result = $"{text.Get("内置 DLL 安装失败", "Bundled DLL installation failed")}: {ex.GetBaseException().Message}";
         }
@@ -308,6 +340,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         {
             installTask = null;
         }
+    }
+
+    private void BeginPermissionChoice()
+    {
+        showPermissionChoice = true;
+        permissionPopupRequested = true;
+        IsOpen = true;
     }
 
     private void Refresh(bool openWhenPending)

@@ -1,3 +1,4 @@
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Core.Models;
 
 namespace DalamudActCompat.Parser;
@@ -8,7 +9,9 @@ internal sealed class DutyEncounterAccumulator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> completedSegmentIds = [];
     private readonly HashSet<Guid> segmentIds = [];
+    private readonly List<string> displayRoster = [];
     private double completedDurationSeconds;
+    private int partyCapacity;
     private Guid sessionId;
     private DateTimeOffset? startTime;
     private uint? territoryId;
@@ -21,10 +24,16 @@ internal sealed class DutyEncounterAccumulator
 
     public IReadOnlyCollection<Guid> SegmentIds => segmentIds;
 
-    public Encounter Update(Encounter segment, bool finished, DateTimeOffset now)
+    public Encounter Update(
+        Encounter segment,
+        bool finished,
+        DateTimeOffset now,
+        IReadOnlyList<string>? currentPartyMemberIds = null,
+        int observedPartyCapacity = 0)
     {
         ArgumentNullException.ThrowIfNull(segment);
         BeginOrUpdateSession(segment);
+        UpdateDisplayRoster(segment, currentPartyMemberIds, observedPartyCapacity);
         latestSegment = segment;
         segmentIds.Add(segment.Id);
         if (finished && completedSegmentIds.Add(segment.Id))
@@ -65,7 +74,9 @@ internal sealed class DutyEncounterAccumulator
         completedCombatants.Clear();
         completedSegmentIds.Clear();
         segmentIds.Clear();
+        displayRoster.Clear();
         completedDurationSeconds = 0;
+        partyCapacity = 0;
         sessionId = Guid.Empty;
         startTime = null;
         territoryId = null;
@@ -101,9 +112,7 @@ internal sealed class DutyEncounterAccumulator
     {
         foreach (var combatant in combatants)
         {
-            var key = string.IsNullOrWhiteSpace(combatant.Id)
-                ? combatant.Name
-                : combatant.Id;
+            var key = CombatantKey(combatant);
             if (!completedCombatants.TryGetValue(key, out var totals))
             {
                 totals = new CombatantTotals();
@@ -111,6 +120,65 @@ internal sealed class DutyEncounterAccumulator
             }
 
             totals.Add(combatant, encounterDurationSeconds);
+        }
+    }
+
+    private void UpdateDisplayRoster(
+        Encounter segment,
+        IReadOnlyList<string>? currentPartyMemberIds,
+        int observedPartyCapacity)
+    {
+        if (currentPartyMemberIds is null)
+        {
+            return;
+        }
+
+        var currentRoster = currentPartyMemberIds
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        partyCapacity = Math.Max(
+            partyCapacity,
+            Math.Max(observedPartyCapacity, currentRoster.Length));
+        if (currentRoster.Length == 0 || partyCapacity == 0)
+        {
+            return;
+        }
+
+        var nextRoster = new List<string>(partyCapacity);
+        AddRosterMembers(nextRoster, currentRoster);
+        if (nextRoster.Count < partyCapacity)
+        {
+            // During a vacancy the most recent roster fills the empty slot. Once a replacement
+            // makes the live roster full, this branch is skipped and the departed member leaves
+            // the duty-wide ranking without transferring their totals to another player.
+            AddRosterMembers(nextRoster, displayRoster);
+            AddRosterMembers(
+                nextRoster,
+                segment.Combatants
+                    .Where(static combatant => !IsLimitBreak(combatant))
+                    .Select(CombatantKey));
+        }
+
+        displayRoster.Clear();
+        displayRoster.AddRange(nextRoster);
+    }
+
+    private void AddRosterMembers(List<string> target, IEnumerable<string> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (target.Count == partyCapacity)
+            {
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(candidate) ||
+                target.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            target.Add(candidate);
         }
     }
 
@@ -130,9 +198,7 @@ internal sealed class DutyEncounterAccumulator
         {
             foreach (var combatant in activeSegment.Combatants)
             {
-                var key = string.IsNullOrWhiteSpace(combatant.Id)
-                    ? combatant.Name
-                    : combatant.Id;
+                var key = CombatantKey(combatant);
                 if (!merged.TryGetValue(key, out var totals))
                 {
                     totals = new CombatantTotals();
@@ -147,8 +213,13 @@ internal sealed class DutyEncounterAccumulator
         var durationSeconds = Math.Max(
             1,
             completedDurationSeconds + activeDurationSeconds);
-        var combatants = merged.Values
-            .Select(totals => totals.ToCombatant(durationSeconds))
+        var visibleRoster = displayRoster.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var combatants = merged
+            .Where(pair =>
+                visibleRoster.Count == 0 ||
+                visibleRoster.Contains(pair.Key) ||
+                pair.Value.IsLimitBreak)
+            .Select(pair => pair.Value.ToCombatant(durationSeconds))
             .ToArray();
         var jobs = combatants
             .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))
@@ -196,6 +267,17 @@ internal sealed class DutyEncounterAccumulator
                 (segment.EndTime.GetValueOrDefault(fallbackEndTime) - segment.StartTime)
                 .TotalSeconds);
 
+    private static string CombatantKey(Combatant combatant)
+        => string.IsNullOrWhiteSpace(combatant.Id)
+            ? combatant.Name
+            : combatant.Id;
+
+    private static bool IsLimitBreak(Combatant combatant)
+        => string.Equals(
+            combatant.Name,
+            ChineseCombatChatContext.LimitBreakActorName,
+            StringComparison.OrdinalIgnoreCase);
+
     private sealed class CombatantTotals
     {
         private string id = string.Empty;
@@ -213,6 +295,12 @@ internal sealed class DutyEncounterAccumulator
         private double personalDamageDurationSeconds;
         private double externalDamageDurationSeconds;
         private double raidContributionDamage;
+
+        public bool IsLimitBreak
+            => string.Equals(
+                name,
+                ChineseCombatChatContext.LimitBreakActorName,
+                StringComparison.OrdinalIgnoreCase);
 
         public void Add(Combatant combatant, double encounterDurationSeconds)
         {

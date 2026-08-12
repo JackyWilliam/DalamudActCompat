@@ -443,7 +443,7 @@ public static class HostPluginBridge
         }
     }
 
-    public static bool SendMatchaNotification(string message)
+    public static bool SendMatchaNotification(string message, string notificationKind = "")
     {
         DemandMatchaCapability("ReadCombatLogs");
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
@@ -471,7 +471,7 @@ public static class HostPluginBridge
         var fallbackAccepted = sender?.Invoke(
             HostMessageTypes.MatchaNotification,
             HostMessagePriority.Critical,
-            new HostMatchaNotification(message),
+            new HostMatchaNotification(message, ResolveMatchaNotificationKind(notificationKind)),
             null,
             DateTimeOffset.UtcNow.AddSeconds(2)) == true;
         if (!fallbackAccepted)
@@ -484,6 +484,16 @@ public static class HostPluginBridge
 
         return fallbackAccepted;
     }
+
+    internal static HostMatchaNotificationKind ResolveMatchaNotificationKind(string notificationKind)
+        // Matcha supplies its EventType name through the compatibility bridge so icon routing
+        // stays stable across languages and user-configured formatter text.
+        => notificationKind switch
+        {
+            "InitZone" => HostMatchaNotificationKind.WorldChanged,
+            "MatchAlert" => HostMatchaNotificationKind.DutyEntered,
+            _ => HostMatchaNotificationKind.General,
+        };
 
     internal static void RelayMatchaLogLine(string line)
     {

@@ -532,7 +532,8 @@ public sealed class HostIpcClient : IAsyncDisposable
                 var matchaNotification = envelope.Payload.Deserialize<HostMatchaNotification>();
                 if (matchaNotification is null ||
                     string.IsNullOrWhiteSpace(matchaNotification.Message) ||
-                    matchaNotification.Message.Length > 1024)
+                    matchaNotification.Message.Length > 1024 ||
+                    !Enum.IsDefined(matchaNotification.Kind))
                 {
                     logger.Warning("Matcha Host sent an invalid notification; request denied.");
                     break;

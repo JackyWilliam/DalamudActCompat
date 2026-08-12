@@ -103,12 +103,9 @@ public sealed class EncounterService : IAsyncDisposable
     {
         try
         {
-            await pending.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            logger.Warning(
-                "Encounter save flush exceeded five seconds; the tracked save will continue without disposing its resources.");
+            // Encounter writes are serialized and owned by this service, so shutdown joins
+            // the final write instead of leaving plugin code running after unload.
+            await pending.ConfigureAwait(false);
         }
         catch (Exception ex)
         {

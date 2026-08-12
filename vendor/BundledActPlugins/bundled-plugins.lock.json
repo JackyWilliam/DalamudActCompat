@@ -71,7 +71,7 @@
                     {
                         "id":  "matcha",
                         "name":  "抹茶 / Cafe.Matcha",
-                        "version":  "26.8.10.829",
+                        "version":  "26.8.12.1622",
                         "author":  "FFCafe / The Waking Sands",
                         "maintainer":  "The Waking Sands contributors; DACT compatibility build maintained by DalamudActCompat",
                         "copyright":  "Copyright © FFCafe and Cafe.Matcha contributors",
@@ -81,9 +81,9 @@
                         "license":  "AGPL-3.0",
                         "licenseFile":  "matcha/LICENSE.txt",
                         "relativeAssembly":  "Plugins/Cafe.Matcha/Cafe.Matcha.dll",
-                        "sha256":  "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64",
-                        "relativePackage":  "matcha/Cafe.Matcha-26.8.10.829-dact2.zip",
-                        "packageSha256":  "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d",
+                        "sha256":  "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa",
+                        "relativePackage":  "matcha/Cafe.Matcha-26.8.12.1622-dact3.zip",
+                        "packageSha256":  "da2037d3fb75914fd980f72978debf83fc761f693adfff939dbf386f0196a89b",
                         "disableOnlineUpdates":  true,
                         "enableAfterInstall":  true
                     }

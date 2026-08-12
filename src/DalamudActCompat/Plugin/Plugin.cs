@@ -2,6 +2,7 @@ using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.ImGuiNotification;
+using Dalamud.Interface.Textures;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
@@ -29,6 +30,8 @@ namespace DalamudActCompat.Plugin;
 public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/actcompat";
+    private const uint MatchaWorldChangedIconId = 61835;
+    private const uint MatchaDutyEnteredIconId = 61832;
 
     private readonly PluginServices services;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
@@ -68,6 +71,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ActHostSupervisor hostSupervisor;
     private readonly ActHostSupervisor matchaHostSupervisor;
     private readonly ActHostSupervisor genericHostSupervisor;
+    private readonly ISharedImmediateTexture matchaWorldChangedIcon;
+    private readonly ISharedImmediateTexture matchaDutyEnteredIcon;
     private readonly SemaphoreSlim hostTopologyLock = new(1, 1);
     private readonly object permissionSnapshotLock = new();
     private readonly object pluginInstallStatusLock = new();
@@ -92,6 +97,11 @@ public sealed class Plugin : IDalamudPlugin
         });
     private readonly CancellationTokenSource hostCommandCancellation = new();
     private readonly Task hostCommandWorker;
+    private readonly CancellationTokenSource independentHostStartupCancellation = new();
+    private readonly Task independentHostStartupTask;
+    private readonly object backgroundOperationLock = new();
+    private readonly List<Task> backgroundOperations = [];
+    private bool backgroundOperationShutdownStarted;
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
     private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
@@ -311,6 +321,12 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(assetDirectory, "StatusIcons", "CombatTransition.png"));
         var endedStatusIcon = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "StatusIcons", "CombatEnded.png"));
+        // These game icon IDs are the canonical source of the two user-selected images,
+        // avoiding duplicate extracted assets while retaining Dalamud's texture lifecycle.
+        matchaWorldChangedIcon = textureProvider.GetFromGameIcon(
+            new GameIconLookup(MatchaWorldChangedIconId));
+        matchaDutyEnteredIcon = textureProvider.GetFromGameIcon(
+            new GameIconLookup(MatchaDutyEnteredIconId));
         meterWindow = new MeterWindow(
             meterService,
             fflogsEstimateService,
@@ -474,7 +490,9 @@ public sealed class Plugin : IDalamudPlugin
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
         StartBundledCactbotInitialization(pluginInterface.AssemblyLocation.Directory!.FullName);
-        _ = Task.Run(StartIndependentHostAsync);
+        independentHostStartupTask = Task.Run(
+            () => StartIndependentHostAsync(independentHostStartupCancellation.Token),
+            CancellationToken.None);
         if (configuration.AutoCheckBundledPluginUpdates)
         {
             StartBundledPluginUpdateCheck(openWindow: false);
@@ -487,12 +505,35 @@ public sealed class Plugin : IDalamudPlugin
     {
         bundledUpdateCancellation.Cancel();
         BeginCactbotShutdown();
+        BeginBackgroundOperationShutdown();
         fflogsEstimateService.BeginShutdown();
-        var factoryResetCompleted = factoryResetOperations
-            .WaitForShutdownAsync(TimeSpan.FromSeconds(5))
-            .GetAwaiter()
-            .GetResult();
+        factoryResetOperations.BeginShutdown();
+        lifecycle.BeginShutdown();
+        independentHostStartupCancellation.Cancel();
         bundledPluginUpdateChecker.Dispose();
+
+        // CanUnloadAsync invokes Dispose away from the framework thread. Marshal only the
+        // short Dalamud/UI detach phase back before awaiting background component shutdown.
+        try
+        {
+            services.Framework
+                .RunOnFrameworkThread(DetachDalamudResources)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            // Critical parser/Host cleanup must still run if Dalamud is already tearing
+            // down its framework services during game exit.
+            logger.Error(ex, "Dalamud UI/event detach failed during shutdown.");
+        }
+
+        // Returning early would let Dalamud tear down the load context around live hooks/tasks.
+        DisposeComponentsAsync().GetAwaiter().GetResult();
+    }
+
+    private void DetachDalamudResources()
+    {
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
@@ -513,42 +554,6 @@ public sealed class Plugin : IDalamudPlugin
         matchaHostSupervisor.MatchaLogLineRequested -= OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested -= OnMatchaTtsRequested;
         genericHostSupervisor.MatchaTtsRequested -= OnGenericTtsRequested;
-
-        if (factoryResetCompleted)
-        {
-            SaveConfiguration();
-        }
-        else
-        {
-            logger.Warning(
-                "Factory reset did not stop within five seconds. Dalamud configuration saving and component disposal are deferred to avoid racing the active reset.");
-        }
-        var shutdown = Task.Run(() => DisposeComponentsAsync(factoryResetCompleted));
-        var completed = ReferenceEquals(
-            Task.WhenAny(shutdown, Task.Delay(TimeSpan.FromMilliseconds(250)))
-                .GetAwaiter()
-                .GetResult(),
-            shutdown);
-        if (!completed)
-        {
-            logger.Warning(
-                "ACT compatibility shutdown exceeded 250 ms. Dalamud/FFXIV was released; " +
-                "remaining in-process plugin cleanup will continue only on the background task.");
-            _ = shutdown.ContinueWith(
-                task => logger.Error(
-                    task.Exception?.GetBaseException()
-                    ?? new InvalidOperationException("Unknown shutdown failure."),
-                    "ACT compatibility background shutdown failed."),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-        }
-        else if (shutdown.IsFaulted)
-        {
-            logger.Error(
-                shutdown.Exception?.GetBaseException() ?? new InvalidOperationException("Unknown shutdown failure."),
-                "ACT compatibility background shutdown failed.");
-        }
     }
 
     private void Draw()
@@ -610,7 +615,7 @@ public sealed class Plugin : IDalamudPlugin
                 meterWindow.IsOpen = true;
                 break;
             case "host":
-                _ = Task.Run(async () =>
+                StartBackgroundOperation(async () =>
                 {
                     try
                     {
@@ -626,7 +631,7 @@ public sealed class Plugin : IDalamudPlugin
                 statusWindow.IsOpen = true;
                 break;
             case "stop":
-                _ = Task.Run(async () =>
+                StartBackgroundOperation(async () =>
                 {
                     try
                     {
@@ -883,6 +888,48 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void StartBackgroundOperation(Func<Task> operation)
+    {
+        lock (backgroundOperationLock)
+        {
+            if (backgroundOperationShutdownStarted)
+            {
+                return;
+            }
+
+            // Retain every task until unload. Removing completed tasks via a continuation
+            // would itself create unowned plugin code that could race the ALC teardown.
+            backgroundOperations.Add(Task.Run(operation, CancellationToken.None));
+        }
+    }
+
+    private void BeginBackgroundOperationShutdown()
+    {
+        lock (backgroundOperationLock)
+        {
+            backgroundOperationShutdownStarted = true;
+        }
+    }
+
+    private async Task ShutdownBackgroundOperationsAsync()
+    {
+        Task[] tasks;
+        lock (backgroundOperationLock)
+        {
+            backgroundOperationShutdownStarted = true;
+            tasks = backgroundOperations.ToArray();
+        }
+
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex.GetBaseException(), "A tracked plugin operation failed during shutdown.");
+        }
+    }
+
     private Task ShutdownCactbotOperationsAsync()
     {
         BeginCactbotShutdown();
@@ -895,25 +942,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task ShutdownCactbotOperationsCoreAsync(Task[] tasks)
     {
-        var completion = Task.WhenAll(tasks);
         try
         {
-            await completion.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            logger.Warning(
-                "Cactbot background operations did not stop within five seconds; cancellation resources will be released after they exit.");
-            _ = completion.ContinueWith(
-                completedTask =>
-                {
-                    _ = completedTask.Exception;
-                    DisposeCactbotCancellation();
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            return;
+            // Cancellation is cooperative, so unloading must join every tracked operation.
+            // Abandoning one here would keep plugin code alive after its ALC is released.
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1042,7 +1075,7 @@ public sealed class Plugin : IDalamudPlugin
             ThirdPartyPluginInstallState.Preflighting,
             Path.GetFileNameWithoutExtension(normalizedPackagePath),
             Detail: "正在进行安全静态预检；此阶段不会执行 DLL。"));
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             try
             {
@@ -1228,7 +1261,7 @@ public sealed class Plugin : IDalamudPlugin
             State = ThirdPartyPluginInstallState.StartingHost,
             Detail = "权限已确认，正在启动共享通用 Host 并执行运行时加载检查。",
         });
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             try
             {
@@ -1345,7 +1378,7 @@ public sealed class Plugin : IDalamudPlugin
             installed.Manifest.Id,
             installed.Manifest.Version,
             Detail: "正在安全停止通用 Host 并删除插件。"));
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             try
             {
@@ -1399,7 +1432,7 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
-    private async Task InstallBundledPluginsAsync(
+    private async Task<BundledPluginInstallOutcome> InstallBundledPluginsAsync(
         IReadOnlyList<BundledActPluginDescriptor> plugins)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
@@ -1412,6 +1445,8 @@ public sealed class Plugin : IDalamudPlugin
             var parserWasRunning = parserEngine.Status.State == ParserState.Running;
             var matchaWasRunning =
                 matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var installCommitted = false;
+            Exception? runtimeRecoveryFailure = null;
             try
             {
                 if (matchaWasRunning)
@@ -1432,6 +1467,9 @@ public sealed class Plugin : IDalamudPlugin
                                 .InstallAndAcknowledgeAsync(plugins, cancellationToken)
                                 .ConfigureAwait(false);
                             SaveConfiguration();
+                            // The packages and disclosure keys are durable at this point. A later
+                            // Host fault is a runtime recovery problem, not an installation rollback.
+                            installCommitted = true;
                         },
                         hostSupervisor.StartAsync,
                         parserEngine.StartAsync,
@@ -1439,6 +1477,10 @@ public sealed class Plugin : IDalamudPlugin
                         timeout.Token,
                         TimeSpan.FromSeconds(20))
                     .ConfigureAwait(false);
+            }
+            catch (Exception recoveryFailure) when (installCommitted)
+            {
+                runtimeRecoveryFailure = recoveryFailure;
             }
             catch (Exception installFailure)
             {
@@ -1466,18 +1508,33 @@ public sealed class Plugin : IDalamudPlugin
                 throw;
             }
 
-            if (hostWasRunning &&
+            if (runtimeRecoveryFailure is null &&
+                hostWasRunning &&
                 hostSupervisor.Snapshot.State == HostSupervisorState.Running)
             {
-                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
-                await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+                try
+                {
+                    await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+                    await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+                }
+                catch (Exception recoveryFailure)
+                {
+                    runtimeRecoveryFailure = recoveryFailure;
+                }
             }
 
-            services.NotificationManager.AddNotification(new()
+            if (runtimeRecoveryFailure is not null)
             {
-                Title = "ACT 兼容",
-                Content = "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。",
-            });
+                logger.Warning(
+                    $"Bundled ACT plugins were installed and acknowledged, but runtime recovery is pending: {runtimeRecoveryFailure.GetBaseException().Message}");
+                TryNotifyBundledPluginInstall(
+                    "第三方 DLL 和来源声明已保存；兼容 Host 未完全恢复，将由监督器继续重试。");
+                return BundledPluginInstallOutcome.RuntimeRecoveryPending(runtimeRecoveryFailure);
+            }
+
+            TryNotifyBundledPluginInstall(
+                "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。");
+            return BundledPluginInstallOutcome.Ready;
         }
         finally
         {
@@ -1485,9 +1542,26 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void TryNotifyBundledPluginInstall(string content)
+    {
+        try
+        {
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = "ACT 兼容",
+                Content = content,
+            });
+        }
+        catch (Exception ex)
+        {
+            // Notification delivery must not reinterpret a durable installation as failed.
+            logger.Warning($"Could not show the bundled ACT plugin completion notification: {ex.Message}");
+        }
+    }
+
     private void StartBundledPluginUpdateCheck(bool openWindow)
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             var cancellationToken = bundledUpdateCancellation.Token;
             if (openWindow)
@@ -1987,16 +2061,23 @@ public sealed class Plugin : IDalamudPlugin
             });
     }
 
-    private async Task StartIndependentHostAsync()
+    private async Task StartIndependentHostAsync(CancellationToken cancellationToken)
     {
-        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+        var lockAcquired = false;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            await hostTopologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lockAcquired = true;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(45));
             await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
             await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
             await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
             await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.Information("Independent ACT Host startup was cancelled during plugin shutdown.");
         }
         catch (Exception ex)
         {
@@ -2007,7 +2088,10 @@ public sealed class Plugin : IDalamudPlugin
         }
         finally
         {
-            hostTopologyLock.Release();
+            if (lockAcquired)
+            {
+                hostTopologyLock.Release();
+            }
         }
     }
 
@@ -2069,7 +2153,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void RestartHostFromUi()
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2091,7 +2175,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void RestartMatchaHostFromUi()
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2125,7 +2209,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void RestartGenericHostFromUi()
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2151,7 +2235,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ApplyActPermissionChanges(bool switchFoxTtsToPro = false)
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2287,7 +2371,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void StopHostFromUi()
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2308,7 +2392,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void StopMatchaHostFromUi()
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2331,7 +2415,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void StopGenericHostFromUi()
     {
-        _ = Task.Run(async () =>
+        StartBackgroundOperation(async () =>
         {
             await hostTopologyLock.WaitAsync().ConfigureAwait(false);
             try
@@ -2488,55 +2572,42 @@ public sealed class Plugin : IDalamudPlugin
     private bool IsGenericHostConfiguredToRun()
         => CreateGenericHostPermissionSnapshot().AllowedPluginIds.Count > 0;
 
-    private async Task DisposeComponentsAsync(bool factoryResetCompleted)
+    private async Task DisposeComponentsAsync()
     {
         hostCommandQueue.Writer.TryComplete();
         await hostCommandCancellation.CancelAsync().ConfigureAwait(false);
         try
         {
-            await hostCommandWorker.WaitAsync(TimeSpan.FromMilliseconds(500))
-                .ConfigureAwait(false);
+            await hostCommandWorker.ConfigureAwait(false);
             hostCommandCancellation.Dispose();
         }
-        catch (TimeoutException)
+        catch (Exception ex)
         {
-            logger.Warning(
-                "ACT Host command broker did not stop within 500 ms; it remains off the game thread.");
+            hostCommandCancellation.Dispose();
+            logger.Error(ex, "ACT Host command broker failed during shutdown.");
         }
 
-        if (!factoryResetCompleted)
-        {
-            var delayedDisposal = DisposeComponentsAfterFactoryResetAsync();
-            _ = delayedDisposal.ContinueWith(
-                task => logger.Error(
-                    task.Exception?.GetBaseException()
-                    ?? new InvalidOperationException("Unknown delayed shutdown failure."),
-                    "ACT compatibility delayed shutdown failed after factory reset."),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            return;
-        }
+        await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);
 
-        await DisposeRemainingComponentsAsync().ConfigureAwait(false);
-    }
-
-    private async Task DisposeComponentsAfterFactoryResetAsync()
-    {
+        // A reset owns configuration files until its rollback/commit finishes. Waiting here
+        // keeps those operations inside the plugin lifetime instead of abandoning them.
         await factoryResetOperations.WaitForCompletionAsync().ConfigureAwait(false);
+        SaveConfiguration();
         await DisposeRemainingComponentsAsync().ConfigureAwait(false);
     }
 
     private async Task DisposeRemainingComponentsAsync()
     {
         await ShutdownCactbotOperationsAsync().ConfigureAwait(false);
-        await fflogsEstimateService.DisposeAsync().ConfigureAwait(false);
+        await independentHostStartupTask.ConfigureAwait(false);
+        independentHostStartupCancellation.Dispose();
         await hostTopologyLock.WaitAsync().ConfigureAwait(false);
         try
         {
             await lifecycle.DisposeAsync().ConfigureAwait(false);
             await parserEngine.DisposeAsync().ConfigureAwait(false);
             await encounterService.DisposeAsync().ConfigureAwait(false);
+            await fflogsEstimateService.DisposeAsync().ConfigureAwait(false);
             Volatile.Write(ref matchaEventsEnabled, 0);
             actRuntime.SetNetworkSentCaptureEnabled(false);
             await matchaHostSupervisor.DisposeAsync().ConfigureAwait(false);
@@ -2639,11 +2710,18 @@ public sealed class Plugin : IDalamudPlugin
             {
                 try
                 {
-                    services.NotificationManager.AddNotification(new()
+                    var gameNotification = new Notification
                     {
                         Title = "抹茶 / Cafe.Matcha",
                         Content = notification.Message,
-                    });
+                    };
+                    gameNotification.IconTexture = notification.Kind switch
+                    {
+                        HostMatchaNotificationKind.WorldChanged => matchaWorldChangedIcon,
+                        HostMatchaNotificationKind.DutyEntered => matchaDutyEnteredIcon,
+                        _ => null,
+                    };
+                    services.NotificationManager.AddNotification(gameNotification);
                 }
                 catch (Exception exception)
                 {
@@ -2981,7 +3059,7 @@ public sealed class Plugin : IDalamudPlugin
             identities[identity.DisplayName] = identity;
         }
 
-        foreach (var member in partyList)
+        foreach (var member in EnumerateLocalPartyMembers(partyList))
         {
             var name = member.Name.TextValue;
             if (string.IsNullOrWhiteSpace(name))
@@ -3015,5 +3093,22 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return identities.Values.ToArray();
+    }
+
+    private static IEnumerable<Dalamud.Game.ClientState.Party.IPartyMember>
+        EnumerateLocalPartyMembers(IPartyList partyList)
+    {
+        for (var index = 0; index < 8; index++)
+        {
+            // In alliance duties IPartyList's normal indexer switches to AllianceList.
+            // MainGroup remains the authoritative source for the local eight-player party.
+            var member = partyList.IsAlliance
+                ? partyList.CreatePartyMemberReference(partyList.GetPartyMemberAddress(index))
+                : partyList[index];
+            if (member is not null)
+            {
+                yield return member;
+            }
+        }
     }
 }

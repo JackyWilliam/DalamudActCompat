@@ -84,6 +84,7 @@ try
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
     ValidateDutyEncounterPartySizes();
+    ValidateDutyEncounterRosterReplacement();
     ValidateControlCenterPresentation();
     ValidateDiagnosticReport(testRoot);
     ValidateFflogsEstimateCurve();
@@ -92,6 +93,8 @@ try
     ValidateFflogsConcurrencyBoundaries();
     await ValidateFflogsCacheWritersAsync(testRoot);
     await ValidateBundledPluginInstallLifecycleAsync();
+    await ValidatePluginLifecycleShutdownAsync(testRoot);
+    ValidatePluginUnloadOwnership();
     await ValidateEncounterShutdownFlushAsync(testRoot);
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
@@ -446,6 +449,7 @@ static void ValidatePluginRepositoryMetadata()
         installUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
         entry.GetProperty("DownloadLinkUpdate").GetString() is { } updateUrl &&
         updateUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
+        entry.GetProperty("CanUnloadAsync").GetBoolean() &&
         entry.GetProperty("DownloadLinkTesting").ValueKind == JsonValueKind.Null,
         "Dalamud custom repository version or release download links drifted from the plugin assembly.");
     var iconUrl = entry.GetProperty("IconUrl").GetString();
@@ -1613,6 +1617,10 @@ static void ValidateEncounterParticipantsSurvivePartyDeparture()
     var allies = Enumerable.Range(1, 8)
         .Select(index => new CombatantData($"Player {index}", encounter))
         .ToList();
+    allies.Add(new CombatantData("Player 9", encounter));
+    allies.Add(new CombatantData("Escort NPC", encounter));
+    allies.Add(new CombatantData("Alliance Player", encounter));
+    allies.Add(new CombatantData(ChineseCombatChatContext.LimitBreakActorName, encounter));
     encounter.SetAllies(allies);
 
     var cachedIdentities = Enumerable.Range(1, 8)
@@ -1631,26 +1639,91 @@ static void ValidateEncounterParticipantsSurvivePartyDeparture()
     var resolved = SelfHostedActRuntime.ResolveEncounterCombatants(
         encounter,
         liveIdentities,
-        cachedIdentities);
+        cachedIdentities,
+        partyCapacity: 8);
 
     Assert(
-        resolved.Count == 8,
-        "A completed eight-player encounter lost combatants who left the live party before publication.");
+        resolved.Count == 9 &&
+        resolved.Count(static item => item.Identity is not null) == 8,
+        "Combat statistics did not contain exactly eight party players plus one Limit Break row.");
     Assert(
-        resolved.All(static item => item.Identity is not null),
-        "An encounter-scoped player identity was not retained after a party departure.");
+        resolved.All(static item =>
+            item.Identity is not null ||
+            item.Combatant.Name == ChineseCombatChatContext.LimitBreakActorName),
+        "An ACT ally without a player identity leaked into combat statistics.");
     Assert(
         resolved.Skip(5).Select(static item => item.Identity!.Name)
+            .Take(3)
             .SequenceEqual(["Player 6", "Player 7", "Player 8"]),
         "The departed players were not restored from the encounter identity cache.");
+    Assert(
+        resolved.All(static item =>
+            item.Combatant.Name is not ("Escort NPC" or "Alliance Player")),
+        "A friendly NPC or non-party alliance player was included in combat statistics.");
+    Assert(
+        resolved.Count(static item =>
+            item.Combatant.Name == ChineseCombatChatContext.LimitBreakActorName &&
+            item.Identity is null) == 1,
+        "The synthetic Limit Break row was removed with non-player ACT allies.");
+    Assert(
+        resolved.All(static item => item.Combatant.Name != "Player 9"),
+        "A ninth player outside the encounter's local party was included in combat statistics.");
+
+    var replacementIdentity = new ActPlayerIdentity(
+        "Player 9",
+        "Test World",
+        "DPS",
+        false,
+        false)
+    {
+        ContentId = 9,
+    };
+    var replacementParty = cachedIdentities
+        .Take(7)
+        .Append(replacementIdentity)
+        .ToArray();
+    var afterReplacement = SelfHostedActRuntime.ResolveEncounterCombatants(
+        encounter,
+        replacementParty,
+        cachedIdentities,
+        partyCapacity: 8);
+    Assert(
+        afterReplacement.Count == 9 &&
+        afterReplacement.Any(static item => item.Combatant.Name == "Player 9") &&
+        afterReplacement.All(static item => item.Combatant.Name != "Player 8"),
+        "A live replacement did not take priority over a departed cached party player.");
 
     var withoutMetadata = SelfHostedActRuntime.ResolveEncounterCombatants(
         encounter,
         liveIdentities,
-        []);
+        [],
+        partyCapacity: 8);
     Assert(
-        withoutMetadata.Count == 8 && withoutMetadata.Skip(5).All(static item => item.Identity is null),
-        "ACT allies without live identity metadata were silently removed from the encounter.");
+        withoutMetadata.Count == 6 &&
+        withoutMetadata.Count(static item => item.Identity is not null) == 5 &&
+        withoutMetadata.All(static item =>
+            item.Combatant.Name is not ("Escort NPC" or "Alliance Player")),
+        "ACT allies without authoritative player metadata were included in combat statistics.");
+
+    var fourPlayerCache = cachedIdentities.Take(4).ToArray();
+    var fourPlayerVacancy = SelfHostedActRuntime.ResolveEncounterCombatants(
+        encounter,
+        fourPlayerCache.Take(3).ToArray(),
+        fourPlayerCache,
+        partyCapacity: 4);
+    var fourPlayerReplacement = SelfHostedActRuntime.ResolveEncounterCombatants(
+        encounter,
+        fourPlayerCache.Take(3).Append(replacementIdentity).ToArray(),
+        fourPlayerCache,
+        partyCapacity: 4);
+    Assert(
+        fourPlayerVacancy.Count == 5 &&
+        fourPlayerVacancy.Any(static item => item.Combatant.Name == "Player 4") &&
+        fourPlayerVacancy.All(static item => item.Combatant.Name != "Player 9") &&
+        fourPlayerReplacement.Count == 5 &&
+        fourPlayerReplacement.Any(static item => item.Combatant.Name == "Player 9") &&
+        fourPlayerReplacement.All(static item => item.Combatant.Name != "Player 4"),
+        "A four-player vacancy did not retain the departed member or a full replacement expanded the roster to five players.");
 }
 
 static void ValidateEmptyEncounterFiltering()
@@ -1951,12 +2024,57 @@ static void ValidateControlCenterPresentation()
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
     Assert(
         ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
-            ThirdPartyNoticeOpenMode.ManualDisclosure) &&
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 1,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
         ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
-            ThirdPartyNoticeOpenMode.ManualUpdateCheck) &&
+            ThirdPartyNoticeOpenMode.ManualUpdateCheck,
+            pendingCount: 1,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
         !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
-            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate),
-        "The required post-update third-party acknowledgement is not separated from manually opened DLL windows.");
+            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate,
+            pendingCount: 1,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate,
+            pendingCount: 0,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 0,
+            installInProgress: true,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 0,
+            installInProgress: false,
+            permissionChoicePending: true,
+            ttsProChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 0,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: true) &&
+        ThirdPartyPluginNoticeWindow.CanAdvanceToPermissionChoice(0) &&
+        !ThirdPartyPluginNoticeWindow.CanAdvanceToPermissionChoice(1),
+        "The required third-party notice is dismissible before acknowledgement, a manual notice is not dismissible while idle, or permission flow advances with pending disclosures.");
+    var degradedInstall = BundledPluginInstallOutcome.RuntimeRecoveryPending(
+        new InvalidOperationException("expected runtime recovery warning"));
+    Assert(
+        BundledPluginInstallOutcome.Ready.RuntimeReady &&
+        !degradedInstall.RuntimeReady &&
+        degradedInstall.RuntimeWarning == "expected runtime recovery warning",
+        "Bundled installation no longer distinguishes a durable install from runtime recovery.");
     Assert(
         Plugin.ShouldEnableBundledCapability(
             enableFullFunctionality: false,
@@ -2156,8 +2274,11 @@ static void ValidateControlCenterPresentation()
         permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
         !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
         ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(openMode)", StringComparison.Ordinal) &&
-        !thirdPartySource.Contains("稍后处理", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("未确认的扩展保持禁用", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("BeginPermissionChoice();", StringComparison.Ordinal) &&
+        pluginSource.Contains("installCommitted = true;", StringComparison.Ordinal) &&
+        pluginSource.Contains("BundledPluginInstallOutcome.RuntimeRecoveryPending", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
         pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenManualDisclosure", StringComparison.Ordinal) &&
         pluginSource.Contains("OpenRequiredAfterPluginUpdateWhenPending();", StringComparison.Ordinal) &&
@@ -2165,10 +2286,13 @@ static void ValidateControlCenterPresentation()
         pluginSource.Contains("BeginUpdateCheck(userInitiated: false)", StringComparison.Ordinal) &&
         pluginSource.Contains("userInitiated: openWindow);", StringComparison.Ordinal) &&
         pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
-        pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
+        pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal) &&
+        pluginSource.Contains("MatchaWorldChangedIconId = 61835", StringComparison.Ordinal) &&
+        pluginSource.Contains("MatchaDutyEnteredIconId = 61832", StringComparison.Ordinal) &&
+        pluginSource.Contains("gameNotification.IconTexture = notification.Kind switch", StringComparison.Ordinal),
         "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");
     var installBundledPluginsIndex = pluginSource.IndexOf(
-        "private async Task InstallBundledPluginsAsync",
+        "private async Task<BundledPluginInstallOutcome> InstallBundledPluginsAsync",
         StringComparison.Ordinal);
     var startBundledUpdateCheckIndex = pluginSource.IndexOf(
         "private void StartBundledPluginUpdateCheck",
@@ -2516,7 +2640,9 @@ static async Task ValidateMatchaTypedIpcAsync()
         1,
         HostMessageTypes.MatchaNotification,
         HostMessagePriority.Critical,
-        new HostMatchaNotification("Windows fallback"))]);
+        new HostMatchaNotification(
+            "Windows fallback",
+            HostMatchaNotificationKind.WorldChanged))]);
     applyMessage.Invoke(client, [HostEnvelope.Create(
         "matcha-typed-ipc-smoke",
         2,
@@ -2530,7 +2656,11 @@ static async Task ValidateMatchaTypedIpcAsync()
         HostMessagePriority.Control,
         new HostTtsRequest("matcha speech", "matcha"))]);
     Assert(
-        notification?.Message == "Windows fallback" &&
+        notification is
+        {
+            Message: "Windows fallback",
+            Kind: HostMatchaNotificationKind.WorldChanged,
+        } &&
         logLine?.Line == "00|matcha" &&
         tts is { Text: "matcha speech", Source: "matcha" },
         "Matcha notification, log, or TTS crossed an untyped/shared command channel.");
@@ -2751,15 +2881,15 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         pending.Any(plugin =>
             plugin.Id == "matcha" &&
-            plugin.Version == "26.8.10.829" &&
+            plugin.Version == "26.8.12.1622" &&
             plugin.License == "AGPL-3.0" &&
             plugin.DisableOnlineUpdates &&
             plugin.EnableAfterInstall &&
             plugin.SourceUrl.EndsWith(
                 "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
                 StringComparison.Ordinal) &&
-            plugin.PackageSha256 == "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d" &&
-            plugin.Sha256 == "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64" &&
+            plugin.PackageSha256 == "da2037d3fb75914fd980f72978debf83fc761f693adfff939dbf386f0196a89b" &&
+            plugin.Sha256 == "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa" &&
             File.Exists(plugin.PackagePath)),
         "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
@@ -3552,6 +3682,203 @@ static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
     Assert(
         Directory.EnumerateFiles(paths.EncounterLogDirectory, "*.json").Count() == 1,
         "An encounter submitted immediately before shutdown did not write its individual log.");
+}
+
+static void ValidateDutyEncounterRosterReplacement()
+{
+    foreach (var partySize in new[] { 4, 8 })
+    {
+        var start = new DateTimeOffset(2026, 8, 12, 12, 0, 0, TimeSpan.Zero);
+        var original = CreatePartySegment(
+            Guid.NewGuid(),
+            start,
+            start.AddSeconds(30),
+            partySize,
+            damage: 1_000,
+            dps: 100,
+            encDps: 100,
+            extDps: 100);
+        original = original with
+        {
+            Combatants = original.Combatants
+                .Append(new Combatant(
+                    "limit-break",
+                    "Limit Break",
+                    string.Empty,
+                    false,
+                    250,
+                    0,
+                    0))
+                .ToArray(),
+        };
+        var originalRoster = original.Combatants
+            .Where(static combatant => combatant.Name != "Limit Break")
+            .Select(static combatant => combatant.Id)
+            .ToArray();
+        var remainingRoster = originalRoster.Take(partySize - 1).ToArray();
+        var replacementId = $"player-{partySize + 1}";
+        var replacementRoster = remainingRoster.Append(replacementId).ToArray();
+        var vacancy = CreatePartySegment(
+            Guid.NewGuid(),
+            start.AddSeconds(40),
+            start.AddSeconds(50),
+            partySize - 1,
+            damage: 500,
+            dps: 100,
+            encDps: 100,
+            extDps: 100);
+        var replacement = vacancy with
+        {
+            Id = Guid.NewGuid(),
+            StartTime = start.AddSeconds(60),
+            EndTime = start.AddSeconds(70),
+            Combatants = vacancy.Combatants
+                .Append(new Combatant(
+                    replacementId,
+                    $"Player {partySize + 1}",
+                    "DPS",
+                    false,
+                    500,
+                    0,
+                    0,
+                    100,
+                    100,
+                    100))
+                .ToArray(),
+        };
+
+        var accumulator = new DutyEncounterAccumulator();
+        _ = accumulator.Update(
+            original,
+            finished: true,
+            original.EndTime!.Value,
+            originalRoster,
+            partySize);
+        var duringVacancy = accumulator.Update(
+            vacancy,
+            finished: false,
+            vacancy.EndTime!.Value,
+            remainingRoster,
+            partySize);
+        Assert(
+            duringVacancy.Combatants.Count == partySize + 1 &&
+            duringVacancy.Combatants.Any(static combatant => combatant.Name == "Limit Break") &&
+            duringVacancy.Combatants.Any(combatant => combatant.Id == $"player-{partySize}"),
+            $"A {partySize}-player duty dropped the departed member before a replacement arrived.");
+
+        var afterReplacement = accumulator.Update(
+            replacement,
+            finished: false,
+            replacement.EndTime!.Value,
+            replacementRoster,
+            partySize);
+        Assert(
+            afterReplacement.Combatants.Count == partySize + 1 &&
+            afterReplacement.Combatants.Any(static combatant => combatant.Name == "Limit Break") &&
+            afterReplacement.Combatants.Any(combatant => combatant.Id == replacementId) &&
+            afterReplacement.Combatants.All(combatant => combatant.Id != $"player-{partySize}"),
+            $"A full replacement expanded a {partySize}-player duty beyond its roster capacity.");
+
+        var completed = accumulator.Complete(start.AddSeconds(80))
+                        ?? throw new InvalidOperationException(
+                            $"The {partySize}-player replacement duty did not complete.");
+        Assert(
+            completed.Combatants.Count == partySize + 1 &&
+            completed.Combatants.Any(static combatant => combatant.Name == "Limit Break") &&
+            completed.Combatants.Any(combatant => combatant.Id == replacementId) &&
+            completed.Combatants.All(combatant => combatant.Id != $"player-{partySize}") &&
+            original.Combatants.Any(combatant => combatant.Id == $"player-{partySize}"),
+            $"The {partySize}-player duty did not keep the current roster separate from the original segment history.");
+    }
+}
+
+static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "plugin-lifecycle-shutdown");
+    var paths = new PluginPaths(root);
+    var configuration = new PluginConfiguration
+    {
+        EnableParsing = true,
+        AutoStartParser = true,
+    };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var logger = new PluginLogger(log);
+    var encounterService = new EncounterService(
+        new EncounterRepository(new JsonFileStore(), paths),
+        new EncounterStateStore(),
+        configuration,
+        logger,
+        paths);
+    var parser = new BlockingStartupParserEngine();
+    var lifecycle = new PluginLifecycle(
+        parser,
+        encounterService,
+        paths,
+        configuration,
+        logger,
+        TimeSpan.Zero);
+
+    lifecycle.Start();
+    await parser.StartEntered.WaitAsync(TimeSpan.FromSeconds(2));
+    await lifecycle.DisposeAsync();
+    await lifecycle.DisposeAsync();
+
+    Assert(
+        parser.StartCount == 1 &&
+        parser.StopCount == 1 &&
+        parser.StopObservedCompletedStartup,
+        "Plugin shutdown did not cancel and join its exact startup task before stopping the parser.");
+
+    await parser.DisposeAsync();
+    await encounterService.DisposeAsync();
+}
+
+static void ValidatePluginUnloadOwnership()
+{
+    var projectRoot = FindProjectRoot();
+    var pluginSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "Plugin.cs"));
+    var lifecycleSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "PluginLifecycle.cs"));
+    var runtimeSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    var projectSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "DalamudActCompat.csproj"));
+    var parserConstruction = runtimeSource.IndexOf(
+        "parser = new IINACT.FfxivActPluginWrapper(",
+        StringComparison.Ordinal);
+    var hookConstruction = runtimeSource.IndexOf(
+        "zoneDownHookManager = new IINACT.Network.ZoneDownHookManager(",
+        StringComparison.Ordinal);
+
+    Assert(
+        projectSource.Contains("<CanUnloadAsync>true</CanUnloadAsync>", StringComparison.Ordinal) &&
+        lifecycleSource.Contains("startupTask = Task.Run", StringComparison.Ordinal) &&
+        lifecycleSource.Contains("await trackedStartup.ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("await independentHostStartupTask.ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("DisposeComponentsAsync().GetAwaiter().GetResult();", StringComparison.Ordinal) &&
+        !pluginSource.Contains("_ = Task.Run", StringComparison.Ordinal) &&
+        !pluginSource.Contains("shutdown exceeded 250 ms", StringComparison.OrdinalIgnoreCase) &&
+        !pluginSource.Contains("hostCommandWorker.WaitAsync", StringComparison.Ordinal) &&
+        !pluginSource.Contains("completion.WaitAsync(TimeSpan.FromSeconds(5))", StringComparison.Ordinal) &&
+        parserConstruction >= 0 &&
+        hookConstruction > parserConstruction,
+        "Plugin unload can still return around a live startup task/hook, or the parser hook is enabled before dependency loading completes.");
 }
 
 static async Task ValidateAtomicEncounterStateUpdatesAsync()
@@ -5694,7 +6021,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
-        "BundledActPlugins/matcha/Cafe.Matcha-26.8.10.829-dact2.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.8.12.1622-dact3.zip",
         "BundledActPlugins/matcha/LICENSE.txt",
         "BundledActPlugins/matcha/BUILD.md",
         "BundledActPlugins/matcha/dact-compat.patch",
@@ -6323,6 +6650,67 @@ internal sealed class TestParserEngine : IParserEngine
     {
         cancellationToken.ThrowIfCancellationRequested();
         StopCount++;
+        SetStatus(ParserState.Stopped);
+        return Task.CompletedTask;
+    }
+
+    public async Task RestartAsync(CancellationToken cancellationToken)
+    {
+        await StopAsync(cancellationToken);
+        await StartAsync(cancellationToken);
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private void SetStatus(ParserState state)
+    {
+        Status = new ParserStatus(state, state.ToString(), DateTimeOffset.UtcNow);
+        StatusChanged?.Invoke(this, Status);
+    }
+}
+
+internal sealed class BlockingStartupParserEngine : IParserEngine
+{
+    private readonly TaskCompletionSource startEntered = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource startCompleted = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public event EventHandler<ParserStatus>? StatusChanged;
+
+    public ParserStatus Status { get; private set; } = new(
+        ParserState.Stopped,
+        ParserState.Stopped.ToString(),
+        DateTimeOffset.UtcNow);
+
+    public Task StartEntered => startEntered.Task;
+
+    public int StartCount { get; private set; }
+
+    public int StopCount { get; private set; }
+
+    public bool StopObservedCompletedStartup { get; private set; }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        StartCount++;
+        SetStatus(ParserState.Initializing);
+        startEntered.TrySetResult();
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+        finally
+        {
+            startCompleted.TrySetResult();
+        }
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StopCount++;
+        StopObservedCompletedStartup = startCompleted.Task.IsCompleted;
         SetStatus(ParserState.Stopped);
         return Task.CompletedTask;
     }

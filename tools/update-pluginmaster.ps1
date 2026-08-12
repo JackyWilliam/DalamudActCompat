@@ -37,6 +37,7 @@ $entry.DownloadLinkInstall = $downloadUrl
 $entry.DownloadLinkUpdate = $downloadUrl
 $entry.LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $entry.Changelog = $Changelog
+$entry | Add-Member -NotePropertyName CanUnloadAsync -NotePropertyValue $true -Force
 $entry | Add-Member -NotePropertyName IconUrl -NotePropertyValue $IconUrl -Force
 
 $json = $entry | ConvertTo-Json -Depth 10

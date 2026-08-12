@@ -67,15 +67,15 @@ is enabled after installation and starts last in its own dedicated Host process.
   - The supplied package contains no license file. Redistribution of this
     bundled version was authorized by the upstream maintainer through direct
     communication on 2026-08-10.
-- Cafe.Matcha 26.8.10.829
+- Cafe.Matcha 26.8.12.1622
   - Author/copyright: FFCafe and Cafe.Matcha contributors
   - Project: <https://github.com/thewakingsands/matcha>
   - Exact source commit: <https://github.com/thewakingsands/matcha/tree/6cf242b59475aa77e4c2deee61e1b9191be5ba13>
   - Upstream Actions run: <https://github.com/thewakingsands/matcha/actions/runs/31370163458>
   - DACT compatibility patch/build instructions:
     `vendor/BundledActPlugins/matcha/dact-compat.patch` and `BUILD.md`
-  - Complete package SHA-256: `9737B120C795EA207A651FE15D7A390F732AAB377CEEECAD959AD88BB621AC1C`
-  - Entry DLL SHA-256: `D55D7D8BEDFA90665422C42B86B1CA102896D360C7D077E4DFB2248A1CB2E8B5`
+  - Complete package SHA-256: `DA2037D3FB75914FD980F72978DEBF83FC761F693ADFFF939DBF386F0196A89B`
+  - Entry DLL SHA-256: `3DF088E73DD8A314A08A1B302A2FEFE9BFEFC1A52FCE54032F719421CF7810FA`
   - Hash-pinned upstream Actions companion SHA-256:
     `EF485B027FE84150768A8498331BEFCE5C997047FADF7B38B766EC9703818ED6`
   - License: AGPL-3.0; the license text is included with the bundled package.

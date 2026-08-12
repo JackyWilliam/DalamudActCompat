@@ -267,7 +267,12 @@ public sealed class IinactAdapter : IParserEngine
             lock (dutySessionLock)
             {
                 wasBoundByDuty = true;
-                dutyEncounter = dutySession.Update(encounter, finished, DateTimeOffset.UtcNow);
+                dutyEncounter = dutySession.Update(
+                    encounter,
+                    finished,
+                    DateTimeOffset.UtcNow,
+                    snapshot.CurrentPartyMemberIds,
+                    snapshot.PartyCapacity);
             }
             stateStore.UpdateCurrent(dutyEncounter);
             return;
@@ -293,7 +298,12 @@ public sealed class IinactAdapter : IParserEngine
                                    StringComparison.OrdinalIgnoreCase);
                 if (sameDutyZone)
                 {
-                    _ = dutySession.Update(encounter, finished, DateTimeOffset.UtcNow);
+                    _ = dutySession.Update(
+                        encounter,
+                        finished,
+                        DateTimeOffset.UtcNow,
+                        snapshot.CurrentPartyMemberIds,
+                        snapshot.PartyCapacity);
                 }
             }
 
