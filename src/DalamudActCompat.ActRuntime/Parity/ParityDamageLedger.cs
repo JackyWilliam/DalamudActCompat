@@ -41,6 +41,11 @@ internal static class ParityDamageLedger
                 reason,
                 item.RawLineType,
                 item.PacketId,
+                item.ParserEventId,
+                item.RawEventId,
+                item.TargetIndex,
+                item.EffectIndex,
+                item.EffectType,
                 item.Evidence));
         }
         return result;

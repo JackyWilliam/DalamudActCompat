@@ -19,6 +19,10 @@ internal static class FflogsParityReplay
         => JsonSerializer.Deserialize<ParityReplayFixture>(File.ReadAllText(path), JsonOptions)
            ?? throw new InvalidDataException($"Normalized parity fixture '{path}' is empty.");
 
+    public static ParityReconciliationReplayFixture ReadReconciliationFixture(string path)
+        => JsonSerializer.Deserialize<ParityReconciliationReplayFixture>(File.ReadAllText(path), JsonOptions)
+           ?? throw new InvalidDataException($"Reconciliation parity fixture '{path}' is empty.");
+
     public static FflogsParityDiagnostic ReplayRaw(ParityRawReplayFixture fixture)
     {
         ArgumentNullException.ThrowIfNull(fixture);
@@ -45,13 +49,35 @@ internal static class FflogsParityReplay
             []);
     }
 
+    public static FflogsParityDiagnostic ReplayReconciliation(
+        ParityReconciliationReplayFixture fixture,
+        string fixtureDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(fixture);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fixtureDirectory);
+        var normalizer = new FflogsParityRawNormalizer(fixture.PartyActorIds);
+        var rawEvents = normalizer.Normalize(fixture.RawLines);
+        var reference = string.IsNullOrWhiteSpace(fixture.ReferencePath)
+            ? null
+            : ParityReferenceFightImporter.Read(Path.Combine(fixtureDirectory, fixture.ReferencePath));
+        return AnalyzeFixture(
+            fixture.Name,
+            fixture.Zone,
+            fixture.EncounterName,
+            fixture.PartyActorIds,
+            fixture.NormalizedEvents,
+            rawEvents,
+            reference);
+    }
+
     private static FflogsParityDiagnostic AnalyzeFixture(
         string fixtureName,
         string zone,
         string encounterName,
         IReadOnlyList<string> partyActorIds,
         IReadOnlyList<ParityReplayEvent> normalizedEvents,
-        IReadOnlyList<ParityReplayEvent> rawEvents)
+        IReadOnlyList<ParityReplayEvent> rawEvents,
+        ParityReferenceFight? reference = null)
     {
         var boundaries = normalizedEvents
             .Where(static item => item.Kind == ParityReplayEventKind.EncounterBoundary)
@@ -86,7 +112,8 @@ internal static class FflogsParityReplay
             normalizedEvents,
             rawEvents,
             party,
-            capture);
+            capture,
+            referenceFight: reference);
     }
 
     private static Guid CreateStableFixtureId(string fixtureName)

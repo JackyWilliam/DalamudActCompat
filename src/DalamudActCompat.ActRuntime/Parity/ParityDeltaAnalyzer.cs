@@ -8,7 +8,8 @@ internal static class ParityDeltaAnalyzer
         long rawDamage,
         long includedDamage,
         ParityReferenceSnapshot? reference,
-        ParityActorRegistry actors)
+        ParityActorRegistry actors,
+        ParityReconciliationDiagnostic reconciliation)
     {
         var result = ledger
             .Where(static item => item.Decision == ParityLedgerDecision.Included)
@@ -21,6 +22,7 @@ internal static class ParityDeltaAnalyzer
                 null,
                 null,
                 ParityReferencePrecision.Unknown,
+                ParityEvidenceStatus.Observed,
                 $"{group.Count()} normalized ACT events entered DamageLedger"))
             .ToList();
         result.AddRange(ledger
@@ -34,6 +36,7 @@ internal static class ParityDeltaAnalyzer
                 null,
                 null,
                 ParityReferencePrecision.Exact,
+                ParityEvidenceStatus.Observed,
                 $"{group.Count()} normalized ACT events were excluded")));
         result.Add(new ParityDeltaBreakdown(
             "ParserNormalizationAdjustment",
@@ -43,7 +46,54 @@ internal static class ParityDeltaAnalyzer
             null,
             null,
             ParityReferencePrecision.Exact,
+            ParityEvidenceStatus.Observed,
             "Normalized party damage minus provisionally party-owned raw 21/22/24 damage; includes parser source redirects and DoT simulation."));
+
+        var knownParserDeltas = reconciliation.Events
+            .Where(static item => item.Status != ParityCorrelationStatus.Ambiguous)
+            .Select(static item => new
+            {
+                item.Category,
+                item.Status,
+                Delta = item.Status switch
+                {
+                    ParityCorrelationStatus.Matched => item.IncludedAmount -
+                                                       (item.RawPartyOwned ? item.RawAmount ?? 0 : 0),
+                    ParityCorrelationStatus.UnmatchedNormalized => item.IncludedAmount,
+                    ParityCorrelationStatus.UnmatchedRaw => -(item.RawAmount ?? 0),
+                    _ => 0,
+                },
+            })
+            .Where(static item => item.Delta != 0)
+            .GroupBy(static item => item.Category, StringComparer.Ordinal)
+            .Select(group => new ParityDeltaBreakdown(
+                $"ParserNormalization/{group.Key}",
+                group.Sum(static item => item.Delta),
+                null,
+                null,
+                null,
+                null,
+                ParityReferencePrecision.Exact,
+                group.All(static item => item.Status == ParityCorrelationStatus.Matched)
+                    ? ParityEvidenceStatus.Observed
+                    : ParityEvidenceStatus.Unknown,
+                $"{group.Count()} correlated rows; expand Reconciliation.Events for packet-level evidence"))
+            .ToArray();
+        result.AddRange(knownParserDeltas);
+        var knownParserDelta = knownParserDeltas.Sum(static item => item.LocalAmount);
+        if (knownParserDelta != includedDamage - rawDamage)
+        {
+            result.Add(new ParityDeltaBreakdown(
+                "ParserNormalization/AmbiguousOrUncapturedResidual",
+                includedDamage - rawDamage - knownParserDelta,
+                null,
+                null,
+                null,
+                null,
+                ParityReferencePrecision.Unknown,
+                ParityEvidenceStatus.Unknown,
+                "The exact layer-total adjustment is conserved, but ambiguous or absent correlations prevent event-level allocation."));
+        }
 
         var friendlyFire = rawEvents
             .Where(static item => item.Kind == ParityReplayEventKind.Damage && item.IsDamageSwing)
@@ -59,6 +109,7 @@ internal static class ParityDeltaAnalyzer
             null,
             null,
             ParityReferencePrecision.Inferred,
+            ParityEvidenceStatus.Inferred,
             "Party-owned raw damage whose target also resolves to a party actor; FFLogs comparison requires exact event export."));
 
         var estimatedOverkill = rawEvents
@@ -90,6 +141,7 @@ internal static class ParityDeltaAnalyzer
             null,
             null,
             ParityReferencePrecision.Inferred,
+            ParityEvidenceStatus.Inferred,
             "TargetCurrentHp is packet-level evidence, not yet paired to every normalized event; this is diagnostic only."));
 
         AddReferenceDelta(result, reference, includedDamage);
@@ -111,6 +163,7 @@ internal static class ParityDeltaAnalyzer
                 includedDamage - exactReference,
                 includedDamage - exactReference,
                 ParityReferencePrecision.Exact,
+                ParityEvidenceStatus.Observed,
                 reference.Source));
         }
         else if (reference?.RoundedTotalDamageMillions is double roundedReference)
@@ -125,6 +178,7 @@ internal static class ParityDeltaAnalyzer
                 includedDamage - (center + halfDisplayUnit),
                 includedDamage - (center - halfDisplayUnit),
                 ParityReferencePrecision.Rounded,
+                ParityEvidenceStatus.Observed,
                 "FFLogs amount was displayed to 0.01 million; the exact delta is bounded by the display rounding interval."));
         }
     }

@@ -147,6 +147,10 @@ internal sealed class FflogsParityRawNormalizer
                     : ParityDamageKind.Direct,
                 RawLineType = fields[0],
                 PacketId = fields[44],
+                RawEventId = ResolveChecksum(fields, minimumIndex: 46),
+                TargetIndex = ParseIndex(fields[45]),
+                EffectIndex = (effectIndex - 8) / 2,
+                EffectType = ResolveEffectType(fields[effectIndex]),
                 Evidence = $"ActionEffect slot {(effectIndex - 8) / 2}",
             });
         }
@@ -190,7 +194,8 @@ internal sealed class FflogsParityRawNormalizer
                 IsDamageSwing = true,
                 DamageKind = ParityDamageKind.DamageOverTime,
                 RawLineType = fields[0],
-                Evidence = "Network DoT tick; crit/direct flags require parser simulation and remain unknown here",
+                RawEventId = ResolveChecksum(fields, minimumIndex: 19),
+                Evidence = "Network aggregate DoT tick; source ownership and crit/direct flags may be synthesized or redirected by the parser",
             },
         ];
     }
@@ -294,6 +299,26 @@ internal sealed class FflogsParityRawNormalizer
         => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : null;
+
+    private static int? ParseIndex(string value)
+        => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+
+    private static int? ResolveEffectType(string flagsText)
+    {
+        var flags = flagsText.PadLeft(8, '0');
+        return flags.Length == 8 && byte.TryParse(
+            flags.AsSpan(6, 2),
+            NumberStyles.HexNumber,
+            CultureInfo.InvariantCulture,
+            out var type)
+            ? type
+            : null;
+    }
+
+    private static string ResolveChecksum(IReadOnlyList<string> fields, int minimumIndex)
+        => fields.Count > minimumIndex ? fields[^1] : string.Empty;
 
     private static bool IsActorId(string value)
         => value.Length == 8 && uint.TryParse(

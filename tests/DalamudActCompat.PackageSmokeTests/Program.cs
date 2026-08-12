@@ -4363,6 +4363,90 @@ static void ValidateFflogsParityReplay(string testRoot)
         markdown.Contains("## Damage Ledger", StringComparison.Ordinal) &&
         markdown.Contains("NonPartySource", StringComparison.Ordinal),
         "Parity report omitted required duration, downtime, or ledger evidence.");
+
+    var reconciliationFixture = FflogsParityReplay.ReadReconciliationFixture(
+        Path.Combine(fixtureDirectory, "event-reconciliation.json"));
+    var reconciliationDiagnostic = FflogsParityReplay.ReplayReconciliation(
+        reconciliationFixture,
+        fixtureDirectory);
+    var reconciliation = reconciliationDiagnostic.Reconciliation;
+    Assert(
+        reconciliationDiagnostic.IncludedDamage == reconciliationFixture.ExpectedIncludedDamage,
+        "Paired parity replay changed the expected included DamageLedger total.");
+    Assert(
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Matched) ==
+        reconciliationFixture.ExpectedMatched &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Ambiguous) ==
+        reconciliationFixture.ExpectedAmbiguous &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedRaw) ==
+        reconciliationFixture.ExpectedUnmatchedRaw &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedNormalized) ==
+        reconciliationFixture.ExpectedUnmatchedNormalized &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedReference) == 1,
+        $"Paired parity replay states changed: matched={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Matched)}, " +
+        $"ambiguous={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Ambiguous)}, " +
+        $"unmatchedRaw={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedRaw)}, " +
+        $"unmatchedNormalized={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedNormalized)}.");
+    Assert(
+        reconciliation.Conservation is
+        {
+            RawConserved: true,
+            NormalizedConserved: true,
+            OwnerAttributionConserved: true,
+        } &&
+        reconciliation.Conservation.RawClassifiedDamage ==
+        reconciliation.Conservation.MatchedRawDamage +
+        reconciliation.Conservation.IntentionallyIgnoredRawDamage +
+        reconciliation.Conservation.UnmatchedRawDamage &&
+        reconciliation.Conservation.UnmatchedRawDamage ==
+        reconciliation.Conservation.AmbiguousRawDamage +
+        reconciliation.Conservation.UnmatchedRawOnlyDamage &&
+        reconciliation.Conservation.NormalizedDamage ==
+        reconciliation.Conservation.IncludedLedgerDamage +
+        reconciliation.Conservation.ExcludedLedgerDamage &&
+        reconciliation.Conservation.SourceDamageBeforeOwnerAttribution ==
+        reconciliation.Conservation.OwnerAttributedDamage,
+        "Raw, normalized, or pet-owner damage conservation failed.");
+    Assert(
+        reconciliation.Events.Any(static item =>
+            item.Status == ParityCorrelationStatus.Ambiguous &&
+            item.Category == "DoTNormalizationCandidate") &&
+        reconciliation.Events.Any(static item => item.Category == "FriendlyTargetCandidate") &&
+        reconciliation.Events.Any(static item => item.Category == "EnvironmentCandidate") &&
+        reconciliation.Events.Any(static item => item.Category == "OverkillCandidate") &&
+        reconciliation.Events.Any(static item => item.TargetName == "Trash") &&
+        reconciliation.Events.Count(static item => item.Category == "PetOwnerAttribution") >= 2,
+        "Reconciliation fixture lost DoT, friendly, environment, overkill, target-scope, or pet-respawn coverage.");
+    Assert(
+        reconciliation.TopPositiveReferenceDeltaEvents.Count >= 2 &&
+        reconciliation.TopPositiveReferenceDeltaEvents[0].AbilityName == "Large Hit" &&
+        reconciliation.TopPositiveReferenceDeltaEvents[0].NormalizedAmount -
+        reconciliation.TopPositiveReferenceDeltaEvents[0].ReferenceAmount == 100 &&
+        reconciliation.TopActorDeltas.Count > 0 &&
+        reconciliation.TopAbilityDeltas.Count > 0 &&
+        reconciliation.TopTargetDeltas.Count > 0,
+        "Exact reference pairing did not expose positive event-level deltas.");
+    Assert(
+        reconciliationDiagnostic.DeltaBreakdown.Any(static item =>
+            item.Category.StartsWith("ParserNormalization/", StringComparison.Ordinal)),
+        "Parser normalization was not expanded into event-addressable categories.");
+
+    var jsonReference = ParityReferenceFightImporter.Read(
+        Path.Combine(fixtureDirectory, "event-reconciliation.reference.json"));
+    var csvReference = ParityReferenceFightImporter.Read(
+        Path.Combine(fixtureDirectory, "event-reconciliation.reference.csv"));
+    Assert(
+        jsonReference.DamageEvents.Count == 10 &&
+        csvReference.DamageEvents is [{ SourceName: "Player, One", Amount: 950, Overkill: 50 }],
+        "JSON or quoted CSV reference import boundary changed.");
+
+    var reconciliationMarkdown = FflogsParityReportWriter.BuildMarkdown(reconciliationDiagnostic);
+    Assert(
+        reconciliationMarkdown.Contains("## Event Reconciliation", StringComparison.Ordinal) &&
+        reconciliationMarkdown.Contains("Top 50 unmatched normalized events", StringComparison.Ordinal) &&
+        reconciliationMarkdown.Contains("Top actors contributing to delta", StringComparison.Ordinal) &&
+        reconciliationMarkdown.Contains("Owner conservation", StringComparison.Ordinal),
+        "Parity Markdown omitted Phase 1A reconciliation evidence.");
 }
 
 static void ValidateDalamudGameStateBridge()

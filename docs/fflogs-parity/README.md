@@ -1,6 +1,6 @@
 # FFLogs Parity Diagnostics
 
-Phase 0 is a developer-only sidecar. When DACT debug mode is enabled, a completed encounter writes JSON and Markdown reports under the plugin config directory at `logs/parity/`. The recorder observes raw pipe lines and normalized ACT `MasterSwing` callbacks, but never writes values back to `EncounterData`, `RaidDpsEstimator`, encounter snapshots, or the UI.
+The parity tooling is a developer-only sidecar. When DACT debug mode is enabled, a completed encounter writes JSON and Markdown reports under the plugin config directory at `logs/parity/`. The recorder observes raw pipe lines and normalized ACT `MasterSwing` callbacks, but never writes values back to `EncounterData`, `RaidDpsEstimator`, encounter snapshots, or the UI.
 
 ## Model boundaries
 
@@ -19,6 +19,8 @@ ACT MasterSwing callbacks                      ├-> ParityDamageLedger
 - `ParityDamageLedger` records every normalized action's include/exclude decision and reason.
 - `ParityEncounterTimeline` reports fight, damage-wall, current union-downtime, all-targets-unavailable, and actor observed-span clocks separately.
 - `ParityDeltaAnalyzer` reports local categories and reference precision; it does not convert an unexplained residual into a correction coefficient.
+- `ParityEventReconciler` pairs raw, normalized, ledger, and optional reference events. It accepts only unique packet identities or complete timestamp/source/target/ability/amount identities; weak matches remain `ambiguous` or `unmatched`.
+- `ParityReferenceFightImporter` loads developer-supplied JSON or CSV reference events. It is not used by normal DACT runtime and never calls the FFLogs API.
 - Attribution fields are present in the schema but explicitly deferred. Phase 0 does not copy the current estimator into a new model.
 
 ## Dual-layer fixtures
@@ -29,6 +31,18 @@ Fixtures live in `tests/DalamudActCompat.PackageSmokeTests/Fixtures/FflogsParity
 2. `*.normalized.json` stores canonical events after parser normalization. Replay exercises deterministic ledger decisions, crit/direct aggregation, duration clocks, and downtime math without requiring the compiled parser.
 
 Both layers declare expected included damage and current diagnostic duration. Package smoke tests replay both and verify that excluded events retain their reasons.
+
+Phase 1A adds `event-reconciliation.json`, which contains both layers plus an optional exact reference-file path. It covers packet correlation, aggregate DoT ambiguity, friendly targets, environment damage, overkill, boss/trash targets, pet respawn, duplicate normalization, large packets, and unmatched events. The report includes raw/normalized/owner conservation equations and Top 50 event/actor/ability/target views.
+
+## Reference import schema
+
+The JSON shape is `ParityReferenceFight` (`fight`, `actors`, `targets`, and `damageEvents`). The CSV header is:
+
+```text
+timestamp,sequence,sourceId,sourceInstanceId,sourceName,targetId,targetInstanceId,targetName,abilityId,abilityName,amount,overkill,absorbed,critical,directHit,packetId
+```
+
+CSV timestamps are ISO-8601. `packetId`, instance IDs, overkill, and absorbed are optional. `amount` is the reference event's effective damage value; importing it only enables diagnostics and never overwrites local totals.
 
 Run the regression suite with:
 

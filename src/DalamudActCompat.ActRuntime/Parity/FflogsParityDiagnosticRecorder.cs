@@ -85,6 +85,7 @@ internal sealed class FflogsParityDiagnosticRecorder
                 OwnerId = ownerId,
                 TargetId = targetId,
                 TargetName = swing.Victim,
+                AbilityId = ResolveFirstTag(swing, "ActionId", "AbilityId"),
                 AbilityName = swing.AttackType,
                 Amount = amount,
                 Critical = swing.Critical,
@@ -94,7 +95,10 @@ internal sealed class FflogsParityDiagnosticRecorder
                 HasEncounter = hasEncounter,
                 DamageKind = kind,
                 RawLineType = "MasterSwing",
-                PacketId = swing.TimeSorter.ToString(CultureInfo.InvariantCulture),
+                // ACT's TimeSorter orders callbacks but is not the network packet ID.
+                // Keeping both fields distinct prevents a plausible-looking false match.
+                PacketId = ResolveFirstTag(swing, "PacketId", "PacketID", "NetworkPacketId"),
+                ParserEventId = swing.TimeSorter.ToString(CultureInfo.InvariantCulture),
                 Evidence = isDamageSwing
                     ? "FFXIV_ACT_Plugin normalized MasterSwing observed before DACT party filtering"
                     : "Non-damage MasterSwing retained so exclusion is explicit",
@@ -271,6 +275,19 @@ internal sealed class FflogsParityDiagnosticRecorder
 
     private static string ResolveTagString(MasterSwing swing, string key)
         => swing.Tags.TryGetValue(key, out var value) ? value?.ToString() ?? string.Empty : string.Empty;
+
+    private static string ResolveFirstTag(MasterSwing swing, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = ResolveTagString(swing, key);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+        return string.Empty;
+    }
 
     private static ActPlayerIdentity? ResolveIdentityById(
         IReadOnlyList<ActPlayerIdentity> identities,

@@ -16,7 +16,8 @@ internal static class FflogsParityAnalyzer
         IReadOnlyList<ParityReplayEvent> rawEvents,
         IReadOnlySet<string> partyActorIds,
         ParityCaptureHealth captureHealth,
-        ParityReferenceSnapshot? reference = null)
+        ParityReferenceSnapshot? reference = null,
+        ParityReferenceFight? referenceFight = null)
     {
         ArgumentNullException.ThrowIfNull(normalizedEvents);
         ArgumentNullException.ThrowIfNull(rawEvents);
@@ -50,19 +51,27 @@ internal static class FflogsParityAnalyzer
         var excludedDamage = ledger
             .Where(static entry => entry.Decision == ParityLedgerDecision.Excluded)
             .Sum(static entry => Math.Max(0, entry.Amount));
+        var reconciliation = ParityEventReconciler.Build(
+            rawEvents,
+            normalizedEvents,
+            ledger,
+            actors,
+            referenceFight);
         var breakdown = ParityDeltaAnalyzer.Build(
             ledger,
             rawEvents,
             rawDamage,
             includedDamage,
             reference,
-            actors);
+            actors,
+            reconciliation);
 
         var unknowns = new List<string>
         {
             "FFLogs actor active-time state machine is not publicly specified; ActorActiveTime uses first-to-last included damage observation and is labelled accordingly.",
             "FFLogs phase labels and targetable filtering are not inferred from NameToggle alone; phase names in downtime rows are observational labels.",
             "Raw DoT crit/direct flags and ownership may be synthesized or redirected by FFXIV_ACT_Plugin, so the normalized MasterSwing layer remains authoritative for current DACT accounting.",
+            "A correlation marked matched requires a unique packet/event identity. Ambiguous and unmatched rows are intentionally not repaired with timestamp-and-amount-only heuristics.",
         };
         if (reference is null || reference.Precision != ParityReferencePrecision.Exact)
         {
@@ -79,7 +88,7 @@ internal static class FflogsParityAnalyzer
         }
 
         return new FflogsParityDiagnostic(
-            "0.1",
+            "0.2",
             encounterId,
             zone,
             encounterName,
@@ -104,6 +113,7 @@ internal static class FflogsParityAnalyzer
             ledger,
             downtime,
             breakdown,
+            reconciliation,
             captureHealth,
             reference,
             unknowns);

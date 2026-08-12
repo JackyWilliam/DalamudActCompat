@@ -104,10 +104,47 @@ internal static class FflogsParityReportWriter
         }
 
         builder.AppendLine();
+        builder.AppendLine("## Event Reconciliation");
+        builder.AppendLine();
+        builder.AppendLine($"- Reference: {Escape(diagnostic.Reconciliation.ReferenceComparisonStatus)}");
+        var conservation = diagnostic.Reconciliation.Conservation;
+        builder.AppendLine(
+            $"- Raw conservation: `{conservation.RawClassifiedDamage:N0} = " +
+            $"{conservation.MatchedRawDamage:N0} matched + " +
+            $"{conservation.IntentionallyIgnoredRawDamage:N0} ignored + " +
+            $"{conservation.UnmatchedRawDamage:N0} unmatched` ({conservation.RawConserved})");
+        builder.AppendLine(
+            $"- Raw unmatched detail: `{conservation.AmbiguousRawDamage:N0} ambiguous + " +
+            $"{conservation.UnmatchedRawOnlyDamage:N0} strictly unmatched`");
+        builder.AppendLine(
+            $"- Normalized conservation: `{conservation.NormalizedDamage:N0} = " +
+            $"{conservation.IncludedLedgerDamage:N0} included + " +
+            $"{conservation.ExcludedLedgerDamage:N0} excluded` ({conservation.NormalizedConserved})");
+        builder.AppendLine(
+            $"- Owner conservation: `{conservation.SourceDamageBeforeOwnerAttribution:N0} source = " +
+            $"{conservation.OwnerAttributedDamage:N0} attributed` ({conservation.OwnerAttributionConserved})");
+        AppendReconciliationEvents(builder, "All correlation rows", diagnostic.Reconciliation.Events);
+        AppendReconciliationEvents(
+            builder,
+            "Top 50 positive DACT-vs-reference delta events",
+            diagnostic.Reconciliation.TopPositiveReferenceDeltaEvents);
+        AppendReconciliationEvents(
+            builder,
+            "Top 50 unmatched normalized events",
+            diagnostic.Reconciliation.TopUnmatchedNormalizedEvents);
+        AppendReconciliationEvents(
+            builder,
+            "Top 50 unmatched raw events",
+            diagnostic.Reconciliation.TopUnmatchedRawEvents);
+        AppendAggregates(builder, "Top actors contributing to delta", diagnostic.Reconciliation.TopActorDeltas);
+        AppendAggregates(builder, "Top abilities contributing to delta", diagnostic.Reconciliation.TopAbilityDeltas);
+        AppendAggregates(builder, "Top targets contributing to delta", diagnostic.Reconciliation.TopTargetDeltas);
+
+        builder.AppendLine();
         builder.AppendLine("## Damage Delta Breakdown");
         builder.AppendLine();
-        builder.AppendLine("| Category | Local | Reference | Delta / Bounds | Precision | Evidence |");
-        builder.AppendLine("|---|---:|---:|---:|---|---|");
+        builder.AppendLine("| Category | Local | Reference | Delta / Bounds | Precision | Status | Evidence |");
+        builder.AppendLine("|---|---:|---:|---:|---|---|---|");
         foreach (var item in diagnostic.DeltaBreakdown)
         {
             var delta = item.Delta is not null
@@ -118,7 +155,7 @@ internal static class FflogsParityReportWriter
             builder.AppendLine(
                 $"| {Escape(item.Category)} | {item.LocalAmount:N0} | " +
                 $"{(item.ReferenceAmount is null ? "unknown" : item.ReferenceAmount.Value.ToString("N0", CultureInfo.InvariantCulture))} | " +
-                $"{delta} | {item.Precision} | {Escape(item.Evidence)} |");
+                $"{delta} | {item.Precision} | {item.EvidenceStatus} | {Escape(item.Evidence)} |");
         }
 
         builder.AppendLine();
@@ -137,6 +174,58 @@ internal static class FflogsParityReportWriter
             builder.AppendLine($"- {Escape(unknown)}");
         }
         return builder.ToString();
+    }
+
+    private static void AppendReconciliationEvents(
+        StringBuilder builder,
+        string title,
+        IReadOnlyList<ParityReconciliationEvent> events)
+    {
+        builder.AppendLine();
+        builder.AppendLine($"### {title}");
+        builder.AppendLine();
+        if (events.Count == 0)
+        {
+            builder.AppendLine("No events available.");
+            return;
+        }
+        builder.AppendLine("| Time | Status | Source / Owner | Target | Ability | Raw | Normalized | Included | Reference | Category | Evidence / reason | IDs |");
+        builder.AppendLine("|---|---|---|---|---|---:|---:|---:|---:|---|---|---|");
+        foreach (var item in events)
+        {
+            builder.AppendLine(
+                $"| `{item.Timestamp:O}` | {item.Status} | " +
+                $"{Escape(item.SourceName)} (`{item.SourceId}`) / {Escape(item.OwnerName)} (`{item.OwnerId}`) | " +
+                $"{Escape(item.TargetName)} (`{item.TargetId}`) | " +
+                $"{Escape(item.AbilityName)} (`{item.AbilityId}`) | " +
+                $"{FormatNullable(item.RawAmount)} | {FormatNullable(item.NormalizedAmount)} | " +
+                $"{item.IncludedAmount:N0} | {FormatNullable(item.ReferenceAmount)} | " +
+                $"{Escape(item.Category)} | {item.EvidenceStatus}: {Escape(item.DeltaReason)} | " +
+                $"packet `{Escape(item.PacketId)}`, parser `{Escape(item.ParserEventId)}`, raw `{Escape(item.RawEventId)}` |");
+        }
+    }
+
+    private static void AppendAggregates(
+        StringBuilder builder,
+        string title,
+        IReadOnlyList<ParityDeltaAggregate> values)
+    {
+        builder.AppendLine();
+        builder.AppendLine($"### {title}");
+        builder.AppendLine();
+        if (values.Count == 0)
+        {
+            builder.AppendLine("No deltas available.");
+            return;
+        }
+        builder.AppendLine("| Dimension | ID / key | Name | Delta | Events | Status |");
+        builder.AppendLine("|---|---|---|---:|---:|---|");
+        foreach (var item in values)
+        {
+            builder.AppendLine(
+                $"| {Escape(item.Dimension)} | `{Escape(item.Key)}` | {Escape(item.Name)} | " +
+                $"{item.Delta:+#,0;-#,0;0} | {item.EventCount} | {item.EvidenceStatus} |");
+        }
     }
 
     private static void WriteAtomically(string path, string content)
@@ -158,6 +247,9 @@ internal static class FflogsParityReportWriter
 
     private static string FormatTimestamp(DateTimeOffset? timestamp)
         => timestamp?.ToString("O", CultureInfo.InvariantCulture) ?? "unknown";
+
+    private static string FormatNullable(long? value)
+        => value?.ToString("N0", CultureInfo.InvariantCulture) ?? "unknown";
 
     private static string Escape(string value)
         => value.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", " ").Replace("\n", " ");

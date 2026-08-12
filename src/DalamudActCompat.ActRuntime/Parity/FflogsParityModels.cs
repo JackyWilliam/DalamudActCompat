@@ -44,6 +44,24 @@ internal enum ParityReferencePrecision
     Unknown,
 }
 
+internal enum ParityCorrelationStatus
+{
+    Matched,
+    Ambiguous,
+    IntentionallyIgnored,
+    UnmatchedRaw,
+    UnmatchedNormalized,
+    UnmatchedReference,
+}
+
+internal enum ParityEvidenceStatus
+{
+    Official,
+    Observed,
+    Inferred,
+    Unknown,
+}
+
 /// <summary>
 /// Canonical replay event shared by raw-log and normalized-event fixtures.
 /// Optional fields are deliberate: keeping one stable wire shape makes fixtures
@@ -94,6 +112,20 @@ internal sealed record ParityReplayEvent
     public string RawLineType { get; init; } = string.Empty;
 
     public string PacketId { get; init; } = string.Empty;
+
+    public string ParserEventId { get; init; } = string.Empty;
+
+    public string RawEventId { get; init; } = string.Empty;
+
+    public int? TargetIndex { get; init; }
+
+    public int? EffectIndex { get; init; }
+
+    public int? EffectType { get; init; }
+
+    public long? Overkill { get; init; }
+
+    public long? Absorbed { get; init; }
 
     public string Evidence { get; init; } = string.Empty;
 }
@@ -148,6 +180,11 @@ internal sealed record ParityDamageLedgerEntry(
     ParityExclusionReason ExclusionReason,
     string RawLineType,
     string PacketId,
+    string ParserEventId,
+    string RawEventId,
+    int? TargetIndex,
+    int? EffectIndex,
+    int? EffectType,
     string Evidence);
 
 internal sealed record ParityDowntimeInterval(
@@ -210,7 +247,114 @@ internal sealed record ParityDeltaBreakdown(
     long? MinimumDelta,
     long? MaximumDelta,
     ParityReferencePrecision Precision,
+    ParityEvidenceStatus EvidenceStatus,
     string Evidence);
+
+internal sealed record ParityReconciliationEvent(
+    string CorrelationId,
+    ParityCorrelationStatus Status,
+    DateTimeOffset Timestamp,
+    long? RawSequence,
+    long? NormalizedSequence,
+    long? ReferenceSequence,
+    string SourceId,
+    string SourceName,
+    string OwnerId,
+    string OwnerName,
+    string TargetId,
+    string TargetName,
+    string AbilityId,
+    string AbilityName,
+    long? RawAmount,
+    bool RawPartyOwned,
+    long? NormalizedAmount,
+    long IncludedAmount,
+    long? ReferenceAmount,
+    string PacketId,
+    string ParserEventId,
+    string RawEventId,
+    int? TargetIndex,
+    int? EffectIndex,
+    string Category,
+    string DeltaReason,
+    ParityEvidenceStatus EvidenceStatus,
+    int CandidateCount);
+
+internal sealed record ParityDamageConservation(
+    long RawClassifiedDamage,
+    long MatchedRawDamage,
+    long IntentionallyIgnoredRawDamage,
+    long AmbiguousRawDamage,
+    long UnmatchedRawOnlyDamage,
+    long UnmatchedRawDamage,
+    bool RawConserved,
+    long NormalizedDamage,
+    long IncludedLedgerDamage,
+    long ExcludedLedgerDamage,
+    bool NormalizedConserved,
+    long SourceDamageBeforeOwnerAttribution,
+    long OwnerAttributedDamage,
+    bool OwnerAttributionConserved);
+
+internal sealed record ParityDeltaAggregate(
+    string Dimension,
+    string Key,
+    string Name,
+    long Delta,
+    int EventCount,
+    ParityEvidenceStatus EvidenceStatus);
+
+internal sealed record ParityReconciliationDiagnostic(
+    IReadOnlyList<ParityReconciliationEvent> Events,
+    ParityDamageConservation Conservation,
+    IReadOnlyList<ParityReconciliationEvent> TopPositiveReferenceDeltaEvents,
+    IReadOnlyList<ParityReconciliationEvent> TopUnmatchedNormalizedEvents,
+    IReadOnlyList<ParityReconciliationEvent> TopUnmatchedRawEvents,
+    IReadOnlyList<ParityDeltaAggregate> TopActorDeltas,
+    IReadOnlyList<ParityDeltaAggregate> TopAbilityDeltas,
+    IReadOnlyList<ParityDeltaAggregate> TopTargetDeltas,
+    string ReferenceComparisonStatus);
+
+internal sealed record ParityReferenceFightInfo(
+    string ReportCode,
+    string FightId,
+    string Zone,
+    string EncounterName,
+    DateTimeOffset? Start,
+    DateTimeOffset? End);
+
+internal sealed record ParityReferenceEntity(
+    string Id,
+    int? InstanceId,
+    string Name,
+    string Type,
+    string OwnerId);
+
+internal sealed record ParityReferenceDamageEvent(
+    long Sequence,
+    DateTimeOffset Timestamp,
+    string SourceId,
+    int? SourceInstanceId,
+    string SourceName,
+    string TargetId,
+    int? TargetInstanceId,
+    string TargetName,
+    string AbilityId,
+    string AbilityName,
+    long Amount,
+    long? Overkill,
+    long? Absorbed,
+    bool Critical,
+    bool DirectHit,
+    string PacketId);
+
+internal sealed record ParityReferenceFight(
+    string SchemaVersion,
+    string Source,
+    ParityReferenceFightInfo Fight,
+    IReadOnlyList<ParityReferenceEntity> Actors,
+    IReadOnlyList<ParityReferenceEntity> Targets,
+    IReadOnlyList<ParityReferenceDamageEvent> DamageEvents);
 
 internal sealed record FflogsParityDiagnostic(
     string SchemaVersion,
@@ -227,6 +371,7 @@ internal sealed record FflogsParityDiagnostic(
     IReadOnlyList<ParityDamageLedgerEntry> DamageLedger,
     IReadOnlyList<ParityDowntimeInterval> DowntimeIntervals,
     IReadOnlyList<ParityDeltaBreakdown> DeltaBreakdown,
+    ParityReconciliationDiagnostic Reconciliation,
     ParityCaptureHealth CaptureHealth,
     ParityReferenceSnapshot? Reference,
     IReadOnlyList<string> Unknowns);
@@ -253,4 +398,20 @@ internal sealed record ParityRawReplayFixture(
     IReadOnlyList<string> RawLines,
     long ExpectedIncludedDamage,
     double ExpectedCurrentDamageMetricDurationSeconds,
+    string Notes);
+
+internal sealed record ParityReconciliationReplayFixture(
+    string SchemaVersion,
+    string Name,
+    string Zone,
+    string EncounterName,
+    IReadOnlyList<string> PartyActorIds,
+    IReadOnlyList<string> RawLines,
+    IReadOnlyList<ParityReplayEvent> NormalizedEvents,
+    string ReferencePath,
+    long ExpectedIncludedDamage,
+    int ExpectedMatched,
+    int ExpectedAmbiguous,
+    int ExpectedUnmatchedRaw,
+    int ExpectedUnmatchedNormalized,
     string Notes);
