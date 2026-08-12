@@ -92,6 +92,8 @@ try
     ValidateFflogsConcurrencyBoundaries();
     await ValidateFflogsCacheWritersAsync(testRoot);
     await ValidateBundledPluginInstallLifecycleAsync();
+    await ValidatePluginLifecycleShutdownAsync(testRoot);
+    ValidatePluginUnloadOwnership();
     await ValidateEncounterShutdownFlushAsync(testRoot);
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
@@ -446,6 +448,7 @@ static void ValidatePluginRepositoryMetadata()
         installUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
         entry.GetProperty("DownloadLinkUpdate").GetString() is { } updateUrl &&
         updateUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
+        entry.GetProperty("CanUnloadAsync").GetBoolean() &&
         entry.GetProperty("DownloadLinkTesting").ValueKind == JsonValueKind.Null,
         "Dalamud custom repository version or release download links drifted from the plugin assembly.");
     var iconUrl = entry.GetProperty("IconUrl").GetString();
@@ -3622,6 +3625,95 @@ static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
         "An encounter submitted immediately before shutdown did not write its individual log.");
 }
 
+static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "plugin-lifecycle-shutdown");
+    var paths = new PluginPaths(root);
+    var configuration = new PluginConfiguration
+    {
+        EnableParsing = true,
+        AutoStartParser = true,
+    };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var logger = new PluginLogger(log);
+    var encounterService = new EncounterService(
+        new EncounterRepository(new JsonFileStore(), paths),
+        new EncounterStateStore(),
+        configuration,
+        logger,
+        paths);
+    var parser = new BlockingStartupParserEngine();
+    var lifecycle = new PluginLifecycle(
+        parser,
+        encounterService,
+        paths,
+        configuration,
+        logger,
+        TimeSpan.Zero);
+
+    lifecycle.Start();
+    await parser.StartEntered.WaitAsync(TimeSpan.FromSeconds(2));
+    await lifecycle.DisposeAsync();
+    await lifecycle.DisposeAsync();
+
+    Assert(
+        parser.StartCount == 1 &&
+        parser.StopCount == 1 &&
+        parser.StopObservedCompletedStartup,
+        "Plugin shutdown did not cancel and join its exact startup task before stopping the parser.");
+
+    await parser.DisposeAsync();
+    await encounterService.DisposeAsync();
+}
+
+static void ValidatePluginUnloadOwnership()
+{
+    var projectRoot = FindProjectRoot();
+    var pluginSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "Plugin.cs"));
+    var lifecycleSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "PluginLifecycle.cs"));
+    var runtimeSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    var projectSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "DalamudActCompat.csproj"));
+    var parserConstruction = runtimeSource.IndexOf(
+        "parser = new IINACT.FfxivActPluginWrapper(",
+        StringComparison.Ordinal);
+    var hookConstruction = runtimeSource.IndexOf(
+        "zoneDownHookManager = new IINACT.Network.ZoneDownHookManager(",
+        StringComparison.Ordinal);
+
+    Assert(
+        projectSource.Contains("<CanUnloadAsync>true</CanUnloadAsync>", StringComparison.Ordinal) &&
+        lifecycleSource.Contains("startupTask = Task.Run", StringComparison.Ordinal) &&
+        lifecycleSource.Contains("await trackedStartup.ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("await independentHostStartupTask.ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("DisposeComponentsAsync().GetAwaiter().GetResult();", StringComparison.Ordinal) &&
+        !pluginSource.Contains("_ = Task.Run", StringComparison.Ordinal) &&
+        !pluginSource.Contains("shutdown exceeded 250 ms", StringComparison.OrdinalIgnoreCase) &&
+        !pluginSource.Contains("hostCommandWorker.WaitAsync", StringComparison.Ordinal) &&
+        !pluginSource.Contains("completion.WaitAsync(TimeSpan.FromSeconds(5))", StringComparison.Ordinal) &&
+        parserConstruction >= 0 &&
+        hookConstruction > parserConstruction,
+        "Plugin unload can still return around a live startup task/hook, or the parser hook is enabled before dependency loading completes.");
+}
+
 static async Task ValidateAtomicEncounterStateUpdatesAsync()
 {
     var stateStore = new EncounterStateStore();
@@ -6391,6 +6483,67 @@ internal sealed class TestParserEngine : IParserEngine
     {
         cancellationToken.ThrowIfCancellationRequested();
         StopCount++;
+        SetStatus(ParserState.Stopped);
+        return Task.CompletedTask;
+    }
+
+    public async Task RestartAsync(CancellationToken cancellationToken)
+    {
+        await StopAsync(cancellationToken);
+        await StartAsync(cancellationToken);
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private void SetStatus(ParserState state)
+    {
+        Status = new ParserStatus(state, state.ToString(), DateTimeOffset.UtcNow);
+        StatusChanged?.Invoke(this, Status);
+    }
+}
+
+internal sealed class BlockingStartupParserEngine : IParserEngine
+{
+    private readonly TaskCompletionSource startEntered = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource startCompleted = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public event EventHandler<ParserStatus>? StatusChanged;
+
+    public ParserStatus Status { get; private set; } = new(
+        ParserState.Stopped,
+        ParserState.Stopped.ToString(),
+        DateTimeOffset.UtcNow);
+
+    public Task StartEntered => startEntered.Task;
+
+    public int StartCount { get; private set; }
+
+    public int StopCount { get; private set; }
+
+    public bool StopObservedCompletedStartup { get; private set; }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        StartCount++;
+        SetStatus(ParserState.Initializing);
+        startEntered.TrySetResult();
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+        finally
+        {
+            startCompleted.TrySetResult();
+        }
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StopCount++;
+        StopObservedCompletedStartup = startCompleted.Task.IsCompleted;
         SetStatus(ParserState.Stopped);
         return Task.CompletedTask;
     }

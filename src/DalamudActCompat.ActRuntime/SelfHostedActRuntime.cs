@@ -605,15 +605,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         try
         {
             IINACT.FfxivActPluginWrapper.ConfigureRegion(dataManager.Language);
-            zoneDownHookManager = new IINACT.Network.ZoneDownHookManager(
-                notificationManager,
-                gameInteropProvider);
             parser = new IINACT.FfxivActPluginWrapper(
                 configuration,
                 dataManager.Language,
                 chatGui,
                 framework,
                 condition);
+            // Keep the native hook disabled until every parser dependency has loaded.
+            // A failed or stalled wrapper construction must not leave a half-started hook.
+            zoneDownHookManager = new IINACT.Network.ZoneDownHookManager(
+                notificationManager,
+                gameInteropProvider);
             // IINACT registers its formatter in the wrapper constructor. Subscribe after it
             // so the external ACT Host receives both the raw pipe line and ACT's legacy line.
             ActGlobals.oFormActMain.BeforeLogLineRead += OnBeforeLogLineRead;
