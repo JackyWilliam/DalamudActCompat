@@ -13,6 +13,7 @@ using System.Xml;
 using Advanced_Combat_Tracker;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.ActRuntime;
+using DalamudActCompat.ActRuntime.Parity;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
@@ -62,6 +63,7 @@ try
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     ValidateRaidDpsEstimator();
+    ValidateFflogsParityReplay(testRoot);
     ValidateEncounterParticipantsSurvivePartyDeparture();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -4275,6 +4277,92 @@ static void ValidateRaidDpsEstimator()
                 397.974,
                 useObservedDamageWindow: true) - 1_000) < 0.001,
         "The verified Lindwurm transition interval was not removed from DPS/rDPS duration.");
+}
+
+static void ValidateFflogsParityReplay(string testRoot)
+{
+    Assert(
+        FflogsParityRawNormalizer.TryDecodeDamageEffect(
+            "754003",
+            "06FF4001",
+            out var largeDamage,
+            out var largeCritical,
+            out var largeDirectHit) &&
+        largeDamage == 67_327 &&
+        !largeCritical &&
+        largeDirectHit,
+        "Raw parity normalizer no longer matches FFXIV_ACT_Plugin's large-damage encoding or hit flags.");
+
+    var fixtureDirectory = Path.Combine(
+        FindProjectRoot(),
+        "tests",
+        "DalamudActCompat.PackageSmokeTests",
+        "Fixtures",
+        "FflogsParity");
+    var rawFixture = FflogsParityReplay.ReadRawFixture(
+        Path.Combine(fixtureDirectory, "two-target-transition.raw.json"));
+    var rawDiagnostic = FflogsParityReplay.ReplayRaw(rawFixture);
+    Assert(
+        rawDiagnostic.IncludedDamage == rawFixture.ExpectedIncludedDamage,
+        "Raw parity replay did not reproduce the expected DamageLedger total.");
+    Assert(
+        Math.Abs(
+            rawDiagnostic.Durations.CurrentDamageMetricDurationSeconds -
+            rawFixture.ExpectedCurrentDamageMetricDurationSeconds) < 0.001,
+        "Raw parity replay did not reproduce current union-downtime duration semantics.");
+    Assert(
+        Math.Abs(rawDiagnostic.Durations.CandidateDamageMetricDurationSeconds - 5) < 0.001,
+        "Raw parity replay did not isolate the all-targets-unavailable candidate duration.");
+    Assert(
+        rawDiagnostic.DamageLedger.Count(static entry =>
+            entry.Decision == ParityLedgerDecision.Excluded &&
+            entry.ExclusionReason == ParityExclusionReason.NonPartySource) == 1,
+        "Raw parity replay did not retain a non-party damage exclusion reason.");
+    Assert(
+        rawDiagnostic.Actors.Single(static actor => actor.Name == "Player One") is
+        {
+            IncludedDamage: 6000,
+            CriticalHits: 2,
+            DirectHits: 2,
+            CriticalDirectHits: 1,
+            CriticalRate: > 0.666 and < 0.667,
+            DirectHitRate: > 0.666 and < 0.667,
+            CriticalDirectRate: > 0.333 and < 0.334,
+        },
+        "Raw parity replay lost pet ownership or critical/direct-hit aggregation.");
+
+    var normalizedFixture = FflogsParityReplay.ReadNormalizedFixture(
+        Path.Combine(fixtureDirectory, "two-target-transition.normalized.json"));
+    var normalizedDiagnostic = FflogsParityReplay.ReplayNormalized(normalizedFixture);
+    Assert(
+        normalizedDiagnostic.IncludedDamage == normalizedFixture.ExpectedIncludedDamage,
+        "Normalized parity replay did not reproduce the expected DamageLedger total.");
+    Assert(
+        Math.Abs(
+            normalizedDiagnostic.Durations.CurrentDamageMetricDurationSeconds -
+            normalizedFixture.ExpectedCurrentDamageMetricDurationSeconds) < 0.001,
+        "Normalized parity replay did not reproduce current union-downtime duration semantics.");
+    Assert(
+        normalizedDiagnostic.Durations.FightDurationSeconds == 8,
+        "Normalized parity replay changed explicit fight boundaries.");
+    Assert(
+        normalizedDiagnostic.DamageLedger.Any(static entry =>
+            entry.ExclusionReason == ParityExclusionReason.NotDamageSwing),
+        "Normalized parity replay did not explain why a non-damage swing was excluded.");
+
+    var reportDirectory = Path.Combine(testRoot, "parity-report");
+    var reportPaths = FflogsParityReportWriter.Write(reportDirectory, normalizedDiagnostic);
+    Assert(
+        File.Exists(reportPaths.JsonPath) && File.Exists(reportPaths.MarkdownPath),
+        "Parity diagnostic report files were not written.");
+    var markdown = File.ReadAllText(reportPaths.MarkdownPath);
+    Assert(
+        markdown.Contains("FightDuration", StringComparison.Ordinal) &&
+        markdown.Contains("DamageMetricDuration", StringComparison.Ordinal) &&
+        markdown.Contains("all-targets-unavailable", StringComparison.Ordinal) &&
+        markdown.Contains("## Damage Ledger", StringComparison.Ordinal) &&
+        markdown.Contains("NonPartySource", StringComparison.Ordinal),
+        "Parity report omitted required duration, downtime, or ledger evidence.");
 }
 
 static void ValidateDalamudGameStateBridge()

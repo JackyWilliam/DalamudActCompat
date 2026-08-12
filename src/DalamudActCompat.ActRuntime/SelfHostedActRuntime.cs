@@ -13,6 +13,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
+using DalamudActCompat.ActRuntime.Parity;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -65,6 +66,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator = new();
+    private readonly FflogsParityDiagnosticRecorder parityDiagnosticRecorder = new();
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -111,6 +113,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool activeEncounterNamesLogged;
     private bool networkSentCaptureRequested;
     private bool networkSentSubscribed;
+    private int parityDiagnosticFaulted;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -1642,6 +1645,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             observedDeaths.Clear();
             ResetChatEncounterUnsafe();
         }
+        parityDiagnosticRecorder.ResetEncounter();
+        Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
     }
 
     private static ActPluginData RegisterSystemPlugin(IActPluginV1 plugin, string fileName)
@@ -1686,6 +1691,13 @@ public sealed class SelfHostedActRuntime : IDisposable
         if (isImport)
         {
             return;
+        }
+
+        if (debugMode())
+        {
+            // Phase 0 records the raw parser input in a sidecar only. It must never
+            // mutate the log line or influence the production encounter pipeline.
+            ObserveParityRawLine(logInfo.originalLogLine);
         }
 
         if (raidDpsEstimator.ObserveNetworkLine(
@@ -1936,12 +1948,6 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
-        var encounter = action.combatAction.ParentEncounter;
-        if (encounter is null)
-        {
-            return;
-        }
-
         var swing = action.combatAction;
         var identities = gameStateProvider.Identities;
         var attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Attacker);
@@ -1950,6 +1956,22 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, ownerName);
         }
+        var encounter = swing.ParentEncounter;
+        if (debugMode())
+        {
+            // Observe before DACT's current party and swing filters so every excluded
+            // MasterSwing has a concrete reason in the parity ledger.
+            ObserveParityCombatAction(
+                swing,
+                identities,
+                attackerIdentity,
+                encounter is not null);
+        }
+        if (encounter is null)
+        {
+            return;
+        }
+
         var victimIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Victim);
         if (attackerIdentity is null && victimIdentity is null)
         {
@@ -2062,6 +2084,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             ActEncounterSnapshot? snapshot = null;
             ActEncounterSnapshot? fallbackSnapshot = null;
             string? unmatchedNames = null;
+            ParityCompletionRequest? parityCompletion = null;
             lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
             {
                 lock (encounterSync)
@@ -2196,6 +2219,30 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     if (finished)
                     {
+                        if (debugMode() && Volatile.Read(ref parityDiagnosticFaulted) == 0)
+                        {
+                            var diagnosticStart = encounter.StartTime == DateTime.MaxValue
+                                ? startTime
+                                : new DateTimeOffset(encounter.StartTime);
+                            var diagnosticEnd = encounter.EndTime == DateTime.MinValue
+                                ? endTime
+                                : new DateTimeOffset(encounter.EndTime);
+                            parityCompletion = new ParityCompletionRequest(
+                                activeEncounterId,
+                                encounter.ZoneName ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
+                                encounter.Title ?? string.Empty,
+                                diagnosticStart,
+                                diagnosticEnd,
+                                cachedIdentities,
+                                ActGlobals.oFormActMain.DroppedLogLines,
+                                ActGlobals.oFormActMain.DroppedCombatActions);
+                        }
+                        else
+                        {
+                            parityDiagnosticRecorder.ResetEncounter();
+                            Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
+                        }
+
                         raidDpsEstimator.FinishEncounter();
                         activeEncounter = null;
                         if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)
@@ -2217,6 +2264,39 @@ public sealed class SelfHostedActRuntime : IDisposable
                         observedDeaths.Clear();
                         ResetChatEncounterUnsafe();
                     }
+                }
+            }
+
+            if (parityCompletion is not null)
+            {
+                try
+                {
+                    var diagnostic = parityDiagnosticRecorder.Complete(
+                        parityCompletion.EncounterId,
+                        parityCompletion.Zone,
+                        parityCompletion.EncounterName,
+                        parityCompletion.FightStart,
+                        parityCompletion.FightEnd,
+                        parityCompletion.Identities,
+                        parityCompletion.DroppedRawLogLines,
+                        parityCompletion.DroppedNormalizedActions);
+                    var output = FflogsParityReportWriter.Write(
+                        Path.Combine(
+                            pluginInterface.ConfigDirectory.FullName,
+                            "logs",
+                            "parity"),
+                        diagnostic);
+                    log.Information(
+                        $"FFLogs parity diagnostic written to '{output.JsonPath}' and '{output.MarkdownPath}'.");
+                    Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
+                }
+                catch (Exception ex)
+                {
+                    // A developer diagnostic is lower priority than encounter publication;
+                    // preserve the existing fault-isolation contract on every write failure.
+                    log.Warning(ex, "FFLogs parity diagnostic could not be written.");
+                    parityDiagnosticRecorder.ResetEncounter();
+                    Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
                 }
             }
 
@@ -2254,6 +2334,52 @@ public sealed class SelfHostedActRuntime : IDisposable
         => fallback is not null &&
            SnapshotTotalDamage(fallback) > 0 &&
            (primary is null || SnapshotTotalDamage(primary) <= 0);
+
+    private void ObserveParityRawLine(string rawLine)
+    {
+        if (Volatile.Read(ref parityDiagnosticFaulted) != 0)
+        {
+            return;
+        }
+        try
+        {
+            parityDiagnosticRecorder.ObserveRawLine(rawLine);
+        }
+        catch (Exception ex)
+        {
+            if (Interlocked.Exchange(ref parityDiagnosticFaulted, 1) == 0)
+            {
+                log.Warning(ex, "FFLogs parity raw observer was isolated for the current encounter.");
+            }
+        }
+    }
+
+    private void ObserveParityCombatAction(
+        MasterSwing swing,
+        IReadOnlyList<ActPlayerIdentity> identities,
+        ActPlayerIdentity? attackerIdentity,
+        bool hasEncounter)
+    {
+        if (Volatile.Read(ref parityDiagnosticFaulted) != 0)
+        {
+            return;
+        }
+        try
+        {
+            parityDiagnosticRecorder.ObserveCombatAction(
+                swing,
+                identities,
+                attackerIdentity,
+                hasEncounter);
+        }
+        catch (Exception ex)
+        {
+            if (Interlocked.Exchange(ref parityDiagnosticFaulted, 1) == 0)
+            {
+                log.Warning(ex, "FFLogs parity normalized observer was isolated for the current encounter.");
+            }
+        }
+    }
 
     private static HashSet<string> LoadLimitBreakActionNames(IDataManager dataManager)
     {
@@ -2461,6 +2587,16 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         public int CriticalDirectHits { get; set; }
     }
+
+    private sealed record ParityCompletionRequest(
+        Guid EncounterId,
+        string Zone,
+        string EncounterName,
+        DateTimeOffset? FightStart,
+        DateTimeOffset? FightEnd,
+        IReadOnlyList<ActPlayerIdentity> Identities,
+        long DroppedRawLogLines,
+        long DroppedNormalizedActions);
 
     private sealed class OverlayConnectionAttempt(
         OverlayConnectionMode mode) : IDisposable
