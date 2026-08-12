@@ -87,6 +87,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
     private Guid activeEncounterId;
+    private int activeEncounterPartyCapacity;
     private readonly Dictionary<string, ActPlayerIdentity> activeEncounterIdentities =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> lastKnownDead = new(StringComparer.OrdinalIgnoreCase);
@@ -1630,6 +1631,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             raidDpsEstimator.Reset();
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
+            activeEncounterPartyCapacity = 0;
             activeEncounterIdentities.Clear();
             activeEncounterPublished = false;
             activeEncounterNamesLogged = false;
@@ -1918,7 +1920,13 @@ public sealed class SelfHostedActRuntime : IDisposable
                 finished ? chatLastDamage : null,
                 chatZone,
                 string.IsNullOrWhiteSpace(chatEnemy) ? "Encounter" : chatEnemy,
-                combatants);
+                combatants)
+            {
+                CurrentPartyMemberIds = identities
+                    .Select(static identity => identity.DisplayName)
+                    .ToArray(),
+                PartyCapacity = Math.Max(activeEncounterPartyCapacity, identities.Count),
+            };
     }
 
     private void OnAfterCombatAction(bool isImport, CombatActionEventArgs action)
@@ -2063,6 +2071,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         var continuesChatEncounter = chatEncounterId != Guid.Empty;
                         criticalDirectHitCounters.Clear();
                         activeEncounterIdentities.Clear();
+                        activeEncounterPartyCapacity = 0;
                         activeEncounter = encounter;
                         activeEncounterId = continuesChatEncounter
                             ? chatEncounterId
@@ -2104,12 +2113,18 @@ public sealed class SelfHostedActRuntime : IDisposable
                             measurementEndTime,
                             useObservedDamageEnd: finished));
                     var identities = gameStateProvider.Identities;
+                    // The largest live roster seen in this pull is the slot count. Cached
+                    // identities only fill temporarily empty slots and never expand the party.
+                    activeEncounterPartyCapacity = Math.Max(
+                        activeEncounterPartyCapacity,
+                        identities.Count);
                     CacheActiveEncounterIdentities(identities);
                     var cachedIdentities = activeEncounterIdentities.Values.ToArray();
                     var combatants = ResolveEncounterCombatants(
                             encounter,
                             identities,
-                            cachedIdentities)
+                            cachedIdentities,
+                            activeEncounterPartyCapacity)
                         .Select(item =>
                         {
                             var hitCounts = GetDamageHitCounts(item.Combatant);
@@ -2165,6 +2180,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                         {
                             CombatDuration = TimeSpan.FromSeconds(effectiveEncounterSeconds),
                             IsTransitioning = !finished && raidDpsEstimator.IsTransitioning,
+                            CurrentPartyMemberIds = identities
+                                .Select(static identity => identity.DisplayName)
+                                .ToArray(),
+                            PartyCapacity = activeEncounterPartyCapacity,
                         };
                     }
                     else if (!activeEncounterNamesLogged)
@@ -2187,6 +2206,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         }
 
                         activeEncounterId = Guid.Empty;
+                        activeEncounterPartyCapacity = 0;
                         activeEncounterIdentities.Clear();
                         activeEncounterPublished = false;
                         activeEncounterNamesLogged = false;
@@ -2328,9 +2348,13 @@ public sealed class SelfHostedActRuntime : IDisposable
         ResolveEncounterCombatants(
             EncounterData encounter,
             IReadOnlyList<ActPlayerIdentity> liveIdentities,
-            IReadOnlyList<ActPlayerIdentity> cachedIdentities)
+            IReadOnlyList<ActPlayerIdentity> cachedIdentities,
+            int partyCapacity)
     {
-        var partyIdentities = ResolveLocalPartyIdentities(liveIdentities, cachedIdentities);
+        var partyIdentities = ResolveLocalPartyIdentities(
+            liveIdentities,
+            cachedIdentities,
+            partyCapacity);
         var allies = encounter.GetAllies();
         if (allies.Count == 0)
         {
@@ -2357,9 +2381,16 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private static IReadOnlyList<ActPlayerIdentity> ResolveLocalPartyIdentities(
         IReadOnlyList<ActPlayerIdentity> liveIdentities,
-        IReadOnlyList<ActPlayerIdentity> cachedIdentities)
+        IReadOnlyList<ActPlayerIdentity> cachedIdentities,
+        int partyCapacity)
     {
-        var resolved = new List<ActPlayerIdentity>(8);
+        var boundedCapacity = Math.Clamp(partyCapacity, 0, 8);
+        if (boundedCapacity == 0)
+        {
+            return [];
+        }
+
+        var resolved = new List<ActPlayerIdentity>(boundedCapacity);
         foreach (var identity in liveIdentities.Concat(cachedIdentities))
         {
             if (resolved.Any(existing => IsSamePlayerIdentity(existing, identity)))
@@ -2368,7 +2399,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
 
             resolved.Add(identity);
-            if (resolved.Count == 8)
+            if (resolved.Count == boundedCapacity)
             {
                 break;
             }

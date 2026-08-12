@@ -11,6 +11,12 @@ public sealed record ActEncounterSnapshot(
     public TimeSpan? CombatDuration { get; init; }
 
     public bool IsTransitioning { get; init; }
+
+    // Combatants contain ACT totals, while this transient roster metadata lets the duty
+    // accumulator distinguish a replacement from an additional historical participant.
+    public IReadOnlyList<string> CurrentPartyMemberIds { get; init; } = [];
+
+    public int PartyCapacity { get; init; }
 }
 
 public sealed record ActCombatantSnapshot(
