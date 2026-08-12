@@ -2,6 +2,7 @@ using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.ImGuiNotification;
+using Dalamud.Interface.Textures;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.Core.Interfaces;
@@ -29,6 +30,8 @@ namespace DalamudActCompat.Plugin;
 public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/actcompat";
+    private const uint MatchaWorldChangedIconId = 61835;
+    private const uint MatchaDutyEnteredIconId = 61832;
 
     private readonly PluginServices services;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
@@ -68,6 +71,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ActHostSupervisor hostSupervisor;
     private readonly ActHostSupervisor matchaHostSupervisor;
     private readonly ActHostSupervisor genericHostSupervisor;
+    private readonly ISharedImmediateTexture matchaWorldChangedIcon;
+    private readonly ISharedImmediateTexture matchaDutyEnteredIcon;
     private readonly SemaphoreSlim hostTopologyLock = new(1, 1);
     private readonly object permissionSnapshotLock = new();
     private readonly object pluginInstallStatusLock = new();
@@ -316,6 +321,12 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(assetDirectory, "StatusIcons", "CombatTransition.png"));
         var endedStatusIcon = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "StatusIcons", "CombatEnded.png"));
+        // These game icon IDs are the canonical source of the two user-selected images,
+        // avoiding duplicate extracted assets while retaining Dalamud's texture lifecycle.
+        matchaWorldChangedIcon = textureProvider.GetFromGameIcon(
+            new GameIconLookup(MatchaWorldChangedIconId));
+        matchaDutyEnteredIcon = textureProvider.GetFromGameIcon(
+            new GameIconLookup(MatchaDutyEnteredIconId));
         meterWindow = new MeterWindow(
             meterService,
             fflogsEstimateService,
@@ -2699,11 +2710,18 @@ public sealed class Plugin : IDalamudPlugin
             {
                 try
                 {
-                    services.NotificationManager.AddNotification(new()
+                    var gameNotification = new Notification
                     {
                         Title = "抹茶 / Cafe.Matcha",
                         Content = notification.Message,
-                    });
+                    };
+                    gameNotification.IconTexture = notification.Kind switch
+                    {
+                        HostMatchaNotificationKind.WorldChanged => matchaWorldChangedIcon,
+                        HostMatchaNotificationKind.DutyEntered => matchaDutyEnteredIcon,
+                        _ => null,
+                    };
+                    services.NotificationManager.AddNotification(gameNotification);
                 }
                 catch (Exception exception)
                 {

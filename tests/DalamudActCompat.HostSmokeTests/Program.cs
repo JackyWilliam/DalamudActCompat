@@ -72,7 +72,7 @@ var matchaPackage = Path.Combine(
     "vendor",
     "BundledActPlugins",
     "matcha",
-    "Cafe.Matcha-26.8.10.829-dact2.zip");
+    "Cafe.Matcha-26.8.12.1622-dact3.zip");
 if (File.Exists(matchaPackage))
 {
     ValidateMatchaAssemblyContract(matchaPackage);
@@ -1776,7 +1776,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
         var originalHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assemblyPath)));
         Assert(
-            originalHash == "F0EFA181486FFC2C773D0A2B422935E305EAAE32800E35BD398B8A37E92EFF64",
+            originalHash == "3DF088E73DD8A314A08A1B302A2FEFE9BFEFC1A52FCE54032F719421CF7810FA",
             "The bundled Matcha entry DLL does not match its disclosed fixed hash.");
         Assert(
             Convert.ToHexString(
@@ -1799,7 +1799,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
             bridgeType.Fields.Any(field =>
                 field.Name == "ContractVersion" &&
                 field.IsLiteral &&
-                string.Equals(field.Constant as string, "2", StringComparison.Ordinal)),
+                string.Equals(field.Constant as string, "3", StringComparison.Ordinal)),
             "Matcha does not disclose the expected DACT bridge contract.");
         var methods = definition.MainModule.Types
             .SelectMany(EnumerateCecilTypes)
@@ -1930,32 +1930,54 @@ void ValidateMatchaAssemblyContract(string packagePath)
                 ["matcha"] = ["ReadCombatLogs"],
             },
             ["matcha"])]);
-        object? notificationPayload = null;
+        var notificationPayloads = new List<HostMatchaNotification>();
         Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> sender =
             (type, _, payload, _, _) =>
             {
-                if (type == HostMessageTypes.MatchaNotification)
+                if (type == HostMessageTypes.MatchaNotification &&
+                    payload is HostMatchaNotification notification)
                 {
-                    notificationPayload = payload;
+                    notificationPayloads.Add(notification);
                 }
                 return true;
             };
         configureSender.Invoke(null, [sender]);
+        var matchaEventType = loadedAssembly.GetType(
+                                  "Cafe.Matcha.Constant.EventType",
+                                  throwOnError: true)!
+                              ?? throw new TypeLoadException("Cafe.Matcha.Constant.EventType");
         var sendNativeToast = loadedAssembly
                                   .GetType("Cafe.Matcha.Utils.Output", throwOnError: true)!
                                   .GetMethod(
                                       "SendNativeToast",
-                                      BindingFlags.Static | BindingFlags.NonPublic)
+                                      BindingFlags.Static | BindingFlags.NonPublic,
+                                      binder: null,
+                                      types: [typeof(string), matchaEventType],
+                                      modifiers: null)
                               ?? throw new MissingMethodException(
                                   "Cafe.Matcha.Utils.Output",
                                   "SendNativeToast");
-        sendNativeToast.Invoke(null, ["Matcha bridge smoke"]);
+        sendNativeToast.Invoke(null, [
+            "Matcha world bridge smoke",
+            Enum.Parse(matchaEventType, "InitZone"),
+        ]);
+        sendNativeToast.Invoke(null, [
+            "Matcha duty bridge smoke",
+            Enum.Parse(matchaEventType, "MatchAlert"),
+        ]);
         Assert(
-            notificationPayload is HostMatchaNotification
-            {
-                Message: "Matcha bridge smoke",
-            },
-            "Matcha's real native-toast entry point did not reach the typed Host notification route.");
+            notificationPayloads is
+            [
+                {
+                    Message: "Matcha world bridge smoke",
+                    Kind: HostMatchaNotificationKind.WorldChanged,
+                },
+                {
+                    Message: "Matcha duty bridge smoke",
+                    Kind: HostMatchaNotificationKind.DutyEntered,
+                },
+            ],
+            "Matcha's real native-toast entry point did not preserve world/duty event kinds on the typed Host notification route.");
 
         context.Unload();
     }
@@ -2165,10 +2187,14 @@ void ValidateMatchaNotificationRouting()
 
     configureWindowsWriter.Invoke(null, [(Func<string, bool>)(_ => false)]);
     Assert(
-        HostPluginBridge.SendMatchaNotification("Typed fallback") &&
+        HostPluginBridge.SendMatchaNotification("Typed fallback", "MatchAlert") &&
         fallbackCalls == 1 &&
         fallbackType == HostMessageTypes.MatchaNotification &&
-        fallbackPayload is HostMatchaNotification { Message: "Typed fallback" },
+        fallbackPayload is HostMatchaNotification
+        {
+            Message: "Typed fallback",
+            Kind: HostMatchaNotificationKind.DutyEntered,
+        },
         "Matcha notification did not use its typed game-side fallback channel.");
 
     Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> rejectingSender =
@@ -2621,7 +2647,7 @@ async Task ValidateMatchaLoadsOutOfProcessAsync(string packagePath)
             {
                 id = "matcha",
                 name = "Cafe.Matcha",
-                version = "26.8.10.829",
+                version = "26.8.12.1622",
                 entryAssembly = Path.GetRelativePath(matchaInstallRoot, entryAssembly),
                 entryType = "Cafe.Matcha.MatchaInit",
                 hostApiVersion = 1,

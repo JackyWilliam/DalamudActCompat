@@ -8,10 +8,12 @@ The patch adds a small reflection bridge used only when the DLL runs in the
 dedicated DalamudActCompat Host. Configuration and bundled data stay confined
 to their assigned roots; import/export may access only a JSON file explicitly
 selected in Matcha's own file dialog. Real-time alerts use the Host Windows
-shell first and then a typed game-side IPC fallback; delivery failures are
-logged and never enter Matcha's blocking `MessageBox`. Outside that Host, the
-original ACT behavior is retained. The patch also disables Confuser for this
-reproducible compatibility build; the upstream release build remains unchanged.
+shell first and then a typed game-side IPC fallback; the fallback also carries
+Matcha's event type so Dalamud can select an icon without parsing localized or
+user-formatted text. Delivery failures are logged and never enter Matcha's
+blocking `MessageBox`. Outside that Host, the original ACT behavior is retained.
+The patch also disables Confuser for this reproducible compatibility build; the
+upstream release build remains unchanged.
 
 Build prerequisites and dependency versions are the same as upstream
 `.github/workflows/build.yml`:
@@ -24,13 +26,13 @@ Build prerequisites and dependency versions are the same as upstream
 From a clean checkout at the commit above:
 
 ```powershell
-git apply dact-compat.patch
+git apply --unidiff-zero dact-compat.patch
 dotnet restore Cafe.Matcha.sln
 dotnet msbuild Cafe.Matcha.sln -p:Configuration=Release -p:DactCompatBuild=true -m
 ```
 
 The expected entry DLL SHA-256 is
-`F0EFA181486FFC2C773D0A2B422935E305EAAE32800E35BD398B8A37E92EFF64`.
+`3DF088E73DD8A314A08A1B302A2FEFE9BFEFC1A52FCE54032F719421CF7810FA`.
 
 The complete package also keeps the unmodified upstream Actions DLL as
 `Plugins/Cafe.Matcha/upstream/Cafe.Matcha.Upstream.dll` (SHA-256

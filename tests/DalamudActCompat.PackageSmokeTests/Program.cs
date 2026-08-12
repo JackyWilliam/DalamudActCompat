@@ -2000,24 +2000,50 @@ static void ValidateControlCenterPresentation()
         "The DLL update-check window does not stay hidden when a successful check finds no updates.");
     Assert(
         ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 1,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualUpdateCheck,
+            pendingCount: 1,
             installInProgress: false,
             permissionChoicePending: false,
             ttsProChoicePending: false) &&
         !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate,
+            pendingCount: 1,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate,
+            pendingCount: 0,
+            installInProgress: false,
+            permissionChoicePending: false,
+            ttsProChoicePending: false) &&
+        !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 0,
             installInProgress: true,
             permissionChoicePending: false,
             ttsProChoicePending: false) &&
         !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 0,
             installInProgress: false,
             permissionChoicePending: true,
             ttsProChoicePending: false) &&
         !ThirdPartyPluginNoticeWindow.ShouldShowCloseButton(
+            ThirdPartyNoticeOpenMode.ManualDisclosure,
+            pendingCount: 0,
             installInProgress: false,
             permissionChoicePending: false,
             ttsProChoicePending: true) &&
         ThirdPartyPluginNoticeWindow.CanAdvanceToPermissionChoice(0) &&
         !ThirdPartyPluginNoticeWindow.CanAdvanceToPermissionChoice(1),
-        "The third-party notice can become uncloseable while idle or can advance while disclosures remain pending.");
+        "The required third-party notice is dismissible before acknowledgement, a manual notice is not dismissible while idle, or permission flow advances with pending disclosures.");
     var degradedInstall = BundledPluginInstallOutcome.RuntimeRecoveryPending(
         new InvalidOperationException("expected runtime recovery warning"));
     Assert(
@@ -2236,7 +2262,10 @@ static void ValidateControlCenterPresentation()
         pluginSource.Contains("BeginUpdateCheck(userInitiated: false)", StringComparison.Ordinal) &&
         pluginSource.Contains("userInitiated: openWindow);", StringComparison.Ordinal) &&
         pluginSource.Contains("更新检查已经在进行中", StringComparison.Ordinal) &&
-        pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal),
+        pluginSource.Contains("services.NotificationManager.AddNotification", StringComparison.Ordinal) &&
+        pluginSource.Contains("MatchaWorldChangedIconId = 61835", StringComparison.Ordinal) &&
+        pluginSource.Contains("MatchaDutyEnteredIconId = 61832", StringComparison.Ordinal) &&
+        pluginSource.Contains("gameNotification.IconTexture = notification.Kind switch", StringComparison.Ordinal),
         "The update notice is not a landscape branded window with a top modal and visible manual-check feedback.");
     var installBundledPluginsIndex = pluginSource.IndexOf(
         "private async Task<BundledPluginInstallOutcome> InstallBundledPluginsAsync",
@@ -2587,7 +2616,9 @@ static async Task ValidateMatchaTypedIpcAsync()
         1,
         HostMessageTypes.MatchaNotification,
         HostMessagePriority.Critical,
-        new HostMatchaNotification("Windows fallback"))]);
+        new HostMatchaNotification(
+            "Windows fallback",
+            HostMatchaNotificationKind.WorldChanged))]);
     applyMessage.Invoke(client, [HostEnvelope.Create(
         "matcha-typed-ipc-smoke",
         2,
@@ -2601,7 +2632,11 @@ static async Task ValidateMatchaTypedIpcAsync()
         HostMessagePriority.Control,
         new HostTtsRequest("matcha speech", "matcha"))]);
     Assert(
-        notification?.Message == "Windows fallback" &&
+        notification is
+        {
+            Message: "Windows fallback",
+            Kind: HostMatchaNotificationKind.WorldChanged,
+        } &&
         logLine?.Line == "00|matcha" &&
         tts is { Text: "matcha speech", Source: "matcha" },
         "Matcha notification, log, or TTS crossed an untyped/shared command channel.");
@@ -2822,15 +2857,15 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         pending.Any(plugin =>
             plugin.Id == "matcha" &&
-            plugin.Version == "26.8.10.829" &&
+            plugin.Version == "26.8.12.1622" &&
             plugin.License == "AGPL-3.0" &&
             plugin.DisableOnlineUpdates &&
             plugin.EnableAfterInstall &&
             plugin.SourceUrl.EndsWith(
                 "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
                 StringComparison.Ordinal) &&
-            plugin.PackageSha256 == "d79f10293bec95aa909962e31f0ab080958bf1c1acbd6fc654943a24212e962d" &&
-            plugin.Sha256 == "f0efa181486ffc2c773d0a2b422935e305eaae32800e35bd398b8a37e92eff64" &&
+            plugin.PackageSha256 == "da2037d3fb75914fd980f72978debf83fc761f693adfff939dbf386f0196a89b" &&
+            plugin.Sha256 == "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa" &&
             File.Exists(plugin.PackagePath)),
         "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
@@ -5854,7 +5889,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
-        "BundledActPlugins/matcha/Cafe.Matcha-26.8.10.829-dact2.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.8.12.1622-dact3.zip",
         "BundledActPlugins/matcha/LICENSE.txt",
         "BundledActPlugins/matcha/BUILD.md",
         "BundledActPlugins/matcha/dact-compat.patch",

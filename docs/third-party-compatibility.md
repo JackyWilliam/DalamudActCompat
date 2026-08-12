@@ -10,7 +10,7 @@ Machina 7.55h、Unscrambler.XIV 7.55.1 和 FFXIV_ACT_Plugin 3.0.2.7。
 插件会明确提示兜底解析不保证 FF Logs 排名有效，不再静默生成看似安全的上传日志。
 
 Triggernometry 中文维护版 2.1.2.2、ACT.FoxTTS 3.3.1.189、PostNamazu
-1.3.6.6、SilverDasher 0.6.0.4 和 Cafe.Matcha 26.8.10.829 随本插件发布。
+1.3.6.6、SilverDasher 0.6.0.4 和 Cafe.Matcha 26.8.12.1622 随本插件发布。
 首次安装以及 DalamudActCompat 每次更新后，
 游戏内都会弹出告知窗口，展示 DLL 作者、当前维护者、版本、许可证、项目网址、
 源码网址、DLL 实际下载网址和 SHA-256；窗口不会自动打开网页，未确认时不会加载

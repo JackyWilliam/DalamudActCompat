@@ -58,7 +58,7 @@ public static class LegacyAssemblyRewriter
             field.Name == "ContractVersion" &&
             field.IsLiteral &&
             field.FieldType.MetadataType == MetadataType.String);
-        if (!string.Equals(contractVersion?.Constant as string, "2", StringComparison.Ordinal))
+        if (!string.Equals(contractVersion?.Constant as string, "3", StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "Matcha DACT compatibility contract is missing or unsupported.");

@@ -14,6 +14,13 @@ public enum FoxTtsProChoice
     NeverRemind,
 }
 
+internal enum ThirdPartyNoticeOpenMode
+{
+    ManualDisclosure,
+    ManualUpdateCheck,
+    RequiredAfterPluginUpdate,
+}
+
 public sealed class ThirdPartyPluginNoticeWindow : Window
 {
     private const string PermissionPopupId = "扩展完整功能###DalamudActCompatFullPermissions";
@@ -42,6 +49,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private bool ttsProPopupRequested;
     private bool updateCheckInProgress;
     private bool outerFrameStylePushed;
+    private ThirdPartyNoticeOpenMode openMode = ThirdPartyNoticeOpenMode.ManualDisclosure;
 
     public ThirdPartyPluginNoticeWindow(
         Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures,
@@ -119,6 +127,8 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                         typeof(ThirdPartyPluginNoticeWindow).Assembly.GetName().Version),
                     "third-party-notice",
                     showCloseButton: ShouldShowCloseButton(
+                        openMode,
+                        pending.Count,
                         installTask is not null,
                         showPermissionChoice,
                         showTtsProChoice)))
@@ -204,9 +214,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                     ImGui.PopStyleColor();
 
                     ImGui.SameLine();
-                    ImGui.TextDisabled(text.Get(
-                        "可关闭后稍后处理；未确认的扩展保持禁用。确认来源并完成安装后才能继续权限设置。",
-                        "You may close and defer this step; unacknowledged extensions remain disabled. Acknowledge the sources and finish installation to continue to permissions."));
+                    ImGui.TextDisabled(openMode is ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate
+                        ? text.Get(
+                            "必须确认来源并完成安装后才能继续权限设置。",
+                            "Acknowledge the sources and finish installation to continue to permissions.")
+                        : text.Get(
+                            "可关闭后稍后处理；未确认的扩展保持禁用。确认来源并完成安装后才能继续权限设置。",
+                            "You may close and defer this step; unacknowledged extensions remain disabled. Acknowledge the sources and finish installation to continue to permissions."));
                 }
 
             }
@@ -220,6 +234,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
     public void OpenManualDisclosure()
     {
+        openMode = ThirdPartyNoticeOpenMode.ManualDisclosure;
         Refresh(openWhenPending: false);
         IsOpen = true;
     }
@@ -229,6 +244,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         Refresh(openWhenPending: false);
         if (pending.Count > 0)
         {
+            openMode = ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate;
             IsOpen = true;
         }
     }
@@ -241,6 +257,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             "Checking the three DLLs with registered online sources...");
         if (userInitiated)
         {
+            openMode = ThirdPartyNoticeOpenMode.ManualUpdateCheck;
             Refresh(openWhenPending: false);
             IsOpen = true;
         }
@@ -256,6 +273,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         Refresh(openWhenPending: false);
         if (showWindow)
         {
+            openMode = userInitiated
+                ? ThirdPartyNoticeOpenMode.ManualUpdateCheck
+                : ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate;
             IsOpen = true;
         }
     }
@@ -267,12 +287,17 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         => pendingCount > 0 || (failed && userInitiated);
 
     internal static bool ShouldShowCloseButton(
+        ThirdPartyNoticeOpenMode openMode,
+        int pendingCount,
         bool installInProgress,
         bool permissionChoicePending,
         bool ttsProChoicePending)
-        // Loading remains fail-closed through BundledActPluginManager.IsAllowedToLoad, so the
-        // notice itself only needs to stay locked while an operation or explicit choice is active.
-        => !installInProgress && !permissionChoicePending && !ttsProChoicePending;
+        // Required post-update disclosures must remain visible until acknowledged. Manually
+        // opened disclosures may still be deferred because unacknowledged DLLs fail closed.
+        => !installInProgress &&
+           !permissionChoicePending &&
+           !ttsProChoicePending &&
+           (pendingCount == 0 || openMode is not ThirdPartyNoticeOpenMode.RequiredAfterPluginUpdate);
 
     internal static bool CanAdvanceToPermissionChoice(int pendingCount)
         => pendingCount == 0;
