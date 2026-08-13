@@ -39,6 +39,8 @@ internal sealed class RaidDpsEstimator
     private readonly List<PeriodicBuffSnapshotInterval> periodicSnapshotHistory = [];
     private readonly Dictionary<DamageActionKey, Queue<GuaranteedHitDimensions>>
         pendingGuaranteedActions = [];
+    private readonly Dictionary<string, TechnicalFinishApplication>
+        technicalFinishApplicationsBySource = [];
     private readonly Dictionary<string, DateTimeOffset> reassembleByActorId =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ReassembleAction> consumedReassembleByActorId =
@@ -84,6 +86,13 @@ internal sealed class RaidDpsEstimator
         0x9075, // Excavator
     ];
 
+    private static readonly IReadOnlyDictionary<uint, double>
+        TechnicalFinishMultipliersByActionId = new Dictionary<uint, double>
+        {
+            [0x81C1] = 1.03, // Three-step Technical Finish
+            [0x81C2] = 1.05, // Four-step Technical Finish
+        };
+
     private static readonly IReadOnlyDictionary<uint, RaidBuffDefinition> StatusesById =
         new Dictionary<uint, RaidBuffDefinition>
         {
@@ -94,7 +103,6 @@ internal sealed class RaidDpsEstimator
             [0xA27] = RaidBuffDefinition.Damage(1.03), // Arcane Circle
             [0x511] = RaidBuffDefinition.Damage(1.05), // Embolden (party)
             [0xE65] = RaidBuffDefinition.Damage(1.05), // Starry Muse
-            [0x71E] = RaidBuffDefinition.Damage(1.05), // Technical Finish
             [0x839] = RaidBuffDefinition.Damage(1.05), // Standard Finish (partner)
             [0xF09] = RaidBuffDefinition.Damage(1.05), // Dokumori
             [0xF2F] = RaidBuffDefinition.Damage(1.06), // The Balance
@@ -122,8 +130,6 @@ internal sealed class RaidDpsEstimator
             ["鼓励"] = RaidBuffDefinition.Damage(1.05),
             ["Starry Muse"] = RaidBuffDefinition.Damage(1.05),
             ["星空构想"] = RaidBuffDefinition.Damage(1.05),
-            ["Technical Finish"] = RaidBuffDefinition.Damage(1.05),
-            ["技巧舞步结束"] = RaidBuffDefinition.Damage(1.05),
             ["Standard Finish"] = RaidBuffDefinition.Damage(1.05),
             ["标准舞步结束"] = RaidBuffDefinition.Damage(1.05),
             ["Dokumori"] = RaidBuffDefinition.Damage(1.05),
@@ -160,6 +166,7 @@ internal sealed class RaidDpsEstimator
             activePeriodicSnapshots.Clear();
             periodicSnapshotHistory.Clear();
             PrunePendingGuaranteedActions(startTime);
+            PruneTechnicalFinishApplications(startTime);
             PruneReassemble(startTime);
             encounterActive = true;
         }
@@ -191,6 +198,7 @@ internal sealed class RaidDpsEstimator
             activePeriodicSnapshots.Clear();
             periodicSnapshotHistory.Clear();
             pendingGuaranteedActions.Clear();
+            technicalFinishApplicationsBySource.Clear();
             reassembleByActorId.Clear();
             consumedReassembleByActorId.Clear();
         }
@@ -263,13 +271,13 @@ internal sealed class RaidDpsEstimator
             targetId,
             targetName,
             fields[3]);
-        var isRaidBuff = ResolveDefinition(statusId, fields[3], out var definition);
         lock (syncRoot)
         {
             RememberActor(sourceId, sourceName);
             RememberActor(targetId, targetName);
             PruneExpiredStatuses(timestamp);
             PruneExpiredPeriodicSnapshots(timestamp);
+            PruneTechnicalFinishApplications(timestamp);
             PruneReassemble(timestamp);
             if (fields[0] == "30")
             {
@@ -277,7 +285,7 @@ internal sealed class RaidDpsEstimator
                 {
                     reassembleByActorId.Remove(NormalizeActorId(sourceId));
                 }
-                if (isRaidBuff && activeStatuses.Remove(key, out var removed))
+                if (activeStatuses.Remove(key, out var removed))
                 {
                     removed.EndTime = timestamp < removed.EndTime ? timestamp : removed.EndTime;
                 }
@@ -296,6 +304,19 @@ internal sealed class RaidDpsEstimator
                 return;
             }
 
+            var isRaidBuff = ResolveDefinition(
+                timestamp,
+                statusId,
+                fields[3],
+                sourceId,
+                sourceName,
+                out var definition);
+            if (!isRaidBuff && IsTechnicalFinishStatus(statusId, fields[3]))
+            {
+                // A carrier without its application action has no observable step count;
+                // treating it as a fixed 5% window would recreate the attribution bug.
+                return;
+            }
             var endTime = timestamp.AddSeconds(Math.Min(durationSeconds, 600));
             if (statusId == 0x353)
             {
@@ -346,11 +367,16 @@ internal sealed class RaidDpsEstimator
 
             if (activeStatuses.TryGetValue(key, out var existing))
             {
-                if (endTime > existing.EndTime)
+                if (existing.Definition == definition)
                 {
-                    existing.EndTime = endTime;
+                    if (endTime > existing.EndTime)
+                    {
+                        existing.EndTime = endTime;
+                    }
+                    return;
                 }
-                return;
+
+                existing.EndTime = timestamp < existing.EndTime ? timestamp : existing.EndTime;
             }
 
             var interval = new RaidStatusInterval(
@@ -656,8 +682,16 @@ internal sealed class RaidDpsEstimator
         lock (syncRoot)
         {
             PrunePendingGuaranteedActions(timestamp);
+            PruneTechnicalFinishApplications(timestamp);
             PruneReassemble(timestamp);
             var sourceId = NormalizeActorId(fields[2]);
+            if (TechnicalFinishMultipliersByActionId.TryGetValue(actionId, out var multiplier))
+            {
+                // Status 0x71E is shared by every finish rank; only the application action
+                // carries the completed-step multiplier that each target window must retain.
+                technicalFinishApplicationsBySource[ActorSnapshotKey(fields[2], fields[3])] =
+                    new TechnicalFinishApplication(timestamp, multiplier);
+            }
             var dimensions = GuaranteedActionsById.GetValueOrDefault(actionId);
             if (dimensions == GuaranteedHitDimensions.None &&
                 ReassembleWeaponskills.Contains(actionId))
@@ -737,6 +771,16 @@ internal sealed class RaidDpsEstimator
                      .ToArray())
         {
             pendingGuaranteedActions.Remove(key);
+        }
+    }
+
+    private void PruneTechnicalFinishApplications(DateTimeOffset timestamp)
+    {
+        foreach (var pair in technicalFinishApplicationsBySource
+                     .Where(pair => timestamp - pair.Value.Timestamp > PendingActionLifetime)
+                     .ToArray())
+        {
+            technicalFinishApplicationsBySource.Remove(pair.Key);
         }
     }
 
@@ -846,12 +890,38 @@ internal sealed class RaidDpsEstimator
         }
     }
 
-    private static bool ResolveDefinition(
+    private bool ResolveDefinition(
+        DateTimeOffset timestamp,
         uint statusId,
         string statusName,
+        string sourceId,
+        string sourceName,
         out RaidBuffDefinition definition)
-        => StatusesById.TryGetValue(statusId, out definition) ||
-           StatusesByName.TryGetValue(statusName.Trim(), out definition);
+    {
+        if (IsTechnicalFinishStatus(statusId, statusName))
+        {
+            if (technicalFinishApplicationsBySource.TryGetValue(
+                    ActorSnapshotKey(sourceId, sourceName),
+                    out var application) &&
+                application.Timestamp <= timestamp &&
+                timestamp - application.Timestamp <= PendingActionLifetime)
+            {
+                definition = RaidBuffDefinition.Damage(application.DamageMultiplier);
+                return true;
+            }
+
+            definition = default;
+            return false;
+        }
+
+        return StatusesById.TryGetValue(statusId, out definition) ||
+               StatusesByName.TryGetValue(statusName.Trim(), out definition);
+    }
+
+    private static bool IsTechnicalFinishStatus(uint statusId, string statusName)
+        => statusId == 0x71E ||
+           string.Equals(statusName.Trim(), "Technical Finish", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(statusName.Trim(), "技巧舞步结束", StringComparison.OrdinalIgnoreCase);
 
     private RaidStatusInterval[] ResolveExternalBuffs(
         DateTimeOffset timestamp,
@@ -1224,6 +1294,10 @@ internal sealed class RaidDpsEstimator
         string AbilityName);
 
     private readonly record struct ReassembleAction(DateTimeOffset Timestamp, uint ActionId);
+
+    private readonly record struct TechnicalFinishApplication(
+        DateTimeOffset Timestamp,
+        double DamageMultiplier);
 
     private readonly record struct PercentageBuffSnapshot(
         string SourceName,

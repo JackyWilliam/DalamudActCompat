@@ -4113,12 +4113,16 @@ static void ValidateRaidDpsEstimator()
 {
     var start = DateTimeOffset.UtcNow;
     var estimator = new RaidDpsEstimator();
+    static string TechnicalFinishAction(string actionId) =>
+        $"22|time|10000001|Dancer|{actionId}|Technical Finish|10000001|Dancer|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0";
+
     Assert(
         RaidDpsEstimator.IsDamageSwingType(1) &&
         RaidDpsEstimator.IsDamageSwingType(2) &&
         !RaidDpsEstimator.IsDamageSwingType(3),
         "ACT healing swings can still enter the DPS/rDPS damage window.");
     estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C1"));
     estimator.ObserveStatusLine(
         start,
         "26|time|71E|技巧舞步结束|20.00|10000001|Dancer|10000002|Paladin@Alpha|");
@@ -4126,16 +4130,16 @@ static void ValidateRaidDpsEstimator()
         start.AddSeconds(1),
         "Paladin",
         "Boss",
-        1_050,
+        1_030,
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Paladin@Alpha") + 50) < 0.001 &&
-        Math.Abs(estimator.ResolveDamageAdjustment("Dancer") - 50) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin@Alpha") + 30) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Dancer") - 30) < 0.001 &&
         Math.Abs(
             estimator.ResolveDamageAdjustment("Paladin") +
             estimator.ResolveDamageAdjustment("Dancer")) < 0.001,
-        "Percentage raid-buff damage was not transferred from the receiver to the provider.");
+        "Three-step Technical Finish was not attributed at 3%.");
 
     estimator.ObserveStatusLine(
         start.AddSeconds(2),
@@ -4148,8 +4152,110 @@ static void ValidateRaidDpsEstimator()
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Paladin") + 50) < 0.001,
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin") + 30) < 0.001,
         "A removed raid buff continued changing rDPS attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Paladin") - 50) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 50) < 0.001,
+        "Four-step Technical Finish was not attributed at 5%.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C1"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|839|Standard Finish|60.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        10_815,
+        critical: false,
+        directHit: false);
+    var overlapTotals = estimator.ResolveAttributionTotals(
+        RaidDpsEstimator.AttributionKind.Percentage);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Paladin") - 815) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 815) < 0.001 &&
+        Math.Abs(overlapTotals.Received - overlapTotals.Contributed) < 0.001,
+        "Standard and three-step Technical overlap stopped using multiplicative conservation.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C1"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1234|Eukrasian Dosis III|30.00|10000002|Sage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|71E|Technical Finish|0.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000002",
+            "Sage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Eukrasian Dosis III (*)",
+            1_030,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Sage");
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 30) < 0.001,
+        "A periodic snapshot did not retain its three-step Technical multiplier.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1234|Eukrasian Dosis III|30.00|10000002|Sage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|71E|Technical Finish|0.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000002",
+            "Sage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Eukrasian Dosis III (*)",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Sage");
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 50) < 0.001,
+        "A periodic snapshot did not retain its four-step Technical multiplier.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
@@ -4172,19 +4278,21 @@ static void ValidateRaidDpsEstimator()
 
     estimator.Reset();
     estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
     estimator.ObserveStatusLine(
         start,
-        "26|time|71E|技巧舞步结束|20.00|10000002|Paladin|10000002|Paladin|");
+        "26|time|71E|技巧舞步结束|20.00|10000001|Dancer|10000001|Dancer|");
     estimator.ObserveDamage(
         start.AddSeconds(1),
-        "Paladin",
+        "Dancer",
         "Boss",
         1_050,
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Paladin")) < 0.001,
-        "A self-provided damage buff was incorrectly treated as external rDPS contribution.");
+        Math.Abs(estimator.ResolveContributedDamage("Dancer")) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Dancer")) < 0.001,
+        "Dancer self Technical damage was incorrectly treated as rDPS contribution.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
@@ -4210,14 +4318,45 @@ static void ValidateRaidDpsEstimator()
     estimator.StartEncounter(start);
     estimator.ObserveNetworkLine(
         start,
-        "03|time|10000001|Summoner|1B|64|0000|434|Test World|");
+        "03|time|10000009|Summoner|1B|64|0000|434|Test World|");
     estimator.ObserveNetworkLine(
         start,
-        "03|time|40000001|Solar Bahamut|00|64|10000001|00||");
+        "03|time|40000001|Solar Bahamut|00|64|10000009|00||");
     Assert(
         estimator.TryResolvePetOwner("Solar Bahamut", out var petOwner) &&
         petOwner == "Summoner",
         "A party pet was not resolved back to its owner from AddCombatant data.");
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000009|Summoner|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|40000001|Solar Bahamut|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Summoner",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false,
+        damageSourceName: "Solar Bahamut");
+    var petTechnicalTotals = estimator.ResolveAttributionTotals(
+        RaidDpsEstimator.AttributionKind.Percentage);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Summoner") - 50) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 50) < 0.001 &&
+        Math.Abs(petTechnicalTotals.Received - petTechnicalTotals.Contributed) < 0.001,
+        "Pet damage under Technical was not owner-attributed exactly once and conserved.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000001|Summoner|1B|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|40000001|Solar Bahamut|00|64|10000001|00||");
     estimator.ObserveStatusLine(
         start,
         "26|time|F2F|The Balance|20.00|10000002|Astrologian|10000001|Summoner|");
