@@ -67,6 +67,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator = new();
     private readonly EffectiveDamageLedger effectiveDamageLedger = new();
+    private readonly EncounterDurationTracker encounterDurationTracker = new();
     private EncounterData? effectiveDamageEncounter;
     private readonly FflogsParityDiagnosticRecorder parityDiagnosticRecorder = new();
     private IINACT.FfxivActPluginWrapper? parser;
@@ -1635,6 +1636,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             raidDpsEstimator.Reset();
             effectiveDamageLedger.Reset();
+            encounterDurationTracker.Reset();
             effectiveDamageEncounter = null;
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
@@ -1713,6 +1715,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                 transitionStateDirty = true;
             }
         }
+
+        encounterDurationTracker.ObserveRawLine(
+            new DateTimeOffset(logInfo.detectedTime),
+            logInfo.originalLogLine,
+            gameStateProvider.Identities);
 
         if (raidDpsEstimator.ObserveNetworkLine(
                 new DateTimeOffset(logInfo.detectedTime),
@@ -1987,11 +1994,15 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         var victimIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Victim);
+        var actionTime = swing.Time == default
+            ? DateTimeOffset.Now
+            : new DateTimeOffset(swing.Time);
         lock (encounterSync)
         {
             if (!ReferenceEquals(effectiveDamageEncounter, encounter))
             {
                 effectiveDamageLedger.StartEncounter(identities);
+                encounterDurationTracker.StartEncounter(actionTime, identities);
                 effectiveDamageEncounter = encounter;
             }
         }
@@ -2006,9 +2017,6 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         var isDamageSwing = RaidDpsEstimator.IsDamageSwing(swing);
-        var actionTime = swing.Time == default
-            ? DateTimeOffset.Now
-            : new DateTimeOffset(swing.Time);
         if (!isDamageSwing)
         {
             lock (encounterSync)
@@ -2157,11 +2165,20 @@ public sealed class SelfHostedActRuntime : IDisposable
                         1,
                         ((endTime ?? DateTimeOffset.Now) - startTime).TotalSeconds);
                     var measurementEndTime = endTime ?? DateTimeOffset.Now;
-                    var effectiveEncounterSeconds = Math.Max(
-                        1,
-                        raidDpsEstimator.ResolveEffectiveDamageDurationSeconds(
+                    var damageMetricDuration = encounterDurationTracker
+                        .ResolveDamageMetricDurationSeconds(
                             measurementEndTime,
-                            useObservedDamageEnd: finished));
+                            useObservedDamageEnd: finished);
+                    if (damageMetricDuration <= 0)
+                    {
+                        // Before the first EffectResult, preserve the existing live
+                        // snapshot instead of briefly dividing by a one-second floor.
+                        damageMetricDuration = raidDpsEstimator
+                            .ResolveEffectiveDamageDurationSeconds(
+                                measurementEndTime,
+                                useObservedDamageEnd: finished);
+                    }
+                    var effectiveEncounterSeconds = Math.Max(1, damageMetricDuration);
                     var identities = gameStateProvider.Identities;
                     // The largest live roster seen in this pull is the slot count. Cached
                     // identities only fill temporarily empty slots and never expand the party.
@@ -2282,6 +2299,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                         raidDpsEstimator.FinishEncounter();
                         effectiveDamageLedger.FinishEncounter();
+                        encounterDurationTracker.FinishEncounter();
                         effectiveDamageEncounter = null;
                         activeEncounter = null;
                         if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)

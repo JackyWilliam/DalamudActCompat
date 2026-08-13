@@ -4293,6 +4293,7 @@ static void ValidateFflogsParityReplay(string testRoot)
         largeDirectHit,
         "Raw parity normalizer no longer matches FFXIV_ACT_Plugin's large-damage encoding or hit flags.");
     ValidateEffectiveDamageLedger();
+    ValidateEncounterDurationTracker();
 
     var fixtureDirectory = Path.Combine(
         FindProjectRoot(),
@@ -4613,6 +4614,162 @@ static void ValidateEffectiveDamageLedger()
         snapshot.SourceTotals["40000001"] == 140,
         "Effective DamageLedger lost confirmed autos/periodics, admitted an unconfirmed event, " +
         "failed event-level overkill exclusion, or broke pet-owner conservation.");
+}
+
+static void ValidateEncounterDurationTracker()
+{
+    var player = new ActPlayerIdentity("Player One", string.Empty, "PLD", true, false)
+    {
+        EntityId = 0x10000001,
+    };
+    var identities = new[] { player };
+    var start = DateTimeOffset.Parse("2026-08-12T20:20:00+08:00");
+
+    var rotating = new EncounterDurationTracker();
+    rotating.ObserveTargetPresence(start.AddSeconds(-1), "40000010", "Boss A");
+    rotating.ObserveTargetPresence(start.AddSeconds(-1), "40000011", "Boss B");
+    rotating.StartEncounter(start, identities);
+    rotating.ObserveConfirmedDamage(
+        start,
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000010",
+        "Boss A");
+    rotating.ObserveTargetability(start.AddSeconds(2), "40000010", "Boss A", false);
+    rotating.ObserveTargetability(start.AddSeconds(3), "40000011", "Boss B", true);
+    rotating.ObserveConfirmedDamage(
+        start.AddSeconds(3),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000011",
+        "Boss B");
+    rotating.ObserveTargetability(start.AddSeconds(4), "40000011", "Boss B", false);
+    rotating.ObserveTargetability(start.AddSeconds(5), "40000010", "Boss A", true);
+    rotating.ObserveConfirmedDamage(
+        start.AddSeconds(5),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000010",
+        "Boss A");
+    rotating.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000010",
+        "Boss A");
+    Assert(
+        Math.Abs(rotating.ResolveFightDurationSeconds(start.AddSeconds(12)) - 12) < 0.001 &&
+        Math.Abs(rotating.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(12),
+            useObservedDamageEnd: true) - 9) < 0.001 &&
+        Math.Abs(rotating.ResolveActorActiveTimeSeconds("10000001") - 10) < 0.001,
+        "FightDuration, phase-global DamageMetricDuration, and ActorActiveTime were not kept separate.");
+
+    var adds = new EncounterDurationTracker();
+    adds.ObserveTargetPresence(start.AddSeconds(-1), "40000020", "Boss");
+    adds.ObserveTargetPresence(start.AddSeconds(2), "40000021", "Add");
+    adds.StartEncounter(start, identities);
+    adds.ObserveConfirmedDamage(start, "10000001", "Player One", string.Empty, "40000020", "Boss");
+    adds.ObserveConfirmedDamage(start.AddSeconds(3), "10000001", "Player One", string.Empty, "40000021", "Add");
+    adds.ObserveConfirmedDamage(
+        start.AddSeconds(4),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000021",
+        "Add",
+        targetDefeated: true);
+    adds.ObserveTargetability(start.AddSeconds(6), "40000020", "Boss", false);
+    adds.ObserveTargetability(start.AddSeconds(7), "40000020", "Boss", true);
+    adds.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000020", "Boss");
+    Assert(
+        Math.Abs(adds.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 9) < 0.001,
+        "A defeated add remained in the historical target intersection and hid later boss downtime.");
+
+    var replacement = new EncounterDurationTracker();
+    replacement.ObserveTargetPresence(start.AddSeconds(-1), "40000030", "Phase One");
+    replacement.ObserveTargetPresence(start.AddSeconds(5), "40000031", "Phase Two");
+    replacement.StartEncounter(start, identities);
+    replacement.ObserveConfirmedDamage(start, "10000001", "Player One", string.Empty, "40000030", "Phase One");
+    replacement.ObserveTargetability(start.AddSeconds(3), "40000030", "Phase One", false);
+    replacement.ObserveConfirmedDamage(start.AddSeconds(5), "10000001", "Player One", string.Empty, "40000031", "Phase Two");
+    replacement.ObserveTargetability(start.AddSeconds(7), "40000031", "Phase Two", false);
+    replacement.ObserveTargetability(start.AddSeconds(8), "40000031", "Phase Two", true);
+    replacement.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000031", "Phase Two");
+    Assert(
+        Math.Abs(replacement.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 7) < 0.001,
+        "A phase replacement did not retire the old target while preserving the targetless transition.");
+
+    var departed = new EncounterDurationTracker();
+    departed.ObserveTargetPresence(start.AddSeconds(-1), "40000040", "Twin A");
+    departed.ObserveTargetPresence(start.AddSeconds(-1), "40000041", "Twin B");
+    departed.StartEncounter(start, identities);
+    departed.ObserveConfirmedDamage(start, "10000001", "Player One", string.Empty, "40000040", "Twin A");
+    departed.ObserveConfirmedDamage(start.AddSeconds(1), "10000001", "Player One", string.Empty, "40000041", "Twin B");
+    departed.ObserveTargetability(start.AddSeconds(3), "40000040", "Twin A", false);
+    departed.ObserveTargetability(start.AddSeconds(6), "40000041", "Twin B", false);
+    departed.ObserveTargetability(start.AddSeconds(7), "40000041", "Twin B", true);
+    departed.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000041", "Twin B");
+    Assert(
+        Math.Abs(departed.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 9) < 0.001,
+        "A permanently departed twin polluted the current phase target set.");
+
+    var captured = new EncounterDurationTracker();
+    captured.ObserveTargetPresence(start.AddSeconds(-1), "40000050", "Red");
+    captured.ObserveTargetPresence(start.AddSeconds(-1), "40000051", "Blue");
+    var firstAction =
+        "21|time|10000001|Player One|1000|Opening Hit|40000050|Red|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000001|0|raw-01";
+    captured.ObserveRawLine(start, firstAction, identities);
+    captured.StartEncounter(start, identities);
+    captured.ObserveRawLine(
+        start.AddSeconds(0.757),
+        "37|time|40000050|Red|00000001|400|",
+        identities);
+    captured.ObserveConfirmedDamage(
+        start.AddSeconds(82),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000051",
+        "Blue");
+    captured.ObserveTargetability(start.AddSeconds(79.998), "40000050", "Red", false);
+    captured.ObserveTargetability(start.AddSeconds(96.303), "40000051", "Blue", false);
+    captured.ObserveTargetability(start.AddSeconds(107.490), "40000051", "Blue", true);
+    captured.ObserveTargetability(start.AddSeconds(148.141), "40000050", "Red", true);
+    captured.ObserveTargetability(start.AddSeconds(158.081), "40000050", "Red", false);
+    captured.ObserveTargetability(start.AddSeconds(158.081), "40000051", "Blue", false);
+    captured.ObserveTargetability(start.AddSeconds(173.540), "40000050", "Red", true);
+    captured.ObserveTargetability(start.AddSeconds(173.540), "40000051", "Blue", true);
+    captured.ObserveConfirmedDamage(
+        start.AddSeconds(423.540),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000051",
+        "Blue",
+        targetDefeated: true);
+    captured.ObserveRawLine(
+        start.AddSeconds(424),
+        firstAction.Replace(
+            "|00000001|0|raw-01",
+            "|00000002|0|raw-02",
+            StringComparison.Ordinal),
+        identities);
+    Assert(
+        Math.Abs(captured.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(424),
+            useObservedDamageEnd: true) - 396.137) < 0.001,
+        "The captured dual-boss boundary did not use confirmed EffectResult time or phase-global downtime.");
 }
 
 static void ValidateDalamudGameStateBridge()
