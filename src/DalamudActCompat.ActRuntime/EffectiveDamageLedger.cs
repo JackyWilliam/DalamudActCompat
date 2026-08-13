@@ -25,6 +25,7 @@ internal sealed class EffectiveDamageLedger
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> ownerDamage =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<EffectiveDamageEvent> committedEvents = [];
     private bool encounterActive;
 
     public void StartEncounter(IReadOnlyList<ActPlayerIdentity> identities)
@@ -38,6 +39,7 @@ internal sealed class EffectiveDamageLedger
             targetEffectiveHp.Clear();
             sourceDamage.Clear();
             ownerDamage.Clear();
+            committedEvents.Clear();
             partyActorIds.Clear();
             UpdatePartyActorsUnsafe(identities);
             encounterActive = true;
@@ -87,6 +89,7 @@ internal sealed class EffectiveDamageLedger
             targetEffectiveHp.Clear();
             sourceDamage.Clear();
             ownerDamage.Clear();
+            committedEvents.Clear();
         }
     }
 
@@ -115,7 +118,10 @@ internal sealed class EffectiveDamageLedger
             (long)swing.Damage,
             RaidDpsEstimator.IsDamageSwing(swing),
             attackerIdentity is not null,
-            victimIdentity is not null),
+            victimIdentity is not null,
+            swing.Critical,
+            swing.Tags.TryGetValue("DirectHit", out var directHit) &&
+            string.Equals(directHit?.ToString(), "True", StringComparison.OrdinalIgnoreCase)),
             identities);
     }
 
@@ -206,6 +212,18 @@ internal sealed class EffectiveDamageLedger
         }
     }
 
+    internal IReadOnlyList<EffectiveDamageEvent> GetCommittedEventsSince(
+        int startIndex,
+        out int nextIndex)
+    {
+        lock (syncRoot)
+        {
+            startIndex = Math.Clamp(startIndex, 0, committedEvents.Count);
+            nextIndex = committedEvents.Count;
+            return committedEvents.Skip(startIndex).ToArray();
+        }
+    }
+
     private void ObserveActorUnsafe(IReadOnlyList<string> fields)
     {
         if (fields.Count < 7 || !IsActorId(fields[2]))
@@ -268,8 +286,8 @@ internal sealed class EffectiveDamageLedger
                     fields[effectIndex],
                     fields[effectIndex + 1],
                     out var amount,
-                    out _,
-                    out _) || amount <= 0)
+                    out var critical,
+                    out var directHit) || amount <= 0)
             {
                 continue;
             }
@@ -283,7 +301,9 @@ internal sealed class EffectiveDamageLedger
                 fields[7],
                 fields[5],
                 amount,
-                ParseDecimalLong(fields[24]));
+                ParseDecimalLong(fields[24]),
+                critical,
+                directHit);
             queue.Enqueue(pending);
             RemoveMatchingNormalizedCandidateUnsafe(pending);
         }
@@ -326,7 +346,18 @@ internal sealed class EffectiveDamageLedger
         targetEffectiveHp[item.TargetId] = resultHp <= 1
             ? Math.Max(0, currentHp - effectiveDamage)
             : resultHp;
-        AddDamageUnsafe(item.SourceId, item.SourceName, item.OwnerId, effectiveDamage);
+        AddDamageUnsafe(new EffectiveDamageEvent(
+            item.Timestamp,
+            item.SourceId,
+            item.SourceName,
+            item.OwnerId,
+            item.TargetId,
+            item.TargetName,
+            item.AbilityName,
+            effectiveDamage,
+            item.Critical,
+            item.DirectHit,
+            IsPeriodic: false));
         return effectiveDamage > 0;
     }
 
@@ -409,7 +440,18 @@ internal sealed class EffectiveDamageLedger
                 ? remainingEffective
                 : (long)Math.Floor((decimal)amount * effectiveNormalizedTotal / normalizedTotal);
             effectiveAmount = Math.Min(effectiveAmount, remainingEffective);
-            AddDamageUnsafe(item.SourceId, item.SourceName, item.OwnerId, effectiveAmount);
+            AddDamageUnsafe(new EffectiveDamageEvent(
+                item.Timestamp,
+                item.SourceId,
+                item.SourceName,
+                item.OwnerId,
+                item.TargetId,
+                item.TargetName,
+                item.AbilityName,
+                effectiveAmount,
+                item.Critical,
+                item.DirectHit,
+                IsPeriodic: true));
             remainingNormalized -= amount;
             remainingEffective -= effectiveAmount;
         }
@@ -456,18 +498,21 @@ internal sealed class EffectiveDamageLedger
         return currentHp;
     }
 
-    private void AddDamageUnsafe(string sourceId, string sourceName, string ownerId, long amount)
+    private void AddDamageUnsafe(EffectiveDamageEvent item)
     {
-        if (amount <= 0)
+        if (item.Amount <= 0)
         {
             return;
         }
-        var sourceKey = ActorKey(sourceId, sourceName);
-        var ownerKey = !string.IsNullOrWhiteSpace(ownerId)
-            ? NormalizeActorId(ownerId)
+        var sourceKey = ActorKey(item.SourceId, item.SourceName);
+        var ownerKey = !string.IsNullOrWhiteSpace(item.OwnerId)
+            ? NormalizeActorId(item.OwnerId)
             : sourceKey;
-        sourceDamage[sourceKey] = sourceDamage.GetValueOrDefault(sourceKey) + amount;
-        ownerDamage[ownerKey] = ownerDamage.GetValueOrDefault(ownerKey) + amount;
+        sourceDamage[sourceKey] = sourceDamage.GetValueOrDefault(sourceKey) + item.Amount;
+        ownerDamage[ownerKey] = ownerDamage.GetValueOrDefault(ownerKey) + item.Amount;
+        // Downstream metrics consume this immutable decision instead of reclassifying
+        // the parser swing and silently diverging from the authoritative totals.
+        committedEvents.Add(item);
     }
 
     private void UpdatePartyActorsUnsafe(IReadOnlyList<ActPlayerIdentity> identities)
@@ -551,7 +596,9 @@ internal sealed class EffectiveDamageLedger
         string TargetName,
         string AbilityName,
         long Amount,
-        long? TargetCurrentHp);
+        long? TargetCurrentHp,
+        bool Critical,
+        bool DirectHit);
 
     private sealed record PendingPeriodicDamage(
         DateTimeOffset Timestamp,
@@ -572,7 +619,22 @@ internal sealed record NormalizedDamageCandidate(
     long Amount,
     bool IsDamageSwing,
     bool IsPartyOwned,
-    bool IsPartyTarget);
+    bool IsPartyTarget,
+    bool Critical = false,
+    bool DirectHit = false);
+
+internal sealed record EffectiveDamageEvent(
+    DateTimeOffset Timestamp,
+    string SourceId,
+    string SourceName,
+    string OwnerId,
+    string TargetId,
+    string TargetName,
+    string AbilityName,
+    long Amount,
+    bool Critical,
+    bool DirectHit,
+    bool IsPeriodic);
 
 internal sealed record EffectiveDamageLedgerSnapshot(
     long SourceDamage,

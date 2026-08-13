@@ -166,6 +166,22 @@ internal sealed class EncounterDurationTracker
         }
     }
 
+    internal bool IsTransitioningAt(DateTimeOffset timestamp)
+    {
+        lock (syncRoot)
+        {
+            if (!encounterActive)
+            {
+                return false;
+            }
+            var intervals = BuildMembershipIntervalsUnsafe(timestamp.AddTicks(1))
+                .Where(interval => interval.Start <= timestamp && timestamp < interval.End)
+                .ToArray();
+            return intervals.Length > 0 && intervals.All(interval =>
+                !IsTargetableAtUnsafe(targets[interval.TargetKey], interval, timestamp));
+        }
+    }
+
     internal void ObserveTargetPresence(
         DateTimeOffset timestamp,
         string targetId,

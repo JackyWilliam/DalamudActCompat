@@ -4203,10 +4203,8 @@ static void ValidateRaidDpsEstimator()
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveObservedDamageDurationSeconds() - 10) < 0.001 &&
-        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: false) - (1_000d / 30)) < 0.001 &&
-        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: true) - 100) < 0.001,
-        "Finished rDPS did not trim non-damage tail time while active rDPS retained wall-clock duration.");
+        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30) - (1_000d / 30)) < 0.001,
+        "rDPS did not use the authoritative DamageMetricDuration supplied by the encounter tracker.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
@@ -4241,42 +4239,105 @@ static void ValidateRaidDpsEstimator()
 
     estimator.Reset();
     estimator.StartEncounter(start);
-    estimator.ObserveDamage(
+    estimator.ObserveStatusLine(
         start,
-        "Paladin",
-        "Lindwurm",
-        1_000,
-        critical: false,
-        directHit: false);
+        "26|time|511|Embolden|20.00|10000003|Red Mage|10000002|Sage|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1234|Eukrasian Dosis III|30.00|10000002|Sage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|511|Embolden|0.00|10000003|Red Mage|10000002|Sage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000002",
+            "Sage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Eukrasian Dosis III (*)",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Sage");
+    var dotSnapshotTransfer = 50d;
+    var attributionTotals = estimator.ResolveAttributionTotals();
     Assert(
-        estimator.ObserveNetworkLine(
-            start.AddSeconds(330),
-            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|00|") &&
-        estimator.IsTransitioning,
-        "NameToggle 00 did not switch the active encounter to transition state.");
+        Math.Abs(estimator.ResolveReceivedDamage("Sage") - dotSnapshotTransfer) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Red Mage") - dotSnapshotTransfer) < 0.001 &&
+        Math.Abs(attributionTotals.Received - attributionTotals.Contributed) < 0.001,
+        "Percentage DoT attribution did not retain its application-time external buff snapshot.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|1235|Dia|30.00|10000004|White Mage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|511|Embolden|20.00|10000003|Red Mage|10000004|White Mage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000004",
+            "White Mage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Dia (DoT)",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "White Mage");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000004",
+            "White Mage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Glare",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: false),
+        "White Mage");
     Assert(
-        estimator.ObserveNetworkLine(
-            start.AddSeconds(352.145),
-            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|01|") &&
-        !estimator.IsTransitioning,
-        "NameToggle 01 did not switch the encounter back to running state.");
-    estimator.ObserveDamage(
-        start.AddSeconds(397.974),
-        "Paladin",
-        "Lindwurm",
-        374_829,
-        critical: false,
-        directHit: false);
+        Math.Abs(estimator.ResolveReceivedDamage("White Mage") - 50) < 0.001,
+        "An unbuffed DoT snapshot used tick-time buffs or direct damage stopped using hit-time buffs.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|511|Embolden|20.00|10000003|Red Mage|10000005|Dark Knight|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|2ED|Salted Earth|15.00|10000005|Dark Knight|10000005|Dark Knight|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|511|Embolden|0.00|10000003|Red Mage|10000005|Dark Knight|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000005",
+            "Dark Knight",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Salted Earth",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Dark Knight");
     Assert(
-        Math.Abs(estimator.ResolveDamageDowntimeSeconds(start.AddSeconds(397.974)) - 22.145) < 0.001 &&
-        Math.Abs(estimator.ResolveEffectiveDamageDurationSeconds() - 375.829) < 0.001 &&
-        Math.Abs(
-            estimator.ResolveRate(
-                "Paladin",
-                375_829,
-                397.974,
-                useObservedDamageWindow: true) - 1_000) < 0.001,
-        "The verified Lindwurm transition interval was not removed from DPS/rDPS duration.");
+        Math.Abs(estimator.ResolveReceivedDamage("Dark Knight") - 50) < 0.001,
+        "A self-status ground effect did not reuse its application snapshot on enemy ticks.");
 }
 
 static void ValidateFflogsParityReplay(string testRoot)
@@ -4605,6 +4666,7 @@ static void ValidateEffectiveDamageLedger()
         "24|2026-08-12T20:10:06+08:00|40000010|Boss|DoT|0|0032|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-06");
 
     var snapshot = ledger.GetSnapshot();
+    var committed = ledger.GetCommittedEventsSince(0, out var nextEventIndex);
     Assert(
         ledger.TryResolveDamage(player, out var playerDamage) &&
         playerDamage == 500 &&
@@ -4614,6 +4676,14 @@ static void ValidateEffectiveDamageLedger()
         snapshot.SourceTotals["40000001"] == 140,
         "Effective DamageLedger lost confirmed autos/periodics, admitted an unconfirmed event, " +
         "failed event-level overkill exclusion, or broke pet-owner conservation.");
+    Assert(
+        committed.Count == 5 &&
+        committed.Sum(static item => item.Amount) == snapshot.OwnerDamage &&
+        committed.Count(static item => item.IsPeriodic) == 2 &&
+        committed[0].Timestamp == first &&
+        committed.Any(static item => item.SourceId == "40000001" && item.OwnerId == "10000001") &&
+        nextEventIndex == committed.Count,
+        "The immutable effective-event stream diverged from ledger totals, periodics, or pet ownership.");
 }
 
 static void ValidateEncounterDurationTracker()
@@ -4646,6 +4716,9 @@ static void ValidateEncounterDurationTracker()
         "40000011",
         "Boss B");
     rotating.ObserveTargetability(start.AddSeconds(4), "40000011", "Boss B", false);
+    Assert(
+        rotating.IsTransitioningAt(start.AddSeconds(4.5)),
+        "The duration tracker did not expose phase-global target unavailability.");
     rotating.ObserveTargetability(start.AddSeconds(5), "40000010", "Boss A", true);
     rotating.ObserveConfirmedDamage(
         start.AddSeconds(5),
@@ -4668,6 +4741,9 @@ static void ValidateEncounterDurationTracker()
             useObservedDamageEnd: true) - 9) < 0.001 &&
         Math.Abs(rotating.ResolveActorActiveTimeSeconds("10000001") - 10) < 0.001,
         "FightDuration, phase-global DamageMetricDuration, and ActorActiveTime were not kept separate.");
+    Assert(
+        !rotating.IsTransitioningAt(start.AddSeconds(5.5)),
+        "One available target did not end the phase-global transition state.");
 
     var adds = new EncounterDurationTracker();
     adds.ObserveTargetPresence(start.AddSeconds(-1), "40000020", "Boss");

@@ -4,10 +4,10 @@ using System.Globalization;
 namespace DalamudActCompat.ActRuntime;
 
 /// <summary>
-/// Estimates FFLogs-style raid-contributing damage from ACT damage swings and
-/// network status add/remove lines. The calculation follows FFLogs' published
-/// percentage, critical-hit, and direct-hit attribution formulas. Player base
-/// critical/direct chances are inferred conservatively from unbuffed hits.
+/// Estimates FFLogs-style raid-contributing damage from committed effective
+/// damage and network status add/remove lines. The calculation follows FFLogs'
+/// published percentage, critical-hit, and direct-hit attribution formulas.
+/// Player base critical/direct chances are inferred conservatively from unbuffed hits.
 /// </summary>
 internal sealed class RaidDpsEstimator
 {
@@ -19,20 +19,20 @@ internal sealed class RaidDpsEstimator
     private readonly List<RaidStatusInterval> statusHistory = [];
     private readonly Dictionary<string, double> damageAdjustments =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, double> receivedBuffDamage =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, double> contributedBuffDamage =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HitBaseline> hitBaselines =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> actorNamesById =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> ownerIdsByActorId =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> damageTargets =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, DateTimeOffset> untargetableDamageTargets =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<DamageDowntimeInterval> completedDamageDowntimes = [];
+    private readonly Dictionary<PeriodicSnapshotKey, PeriodicBuffSnapshotInterval>
+        activePeriodicSnapshots = [];
+    private readonly List<PeriodicBuffSnapshotInterval> periodicSnapshotHistory = [];
     private bool encounterActive;
-    private DateTimeOffset firstObservedDamage;
-    private DateTimeOffset lastObservedDamage;
 
     private static readonly IReadOnlyDictionary<uint, RaidBuffDefinition> StatusesById =
         new Dictionary<uint, RaidBuffDefinition>
@@ -102,12 +102,11 @@ internal sealed class RaidDpsEstimator
             statusHistory.Clear();
             statusHistory.AddRange(activeStatuses.Values.Where(status => status.EndTime > startTime));
             damageAdjustments.Clear();
+            receivedBuffDamage.Clear();
+            contributedBuffDamage.Clear();
             hitBaselines.Clear();
-            damageTargets.Clear();
-            untargetableDamageTargets.Clear();
-            completedDamageDowntimes.Clear();
-            firstObservedDamage = default;
-            lastObservedDamage = default;
+            activePeriodicSnapshots.Clear();
+            periodicSnapshotHistory.Clear();
             encounterActive = true;
         }
     }
@@ -128,14 +127,13 @@ internal sealed class RaidDpsEstimator
             activeStatuses.Clear();
             statusHistory.Clear();
             damageAdjustments.Clear();
+            receivedBuffDamage.Clear();
+            contributedBuffDamage.Clear();
             hitBaselines.Clear();
             actorNamesById.Clear();
             ownerIdsByActorId.Clear();
-            damageTargets.Clear();
-            untargetableDamageTargets.Clear();
-            completedDamageDowntimes.Clear();
-            firstObservedDamage = default;
-            lastObservedDamage = default;
+            activePeriodicSnapshots.Clear();
+            periodicSnapshotHistory.Clear();
         }
     }
 
@@ -163,37 +161,6 @@ internal sealed class RaidDpsEstimator
             return false;
         }
 
-        if (rawLine.StartsWith("34|", StringComparison.Ordinal))
-        {
-            var fields = rawLine.Split('|');
-            if (fields.Length < 7 || (fields[6] != "00" && fields[6] != "01"))
-            {
-                return false;
-            }
-
-            var targetName = NormalizeActorName(fields[3]);
-            lock (syncRoot)
-            {
-                RememberActor(fields[2], targetName);
-                if (!encounterActive || !damageTargets.Contains(targetName))
-                {
-                    return false;
-                }
-
-                var wasTransitioning = untargetableDamageTargets.Count > 0;
-                if (fields[6] == "00")
-                {
-                    untargetableDamageTargets.TryAdd(targetName, timestamp);
-                }
-                else if (untargetableDamageTargets.Remove(targetName, out var startTime) &&
-                         timestamp > startTime)
-                {
-                    completedDamageDowntimes.Add(new DamageDowntimeInterval(startTime, timestamp));
-                }
-                return wasTransitioning != (untargetableDamageTargets.Count > 0);
-            }
-        }
-
         ObserveStatusLine(timestamp, rawLine);
         return false;
     }
@@ -209,8 +176,7 @@ internal sealed class RaidDpsEstimator
 
         var fields = rawLine.Split('|');
         if (fields.Length < 9 ||
-            !uint.TryParse(fields[2], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var statusId) ||
-            !ResolveDefinition(statusId, fields[3], out var definition))
+            !uint.TryParse(fields[2], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var statusId))
         {
             return;
         }
@@ -225,17 +191,26 @@ internal sealed class RaidDpsEstimator
         }
 
         var key = new RaidStatusKey(statusId, sourceId, targetId);
+        var periodicKey = CreatePeriodicSnapshotKey(
+            sourceId,
+            sourceName,
+            targetId,
+            targetName,
+            fields[3]);
+        var isRaidBuff = ResolveDefinition(statusId, fields[3], out var definition);
         lock (syncRoot)
         {
             RememberActor(sourceId, sourceName);
             RememberActor(targetId, targetName);
             PruneExpiredStatuses(timestamp);
+            PruneExpiredPeriodicSnapshots(timestamp);
             if (fields[0] == "30")
             {
-                if (activeStatuses.Remove(key, out var removed))
+                if (isRaidBuff && activeStatuses.Remove(key, out var removed))
                 {
                     removed.EndTime = timestamp < removed.EndTime ? timestamp : removed.EndTime;
                 }
+                ClosePeriodicSnapshot(periodicKey, timestamp);
                 return;
             }
 
@@ -251,6 +226,35 @@ internal sealed class RaidDpsEstimator
             }
 
             var endTime = timestamp.AddSeconds(Math.Min(durationSeconds, 600));
+            if (!isRaidBuff)
+            {
+                if (encounterActive)
+                {
+                    // Unknown statuses are retained only until an effective periodic event
+                    // proves the matching DoT or self-status ground effect needs the snapshot.
+                    ClosePeriodicSnapshot(periodicKey, timestamp);
+                    var damageActorName = ResolveOwnerName(sourceId, sourceName);
+                    var percentageBuffs = ResolveExternalBuffs(
+                            timestamp,
+                            damageActorName,
+                            sourceName,
+                            string.Empty)
+                        .Where(static status => status.Definition.DamageMultiplier > 1)
+                        .Select(static status => new PercentageBuffSnapshot(
+                            status.SourceName,
+                            status.Definition.DamageMultiplier))
+                        .ToArray();
+                    var snapshot = new PeriodicBuffSnapshotInterval(
+                        periodicKey,
+                        timestamp,
+                        endTime,
+                        percentageBuffs);
+                    activePeriodicSnapshots[periodicKey] = snapshot;
+                    periodicSnapshotHistory.Add(snapshot);
+                }
+                return;
+            }
+
             if (activeStatuses.TryGetValue(key, out var existing))
             {
                 if (endTime > existing.EndTime)
@@ -273,35 +277,6 @@ internal sealed class RaidDpsEstimator
                 statusHistory.Add(interval);
             }
         }
-    }
-
-    public void ObserveDamage(
-        MasterSwing swing,
-        string attackerName,
-        string victimName,
-        string? damageSourceName = null)
-    {
-        ArgumentNullException.ThrowIfNull(swing);
-        if (!IsDamageSwing(swing))
-        {
-            return;
-        }
-
-        var directHit = swing.Tags.TryGetValue("DirectHit", out var directValue) &&
-                        string.Equals(directValue?.ToString(), "True", StringComparison.OrdinalIgnoreCase);
-        var isDot = swing.AttackType.Contains("DoT", StringComparison.OrdinalIgnoreCase) ||
-                    swing.DamageType.Contains("DoT", StringComparison.OrdinalIgnoreCase) ||
-                    (swing.Tags.TryGetValue("DoT", out var dotValue) &&
-                     string.Equals(dotValue?.ToString(), "True", StringComparison.OrdinalIgnoreCase));
-        ObserveDamage(
-            swing.Time == default ? DateTimeOffset.Now : new DateTimeOffset(swing.Time),
-            attackerName,
-            victimName,
-            swing.Damage.Number,
-            swing.Critical,
-            directHit,
-            isDot,
-            damageSourceName);
     }
 
     internal static bool IsDamageSwing(MasterSwing swing)
@@ -344,6 +319,49 @@ internal sealed class RaidDpsEstimator
         bool directHit,
         bool isDot = false,
         string? damageSourceName = null)
+        => ObserveDamage(
+            timestamp,
+            attackerName,
+            victimName,
+            damage,
+            critical,
+            directHit,
+            isDot,
+            damageSourceName,
+            periodicKey: null);
+
+    internal void ObserveEffectiveDamage(EffectiveDamageEvent item, string ownerName)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ObserveDamage(
+            item.Timestamp,
+            ownerName,
+            item.TargetName,
+            item.Amount,
+            item.Critical,
+            item.DirectHit,
+            item.IsPeriodic,
+            item.SourceName,
+            item.IsPeriodic
+                ? CreatePeriodicSnapshotKey(
+                    item.SourceId,
+                    item.SourceName,
+                    item.TargetId,
+                    item.TargetName,
+                    item.AbilityName)
+                : null);
+    }
+
+    private void ObserveDamage(
+        DateTimeOffset timestamp,
+        string attackerName,
+        string victimName,
+        long damage,
+        bool critical,
+        bool directHit,
+        bool isDot,
+        string? damageSourceName,
+        PeriodicSnapshotKey? periodicKey)
     {
         if (damage <= 0 || string.IsNullOrWhiteSpace(attackerName))
         {
@@ -360,42 +378,36 @@ internal sealed class RaidDpsEstimator
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(victimName))
+            var externalBuffs = ResolveExternalBuffs(
+                timestamp,
+                attackerName,
+                damageSourceName,
+                victimName);
+            IReadOnlyList<PercentageBuffSnapshot> percentageBuffs;
+            if (isDot)
             {
-                damageTargets.Add(victimName);
+                // A tick must never inherit a later raid-buff window. If no matching
+                // application was observed, an empty snapshot is safer than tick-time attribution.
+                percentageBuffs = periodicKey is { } key &&
+                                  TryResolvePeriodicPercentageBuffs(key, timestamp, out var snapshotted)
+                    ? snapshotted
+                    : [];
             }
-
-            if (firstObservedDamage == default || timestamp < firstObservedDamage)
+            else
             {
-                firstObservedDamage = timestamp;
+                percentageBuffs = externalBuffs
+                    .Where(static status => status.Definition.DamageMultiplier > 1)
+                    .Select(static status => new PercentageBuffSnapshot(
+                        status.SourceName,
+                        status.Definition.DamageMultiplier))
+                    .ToArray();
             }
-            if (lastObservedDamage == default || timestamp > lastObservedDamage)
-            {
-                lastObservedDamage = timestamp;
-            }
-
-            var externalBuffs = statusHistory
-                .Where(status => status.StartTime <= timestamp && timestamp < status.EndTime)
-                .Where(status => SameActor(status.TargetName, attackerName) ||
-                                 SameActor(status.TargetName, damageSourceName) ||
-                                 (!string.IsNullOrWhiteSpace(victimName) &&
-                                  SameActor(status.TargetName, victimName)))
-                .Where(status => !SameActor(status.SourceName, attackerName))
-                .GroupBy(status => (
-                    status.Key.StatusId,
-                    SourceName: NormalizeActorName(status.SourceName)))
-                .Select(static group => group.First())
-                .ToArray();
-
-            var percentageBuffs = externalBuffs
-                .Where(static status => status.Definition.DamageMultiplier > 1)
-                .ToArray();
             var damageAfterPercentageRemoval = (double)damage;
-            if (percentageBuffs.Length > 0)
+            if (percentageBuffs.Count > 0)
             {
                 var combinedMultiplier = percentageBuffs.Aggregate(
                     1.0,
-                    static (current, status) => current * status.Definition.DamageMultiplier);
+                    static (current, status) => current * status.DamageMultiplier);
                 if (combinedMultiplier > 1)
                 {
                     damageAfterPercentageRemoval = damage / combinedMultiplier;
@@ -404,7 +416,7 @@ internal sealed class RaidDpsEstimator
                     foreach (var status in percentageBuffs)
                     {
                         var contribution = lostDamage *
-                                           Math.Log(status.Definition.DamageMultiplier) /
+                                           Math.Log(status.DamageMultiplier) /
                                            combinedLog;
                         TransferContribution(attackerName, status.SourceName, contribution);
                     }
@@ -484,11 +496,11 @@ internal sealed class RaidDpsEstimator
     public double ResolveRate(
         string actorName,
         long rawDamage,
-        double encounterDurationSeconds,
-        bool useObservedDamageWindow = false,
-        DateTimeOffset? measurementEndTime = null)
+        double damageMetricDurationSeconds)
     {
-        if (rawDamage <= 0 || !double.IsFinite(encounterDurationSeconds) || encounterDurationSeconds <= 0)
+        if (rawDamage <= 0 ||
+            !double.IsFinite(damageMetricDurationSeconds) ||
+            damageMetricDurationSeconds <= 0)
         {
             return 0;
         }
@@ -497,84 +509,8 @@ internal sealed class RaidDpsEstimator
         lock (syncRoot)
         {
             var adjustedDamage = rawDamage + damageAdjustments.GetValueOrDefault(actorName);
-            var durationSeconds = encounterDurationSeconds;
-            if (firstObservedDamage != default &&
-                ((useObservedDamageWindow && lastObservedDamage > firstObservedDamage) ||
-                 (!useObservedDamageWindow &&
-                  measurementEndTime is { } activeEndTime &&
-                  activeEndTime > firstObservedDamage)))
-            {
-                var observedEndTime = useObservedDamageWindow
-                    ? lastObservedDamage
-                    : measurementEndTime!.Value;
-                durationSeconds = (observedEndTime - firstObservedDamage).TotalSeconds;
-            }
-            var downtimeStart = firstObservedDamage;
-            var downtimeEnd = useObservedDamageWindow
-                ? lastObservedDamage
-                : measurementEndTime ?? DateTimeOffset.Now;
-            if (downtimeStart != default && downtimeEnd > downtimeStart)
-            {
-                durationSeconds -= ResolveDamageDowntimeSecondsUnsafe(downtimeStart, downtimeEnd);
-            }
-            if (durationSeconds <= 0)
-            {
-                return 0;
-            }
-            return Math.Max(0, adjustedDamage) / durationSeconds;
-        }
-    }
-
-    internal double ResolveObservedDamageDurationSeconds()
-    {
-        lock (syncRoot)
-        {
-            return firstObservedDamage != default && lastObservedDamage > firstObservedDamage
-                ? (lastObservedDamage - firstObservedDamage).TotalSeconds
-                : 0;
-        }
-    }
-
-    internal double ResolveDamageDowntimeSeconds(DateTimeOffset measurementEndTime)
-    {
-        lock (syncRoot)
-        {
-            return firstObservedDamage != default && measurementEndTime > firstObservedDamage
-                ? ResolveDamageDowntimeSecondsUnsafe(firstObservedDamage, measurementEndTime)
-                : 0;
-        }
-    }
-
-    internal double ResolveEffectiveDamageDurationSeconds()
-        => ResolveEffectiveDamageDurationSeconds(lastObservedDamage, useObservedDamageEnd: true);
-
-    internal double ResolveEffectiveDamageDurationSeconds(
-        DateTimeOffset measurementEndTime,
-        bool useObservedDamageEnd)
-    {
-        lock (syncRoot)
-        {
-            var endTime = useObservedDamageEnd ? lastObservedDamage : measurementEndTime;
-            if (firstObservedDamage == default || endTime <= firstObservedDamage)
-            {
-                return 0;
-            }
-
-            return Math.Max(
-                0,
-                (endTime - firstObservedDamage).TotalSeconds -
-                ResolveDamageDowntimeSecondsUnsafe(firstObservedDamage, endTime));
-        }
-    }
-
-    internal bool IsTransitioning
-    {
-        get
-        {
-            lock (syncRoot)
-            {
-                return encounterActive && untargetableDamageTargets.Count > 0;
-            }
+            // Damage and duration are authoritative inputs; this estimator owns attribution only.
+            return Math.Max(0, adjustedDamage) / damageMetricDurationSeconds;
         }
     }
 
@@ -586,12 +522,132 @@ internal sealed class RaidDpsEstimator
         }
     }
 
+    internal double ResolveReceivedDamage(string actorName)
+    {
+        lock (syncRoot)
+        {
+            return receivedBuffDamage.GetValueOrDefault(NormalizeActorName(actorName));
+        }
+    }
+
+    internal double ResolveContributedDamage(string actorName)
+    {
+        lock (syncRoot)
+        {
+            return contributedBuffDamage.GetValueOrDefault(NormalizeActorName(actorName));
+        }
+    }
+
+    internal (double Received, double Contributed) ResolveAttributionTotals()
+    {
+        lock (syncRoot)
+        {
+            return (receivedBuffDamage.Values.Sum(), contributedBuffDamage.Values.Sum());
+        }
+    }
+
     private static bool ResolveDefinition(
         uint statusId,
         string statusName,
         out RaidBuffDefinition definition)
         => StatusesById.TryGetValue(statusId, out definition) ||
            StatusesByName.TryGetValue(statusName.Trim(), out definition);
+
+    private RaidStatusInterval[] ResolveExternalBuffs(
+        DateTimeOffset timestamp,
+        string attackerName,
+        string damageSourceName,
+        string victimName)
+        => statusHistory
+            .Where(status => status.StartTime <= timestamp && timestamp < status.EndTime)
+            .Where(status => SameActor(status.TargetName, attackerName) ||
+                             SameActor(status.TargetName, damageSourceName) ||
+                             (!string.IsNullOrWhiteSpace(victimName) &&
+                              SameActor(status.TargetName, victimName)))
+            .Where(status => !SameActor(status.SourceName, attackerName))
+            .GroupBy(status => (
+                status.Key.StatusId,
+                SourceName: NormalizeActorName(status.SourceName)))
+            .Select(static group => group.First())
+            .ToArray();
+
+    private string ResolveOwnerName(string sourceId, string sourceName)
+    {
+        if (ownerIdsByActorId.TryGetValue(sourceId, out var ownerId) &&
+            actorNamesById.TryGetValue(ownerId, out var ownerName))
+        {
+            return ownerName;
+        }
+        return actorNamesById.GetValueOrDefault(sourceId, NormalizeActorName(sourceName));
+    }
+
+    private bool TryResolvePeriodicPercentageBuffs(
+        PeriodicSnapshotKey key,
+        DateTimeOffset timestamp,
+        out IReadOnlyList<PercentageBuffSnapshot> buffs)
+    {
+        var snapshot = periodicSnapshotHistory.LastOrDefault(item =>
+            (item.Key == key ||
+             item.Key.SourceKey == key.SourceKey &&
+             item.Key.TargetKey == item.Key.SourceKey &&
+             item.Key.EffectName == key.EffectName) &&
+            item.StartTime <= timestamp &&
+            timestamp < item.EndTime);
+        if (snapshot is not null)
+        {
+            buffs = snapshot.PercentageBuffs;
+            return true;
+        }
+        buffs = [];
+        return false;
+    }
+
+    private void ClosePeriodicSnapshot(PeriodicSnapshotKey key, DateTimeOffset timestamp)
+    {
+        if (activePeriodicSnapshots.Remove(key, out var snapshot))
+        {
+            snapshot.EndTime = timestamp < snapshot.EndTime ? timestamp : snapshot.EndTime;
+        }
+    }
+
+    private void PruneExpiredPeriodicSnapshots(DateTimeOffset timestamp)
+    {
+        foreach (var pair in activePeriodicSnapshots
+                     .Where(pair => pair.Value.EndTime <= timestamp)
+                     .ToArray())
+        {
+            activePeriodicSnapshots.Remove(pair.Key);
+        }
+    }
+
+    private static PeriodicSnapshotKey CreatePeriodicSnapshotKey(
+        string sourceId,
+        string sourceName,
+        string targetId,
+        string targetName,
+        string effectName)
+        => new(
+            ActorSnapshotKey(sourceId, sourceName),
+            ActorSnapshotKey(targetId, targetName),
+            NormalizePeriodicEffectName(effectName));
+
+    private static string ActorSnapshotKey(string actorId, string actorName)
+        => IsActorId(actorId)
+            ? actorId.Trim().ToUpperInvariant()
+            : $"NAME:{NormalizeActorName(actorName).ToUpperInvariant()}";
+
+    private static string NormalizePeriodicEffectName(string effectName)
+    {
+        effectName = effectName.Trim();
+        foreach (var suffix in new[] { " (*)", " (DoT)" })
+        {
+            if (effectName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                effectName = effectName[..^suffix.Length].TrimEnd();
+            }
+        }
+        return effectName.ToUpperInvariant();
+    }
 
     private void TransferContribution(string attackerName, string sourceName, double amount)
     {
@@ -602,6 +658,8 @@ internal sealed class RaidDpsEstimator
 
         damageAdjustments[attackerName] = damageAdjustments.GetValueOrDefault(attackerName) - amount;
         damageAdjustments[sourceName] = damageAdjustments.GetValueOrDefault(sourceName) + amount;
+        receivedBuffDamage[attackerName] = receivedBuffDamage.GetValueOrDefault(attackerName) + amount;
+        contributedBuffDamage[sourceName] = contributedBuffDamage.GetValueOrDefault(sourceName) + amount;
     }
 
     private void TransferDotCriticalDirectContribution(
@@ -660,46 +718,6 @@ internal sealed class RaidDpsEstimator
                 status.SourceName,
                 directPortion * status.Definition.DirectHitChance / buffedDirectChance);
         }
-    }
-
-    private double ResolveDamageDowntimeSecondsUnsafe(
-        DateTimeOffset rangeStart,
-        DateTimeOffset rangeEnd)
-    {
-        var intervals = completedDamageDowntimes
-            .Concat(untargetableDamageTargets.Values.Select(startTime =>
-                new DamageDowntimeInterval(startTime, rangeEnd)))
-            .Select(interval => new DamageDowntimeInterval(
-                interval.StartTime > rangeStart ? interval.StartTime : rangeStart,
-                interval.EndTime < rangeEnd ? interval.EndTime : rangeEnd))
-            .Where(interval => interval.EndTime > interval.StartTime)
-            .OrderBy(interval => interval.StartTime)
-            .ToArray();
-        if (intervals.Length == 0)
-        {
-            return 0;
-        }
-
-        var totalSeconds = 0d;
-        var mergedStart = intervals[0].StartTime;
-        var mergedEnd = intervals[0].EndTime;
-        foreach (var interval in intervals.Skip(1))
-        {
-            if (interval.StartTime <= mergedEnd)
-            {
-                if (interval.EndTime > mergedEnd)
-                {
-                    mergedEnd = interval.EndTime;
-                }
-                continue;
-            }
-
-            totalSeconds += (mergedEnd - mergedStart).TotalSeconds;
-            mergedStart = interval.StartTime;
-            mergedEnd = interval.EndTime;
-        }
-
-        return totalSeconds + (mergedEnd - mergedStart).TotalSeconds;
     }
 
     private void RememberActor(string actorId, string actorName)
@@ -792,9 +810,23 @@ internal sealed class RaidDpsEstimator
 
     private readonly record struct RaidStatusKey(uint StatusId, string SourceId, string TargetId);
 
-    private readonly record struct DamageDowntimeInterval(
+    private readonly record struct PeriodicSnapshotKey(
+        string SourceKey,
+        string TargetKey,
+        string EffectName);
+
+    private readonly record struct PercentageBuffSnapshot(
+        string SourceName,
+        double DamageMultiplier);
+
+    private sealed record PeriodicBuffSnapshotInterval(
+        PeriodicSnapshotKey Key,
         DateTimeOffset StartTime,
-        DateTimeOffset EndTime);
+        DateTimeOffset InitialEndTime,
+        IReadOnlyList<PercentageBuffSnapshot> PercentageBuffs)
+    {
+        public DateTimeOffset EndTime { get; set; } = InitialEndTime;
+    }
 
     private sealed record RaidStatusInterval(
         RaidStatusKey Key,
