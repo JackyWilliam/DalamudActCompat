@@ -211,8 +211,7 @@ internal sealed class EncounterDurationTracker
         string sourceName,
         string ownerId,
         string targetId,
-        string targetName,
-        bool targetDefeated = false)
+        string targetName)
     {
         lock (syncRoot)
         {
@@ -222,8 +221,7 @@ internal sealed class EncounterDurationTracker
                 sourceName,
                 ownerId,
                 targetId,
-                targetName,
-                targetDefeated);
+                targetName);
         }
     }
 
@@ -234,6 +232,7 @@ internal sealed class EncounterDurationTracker
         {
             "21" or "22" => ObserveActionEffectUnsafe(timestamp, fields),
             "24" => ObservePeriodicEffectUnsafe(timestamp, fields),
+            "25" => ObserveDeathUnsafe(timestamp, fields),
             "34" => ObserveTargetabilityLineUnsafe(timestamp, fields),
             "37" => ObserveEffectResultUnsafe(timestamp, fields),
             _ => false,
@@ -377,8 +376,7 @@ internal sealed class EncounterDurationTracker
             item.SourceName,
             item.OwnerId,
             item.TargetId,
-            item.TargetName,
-            resultHp <= 1);
+            item.TargetName);
         return true;
     }
 
@@ -409,8 +407,31 @@ internal sealed class EncounterDurationTracker
             fields[18],
             ownerId,
             targetId,
-            fields[3],
-            targetDefeated: amount >= targetCurrentHp);
+            fields[3]);
+        return true;
+    }
+
+    private bool ObserveDeathUnsafe(DateTimeOffset timestamp, IReadOnlyList<string> fields)
+    {
+        if (fields.Count < 4 || !IsActorId(fields[2]))
+        {
+            return false;
+        }
+        var targetId = NormalizeActorId(fields[2]);
+        if (partyActorIds.Contains(targetId) ||
+            !targets.TryGetValue(targetId, out var target) ||
+            target.MembershipStart == default)
+        {
+            return false;
+        }
+        if (target.DefeatedAt is not null && target.DefeatedAt <= timestamp)
+        {
+            return false;
+        }
+
+        // HP floors are encounter mechanics as well as health values. Only the
+        // explicit network death line is reliable enough to retire target membership.
+        target.DefeatedAt = timestamp;
         return true;
     }
 
@@ -456,8 +477,7 @@ internal sealed class EncounterDurationTracker
         string sourceName,
         string ownerId,
         string targetId,
-        string targetName,
-        bool targetDefeated)
+        string targetName)
     {
         if (!encounterActive)
         {
@@ -504,10 +524,6 @@ internal sealed class EncounterDurationTracker
             target.MembershipStart = presenceStart;
         }
         target.LastDamage = timestamp;
-        if (targetDefeated && (target.DefeatedAt is null || timestamp < target.DefeatedAt))
-        {
-            target.DefeatedAt = timestamp;
-        }
 
         var activityKey = !string.IsNullOrWhiteSpace(ownerId)
             ? NormalizeActorId(ownerId)

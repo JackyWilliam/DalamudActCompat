@@ -4757,8 +4757,11 @@ static void ValidateEncounterDurationTracker()
         "Player One",
         string.Empty,
         "40000021",
-        "Add",
-        targetDefeated: true);
+        "Add");
+    adds.ObserveRawLine(
+        start.AddSeconds(4.1),
+        "25|time|40000021|Add|E0000000||death-add",
+        identities);
     adds.ObserveTargetability(start.AddSeconds(6), "40000020", "Boss", false);
     adds.ObserveTargetability(start.AddSeconds(7), "40000020", "Boss", true);
     adds.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000020", "Boss");
@@ -4767,6 +4770,118 @@ static void ValidateEncounterDurationTracker()
             start.AddSeconds(10),
             useObservedDamageEnd: true) - 9) < 0.001,
         "A defeated add remained in the historical target intersection and hid later boss downtime.");
+
+    var hpFloor = new EncounterDurationTracker();
+    hpFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000060", "Floor Boss");
+    hpFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000061", "Other Boss");
+    hpFloor.ObserveRawLine(
+        start,
+        "21|time|10000001|Player One|1000|Floor Hit|40000060|Floor Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000010|0|floor-hit",
+        identities);
+    hpFloor.StartEncounter(start, identities);
+    hpFloor.ObserveRawLine(
+        start.AddSeconds(0.1),
+        "37|time|40000060|Floor Boss|00000010|1|",
+        identities);
+    hpFloor.ObserveTargetability(start.AddSeconds(1), "40000061", "Other Boss", false);
+    hpFloor.ObserveTargetability(start.AddSeconds(2), "40000060", "Floor Boss", false);
+    hpFloor.ObserveRawLine(
+        start.AddSeconds(2.5),
+        "24|time|40000060|Floor Boss|DoT|0|0064|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||floor-overkill",
+        identities);
+    hpFloor.ObserveTargetability(start.AddSeconds(3), "40000060", "Floor Boss", true);
+    hpFloor.ObserveTargetability(start.AddSeconds(5), "40000061", "Other Boss", true);
+    hpFloor.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000061",
+        "Other Boss");
+    Assert(
+        Math.Abs(hpFloor.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 8.9) < 0.001,
+        "An HP floor retired a live target or hid its later targetable interval and overkill evidence.");
+
+    var periodicFloor = new EncounterDurationTracker();
+    periodicFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000062", "Periodic Floor Boss");
+    periodicFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000063", "Periodic Other Boss");
+    periodicFloor.StartEncounter(start, identities);
+    periodicFloor.ObserveConfirmedDamage(
+        start,
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000062",
+        "Periodic Floor Boss");
+    periodicFloor.ObserveRawLine(
+        start.AddSeconds(1),
+        "24|time|40000062|Periodic Floor Boss|DoT|0|0002|2|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||periodic-floor",
+        identities);
+    periodicFloor.ObserveTargetability(
+        start.AddSeconds(2),
+        "40000063",
+        "Periodic Other Boss",
+        false);
+    periodicFloor.ObserveRawLine(
+        start.AddSeconds(2.5),
+        "24|time|40000062|Periodic Floor Boss|DoT|0|0002|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||periodic-overkill",
+        identities);
+    periodicFloor.ObserveTargetability(
+        start.AddSeconds(5),
+        "40000063",
+        "Periodic Other Boss",
+        true);
+    periodicFloor.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000063",
+        "Periodic Other Boss");
+    Assert(
+        Math.Abs(periodicFloor.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 10) < 0.001,
+        "A lethal-looking periodic or later overkill incorrectly retired target membership.");
+
+    var despawned = new EncounterDurationTracker();
+    despawned.ObserveTargetPresence(start.AddSeconds(-1), "40000022", "Despawn Boss");
+    despawned.ObserveTargetPresence(start.AddSeconds(2), "40000023", "Despawn Add");
+    despawned.StartEncounter(start, identities);
+    despawned.ObserveConfirmedDamage(
+        start,
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000022",
+        "Despawn Boss");
+    despawned.ObserveConfirmedDamage(
+        start.AddSeconds(3),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000023",
+        "Despawn Add");
+    despawned.ObserveRawLine(
+        start.AddSeconds(4),
+        "261|time|Remove|40000023|despawn-add",
+        identities);
+    despawned.ObserveTargetability(start.AddSeconds(6), "40000022", "Despawn Boss", false);
+    despawned.ObserveTargetability(start.AddSeconds(7), "40000022", "Despawn Boss", true);
+    despawned.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000022",
+        "Despawn Boss");
+    Assert(
+        Math.Abs(despawned.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 9) < 0.001,
+        "An explicit despawn did not retire an add before later boss downtime.");
 
     var replacement = new EncounterDurationTracker();
     replacement.ObserveTargetPresence(start.AddSeconds(-1), "40000030", "Phase One");
@@ -4832,8 +4947,7 @@ static void ValidateEncounterDurationTracker()
         "Player One",
         string.Empty,
         "40000051",
-        "Blue",
-        targetDefeated: true);
+        "Blue");
     captured.ObserveRawLine(
         start.AddSeconds(424),
         firstAction.Replace(
