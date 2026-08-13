@@ -4292,6 +4292,7 @@ static void ValidateFflogsParityReplay(string testRoot)
         !largeCritical &&
         largeDirectHit,
         "Raw parity normalizer no longer matches FFXIV_ACT_Plugin's large-damage encoding or hit flags.");
+    ValidateEffectiveDamageLedger();
 
     var fixtureDirectory = Path.Combine(
         FindProjectRoot(),
@@ -4447,6 +4448,171 @@ static void ValidateFflogsParityReplay(string testRoot)
         reconciliationMarkdown.Contains("Top actors contributing to delta", StringComparison.Ordinal) &&
         reconciliationMarkdown.Contains("Owner conservation", StringComparison.Ordinal),
         "Parity Markdown omitted Phase 1A reconciliation evidence.");
+}
+
+static void ValidateEffectiveDamageLedger()
+{
+    var player = new ActPlayerIdentity("Player One", string.Empty, "SMN", true, false)
+    {
+        EntityId = 0x10000001,
+    };
+    var identities = new[] { player };
+    var ledger = new EffectiveDamageLedger();
+    ledger.ObserveRawLine(
+        DateTimeOffset.Parse("2026-08-12T20:10:00+08:00"),
+        "03|2026-08-12T20:10:00+08:00|40000001|Player Pet|00|64|10000001|00||");
+
+    var first = DateTimeOffset.Parse("2026-08-12T20:10:01+08:00");
+    ledger.ObserveRawLine(
+        first,
+        "21|2026-08-12T20:10:01+08:00|10000001|Player One|07|Attack|40000010|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000001|0|raw-01");
+    ledger.StartEncounter(identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            first,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Attack",
+            100,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveRawLine(
+        first.AddMilliseconds(500),
+        "37|2026-08-12T20:10:01.500+08:00|40000010|Boss|00000001|400|");
+
+    var rejected = first.AddSeconds(1);
+    ledger.ObserveRawLine(
+        rejected,
+        "21|2026-08-12T20:10:02+08:00|10000001|Player One|07|Attack|40000010|Boss|000003|00190000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|400|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000002|0|raw-02");
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            rejected,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Attack",
+            25,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+
+    var direct = first.AddSeconds(2);
+    ledger.ObserveRawLine(
+        direct,
+        "21|2026-08-12T20:10:03+08:00|10000001|Player One|1000|Direct Hit|40000010|Boss|000003|00C80000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|400|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000003|0|raw-03");
+    ledger.ObserveRawLine(
+        direct.AddMilliseconds(500),
+        "37|2026-08-12T20:10:03.500+08:00|40000010|Boss|00000003|200|");
+
+    var periodic = first.AddSeconds(3);
+    ledger.ObserveRawLine(
+        periodic,
+        "24|2026-08-12T20:10:04+08:00|40000010|Boss|DoT|0|0064|200|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-04");
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Burn (*)",
+            60,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "40000001",
+            "Player Pet",
+            "10000001",
+            "40000010",
+            "Boss",
+            "Pet Burn (*)",
+            40,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "10000001",
+            "Player One",
+            "Shield (*)",
+            500,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: true),
+        identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Attack",
+            30,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveRawLine(
+        periodic,
+        "21|2026-08-12T20:10:04+08:00|10000001|Player One|07|Attack|40000010|Boss|000003|001E0000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|200|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000004|0|raw-04a");
+
+    var lethal = first.AddSeconds(4);
+    ledger.ObserveRawLine(
+        lethal,
+        "21|2026-08-12T20:10:05+08:00|40000001|Player Pet|1001|Pet Hit|40000010|Boss|000003|00960000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|100|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000005|0|raw-05");
+    ledger.ObserveRawLine(
+        lethal.AddMilliseconds(500),
+        "37|2026-08-12T20:10:05.500+08:00|40000010|Boss|00000005|1|");
+
+    var overkillTick = first.AddSeconds(5);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            overkillTick,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Burn (*)",
+            50,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveRawLine(
+        overkillTick,
+        "24|2026-08-12T20:10:06+08:00|40000010|Boss|DoT|0|0032|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-06");
+
+    var snapshot = ledger.GetSnapshot();
+    Assert(
+        ledger.TryResolveDamage(player, out var playerDamage) &&
+        playerDamage == 500 &&
+        snapshot.SourceDamage == 500 &&
+        snapshot.OwnerDamage == 500 &&
+        snapshot.SourceTotals["10000001"] == 360 &&
+        snapshot.SourceTotals["40000001"] == 140,
+        "Effective DamageLedger lost confirmed autos/periodics, admitted an unconfirmed event, " +
+        "failed event-level overkill exclusion, or broke pet-owner conservation.");
 }
 
 static void ValidateDalamudGameStateBridge()
