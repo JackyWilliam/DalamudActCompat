@@ -4338,6 +4338,219 @@ static void ValidateRaidDpsEstimator()
     Assert(
         Math.Abs(estimator.ResolveReceivedDamage("Dark Knight") - 50) < 0.001,
         "A self-status ground effect did not reuse its application snapshot on enemy ticks.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    var guaranteedSamurai =
+        "21|time|10000006|Samurai|1D3F|Midare Setsugekka|40000001|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000011|0|raw-11";
+    estimator.ObserveNetworkLine(start.AddSeconds(1), guaranteedSamurai);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(1),
+            "10000006",
+            "Samurai",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Midare Setsugekka",
+            100,
+            Critical: true,
+            DirectHit: false,
+            IsPeriodic: false),
+        "Samurai");
+    var samuraiBaseline = estimator.ResolveHitBaseline("Samurai");
+    Assert(
+        samuraiBaseline.CriticalSamples == 0 &&
+        samuraiBaseline.DirectHitSamples == 1 &&
+        samuraiBaseline.DirectHits == 0,
+        "A guaranteed-Crit action polluted Crit samples or incorrectly removed its natural DH sample.");
+
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveNetworkLine(start.AddSeconds(3), guaranteedSamurai);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(3),
+            "10000006",
+            "Samurai",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Midare Setsugekka",
+            1_600,
+            Critical: true,
+            DirectHit: false,
+            IsPeriodic: false),
+        "Samurai");
+    var deterministicCriticalTransfer = 1_600 - (1_600 / 1.0375);
+    Assert(
+        Math.Abs(
+            estimator.ResolveContributedDamage(
+                "Scholar",
+                RaidDpsEstimator.AttributionKind.Critical) -
+            deterministicCriticalTransfer) < 0.001,
+        "Guaranteed Crit damage did not use deterministic rate-buff scaling.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|353|Reassemble|5.00|10000008|Machinist|10000008|Machinist|");
+    var reassembledDrill =
+        "21|time|10000008|Machinist|4072|Drill|40000001|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000012|0|raw-12";
+    estimator.ObserveNetworkLine(start.AddSeconds(1), reassembledDrill);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(1),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Drill",
+            100,
+            Critical: true,
+            DirectHit: true,
+            IsPeriodic: false),
+        "Machinist");
+    var machinistBaseline = estimator.ResolveHitBaseline("Machinist");
+    Assert(
+        machinistBaseline.CriticalSamples == 0 && machinistBaseline.DirectHitSamples == 0,
+        "A Reassemble-guaranteed CDH action polluted a natural HitBaseline dimension.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|721|Devilment|20.00|10000009|Dancer|10000008|Machinist|");
+    var fullMetalField =
+        "21|time|10000008|Machinist|9076|Full Metal Field|40000001|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000013|0|raw-13";
+    estimator.ObserveNetworkLine(start.AddSeconds(1), fullMetalField);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(1),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Full Metal Field",
+            1_000,
+            Critical: true,
+            DirectHit: true,
+            IsPeriodic: false),
+        "Machinist");
+    var guaranteedCritical = estimator.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.Critical);
+    var guaranteedDirect = estimator.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.DirectHit);
+    var combinedDeterministicRatio = 1.075 * 1.04;
+    Assert(
+        guaranteedCritical > 0 && guaranteedDirect > 0 &&
+        Math.Abs(
+            guaranteedCritical + guaranteedDirect -
+            (1_000 - (1_000 / combinedDeterministicRatio))) < 0.001,
+        "A guaranteed CDH action did not retain deterministic Crit/DH overlap attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|4C5|Chain Stratagem|0.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Bioblaster (*)",
+            1_000,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Machinist");
+    var applyInTickOut = estimator.ResolveContributedDamage(
+        "Scholar",
+        RaidDpsEstimator.AttributionKind.Critical);
+    Assert(
+        applyInTickOut > 0,
+        "A periodic tick lost its application-time Crit/DH buff snapshot.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(3),
+        "30|time|4C5|Chain Stratagem|0.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Bioblaster (*)",
+            1_000,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Machinist");
+    Assert(
+        estimator.ResolveContributedDamage(
+            "Scholar",
+            RaidDpsEstimator.AttributionKind.Critical) > 0,
+        "A periodic refresh did not replace its Crit/DH application snapshot.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Bioblaster (*)",
+            1_000,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Machinist");
+    var applyOutTickIn = estimator.ResolveContributedDamage(
+        "Scholar",
+        RaidDpsEstimator.AttributionKind.Critical);
+    var criticalTotals = estimator.ResolveAttributionTotals(RaidDpsEstimator.AttributionKind.Critical);
+    Assert(
+        Math.Abs(applyOutTickIn) < 0.001 &&
+        Math.Abs(criticalTotals.Received - criticalTotals.Contributed) < 0.001,
+        "A periodic tick inherited tick-time Crit/DH buffs or broke category conservation.");
 }
 
 static void ValidateFflogsParityReplay(string testRoot)

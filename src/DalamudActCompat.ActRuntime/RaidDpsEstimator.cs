@@ -11,6 +11,7 @@ namespace DalamudActCompat.ActRuntime;
 /// </summary>
 internal sealed class RaidDpsEstimator
 {
+    private static readonly TimeSpan PendingActionLifetime = TimeSpan.FromSeconds(2);
     private const double DefaultCriticalChance = 0.25;
     private const double DefaultDirectHitChance = 0.25;
     private const double BaselinePriorHits = 40;
@@ -23,6 +24,10 @@ internal sealed class RaidDpsEstimator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, double> contributedBuffDamage =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string ActorName, AttributionKind Kind), double>
+        receivedBuffDamageByKind = [];
+    private readonly Dictionary<(string ActorName, AttributionKind Kind), double>
+        contributedBuffDamageByKind = [];
     private readonly Dictionary<string, HitBaseline> hitBaselines =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> actorNamesById =
@@ -32,7 +37,52 @@ internal sealed class RaidDpsEstimator
     private readonly Dictionary<PeriodicSnapshotKey, PeriodicBuffSnapshotInterval>
         activePeriodicSnapshots = [];
     private readonly List<PeriodicBuffSnapshotInterval> periodicSnapshotHistory = [];
+    private readonly Dictionary<DamageActionKey, Queue<GuaranteedHitDimensions>>
+        pendingGuaranteedActions = [];
+    private readonly Dictionary<string, DateTimeOffset> reassembleByActorId =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ReassembleAction> consumedReassembleByActorId =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool encounterActive;
+
+    [Flags]
+    private enum GuaranteedHitDimensions
+    {
+        None = 0,
+        Critical = 1,
+        DirectHit = 2,
+    }
+
+    internal enum AttributionKind
+    {
+        Percentage,
+        Critical,
+        DirectHit,
+    }
+
+    private static readonly IReadOnlyDictionary<uint, GuaranteedHitDimensions>
+        GuaranteedActionsById = new Dictionary<uint, GuaranteedHitDimensions>
+        {
+            // These action IDs are protocol-stable; localized names are deliberately not used.
+            [0x1D3F] = GuaranteedHitDimensions.Critical, // Midare Setsugekka
+            [0x4066] = GuaranteedHitDimensions.Critical, // Kaeshi: Setsugekka
+            [0x64B5] = GuaranteedHitDimensions.Critical, // Ogi Namikiri
+            [0x64B6] = GuaranteedHitDimensions.Critical, // Kaeshi: Namikiri
+            [0x9066] = GuaranteedHitDimensions.Critical, // Tendo Setsugekka
+            [0x9068] = GuaranteedHitDimensions.Critical, // Tendo Kaeshi Setsugekka
+            [0x9076] = GuaranteedHitDimensions.Critical | GuaranteedHitDimensions.DirectHit, // Full Metal Field
+            [0x64C0] = GuaranteedHitDimensions.Critical | GuaranteedHitDimensions.DirectHit, // Starfall Dance
+        };
+
+    private static readonly HashSet<uint> ReassembleWeaponskills =
+    [
+        // Reassemble is contextual, but the action category is represented by stable IDs too.
+        0x4072, // Drill
+        0x4073, // Bioblaster
+        0x4074, // Air Anchor
+        0x64BC, // Chain Saw
+        0x9075, // Excavator
+    ];
 
     private static readonly IReadOnlyDictionary<uint, RaidBuffDefinition> StatusesById =
         new Dictionary<uint, RaidBuffDefinition>
@@ -104,9 +154,13 @@ internal sealed class RaidDpsEstimator
             damageAdjustments.Clear();
             receivedBuffDamage.Clear();
             contributedBuffDamage.Clear();
+            receivedBuffDamageByKind.Clear();
+            contributedBuffDamageByKind.Clear();
             hitBaselines.Clear();
             activePeriodicSnapshots.Clear();
             periodicSnapshotHistory.Clear();
+            PrunePendingGuaranteedActions(startTime);
+            PruneReassemble(startTime);
             encounterActive = true;
         }
     }
@@ -129,11 +183,16 @@ internal sealed class RaidDpsEstimator
             damageAdjustments.Clear();
             receivedBuffDamage.Clear();
             contributedBuffDamage.Clear();
+            receivedBuffDamageByKind.Clear();
+            contributedBuffDamageByKind.Clear();
             hitBaselines.Clear();
             actorNamesById.Clear();
             ownerIdsByActorId.Clear();
             activePeriodicSnapshots.Clear();
             periodicSnapshotHistory.Clear();
+            pendingGuaranteedActions.Clear();
+            reassembleByActorId.Clear();
+            consumedReassembleByActorId.Clear();
         }
     }
 
@@ -158,6 +217,13 @@ internal sealed class RaidDpsEstimator
                     }
                 }
             }
+            return false;
+        }
+
+        if (rawLine.StartsWith("21|", StringComparison.Ordinal) ||
+            rawLine.StartsWith("22|", StringComparison.Ordinal))
+        {
+            ObserveActionLine(timestamp, rawLine);
             return false;
         }
 
@@ -204,8 +270,13 @@ internal sealed class RaidDpsEstimator
             RememberActor(targetId, targetName);
             PruneExpiredStatuses(timestamp);
             PruneExpiredPeriodicSnapshots(timestamp);
+            PruneReassemble(timestamp);
             if (fields[0] == "30")
             {
+                if (statusId == 0x353)
+                {
+                    reassembleByActorId.Remove(NormalizeActorId(sourceId));
+                }
                 if (isRaidBuff && activeStatuses.Remove(key, out var removed))
                 {
                     removed.EndTime = timestamp < removed.EndTime ? timestamp : removed.EndTime;
@@ -226,6 +297,10 @@ internal sealed class RaidDpsEstimator
             }
 
             var endTime = timestamp.AddSeconds(Math.Min(durationSeconds, 600));
+            if (statusId == 0x353)
+            {
+                reassembleByActorId[NormalizeActorId(sourceId)] = endTime;
+            }
             if (!isRaidBuff)
             {
                 if (encounterActive)
@@ -238,17 +313,31 @@ internal sealed class RaidDpsEstimator
                             timestamp,
                             damageActorName,
                             sourceName,
-                            string.Empty)
+                            targetName)
                         .Where(static status => status.Definition.DamageMultiplier > 1)
                         .Select(static status => new PercentageBuffSnapshot(
                             status.SourceName,
                             status.Definition.DamageMultiplier))
                         .ToArray();
+                    var criticalDirectBuffs = ResolveExternalBuffs(
+                            timestamp,
+                            damageActorName,
+                            sourceName,
+                            targetName)
+                        .Where(static status =>
+                            status.Definition.CriticalChance > 0 ||
+                            status.Definition.DirectHitChance > 0)
+                        .Select(static status => new CriticalDirectBuffSnapshot(
+                            status.SourceName,
+                            status.Definition.CriticalChance,
+                            status.Definition.DirectHitChance))
+                        .ToArray();
                     var snapshot = new PeriodicBuffSnapshotInterval(
                         periodicKey,
                         timestamp,
                         endTime,
-                        percentageBuffs);
+                        percentageBuffs,
+                        criticalDirectBuffs);
                     activePeriodicSnapshots[periodicKey] = snapshot;
                     periodicSnapshotHistory.Add(snapshot);
                 }
@@ -333,6 +422,13 @@ internal sealed class RaidDpsEstimator
     internal void ObserveEffectiveDamage(EffectiveDamageEvent item, string ownerName)
     {
         ArgumentNullException.ThrowIfNull(item);
+        GuaranteedHitDimensions guaranteedDimensions;
+        lock (syncRoot)
+        {
+            guaranteedDimensions = item.IsPeriodic
+                ? GuaranteedHitDimensions.None
+                : ConsumeGuaranteedDimensions(item);
+        }
         ObserveDamage(
             item.Timestamp,
             ownerName,
@@ -349,7 +445,8 @@ internal sealed class RaidDpsEstimator
                     item.TargetId,
                     item.TargetName,
                     item.AbilityName)
-                : null);
+                : null,
+            guaranteedDimensions);
     }
 
     private void ObserveDamage(
@@ -361,7 +458,8 @@ internal sealed class RaidDpsEstimator
         bool directHit,
         bool isDot,
         string? damageSourceName,
-        PeriodicSnapshotKey? periodicKey)
+        PeriodicSnapshotKey? periodicKey,
+        GuaranteedHitDimensions guaranteedDimensions = GuaranteedHitDimensions.None)
     {
         if (damage <= 0 || string.IsNullOrWhiteSpace(attackerName))
         {
@@ -384,14 +482,35 @@ internal sealed class RaidDpsEstimator
                 damageSourceName,
                 victimName);
             IReadOnlyList<PercentageBuffSnapshot> percentageBuffs;
+            IReadOnlyList<CriticalDirectBuffSnapshot> criticalDirectBuffs;
             if (isDot)
             {
-                // A tick must never inherit a later raid-buff window. If no matching
-                // application was observed, an empty snapshot is safer than tick-time attribution.
-                percentageBuffs = periodicKey is { } key &&
-                                  TryResolvePeriodicPercentageBuffs(key, timestamp, out var snapshotted)
-                    ? snapshotted
-                    : [];
+                // An observed application is authoritative for every later tick. Percentage
+                // attribution keeps its existing conservative empty fallback; Crit/DH can
+                // distinguish unmatched ledger-normalized direct/auto events below.
+                if (periodicKey is { } key &&
+                    TryResolvePeriodicBuffSnapshot(key, timestamp, out var snapshot))
+                {
+                    percentageBuffs = snapshot.PercentageBuffs;
+                    criticalDirectBuffs = snapshot.CriticalDirectBuffs;
+                }
+                else
+                {
+                    percentageBuffs = [];
+                    // The ledger can conservatively label a source-normalized event periodic
+                    // without a matching status application. Preserve direct/auto hit-time
+                    // semantics in that case; a real observed DoT always has a snapshot,
+                    // including an explicitly empty one.
+                    criticalDirectBuffs = externalBuffs
+                        .Where(static status =>
+                            status.Definition.CriticalChance > 0 ||
+                            status.Definition.DirectHitChance > 0)
+                        .Select(static status => new CriticalDirectBuffSnapshot(
+                            status.SourceName,
+                            status.Definition.CriticalChance,
+                            status.Definition.DirectHitChance))
+                        .ToArray();
+                }
             }
             else
             {
@@ -400,6 +519,15 @@ internal sealed class RaidDpsEstimator
                     .Select(static status => new PercentageBuffSnapshot(
                         status.SourceName,
                         status.Definition.DamageMultiplier))
+                    .ToArray();
+                criticalDirectBuffs = externalBuffs
+                    .Where(static status =>
+                        status.Definition.CriticalChance > 0 ||
+                        status.Definition.DirectHitChance > 0)
+                    .Select(static status => new CriticalDirectBuffSnapshot(
+                        status.SourceName,
+                        status.Definition.CriticalChance,
+                        status.Definition.DirectHitChance))
                     .ToArray();
             }
             var damageAfterPercentageRemoval = (double)damage;
@@ -418,16 +546,20 @@ internal sealed class RaidDpsEstimator
                         var contribution = lostDamage *
                                            Math.Log(status.DamageMultiplier) /
                                            combinedLog;
-                        TransferContribution(attackerName, status.SourceName, contribution);
+                        TransferContribution(
+                            attackerName,
+                            status.SourceName,
+                            contribution,
+                            AttributionKind.Percentage);
                     }
                 }
             }
 
-            var criticalBuffs = externalBuffs
-                .Where(static status => status.Definition.CriticalChance > 0)
+            var criticalBuffs = criticalDirectBuffs
+                .Where(static status => status.CriticalChance > 0)
                 .ToArray();
-            var directBuffs = externalBuffs
-                .Where(static status => status.Definition.DirectHitChance > 0)
+            var directBuffs = criticalDirectBuffs
+                .Where(static status => status.DirectHitChance > 0)
                 .ToArray();
             var baseline = hitBaselines.GetValueOrDefault(attackerName) ?? new HitBaseline();
             hitBaselines[attackerName] = baseline;
@@ -444,52 +576,181 @@ internal sealed class RaidDpsEstimator
                     criticalBuffs,
                     directBuffs);
             }
-            else if (critical && criticalBuffs.Length > 0)
+            else
             {
-                var criticalMultiplier = 1.35 + unbuffedCriticalChance;
-                var combinedHitMultiplier = criticalMultiplier * (directHit ? 1.25 : 1);
-                var criticalPortion = LogWeightedBonusPortion(
+                TransferGuaranteedCriticalDirectContribution(
+                    attackerName,
                     damageAfterPercentageRemoval,
-                    criticalMultiplier,
-                    combinedHitMultiplier);
-                var buffedCriticalChance = Math.Clamp(
-                    unbuffedCriticalChance + criticalBuffs.Sum(static status => status.Definition.CriticalChance),
-                    0.01,
-                    1);
-                foreach (var status in criticalBuffs)
-                {
-                    TransferContribution(
-                        attackerName,
-                        status.SourceName,
-                        criticalPortion * status.Definition.CriticalChance / buffedCriticalChance);
-                }
-            }
+                    unbuffedCriticalChance,
+                    guaranteedDimensions,
+                    criticalBuffs,
+                    directBuffs);
 
-            if (!isDot && directHit && directBuffs.Length > 0)
-            {
-                var criticalMultiplier = critical ? 1.35 + unbuffedCriticalChance : 1;
-                var combinedHitMultiplier = criticalMultiplier * 1.25;
-                var directPortion = LogWeightedBonusPortion(
-                    damageAfterPercentageRemoval,
-                    1.25,
-                    combinedHitMultiplier);
-                var buffedDirectChance = Math.Clamp(
-                    unbuffedDirectChance + directBuffs.Sum(static status => status.Definition.DirectHitChance),
-                    0.01,
-                    1);
-                foreach (var status in directBuffs)
+                if ((guaranteedDimensions & GuaranteedHitDimensions.Critical) == 0 &&
+                    critical && criticalBuffs.Length > 0)
                 {
-                    TransferContribution(
-                        attackerName,
-                        status.SourceName,
-                        directPortion * status.Definition.DirectHitChance / buffedDirectChance);
+                    var criticalMultiplier = 1.35 + unbuffedCriticalChance;
+                    var combinedHitMultiplier = criticalMultiplier * (directHit ? 1.25 : 1);
+                    var criticalPortion = LogWeightedBonusPortion(
+                        damageAfterPercentageRemoval,
+                        criticalMultiplier,
+                        combinedHitMultiplier);
+                    var buffedCriticalChance = Math.Clamp(
+                        unbuffedCriticalChance + criticalBuffs.Sum(static status => status.CriticalChance),
+                        0.01,
+                        1);
+                    foreach (var status in criticalBuffs)
+                    {
+                        TransferContribution(
+                            attackerName,
+                            status.SourceName,
+                            criticalPortion * status.CriticalChance / buffedCriticalChance,
+                            AttributionKind.Critical);
+                    }
+                }
+
+                if ((guaranteedDimensions & GuaranteedHitDimensions.DirectHit) == 0 &&
+                    directHit && directBuffs.Length > 0)
+                {
+                    var criticalMultiplier = critical ? 1.35 + unbuffedCriticalChance : 1;
+                    var combinedHitMultiplier = criticalMultiplier * 1.25;
+                    var directPortion = LogWeightedBonusPortion(
+                        damageAfterPercentageRemoval,
+                        1.25,
+                        combinedHitMultiplier);
+                    var buffedDirectChance = Math.Clamp(
+                        unbuffedDirectChance + directBuffs.Sum(static status => status.DirectHitChance),
+                        0.01,
+                        1);
+                    foreach (var status in directBuffs)
+                    {
+                        TransferContribution(
+                            attackerName,
+                            status.SourceName,
+                            directPortion * status.DirectHitChance / buffedDirectChance,
+                            AttributionKind.DirectHit);
+                    }
                 }
             }
 
             if (!isDot && criticalBuffs.Length == 0 && directBuffs.Length == 0)
             {
-                baseline.Observe(critical, directHit);
+                baseline.Observe(
+                    critical,
+                    directHit,
+                    (guaranteedDimensions & GuaranteedHitDimensions.Critical) == 0,
+                    (guaranteedDimensions & GuaranteedHitDimensions.DirectHit) == 0);
             }
+        }
+    }
+
+    private void ObserveActionLine(DateTimeOffset timestamp, string rawLine)
+    {
+        var fields = rawLine.TrimEnd('\r', '\n').Split('|');
+        if (fields.Length < 24 ||
+            !uint.TryParse(fields[4], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var actionId))
+        {
+            return;
+        }
+
+        lock (syncRoot)
+        {
+            PrunePendingGuaranteedActions(timestamp);
+            PruneReassemble(timestamp);
+            var sourceId = NormalizeActorId(fields[2]);
+            var dimensions = GuaranteedActionsById.GetValueOrDefault(actionId);
+            if (dimensions == GuaranteedHitDimensions.None &&
+                ReassembleWeaponskills.Contains(actionId))
+            {
+                if (reassembleByActorId.Remove(sourceId))
+                {
+                    dimensions = GuaranteedHitDimensions.Critical | GuaranteedHitDimensions.DirectHit;
+                    consumedReassembleByActorId[sourceId] = new ReassembleAction(timestamp, actionId);
+                }
+                else if (consumedReassembleByActorId.TryGetValue(sourceId, out var consumed) &&
+                         consumed.Timestamp == timestamp && consumed.ActionId == actionId)
+                {
+                    // A single AoE action has one raw line per target; every target shares
+                    // the guarantee even though Reassemble itself is consumed only once.
+                    dimensions = GuaranteedHitDimensions.Critical | GuaranteedHitDimensions.DirectHit;
+                }
+            }
+            if (dimensions == GuaranteedHitDimensions.None)
+            {
+                return;
+            }
+
+            var key = new DamageActionKey(
+                timestamp,
+                ActorSnapshotKey(fields[2], fields[3]),
+                ActorSnapshotKey(fields[6], fields[7]),
+                NormalizePeriodicEffectName(fields[5]));
+            if (!pendingGuaranteedActions.TryGetValue(key, out var queue))
+            {
+                queue = new Queue<GuaranteedHitDimensions>();
+                pendingGuaranteedActions.Add(key, queue);
+            }
+            for (var effectIndex = 8; effectIndex < 24; effectIndex += 2)
+            {
+                if (FfxivActionEffectDecoder.TryDecodeDamage(
+                        fields[effectIndex],
+                        fields[effectIndex + 1],
+                        out var amount,
+                        out _,
+                        out _) && amount > 0)
+                {
+                    queue.Enqueue(dimensions);
+                }
+            }
+            if (queue.Count == 0)
+            {
+                pendingGuaranteedActions.Remove(key);
+            }
+        }
+    }
+
+    private GuaranteedHitDimensions ConsumeGuaranteedDimensions(EffectiveDamageEvent item)
+    {
+        PrunePendingGuaranteedActions(item.Timestamp);
+        var key = new DamageActionKey(
+            item.Timestamp,
+            ActorSnapshotKey(item.SourceId, item.SourceName),
+            ActorSnapshotKey(item.TargetId, item.TargetName),
+            NormalizePeriodicEffectName(item.AbilityName));
+        if (!pendingGuaranteedActions.TryGetValue(key, out var queue) || queue.Count == 0)
+        {
+            return GuaranteedHitDimensions.None;
+        }
+
+        var dimensions = queue.Dequeue();
+        if (queue.Count == 0)
+        {
+            pendingGuaranteedActions.Remove(key);
+        }
+        return dimensions;
+    }
+
+    private void PrunePendingGuaranteedActions(DateTimeOffset timestamp)
+    {
+        foreach (var key in pendingGuaranteedActions.Keys
+                     .Where(key => timestamp - key.Timestamp > PendingActionLifetime)
+                     .ToArray())
+        {
+            pendingGuaranteedActions.Remove(key);
+        }
+    }
+
+    private void PruneReassemble(DateTimeOffset timestamp)
+    {
+        foreach (var pair in reassembleByActorId.Where(pair => pair.Value <= timestamp).ToArray())
+        {
+            reassembleByActorId.Remove(pair.Key);
+        }
+        foreach (var pair in consumedReassembleByActorId
+                     .Where(pair => timestamp - pair.Value.Timestamp > PendingActionLifetime)
+                     .ToArray())
+        {
+            consumedReassembleByActorId.Remove(pair.Key);
         }
     }
 
@@ -538,11 +799,50 @@ internal sealed class RaidDpsEstimator
         }
     }
 
+    internal double ResolveReceivedDamage(string actorName, AttributionKind kind)
+    {
+        lock (syncRoot)
+        {
+            return receivedBuffDamageByKind.GetValueOrDefault(AttributionKey(actorName, kind));
+        }
+    }
+
+    internal double ResolveContributedDamage(string actorName, AttributionKind kind)
+    {
+        lock (syncRoot)
+        {
+            return contributedBuffDamageByKind.GetValueOrDefault(AttributionKey(actorName, kind));
+        }
+    }
+
     internal (double Received, double Contributed) ResolveAttributionTotals()
     {
         lock (syncRoot)
         {
             return (receivedBuffDamage.Values.Sum(), contributedBuffDamage.Values.Sum());
+        }
+    }
+
+    internal (double Received, double Contributed) ResolveAttributionTotals(AttributionKind kind)
+    {
+        lock (syncRoot)
+        {
+            return (
+                receivedBuffDamageByKind
+                    .Where(pair => pair.Key.Kind == kind)
+                    .Sum(static pair => pair.Value),
+                contributedBuffDamageByKind
+                    .Where(pair => pair.Key.Kind == kind)
+                    .Sum(static pair => pair.Value));
+        }
+    }
+
+    internal HitBaselineSnapshot ResolveHitBaseline(string actorName)
+    {
+        lock (syncRoot)
+        {
+            var baseline = hitBaselines.GetValueOrDefault(NormalizeActorName(actorName)) ?? new HitBaseline();
+            return baseline.Snapshot();
         }
     }
 
@@ -581,24 +881,24 @@ internal sealed class RaidDpsEstimator
         return actorNamesById.GetValueOrDefault(sourceId, NormalizeActorName(sourceName));
     }
 
-    private bool TryResolvePeriodicPercentageBuffs(
+    private bool TryResolvePeriodicBuffSnapshot(
         PeriodicSnapshotKey key,
         DateTimeOffset timestamp,
-        out IReadOnlyList<PercentageBuffSnapshot> buffs)
+        out PeriodicBuffSnapshotInterval snapshot)
     {
-        var snapshot = periodicSnapshotHistory.LastOrDefault(item =>
+        var resolved = periodicSnapshotHistory.LastOrDefault(item =>
             (item.Key == key ||
              item.Key.SourceKey == key.SourceKey &&
              item.Key.TargetKey == item.Key.SourceKey &&
              item.Key.EffectName == key.EffectName) &&
             item.StartTime <= timestamp &&
             timestamp < item.EndTime);
-        if (snapshot is not null)
+        if (resolved is not null)
         {
-            buffs = snapshot.PercentageBuffs;
+            snapshot = resolved;
             return true;
         }
-        buffs = [];
+        snapshot = null!;
         return false;
     }
 
@@ -636,6 +936,12 @@ internal sealed class RaidDpsEstimator
             ? actorId.Trim().ToUpperInvariant()
             : $"NAME:{NormalizeActorName(actorName).ToUpperInvariant()}";
 
+    private static string NormalizeActorId(string value)
+        => uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var actorId) &&
+           actorId != 0
+            ? actorId.ToString("X8", CultureInfo.InvariantCulture)
+            : string.Empty;
+
     private static string NormalizePeriodicEffectName(string effectName)
     {
         effectName = effectName.Trim();
@@ -649,7 +955,11 @@ internal sealed class RaidDpsEstimator
         return effectName.ToUpperInvariant();
     }
 
-    private void TransferContribution(string attackerName, string sourceName, double amount)
+    private void TransferContribution(
+        string attackerName,
+        string sourceName,
+        double amount,
+        AttributionKind kind)
     {
         if (!double.IsFinite(amount) || amount <= 0 || SameActor(attackerName, sourceName))
         {
@@ -660,6 +970,70 @@ internal sealed class RaidDpsEstimator
         damageAdjustments[sourceName] = damageAdjustments.GetValueOrDefault(sourceName) + amount;
         receivedBuffDamage[attackerName] = receivedBuffDamage.GetValueOrDefault(attackerName) + amount;
         contributedBuffDamage[sourceName] = contributedBuffDamage.GetValueOrDefault(sourceName) + amount;
+        var receivedKey = AttributionKey(attackerName, kind);
+        var contributedKey = AttributionKey(sourceName, kind);
+        receivedBuffDamageByKind[receivedKey] =
+            receivedBuffDamageByKind.GetValueOrDefault(receivedKey) + amount;
+        contributedBuffDamageByKind[contributedKey] =
+            contributedBuffDamageByKind.GetValueOrDefault(contributedKey) + amount;
+    }
+
+    private void TransferGuaranteedCriticalDirectContribution(
+        string attackerName,
+        double damage,
+        double unbuffedCriticalChance,
+        GuaranteedHitDimensions dimensions,
+        IReadOnlyList<CriticalDirectBuffSnapshot> criticalBuffs,
+        IReadOnlyList<CriticalDirectBuffSnapshot> directBuffs)
+    {
+        var criticalChanceIncrease =
+            (dimensions & GuaranteedHitDimensions.Critical) != 0
+                ? criticalBuffs.Sum(static status => status.CriticalChance)
+                : 0;
+        var directChanceIncrease =
+            (dimensions & GuaranteedHitDimensions.DirectHit) != 0
+                ? directBuffs.Sum(static status => status.DirectHitChance)
+                : 0;
+        var criticalMultiplier = 1.35 + unbuffedCriticalChance;
+        var criticalRatio = criticalChanceIncrease > 0
+            ? (criticalMultiplier + criticalChanceIncrease * (criticalMultiplier - 1)) /
+              criticalMultiplier
+            : 1;
+        var directRatio = directChanceIncrease > 0
+            ? (1.25 + directChanceIncrease * (1.25 - 1)) / 1.25
+            : 1;
+        var combinedRatio = criticalRatio * directRatio;
+        if (combinedRatio <= 1)
+        {
+            return;
+        }
+
+        // Guaranteed hits still scale with rate buffs. Only their probability sample is
+        // deterministic; attribution is the incremental multiplier embedded in the hit.
+        if (criticalRatio > 1)
+        {
+            var portion = LogWeightedBonusPortion(damage, criticalRatio, combinedRatio);
+            foreach (var status in criticalBuffs)
+            {
+                TransferContribution(
+                    attackerName,
+                    status.SourceName,
+                    portion * status.CriticalChance / criticalChanceIncrease,
+                    AttributionKind.Critical);
+            }
+        }
+        if (directRatio > 1)
+        {
+            var portion = LogWeightedBonusPortion(damage, directRatio, combinedRatio);
+            foreach (var status in directBuffs)
+            {
+                TransferContribution(
+                    attackerName,
+                    status.SourceName,
+                    portion * status.DirectHitChance / directChanceIncrease,
+                    AttributionKind.DirectHit);
+            }
+        }
     }
 
     private void TransferDotCriticalDirectContribution(
@@ -667,15 +1041,15 @@ internal sealed class RaidDpsEstimator
         double damage,
         double unbuffedCriticalChance,
         double unbuffedDirectChance,
-        IReadOnlyList<RaidStatusInterval> criticalBuffs,
-        IReadOnlyList<RaidStatusInterval> directBuffs)
+        IReadOnlyList<CriticalDirectBuffSnapshot> criticalBuffs,
+        IReadOnlyList<CriticalDirectBuffSnapshot> directBuffs)
     {
         var buffedCriticalChance = Math.Clamp(
-            unbuffedCriticalChance + criticalBuffs.Sum(static status => status.Definition.CriticalChance),
+            unbuffedCriticalChance + criticalBuffs.Sum(static status => status.CriticalChance),
             0.01,
             1);
         var buffedDirectChance = Math.Clamp(
-            unbuffedDirectChance + directBuffs.Sum(static status => status.Definition.DirectHitChance),
+            unbuffedDirectChance + directBuffs.Sum(static status => status.DirectHitChance),
             0.01,
             1);
         var criticalMultiplier = 1.35 + unbuffedCriticalChance;
@@ -709,14 +1083,16 @@ internal sealed class RaidDpsEstimator
             TransferContribution(
                 attackerName,
                 status.SourceName,
-                criticalPortion * status.Definition.CriticalChance / buffedCriticalChance);
+                criticalPortion * status.CriticalChance / buffedCriticalChance,
+                AttributionKind.Critical);
         }
         foreach (var status in directBuffs)
         {
             TransferContribution(
                 attackerName,
                 status.SourceName,
-                directPortion * status.Definition.DirectHitChance / buffedDirectChance);
+                directPortion * status.DirectHitChance / buffedDirectChance,
+                AttributionKind.DirectHit);
         }
     }
 
@@ -774,38 +1150,64 @@ internal sealed class RaidDpsEstimator
             NormalizeActorName(right),
             StringComparison.OrdinalIgnoreCase);
 
+    private static (string ActorName, AttributionKind Kind) AttributionKey(
+        string actorName,
+        AttributionKind kind)
+        => (NormalizeActorName(actorName).ToUpperInvariant(), kind);
+
     private sealed class HitBaseline
     {
-        private int hits;
+        private int criticalSamples;
+        private int directSamples;
         private int criticalHits;
         private int directHits;
 
-        public void Observe(bool critical, bool direct)
+        public void Observe(
+            bool critical,
+            bool direct,
+            bool observeCritical,
+            bool observeDirect)
         {
-            hits++;
-            if (critical)
+            if (observeCritical)
             {
-                criticalHits++;
+                criticalSamples++;
+                if (critical)
+                {
+                    criticalHits++;
+                }
             }
-            if (direct)
+            if (observeDirect)
             {
-                directHits++;
+                directSamples++;
+                if (direct)
+                {
+                    directHits++;
+                }
             }
         }
 
         public double ResolveCriticalChance()
             => Math.Clamp(
                 ((BaselinePriorHits * DefaultCriticalChance) + criticalHits) /
-                (BaselinePriorHits + hits),
+                (BaselinePriorHits + criticalSamples),
                 0.05,
                 0.50);
 
         public double ResolveDirectHitChance()
             => Math.Clamp(
                 ((BaselinePriorHits * DefaultDirectHitChance) + directHits) /
-                (BaselinePriorHits + hits),
+                (BaselinePriorHits + directSamples),
                 0.05,
                 0.50);
+
+        public HitBaselineSnapshot Snapshot()
+            => new(
+                criticalSamples,
+                criticalHits,
+                ResolveCriticalChance(),
+                directSamples,
+                directHits,
+                ResolveDirectHitChance());
     }
 
     private readonly record struct RaidStatusKey(uint StatusId, string SourceId, string TargetId);
@@ -815,15 +1217,29 @@ internal sealed class RaidDpsEstimator
         string TargetKey,
         string EffectName);
 
+    private readonly record struct DamageActionKey(
+        DateTimeOffset Timestamp,
+        string SourceKey,
+        string TargetKey,
+        string AbilityName);
+
+    private readonly record struct ReassembleAction(DateTimeOffset Timestamp, uint ActionId);
+
     private readonly record struct PercentageBuffSnapshot(
         string SourceName,
         double DamageMultiplier);
+
+    private readonly record struct CriticalDirectBuffSnapshot(
+        string SourceName,
+        double CriticalChance,
+        double DirectHitChance);
 
     private sealed record PeriodicBuffSnapshotInterval(
         PeriodicSnapshotKey Key,
         DateTimeOffset StartTime,
         DateTimeOffset InitialEndTime,
-        IReadOnlyList<PercentageBuffSnapshot> PercentageBuffs)
+        IReadOnlyList<PercentageBuffSnapshot> PercentageBuffs,
+        IReadOnlyList<CriticalDirectBuffSnapshot> CriticalDirectBuffs)
     {
         public DateTimeOffset EndTime { get; set; } = InitialEndTime;
     }
@@ -854,3 +1270,11 @@ internal sealed class RaidDpsEstimator
             => new(1, critical, direct);
     }
 }
+
+internal readonly record struct HitBaselineSnapshot(
+    int CriticalSamples,
+    int CriticalHits,
+    double CriticalChance,
+    int DirectHitSamples,
+    int DirectHits,
+    double DirectHitChance);
