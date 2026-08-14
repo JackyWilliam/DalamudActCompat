@@ -61,6 +61,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         getOverlayWindowSettingsSnapshot;
     private readonly Action persistOverlaySettings;
     private readonly Func<bool> debugMode;
+    private readonly Func<bool> parityDiagnosticsEnabled;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
     private readonly object networkCaptureSync = new();
@@ -138,6 +139,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         Func<IReadOnlyDictionary<string, HtmlOverlayWindowSettings>> getOverlayWindowSettingsSnapshot,
         Action persistOverlaySettings,
         Func<bool> debugMode,
+        Func<bool> parityDiagnosticsEnabled,
         Func<string, ActCapability, bool> permissionCheck)
     {
         this.pluginInterface = pluginInterface;
@@ -155,6 +157,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.getOverlayWindowSettingsSnapshot = getOverlayWindowSettingsSnapshot;
         this.persistOverlaySettings = persistOverlaySettings;
         this.debugMode = debugMode;
+        this.parityDiagnosticsEnabled = parityDiagnosticsEnabled;
         HashSet<uint> weaponskillActionIds;
         try
         {
@@ -1713,7 +1716,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
-        if (debugMode())
+        if (parityDiagnosticsEnabled())
         {
             // Phase 0 records the raw parser input in a sidecar only. It must never
             // mutate the log line or influence the production encounter pipeline.
@@ -1993,7 +1996,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, ownerName);
         }
         var encounter = swing.ParentEncounter;
-        if (debugMode())
+        if (parityDiagnosticsEnabled())
         {
             // Observe before DACT's current party and swing filters so every excluded
             // MasterSwing has a concrete reason in the parity ledger.
@@ -2317,7 +2320,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     if (finished)
                     {
-                        if (debugMode() && Volatile.Read(ref parityDiagnosticFaulted) == 0)
+                        if (parityDiagnosticsEnabled() && Volatile.Read(ref parityDiagnosticFaulted) == 0)
                         {
                             var diagnosticStart = encounter.StartTime == DateTime.MaxValue
                                 ? startTime

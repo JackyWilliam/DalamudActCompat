@@ -21,6 +21,7 @@ using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
+using DalamudActCompat.Quality;
 using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
 using System.Threading.Channels;
@@ -268,6 +269,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration.GetOverlayWindowSettingsSnapshot,
             () => _ = framework.RunOnFrameworkThread(SaveConfiguration),
             () => configuration.DebugMode,
+            () => configuration.EnableFflogsParityRecorder,
             configuration.IsActCapabilityAllowed);
         actRuntime.ConfigureExternalPluginBridges(
             text => hostSupervisor.RequestTts(text, "game-side-act"),
@@ -315,6 +317,9 @@ public sealed class Plugin : IDalamudPlugin
         var jobIcons = new JobIconTextureSet(
             textureProvider,
             Path.Combine(assetDirectory, "JobIcons"));
+        var combatQualitySnapshot = CombatQualitySnapshot.Load(
+            Path.Combine(assetDirectory, "Quality", "combat-quality.json"),
+            logger);
         var runningStatusIcon = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "StatusIcons", "CombatRunning.png"));
         var transitionStatusIcon = textureProvider.GetFromFile(
@@ -421,6 +426,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             text,
             fflogsEstimateService,
+            combatQualitySnapshot,
             () => stateStore.GetSnapshot().Current,
             logoTexture,
             helpTexture,

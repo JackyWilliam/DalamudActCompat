@@ -43,6 +43,10 @@ internal sealed record HarnessOptions
 
     public bool MatchedOwnershipDhAudit { get; init; }
 
+    public bool ProductionCandidateEvaluation { get; init; }
+
+    public string? QualitySnapshotPath { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -114,6 +118,15 @@ internal sealed record HarnessOptions
                 {
                     MatchedOwnershipDhAudit = true,
                     ReplayOnly = true,
+                },
+                "--production-candidate-evaluation" => options with
+                {
+                    ProductionCandidateEvaluation = true,
+                    ReplayOnly = true,
+                },
+                "--quality-snapshot" => options with
+                {
+                    QualitySnapshotPath = Path.GetFullPath(RequireValue(args, ref index, value)),
                 },
                 "--help" or "-h" => options with { ShowHelp = true },
                 _ => throw new ArgumentException($"Unknown argument '{value}'. Use --help for usage."),
@@ -192,6 +205,8 @@ internal sealed record HarnessOptions
           --matched-ownership-mining Mine same-actor longitudinal ownership controls only
           --matched-ownership-replay Replay cached longitudinal controls without network requests
           --matched-ownership-dh-audit Exhaust cached metadata for DH-only matched controls
+          --production-candidate-evaluation Compare PercentageFirst and SharedBaseLog from cache
+          --quality-snapshot PATH Write the generated production quality snapshot to PATH
           --mine-targeted-matrix Mine only targeted BRD→G-CDH public fights, cache them, then run the matrix
           --help            Show this help
         """;

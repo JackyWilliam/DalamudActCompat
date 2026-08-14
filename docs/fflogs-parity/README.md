@@ -1,6 +1,8 @@
 # FFLogs Parity Diagnostics
 
-The parity tooling is a developer-only sidecar. When DACT debug mode is enabled, a completed encounter writes JSON and Markdown reports under the plugin config directory at `logs/parity/`. The recorder observes raw pipe lines and normalized ACT `MasterSwing` callbacks, but never writes values back to `EncounterData`, `RaidDpsEstimator`, encounter snapshots, or the UI.
+Exact rDPS parity research is paused, not deleted. Production presents a local Estimated rDPS model (`SharedBaseLog-v1`) while FFLogs Parse estimates use actual DACT DPS. The retained parity tooling remains a developer-only sidecar and does not block product releases.
+
+Ordinary Debug mode does not start parity capture. A developer must explicitly enable `Record FFLogs parity diagnostics` or launch a cache-only harness mode. When explicitly enabled, a completed encounter writes JSON and Markdown reports under the plugin config directory at `logs/parity/`. The recorder observes raw pipe lines and normalized ACT `MasterSwing` callbacks, but never writes values back to `EncounterData`, `RaidDpsEstimator`, encounter snapshots, or the UI.
 
 ## Model boundaries
 
@@ -51,5 +53,15 @@ $dalamud = 'C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\dev\'
 dotnet build .\DalamudActCompat.slnx -c Release "-p:DalamudLibPath=$dalamud"
 & .\tests\DalamudActCompat.PackageSmokeTests\bin\Release\net10.0-windows10.0.17763.0\DalamudActCompat.PackageSmokeTests.exe
 ```
+
+Regenerate the packaged Combat Quality snapshot from the fixed 100-fight cache with:
+
+```powershell
+dotnet run --project .\tools\DalamudActCompat.FflogsParityHarness -- `
+  --production-candidate-evaluation `
+  --quality-snapshot .\src\DalamudActCompat\Assets\Quality\combat-quality.json
+```
+
+This mode is replay-only by construction and never expands the public FFLogs corpus. The exact-parity research can be reopened when a strict DH-only longitudinal control, stronger actor stats, official API evidence, or an authoritative implementation becomes available.
 
 The historical 2026-08-12 case report is in `phase0-2026-08-12-red-hot-and-deep-blue.md`. Because that encounter predates the normalized-event recorder and the FFLogs evidence is rounded, its remaining event-level delta is marked unknown rather than fitted.

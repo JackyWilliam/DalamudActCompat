@@ -21,7 +21,7 @@ internal static class CurrentFflogsEncounterTable
     // the ranking population and encounter mapping together.
     internal const string RankingRegion = "CN";
     internal const int RankingPartition = 9;
-    internal const string RankingMetric = "rdps";
+    internal const string RankingMetric = "dps";
 
     private static readonly IReadOnlyDictionary<uint, DutyEntry> Duties =
         new Dictionary<uint, DutyEntry>

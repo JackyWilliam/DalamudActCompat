@@ -1,0 +1,19 @@
+{
+  "generatedAt": "2026-08-14T16:24:08.3632319+00:00",
+  "lastRun": "2026-08-14T16:24:08.3632319+00:00",
+  "modelIdentifier": "SharedBaseLog-v1",
+  "statusEngine": "Causal-2s",
+  "samples": 100,
+  "meanDelta": -321.15598421633445,
+  "medianDelta": -311.5231875634745,
+  "mae": 325.156483528309,
+  "p90AbsoluteDelta": 580.8424212115207,
+  "p95AbsoluteDelta": 613.1226306453856,
+  "maxAbsoluteDelta": 979.4167608051939,
+  "rawParityExactCount": 100,
+  "rawParitySampleCount": 100,
+  "directPacketMatched": 289318,
+  "directPacketExpected": 289318,
+  "normalizationWarnings": 0,
+  "latestReport": "artifacts/fflogs-parity-harness/reports/production-candidate-evaluation.md"
+}

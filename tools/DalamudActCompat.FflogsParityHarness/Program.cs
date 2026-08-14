@@ -232,6 +232,26 @@ internal static class Program
                 return 0;
             }
 
+            if (options.ProductionCandidateEvaluation)
+            {
+                var candidateReport = ProductionCandidateEvaluation.Run(collector, manifest);
+                var candidatePaths = await ProductionCandidateEvaluation.WriteAsync(
+                    options.OutputDirectory,
+                    options.QualitySnapshotPath,
+                    candidateReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    candidateReport.Current,
+                    candidateReport.Candidate,
+                    candidatePaths.JsonPath,
+                    candidatePaths.CsvPath,
+                    candidatePaths.MarkdownPath,
+                    candidatePaths.QualitySnapshotPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
+
             if (options.DevilmentProbe)
             {
                 var probeReport = DevilmentPerActionProbe.Run(
@@ -387,6 +407,14 @@ internal static class Program
         if (!HarnessOptions.Parse(["--attribution-matrix"]).ReplayOnly)
         {
             throw new InvalidOperationException("Attribution matrix replay must remain cache-only.");
+        }
+        var productionCandidateOptions = HarnessOptions.Parse(
+            ["--production-candidate-evaluation"]);
+        if (!productionCandidateOptions.ProductionCandidateEvaluation ||
+            !productionCandidateOptions.ReplayOnly)
+        {
+            throw new InvalidOperationException(
+                "Production candidate evaluation must remain cache-only.");
         }
         var orderingOptions = HarnessOptions.Parse(["--percentage-ordering-only"]);
         if (!orderingOptions.PercentageOrderingOnly || !orderingOptions.ReplayOnly)

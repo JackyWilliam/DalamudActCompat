@@ -146,9 +146,14 @@ internal static class GuaranteedHitAttributionExperiment
         NormalizedFight fight,
         IReadOnlyDictionary<long, ProbeGuaranteedDimensions> stableGuarantees)
     {
-        var parity = DactRdpsReplay.Replay(fight);
+        // Guaranteed equation identification remains paused and must not absorb the
+        // separately chosen cross-component ownership model. Keep this diagnostic on
+        // its calibrated PercentageFirst isolation boundary.
+        var parity = DactRdpsReplay.Replay(fight, RaidDpsOwnershipModel.PercentageFirst);
         var timeline = new FightAttributionTimeline(fight);
-        var estimator = new RaidDpsEstimator(timeline.LifeSurgeWeaponskillActionIds.Contains);
+        var estimator = new RaidDpsEstimator(
+            timeline.LifeSurgeWeaponskillActionIds.Contains,
+            RaidDpsOwnershipModel.PercentageFirst);
         estimator.Reset();
         var encounterStart = DactRdpsReplay.ToTimestamp(fight.ReportStartTime, fight.Fight.StartTime);
         foreach (var actor in fight.Actors.Values)

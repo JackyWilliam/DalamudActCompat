@@ -3,10 +3,23 @@ using System.Globalization;
 
 namespace DalamudActCompat.ActRuntime;
 
+internal enum RaidDpsOwnershipModel
+{
+    PercentageFirst,
+    SharedBaseLog,
+}
+
+public static class RaidDpsModelInfo
+{
+    public const string OwnershipModel = "SharedBaseLog-v1";
+
+    public const string StatusEngine = "Causal-2s";
+}
+
 /// <summary>
-/// Estimates FFLogs-style raid-contributing damage from committed effective
-/// damage and network status add/remove lines. The calculation follows FFLogs'
-/// published percentage, critical-hit, and direct-hit attribution formulas.
+/// Estimates raid-contributing damage from committed effective damage and network
+/// status add/remove lines. Published percentage and Crit/DH formulas provide the
+/// component values; cross-component interaction is an explicitly versioned model.
 /// Player base critical/direct chances are inferred conservatively from unbuffed hits.
 /// </summary>
 internal sealed class RaidDpsEstimator
@@ -58,13 +71,17 @@ internal sealed class RaidDpsEstimator
     private readonly Dictionary<string, ContextualGuaranteedAction> consumedLifeSurgeByActorId =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<uint, bool> isWeaponskillAction;
+    private readonly RaidDpsOwnershipModel ownershipModel;
     private bool encounterActive;
 
-    public RaidDpsEstimator(Func<uint, bool>? isWeaponskillAction = null)
+    public RaidDpsEstimator(
+        Func<uint, bool>? isWeaponskillAction = null,
+        RaidDpsOwnershipModel ownershipModel = RaidDpsOwnershipModel.SharedBaseLog)
     {
         // The network action-effect line has no action category. Fail closed when a host
         // cannot provide game metadata rather than promoting arbitrary same-timestamp Crits.
         this.isWeaponskillAction = isWeaponskillAction ?? (static _ => false);
+        this.ownershipModel = ownershipModel;
     }
 
     [Flags]
@@ -616,22 +633,25 @@ internal sealed class RaidDpsEstimator
                     .ToArray();
             }
             var damageAfterPercentageRemoval = (double)damage;
+            var pendingContributions = new List<PendingContribution>();
+            var percentageMultiplier = 1.0;
             if (percentageBuffs.Count > 0)
             {
-                var combinedMultiplier = percentageBuffs.Aggregate(
+                percentageMultiplier = percentageBuffs.Aggregate(
                     1.0,
                     static (current, status) => current * status.DamageMultiplier);
-                if (combinedMultiplier > 1)
+                if (percentageMultiplier > 1)
                 {
-                    damageAfterPercentageRemoval = damage / combinedMultiplier;
+                    damageAfterPercentageRemoval = damage / percentageMultiplier;
                     var lostDamage = damage - damageAfterPercentageRemoval;
-                    var combinedLog = Math.Log(combinedMultiplier);
+                    var combinedLog = Math.Log(percentageMultiplier);
                     foreach (var status in percentageBuffs)
                     {
                         var contribution = lostDamage *
                                            Math.Log(status.DamageMultiplier) /
                                            combinedLog;
-                        TransferContribution(
+                        QueueContribution(
+                            pendingContributions,
                             attackerName,
                             status.SourceName,
                             contribution,
@@ -654,6 +674,7 @@ internal sealed class RaidDpsEstimator
             if (isDot && (criticalBuffs.Length > 0 || directBuffs.Length > 0))
             {
                 TransferDotCriticalDirectContribution(
+                    pendingContributions,
                     attackerName,
                     damageAfterPercentageRemoval,
                     unbuffedCriticalChance,
@@ -664,6 +685,7 @@ internal sealed class RaidDpsEstimator
             else
             {
                 TransferGuaranteedCriticalDirectContribution(
+                    pendingContributions,
                     attackerName,
                     damageAfterPercentageRemoval,
                     unbuffedCriticalChance,
@@ -686,7 +708,8 @@ internal sealed class RaidDpsEstimator
                         1);
                     foreach (var status in criticalBuffs)
                     {
-                        TransferContribution(
+                        QueueContribution(
+                            pendingContributions,
                             attackerName,
                             status.SourceName,
                             criticalPortion * status.CriticalChance / buffedCriticalChance,
@@ -709,7 +732,8 @@ internal sealed class RaidDpsEstimator
                         1);
                     foreach (var status in directBuffs)
                     {
-                        TransferContribution(
+                        QueueContribution(
+                            pendingContributions,
                             attackerName,
                             status.SourceName,
                             directPortion * status.DirectHitChance / buffedDirectChance,
@@ -717,6 +741,12 @@ internal sealed class RaidDpsEstimator
                     }
                 }
             }
+
+            ApplyOwnership(
+                pendingContributions,
+                damage,
+                damageAfterPercentageRemoval,
+                percentageMultiplier);
 
             if (!isDot && criticalBuffs.Length == 0 && directBuffs.Length == 0)
             {
@@ -1258,6 +1288,7 @@ internal sealed class RaidDpsEstimator
     }
 
     private void TransferGuaranteedCriticalDirectContribution(
+        ICollection<PendingContribution> pendingContributions,
         string attackerName,
         double damage,
         double unbuffedCriticalChance,
@@ -1294,7 +1325,8 @@ internal sealed class RaidDpsEstimator
             var portion = LogWeightedBonusPortion(damage, criticalRatio, combinedRatio);
             foreach (var status in criticalBuffs)
             {
-                TransferContribution(
+                QueueContribution(
+                    pendingContributions,
                     attackerName,
                     status.SourceName,
                     portion * status.CriticalChance / criticalChanceIncrease,
@@ -1306,7 +1338,8 @@ internal sealed class RaidDpsEstimator
             var portion = LogWeightedBonusPortion(damage, directRatio, combinedRatio);
             foreach (var status in directBuffs)
             {
-                TransferContribution(
+                QueueContribution(
+                    pendingContributions,
                     attackerName,
                     status.SourceName,
                     portion * status.DirectHitChance / directChanceIncrease,
@@ -1316,6 +1349,7 @@ internal sealed class RaidDpsEstimator
     }
 
     private void TransferDotCriticalDirectContribution(
+        ICollection<PendingContribution> pendingContributions,
         string attackerName,
         double damage,
         double unbuffedCriticalChance,
@@ -1359,7 +1393,8 @@ internal sealed class RaidDpsEstimator
 
         foreach (var status in criticalBuffs)
         {
-            TransferContribution(
+            QueueContribution(
+                pendingContributions,
                 attackerName,
                 status.SourceName,
                 criticalPortion * status.CriticalChance / buffedCriticalChance,
@@ -1367,7 +1402,8 @@ internal sealed class RaidDpsEstimator
         }
         foreach (var status in directBuffs)
         {
-            TransferContribution(
+            QueueContribution(
+                pendingContributions,
                 attackerName,
                 status.SourceName,
                 directPortion * status.DirectHitChance / buffedDirectChance,
@@ -1385,6 +1421,77 @@ internal sealed class RaidDpsEstimator
             {
                 actorJobIdsById[NormalizeActorId(actorId)] = parsedJobId;
             }
+        }
+    }
+
+    private static void QueueContribution(
+        ICollection<PendingContribution> pendingContributions,
+        string attackerName,
+        string sourceName,
+        double amount,
+        AttributionKind kind)
+    {
+        if (!double.IsFinite(amount) || amount <= 0 || SameActor(attackerName, sourceName))
+        {
+            return;
+        }
+
+        pendingContributions.Add(new PendingContribution(attackerName, sourceName, amount, kind));
+    }
+
+    private void ApplyOwnership(
+        IReadOnlyCollection<PendingContribution> pendingContributions,
+        double rawDamage,
+        double damageAfterPercentageRemoval,
+        double percentageMultiplier)
+    {
+        if (pendingContributions.Count == 0)
+        {
+            return;
+        }
+
+        var percentageTotal = pendingContributions
+            .Where(static item => item.Kind == AttributionKind.Percentage)
+            .Sum(static item => item.Amount);
+        var rateTotal = pendingContributions
+            .Where(static item => item.Kind != AttributionKind.Percentage)
+            .Sum(static item => item.Amount);
+        var percentageScale = 1.0;
+        var rateScale = 1.0;
+        if (ownershipModel == RaidDpsOwnershipModel.SharedBaseLog &&
+            percentageTotal > 0 &&
+            rateTotal > 0 &&
+            percentageMultiplier > 1)
+        {
+            var damageAfterBothRemoval = damageAfterPercentageRemoval - rateTotal;
+            if (damageAfterBothRemoval > 0)
+            {
+                var rateMultiplier = damageAfterPercentageRemoval / damageAfterBothRemoval;
+                var combinedLog = Math.Log(percentageMultiplier * rateMultiplier);
+                if (rateMultiplier > 1 && combinedLog > 0)
+                {
+                    // SharedBaseLog assigns the joint removal in proportion to each
+                    // component's log multiplier. This is parameter-free and preserves
+                    // both total conservation and the established within-family weights.
+                    var totalRemoval = rawDamage - damageAfterBothRemoval;
+                    var sharedPercentageTotal =
+                        totalRemoval * Math.Log(percentageMultiplier) / combinedLog;
+                    var sharedRateTotal = totalRemoval - sharedPercentageTotal;
+                    percentageScale = sharedPercentageTotal / percentageTotal;
+                    rateScale = sharedRateTotal / rateTotal;
+                }
+            }
+        }
+
+        foreach (var item in pendingContributions)
+        {
+            TransferContribution(
+                item.AttackerName,
+                item.SourceName,
+                item.Amount * (item.Kind == AttributionKind.Percentage
+                    ? percentageScale
+                    : rateScale),
+                item.Kind);
         }
     }
 
@@ -1525,6 +1632,12 @@ internal sealed class RaidDpsEstimator
         string SourceName,
         double CriticalChance,
         double DirectHitChance);
+
+    private readonly record struct PendingContribution(
+        string AttackerName,
+        string SourceName,
+        double Amount,
+        AttributionKind Kind);
 
     private sealed record PeriodicBuffSnapshotInterval(
         PeriodicSnapshotKey Key,

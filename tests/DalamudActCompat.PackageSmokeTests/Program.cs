@@ -717,7 +717,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 8 &&
+        legacyConfiguration.Version == 9 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -747,7 +747,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 8 &&
+        parserMigration.Version == 9 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -761,16 +761,30 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 8 &&
+        newConfiguration.Version == 9 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser &&
+        !newConfiguration.EnableFflogsParityRecorder &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
         "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
+
+    var previousDebugConfiguration = new PluginConfiguration
+    {
+        Version = 8,
+        DebugMode = true,
+        EnableFflogsParityRecorder = true,
+    };
+    Assert(
+        previousDebugConfiguration.ApplyMigrations() &&
+        previousDebugConfiguration.Version == 9 &&
+        previousDebugConfiguration.DebugMode &&
+        !previousDebugConfiguration.EnableFflogsParityRecorder,
+        "The version-9 migration did not detach ordinary Debug from parity recording.");
 
     var previousV6Configuration = new PluginConfiguration
     {
@@ -779,7 +793,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 8 &&
+        previousV6Configuration.Version == 9 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -803,7 +817,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 8 &&
+        previousGenericPluginUser.Version == 9 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -815,7 +829,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 8 &&
+        previousEdpsUser.Version == 9 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -831,7 +845,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 8 &&
+        previousCustomMetricUser.Version == 9 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -860,7 +874,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 8 &&
+        previousTimelineUser.Version == 9 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -949,7 +963,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 8 &&
+        previousV5CactbotUser.Version == 9 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1382,11 +1396,11 @@ static void ValidateFflogsEstimateCurve()
         new(16, 19_196.895),
         new(17, 19_320.374),
     ];
-    var observedLindwurmPaladinRdps = (double)estimatePercentile.Invoke(
+    var observedLindwurmPaladinDps = (double)estimatePercentile.Invoke(
         null,
         [lindwurmPaladinLowCurve, 19_245.4d])!;
     Assert(
-        Math.Round(observedLindwurmPaladinRdps, MidpointRounding.AwayFromZero) == 16,
+        Math.Round(observedLindwurmPaladinDps, MidpointRounding.AwayFromZero) == 16,
         "Dense low-percentile sampling did not reproduce the observed Lindwurm Paladin parse.");
 
     FflogsCurvePoint[] lindwurmBlackMageLowCurve =
@@ -1394,11 +1408,11 @@ static void ValidateFflogsEstimateCurve()
         new(1, 18_235.211),
         new(2, 19_999.254),
     ];
-    var observedLindwurmBlackMageRdps = (double)estimatePercentile.Invoke(
+    var observedLindwurmBlackMageDps = (double)estimatePercentile.Invoke(
         null,
         [lindwurmBlackMageLowCurve, 19_437.3d])!;
     Assert(
-        Math.Round(observedLindwurmBlackMageRdps, MidpointRounding.AwayFromZero) == 2,
+        Math.Round(observedLindwurmBlackMageDps, MidpointRounding.AwayFromZero) == 2,
         "Dense low-percentile sampling did not reproduce the observed Lindwurm Black Mage parse.");
 
     FflogsCurvePoint[] tyrantPaladinCurve =
@@ -1406,24 +1420,24 @@ static void ValidateFflogsEstimateCurve()
         new(25, 18_718.784),
         new(50, 20_830.289),
     ];
-    var observedPaladinRdps = (double)estimatePercentile.Invoke(
+    var observedPaladinDps = (double)estimatePercentile.Invoke(
         null,
         [tyrantPaladinCurve, 20_550d])!;
     Assert(
-        Math.Round(observedPaladinRdps, MidpointRounding.AwayFromZero) == 47,
-        "The corrected local Paladin rDPS did not calibrate to the observed CN ranking of 47.");
+        Math.Round(observedPaladinDps, MidpointRounding.AwayFromZero) == 47,
+        "The local Paladin DPS did not calibrate to the observed CN ranking of 47.");
 
     FflogsCurvePoint[] tyrantMachinistCurve =
     [
         new(25, 29_403.226),
         new(50, 32_079.946),
     ];
-    var observedMachinistRdps = (double)estimatePercentile.Invoke(
+    var observedMachinistDps = (double)estimatePercentile.Invoke(
         null,
         [tyrantMachinistCurve, 30_601d])!;
     Assert(
-        Math.Round(observedMachinistRdps, MidpointRounding.AwayFromZero) == 36,
-        "The corrected local Machinist rDPS did not calibrate to the observed CN ranking of 36.");
+        Math.Round(observedMachinistDps, MidpointRounding.AwayFromZero) == 36,
+        "The local Machinist DPS did not calibrate to the observed CN ranking of 36.");
 
     var fflogsSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
@@ -1437,8 +1451,9 @@ static void ValidateFflogsEstimateCurve()
             "metric = CurrentFflogsEncounterTable.RankingMetric",
             StringComparison.Ordinal) &&
         fflogsSource.Contains("serverRegion: $serverRegion", StringComparison.Ordinal) &&
-        fflogsSource.Contains("partition: $partition", StringComparison.Ordinal),
-        "FFLogs curves are no longer sourced from the CN rDPS ranking population.");
+        fflogsSource.Contains("partition: $partition", StringComparison.Ordinal) &&
+        fflogsSource.Contains("var encounterDps = combatant.Dps", StringComparison.Ordinal),
+        "FFLogs curves are no longer sourced from the CN DPS ranking population or the lookup stopped using actual DPS.");
 
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
@@ -1491,7 +1506,7 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
                 101,
                 "CN",
                 9,
-                "rdps",
+                "dps",
                 FflogsEstimateService.CurrentCurveFormatVersion)])));
 
     var settings = new FflogsSettings
@@ -1516,10 +1531,10 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
         "Lindwurm",
         [new Combatant(
             "local", "Player", "PLD", true, 90_000, 0, 0,
-            Dps: 3_000,
-            EncDps: 3_000,
-            ExtDps: 3_000,
-            Rdps: 2_000)],
+            Dps: 2_000,
+            EncDps: 2_500,
+            ExtDps: 2_750,
+            Rdps: 3_000)],
         [],
         [],
         [],
@@ -1534,7 +1549,9 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
     var capturedCombatant = captured.Combatants.Single();
     Assert(
         capturedCombatant.FflogsPercentile == 50 &&
-        capturedCombatant.FflogsEncounterName == "Lindwurm",
+        capturedCombatant.FflogsEncounterName == "Lindwurm" &&
+        capturedCombatant.FflogsMetric == "DPS" &&
+        capturedCombatant.FflogsDataUpdatedAt is not null,
         "An FFLogs estimate already visible at encounter end was not captured for history.");
 
     var dutyFinalizedFromAnActiveBoss = service.CaptureAvailableEstimates(encounter with
@@ -2219,7 +2236,7 @@ static void ValidateControlCenterPresentation()
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
         historySource.Contains("FflogsEstimateService.GetPersistedEstimate", StringComparison.Ordinal) &&
-        historySource.Contains("FFLogs ~", StringComparison.Ordinal) &&
+        historySource.Contains("FFLogs {", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "Combat History lost its branded frame, navigation rail, or saved FFLogs display.");
@@ -3276,7 +3293,7 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
                     100,
                     "CN",
                     9,
-                    "rdps",
+                    "dps",
                     FflogsEstimateService.CurrentCurveFormatVersion),
             ]));
     await File.WriteAllTextAsync(
@@ -4275,6 +4292,44 @@ static void ValidateRaidDpsEstimator()
         paladinAdjustment < 0 && dragoonAdjustment > 0 &&
         Math.Abs(paladinAdjustment + dragoonAdjustment) < 0.001,
         "Critical-hit raid-buff attribution was not positive and damage-conserving.");
+
+    var percentageFirst = new RaidDpsEstimator(
+        ownershipModel: RaidDpsOwnershipModel.PercentageFirst);
+    var sharedBaseLog = new RaidDpsEstimator(
+        ownershipModel: RaidDpsOwnershipModel.SharedBaseLog);
+    foreach (var ownershipEstimator in new[] { percentageFirst, sharedBaseLog })
+    {
+        ownershipEstimator.StartEncounter(start);
+        ownershipEstimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+        ownershipEstimator.ObserveStatusLine(
+            start,
+            "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Paladin|");
+        ownershipEstimator.ObserveStatusLine(
+            start,
+            "26|time|312|Battle Litany|20.00|10000003|Dragoon|10000002|Paladin|");
+        ownershipEstimator.ObserveDamage(
+            start.AddSeconds(1),
+            "Paladin",
+            "Boss",
+            1_600,
+            critical: true,
+            directHit: false);
+    }
+    var currentPercentage = percentageFirst.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.Percentage);
+    var sharedPercentage = sharedBaseLog.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.Percentage);
+    var currentTotal = percentageFirst.ResolveReceivedDamage("Paladin");
+    var sharedTotal = sharedBaseLog.ResolveReceivedDamage("Paladin");
+    Assert(
+        sharedPercentage < currentPercentage &&
+        Math.Abs(sharedTotal - currentTotal) < 0.001 &&
+        Math.Abs(
+            sharedBaseLog.ResolveAttributionTotals().Received -
+            sharedBaseLog.ResolveAttributionTotals().Contributed) < 0.001,
+        "SharedBaseLog did not reassign only the percentage/rate interaction while preserving total conservation.");
 
     estimator.Reset();
     estimator.StartEncounter(start);

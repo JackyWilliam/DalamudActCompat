@@ -9,10 +9,14 @@ namespace DalamudActCompat.FflogsParityHarness;
 /// </summary>
 internal static class DactRdpsReplay
 {
-    public static ParitySampleResult Replay(NormalizedFight fight)
+    public static ParitySampleResult Replay(
+        NormalizedFight fight,
+        RaidDpsOwnershipModel ownershipModel = RaidDpsOwnershipModel.SharedBaseLog)
     {
         var lifeSurgeTimeline = new FightAttributionTimeline(fight);
-        var estimator = new RaidDpsEstimator(lifeSurgeTimeline.LifeSurgeWeaponskillActionIds.Contains);
+        var estimator = new RaidDpsEstimator(
+            lifeSurgeTimeline.LifeSurgeWeaponskillActionIds.Contains,
+            ownershipModel);
         estimator.Reset();
         foreach (var actor in fight.Actors.Values)
         {
