@@ -12,6 +12,9 @@ namespace DalamudActCompat.ActRuntime;
 internal sealed class RaidDpsEstimator
 {
     private static readonly TimeSpan PendingActionLifetime = TimeSpan.FromSeconds(2);
+    // Status and action packets share the same bounded correlation horizon, so
+    // delayed removals do not require a separately fitted production timeout.
+    private static readonly TimeSpan StatusRemoveGracePeriod = PendingActionLifetime;
     private const uint LifeSurgeStatusId = 0x74;
     private const double DefaultCriticalChance = 0.25;
     private const double DefaultDirectHitChance = 0.25;
@@ -329,7 +332,7 @@ internal sealed class RaidDpsEstimator
                 }
                 if (activeStatuses.Remove(key, out var removed))
                 {
-                    removed.EndTime = timestamp < removed.EndTime ? timestamp : removed.EndTime;
+                    removed.ObserveRemoval(timestamp);
                 }
                 ClosePeriodicSnapshot(periodicKey, timestamp);
                 return;
@@ -422,14 +425,13 @@ internal sealed class RaidDpsEstimator
             {
                 if (existing.Definition == definition)
                 {
-                    if (endTime > existing.EndTime)
-                    {
-                        existing.EndTime = endTime;
-                    }
+                    // Refresh is a new observed lifetime even when the carrier rounds to
+                    // the same nominal duration. Reset both nominal and bounded fallback.
+                    existing.Refresh(endTime);
                     return;
                 }
 
-                existing.EndTime = timestamp < existing.EndTime ? timestamp : existing.EndTime;
+                existing.ObserveRemoval(timestamp);
             }
 
             var interval = new RaidStatusInterval(
@@ -438,6 +440,7 @@ internal sealed class RaidDpsEstimator
                 NormalizeActorName(targetName),
                 timestamp,
                 endTime,
+                endTime + StatusRemoveGracePeriod,
                 definition);
             activeStatuses[key] = interval;
             if (encounterActive)
@@ -1394,11 +1397,13 @@ internal sealed class RaidDpsEstimator
 
     private void PruneExpiredStatuses(DateTimeOffset timestamp)
     {
-        foreach (var pair in activeStatuses
-                     .Where(pair => pair.Value.EndTime <= timestamp)
-                     .ToArray())
+        foreach (var pair in activeStatuses.ToArray())
         {
-            activeStatuses.Remove(pair.Key);
+            pair.Value.Advance(timestamp);
+            if (pair.Value.State == RaidStatusLifecycleState.ExpiredFallback)
+            {
+                activeStatuses.Remove(pair.Key);
+            }
         }
     }
 
@@ -1536,10 +1541,59 @@ internal sealed class RaidDpsEstimator
         string SourceName,
         string TargetName,
         DateTimeOffset StartTime,
-        DateTimeOffset InitialEndTime,
+        DateTimeOffset InitialNominalEndTime,
+        DateTimeOffset InitialFallbackEndTime,
         RaidBuffDefinition Definition)
     {
-        public DateTimeOffset EndTime { get; set; } = InitialEndTime;
+        public DateTimeOffset NominalEndTime { get; private set; } = InitialNominalEndTime;
+
+        public DateTimeOffset EndTime { get; private set; } = InitialFallbackEndTime;
+
+        public RaidStatusLifecycleState State { get; private set; } =
+            RaidStatusLifecycleState.ActiveObserved;
+
+        public void Refresh(DateTimeOffset nominalEndTime)
+        {
+            NominalEndTime = nominalEndTime;
+            EndTime = nominalEndTime + StatusRemoveGracePeriod;
+            State = RaidStatusLifecycleState.ActiveRefreshed;
+        }
+
+        public void ObserveRemoval(DateTimeOffset timestamp)
+        {
+            EndTime = timestamp < EndTime ? timestamp : EndTime;
+            State = RaidStatusLifecycleState.RemovedObserved;
+        }
+
+        public void Advance(DateTimeOffset timestamp)
+        {
+            if (State is RaidStatusLifecycleState.RemovedObserved or
+                RaidStatusLifecycleState.ExpiredFallback)
+            {
+                return;
+            }
+            if (timestamp >= NominalEndTime)
+            {
+                // Nominal expiry is evidence to start a bounded wait, not proof that
+                // the server-side status already ended for this recipient.
+                State = RaidStatusLifecycleState.NominalExpiryReached;
+                State = RaidStatusLifecycleState.PendingRemoveGrace;
+            }
+            if (timestamp >= EndTime)
+            {
+                State = RaidStatusLifecycleState.ExpiredFallback;
+            }
+        }
+    }
+
+    private enum RaidStatusLifecycleState
+    {
+        ActiveObserved,
+        ActiveRefreshed,
+        NominalExpiryReached,
+        PendingRemoveGrace,
+        RemovedObserved,
+        ExpiredFallback,
     }
 
     private readonly record struct RaidBuffDefinition(
