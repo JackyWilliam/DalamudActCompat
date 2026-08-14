@@ -429,6 +429,23 @@ internal static class FflogsEventNormalizer
             .Select(static group => group.Key)
             .FirstOrDefault() ?? "Unknown";
 
+    internal static FflogsActor? ResolveDancePartnerActor(
+        IReadOnlyList<NormalizedFflogsEvent> events,
+        IReadOnlyDictionary<int, FflogsActor> actors,
+        int dancerId)
+        => events
+            .Where(item =>
+                item.SourceId == dancerId &&
+                item.TargetId != dancerId &&
+                item.AbilityId == 0x839 &&
+                StatusApplyTypes.Contains(item.Type))
+            .Select(item => actors.GetValueOrDefault(item.TargetId))
+            .Where(static actor => actor is not null)
+            .GroupBy(static actor => actor!.Id)
+            .OrderByDescending(static group => group.Count())
+            .Select(static group => group.First())
+            .FirstOrDefault();
+
     private static (int Maximum, bool HasOverlap) ResolveMaximumRaidBuffOverlap(
         IReadOnlyList<NormalizedFflogsEvent> events,
         IReadOnlyDictionary<int, FflogsActor> actors,

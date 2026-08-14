@@ -38,7 +38,14 @@ dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --samples 100 --collect-only
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --samples 100 --replay-only
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --self-test
+dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --devilment-probe
 ```
+
+`--devilment-probe` 只读取现有 manifest、原始 event cache 和第一轮
+`parity-report.json`。它固定选择 6 个 SAM 与 5 个 DRG 样本，输出逐 action、逐 window、
+guaranteed coverage、component parity 和 Cu/Du sensitivity 文件。FFLogs API 未提供的
+per-action/per-window contribution 保持为 `unavailable_api`；diagnostic scenario 不会写回
+normalization 或 production `RaidDpsEstimator`。
 
 原始 GraphQL JSON 默认缓存在
 `artifacts/fflogs-parity-harness/cache`。JSON、CSV 和 Markdown 报告默认写到

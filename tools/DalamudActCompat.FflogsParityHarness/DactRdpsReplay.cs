@@ -257,7 +257,7 @@ internal static class DactRdpsReplay
             .Where(item => item.AbilityId == abilityId)
             .Sum(static item => item.Amount);
 
-    private static string BuildActorLine(FflogsActor actor)
+    internal static string BuildActorLine(FflogsActor actor)
         => string.Join(
             '|',
             "03",
@@ -270,7 +270,7 @@ internal static class DactRdpsReplay
             "00",
             string.Empty);
 
-    private static string BuildStatusLine(
+    internal static string BuildStatusLine(
         NormalizedFflogsEvent item,
         NormalizedFight fight,
         bool remove)
@@ -297,7 +297,7 @@ internal static class DactRdpsReplay
             string.Empty);
     }
 
-    private static string BuildActionLine(
+    internal static string BuildActionLine(
         NormalizedFflogsEvent item,
         IReadOnlyDictionary<int, FflogsActor> actors)
     {
@@ -317,7 +317,7 @@ internal static class DactRdpsReplay
         return string.Join('|', fields);
     }
 
-    private static bool TryResolveTechnicalFinishAction(
+    internal static bool TryResolveTechnicalFinishAction(
         NormalizedFight fight,
         NormalizedFflogsEvent status,
         out NormalizedFflogsEvent action)
@@ -339,11 +339,11 @@ internal static class DactRdpsReplay
         return false;
     }
 
-    private static DateTimeOffset ToTimestamp(long reportStartTime, double relativeMilliseconds)
+    internal static DateTimeOffset ToTimestamp(long reportStartTime, double relativeMilliseconds)
         => DateTimeOffset.FromUnixTimeMilliseconds(
             reportStartTime + (long)Math.Round(relativeMilliseconds, MidpointRounding.AwayFromZero));
 
-    private static string FormatActorId(int actorId)
+    internal static string FormatActorId(int actorId)
         => unchecked((uint)Math.Max(0, actorId)).ToString("X8", CultureInfo.InvariantCulture);
 
     private static string Sanitize(string value) => value.Replace('|', '¦').Trim();

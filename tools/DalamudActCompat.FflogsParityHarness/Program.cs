@@ -54,6 +54,27 @@ internal static class Program
                 return 0;
             }
 
+            if (options.DevilmentProbe)
+            {
+                var probeReport = DevilmentPerActionProbe.Run(
+                    collector,
+                    manifest,
+                    options.OutputDirectory);
+                var probePaths = await DevilmentProbeReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    probeReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    probeReport.SelectedSampleCount,
+                    probeReport.ActionCount,
+                    probePaths.JsonPath,
+                    probePaths.ActionsCsvPath,
+                    probePaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
+
             var results = new List<ParitySampleResult>(manifest.Seeds.Count);
             foreach (var seed in manifest.Seeds)
             {
@@ -143,6 +164,18 @@ internal static class Program
             FflogsEventNormalizer.NormalizeAbilityId("damage", 16_196) != 0x81C2)
         {
             throw new InvalidOperationException("FFLogs status/action identity mapping regressed.");
+        }
+
+        var guaranteed = ProductionGuaranteedMetadata.ReadStableActions();
+        if (guaranteed.GetValueOrDefault(0x9066) != ProbeGuaranteedDimensions.Critical ||
+            guaranteed.GetValueOrDefault(0x64C0) !=
+            (ProbeGuaranteedDimensions.Critical | ProbeGuaranteedDimensions.DirectHit))
+        {
+            throw new InvalidOperationException("Production guaranteed-action metadata probe regressed.");
+        }
+        if (!HarnessOptions.Parse(["--devilment-probe"]).ReplayOnly)
+        {
+            throw new InvalidOperationException("Devilment probe must remain cache-only.");
         }
     }
 }
