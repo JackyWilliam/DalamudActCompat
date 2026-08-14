@@ -35,6 +35,40 @@ internal static class Program
                 api,
                 options.CacheDirectory,
                 options.SampleCount);
+            if (options.MatchedOwnershipMining || options.MatchedOwnershipReplay)
+            {
+                var cacheParent = Directory.GetParent(options.CacheDirectory)?.FullName ??
+                                  options.CacheDirectory;
+                var matchedCollector = new FflogsMatchedOwnershipCollector(
+                    api,
+                    Path.Combine(cacheParent, "matched-ownership-cache"),
+                    options.CacheDirectory,
+                    Path.Combine(cacheParent, "matrix-cache"));
+                var matchedManifest = options.MatchedOwnershipMining
+                    ? await matchedCollector.CollectAsync(cancellation.Token)
+                    : matchedCollector.ReadManifest();
+                var matchedReport = MatchedOwnershipExperiment.Run(matchedManifest);
+                var matchedPaths = await MatchedOwnershipReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    matchedReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    matchedReport.OwnershipStatus,
+                    matchedReport.Mining.ApiCandidatesScanned,
+                    MatchedActors = matchedReport.Actors.Count,
+                    Fights = matchedReport.Fights.Count,
+                    GradeA = matchedReport.GradeAGroupCount,
+                    GradeB = matchedReport.GradeBGroupCount,
+                    matchedReport.HasEnoughDhOnlyEvidence,
+                    matchedReport.HasEnoughCriticalDirectEvidence,
+                    matchedReport.SharedBaseLogVsShapley3Identifiable,
+                    matchedPaths.JsonPath,
+                    matchedPaths.PairCsvPath,
+                    matchedPaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
             if (options.PercentageOrderingOnly)
             {
                 var existingManifest = collector.ReadManifest();
@@ -403,6 +437,13 @@ internal static class Program
             targetedOptions.ReplayOnly)
         {
             throw new InvalidOperationException("Targeted matrix mining option semantics regressed.");
+        }
+        var matchedMiningOptions = HarnessOptions.Parse(["--matched-ownership-mining"]);
+        var matchedReplayOptions = HarnessOptions.Parse(["--matched-ownership-replay"]);
+        if (!matchedMiningOptions.MatchedOwnershipMining || matchedMiningOptions.ReplayOnly ||
+            !matchedReplayOptions.MatchedOwnershipReplay || !matchedReplayOptions.ReplayOnly)
+        {
+            throw new InvalidOperationException("Matched ownership option semantics regressed.");
         }
         if (OffensiveBuffRegistry.All.Any(static item => item.ProviderJob == "SAM") ||
             !OffensiveBuffRegistry.All.Any(static item =>

@@ -23,6 +23,10 @@ internal sealed class FflogsApiClient(FflogsCredentials credentials, bool refres
     private double rateLimitRemaining = double.PositiveInfinity;
     private int rateLimitResetSeconds;
 
+    public int CacheHitCount { get; private set; }
+
+    public int NetworkRequestCount { get; private set; }
+
     public async Task<JsonDocument> QueryCachedAsync(
         string cachePath,
         string query,
@@ -31,10 +35,12 @@ internal sealed class FflogsApiClient(FflogsCredentials credentials, bool refres
     {
         if (!refreshCache && File.Exists(cachePath))
         {
+            CacheHitCount++;
             return JsonDocument.Parse(await File.ReadAllTextAsync(cachePath, cancellationToken));
         }
 
         await RespectRateLimitAsync(cancellationToken);
+        NetworkRequestCount++;
         Exception? lastFailure = null;
         for (var attempt = 1; attempt <= MaximumAttempts; attempt++)
         {

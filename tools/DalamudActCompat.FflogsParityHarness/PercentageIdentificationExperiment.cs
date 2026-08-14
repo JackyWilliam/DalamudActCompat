@@ -90,6 +90,22 @@ internal static class PercentageIdentificationExperiment
             ]);
     }
 
+    internal static IReadOnlyList<PercentageIdentificationConstraintRow> AnalyzeSamples(
+        IReadOnlyList<(CachedFightSample Sample, string Source)> samples)
+    {
+        var constraints = new List<PercentageIdentificationConstraintRow>();
+        for (var index = 0; index < samples.Count; index++)
+        {
+            var (sample, source) = samples[index];
+            AnalyzeFight(FflogsEventNormalizer.NormalizeAttribution(sample), source, constraints);
+            if ((index + 1) % 5 == 0 || index + 1 == samples.Count)
+            {
+                Console.WriteLine($"Ownership replay analyzed {index + 1}/{samples.Count} targeted fights.");
+            }
+        }
+        return constraints;
+    }
+
     internal static PercentageInteractionDecomposition DecomposeForTest(
         double damage,
         double percentageMultiplier,
@@ -1109,7 +1125,10 @@ internal static class PercentageIdentificationExperiment
         private double oracleSharedLog;
         private double oracleSharedShapley3;
         private double causalPercentageFirst;
+        private double causalRateFirst;
+        private double causalSharedShapley;
         private double causalSharedLog;
+        private double causalSharedShapley3;
         private double cohortPercentageFirst;
         private double cohortSharedLog;
         private int eventCount;
@@ -1179,8 +1198,14 @@ internal static class PercentageIdentificationExperiment
                 oracle, expectedProvider, static value => value.SharedShapley3);
             causalPercentageFirst += ProviderContribution(
                 causal, expectedProvider, static value => value.PercentageFirst);
+            causalRateFirst += ProviderContribution(
+                causal, expectedProvider, static value => value.RateFirst);
+            causalSharedShapley += ProviderContribution(
+                causal, expectedProvider, static value => value.SharedShapley2);
             causalSharedLog += ProviderContribution(
                 causal, expectedProvider, static value => value.SharedBaseLog);
+            causalSharedShapley3 += ProviderContribution(
+                causal, expectedProvider, static value => value.SharedShapley3);
             cohortPercentageFirst += ProviderContribution(
                 cohort, expectedProvider, static value => value.PercentageFirst);
             cohortSharedLog += ProviderContribution(
@@ -1305,7 +1330,10 @@ internal static class PercentageIdentificationExperiment
                 oracleSharedLog,
                 oracleSharedShapley3,
                 causalPercentageFirst,
+                causalRateFirst,
+                causalSharedShapley,
                 causalSharedLog,
+                causalSharedShapley3,
                 cohortPercentageFirst,
                 cohortSharedLog,
                 eventCount,

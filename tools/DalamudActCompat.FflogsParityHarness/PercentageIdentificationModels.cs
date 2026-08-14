@@ -10,7 +10,10 @@ internal static class PercentageIdentificationCandidates
     public const string NominalPercentageFirst = "Nominal.PercentageFirst";
     public const string NominalSharedBaseLog = "Nominal.SharedBaseLog";
     public const string CausalGracePercentageFirst = "CausalGrace2s.PercentageFirst";
+    public const string CausalGraceRateFirst = "CausalGrace2s.RateFirst";
+    public const string CausalGraceSharedShapley = "CausalGrace2s.SharedShapley2";
     public const string CausalGraceSharedBaseLog = "CausalGrace2s.SharedBaseLog";
+    public const string CausalGraceSharedShapley3 = "CausalGrace2s.SharedShapley3";
     public const string CausalCohortPercentageFirst = "CausalCohort2s.PercentageFirst";
     public const string CausalCohortSharedBaseLog = "CausalCohort2s.SharedBaseLog";
 
@@ -72,7 +75,10 @@ internal sealed record PercentageIdentificationConstraintRow(
     double OracleSharedBaseLog,
     double OracleSharedShapley3,
     double CausalGracePercentageFirst,
+    double CausalGraceRateFirst,
+    double CausalGraceSharedShapley,
     double CausalGraceSharedBaseLog,
+    double CausalGraceSharedShapley3,
     double CausalCohortPercentageFirst,
     double CausalCohortSharedBaseLog,
     int EventCount,
@@ -134,7 +140,10 @@ internal sealed record PercentageIdentificationConstraintRow(
             PercentageIdentificationCandidates.NominalPercentageFirst => NominalPercentageFirst,
             PercentageIdentificationCandidates.NominalSharedBaseLog => NominalSharedBaseLog,
             PercentageIdentificationCandidates.CausalGracePercentageFirst => CausalGracePercentageFirst,
+            PercentageIdentificationCandidates.CausalGraceRateFirst => CausalGraceRateFirst,
+            PercentageIdentificationCandidates.CausalGraceSharedShapley => CausalGraceSharedShapley,
             PercentageIdentificationCandidates.CausalGraceSharedBaseLog => CausalGraceSharedBaseLog,
+            PercentageIdentificationCandidates.CausalGraceSharedShapley3 => CausalGraceSharedShapley3,
             PercentageIdentificationCandidates.CausalCohortPercentageFirst => CausalCohortPercentageFirst,
             PercentageIdentificationCandidates.CausalCohortSharedBaseLog => CausalCohortSharedBaseLog,
             _ => throw new ArgumentOutOfRangeException(nameof(candidate), candidate, "Unknown candidate."),

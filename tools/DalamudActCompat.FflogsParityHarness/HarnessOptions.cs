@@ -37,6 +37,10 @@ internal sealed record HarnessOptions
 
     public bool PercentageOrderingOnly { get; init; }
 
+    public bool MatchedOwnershipMining { get; init; }
+
+    public bool MatchedOwnershipReplay { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -94,6 +98,16 @@ internal sealed record HarnessOptions
                     TargetedMatrixMining = true,
                     ReplayOnly = false,
                 },
+                "--matched-ownership-mining" => options with
+                {
+                    MatchedOwnershipMining = true,
+                    ReplayOnly = false,
+                },
+                "--matched-ownership-replay" => options with
+                {
+                    MatchedOwnershipReplay = true,
+                    ReplayOnly = true,
+                },
                 "--help" or "-h" => options with { ShowHelp = true },
                 _ => throw new ArgumentException($"Unknown argument '{value}'. Use --help for usage."),
             };
@@ -106,6 +120,11 @@ internal sealed record HarnessOptions
         if (options.TargetedMatrixMining && options.ReplayOnly)
         {
             throw new ArgumentException("--mine-targeted-matrix cannot be combined with --replay-only.");
+        }
+        if (options.MatchedOwnershipMining && options.MatchedOwnershipReplay)
+        {
+            throw new ArgumentException(
+                "--matched-ownership-mining and --matched-ownership-replay are mutually exclusive.");
         }
 
         return options with
@@ -159,6 +178,8 @@ internal sealed record HarnessOptions
           --attribution-matrix Run the cache-only cross-provider Crit/DH attribution matrix
           --percentage-audit Run the cache-only fixed percentage-damage attribution audit
           --percentage-ordering-only Run only the cache-only percentage/rate ordering probe
+          --matched-ownership-mining Mine same-actor longitudinal ownership controls only
+          --matched-ownership-replay Replay cached longitudinal controls without network requests
           --mine-targeted-matrix Mine only targeted BRD→G-CDH public fights, cache them, then run the matrix
           --help            Show this help
         """;
