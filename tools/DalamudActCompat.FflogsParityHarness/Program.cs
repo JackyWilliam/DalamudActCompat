@@ -35,6 +35,33 @@ internal static class Program
                 api,
                 options.CacheDirectory,
                 options.SampleCount);
+            if (options.MatchedOwnershipDhAudit)
+            {
+                var cacheParent = Directory.GetParent(options.CacheDirectory)?.FullName ??
+                                  options.CacheDirectory;
+                var dhAuditReport = DhOwnershipExhaustionAudit.Run(
+                    Path.Combine(cacheParent, "matched-ownership-cache"),
+                    options.CacheDirectory);
+                var dhAuditPaths = await DhOwnershipExhaustionAudit.WriteAsync(
+                    options.OutputDirectory,
+                    dhAuditReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    dhAuditReport.OwnershipStatus,
+                    dhAuditReport.ExistingApiResponses,
+                    dhAuditReport.UniqueMetadataResponses,
+                    dhAuditReport.ReconstructedPreflightRows,
+                    dhAuditReport.StrictDhOnlyCandidateFights,
+                    dhAuditReport.ValidMatchedPairs,
+                    dhAuditReport.NewNetworkRequests,
+                    dhAuditReport.FullEventsDownloaded,
+                    dhAuditReport.ActorFlipStatus,
+                    dhAuditPaths.JsonPath,
+                    dhAuditPaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
             if (options.MatchedOwnershipMining || options.MatchedOwnershipReplay)
             {
                 var cacheParent = Directory.GetParent(options.CacheDirectory)?.FullName ??
@@ -440,8 +467,10 @@ internal static class Program
         }
         var matchedMiningOptions = HarnessOptions.Parse(["--matched-ownership-mining"]);
         var matchedReplayOptions = HarnessOptions.Parse(["--matched-ownership-replay"]);
+        var matchedDhOptions = HarnessOptions.Parse(["--matched-ownership-dh-audit"]);
         if (!matchedMiningOptions.MatchedOwnershipMining || matchedMiningOptions.ReplayOnly ||
-            !matchedReplayOptions.MatchedOwnershipReplay || !matchedReplayOptions.ReplayOnly)
+            !matchedReplayOptions.MatchedOwnershipReplay || !matchedReplayOptions.ReplayOnly ||
+            !matchedDhOptions.MatchedOwnershipDhAudit || !matchedDhOptions.ReplayOnly)
         {
             throw new InvalidOperationException("Matched ownership option semantics regressed.");
         }

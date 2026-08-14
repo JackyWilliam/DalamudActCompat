@@ -41,6 +41,8 @@ internal sealed record HarnessOptions
 
     public bool MatchedOwnershipReplay { get; init; }
 
+    public bool MatchedOwnershipDhAudit { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -108,6 +110,11 @@ internal sealed record HarnessOptions
                     MatchedOwnershipReplay = true,
                     ReplayOnly = true,
                 },
+                "--matched-ownership-dh-audit" => options with
+                {
+                    MatchedOwnershipDhAudit = true,
+                    ReplayOnly = true,
+                },
                 "--help" or "-h" => options with { ShowHelp = true },
                 _ => throw new ArgumentException($"Unknown argument '{value}'. Use --help for usage."),
             };
@@ -121,10 +128,14 @@ internal sealed record HarnessOptions
         {
             throw new ArgumentException("--mine-targeted-matrix cannot be combined with --replay-only.");
         }
-        if (options.MatchedOwnershipMining && options.MatchedOwnershipReplay)
+        var matchedOwnershipModeCount =
+            Convert.ToInt32(options.MatchedOwnershipMining) +
+            Convert.ToInt32(options.MatchedOwnershipReplay) +
+            Convert.ToInt32(options.MatchedOwnershipDhAudit);
+        if (matchedOwnershipModeCount > 1)
         {
             throw new ArgumentException(
-                "--matched-ownership-mining and --matched-ownership-replay are mutually exclusive.");
+                "Matched ownership modes are mutually exclusive.");
         }
 
         return options with
@@ -180,6 +191,7 @@ internal sealed record HarnessOptions
           --percentage-ordering-only Run only the cache-only percentage/rate ordering probe
           --matched-ownership-mining Mine same-actor longitudinal ownership controls only
           --matched-ownership-replay Replay cached longitudinal controls without network requests
+          --matched-ownership-dh-audit Exhaust cached metadata for DH-only matched controls
           --mine-targeted-matrix Mine only targeted BRD→G-CDH public fights, cache them, then run the matrix
           --help            Show this help
         """;
