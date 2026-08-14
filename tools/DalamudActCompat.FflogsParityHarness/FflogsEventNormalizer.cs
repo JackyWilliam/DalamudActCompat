@@ -214,6 +214,117 @@ internal static class FflogsEventNormalizer
             warnings);
     }
 
+    public static NormalizedAttributionFight NormalizeAttribution(CachedFightSample sample)
+    {
+        using var metadata = JsonDocument.Parse(File.ReadAllText(sample.MetadataPath));
+        var report = metadata.RootElement
+            .GetProperty("data")
+            .GetProperty("reportData")
+            .GetProperty("report");
+        if (report.ValueKind == JsonValueKind.Null)
+        {
+            throw new InvalidDataException("Cached report metadata is null.");
+        }
+
+        var fightElement = report.GetProperty("fights").EnumerateArray()
+            .Single(fight => GetInt(fight, "id") == sample.Seed.FightId);
+        var fight = new FflogsFight(
+            GetInt(fightElement, "id"),
+            GetInt(fightElement, "encounterID"),
+            GetString(fightElement, "name"),
+            GetDouble(fightElement, "startTime"),
+            GetDouble(fightElement, "endTime"),
+            GetDouble(fightElement, "combatTime"),
+            GetBoolean(fightElement, "kill"),
+            GetInt(fightElement, "difficulty"));
+        if (!fight.Kill)
+        {
+            throw new InvalidDataException("Attribution matrix accepts kill fights only.");
+        }
+
+        var masterData = report.GetProperty("masterData");
+        var actors = ParseActors(masterData.GetProperty("actors"));
+        var abilities = masterData.GetProperty("abilities").EnumerateArray()
+            .Where(static ability => ability.TryGetProperty("gameID", out _))
+            .GroupBy(static ability => GetLong(ability, "gameID"))
+            .ToDictionary(
+                static group => group.Key,
+                static group => GetString(group.First(), "name"));
+        var table = report.GetProperty("damageTable").GetProperty("data");
+        var tableEntries = table.TryGetProperty("entries", out var entries)
+            ? entries.EnumerateArray().ToArray()
+            : [];
+        var damageActors = tableEntries
+            .Select(entry => ParseDamageTableActor(entry, actors))
+            .Where(static actor => actor.ActorId != 0)
+            .ToDictionary(static actor => actor.ActorId);
+        var party = actors.Values
+            .Where(actor =>
+                damageActors.ContainsKey(actor.Id) &&
+                string.Equals(actor.Type, "Player", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(actor.Job) &&
+                !string.Equals(actor.Job, "Unknown", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(actor.Job, "LimitBreak", StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(static actor => actor.Id)
+            .OrderBy(static actor => actor.Job, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static actor => actor.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var normalizedEvents = ParseEvents(sample.EventPaths, abilities);
+        if (normalizedEvents.Count == 0)
+        {
+            throw new InvalidDataException("Filtered FFLogs event cache is empty.");
+        }
+
+        var warnings = new List<string>();
+        var metricDurationMilliseconds = GetDouble(table, "totalTime");
+        if (metricDurationMilliseconds <= 0)
+        {
+            metricDurationMilliseconds = GetDouble(table, "combatTime");
+        }
+        if (metricDurationMilliseconds <= 0)
+        {
+            metricDurationMilliseconds = fight.EndTime - fight.StartTime;
+            warnings.Add("DamageDone duration was missing; wall duration is used for matrix provenance.");
+        }
+        var damageEvents = normalizedEvents.Where(IsDamageEvent).ToArray();
+        var unmatched = damageEvents.Count(static item => !item.IsPeriodic && !item.MatchedCalculatedDamage);
+        if (unmatched > 0)
+        {
+            warnings.Add($"{unmatched}/{damageEvents.Length} direct events lack calculateddamage packet correlation.");
+        }
+
+        return new NormalizedAttributionFight(
+            sample.Seed,
+            GetLong(report, "startTime"),
+            fight,
+            party,
+            actors,
+            normalizedEvents,
+            damageActors,
+            metricDurationMilliseconds / 1000d,
+            string.Join("/", party.Select(static actor => ToJobAbbreviation(actor.Job))),
+            "9",
+            warnings);
+    }
+
+    private static FflogsDamageTableActor ParseDamageTableActor(
+        JsonElement entry,
+        IReadOnlyDictionary<int, FflogsActor> actors)
+    {
+        var actorId = GetInt(entry, "id");
+        var actor = actors.GetValueOrDefault(actorId);
+        return new FflogsDamageTableActor(
+            actorId,
+            GetString(entry, "name"),
+            actor?.Job ?? GetString(entry, "icon"),
+            GetLong(entry, "total"),
+            GetDouble(entry, "totalRDPS"),
+            GetDouble(entry, "totalRDPSTaken"),
+            GetDouble(entry, "totalRDPSGiven"),
+            ParseContributions(entry, "given"),
+            ParseContributions(entry, "taken"));
+    }
+
     private static Dictionary<int, FflogsActor> ParseActors(JsonElement actorArray)
         => actorArray.EnumerateArray()
             .Select(actor => new FflogsActor(

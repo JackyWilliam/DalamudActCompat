@@ -14,8 +14,8 @@ internal readonly record struct GuaranteedHitCandidateInput(
     double UnbuffedDirectChance,
     double CriticalRateIncrease,
     double DirectRateIncrease,
-    double DancerCriticalRateIncrease,
-    double DancerDirectRateIncrease,
+    double ProviderCriticalRateIncrease,
+    double ProviderDirectRateIncrease,
     ProbeGuaranteedDimensions Dimensions,
     double SelfCriticalRateIncrease = 0,
     double SelfDirectRateIncrease = 0);

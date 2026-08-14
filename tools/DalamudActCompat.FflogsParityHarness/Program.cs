@@ -35,6 +35,40 @@ internal static class Program
                 api,
                 options.CacheDirectory,
                 options.SampleCount);
+            if (options.AttributionMatrix)
+            {
+                var existingManifest = collector.ReadManifest();
+                var matrixCache = Path.Combine(
+                    Directory.GetParent(options.CacheDirectory)?.FullName ?? options.CacheDirectory,
+                    "matrix-cache");
+                var matrixCollector = new FflogsTargetedMatrixCollector(api, matrixCache);
+                var targetedManifest = options.TargetedMatrixMining
+                    ? await matrixCollector.CollectAsync(cancellation.Token)
+                    : matrixCollector.ReadManifestOrNull();
+                var targetedSamples = matrixCollector.ReadSamples(targetedManifest);
+                var matrixReport = CrossProviderAttributionMatrixExperiment.Run(
+                    collector,
+                    existingManifest,
+                    targetedSamples,
+                    targetedManifest?.NewlyMinedFightCount ?? 0);
+                var matrixPaths = await AttributionMatrixReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    matrixReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    matrixReport.EquationStatus,
+                    matrixReport.ExistingCachedFightCount,
+                    matrixReport.TargetedCachedFightCount,
+                    matrixReport.NewlyMinedFightCount,
+                    MatrixCellsCovered = matrixReport.Matrix.Count(static cell => cell.ConstraintCount > 0),
+                    MatchedGroups = matrixReport.MatchedGroups.Count,
+                    matrixPaths.JsonPath,
+                    matrixPaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
+
             CacheManifest manifest;
             if (options.ReplayOnly)
             {
@@ -203,6 +237,29 @@ internal static class Program
         if (!HarnessOptions.Parse(["--guaranteed-hit-experiment"]).ReplayOnly)
         {
             throw new InvalidOperationException("Guaranteed-hit experiment must remain cache-only.");
+        }
+        if (!HarnessOptions.Parse(["--attribution-matrix"]).ReplayOnly)
+        {
+            throw new InvalidOperationException("Attribution matrix replay must remain cache-only.");
+        }
+        var targetedOptions = HarnessOptions.Parse(["--mine-targeted-matrix"]);
+        if (!targetedOptions.AttributionMatrix ||
+            !targetedOptions.TargetedMatrixMining ||
+            targetedOptions.ReplayOnly)
+        {
+            throw new InvalidOperationException("Targeted matrix mining option semantics regressed.");
+        }
+        if (OffensiveBuffRegistry.All.Any(static item => item.ProviderJob == "SAM") ||
+            !OffensiveBuffRegistry.All.Any(static item =>
+                item.ProviderJob == "BRD" &&
+                item.Dimension == OffensiveBuffDimension.DirectHitRate) ||
+            GuaranteedHitRegistry.HasGuaranteedDirectOnly ||
+            !GuaranteedHitRegistry.All.Any(static item =>
+                item.Job == "PCT" &&
+                item.Dimensions == (ProbeGuaranteedDimensions.Critical |
+                                    ProbeGuaranteedDimensions.DirectHit)))
+        {
+            throw new InvalidOperationException("Authoritative provider/recipient registry semantics regressed.");
         }
 
         var experimentEvent = damage with { Amount = 100_000, Critical = true, DirectHit = false };

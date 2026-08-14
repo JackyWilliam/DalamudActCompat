@@ -275,13 +275,20 @@ internal static class DactRdpsReplay
         NormalizedFflogsEvent item,
         NormalizedFight fight,
         bool remove)
+        => BuildStatusLine(item, fight.Fight, fight.Actors, remove);
+
+    internal static string BuildStatusLine(
+        NormalizedFflogsEvent item,
+        FflogsFight fight,
+        IReadOnlyDictionary<int, FflogsActor> actors,
+        bool remove)
     {
-        var source = fight.Actors.GetValueOrDefault(item.SourceId);
-        var target = fight.Actors.GetValueOrDefault(item.TargetId);
+        var source = actors.GetValueOrDefault(item.SourceId);
+        var target = actors.GetValueOrDefault(item.TargetId);
         var remainingSeconds = Math.Clamp(
             item.DurationMilliseconds > 0
                 ? item.DurationMilliseconds / 1000d
-                : (fight.Fight.EndTime - item.Timestamp) / 1000d,
+                : (fight.EndTime - item.Timestamp) / 1000d,
             0.001,
             600);
         return string.Join(

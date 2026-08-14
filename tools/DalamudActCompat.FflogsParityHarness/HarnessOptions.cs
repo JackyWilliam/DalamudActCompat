@@ -29,6 +29,10 @@ internal sealed record HarnessOptions
 
     public bool GuaranteedHitExperiment { get; init; }
 
+    public bool AttributionMatrix { get; init; }
+
+    public bool TargetedMatrixMining { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -65,6 +69,17 @@ internal sealed record HarnessOptions
                     GuaranteedHitExperiment = true,
                     ReplayOnly = true,
                 },
+                "--attribution-matrix" => options with
+                {
+                    AttributionMatrix = true,
+                    ReplayOnly = true,
+                },
+                "--mine-targeted-matrix" => options with
+                {
+                    AttributionMatrix = true,
+                    TargetedMatrixMining = true,
+                    ReplayOnly = false,
+                },
                 "--help" or "-h" => options with { ShowHelp = true },
                 _ => throw new ArgumentException($"Unknown argument '{value}'. Use --help for usage."),
             };
@@ -73,6 +88,10 @@ internal sealed record HarnessOptions
         if (options.CollectOnly && options.ReplayOnly)
         {
             throw new ArgumentException("--collect-only and --replay-only are mutually exclusive.");
+        }
+        if (options.TargetedMatrixMining && options.ReplayOnly)
+        {
+            throw new ArgumentException("--mine-targeted-matrix cannot be combined with --replay-only.");
         }
 
         return options with
@@ -123,6 +142,8 @@ internal sealed record HarnessOptions
           --self-test       Run deterministic statistics checks without network requests
           --devilment-probe Run the cached SAM/DRG per-action Devilment audit without network requests
           --guaranteed-hit-experiment Run cache-only aggregate guaranteed-hit candidate elimination
+          --attribution-matrix Run the cache-only cross-provider Crit/DH attribution matrix
+          --mine-targeted-matrix Mine only targeted BRD→G-CDH public fights, cache them, then run the matrix
           --help            Show this help
         """;
 

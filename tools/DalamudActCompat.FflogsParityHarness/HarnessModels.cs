@@ -72,6 +72,34 @@ internal sealed record FflogsDamageTableMetrics(
     IReadOnlyList<FflogsContribution> Given,
     IReadOnlyList<FflogsContribution> Taken);
 
+internal sealed record FflogsDamageTableActor(
+    int ActorId,
+    string ActorName,
+    string Job,
+    long RawDamage,
+    double RdpsTotal,
+    double RdpsTaken,
+    double RdpsGiven,
+    IReadOnlyList<FflogsContribution> Given,
+    IReadOnlyList<FflogsContribution> Taken);
+
+/// <summary>
+/// Provider/recipient experiments deliberately use a neutral fight model. Reusing
+/// NormalizedFight would silently assign one provider or recipient to its Dancer field.
+/// </summary>
+internal sealed record NormalizedAttributionFight(
+    RankingSeed Seed,
+    long ReportStartTime,
+    FflogsFight Fight,
+    IReadOnlyList<FflogsActor> Party,
+    IReadOnlyDictionary<int, FflogsActor> Actors,
+    IReadOnlyList<NormalizedFflogsEvent> Events,
+    IReadOnlyDictionary<int, FflogsDamageTableActor> DamageTableActors,
+    double MetricDurationSeconds,
+    string PartyComposition,
+    string Partition,
+    IReadOnlyList<string> NormalizationWarnings);
+
 /// <summary>
 /// This is the explicit API-to-DACT boundary. Reference metrics travel beside the
 /// normalized events but are never injected into the production estimator.
