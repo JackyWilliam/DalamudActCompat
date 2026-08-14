@@ -180,7 +180,7 @@ internal static class DevilmentPerActionProbe
                           fight.Dancer.Id)
                       ?? throw new InvalidDataException("Selected fight has no resolvable Dance Partner actor.");
         var targetIds = timeline.DevilmentTargetIds;
-        var estimator = new RaidDpsEstimator();
+        var estimator = new RaidDpsEstimator(timeline.LifeSurgeWeaponskillActionIds.Contains);
         estimator.Reset();
         var encounterStart = DactRdpsReplay.ToTimestamp(fight.ReportStartTime, fight.Fight.StartTime);
         foreach (var actor in fight.Actors.Values)
@@ -272,14 +272,23 @@ internal static class DevilmentPerActionProbe
                 continue;
             }
 
-            var currentDimensions = stableGuarantees.GetValueOrDefault(item.AbilityId);
             var lifeSurge = timeline.TryResolveLifeSurgeAction(item, out var contextualDimensions);
+            var stableDimensions = stableGuarantees.GetValueOrDefault(item.AbilityId);
+            var productionContextualDimensions = lifeSurge &&
+                                                  RaidDpsEstimator.IsContextualGuaranteedCriticalStatus(0x74)
+                ? contextualDimensions
+                : ProbeGuaranteedDimensions.None;
+            var currentDimensions = stableDimensions != ProbeGuaranteedDimensions.None
+                ? stableDimensions
+                : productionContextualDimensions;
             var expectedDimensions = currentDimensions != ProbeGuaranteedDimensions.None
                 ? currentDimensions
                 : lifeSurge ? contextualDimensions : ProbeGuaranteedDimensions.None;
-            var category = ResolveCategory(currentDimensions, lifeSurge);
-            var guaranteeSource = currentDimensions != ProbeGuaranteedDimensions.None
+            var category = ResolveCategory(stableDimensions, lifeSurge);
+            var guaranteeSource = stableDimensions != ProbeGuaranteedDimensions.None
                 ? "dact_production_stable_action_metadata"
+                : productionContextualDimensions != ProbeGuaranteedDimensions.None
+                    ? "dact_production_life_surge_status_metadata"
                 : lifeSurge
                     ? "inferred_from_fflogs_life_surge_apply_remove_boundary"
                     : "dact_metadata_no_guarantee";
@@ -306,7 +315,7 @@ internal static class DevilmentPerActionProbe
             var regularTotal = regular.Critical + regular.Direct;
             var guaranteedTotal = guaranteed.Critical + guaranteed.Direct;
             var scenarioCorrection = selection.PartnerJob == "SAM" &&
-                                     currentDimensions != ProbeGuaranteedDimensions.None
+                                     stableDimensions != ProbeGuaranteedDimensions.None
                 ? regularTotal - analyticalTotal
                 : selection.PartnerJob == "DRG" && lifeSurge
                     ? guaranteedTotal - analyticalTotal
@@ -659,6 +668,8 @@ internal static class DevilmentPerActionProbe
             {
                 var stable = stableGuarantees.GetValueOrDefault(group.Key.ActionId);
                 var contextual = group.Any(static action => action.GuaranteeCategory == "E");
+                var contextualCovered = contextual && group.Any(static action =>
+                    action.GuaranteeSource == "dact_production_life_surge_status_metadata");
                 var unknown = group.Any(static action => action.GuaranteeCategory == "F");
                 var evidenceEvents = contextual
                     ? group.Where(static action => action.GuaranteeCategory == "E").ToArray()
@@ -672,8 +683,8 @@ internal static class DevilmentPerActionProbe
                             : "ordinary random Crit/DH";
                 var covered = stable != ProbeGuaranteedDimensions.None
                     ? "YES"
-                    : contextual ? "NO" : unknown ? "UNKNOWN" : "YES";
-                var mismatch = contextual ? "YES" : unknown ? "UNKNOWN" : "NO";
+                    : contextual ? contextualCovered ? "YES" : "NO" : unknown ? "UNKNOWN" : "YES";
+                var mismatch = contextual ? contextualCovered ? "NO" : "YES" : unknown ? "UNKNOWN" : "NO";
                 var evidence = stable != ProbeGuaranteedDimensions.None
                     ? "production metadata + official FFXIV job action description"
                     : contextual
@@ -688,7 +699,9 @@ internal static class DevilmentPerActionProbe
                     expected,
                     stable != ProbeGuaranteedDimensions.None
                         ? DescribeDimensions(stable)
-                        : "none",
+                        : contextualCovered
+                            ? "contextual Critical via Life Surge status 0x74 consumption"
+                            : "none",
                     $"{evidenceEvents.Count(static action => action.IsCrit)}/{evidenceEvents.Length} Crit; " +
                     $"{evidenceEvents.Count(static action => action.IsDirectHit)}/{evidenceEvents.Length} DH",
                     evidenceEvents.Length,

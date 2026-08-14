@@ -11,7 +11,8 @@ internal static class DactRdpsReplay
 {
     public static ParitySampleResult Replay(NormalizedFight fight)
     {
-        var estimator = new RaidDpsEstimator();
+        var lifeSurgeTimeline = new FightAttributionTimeline(fight);
+        var estimator = new RaidDpsEstimator(lifeSurgeTimeline.LifeSurgeWeaponskillActionIds.Contains);
         estimator.Reset();
         foreach (var actor in fight.Actors.Values)
         {
@@ -312,7 +313,8 @@ internal static class DactRdpsReplay
         fields[7] = Sanitize(actors.GetValueOrDefault(item.TargetId)?.Name ?? $"Actor {item.TargetId}");
         // A single decoded damage slot is enough for the production guarantee queue;
         // the authoritative amount still comes from EffectiveDamageEvent below.
-        fields[8] = "000003";
+        var hitFlags = (item.Critical ? 0x20 : 0) | (item.DirectHit ? 0x40 : 0);
+        fields[8] = $"0000{hitFlags:X2}03";
         fields[9] = "00640000";
         return string.Join('|', fields);
     }

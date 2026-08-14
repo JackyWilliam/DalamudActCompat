@@ -66,7 +66,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly object networkCaptureSync = new();
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly RaidDpsEstimator raidDpsEstimator = new();
+    private readonly RaidDpsEstimator raidDpsEstimator;
     private readonly EffectiveDamageLedger effectiveDamageLedger = new();
     private readonly EncounterDurationTracker encounterDurationTracker = new();
     private int effectiveDamageEventCursor;
@@ -155,6 +155,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.getOverlayWindowSettingsSnapshot = getOverlayWindowSettingsSnapshot;
         this.persistOverlaySettings = persistOverlaySettings;
         this.debugMode = debugMode;
+        HashSet<uint> weaponskillActionIds;
+        try
+        {
+            weaponskillActionIds = LoadWeaponskillActionIds(dataManager);
+        }
+        catch (Exception ex)
+        {
+            weaponskillActionIds = [];
+            log.Warning(ex, "Weaponskill action metadata could not be loaded; contextual guarantees will fail closed.");
+        }
+        raidDpsEstimator = new RaidDpsEstimator(weaponskillActionIds.Contains);
         HashSet<string> limitBreakActionNames;
         try
         {
@@ -2489,6 +2500,12 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
         return names;
     }
+
+    private static HashSet<uint> LoadWeaponskillActionIds(IDataManager dataManager)
+        => dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>()
+            .Where(static action => action.ActionCategory.RowId == 3)
+            .Select(static action => action.RowId)
+            .ToHashSet();
 
     private void RestoreHtmlOverlays()
     {

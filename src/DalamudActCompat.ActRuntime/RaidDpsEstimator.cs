@@ -12,6 +12,7 @@ namespace DalamudActCompat.ActRuntime;
 internal sealed class RaidDpsEstimator
 {
     private static readonly TimeSpan PendingActionLifetime = TimeSpan.FromSeconds(2);
+    private const uint LifeSurgeStatusId = 0x74;
     private const double DefaultCriticalChance = 0.25;
     private const double DefaultDirectHitChance = 0.25;
     private const double BaselinePriorHits = 40;
@@ -45,7 +46,21 @@ internal sealed class RaidDpsEstimator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ReassembleAction> consumedReassembleByActorId =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> lifeSurgeByActorId =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> pendingLifeSurgeRemovalByActorId =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ContextualGuaranteedAction> consumedLifeSurgeByActorId =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Func<uint, bool> isWeaponskillAction;
     private bool encounterActive;
+
+    public RaidDpsEstimator(Func<uint, bool>? isWeaponskillAction = null)
+    {
+        // The network action-effect line has no action category. Fail closed when a host
+        // cannot provide game metadata rather than promoting arbitrary same-timestamp Crits.
+        this.isWeaponskillAction = isWeaponskillAction ?? (static _ => false);
+    }
 
     [Flags]
     private enum GuaranteedHitDimensions
@@ -168,6 +183,7 @@ internal sealed class RaidDpsEstimator
             PrunePendingGuaranteedActions(startTime);
             PruneTechnicalFinishApplications(startTime);
             PruneReassemble(startTime);
+            PruneLifeSurge(startTime);
             encounterActive = true;
         }
     }
@@ -201,6 +217,9 @@ internal sealed class RaidDpsEstimator
             technicalFinishApplicationsBySource.Clear();
             reassembleByActorId.Clear();
             consumedReassembleByActorId.Clear();
+            lifeSurgeByActorId.Clear();
+            pendingLifeSurgeRemovalByActorId.Clear();
+            consumedLifeSurgeByActorId.Clear();
         }
     }
 
@@ -232,6 +251,19 @@ internal sealed class RaidDpsEstimator
             rawLine.StartsWith("22|", StringComparison.Ordinal))
         {
             ObserveActionLine(timestamp, rawLine);
+            return false;
+        }
+
+        if (rawLine.StartsWith("25|", StringComparison.Ordinal))
+        {
+            var fields = rawLine.Split('|');
+            if (fields.Length >= 3)
+            {
+                lock (syncRoot)
+                {
+                    ClearLifeSurge(NormalizeActorId(fields[2]));
+                }
+            }
             return false;
         }
 
@@ -279,11 +311,16 @@ internal sealed class RaidDpsEstimator
             PruneExpiredPeriodicSnapshots(timestamp);
             PruneTechnicalFinishApplications(timestamp);
             PruneReassemble(timestamp);
+            PruneLifeSurge(timestamp);
             if (fields[0] == "30")
             {
                 if (statusId == 0x353)
                 {
                     reassembleByActorId.Remove(NormalizeActorId(sourceId));
+                }
+                if (IsContextualGuaranteedCriticalStatus(statusId))
+                {
+                    ObserveLifeSurgeRemoval(timestamp, NormalizeActorId(targetId));
                 }
                 if (activeStatuses.Remove(key, out var removed))
                 {
@@ -321,6 +358,16 @@ internal sealed class RaidDpsEstimator
             if (statusId == 0x353)
             {
                 reassembleByActorId[NormalizeActorId(sourceId)] = endTime;
+            }
+            if (IsContextualGuaranteedCriticalStatus(statusId))
+            {
+                var actorId = NormalizeActorId(targetId);
+                if (!string.IsNullOrEmpty(actorId))
+                {
+                    lifeSurgeByActorId[actorId] = endTime;
+                    pendingLifeSurgeRemovalByActorId.Remove(actorId);
+                    consumedLifeSurgeByActorId.Remove(actorId);
+                }
             }
             if (!isRaidBuff)
             {
@@ -399,6 +446,9 @@ internal sealed class RaidDpsEstimator
 
     internal static bool IsDamageSwingType(int swingType)
         => swingType is 1 or 2;
+
+    internal static bool IsContextualGuaranteedCriticalStatus(uint statusId)
+        => statusId == LifeSurgeStatusId;
 
     internal bool TryResolvePetOwner(string actorName, out string ownerName)
     {
@@ -684,6 +734,7 @@ internal sealed class RaidDpsEstimator
             PrunePendingGuaranteedActions(timestamp);
             PruneTechnicalFinishApplications(timestamp);
             PruneReassemble(timestamp);
+            PruneLifeSurge(timestamp);
             var sourceId = NormalizeActorId(fields[2]);
             if (TechnicalFinishMultipliersByActionId.TryGetValue(actionId, out var multiplier))
             {
@@ -692,6 +743,27 @@ internal sealed class RaidDpsEstimator
                 technicalFinishApplicationsBySource[ActorSnapshotKey(fields[2], fields[3])] =
                     new TechnicalFinishApplication(timestamp, multiplier);
             }
+            var key = new DamageActionKey(
+                timestamp,
+                ActorSnapshotKey(fields[2], fields[3]),
+                ActorSnapshotKey(fields[6], fields[7]),
+                NormalizePeriodicEffectName(fields[5]));
+            var damageEffectCount = 0;
+            var hasCriticalDamage = false;
+            for (var effectIndex = 8; effectIndex < 24; effectIndex += 2)
+            {
+                if (FfxivActionEffectDecoder.TryDecodeDamage(
+                        fields[effectIndex],
+                        fields[effectIndex + 1],
+                        out var amount,
+                        out var critical,
+                        out _) && amount > 0)
+                {
+                    damageEffectCount++;
+                    hasCriticalDamage |= critical;
+                }
+            }
+
             var dimensions = GuaranteedActionsById.GetValueOrDefault(actionId);
             if (dimensions == GuaranteedHitDimensions.None &&
                 ReassembleWeaponskills.Contains(actionId))
@@ -711,35 +783,89 @@ internal sealed class RaidDpsEstimator
             }
             if (dimensions == GuaranteedHitDimensions.None)
             {
+                dimensions = ResolveLifeSurgeDimensions(
+                    timestamp,
+                    sourceId,
+                    actionId,
+                    damageEffectCount,
+                    hasCriticalDamage);
+            }
+            if (dimensions == GuaranteedHitDimensions.None)
+            {
                 return;
             }
 
-            var key = new DamageActionKey(
-                timestamp,
-                ActorSnapshotKey(fields[2], fields[3]),
-                ActorSnapshotKey(fields[6], fields[7]),
-                NormalizePeriodicEffectName(fields[5]));
-            if (!pendingGuaranteedActions.TryGetValue(key, out var queue))
-            {
-                queue = new Queue<GuaranteedHitDimensions>();
-                pendingGuaranteedActions.Add(key, queue);
-            }
-            for (var effectIndex = 8; effectIndex < 24; effectIndex += 2)
-            {
-                if (FfxivActionEffectDecoder.TryDecodeDamage(
-                        fields[effectIndex],
-                        fields[effectIndex + 1],
-                        out var amount,
-                        out _,
-                        out _) && amount > 0)
-                {
-                    queue.Enqueue(dimensions);
-                }
-            }
-            if (queue.Count == 0)
-            {
-                pendingGuaranteedActions.Remove(key);
-            }
+            EnqueueGuaranteedDimensions(key, damageEffectCount, dimensions);
+        }
+    }
+
+    private GuaranteedHitDimensions ResolveLifeSurgeDimensions(
+        DateTimeOffset timestamp,
+        string sourceId,
+        uint actionId,
+        int damageEffectCount,
+        bool hasCriticalDamage)
+    {
+        if (string.IsNullOrEmpty(sourceId) ||
+            damageEffectCount == 0 ||
+            !hasCriticalDamage ||
+            !isWeaponskillAction(actionId))
+        {
+            return GuaranteedHitDimensions.None;
+        }
+
+        if (consumedLifeSurgeByActorId.TryGetValue(sourceId, out var consumed) &&
+            consumed.Timestamp == timestamp && consumed.ActionId == actionId)
+        {
+            // AoE targets arrive as separate action lines but share one Life Surge consume.
+            return GuaranteedHitDimensions.Critical;
+        }
+
+        if (pendingLifeSurgeRemovalByActorId.TryGetValue(sourceId, out var removal) &&
+            removal == timestamp)
+        {
+            pendingLifeSurgeRemovalByActorId.Remove(sourceId);
+            consumedLifeSurgeByActorId[sourceId] = new ContextualGuaranteedAction(timestamp, actionId);
+            return GuaranteedHitDimensions.Critical;
+        }
+
+        if (!lifeSurgeByActorId.Remove(sourceId, out var endTime) || endTime <= timestamp)
+        {
+            return GuaranteedHitDimensions.None;
+        }
+        consumedLifeSurgeByActorId[sourceId] = new ContextualGuaranteedAction(timestamp, actionId);
+        return GuaranteedHitDimensions.Critical;
+    }
+
+    private void ObserveLifeSurgeRemoval(DateTimeOffset timestamp, string actorId)
+    {
+        if (string.IsNullOrEmpty(actorId) || !lifeSurgeByActorId.Remove(actorId))
+        {
+            return;
+        }
+
+        // FFLogs can order the remove before its packet-correlated damage action. Retain
+        // only the exact timestamp; the weaponskill metadata gate still rejects autos/oGCDs.
+        pendingLifeSurgeRemovalByActorId[actorId] = timestamp;
+    }
+
+    private void EnqueueGuaranteedDimensions(
+        DamageActionKey key,
+        int effectCount,
+        GuaranteedHitDimensions dimensions)
+    {
+        if (effectCount <= 0 || dimensions == GuaranteedHitDimensions.None)
+        {
+            return;
+        }
+        if (!pendingGuaranteedActions.TryGetValue(key, out var queue))
+        {
+            queue = new Queue<GuaranteedHitDimensions>();
+            pendingGuaranteedActions.Add(key, queue);
+        }
+        for (var index = 0; index < effectCount; index++)
+        {
+            queue.Enqueue(dimensions);
         }
     }
 
@@ -796,6 +922,37 @@ internal sealed class RaidDpsEstimator
         {
             consumedReassembleByActorId.Remove(pair.Key);
         }
+    }
+
+    private void PruneLifeSurge(DateTimeOffset timestamp)
+    {
+        foreach (var pair in lifeSurgeByActorId.Where(pair => pair.Value <= timestamp).ToArray())
+        {
+            ClearLifeSurge(pair.Key);
+        }
+        foreach (var pair in pendingLifeSurgeRemovalByActorId
+                     .Where(pair => timestamp - pair.Value > PendingActionLifetime)
+                     .ToArray())
+        {
+            pendingLifeSurgeRemovalByActorId.Remove(pair.Key);
+        }
+        foreach (var pair in consumedLifeSurgeByActorId
+                     .Where(pair => timestamp - pair.Value.Timestamp > PendingActionLifetime)
+                     .ToArray())
+        {
+            consumedLifeSurgeByActorId.Remove(pair.Key);
+        }
+    }
+
+    private void ClearLifeSurge(string actorId)
+    {
+        if (string.IsNullOrEmpty(actorId))
+        {
+            return;
+        }
+        lifeSurgeByActorId.Remove(actorId);
+        pendingLifeSurgeRemovalByActorId.Remove(actorId);
+        consumedLifeSurgeByActorId.Remove(actorId);
     }
 
     public double ResolveRate(
@@ -1294,6 +1451,8 @@ internal sealed class RaidDpsEstimator
         string AbilityName);
 
     private readonly record struct ReassembleAction(DateTimeOffset Timestamp, uint ActionId);
+
+    private readonly record struct ContextualGuaranteedAction(DateTimeOffset Timestamp, uint ActionId);
 
     private readonly record struct TechnicalFinishApplication(
         DateTimeOffset Timestamp,

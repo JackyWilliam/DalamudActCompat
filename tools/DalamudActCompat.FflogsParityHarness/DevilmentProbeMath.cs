@@ -93,6 +93,9 @@ internal sealed class FightAttributionTimeline
     public IReadOnlySet<int> DevilmentTargetIds
         => devilmentWindows.Keys.Select(static key => key.TargetId).ToHashSet();
 
+    public IReadOnlySet<uint> LifeSurgeWeaponskillActionIds
+        => lifeSurgeActions.Keys.Select(static key => checked((uint)key.AbilityId)).ToHashSet();
+
     public bool TryResolveLifeSurgeAction(
         NormalizedFflogsEvent item,
         out ProbeGuaranteedDimensions dimensions)

@@ -4690,6 +4690,194 @@ static void ValidateRaidDpsEstimator()
         Math.Abs(applyOutTickIn) < 0.001 &&
         Math.Abs(criticalTotals.Received - criticalTotals.Contributed) < 0.001,
         "A periodic tick inherited tick-time Crit/DH buffs or broke category conservation.");
+
+    ValidateLifeSurgeGuaranteedCriticalState(start);
+}
+
+static void ValidateLifeSurgeGuaranteedCriticalState(DateTimeOffset start)
+{
+    const string dragoonId = "10000010";
+    const string dancerId = "10000009";
+    const string firstTargetId = "40000001";
+    const string secondTargetId = "40000002";
+
+    static RaidDpsEstimator NewEstimator() => new(actionId =>
+        actionId is 0x64AB or 0x9058 or 0x0DE4 or 0x56);
+
+    static string CriticalAction(string actionId, string actionName, string targetId) =>
+        string.Join(
+            '|',
+            "21", "time", dragoonId, "Dragoon", actionId, actionName,
+            targetId, targetId == firstTargetId ? "Boss A" : "Boss B",
+            "00002003", "00640000",
+            "0", "0", "0", "0", "0", "0", "0", "0",
+            "0", "0", "0", "0", "0", "0");
+
+    static EffectiveDamageEvent Damage(
+        DateTimeOffset timestamp,
+        string actionName,
+        string targetId) =>
+        new(
+            timestamp,
+            dragoonId,
+            "Dragoon",
+            string.Empty,
+            targetId,
+            targetId == firstTargetId ? "Boss A" : "Boss B",
+            actionName,
+            1_000,
+            Critical: true,
+            DirectHit: false,
+            IsPeriodic: false);
+
+    static void ApplyDevilmentAndLifeSurge(RaidDpsEstimator estimator, DateTimeOffset timestamp)
+    {
+        estimator.ObserveStatusLine(
+            timestamp,
+            $"26|time|721|Devilment|20.00|{dancerId}|Dancer|{dragoonId}|Dragoon|");
+        estimator.ObserveStatusLine(
+            timestamp,
+            $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    }
+
+    void AssertCoveredWeaponskill(string actionId, string actionName, bool removeBeforeAction)
+    {
+        var estimator = NewEstimator();
+        estimator.StartEncounter(start);
+        ApplyDevilmentAndLifeSurge(estimator, start);
+        var hitTime = start.AddSeconds(1);
+        if (removeBeforeAction)
+        {
+            estimator.ObserveStatusLine(
+                hitTime,
+                $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+        }
+        estimator.ObserveNetworkLine(hitTime, CriticalAction(actionId, actionName, firstTargetId));
+        if (!removeBeforeAction)
+        {
+            estimator.ObserveStatusLine(
+                hitTime,
+                $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+        }
+        estimator.ObserveEffectiveDamage(Damage(hitTime, actionName, firstTargetId), "Dragoon");
+
+        var expectedContribution = 1_000 - (1_000 / 1.075);
+        Assert(
+            Math.Abs(
+                estimator.ResolveContributedDamage(
+                    "Dancer",
+                    RaidDpsEstimator.AttributionKind.Critical) -
+                expectedContribution) < 0.001,
+            $"Life Surge did not mark {actionName} as contextual guaranteed Crit.");
+    }
+
+    // Both packet orders occur in real/parser-replayed data: the effective ledger commits
+    // after the action/status pair, so the consume must bind regardless of their order.
+    AssertCoveredWeaponskill("64AB", "Heavens' Thrust", removeBeforeAction: false);
+    AssertCoveredWeaponskill("9058", "Drakesbane", removeBeforeAction: true);
+    AssertCoveredWeaponskill("DE4", "Wheeling Thrust", removeBeforeAction: false);
+
+    var nonWeaponskill = NewEstimator();
+    nonWeaponskill.StartEncounter(start);
+    nonWeaponskill.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    var randomCritTime = start.AddSeconds(1);
+    nonWeaponskill.ObserveNetworkLine(
+        randomCritTime,
+        CriticalAction("4057", "High Jump", firstTargetId));
+    nonWeaponskill.ObserveEffectiveDamage(
+        Damage(randomCritTime, "High Jump", firstTargetId),
+        "Dragoon");
+    var weaponskillTime = start.AddSeconds(2);
+    nonWeaponskill.ObserveNetworkLine(
+        weaponskillTime,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    nonWeaponskill.ObserveStatusLine(
+        weaponskillTime,
+        $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    nonWeaponskill.ObserveEffectiveDamage(
+        Damage(weaponskillTime, "Heavens' Thrust", firstTargetId),
+        "Dragoon");
+    Assert(
+        nonWeaponskill.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "A random-Crit ability consumed Life Surge or the following weaponskill lost the guarantee.");
+
+    var expired = NewEstimator();
+    expired.StartEncounter(start);
+    expired.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|1.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    var afterExpiry = start.AddSeconds(2);
+    expired.ObserveNetworkLine(
+        afterExpiry,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    expired.ObserveEffectiveDamage(Damage(afterExpiry, "Heavens' Thrust", firstTargetId), "Dragoon");
+    Assert(
+        expired.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "An expired Life Surge still guaranteed a later weaponskill.");
+
+    var removed = NewEstimator();
+    removed.StartEncounter(start);
+    removed.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    removed.ObserveStatusLine(
+        start.AddSeconds(1),
+        $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    var afterRemove = start.AddSeconds(2);
+    removed.ObserveNetworkLine(
+        afterRemove,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    removed.ObserveEffectiveDamage(Damage(afterRemove, "Heavens' Thrust", firstTargetId), "Dragoon");
+    Assert(
+        removed.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "A Life Surge remove without a same-timestamp weaponskill leaked into a later action.");
+
+    var multiTarget = NewEstimator();
+    multiTarget.StartEncounter(start);
+    ApplyDevilmentAndLifeSurge(multiTarget, start);
+    var aoeTime = start.AddSeconds(1);
+    multiTarget.ObserveNetworkLine(
+        aoeTime,
+        CriticalAction("56", "Doom Spike", firstTargetId));
+    multiTarget.ObserveStatusLine(
+        aoeTime,
+        $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    multiTarget.ObserveNetworkLine(
+        aoeTime,
+        CriticalAction("56", "Doom Spike", secondTargetId));
+    multiTarget.ObserveEffectiveDamage(Damage(aoeTime, "Doom Spike", firstTargetId), "Dragoon");
+    multiTarget.ObserveEffectiveDamage(Damage(aoeTime, "Doom Spike", secondTargetId), "Dragoon");
+    var expectedMultiTargetContribution = 2 * (1_000 - (1_000 / 1.075));
+    Assert(
+        Math.Abs(
+            multiTarget.ResolveContributedDamage(
+                "Dancer",
+                RaidDpsEstimator.AttributionKind.Critical) -
+            expectedMultiTargetContribution) < 0.001 &&
+        Math.Abs(
+            multiTarget.ResolveContributedDamage(
+                "Dancer",
+                RaidDpsEstimator.AttributionKind.DirectHit)) < 0.001,
+        "Life Surge multi-target damage consumed the guarantee too early or more than once.");
+
+    var deathReset = NewEstimator();
+    deathReset.StartEncounter(start);
+    deathReset.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    deathReset.ObserveNetworkLine(
+        start.AddSeconds(1),
+        $"25|time|{dragoonId}|Dragoon|E0000000||death|");
+    var afterDeath = start.AddSeconds(2);
+    deathReset.ObserveNetworkLine(
+        afterDeath,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    deathReset.ObserveEffectiveDamage(Damage(afterDeath, "Heavens' Thrust", firstTargetId), "Dragoon");
+    Assert(
+        deathReset.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "Life Surge state survived player death/reset cleanup.");
 }
 
 static void ValidateFflogsParityReplay(string testRoot)
