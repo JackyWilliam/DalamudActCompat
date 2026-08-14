@@ -6,4 +6,5 @@
   <Project Path="tests/DalamudActCompat.PackageSmokeTests/DalamudActCompat.PackageSmokeTests.csproj" />
   <Project Path="tests/DalamudActCompat.LegacyResourceSmokeTests/DalamudActCompat.LegacyResourceSmokeTests.csproj" />
   <Project Path="tests/DalamudActCompat.HostSmokeTests/DalamudActCompat.HostSmokeTests.csproj" />
+  <Project Path="tools/DalamudActCompat.FflogsParityHarness/DalamudActCompat.FflogsParityHarness.csproj" />
 </Solution>

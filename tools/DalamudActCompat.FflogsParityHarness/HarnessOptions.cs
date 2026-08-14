@@ -1,0 +1,137 @@
+using System.Globalization;
+using System.Text.Json;
+
+namespace DalamudActCompat.FflogsParityHarness;
+
+internal sealed record HarnessOptions
+{
+    public int SampleCount { get; init; } = 200;
+
+    public string CacheDirectory { get; init; } = Path.Combine("artifacts", "fflogs-parity-harness", "cache");
+
+    public string OutputDirectory { get; init; } = Path.Combine("artifacts", "fflogs-parity-harness", "reports");
+
+    public string ConfigurationPath { get; init; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "XIVLauncherCN",
+        "pluginConfigs",
+        "DalamudActCompat.json");
+
+    public bool RefreshCache { get; init; }
+
+    public bool CollectOnly { get; init; }
+
+    public bool ReplayOnly { get; init; }
+
+    public bool SelfTest { get; init; }
+
+    public bool ShowHelp { get; init; }
+
+    public static HarnessOptions Parse(IReadOnlyList<string> args)
+    {
+        var options = new HarnessOptions();
+        for (var index = 0; index < args.Count; index++)
+        {
+            var value = args[index];
+            options = value switch
+            {
+                "--samples" => options with
+                {
+                    SampleCount = ParseSampleCount(RequireValue(args, ref index, value)),
+                },
+                "--cache-dir" => options with
+                {
+                    CacheDirectory = Path.GetFullPath(RequireValue(args, ref index, value)),
+                },
+                "--output-dir" => options with
+                {
+                    OutputDirectory = Path.GetFullPath(RequireValue(args, ref index, value)),
+                },
+                "--config" => options with
+                {
+                    ConfigurationPath = Path.GetFullPath(RequireValue(args, ref index, value)),
+                },
+                "--refresh" => options with { RefreshCache = true },
+                "--collect-only" => options with { CollectOnly = true },
+                "--replay-only" => options with { ReplayOnly = true },
+                "--self-test" => options with { SelfTest = true },
+                "--help" or "-h" => options with { ShowHelp = true },
+                _ => throw new ArgumentException($"Unknown argument '{value}'. Use --help for usage."),
+            };
+        }
+
+        if (options.CollectOnly && options.ReplayOnly)
+        {
+            throw new ArgumentException("--collect-only and --replay-only are mutually exclusive.");
+        }
+
+        return options with
+        {
+            CacheDirectory = Path.GetFullPath(options.CacheDirectory),
+            OutputDirectory = Path.GetFullPath(options.OutputDirectory),
+            ConfigurationPath = Path.GetFullPath(options.ConfigurationPath),
+        };
+    }
+
+    public FflogsCredentials LoadCredentials()
+    {
+        var environmentClientId = Environment.GetEnvironmentVariable("FFLOGS_CLIENT_ID");
+        var environmentClientSecret = Environment.GetEnvironmentVariable("FFLOGS_CLIENT_SECRET");
+        if (!string.IsNullOrWhiteSpace(environmentClientId) &&
+            !string.IsNullOrWhiteSpace(environmentClientSecret))
+        {
+            return new FflogsCredentials(environmentClientId.Trim(), environmentClientSecret.Trim());
+        }
+
+        using var configuration = JsonDocument.Parse(File.ReadAllText(ConfigurationPath));
+        if (!configuration.RootElement.TryGetProperty("Fflogs", out var fflogs))
+        {
+            throw new InvalidDataException($"Configuration '{ConfigurationPath}' has no Fflogs section.");
+        }
+
+        var clientId = fflogs.GetProperty("ClientId").GetString();
+        var clientSecret = fflogs.GetProperty("ClientSecret").GetString();
+        if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
+        {
+            throw new InvalidDataException(
+                "FFLogs credentials are missing. Set FFLOGS_CLIENT_ID/FFLOGS_CLIENT_SECRET or configure DACT.");
+        }
+
+        return new FflogsCredentials(clientId.Trim(), clientSecret.Trim());
+    }
+
+    public static string Usage => """
+        FFLogs rDPS Parity Harness
+
+          --samples N       Valid DNC samples to collect (100-300, default 200)
+          --cache-dir PATH  Raw GraphQL response cache
+          --output-dir PATH CSV/JSON/Markdown output
+          --config PATH     DACT configuration used only to read API credentials
+          --refresh         Ignore existing response cache
+          --collect-only    Fetch/cache samples without replay
+          --replay-only     Replay the cached manifest without network requests
+          --self-test       Run deterministic statistics checks without network requests
+          --help            Show this help
+        """;
+
+    private static int ParseSampleCount(string value)
+    {
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) ||
+            count is < 100 or > 300)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), "Sample count must be between 100 and 300.");
+        }
+
+        return count;
+    }
+
+    private static string RequireValue(IReadOnlyList<string> args, ref int index, string argument)
+    {
+        if (++index >= args.Count || string.IsNullOrWhiteSpace(args[index]))
+        {
+            throw new ArgumentException($"{argument} requires a value.");
+        }
+
+        return args[index];
+    }
+}

@@ -23,6 +23,7 @@ using System.Resources.Extensions;
 
 [assembly: InternalsVisibleTo("DalamudActCompat.LegacyResourceSmokeTests")]
 [assembly: InternalsVisibleTo("DalamudActCompat.PackageSmokeTests")]
+[assembly: InternalsVisibleTo("DalamudActCompat.FflogsParityHarness")]
 
 namespace DalamudActCompat.ActRuntime;
 
