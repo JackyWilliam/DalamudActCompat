@@ -181,6 +181,12 @@ internal static class DevilmentProbeReportWriter
         var maxCalibrationResidual = report.Samples.Count == 0
             ? 0
             : report.Samples.Max(static sample => Math.Abs(sample.AnalyticalCalibrationResidual));
+        var lifeSurgeCoverage = report.Coverage
+            .Where(static item => item.ExpectedBehavior.Contains("Life Surge", StringComparison.Ordinal))
+            .ToArray();
+        var lifeSurgeFixed = lifeSurgeCoverage.Length > 0 && lifeSurgeCoverage.All(static item =>
+            item.Covered == "YES" && item.Mismatch == "NO" &&
+            item.CurrentDactMetadata.Contains("status 0x74", StringComparison.Ordinal));
 
         builder.AppendLine("# DNC Devilment SAM vs DRG Per-Action Probe");
         builder.AppendLine();
@@ -367,18 +373,24 @@ internal static class DevilmentProbeReportWriter
         builder.AppendLine();
         builder.AppendLine("## Root-cause ranking");
         builder.AppendLine();
-        builder.AppendLine("- **Confirmed:** DRG Life Surge (status 0x74) produces contextual guaranteed-Crit weaponskills, but production has no Life Surge consumption path. The selected contextual rows are all observed Crits; action IDs are listed in the coverage table.");
+        builder.AppendLine(lifeSurgeFixed
+            ? "- **Confirmed and fixed:** DRG Life Surge (status 0x74) contextual guaranteed-Crit weaponskills are covered by production status consumption; every selected contextual row reports Covered=YES and Mismatch=NO."
+            : "- **Confirmed bug:** DRG Life Surge (status 0x74) produces contextual guaranteed-Crit weaponskills, but the selected production coverage still has a mismatch. Action IDs are listed in the coverage table.");
         builder.AppendLine($"- **Strongly supported:** SAM's discrepancy is concentrated in production-known intrinsic guaranteed-Crit actions. The guaranteed-as-regular diagnostic accounts for {share:F1}% of the selected aggregate Devilment gap, led by both Tendo Setsugekka actions. It does not fit every fight exactly, so the precise FFLogs guaranteed branch is not yet confirmed.");
         builder.AppendLine($"- **Possible but insufficient in the requested range:** Cu/Du input mismatch. ±1 percentage point moves final rDPS by at most {maxSensitivityRdps:F3} in these fights, well below the largest hundreds-of-rDPS errors, though a larger unknown actual-stat difference can still affect residuals.");
         builder.AppendLine("- **Possible:** self-sourced rate buffs are excluded before production builds Cb/Db. This is especially relevant to DRG Battle Litany and needs a controlled denominator audit against FFLogs.");
         builder.AppendLine("- **Unlikely for the primary SAM/DRG split:** DoT snapshot and window-edge state. The modeled guaranteed signal is direct-hit-time damage and repeats across nearly every window; public per-action FFLogs truth is still required before fully ruling snapshot state out.");
         builder.AppendLine("- **Ruled out for this dataset's numerator:** damage normalization and direct packet correlation; first-round parity remains exact. Pet/owner attribution is also not a credible explanation for the selected SAM/DRG partner actions, and per-fight action totals cover production Devilment with effectively zero residual.");
         builder.AppendLine();
-        builder.AppendLine("## Minimal production patch plan (not implemented)");
+        builder.AppendLine(lifeSurgeFixed
+            ? "## Next evidence checks"
+            : "## Minimal production patch plan (not implemented)");
         builder.AppendLine();
         builder.AppendLine("1. Do not change the guaranteed multiplier yet. First obtain an authoritative FFLogs guaranteed-hit rule or controlled logs with known Cu/Du; the public FFLogs page does not define this branch and the regular-path scenario leaves fight-dependent residuals.");
-        builder.AppendLine("2. In `src/DalamudActCompat.ActRuntime/RaidDpsEstimator.cs`, add Life Surge status consumption beside the existing Reassemble action-state handling, with weaponskill-only consumption and multi-target action reuse. This affects DRG under Crit-rate buffs, especially Devilment and Chain Stratagem/Battle Litany interactions.");
-        builder.AppendLine("3. Add ActRuntime regression tests for Life Surge + Devilment, random Crits during the Life Surge window, removal/expiry, and a non-weaponskill between apply and consumption. Keep all existing SAM stable-ID tests.");
+        builder.AppendLine(lifeSurgeFixed
+            ? "2. Keep the Life Surge regression matrix and its 11-fight replay as a fixed coverage gate; do not interpret the worsened final DRG delta as permission to restore the old omission."
+            : "2. Add Life Surge status consumption beside Reassemble, with weaponskill-only consumption and multi-target action reuse, then add apply/remove/expiry/random-Crit regression coverage.");
+        builder.AppendLine("3. Use aggregate candidate elimination without inventing FFLogs per-action truth; validate high- and low-guaranteed-damage cohorts and rate-buff-overlap groups separately.");
         builder.AppendLine("4. If authoritative data confirms a different guaranteed allocation equation, change only `TransferGuaranteedCriticalDirectContribution`, add SAM Midare/Ogi/Tendo and guaranteed Crit+DH fixtures, then rerun the existing 100 cached samples plus this 11-fight probe.");
         builder.AppendLine("5. Replace Cu/Du observation inference only when a reliable actor-stat input exists; do not tune the 25% prior, 40-hit prior, or clamp against final rDPS deltas.");
         builder.AppendLine();

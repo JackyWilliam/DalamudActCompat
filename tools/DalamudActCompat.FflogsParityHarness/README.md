@@ -39,7 +39,14 @@ dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --samples 100 --replay-only
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --self-test
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --devilment-probe
+dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --guaranteed-hit-experiment
 ```
+
+`--guaranteed-hit-experiment` 只读取现有 100 场缓存。它从 61 场 SAM partner 中选取
+30 场 guaranteed damage 最高的高信息量样本，并把 production 实测的 regular-action
+Devilment contribution 保持不变，只离线替换 guaranteed-event candidate contribution。
+比较基准只能是 FFLogs 整场 `Devilment given.total`；工具不会伪造或反推 per-action truth，
+也不会写回 production `TransferGuaranteedCriticalDirectContribution`。
 
 `--devilment-probe` 只读取现有 manifest、原始 event cache 和第一轮
 `parity-report.json`。它固定选择 6 个 SAM 与 5 个 DRG 样本，输出逐 action、逐 window、

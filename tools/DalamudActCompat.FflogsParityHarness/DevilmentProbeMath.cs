@@ -35,10 +35,26 @@ internal static class ProductionGuaranteedMetadata
         }
         return result;
     }
+
+    public static IReadOnlySet<long> ReadReassembleWeaponskills()
+    {
+        var field = typeof(RaidDpsEstimator).GetField(
+            "ReassembleWeaponskills",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Production Reassemble metadata field was not found.");
+        if (field.GetValue(null) is not IEnumerable values)
+        {
+            throw new InvalidOperationException("Production Reassemble metadata was not enumerable.");
+        }
+
+        return values.Cast<object>().Select(Convert.ToInt64).ToHashSet();
+    }
 }
 
 internal sealed class FightAttributionTimeline
 {
+    private static readonly IReadOnlySet<long> ReassembleWeaponskills =
+        ProductionGuaranteedMetadata.ReadReassembleWeaponskills();
     private static readonly IReadOnlyDictionary<long, double> PercentageMultipliers =
         new Dictionary<long, double>
         {
@@ -66,6 +82,7 @@ internal sealed class FightAttributionTimeline
     private readonly NormalizedFight fight;
     private readonly IReadOnlyList<ProbeStatusInterval> statuses;
     private readonly IReadOnlyDictionary<ProbeActionKey, ProbeGuaranteedDimensions> lifeSurgeActions;
+    private readonly IReadOnlyDictionary<ProbeActionKey, ProbeGuaranteedDimensions> reassembleActions;
     private readonly IReadOnlyDictionary<(int SourceId, int TargetId), IReadOnlyList<ProbeStatusInterval>>
         devilmentWindows;
 
@@ -74,6 +91,10 @@ internal sealed class FightAttributionTimeline
         this.fight = fight;
         statuses = BuildStatusIntervals(fight);
         lifeSurgeActions = ResolveLifeSurgeActions(fight, statuses);
+        reassembleActions = ResolveReassembleActions(
+            fight,
+            statuses,
+            ReassembleWeaponskills);
         devilmentWindows = statuses
             .Where(status => status.AbilityId == 0x721 &&
                              status.SourceId == fight.Dancer.Id &&
@@ -100,6 +121,11 @@ internal sealed class FightAttributionTimeline
         NormalizedFflogsEvent item,
         out ProbeGuaranteedDimensions dimensions)
         => lifeSurgeActions.TryGetValue(ProbeActionKey.From(item), out dimensions);
+
+    public bool TryResolveReassembleAction(
+        NormalizedFflogsEvent item,
+        out ProbeGuaranteedDimensions dimensions)
+        => reassembleActions.TryGetValue(ProbeActionKey.From(item), out dimensions);
 
     public ProbeAttributionState Resolve(NormalizedFflogsEvent item, FflogsActor owner)
     {
@@ -154,7 +180,13 @@ internal sealed class FightAttributionTimeline
             devilmentDirect,
             activeAtHit,
             attributedWindow?.Window,
-            timing);
+            timing,
+            external
+                .Where(status => RateBuffs.ContainsKey(status.AbilityId))
+                .Select(static status => status.AbilityId)
+                .Distinct()
+                .Order()
+                .ToArray());
     }
 
     private IReadOnlyList<ProbeStatusInterval> ResolveExternalStatuses(
@@ -293,6 +325,42 @@ internal sealed class FightAttributionTimeline
         return result;
     }
 
+    private static IReadOnlyDictionary<ProbeActionKey, ProbeGuaranteedDimensions> ResolveReassembleActions(
+        NormalizedFight fight,
+        IReadOnlyList<ProbeStatusInterval> statuses,
+        IReadOnlySet<long> weaponskills)
+    {
+        var result = new Dictionary<ProbeActionKey, ProbeGuaranteedDimensions>();
+        foreach (var reassemble in statuses.Where(static status => status.AbilityId == 0x353))
+        {
+            var selected = fight.Events
+                .Where(item => FflogsEventNormalizer.IsDamageEvent(item) &&
+                               !item.IsPeriodic &&
+                               item.SourceId == reassemble.SourceId &&
+                               weaponskills.Contains(item.AbilityId) &&
+                               item.Timestamp >= reassemble.Start &&
+                               item.Timestamp <= reassemble.End + 1)
+                .OrderBy(static item => item.Timestamp)
+                .FirstOrDefault();
+            if (selected is null)
+            {
+                continue;
+            }
+
+            // Reassemble is consumed once per cast, while an AoE cast emits one damage
+            // event per target. The production queue attaches the same CDH guarantee to all.
+            foreach (var item in fight.Events.Where(item =>
+                         item.SourceId == selected.SourceId &&
+                         item.AbilityId == selected.AbilityId &&
+                         item.Timestamp == selected.Timestamp))
+            {
+                result[ProbeActionKey.From(item)] =
+                    ProbeGuaranteedDimensions.Critical | ProbeGuaranteedDimensions.DirectHit;
+            }
+        }
+        return result;
+    }
+
     private static string NormalizeEffectName(string value)
     {
         value = value.Trim();
@@ -339,7 +407,8 @@ internal readonly record struct ProbeAttributionState(
     double DevilmentDirectIncrease,
     bool DevilmentActiveAtHit,
     int? DevilmentWindow,
-    string AttributionTiming);
+    string AttributionTiming,
+    IReadOnlyList<long> RateBuffIds);
 
 internal static class DevilmentContributionMath
 {

@@ -75,6 +75,25 @@ internal static class Program
                 return 0;
             }
 
+            if (options.GuaranteedHitExperiment)
+            {
+                var experiment = GuaranteedHitAttributionExperiment.Run(collector, manifest);
+                var experimentPaths = await GuaranteedHitExperimentReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    experiment,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    experiment.EquationStatus,
+                    experiment.BestCandidate,
+                    experiment.SelectedSamFightCount,
+                    experiment.CurrentProductionCalibration,
+                    experimentPaths.JsonPath,
+                    experimentPaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
+
             var results = new List<ParitySampleResult>(manifest.Seeds.Count);
             foreach (var seed in manifest.Seeds)
             {
@@ -173,9 +192,74 @@ internal static class Program
         {
             throw new InvalidOperationException("Production guaranteed-action metadata probe regressed.");
         }
+        if (!ProductionGuaranteedMetadata.ReadReassembleWeaponskills().Contains(0x4072))
+        {
+            throw new InvalidOperationException("Production Reassemble weaponskill metadata probe regressed.");
+        }
         if (!HarnessOptions.Parse(["--devilment-probe"]).ReplayOnly)
         {
             throw new InvalidOperationException("Devilment probe must remain cache-only.");
+        }
+        if (!HarnessOptions.Parse(["--guaranteed-hit-experiment"]).ReplayOnly)
+        {
+            throw new InvalidOperationException("Guaranteed-hit experiment must remain cache-only.");
+        }
+
+        var experimentEvent = damage with { Amount = 100_000, Critical = true, DirectHit = false };
+        var experimentState = new ProbeAttributionState(
+            1,
+            0.30,
+            0.20,
+            0.20,
+            0.20,
+            true,
+            1,
+            "hit_time",
+            [0x721, 0x312]);
+        var productionProbe = DevilmentContributionMath.Calculate(
+            experimentEvent,
+            experimentState,
+            0.25,
+            0.25,
+            ProbeGuaranteedDimensions.Critical);
+        var offlineCandidate = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.CurrentProduction,
+            new GuaranteedHitCandidateInput(
+                100_000,
+                true,
+                false,
+                0.25,
+                0.25,
+                0.30,
+                0.20,
+                0.20,
+                0.20,
+                ProbeGuaranteedDimensions.Critical));
+        if (Math.Abs(productionProbe.Critical + productionProbe.Direct -
+                     offlineCandidate.Critical - offlineCandidate.Direct) > 0.000_001)
+        {
+            throw new InvalidOperationException("Guaranteed-hit CurrentProduction candidate calibration regressed.");
+        }
+        foreach (var definition in GuaranteedHitCandidateMath.Definitions)
+        {
+            var value = GuaranteedHitCandidateMath.Calculate(
+                definition.Name,
+                new GuaranteedHitCandidateInput(
+                    100_000,
+                    true,
+                    true,
+                    0.25,
+                    0.25,
+                    0.30,
+                    0.40,
+                    0.20,
+                    0.20,
+                    ProbeGuaranteedDimensions.Critical | ProbeGuaranteedDimensions.DirectHit));
+            if (!double.IsFinite(value.Critical) || value.Critical < 0 ||
+                !double.IsFinite(value.Direct) || value.Direct < 0)
+            {
+                throw new InvalidOperationException($"Guaranteed-hit candidate '{definition.Name}' is invalid.");
+            }
         }
     }
 }

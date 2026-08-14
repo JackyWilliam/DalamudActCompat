@@ -27,6 +27,8 @@ internal sealed record HarnessOptions
 
     public bool DevilmentProbe { get; init; }
 
+    public bool GuaranteedHitExperiment { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -58,6 +60,11 @@ internal sealed record HarnessOptions
                 "--replay-only" => options with { ReplayOnly = true },
                 "--self-test" => options with { SelfTest = true },
                 "--devilment-probe" => options with { DevilmentProbe = true, ReplayOnly = true },
+                "--guaranteed-hit-experiment" => options with
+                {
+                    GuaranteedHitExperiment = true,
+                    ReplayOnly = true,
+                },
                 "--help" or "-h" => options with { ShowHelp = true },
                 _ => throw new ArgumentException($"Unknown argument '{value}'. Use --help for usage."),
             };
@@ -115,6 +122,7 @@ internal sealed record HarnessOptions
           --replay-only     Replay the cached manifest without network requests
           --self-test       Run deterministic statistics checks without network requests
           --devilment-probe Run the cached SAM/DRG per-action Devilment audit without network requests
+          --guaranteed-hit-experiment Run cache-only aggregate guaranteed-hit candidate elimination
           --help            Show this help
         """;
 
