@@ -261,5 +261,64 @@ internal static class Program
                 throw new InvalidOperationException($"Guaranteed-hit candidate '{definition.Name}' is invalid.");
             }
         }
+
+        var selfRateInput = new GuaranteedHitCandidateInput(
+            100_000,
+            true,
+            false,
+            0.25,
+            0.25,
+            0.30,
+            0.20,
+            0.20,
+            0.20,
+            ProbeGuaranteedDimensions.Critical,
+            SelfCriticalRateIncrease: 0.10);
+        var observedExternal = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.ObservedExternalProvidersOnly,
+            selfRateInput);
+        var observedSelfScaling = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.ObservedSelfScalingExternalDenominator,
+            selfRateInput);
+        var unscaledExcluded = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.UnscaledExcludeSelfEverywhere,
+            selfRateInput);
+        var unscaledExternal = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.UnscaledExternalProvidersOnly,
+            selfRateInput);
+        if (observedExternal != observedSelfScaling || unscaledExcluded != unscaledExternal)
+        {
+            // These duplicate policies are intentionally emitted so the report proves
+            // where the declared denominator axes collapse mathematically.
+            throw new InvalidOperationException("Guaranteed-hit denominator equivalence regressed.");
+        }
+        const double externalCriticalGameRatio = (1.60 + 0.30 * 0.60) / 1.60;
+        const double allCriticalGameRatio = (1.60 + 0.40 * 0.60) / 1.60;
+        var expectedWithoutSelf = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.ObservedExternalProvidersOnly,
+            selfRateInput with
+            {
+                DamageAfterPercentageRemoval =
+                    selfRateInput.DamageAfterPercentageRemoval *
+                    externalCriticalGameRatio / allCriticalGameRatio,
+            });
+        var observedWithoutSelf = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.ObservedExcludeSelfEverywhere,
+            selfRateInput);
+        if (Math.Abs(observedWithoutSelf.Critical - expectedWithoutSelf.Critical) > 1e-9 ||
+            Math.Abs(observedWithoutSelf.Direct - expectedWithoutSelf.Direct) > 1e-9)
+        {
+            throw new InvalidOperationException("Guaranteed-hit self-scaling removal regressed.");
+        }
+        var conditionalWithOverlap = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.OtherExternalOverlapObservedElseUnscaled,
+            selfRateInput);
+        var observed = GuaranteedHitCandidateMath.Calculate(
+            GuaranteedHitCandidateMath.ObservedHitRegular,
+            selfRateInput);
+        if (conditionalWithOverlap != observed)
+        {
+            throw new InvalidOperationException("Guaranteed-hit overlap boundary selection regressed.");
+        }
     }
 }

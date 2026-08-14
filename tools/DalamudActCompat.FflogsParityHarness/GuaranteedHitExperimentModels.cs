@@ -16,7 +16,9 @@ internal readonly record struct GuaranteedHitCandidateInput(
     double DirectRateIncrease,
     double DancerCriticalRateIncrease,
     double DancerDirectRateIncrease,
-    ProbeGuaranteedDimensions Dimensions);
+    ProbeGuaranteedDimensions Dimensions,
+    double SelfCriticalRateIncrease = 0,
+    double SelfDirectRateIncrease = 0);
 
 internal sealed record GuaranteedHitExperimentSelection(
     string Report,
@@ -72,7 +74,16 @@ internal sealed record GuaranteedHitResidualStatistics(
     double ResidualVsGuaranteedDamageCorrelation,
     double ResidualVsCriticalProxyCorrelation,
     double ResidualVsDirectProxyCorrelation,
-    double ResidualVsRateBuffOverlapCorrelation);
+    double ResidualVsRateBuffOverlapCorrelation,
+    double ResidualVsGuaranteedDamageRatioCorrelation,
+    double ResidualVsTendoDamageRatioCorrelation,
+    double ResidualVsTendoKaeshiDamageRatioCorrelation,
+    double ResidualVsOgiDamageRatioCorrelation,
+    double ResidualVsSelfRateExposureCorrelation,
+    double ResidualVsExternalCriticalOverlapCorrelation,
+    double ResidualVsExternalDirectOverlapCorrelation,
+    double ActorEtaSquared,
+    double EncounterEtaSquared);
 
 internal sealed record GuaranteedHitCandidateRanking(
     string Candidate,
@@ -127,6 +138,146 @@ internal sealed record GuaranteedHitCalibrationResult(
     double MaximumAbsoluteFightResidual,
     bool Passed);
 
+internal sealed record GuaranteedHitResidualDecomposition(
+    string Report,
+    int FightId,
+    string Actor,
+    string PartnerActor,
+    string Encounter,
+    int EncounterId,
+    string Cohort,
+    double Duration,
+    string PartyComposition,
+    long PartnerTotalRawDamage,
+    long GuaranteedRawDamage,
+    double GuaranteedTotalRawRatio,
+    double GuaranteedDevilmentWindowRatio,
+    long MidareDamage,
+    long TendoDamage,
+    long TendoKaeshiDamage,
+    long OgiDamage,
+    long KaeshiNamikiriDamage,
+    long KaeshiSetsugekkaDamage,
+    double CriticalChanceProxy,
+    double DirectChanceProxy,
+    double CriticalChanceMinimum,
+    double CriticalChanceMaximum,
+    double DirectChanceMinimum,
+    double DirectChanceMaximum,
+    string CriticalRateBuffComposition,
+    string DirectRateBuffComposition,
+    double SelfRateExposureFraction,
+    double ExternalRateExposureFraction,
+    double ExternalCriticalOverlapFraction,
+    double ExternalDirectOverlapFraction,
+    double RawWeightedSelfCriticalRate,
+    double RawWeightedSelfDirectRate,
+    double RawWeightedExternalCriticalRate,
+    double RawWeightedExternalDirectRate,
+    double FflogsDevilmentTotal,
+    double ProductionDevilmentTotal,
+    double CurrentProductionResidual,
+    double ObservedHitRegularResidual,
+    double UnscaledObservedHitResidual,
+    IReadOnlyDictionary<string, double> CandidateResiduals);
+
+internal sealed record GuaranteedHitCandidateScopeValidation(
+    string Candidate,
+    string Scope,
+    string Unit,
+    GuaranteedHitResidualStatistics Statistics);
+
+internal sealed record GuaranteedHitActorAnalysis(
+    string Actor,
+    int FightCount,
+    int EncounterCount,
+    string Encounters,
+    double CurrentResidualMean,
+    double ObservedResidualMean,
+    double UnscaledResidualMean,
+    double CriticalChanceMinimum,
+    double CriticalChanceMaximum,
+    double DirectChanceMinimum,
+    double DirectChanceMaximum,
+    double GuaranteedDamageRatioMean,
+    double TendoRatioMean,
+    double ExternalCriticalOverlapMean,
+    double ExternalDirectOverlapMean,
+    double SelfRateExposureMean,
+    string RateBuffComposition,
+    IReadOnlyDictionary<string, double> CandidateResidualMeans);
+
+internal sealed record GuaranteedHitActorStability(
+    string Candidate,
+    int MultiFightActorCount,
+    int MultiEncounterActorCount,
+    int StableSignActorCount,
+    double MeanWithinActorStandardDeviation,
+    double ActorEtaSquared);
+
+internal sealed record GuaranteedHitCohortFeatureDistribution(
+    string Cohort,
+    string Feature,
+    int FightCount,
+    double Mean,
+    double Median,
+    double FirstQuartile,
+    double ThirdQuartile,
+    double Minimum,
+    double Maximum);
+
+internal sealed record GuaranteedHitCohortCategoryDistribution(
+    string Cohort,
+    string Dimension,
+    string Value,
+    int FightCount,
+    double Fraction);
+
+internal sealed record GuaranteedHitPartialCorrelation(
+    string Candidate,
+    string Scope,
+    string Variable,
+    int FightCount,
+    int WithinActorObservationCount,
+    int WithinEncounterObservationCount,
+    double RawCorrelation,
+    double ControllingGuaranteedDamageRatio,
+    double ControllingNumericInputs,
+    double WithinActorCorrelation,
+    double WithinEncounterCorrelation,
+    double FullControlsCorrelation);
+
+internal sealed record GuaranteedHitCounterfactualStatistics(
+    string Candidate,
+    string PartnerJob,
+    int SampleCount,
+    double MeanDelta,
+    double MedianDelta,
+    double MeanAbsoluteDelta,
+    double RootMeanSquareDelta,
+    double MaximumAbsoluteDelta,
+    int NegativeCount,
+    int ZeroCount,
+    int PositiveCount);
+
+internal sealed record RateBuffDenominatorAudit(
+    long AbilityId,
+    string Buff,
+    double CriticalRate,
+    double DirectRate,
+    string SourceAndTarget,
+    string ExternalTargetProduction,
+    string SelfTargetProduction,
+    bool AllowsSelfContribution,
+    string OtherProviderDenominator,
+    string FflogsPublicRule);
+
+internal sealed record GuaranteedHitAcceptanceCheck(
+    string Candidate,
+    string Check,
+    bool Passed,
+    string Evidence);
+
 internal sealed record GuaranteedHitAttributionExperimentReport(
     DateTimeOffset GeneratedAt,
     int CachedSampleCount,
@@ -148,7 +299,18 @@ internal sealed record GuaranteedHitAttributionExperimentReport(
     string EquationStatusReason,
     IReadOnlyList<GuaranteedHitFullReplayComparison> FullReplay,
     IReadOnlyList<string> RemainingUnknowns,
-    IReadOnlyList<string> EvidenceBoundaries);
+    IReadOnlyList<string> EvidenceBoundaries,
+    IReadOnlyList<GuaranteedHitResidualDecomposition> ResidualDecomposition,
+    IReadOnlyList<GuaranteedHitCandidateScopeValidation> CandidateScopeValidation,
+    IReadOnlyList<GuaranteedHitActorAnalysis> ActorAnalysis,
+    IReadOnlyList<GuaranteedHitActorStability> ActorStability,
+    IReadOnlyList<GuaranteedHitCohortFeatureDistribution> CohortFeatureDistributions,
+    IReadOnlyList<GuaranteedHitCohortCategoryDistribution> CohortCategoryDistributions,
+    IReadOnlyList<GuaranteedHitPartialCorrelation> PartialCorrelations,
+    IReadOnlyList<GuaranteedHitCounterfactualStatistics> AllCandidateCounterfactuals,
+    IReadOnlyList<RateBuffDenominatorAudit> RateBuffDenominatorAudit,
+    IReadOnlyList<GuaranteedHitAcceptanceCheck> AcceptanceChecks,
+    IReadOnlyList<string> ResidualFindings);
 
 internal sealed record GuaranteedHitExperimentReportPaths(
     string JsonPath,
@@ -158,4 +320,12 @@ internal sealed record GuaranteedHitExperimentReportPaths(
     string ActionFamilyCsvPath,
     string BuffConditionCsvPath,
     string FullReplayCsvPath,
+    string ResidualDecompositionCsvPath,
+    string CandidateScopeCsvPath,
+    string ActorAnalysisCsvPath,
+    string CohortFeatureCsvPath,
+    string CohortCategoryCsvPath,
+    string PartialCorrelationCsvPath,
+    string AllCandidateCounterfactualCsvPath,
+    string RateBuffAuditCsvPath,
     string MarkdownPath);

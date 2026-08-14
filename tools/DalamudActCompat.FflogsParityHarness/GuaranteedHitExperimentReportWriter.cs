@@ -20,6 +20,14 @@ internal static class GuaranteedHitExperimentReportWriter
             Path.Combine(outputDirectory, "guaranteed-hit-action-family-validation.csv"),
             Path.Combine(outputDirectory, "guaranteed-hit-buff-condition-validation.csv"),
             Path.Combine(outputDirectory, "guaranteed-hit-full-replay-counterfactual.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-residual-decomposition.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-candidate-scope-validation.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-actor-analysis.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-cohort-features.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-cohort-categories.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-partial-correlations.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-all-candidate-counterfactual.csv"),
+            Path.Combine(outputDirectory, "guaranteed-hit-rate-buff-audit.csv"),
             Path.Combine(outputDirectory, "guaranteed-hit-experiment-summary.md"));
         await File.WriteAllTextAsync(
             paths.JsonPath,
@@ -35,6 +43,14 @@ internal static class GuaranteedHitExperimentReportWriter
         await File.WriteAllTextAsync(paths.ActionFamilyCsvPath, BuildActionFamilyCsv(report), cancellationToken);
         await File.WriteAllTextAsync(paths.BuffConditionCsvPath, BuildBuffConditionCsv(report), cancellationToken);
         await File.WriteAllTextAsync(paths.FullReplayCsvPath, BuildFullReplayCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.ResidualDecompositionCsvPath, BuildResidualDecompositionCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.CandidateScopeCsvPath, BuildCandidateScopeCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.ActorAnalysisCsvPath, BuildActorAnalysisCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.CohortFeatureCsvPath, BuildCohortFeatureCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.CohortCategoryCsvPath, BuildCohortCategoryCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.PartialCorrelationCsvPath, BuildPartialCorrelationCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.AllCandidateCounterfactualCsvPath, BuildAllCandidateCounterfactualCsv(report), cancellationToken);
+        await File.WriteAllTextAsync(paths.RateBuffAuditCsvPath, BuildRateBuffAuditCsv(report), cancellationToken);
         await File.WriteAllTextAsync(paths.MarkdownPath, BuildMarkdown(report), cancellationToken);
         return paths;
     }
@@ -114,7 +130,10 @@ internal static class GuaranteedHitExperimentReportWriter
         builder.AppendLine(
             "candidate,cohort,n,mean,median,mae,rmse,maxAbs,negative,zero,positive," +
             "residualVsDuration,residualVsGuaranteedDamage,residualVsCriticalProxy," +
-            "residualVsDirectProxy,residualVsRateBuffOverlap");
+            "residualVsDirectProxy,residualVsRateBuffOverlap,residualVsGuaranteedRatio," +
+            "residualVsTendoRatio,residualVsTendoKaeshiRatio,residualVsOgiRatio," +
+            "residualVsSelfRate,residualVsExternalCrit,residualVsExternalDh," +
+            "actorEtaSquared,encounterEtaSquared");
         foreach (var item in report.CohortValidation)
         {
             var stats = item.Statistics;
@@ -125,7 +144,15 @@ internal static class GuaranteedHitExperimentReportWriter
                 stats.PositiveCount, stats.ResidualVsDurationCorrelation,
                 stats.ResidualVsGuaranteedDamageCorrelation,
                 stats.ResidualVsCriticalProxyCorrelation, stats.ResidualVsDirectProxyCorrelation,
-                stats.ResidualVsRateBuffOverlapCorrelation);
+                stats.ResidualVsRateBuffOverlapCorrelation,
+                stats.ResidualVsGuaranteedDamageRatioCorrelation,
+                stats.ResidualVsTendoDamageRatioCorrelation,
+                stats.ResidualVsTendoKaeshiDamageRatioCorrelation,
+                stats.ResidualVsOgiDamageRatioCorrelation,
+                stats.ResidualVsSelfRateExposureCorrelation,
+                stats.ResidualVsExternalCriticalOverlapCorrelation,
+                stats.ResidualVsExternalDirectOverlapCorrelation,
+                stats.ActorEtaSquared, stats.EncounterEtaSquared);
         }
         return builder.ToString();
     }
@@ -157,6 +184,194 @@ internal static class GuaranteedHitExperimentReportWriter
                 item.PartnerJob, item.SampleCount, item.CurrentMeanDelta, item.CurrentMedianDelta,
                 item.CurrentMeanAbsoluteDelta, item.CurrentMaxAbsoluteDelta, item.CandidateMeanDelta,
                 item.CandidateMedianDelta, item.CandidateMeanAbsoluteDelta, item.CandidateMaxAbsoluteDelta);
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildResidualDecompositionCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var candidates = report.Candidates.Select(static item => item.Name).ToArray();
+        var builder = new StringBuilder();
+        object?[] fixedHeader =
+        [
+            "report", "fightId", "actor", "partnerActor", "encounter", "encounterId", "cohort",
+            "duration", "partyComposition", "partnerTotalRawDamage", "guaranteedRawDamage",
+            "guaranteedTotalRawRatio", "guaranteedDevilmentWindowRatio", "midareDamage",
+            "tendoDamage", "tendoKaeshiDamage", "ogiDamage", "kaeshiNamikiriDamage",
+            "kaeshiSetsugekkaDamage", "criticalChanceProxy", "directChanceProxy",
+            "criticalChanceMinimum", "criticalChanceMaximum", "directChanceMinimum",
+            "directChanceMaximum", "criticalRateBuffComposition", "directRateBuffComposition",
+            "selfRateExposureFraction", "externalRateExposureFraction",
+            "externalCriticalOverlapFraction", "externalDirectOverlapFraction",
+            "rawWeightedSelfCriticalRate", "rawWeightedSelfDirectRate",
+            "rawWeightedExternalCriticalRate", "rawWeightedExternalDirectRate",
+            "fflogsDevilmentTotal", "productionDevilmentTotal", "currentProductionResidual",
+            "observedHitRegularResidual", "unscaledObservedHitResidual",
+        ];
+        AppendCsv(builder, fixedHeader.Concat(candidates.Select(static candidate =>
+            (object?)$"residual:{candidate}")).ToArray());
+        foreach (var item in report.ResidualDecomposition)
+        {
+            var fixedValues = new object?[]
+            {
+                item.Report, item.FightId, item.Actor, item.PartnerActor, item.Encounter,
+                item.EncounterId, item.Cohort, item.Duration, item.PartyComposition,
+                item.PartnerTotalRawDamage, item.GuaranteedRawDamage, item.GuaranteedTotalRawRatio,
+                item.GuaranteedDevilmentWindowRatio, item.MidareDamage, item.TendoDamage,
+                item.TendoKaeshiDamage, item.OgiDamage, item.KaeshiNamikiriDamage,
+                item.KaeshiSetsugekkaDamage, item.CriticalChanceProxy, item.DirectChanceProxy,
+                item.CriticalChanceMinimum, item.CriticalChanceMaximum,
+                item.DirectChanceMinimum, item.DirectChanceMaximum,
+                item.CriticalRateBuffComposition, item.DirectRateBuffComposition,
+                item.SelfRateExposureFraction, item.ExternalRateExposureFraction,
+                item.ExternalCriticalOverlapFraction, item.ExternalDirectOverlapFraction,
+                item.RawWeightedSelfCriticalRate, item.RawWeightedSelfDirectRate,
+                item.RawWeightedExternalCriticalRate, item.RawWeightedExternalDirectRate,
+                item.FflogsDevilmentTotal, item.ProductionDevilmentTotal,
+                item.CurrentProductionResidual, item.ObservedHitRegularResidual,
+                item.UnscaledObservedHitResidual,
+            };
+            AppendCsv(builder, fixedValues.Concat(candidates.Select(candidate =>
+                (object?)item.CandidateResiduals[candidate])).ToArray());
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildCandidateScopeCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(
+            "candidate,scope,unit,n,mean,median,mae,rmse,maxAbs,negative,zero,positive," +
+            "corrDuration,corrGuaranteedRaw,corrGuaranteedRatio,corrCu,corrDu,corrRateOverlap," +
+            "corrTendoRatio,corrTendoKaeshiRatio,corrOgiRatio,corrSelfRate,corrExternalCrit," +
+            "corrExternalDh,repeatedActorEtaSquared,encounterEtaSquared");
+        foreach (var item in report.CandidateScopeValidation)
+        {
+            var stats = item.Statistics;
+            AppendCsv(builder,
+                item.Candidate, item.Scope, item.Unit, stats.FightCount, stats.MeanResidual,
+                stats.MedianResidual, stats.MeanAbsoluteResidual, stats.RootMeanSquareResidual,
+                stats.MaximumAbsoluteResidual, stats.NegativeCount, stats.ZeroCount,
+                stats.PositiveCount, stats.ResidualVsDurationCorrelation,
+                stats.ResidualVsGuaranteedDamageCorrelation,
+                stats.ResidualVsGuaranteedDamageRatioCorrelation,
+                stats.ResidualVsCriticalProxyCorrelation, stats.ResidualVsDirectProxyCorrelation,
+                stats.ResidualVsRateBuffOverlapCorrelation,
+                stats.ResidualVsTendoDamageRatioCorrelation,
+                stats.ResidualVsTendoKaeshiDamageRatioCorrelation,
+                stats.ResidualVsOgiDamageRatioCorrelation,
+                stats.ResidualVsSelfRateExposureCorrelation,
+                stats.ResidualVsExternalCriticalOverlapCorrelation,
+                stats.ResidualVsExternalDirectOverlapCorrelation,
+                stats.ActorEtaSquared, stats.EncounterEtaSquared);
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildActorAnalysisCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var candidates = report.Candidates.Select(static item => item.Name).ToArray();
+        var builder = new StringBuilder();
+        object?[] fixedHeader =
+        [
+            "actor", "n", "encounterCount", "encounters", "currentMean", "observedMean",
+            "unscaledMean", "cuMin", "cuMax", "duMin", "duMax", "guaranteedDamageRatio",
+            "tendoRatio", "externalCritOverlap", "externalDhOverlap", "selfRateExposure",
+            "rateBuffComposition",
+        ];
+        AppendCsv(builder, fixedHeader.Concat(candidates.Select(static candidate =>
+            (object?)$"mean:{candidate}")).ToArray());
+        foreach (var item in report.ActorAnalysis)
+        {
+            object?[] fixedValues =
+            [
+                item.Actor, item.FightCount, item.EncounterCount, item.Encounters,
+                item.CurrentResidualMean, item.ObservedResidualMean, item.UnscaledResidualMean,
+                item.CriticalChanceMinimum, item.CriticalChanceMaximum,
+                item.DirectChanceMinimum, item.DirectChanceMaximum,
+                item.GuaranteedDamageRatioMean, item.TendoRatioMean,
+                item.ExternalCriticalOverlapMean, item.ExternalDirectOverlapMean,
+                item.SelfRateExposureMean, item.RateBuffComposition,
+            ];
+            AppendCsv(builder, fixedValues.Concat(candidates.Select(candidate =>
+                (object?)item.CandidateResidualMeans[candidate])).ToArray());
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildCohortFeatureCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("cohort,feature,n,mean,median,p25,p75,min,max");
+        foreach (var item in report.CohortFeatureDistributions)
+        {
+            AppendCsv(builder, item.Cohort, item.Feature, item.FightCount, item.Mean,
+                item.Median, item.FirstQuartile, item.ThirdQuartile, item.Minimum, item.Maximum);
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildCohortCategoryCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("cohort,dimension,value,n,fraction");
+        foreach (var item in report.CohortCategoryDistributions)
+        {
+            AppendCsv(
+                builder,
+                item.Cohort,
+                item.Dimension,
+                item.Value,
+                item.FightCount,
+                item.Fraction);
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildPartialCorrelationCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(
+            "candidate,scope,variable,n,withinActorN,withinEncounterN,raw," +
+            "controlGuaranteedRatio,controlNumericInputs," +
+            "withinActor,withinEncounter,fullControls");
+        foreach (var item in report.PartialCorrelations)
+        {
+            AppendCsv(builder, item.Candidate, item.Scope, item.Variable, item.FightCount,
+                item.WithinActorObservationCount, item.WithinEncounterObservationCount,
+                item.RawCorrelation, item.ControllingGuaranteedDamageRatio,
+                item.ControllingNumericInputs, item.WithinActorCorrelation,
+                item.WithinEncounterCorrelation, item.FullControlsCorrelation);
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildAllCandidateCounterfactualCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("candidate,partnerJob,n,mean,median,mae,rmse,maxAbs,negative,zero,positive");
+        foreach (var item in report.AllCandidateCounterfactuals)
+        {
+            AppendCsv(builder, item.Candidate, item.PartnerJob, item.SampleCount,
+                item.MeanDelta, item.MedianDelta, item.MeanAbsoluteDelta,
+                item.RootMeanSquareDelta, item.MaximumAbsoluteDelta,
+                item.NegativeCount, item.ZeroCount, item.PositiveCount);
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildRateBuffAuditCsv(GuaranteedHitAttributionExperimentReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(
+            "abilityId,buff,criticalRate,directRate,sourceAndTarget,externalTargetProduction," +
+            "selfTargetProduction,allowsSelfContribution,otherProviderDenominator,fflogsPublicRule");
+        foreach (var item in report.RateBuffDenominatorAudit)
+        {
+            AppendCsv(builder, $"0x{item.AbilityId:X}", item.Buff, item.CriticalRate,
+                item.DirectRate, item.SourceAndTarget, item.ExternalTargetProduction,
+                item.SelfTargetProduction, item.AllowsSelfContribution,
+                item.OtherProviderDenominator, item.FflogsPublicRule);
         }
         return builder.ToString();
     }
@@ -268,6 +483,145 @@ internal static class GuaranteedHitExperimentReportWriter
                 $"{item.CandidateMedianDelta:F3} / {item.CandidateMeanAbsoluteDelta:F3} / " +
                 $"{item.CandidateMaxAbsoluteDelta:F3} |");
         }
+        builder.AppendLine();
+        builder.AppendLine("## Residual root-cause findings");
+        builder.AppendLine();
+        foreach (var item in report.ResidualFindings)
+        {
+            builder.AppendLine($"- {item}");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## Production rate-buff denominator audit");
+        builder.AppendLine();
+        builder.AppendLine("Production removes `source == damage actor` before it constructs Crit/DH arrays. Therefore self rates do not enter ordinary `Cb/Db`, guaranteed `C/D`, DoT snapshots, or another provider's denominator, and self contribution is rejected again at transfer time.");
+        builder.AppendLine();
+        builder.AppendLine("| Buff | ID | C/D | External carrier | Self carrier | Other-provider denominator | FFLogs public rule |");
+        builder.AppendLine("|---|---|---|---|---|---|---|");
+        foreach (var item in report.RateBuffDenominatorAudit)
+        {
+            builder.AppendLine(
+                $"| {item.Buff} | `0x{item.AbilityId:X}` | {item.CriticalRate:P0}/{item.DirectRate:P0} | " +
+                $"{EscapeMarkdown(item.ExternalTargetProduction)} | {EscapeMarkdown(item.SelfTargetProduction)} | " +
+                $"{EscapeMarkdown(item.OtherProviderDenominator)} | {EscapeMarkdown(item.FflogsPublicRule)} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## High 30 vs holdout 31 feature split");
+        builder.AppendLine();
+        builder.AppendLine("| Feature | High mean | Holdout mean | All-SAM mean |");
+        builder.AppendLine("|---|---:|---:|---:|");
+        foreach (var feature in report.CohortFeatureDistributions.Select(static item => item.Feature)
+                     .Distinct(StringComparer.Ordinal))
+        {
+            var high = report.CohortFeatureDistributions.Single(item =>
+                item.Cohort == "High-information 30" && item.Feature == feature);
+            var holdout = report.CohortFeatureDistributions.Single(item =>
+                item.Cohort == "Holdout 31" && item.Feature == feature);
+            var all = report.CohortFeatureDistributions.Single(item =>
+                item.Cohort == "All SAM 61" && item.Feature == feature);
+            builder.AppendLine($"| {feature} | {high.Mean:F6} | {holdout.Mean:F6} | {all.Mean:F6} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## Candidate re-evaluation by scope");
+        builder.AppendLine();
+        var focusCandidates = new[]
+            {
+                GuaranteedHitCandidateMath.CurrentProduction,
+                GuaranteedHitCandidateMath.ObservedHitRegular,
+                GuaranteedHitCandidateMath.UnscaledObservedHit,
+                GuaranteedHitCandidateMath.ObservedAllActiveDenominator,
+                GuaranteedHitCandidateMath.ObservedExcludeSelfEverywhere,
+                GuaranteedHitCandidateMath.UnscaledAllActiveDenominator,
+                GuaranteedHitCandidateMath.UnscaledSelfScalingExternalDenominator,
+                GuaranteedHitCandidateMath.OtherExternalOverlapObservedElseUnscaled,
+                report.BestCandidate,
+            }
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        builder.AppendLine("| Candidate | Scope | N | Mean | Median | MAE | RMSE | Max | Sign N/0/P | Corr gRaw | Corr Tendo ratio | Repeated-actor eta² |");
+        builder.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|");
+        foreach (var item in report.CandidateScopeValidation.Where(item =>
+                     focusCandidates.Contains(item.Candidate, StringComparer.Ordinal)))
+        {
+            var stats = item.Statistics;
+            builder.AppendLine(
+                $"| `{item.Candidate}` | {item.Scope} | {stats.FightCount} | {stats.MeanResidual:F1} | " +
+                $"{stats.MedianResidual:F1} | {stats.MeanAbsoluteResidual:F1} | " +
+                $"{stats.RootMeanSquareResidual:F1} | {stats.MaximumAbsoluteResidual:F1} | " +
+                $"{stats.NegativeCount}/{stats.ZeroCount}/{stats.PositiveCount} | " +
+                $"{stats.ResidualVsGuaranteedDamageCorrelation:F3} | " +
+                $"{stats.ResidualVsTendoDamageRatioCorrelation:F3} | {stats.ActorEtaSquared:F3} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("Variants C/D in the Observed family and B/C in the Unscaled family are deliberately retained as duplicate rows: their equality is a result of the declared scopes, not missing output.");
+        builder.AppendLine();
+        builder.AppendLine("## Tendo partial-correlation audit");
+        builder.AppendLine();
+        builder.AppendLine("| Candidate | Scope | Variable | N | Actor N | Encounter N | Raw | Control g-ratio | Numeric controls | Within actor | Within encounter | Numeric + encounter controls |");
+        builder.AppendLine("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+        foreach (var item in report.PartialCorrelations.Where(static item =>
+                     item.Candidate == GuaranteedHitCandidateMath.ObservedHitRegular &&
+                     item.Variable is "Tendo raw damage" or "Tendo damage ratio" or
+                         "Tendo Kaeshi raw damage" or "Tendo Kaeshi damage ratio"))
+        {
+            builder.AppendLine(
+                $"| `{item.Candidate}` | {item.Scope} | {item.Variable} | {item.FightCount} | " +
+                $"{item.WithinActorObservationCount} | {item.WithinEncounterObservationCount} | " +
+                $"{item.RawCorrelation:F3} | " +
+                $"{item.ControllingGuaranteedDamageRatio:F3} | {item.ControllingNumericInputs:F3} | " +
+                $"{item.WithinActorCorrelation:F3} | {item.WithinEncounterCorrelation:F3} | " +
+                $"{item.FullControlsCorrelation:F3} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## Actor-level audit");
+        builder.AppendLine();
+        builder.AppendLine("| Dancer actor | N | Encounters | Current mean | Observed mean | Unscaled mean | Cu range | Du range | gRatio | Tendo ratio | ext-Crit exposure | self exposure |");
+        builder.AppendLine("|---|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|");
+        foreach (var item in report.ActorAnalysis.Where(static item => item.FightCount > 1))
+        {
+            builder.AppendLine(
+                $"| {EscapeMarkdown(item.Actor)} | {item.FightCount} | {item.EncounterCount} | " +
+                $"{item.CurrentResidualMean:F1} | {item.ObservedResidualMean:F1} | " +
+                $"{item.UnscaledResidualMean:F1} | {item.CriticalChanceMinimum:P1}–{item.CriticalChanceMaximum:P1} | " +
+                $"{item.DirectChanceMinimum:P1}–{item.DirectChanceMaximum:P1} | " +
+                $"{item.GuaranteedDamageRatioMean:P1} | {item.TendoRatioMean:P1} | " +
+                $"{item.ExternalCriticalOverlapMean:P1} | {item.SelfRateExposureMean:P1} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## Best-candidate acceptance checks");
+        builder.AppendLine();
+        builder.AppendLine("| Check | PASS | Evidence |");
+        builder.AppendLine("|---|---|---|");
+        foreach (var item in report.AcceptanceChecks.Where(item => item.Candidate == report.BestCandidate))
+        {
+            builder.AppendLine($"| {item.Check} | {(item.Passed ? "YES" : "NO")} | {EscapeMarkdown(item.Evidence)} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## All-100 counterfactual comparison");
+        builder.AppendLine();
+        builder.AppendLine("| Candidate | Group | N | Mean | Median | MAE | RMSE | Max | Sign N/0/P |");
+        builder.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---|");
+        foreach (var item in report.AllCandidateCounterfactuals.Where(item =>
+                     focusCandidates.Contains(item.Candidate, StringComparer.Ordinal) &&
+                     item.PartnerJob is "Overall" or "SAM" or "DRG"))
+        {
+            builder.AppendLine(
+                $"| `{item.Candidate}` | {item.PartnerJob} | {item.SampleCount} | " +
+                $"{item.MeanDelta:F3} | {item.MedianDelta:F3} | {item.MeanAbsoluteDelta:F3} | " +
+                $"{item.RootMeanSquareDelta:F3} | {item.MaximumAbsoluteDelta:F3} | " +
+                $"{item.NegativeCount}/{item.ZeroCount}/{item.PositiveCount} |");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## Authoritative-source audit");
+        builder.AppendLine();
+        builder.AppendLine("- [FFLogs official rDPS math](https://www.fflogs.com/help/rdps) publishes ordinary direct-hit and simulated-DoT Crit/DH allocation, but no guaranteed Crit/DH/CDH branch and no explicit self-source membership rule for `Cb/Db`.");
+        builder.AppendLine("- [FFXIV Patch 6.2 Notes](https://na.finalfantasyxiv.com/lodestone/topics/detail/6eee1ca8a733856669d901d95d2fa9db46a466e6) and the [SAM Job Guide](https://na.finalfantasyxiv.com/jobguide/samurai/) confirm guaranteed-hit game damage scales under rate-increase effects; they do not define FFLogs attribution.");
+        builder.AppendLine("- The [DNC](https://na.finalfantasyxiv.com/jobguide/dancer/), [DRG](https://na.finalfantasyxiv.com/jobguide/dragoon/), [SCH](https://na.finalfantasyxiv.com/jobguide/scholar/), and [BRD](https://na.finalfantasyxiv.com/jobguide/bard/) guides confirm each buff's source/target behavior, including self carriers.");
+        builder.AppendLine("- The [FFLogs API](https://www.fflogs.com/api/docs) and [CalculatedDamageEvent scripting interface](https://www.fflogs.com/scripting-api-docs/ff/interfaces/RpgLogs.CalculatedDamageEvent.html) do not expose documented per-action rDPS allocation or actual Cu/Du in the cached GraphQL event shape.");
+        builder.AppendLine("- Public RPGLogs repositories do not contain the server-side FFLogs rDPS engine; the guaranteed branch remains **Not publicly documented**.");
+        builder.AppendLine();
+        builder.AppendLine("## Minimum discriminating data, if another round is authorized");
+        builder.AppendLine();
+        builder.AppendLine("Do not expand the random DNC sample. The minimum useful set is 5–10 controlled fights: repeated same SAM actor/gear with Devilment-only versus Devilment+Crit-only overlap; a known actual Cu/Du pair across both conditions; DRG Life Surge with and without own Litany while Devilment is active; and independent guaranteed-DH and guaranteed-CDH cases. These separate overlap-state, actor-stat, self-scaling, and dimension-specific equations.");
         builder.AppendLine();
         builder.AppendLine("## Remaining unknowns");
         builder.AppendLine();

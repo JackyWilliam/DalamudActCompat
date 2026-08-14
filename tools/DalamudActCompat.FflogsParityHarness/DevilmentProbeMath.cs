@@ -189,7 +189,51 @@ internal sealed class FightAttributionTimeline
                 .ToArray());
     }
 
+    public ProbeRateBuffExposure ResolveRateBuffExposure(
+        NormalizedFflogsEvent item,
+        FflogsActor owner)
+    {
+        var attributionTimestamp = item.Timestamp;
+        if (item.IsPeriodic && TryResolvePeriodicApplication(item, out var application))
+        {
+            attributionTimestamp = application.Start;
+        }
+
+        var statusesAttributionApplies = ResolveApplicableStatuses(
+                attributionTimestamp,
+                owner.Id,
+                item.SourceId,
+                item.TargetId)
+            .Where(status => RateBuffs.ContainsKey(status.AbilityId))
+            .Select(status =>
+            {
+                var rates = RateBuffs[status.AbilityId];
+                var source = fight.Actors.GetValueOrDefault(status.SourceId);
+                return new ProbeRateBuffExposureEntry(
+                    status.AbilityId,
+                    status.AbilityName,
+                    status.SourceId,
+                    source?.Name ?? $"Actor {status.SourceId}",
+                    source?.Job ?? "UNKNOWN",
+                    status.TargetId,
+                    rates.Critical,
+                    rates.Direct,
+                    status.SourceId == owner.Id);
+            })
+            .ToArray();
+        return new ProbeRateBuffExposure(statusesAttributionApplies);
+    }
+
     private IReadOnlyList<ProbeStatusInterval> ResolveExternalStatuses(
+        double timestamp,
+        int ownerId,
+        int sourceId,
+        int targetId)
+        => ResolveApplicableStatuses(timestamp, ownerId, sourceId, targetId)
+            .Where(status => status.SourceId != ownerId)
+            .ToArray();
+
+    private IReadOnlyList<ProbeStatusInterval> ResolveApplicableStatuses(
         double timestamp,
         int ownerId,
         int sourceId,
@@ -199,7 +243,6 @@ internal sealed class FightAttributionTimeline
             .Where(status => status.TargetId == ownerId ||
                              status.TargetId == sourceId ||
                              status.TargetId == targetId)
-            .Where(status => status.SourceId != ownerId)
             .Where(status => PercentageMultipliers.ContainsKey(status.AbilityId) ||
                              status.AbilityId == 0x71E ||
                              RateBuffs.ContainsKey(status.AbilityId))
@@ -409,6 +452,37 @@ internal readonly record struct ProbeAttributionState(
     int? DevilmentWindow,
     string AttributionTiming,
     IReadOnlyList<long> RateBuffIds);
+
+internal sealed record ProbeRateBuffExposureEntry(
+    long AbilityId,
+    string AbilityName,
+    int SourceId,
+    string SourceName,
+    string SourceJob,
+    int TargetId,
+    double CriticalRateIncrease,
+    double DirectRateIncrease,
+    bool IsSelfSourced);
+
+internal sealed record ProbeRateBuffExposure(
+    IReadOnlyList<ProbeRateBuffExposureEntry> Statuses)
+{
+    public double ExternalCriticalRateIncrease => Statuses
+        .Where(static status => !status.IsSelfSourced)
+        .Sum(static status => status.CriticalRateIncrease);
+
+    public double ExternalDirectRateIncrease => Statuses
+        .Where(static status => !status.IsSelfSourced)
+        .Sum(static status => status.DirectRateIncrease);
+
+    public double SelfCriticalRateIncrease => Statuses
+        .Where(static status => status.IsSelfSourced)
+        .Sum(static status => status.CriticalRateIncrease);
+
+    public double SelfDirectRateIncrease => Statuses
+        .Where(static status => status.IsSelfSourced)
+        .Sum(static status => status.DirectRateIncrease);
+}
 
 internal static class DevilmentContributionMath
 {

@@ -10,6 +10,16 @@ internal static class GuaranteedHitCandidateMath
     public const string SeparateDimensionBonus = "SeparateDimensionBonus";
     public const string CombinedLinearWeight = "CombinedLinearWeight";
     public const string GameBonusBuffedRateDenominator = "GameBonusBuffedRateDenominator";
+    public const string ObservedAllActiveDenominator = "ObservedHitRegular.AllActiveDenominator";
+    public const string ObservedExcludeSelfEverywhere = "ObservedHitRegular.ExcludeSelfEverywhere";
+    public const string ObservedExternalProvidersOnly = "ObservedHitRegular.ExternalProvidersOnly";
+    public const string ObservedSelfScalingExternalDenominator = "ObservedHitRegular.SelfScalingExternalDenominator";
+    public const string UnscaledAllActiveDenominator = "UnscaledObservedHit.AllActiveDenominator";
+    public const string UnscaledExcludeSelfEverywhere = "UnscaledObservedHit.ExcludeSelfEverywhere";
+    public const string UnscaledExternalProvidersOnly = "UnscaledObservedHit.ExternalProvidersOnly";
+    public const string UnscaledSelfScalingExternalDenominator = "UnscaledObservedHit.SelfScalingExternalDenominator";
+    public const string OtherExternalOverlapObservedElseUnscaled = "OtherExternalOverlap.ObservedElseUnscaled";
+    public const string OtherExternalOverlapUnscaledElseObserved = "OtherExternalOverlap.UnscaledElseObserved";
 
     public static IReadOnlyList<GuaranteedHitCandidateDefinition> Definitions { get; } =
     [
@@ -57,6 +67,57 @@ internal static class GuaranteedHitCandidateMath
             "2/game bonus with buffed-rate denominator",
             "Use CurrentProduction's guaranteed bonus portions, but allocate Dancer by cD/(Cu+C) and dD/(Du+D).",
             "Tests whether guaranteed extra damage uses the same total buffed-rate denominator as regular hits."),
+        new(
+            ObservedAllActiveDenominator,
+            "denominator A/all active",
+            "RegularObserved(N): Pc* cD/(Cu+Cext+Cself), Pd*dD/(Du+Dext+Dself).",
+            "Observed damage retains every game-side rate scaling effect; every active configured rate enters the allocation denominator."),
+        new(
+            ObservedExcludeSelfEverywhere,
+            "denominator B/exclude self",
+            "Nself0=N*G(Cext,Dext)/G(Cext+Cself,Dext+Dself); " +
+            "RegularObserved(Nself0): cD/(Cu+Cext), dD/(Du+Dext).",
+            "Removes configured self-rate game scaling before applying an external-only attribution denominator."),
+        new(
+            ObservedExternalProvidersOnly,
+            "denominator C/external providers",
+            "RegularObserved(N): Pc*cD/(Cu+Cext), Pd*dD/(Du+Dext).",
+            "Only external provider rates enter attribution; any self-rate scaling remains embedded in observed damage N."),
+        new(
+            ObservedSelfScalingExternalDenominator,
+            "denominator D/self scaling, external denominator",
+            "RegularObserved(N): self rate remains in observed game damage, while shares use cD/(Cu+Cext), dD/(Du+Dext).",
+            "For the observed-hit family this is mathematically identical to Variant C; the duplicate name records the policy equivalence explicitly."),
+        new(
+            UnscaledAllActiveDenominator,
+            "denominator A/all active",
+            "N0=N/G(Cext+Cself,Dext+Dself); RegularObserved(N0) with denominators Cu+Cext+Cself and Du+Dext+Dself.",
+            "All configured rate effects enter both guaranteed game-scaling restoration and attribution denominators."),
+        new(
+            UnscaledExcludeSelfEverywhere,
+            "denominator B/exclude self",
+            "N0=N/G(Cext,Dext); RegularObserved(N0) with denominators Cu+Cext and Du+Dext.",
+            "Self rates are absent from both explicit game-scaling restoration and allocation inputs."),
+        new(
+            UnscaledExternalProvidersOnly,
+            "denominator C/external providers",
+            "N0=N/G(Cext,Dext); RegularObserved(N0) with denominators Cu+Cext and Du+Dext.",
+            "Equivalent to Variant B for this family because both explicit inputs are the external-provider set."),
+        new(
+            UnscaledSelfScalingExternalDenominator,
+            "denominator D/self scaling, external denominator",
+            "N0=N/G(Cext+Cself,Dext+Dself); RegularObserved(N0) with denominators Cu+Cext and Du+Dext.",
+            "Self rates affect guaranteed game scaling restoration but do not dilute external-provider attribution."),
+        new(
+            OtherExternalOverlapObservedElseUnscaled,
+            "boundary diagnostic/other external overlap",
+            "Use ObservedHitRegular when a guaranteed dimension has a non-Dancer external rate provider active; otherwise use UnscaledObservedHit.",
+            "Parameter-free, action/job-independent diagnostic for the observed-vs-unscaled boundary; not an asserted FFLogs rule."),
+        new(
+            OtherExternalOverlapUnscaledElseObserved,
+            "boundary falsification/reversed overlap",
+            "Use UnscaledObservedHit when another external rate provider overlaps; otherwise use ObservedHitRegular.",
+            "Reversed condition used to test whether overlap direction, rather than merely cohort composition, carries the signal."),
     ];
 
     public static (double Critical, double Direct) Calculate(
@@ -84,6 +145,35 @@ internal static class GuaranteedHitCandidateMath
             GameBonusBuffedRateDenominator => AddRegularNonGuaranteed(
                 CalculateBuffedRateDenominator(input),
                 input),
+            ObservedAllActiveDenominator => CalculateRegular(
+                input.DamageAfterPercentageRemoval,
+                input,
+                input.CriticalRateIncrease + input.SelfCriticalRateIncrease,
+                input.DirectRateIncrease + input.SelfDirectRateIncrease),
+            ObservedExcludeSelfEverywhere => CalculateRegular(
+                ResolveDamageWithoutSelfGameScaling(input),
+                input,
+                input.CriticalRateIncrease,
+                input.DirectRateIncrease),
+            ObservedExternalProvidersOnly or ObservedSelfScalingExternalDenominator =>
+                CalculateRegular(input.DamageAfterPercentageRemoval, input),
+            UnscaledAllActiveDenominator => CalculateRegular(
+                input.DamageAfterPercentageRemoval / ResolveAllGameRatio(input),
+                input,
+                input.CriticalRateIncrease + input.SelfCriticalRateIncrease,
+                input.DirectRateIncrease + input.SelfDirectRateIncrease),
+            UnscaledExcludeSelfEverywhere or UnscaledExternalProvidersOnly => CalculateRegular(
+                input.DamageAfterPercentageRemoval / ResolveGameRatio(input),
+                input),
+            UnscaledSelfScalingExternalDenominator => CalculateRegular(
+                input.DamageAfterPercentageRemoval / ResolveAllGameRatio(input),
+                input),
+            OtherExternalOverlapObservedElseUnscaled => HasOtherExternalRateOverlap(input)
+                ? CalculateRegular(input.DamageAfterPercentageRemoval, input)
+                : CalculateRegular(input.DamageAfterPercentageRemoval / ResolveGameRatio(input), input),
+            OtherExternalOverlapUnscaledElseObserved => HasOtherExternalRateOverlap(input)
+                ? CalculateRegular(input.DamageAfterPercentageRemoval / ResolveGameRatio(input), input)
+                : CalculateRegular(input.DamageAfterPercentageRemoval, input),
             _ => throw new ArgumentOutOfRangeException(nameof(candidate), candidate, "Unknown candidate."),
         };
 
@@ -116,6 +206,17 @@ internal static class GuaranteedHitCandidateMath
     private static (double Critical, double Direct) CalculateRegular(
         double damage,
         GuaranteedHitCandidateInput input)
+        => CalculateRegular(
+            damage,
+            input,
+            input.CriticalRateIncrease,
+            input.DirectRateIncrease);
+
+    private static (double Critical, double Direct) CalculateRegular(
+        double damage,
+        GuaranteedHitCandidateInput input,
+        double criticalDenominatorIncrease,
+        double directDenominatorIncrease)
     {
         var criticalMultiplier = 1.35 + input.UnbuffedCriticalChance;
         const double directMultiplier = 1.25;
@@ -124,7 +225,7 @@ internal static class GuaranteedHitCandidateMath
         {
             var combined = criticalMultiplier * (input.IsDirectHit ? directMultiplier : 1);
             var chance = Math.Clamp(
-                input.UnbuffedCriticalChance + input.CriticalRateIncrease,
+                input.UnbuffedCriticalChance + criticalDenominatorIncrease,
                 0.01,
                 1);
             critical = LogWeightedBonusPortion(damage, criticalMultiplier, combined) *
@@ -135,7 +236,7 @@ internal static class GuaranteedHitCandidateMath
         {
             var combined = (input.IsCritical ? criticalMultiplier : 1) * directMultiplier;
             var chance = Math.Clamp(
-                input.UnbuffedDirectChance + input.DirectRateIncrease,
+                input.UnbuffedDirectChance + directDenominatorIncrease,
                 0.01,
                 1);
             direct = LogWeightedBonusPortion(damage, directMultiplier, combined) *
@@ -251,27 +352,62 @@ internal static class GuaranteedHitCandidateMath
     }
 
     private static double ResolveGameRatio(GuaranteedHitCandidateInput input)
+        => ResolveGameRatio(
+            input,
+            input.CriticalRateIncrease,
+            input.DirectRateIncrease);
+
+    private static double ResolveAllGameRatio(GuaranteedHitCandidateInput input)
+        => ResolveGameRatio(
+            input,
+            input.CriticalRateIncrease + input.SelfCriticalRateIncrease,
+            input.DirectRateIncrease + input.SelfDirectRateIncrease);
+
+    private static double ResolveDamageWithoutSelfGameScaling(GuaranteedHitCandidateInput input)
     {
-        var ratios = ResolveRatios(input);
+        var allRateRatio = ResolveAllGameRatio(input);
+        // Guaranteed rate scaling is linear in the total active rate, so the self-only
+        // ratio is not a separable factor when external rates overlap.
+        return input.DamageAfterPercentageRemoval * ResolveGameRatio(input) / allRateRatio;
+    }
+
+    private static double ResolveGameRatio(
+        GuaranteedHitCandidateInput input,
+        double criticalRateIncrease,
+        double directRateIncrease)
+    {
+        var ratios = ResolveRatios(input, criticalRateIncrease, directRateIncrease);
         return Math.Max(1, ratios.Critical * ratios.Direct);
     }
 
     private static (double Critical, double Direct) ResolveRatios(
         GuaranteedHitCandidateInput input)
+        => ResolveRatios(input, input.CriticalRateIncrease, input.DirectRateIncrease);
+
+    private static (double Critical, double Direct) ResolveRatios(
+        GuaranteedHitCandidateInput input,
+        double criticalRateIncrease,
+        double directRateIncrease)
     {
         var criticalMultiplier = 1.35 + input.UnbuffedCriticalChance;
         var critical = (input.Dimensions & ProbeGuaranteedDimensions.Critical) != 0 &&
-                       input.CriticalRateIncrease > 0
+                        criticalRateIncrease > 0
             ? (criticalMultiplier +
-               input.CriticalRateIncrease * (criticalMultiplier - 1)) /
+               criticalRateIncrease * (criticalMultiplier - 1)) /
               criticalMultiplier
             : 1;
         var direct = (input.Dimensions & ProbeGuaranteedDimensions.DirectHit) != 0 &&
-                     input.DirectRateIncrease > 0
-            ? (1.25 + input.DirectRateIncrease * 0.25) / 1.25
+                      directRateIncrease > 0
+            ? (1.25 + directRateIncrease * 0.25) / 1.25
             : 1;
         return (critical, direct);
     }
+
+    private static bool HasOtherExternalRateOverlap(GuaranteedHitCandidateInput input)
+        => ((input.Dimensions & ProbeGuaranteedDimensions.Critical) != 0 &&
+            input.CriticalRateIncrease > input.DancerCriticalRateIncrease) ||
+           ((input.Dimensions & ProbeGuaranteedDimensions.DirectHit) != 0 &&
+            input.DirectRateIncrease > input.DancerDirectRateIncrease);
 
     private static (double Critical, double Direct) Add(
         (double Critical, double Direct) left,
