@@ -331,6 +331,8 @@ internal sealed class FightAttributionTimeline
                 var duration = item.DurationMilliseconds > 0
                     ? item.DurationMilliseconds
                     : fight.Fight.EndTime - item.Timestamp;
+                // Keep this diagnostic timeline on production's bounded packet-state
+                // semantics so its calibration does not mistake status timing for math drift.
                 var interval = new ProbeStatusInterval(
                     item.AbilityId,
                     item.AbilityName,
@@ -338,7 +340,10 @@ internal sealed class FightAttributionTimeline
                     item.TargetId,
                     item.Timestamp,
                     item.AttributionSequence,
-                    Math.Min(fight.Fight.EndTime, item.Timestamp + Math.Max(1, duration)),
+                    Math.Min(
+                        fight.Fight.EndTime,
+                        item.Timestamp + Math.Max(1, duration) +
+                        AttributionTimeline.CausalRemoveGraceMilliseconds),
                     Window: null);
                 active[key] = interval;
                 result.Add(interval);

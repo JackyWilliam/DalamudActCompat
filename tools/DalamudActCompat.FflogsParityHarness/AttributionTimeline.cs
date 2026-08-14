@@ -6,7 +6,35 @@ internal enum AttributionTimelineSemantics
     PacketOrdered,
     ExplicitRemoval,
     ObservedEventState,
+    CausalRemoveGrace,
+    CausalCohortRemoveGrace,
 }
+
+internal enum AttributionStatusEndReason
+{
+    MissingRemoveNominalFallback,
+    ExplicitRemove,
+    RefreshOrOverwrite,
+    RecipientDeath,
+}
+
+internal sealed record AttributionStatusLifecycle(
+    long StatusId,
+    string StatusName,
+    int SourceActorId,
+    int TargetActorId,
+    double Start,
+    long StartSequence,
+    double NominalEnd,
+    double NominalCausalEnd,
+    long NominalCausalEndSequence,
+    double OracleEnd,
+    long OracleEndSequence,
+    double CausalGraceEnd,
+    long CausalGraceEndSequence,
+    double CausalCohortEnd,
+    long CausalCohortEndSequence,
+    AttributionStatusEndReason EndReason);
 
 internal sealed record MatrixBuffExposureEntry(
     OffensiveBuffDefinition Definition,
@@ -18,7 +46,12 @@ internal sealed record MatrixBuffExposureEntry(
     double DamageMultiplier,
     double LegacyDamageMultiplier,
     double WindowStart,
-    double WindowEnd);
+    double WindowEnd,
+    long WindowStartSequence,
+    long WindowEndSequence,
+    double NominalWindowEnd,
+    string StatusStateSource,
+    AttributionStatusEndReason StatusEndReason);
 
 internal sealed record MatrixEventAttributionState(
     IReadOnlyList<MatrixBuffExposureEntry> Buffs,
@@ -36,6 +69,11 @@ internal sealed record MatrixEventAttributionState(
 
 internal sealed class AttributionTimeline
 {
+    // Production already uses two seconds as the bounded action/status correlation
+    // lifetime. Reusing that protocol horizon tests a live-safe fallback without
+    // fitting a new duration to FFLogs residuals.
+    internal const double CausalRemoveGraceMilliseconds = 2_000;
+
     private static readonly IReadOnlySet<long> ReassembleWeaponskills = new HashSet<long>
     {
         16498, 16499, 16500, 25788, 36981,
@@ -57,6 +95,26 @@ internal sealed class AttributionTimeline
     public IReadOnlySet<uint> LifeSurgeWeaponskillActionIds => lifeSurgeActions.Keys
         .Select(static key => checked((uint)key.AbilityId))
         .ToHashSet();
+
+    public IReadOnlyList<AttributionStatusLifecycle> StatusLifecycles => statuses
+        .Select(static status => new AttributionStatusLifecycle(
+            status.AbilityId,
+            status.AbilityName,
+            status.SourceId,
+            status.TargetId,
+            status.Start,
+            status.StartSequence,
+            status.NominalEnd,
+            status.NominalCausalEnd,
+            status.NominalCausalEndSequence,
+            status.OracleEnd,
+            status.OracleEndSequence,
+            status.CausalGraceEnd,
+            status.CausalGraceEndSequence,
+            status.CausalCohortEnd,
+            status.CausalCohortEndSequence,
+            status.EndReason))
+        .ToArray();
 
     public MatrixEventAttributionState Resolve(
         NormalizedFflogsEvent item,
@@ -120,10 +178,19 @@ internal sealed class AttributionTimeline
                     ResolvePercentageMultiplier(status, definition, owner.Job),
                     ResolveLegacyPercentageMultiplier(status, definition),
                     status.Start,
-                    semantics is AttributionTimelineSemantics.ExplicitRemoval or
-                        AttributionTimelineSemantics.ObservedEventState
-                        ? status.ObservedEnd
-                        : status.ProductionEnd);
+                    ResolveEnd(status, semantics),
+                    status.StartSequence,
+                    ResolveEndSequence(status, semantics),
+                    status.NominalEnd,
+                    semantics switch
+                    {
+                        AttributionTimelineSemantics.ObservedEventState or
+                            AttributionTimelineSemantics.ExplicitRemoval => "oracle_explicit_packet",
+                        AttributionTimelineSemantics.CausalRemoveGrace => "causal_individual_2s_fallback",
+                        AttributionTimelineSemantics.CausalCohortRemoveGrace => "causal_cohort_evidence_2s_fallback",
+                        _ => "packet_nominal",
+                    },
+                    status.EndReason);
             })
             .ToArray();
         var external = buffs.Where(static buff => !buff.IsSelfSourced).ToArray();
@@ -229,12 +296,8 @@ internal sealed class AttributionTimeline
         long attributionSequence,
         AttributionTimelineSemantics semantics)
     {
-        var sequenceAware = semantics is AttributionTimelineSemantics.CurrentProduction or
-            AttributionTimelineSemantics.PacketOrdered or
-            AttributionTimelineSemantics.ObservedEventState;
-        var observedEnd = semantics is AttributionTimelineSemantics.ExplicitRemoval or
-            AttributionTimelineSemantics.ObservedEventState;
-        var end = observedEnd ? status.ObservedEnd : status.ProductionEnd;
+        var sequenceAware = semantics is not AttributionTimelineSemantics.ExplicitRemoval;
+        var end = ResolveEnd(status, semantics);
         if (!sequenceAware)
         {
             return status.Start <= timestamp && timestamp < end;
@@ -244,11 +307,35 @@ internal sealed class AttributionTimeline
         // Preserving packet order avoids treating a pre-application action as buffed.
         var afterStart = timestamp > status.Start ||
                          timestamp == status.Start && attributionSequence >= status.StartSequence;
-        var endSequence = observedEnd ? status.ObservedEndSequence : long.MinValue;
+        var endSequence = ResolveEndSequence(status, semantics);
         var beforeEnd = timestamp < end ||
                         timestamp == end && attributionSequence < endSequence;
         return afterStart && beforeEnd;
     }
+
+    private static double ResolveEnd(
+        StatusInterval status,
+        AttributionTimelineSemantics semantics)
+        => semantics switch
+        {
+            AttributionTimelineSemantics.ExplicitRemoval or
+                AttributionTimelineSemantics.ObservedEventState => status.OracleEnd,
+            AttributionTimelineSemantics.CausalRemoveGrace => status.CausalGraceEnd,
+            AttributionTimelineSemantics.CausalCohortRemoveGrace => status.CausalCohortEnd,
+            _ => status.ProductionEnd,
+        };
+
+    private static long ResolveEndSequence(
+        StatusInterval status,
+        AttributionTimelineSemantics semantics)
+        => semantics switch
+        {
+            AttributionTimelineSemantics.ExplicitRemoval or
+                AttributionTimelineSemantics.ObservedEventState => status.OracleEndSequence,
+            AttributionTimelineSemantics.CausalRemoveGrace => status.CausalGraceEndSequence,
+            AttributionTimelineSemantics.CausalCohortRemoveGrace => status.CausalCohortEndSequence,
+            _ => long.MinValue,
+        };
 
     private IReadOnlyList<StatusInterval> ResolveApplicableStatuses(
         double timestamp,
@@ -287,7 +374,7 @@ internal sealed class AttributionTimeline
     {
         var result = new List<StatusInterval>();
         var active = new Dictionary<(long AbilityId, int SourceId, int TargetId), StatusInterval>();
-        foreach (var item in fight.Events)
+        foreach (var item in DactRdpsReplay.OrderEventsForAttribution(fight.Events))
         {
             if (string.Equals(item.Type, "death", StringComparison.OrdinalIgnoreCase))
             {
@@ -298,7 +385,10 @@ internal sealed class AttributionTimeline
                              .ToArray())
                 {
                     var cleared = active[keyToClear];
-                    cleared.ObserveRemoval(item.Timestamp, item.AttributionSequence);
+                    cleared.ObserveRemoval(
+                        item.Timestamp,
+                        item.AttributionSequence,
+                        AttributionStatusEndReason.RecipientDeath);
                     active.Remove(keyToClear);
                 }
                 continue;
@@ -308,7 +398,10 @@ internal sealed class AttributionTimeline
             {
                 if (active.Remove(key, out var previous))
                 {
-                    previous.ObserveRemoval(item.Timestamp, item.AttributionSequence);
+                    previous.ObserveRemoval(
+                        item.Timestamp,
+                        item.AttributionSequence,
+                        AttributionStatusEndReason.RefreshOrOverwrite);
                 }
                 var duration = item.DurationMilliseconds > 0
                     ? item.DurationMilliseconds
@@ -330,11 +423,43 @@ internal sealed class AttributionTimeline
             {
                 // A stack decrement is not status expiry. Closing the interval at the
                 // first consumed Inner Release stack would hide later guaranteed hits.
-                removed.ObserveRemoval(item.Timestamp, item.AttributionSequence);
+                removed.ObserveRemoval(
+                    item.Timestamp,
+                    item.AttributionSequence,
+                    AttributionStatusEndReason.ExplicitRemove);
                 removed.Removed = true;
             }
         }
+        ApplyCohortRemoveEvidence(result);
         return result;
+    }
+
+    private static void ApplyCohortRemoveEvidence(IReadOnlyList<StatusInterval> intervals)
+    {
+        foreach (var cohort in intervals.GroupBy(static status =>
+                     (status.AbilityId, status.SourceId, status.Start)))
+        {
+            var firstPostNominalTransition = cohort
+                .Where(static status => status.HasObservedTransition)
+                .Where(status => status.OracleEnd >= status.NominalEnd)
+                .OrderBy(static status => status.OracleEnd)
+                .ThenBy(static status => status.OracleEndSequence)
+                .FirstOrDefault();
+            if (firstPostNominalTransition is null)
+            {
+                continue;
+            }
+
+            foreach (var status in cohort)
+            {
+                // A party-wide status is emitted once per recipient. The first sibling
+                // transition is causal evidence that removal fan-out has begun, while
+                // the independent two-second cap still bounds a missing final packet.
+                status.ObserveCohortRemoval(
+                    firstPostNominalTransition.OracleEnd,
+                    firstPostNominalTransition.OracleEndSequence);
+            }
+        }
     }
 
     private static IReadOnlyDictionary<ActionKey, ProbeGuaranteedDimensions> ResolveLifeSurgeActions(
@@ -347,9 +472,9 @@ internal sealed class AttributionTimeline
             var candidates = fight.Events
                 .Where(item => FflogsEventNormalizer.IsDamageEvent(item) &&
                                !item.IsPeriodic && item.AbilityId != 7 && item.Critical &&
-                               Math.Abs(item.Timestamp - surge.ObservedEnd) <= 1)
+                               Math.Abs(item.Timestamp - surge.OracleEnd) <= 1)
                 .Where(item => FflogsEventNormalizer.ResolveOwnerActor(item.SourceId, fight.Actors)?.Id == surge.TargetId)
-                .OrderBy(item => Math.Abs(item.Timestamp - surge.ObservedEnd))
+                .OrderBy(item => Math.Abs(item.Timestamp - surge.OracleEnd))
                 .ToArray();
             if (candidates.Length == 0)
             {
@@ -379,7 +504,7 @@ internal sealed class AttributionTimeline
                                !item.IsPeriodic && item.SourceId == reassemble.SourceId &&
                                ReassembleWeaponskills.Contains(item.AbilityId) &&
                                item.Timestamp >= reassemble.Start &&
-                               item.Timestamp <= reassemble.ObservedEnd + 1)
+                               item.Timestamp <= reassemble.OracleEnd + 1)
                 .OrderBy(static item => item.Timestamp)
                 .FirstOrDefault();
             if (selected is null)
@@ -437,19 +562,73 @@ internal sealed class AttributionTimeline
 
         public double ProductionEnd { get; private set; } = InitialNominalEnd;
 
-        public double ObservedEnd { get; private set; } = InitialNominalEnd;
+        public double OracleEnd => HasObservedTransition ? observedTransitionEnd : NominalEnd;
 
-        public long ObservedEndSequence { get; private set; } = long.MinValue;
+        public long OracleEndSequence => HasObservedTransition
+            ? observedTransitionEndSequence
+            : long.MinValue;
+
+        public double NominalCausalEnd => Math.Min(
+            HasObservedTransition ? observedTransitionEnd : double.PositiveInfinity,
+            NominalEnd);
+
+        public long NominalCausalEndSequence => HasObservedTransition &&
+                                                observedTransitionEnd <= NominalEnd
+            ? observedTransitionEndSequence
+            : long.MinValue;
+
+        public double CausalGraceEnd => Math.Min(
+            HasObservedTransition ? observedTransitionEnd : double.PositiveInfinity,
+            NominalEnd + CausalRemoveGraceMilliseconds);
+
+        public long CausalGraceEndSequence => HasObservedTransition &&
+                                              observedTransitionEnd <= NominalEnd + CausalRemoveGraceMilliseconds
+            ? observedTransitionEndSequence
+            : long.MinValue;
+
+        public double CausalCohortEnd { get; private set; } =
+            InitialNominalEnd + CausalRemoveGraceMilliseconds;
+
+        public long CausalCohortEndSequence { get; private set; } = long.MinValue;
+
+        public AttributionStatusEndReason EndReason { get; private set; } =
+            AttributionStatusEndReason.MissingRemoveNominalFallback;
+
+        public bool HasObservedTransition { get; private set; }
 
         public bool Removed { get; set; }
 
-        public void ObserveRemoval(double timestamp, long sequence)
+        private double observedTransitionEnd = InitialNominalEnd;
+
+        private long observedTransitionEndSequence = long.MinValue;
+
+        public void ObserveRemoval(
+            double timestamp,
+            long sequence,
+            AttributionStatusEndReason reason)
         {
             // The explicit status transition is authoritative even when it arrives
             // slightly after the duration estimate carried by applybuff.
-            ObservedEnd = timestamp;
-            ObservedEndSequence = sequence;
+            observedTransitionEnd = timestamp;
+            observedTransitionEndSequence = sequence;
+            HasObservedTransition = true;
+            EndReason = reason;
             ProductionEnd = Math.Min(ProductionEnd, timestamp);
+            CausalCohortEnd = Math.Min(timestamp, NominalEnd + CausalRemoveGraceMilliseconds);
+            CausalCohortEndSequence = timestamp <= NominalEnd + CausalRemoveGraceMilliseconds
+                ? sequence
+                : long.MinValue;
+        }
+
+        public void ObserveCohortRemoval(double timestamp, long sequence)
+        {
+            if (timestamp > CausalCohortEnd ||
+                timestamp == CausalCohortEnd && sequence >= CausalCohortEndSequence)
+            {
+                return;
+            }
+            CausalCohortEnd = timestamp;
+            CausalCohortEndSequence = sequence;
         }
     }
 

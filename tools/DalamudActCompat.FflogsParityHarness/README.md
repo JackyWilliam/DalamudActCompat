@@ -42,7 +42,17 @@ dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --guaranteed-hit-experiment
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --attribution-matrix
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --percentage-audit
+dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --percentage-ordering-only
 ```
+
+`--percentage-ordering-only` is cache-only. It reads production per-event component counters,
+compares parameter-free percentage/rate ordering counterfactuals, and emits packet-sequence,
+expiry, Technical eligibility, direct/periodic, and conservation reports. It never modifies
+the production attribution equation.
+
+The same mode also emits the strict direct-normal core, explicit interaction decomposition,
+provider-level identifiability, cross-provider validation, and live-causal status fallback
+comparison in `percentage-identification-*` and `percentage-status-*` reports.
 
 `--percentage-audit` 只读取现有 106 场 cache，逐 provider/recipient 对账 fixed-magnitude
 percentage contribution，并输出 reference direction、single/overlap、event-state、DoT snapshot

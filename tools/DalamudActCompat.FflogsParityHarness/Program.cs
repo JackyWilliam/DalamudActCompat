@@ -35,6 +35,45 @@ internal static class Program
                 api,
                 options.CacheDirectory,
                 options.SampleCount);
+            if (options.PercentageOrderingOnly)
+            {
+                var existingManifest = collector.ReadManifest();
+                var matrixCache = Path.Combine(
+                    Directory.GetParent(options.CacheDirectory)?.FullName ?? options.CacheDirectory,
+                    "matrix-cache");
+                var matrixCollector = new FflogsTargetedMatrixCollector(api, matrixCache);
+                var targetedSamples = matrixCollector.ReadSamples(matrixCollector.ReadManifestOrNull());
+                var orderingReport = PercentageOrderingExperiment.Run(
+                    collector,
+                    existingManifest,
+                    targetedSamples);
+                var orderingPaths = await PercentageOrderingReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    orderingReport,
+                    cancellation.Token);
+                var identificationReport = PercentageIdentificationExperiment.Run(
+                    collector,
+                    existingManifest,
+                    targetedSamples);
+                var identificationPaths = await PercentageIdentificationReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    identificationReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    orderingReport.FightCount,
+                    orderingReport.ConstraintCount,
+                    orderingReport.RateOverlapConstraintCount,
+                    orderingReport.RateOverlapEventCount,
+                    orderingReport.ProductionPercentageCalibration,
+                    identificationReport.CleanDirectNormalConstraintCount,
+                    orderingPaths.JsonPath,
+                    orderingPaths.MarkdownPath,
+                    IdentificationJsonPath = identificationPaths.JsonPath,
+                    IdentificationMarkdownPath = identificationPaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
             if (options.PercentageAudit)
             {
                 var existingManifest = collector.ReadManifest();
@@ -52,6 +91,14 @@ internal static class Program
                     options.OutputDirectory,
                     percentageReport,
                     cancellation.Token);
+                var orderingReport = PercentageOrderingExperiment.Run(
+                    collector,
+                    existingManifest,
+                    targetedSamples);
+                var orderingPaths = await PercentageOrderingReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    orderingReport,
+                    cancellation.Token);
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
                     percentageReport.FightCount,
@@ -61,8 +108,13 @@ internal static class Program
                     percentageReport.CurrentProductionBeforeFix,
                     percentageReport.CurrentProductionAfterFix,
                     percentageReport.AuthoritativeMetadata,
-                    percentagePaths.JsonPath,
-                    percentagePaths.MarkdownPath,
+                    PercentageJsonPath = percentagePaths.JsonPath,
+                    PercentageMarkdownPath = percentagePaths.MarkdownPath,
+                    orderingReport.RateOverlapConstraintCount,
+                    orderingReport.RateOverlapEventCount,
+                    orderingReport.ProductionPercentageCalibration,
+                    OrderingJsonPath = orderingPaths.JsonPath,
+                    OrderingMarkdownPath = orderingPaths.MarkdownPath,
                 }, new JsonSerializerOptions { WriteIndented = true }));
                 return 0;
             }
@@ -274,6 +326,76 @@ internal static class Program
         if (!HarnessOptions.Parse(["--attribution-matrix"]).ReplayOnly)
         {
             throw new InvalidOperationException("Attribution matrix replay must remain cache-only.");
+        }
+        var orderingOptions = HarnessOptions.Parse(["--percentage-ordering-only"]);
+        if (!orderingOptions.PercentageOrderingOnly || !orderingOptions.ReplayOnly)
+        {
+            throw new InvalidOperationException("Percentage ordering probe must remain cache-only.");
+        }
+        var ordering = PercentageOrderingExperiment.CalculateOrderingTotalsForTest(
+            120_000,
+            1.10,
+            8_000);
+        if (!(ordering.RateFirst < ordering.SharedLog &&
+              ordering.SharedLog < ordering.PercentageFirst) ||
+            Math.Abs(ordering.CurrentTotal - ordering.RateFirstTotal) > 0.000_001 ||
+            Math.Abs(ordering.CurrentTotal - ordering.SharedShapleyTotal) > 0.000_001 ||
+            Math.Abs(ordering.CurrentTotal - ordering.SharedLogTotal) > 0.000_001)
+        {
+            throw new InvalidOperationException("Percentage/rate ordering conservation regressed.");
+        }
+        var noPercentageOrdering = PercentageOrderingExperiment.CalculateOrderingTotalsForTest(
+            120_000,
+            1,
+            8_000);
+        if (Math.Abs(noPercentageOrdering.CurrentTotal - 8_000) > 0.000_001 ||
+            Math.Abs(noPercentageOrdering.RateFirstTotal - 8_000) > 0.000_001 ||
+            Math.Abs(noPercentageOrdering.SharedLogTotal - 8_000) > 0.000_001)
+        {
+            throw new InvalidOperationException("No-percentage rate conservation regressed.");
+        }
+        var decomposition = PercentageIdentificationExperiment.DecomposeForTest(
+            120_000,
+            1.10,
+            6_000,
+            2_000);
+        var reconstructed = decomposition.BaseDamage + decomposition.PercentageMain +
+                            decomposition.CriticalMain + decomposition.DirectMain +
+                            decomposition.PercentageCritical + decomposition.PercentageDirect +
+                            decomposition.CriticalDirect + decomposition.PercentageCriticalDirect;
+        if (Math.Abs(reconstructed - 120_000) > 0.000_001 ||
+            Math.Abs(decomposition.PercentageFirst - ordering.PercentageFirst) > 0.000_001 ||
+            !(decomposition.RateFirst < decomposition.SharedShapley3 &&
+              decomposition.SharedShapley3 < decomposition.PercentageFirst))
+        {
+            throw new InvalidOperationException("Three-dimension interaction decomposition regressed.");
+        }
+        var statusEstimator = new DalamudActCompat.ActRuntime.RaidDpsEstimator();
+        var statusStart = DateTimeOffset.Parse("2026-08-14T00:00:00Z");
+        statusEstimator.StartEncounter(statusStart);
+        const string apply =
+            "26|0|A8F|Searing Light|20|10000001|Provider|10000002|Recipient|";
+        const string remove =
+            "30|0|A8F|Searing Light|0|10000001|Provider|10000002|Recipient|";
+        statusEstimator.ObserveStatusLine(statusStart, apply);
+        statusEstimator.ObserveDamage(
+            statusStart.AddSeconds(20.5), "Recipient", "Target", 10_000, false, false);
+        var insideGrace = statusEstimator.ResolveReceivedDamage(
+            "Recipient", DalamudActCompat.ActRuntime.RaidDpsEstimator.AttributionKind.Percentage);
+        statusEstimator.ObserveStatusLine(statusStart.AddSeconds(20.75), remove);
+        statusEstimator.ObserveDamage(
+            statusStart.AddSeconds(21), "Recipient", "Target", 10_000, false, false);
+        var afterRemove = statusEstimator.ResolveReceivedDamage(
+            "Recipient", DalamudActCompat.ActRuntime.RaidDpsEstimator.AttributionKind.Percentage);
+        statusEstimator.ObserveStatusLine(statusStart.AddSeconds(40), apply);
+        statusEstimator.ObserveDamage(
+            statusStart.AddSeconds(62.001), "Recipient", "Target", 10_000, false, false);
+        var afterFallback = statusEstimator.ResolveReceivedDamage(
+            "Recipient", DalamudActCompat.ActRuntime.RaidDpsEstimator.AttributionKind.Percentage);
+        if (insideGrace <= 0 || Math.Abs(afterRemove - insideGrace) > 0.000_001 ||
+            Math.Abs(afterFallback - insideGrace) > 0.000_001)
+        {
+            throw new InvalidOperationException("Bounded status remove fallback regressed.");
         }
         var targetedOptions = HarnessOptions.Parse(["--mine-targeted-matrix"]);
         if (!targetedOptions.AttributionMatrix ||

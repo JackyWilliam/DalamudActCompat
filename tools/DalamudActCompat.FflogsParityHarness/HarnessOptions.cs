@@ -35,6 +35,8 @@ internal sealed record HarnessOptions
 
     public bool PercentageAudit { get; init; }
 
+    public bool PercentageOrderingOnly { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -79,6 +81,11 @@ internal sealed record HarnessOptions
                 "--percentage-audit" => options with
                 {
                     PercentageAudit = true,
+                    ReplayOnly = true,
+                },
+                "--percentage-ordering-only" => options with
+                {
+                    PercentageOrderingOnly = true,
                     ReplayOnly = true,
                 },
                 "--mine-targeted-matrix" => options with
@@ -151,6 +158,7 @@ internal sealed record HarnessOptions
           --guaranteed-hit-experiment Run cache-only aggregate guaranteed-hit candidate elimination
           --attribution-matrix Run the cache-only cross-provider Crit/DH attribution matrix
           --percentage-audit Run the cache-only fixed percentage-damage attribution audit
+          --percentage-ordering-only Run only the cache-only percentage/rate ordering probe
           --mine-targeted-matrix Mine only targeted BRD→G-CDH public fights, cache them, then run the matrix
           --help            Show this help
         """;

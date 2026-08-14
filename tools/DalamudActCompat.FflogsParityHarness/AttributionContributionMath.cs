@@ -12,7 +12,7 @@ internal enum PercentageCalculationMode
 
 internal static class AttributionContributionMath
 {
-    public static double CalculateRateContribution(
+    public static (double Critical, double Direct) CalculateRateContributionParts(
         string candidate,
         NormalizedFflogsEvent item,
         MatrixEventAttributionState state,
@@ -23,13 +23,10 @@ internal static class AttributionContributionMath
         bool productionInputs)
     {
         if (providerBuff.IsSelfSourced ||
-            providerBuff.Definition.Dimension == OffensiveBuffDimension.PercentageDamage)
+            providerBuff.Definition.Dimension == OffensiveBuffDimension.PercentageDamage ||
+            productionInputs && !providerBuff.Definition.CoveredByProduction)
         {
-            return 0;
-        }
-        if (productionInputs && !providerBuff.Definition.CoveredByProduction)
-        {
-            return 0;
+            return (0, 0);
         }
 
         var applicableRates = state.RateBuffs
@@ -38,29 +35,23 @@ internal static class AttributionContributionMath
             .ToArray();
         var criticalIncrease = applicableRates.Sum(static buff => buff.Definition.CriticalRateIncrease);
         var directIncrease = applicableRates.Sum(static buff => buff.Definition.DirectHitRateIncrease);
-        var providerCritical = providerBuff.Definition.CriticalRateIncrease;
-        var providerDirect = providerBuff.Definition.DirectHitRateIncrease;
-        var selfCritical = productionInputs
-            ? 0
-            : state.SelfCriticalRateIncrease;
-        var selfDirect = productionInputs
-            ? 0
-            : state.SelfDirectRateIncrease;
+        var selfCritical = productionInputs ? 0 : state.SelfCriticalRateIncrease;
+        var selfDirect = productionInputs ? 0 : state.SelfDirectRateIncrease;
         var percentageMultiplier = ResolvePercentageMultiplier(state, productionInputs);
         var damage = item.Amount / Math.Max(1, percentageMultiplier);
         if (item.IsPeriodic)
         {
-            return CalculateDot(
+            return CalculateDotParts(
                 damage,
                 unbuffedCriticalChance,
                 unbuffedDirectChance,
                 criticalIncrease,
                 directIncrease,
-                providerCritical,
-                providerDirect);
+                providerBuff.Definition.CriticalRateIncrease,
+                providerBuff.Definition.DirectHitRateIncrease);
         }
 
-        var contribution = GuaranteedHitCandidateMath.Calculate(
+        return GuaranteedHitCandidateMath.Calculate(
             candidate,
             new GuaranteedHitCandidateInput(
                 damage,
@@ -70,11 +61,32 @@ internal static class AttributionContributionMath
                 unbuffedDirectChance,
                 criticalIncrease,
                 directIncrease,
-                providerCritical,
-                providerDirect,
+                providerBuff.Definition.CriticalRateIncrease,
+                providerBuff.Definition.DirectHitRateIncrease,
                 guaranteedDimensions,
                 selfCritical,
                 selfDirect));
+    }
+
+    public static double CalculateRateContribution(
+        string candidate,
+        NormalizedFflogsEvent item,
+        MatrixEventAttributionState state,
+        MatrixBuffExposureEntry providerBuff,
+        double unbuffedCriticalChance,
+        double unbuffedDirectChance,
+        ProbeGuaranteedDimensions guaranteedDimensions,
+        bool productionInputs)
+    {
+        var contribution = CalculateRateContributionParts(
+            candidate,
+            item,
+            state,
+            providerBuff,
+            unbuffedCriticalChance,
+            unbuffedDirectChance,
+            guaranteedDimensions,
+            productionInputs);
         return contribution.Critical + contribution.Direct;
     }
 
@@ -161,7 +173,7 @@ internal static class AttributionContributionMath
                                   buff.DamageMultiplier > 1)
             .Aggregate(1d, static (current, buff) => current * buff.DamageMultiplier);
 
-    private static double CalculateDot(
+    private static (double Critical, double Direct) CalculateDotParts(
         double damage,
         double unbuffedCriticalChance,
         double unbuffedDirectChance,
@@ -184,7 +196,7 @@ internal static class AttributionContributionMath
             (buffedCritical * buffedDirect * combined);
         if (totalMultiplier <= 0)
         {
-            return 0;
+            return (0, 0);
         }
         var criticalPortion =
             ((buffedCritical * noDirect * criticalMultiplier) +
@@ -194,7 +206,8 @@ internal static class AttributionContributionMath
             ((buffedDirect * noCritical * directMultiplier) +
              (Math.Log(directMultiplier) / Math.Log(combined) *
               buffedCritical * buffedDirect * combined)) * damage / totalMultiplier;
-        return (providerCritical > 0 ? criticalPortion * providerCritical / buffedCritical : 0) +
-               (providerDirect > 0 ? directPortion * providerDirect / buffedDirect : 0);
+        return (
+            providerCritical > 0 ? criticalPortion * providerCritical / buffedCritical : 0,
+            providerDirect > 0 ? directPortion * providerDirect / buffedDirect : 0);
     }
 }
