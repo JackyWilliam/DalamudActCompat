@@ -35,6 +35,37 @@ internal static class Program
                 api,
                 options.CacheDirectory,
                 options.SampleCount);
+            if (options.PercentageAudit)
+            {
+                var existingManifest = collector.ReadManifest();
+                var matrixCache = Path.Combine(
+                    Directory.GetParent(options.CacheDirectory)?.FullName ?? options.CacheDirectory,
+                    "matrix-cache");
+                var matrixCollector = new FflogsTargetedMatrixCollector(api, matrixCache);
+                var targetedManifest = matrixCollector.ReadManifestOrNull();
+                var targetedSamples = matrixCollector.ReadSamples(targetedManifest);
+                var percentageReport = PercentageAttributionAudit.Run(
+                    collector,
+                    existingManifest,
+                    targetedSamples);
+                var percentagePaths = await PercentageAuditReportWriter.WriteAsync(
+                    options.OutputDirectory,
+                    percentageReport,
+                    cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    percentageReport.FightCount,
+                    percentageReport.ConstraintCount,
+                    percentageReport.ReferenceExactCount,
+                    percentageReport.ReferenceAuditCount,
+                    percentageReport.CurrentProductionBeforeFix,
+                    percentageReport.CurrentProductionAfterFix,
+                    percentageReport.AuthoritativeMetadata,
+                    percentagePaths.JsonPath,
+                    percentagePaths.MarkdownPath,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 0;
+            }
             if (options.AttributionMatrix)
             {
                 var existingManifest = collector.ReadManifest();
@@ -186,8 +217,8 @@ internal static class Program
         }
 
         var calculated = new NormalizedFflogsEvent(
-            0, 1000, 1000, "calculateddamage", 1, 2, 100, 100, "Test", 123,
-            0, 0, 0, 0, 0, true, false, false, null, null, 77, false);
+            0, 0, 1000, 1000, "calculateddamage", 1, 2, 100, 100, "Test", 123,
+            0, 0, 0, 0, 0, true, false, false, null, null, 77, false, 1.1);
         var damage = calculated with
         {
             Sequence = 1,
@@ -208,7 +239,9 @@ internal static class Program
         if (correlated.Count != 2 ||
             correlated[0].Timestamp != calculated.Timestamp ||
             correlated[0].DamageTimestamp != damage.DamageTimestamp ||
+            correlated[0].AttributionSequence != calculated.AttributionSequence ||
             !correlated[0].MatchedCalculatedDamage ||
+            Math.Abs(correlated[0].Multiplier - 1.1) > 0.000_001 ||
             correlated[1].MatchedCalculatedDamage)
         {
             throw new InvalidOperationException("damage/calculateddamage packet correlation regressed.");

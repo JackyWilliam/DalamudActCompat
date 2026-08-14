@@ -36,6 +36,10 @@ internal sealed record FflogsFight(
 
 internal sealed record NormalizedFflogsEvent(
     long Sequence,
+    // Direct damage is emitted twice by FFLogs. Sequence is the later HP-result
+    // order; AttributionSequence preserves the earlier calculateddamage order that
+    // FFLogs uses when deciding which status effects were active for the hit.
+    long AttributionSequence,
     // DACT attributes direct damage at the action packet timestamp, not at the later HP result.
     double Timestamp,
     double DamageTimestamp,
@@ -57,7 +61,8 @@ internal sealed record NormalizedFflogsEvent(
     int? SourceInstance,
     int? TargetInstance,
     long? PacketId,
-    bool MatchedCalculatedDamage);
+    bool MatchedCalculatedDamage,
+    double Multiplier);
 
 internal sealed record FflogsContribution(long AbilityId, string AbilityName, double Amount);
 

@@ -8,7 +8,7 @@ internal static class FflogsEventNormalizer
     private static readonly HashSet<long> RaidBuffStatusIds =
     [
         0x756, 0x4A1, 0xA8F, 0xA27, 0x511, 0xE65, 0x839, 0x71E,
-        0xF09, 0xF2F, 0xF31, 0x312, 0x4C5, 0x721, 0x08D,
+        0xF09, 0xF2F, 0xF31, 0x8A9, 0x312, 0x4C5, 0x721, 0x08D,
     ];
 
     private static readonly HashSet<string> StatusApplyTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -363,6 +363,7 @@ internal static class FflogsEventNormalizer
                 var timestamp = GetDouble(item, "timestamp");
                 parsed.Add(new NormalizedFflogsEvent(
                     sequence++,
+                    sequence - 1,
                     timestamp,
                     timestamp,
                     type,
@@ -383,7 +384,8 @@ internal static class FflogsEventNormalizer
                     GetNullableInt(item, "sourceInstance"),
                     GetNullableInt(item, "targetInstance"),
                     GetNullableLong(item, "packetID"),
-                    MatchedCalculatedDamage: false));
+                    MatchedCalculatedDamage: false,
+                    GetDouble(item, "multiplier")));
             }
         }
 
@@ -454,9 +456,11 @@ internal static class FflogsEventNormalizer
             result.Add(item with
             {
                 Timestamp = calculated.Timestamp,
+                AttributionSequence = calculated.AttributionSequence,
                 Critical = calculated.Critical,
                 DirectHit = calculated.DirectHit,
                 IsPeriodic = item.IsPeriodic || calculated.IsPeriodic,
+                Multiplier = calculated.Multiplier,
                 MatchedCalculatedDamage = true,
             });
         }

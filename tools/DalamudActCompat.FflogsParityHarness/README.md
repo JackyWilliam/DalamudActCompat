@@ -40,7 +40,14 @@ dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --self-test
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --devilment-probe
 dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --guaranteed-hit-experiment
+dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --attribution-matrix
+dotnet run --project tools/DalamudActCompat.FflogsParityHarness -c Release -- --percentage-audit
 ```
+
+`--percentage-audit` 只读取现有 106 场 cache，逐 provider/recipient 对账 fixed-magnitude
+percentage contribution，并输出 reference direction、single/overlap、event-state、DoT snapshot
+和 provider 类型诊断。FFLogs public API 不提供 per-event/per-window contribution；报告不会从整场
+`given[]` 反推不存在的逐事件 truth。
 
 `--guaranteed-hit-experiment` 只读取现有 100 场缓存。它从 61 场 SAM partner 中选取
 30 场 guaranteed damage 最高的高信息量样本，并把 production 实测的 regular-action

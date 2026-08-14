@@ -4367,14 +4367,95 @@ static void ValidateRaidDpsEstimator()
         start.AddSeconds(1),
         "Summoner",
         "Boss",
-        1_060,
+        1_030,
         critical: false,
         directHit: false,
         damageSourceName: "Solar Bahamut");
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Summoner") + 60) < 0.001 &&
-        Math.Abs(estimator.ResolveDamageAdjustment("Astrologian") - 60) < 0.001,
-        "Pet damage or the AST single-target card was not included exactly once in rDPS attribution.");
+        Math.Abs(estimator.ResolveDamageAdjustment("Summoner") + 30) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Astrologian") - 30) < 0.001,
+        "The Balance did not use its official 3% off-role multiplier for pet-owner damage.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000001|Paladin|13|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000002|Black Mage|19|64|0000|434|Test World|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000003|Astrologian|10000001|Paladin|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F31|The Spear|20.00|10000003|Astrologian|10000002|Black Mage|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_060,
+        critical: false,
+        directHit: false);
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Black Mage",
+        "Boss",
+        1_060,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Astrologian") - 120) < 0.001,
+        "AST cards did not retain their official 6% multipliers on matching target roles.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000001|Paladin|13|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000002|Black Mage|19|64|0000|434|Test World|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000003|Astrologian|10000002|Black Mage|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F31|The Spear|20.00|10000003|Astrologian|10000001|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_030,
+        critical: false,
+        directHit: false);
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Black Mage",
+        "Boss",
+        1_030,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Astrologian") - 60) < 0.001,
+        "AST cards did not use their official 3% multipliers on off-role targets.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|8A9|Mage's Ballad|45.00|10000003|Bard|10000002|Sage|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Sage",
+        "Boss",
+        1_010,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Sage") - 10) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Bard") - 10) < 0.001,
+        "Mage's Ballad was not attributed at its official fixed 1% multiplier.");
 
     estimator.Reset();
     estimator.StartEncounter(start);

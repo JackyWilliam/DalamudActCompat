@@ -63,9 +63,24 @@ internal static class GuaranteedHitAttributionExperiment
         var calibration = BuildCalibration(analyses);
         if (!calibration.Passed)
         {
+            var mismatch = analyses
+                .SelectMany(analysis => analysis.GuaranteedEvents.Select(item => new
+                {
+                    analysis.Fight.Seed.ReportCode,
+                    analysis.Fight.Fight.Id,
+                    Event = item,
+                    Residual = item.CandidateContributions[GuaranteedHitCandidateMath.CurrentProduction] -
+                               item.ProductionContribution,
+                }))
+                .OrderByDescending(static item => Math.Abs(item.Residual))
+                .First();
             throw new InvalidOperationException(
                 $"CurrentProduction offline calibration failed: event={calibration.MaximumAbsoluteEventResidual:R}, " +
-                $"fight={calibration.MaximumAbsoluteFightResidual:R}.");
+                $"fight={calibration.MaximumAbsoluteFightResidual:R}; max at " +
+                $"{mismatch.ReportCode}:{mismatch.Id} t={mismatch.Event.Timestamp:R} " +
+                $"action={mismatch.Event.ActionName}/{mismatch.Event.ActionId} " +
+                $"production={mismatch.Event.ProductionContribution:R} " +
+                $"offline={mismatch.Event.CandidateContributions[GuaranteedHitCandidateMath.CurrentProduction]:R}.");
         }
 
         var fightResults = BuildFightResults(selected);
@@ -147,7 +162,7 @@ internal static class GuaranteedHitAttributionExperiment
         var guaranteedEvents = new List<GuaranteedEventAnalysis>();
         long devilmentWindowRawDamage = 0;
         long partnerTotalRawDamage = 0;
-        foreach (var item in fight.Events)
+        foreach (var item in DactRdpsReplay.OrderEventsForAttribution(fight.Events))
         {
             var timestamp = DactRdpsReplay.ToTimestamp(fight.ReportStartTime, item.Timestamp);
             if (FflogsEventNormalizer.IsStatusApply(item.Type))
@@ -269,6 +284,7 @@ internal static class GuaranteedHitAttributionExperiment
                 },
                 StringComparer.Ordinal);
             guaranteedEvents.Add(new GuaranteedEventAnalysis(
+                item.Timestamp,
                 item.AbilityId,
                 item.AbilityName,
                 owner.Name,
@@ -1537,6 +1553,7 @@ internal static class GuaranteedHitAttributionExperiment
     }
 
     private sealed record GuaranteedEventAnalysis(
+        double Timestamp,
         long ActionId,
         string ActionName,
         string PartnerActor,

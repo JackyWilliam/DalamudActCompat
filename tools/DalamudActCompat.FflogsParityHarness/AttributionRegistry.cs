@@ -24,6 +24,7 @@ internal sealed record OffensiveBuffDefinition(
     bool SingleTarget,
     bool DebuffOnEnemy,
     bool SelfAlsoAffected,
+    bool AffectsAutoAttacks,
     string OfficialSource,
     string GameVersion,
     bool CoveredByProduction,
@@ -88,15 +89,107 @@ internal static class OffensiveBuffRegistry
             "self and nearby party", "party aura; rank depends on completed steps", true, false,
             "https://na.finalfantasyxiv.com/jobguide/dancer/", true),
         Percentage("BRD", [114], "Mage's Ballad", 2217, 1.01, "1%", "self and party",
-            "50y song aura", true, false, "https://na.finalfantasyxiv.com/jobguide/bard/", false),
+            "50y song aura", true, false, "https://na.finalfantasyxiv.com/jobguide/bard/", true),
         Percentage("BRD", [25785], "Radiant Finale", 2964, null, "2%/4%/6%", "self and nearby party",
             "party aura; magnitude depends on active Coda", true, false,
             "https://na.finalfantasyxiv.com/jobguide/bard/", false,
             analysisNote: "Public cached status events do not encode Coda count; retained in the registry but excluded from fixed-magnitude control residuals."),
     ];
 
+    // These fixed personal effects participate only in denominator diagnostics.
+    // Keeping them out of All prevents a self effect from becoming a provider row.
+    public static IReadOnlyList<OffensiveBuffDefinition> PercentageDenominatorOnly { get; } =
+    [
+        PersonalPercentage("PLD", [20], "Fight or Flight", 76, 1.25,
+            "https://na.finalfantasyxiv.com/jobguide/paladin/"),
+        PersonalPercentage("WAR", [45, 16462], "Surging Tempest", 2677, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/warrior/"),
+        PersonalPercentage("GNB", [16138], "No Mercy", 1831, 1.20,
+            "https://na.finalfantasyxiv.com/jobguide/gunbreaker/"),
+        PersonalPercentage("MNK", [7395], "Riddle of Fire", 1181, 1.15,
+            "https://na.finalfantasyxiv.com/jobguide/monk/"),
+        PersonalPercentage("DRG", [85], "Lance Charge", 1864, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/dragoon/"),
+        PersonalPercentage("DRG", [87, 36929], "Power Surge", 2720, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/dragoon/"),
+        PersonalPercentage("DRG", [3555], "Life of the Dragon", 3177, 1.15,
+            "https://na.finalfantasyxiv.com/jobguide/dragoon/"),
+        PersonalPercentage("NIN", [36958], "Kunai's Bane", 3906, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/ninja/", debuffOnEnemy: true),
+        PersonalPercentage("SAM", [7478, 7483], "Fugetsu", 1298, 1.13,
+            "https://na.finalfantasyxiv.com/jobguide/samurai/"),
+        PersonalPercentage("RPR", [24378, 24379], "Death's Design", 2586, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/reaper/", debuffOnEnemy: true),
+        PersonalPercentage("VPR", [34608, 34623, 34621, 34627], "Hunter's Instinct", 3668, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/viper/"),
+        PersonalPercentage("BRD", [101], "Raging Strikes", 125, 1.15,
+            "https://na.finalfantasyxiv.com/jobguide/bard/"),
+        PersonalPercentage("RDM", [7520], "Embolden (self magic)", 1239, 1.10,
+            "https://na.finalfantasyxiv.com/jobguide/redmage/", affectsAutoAttacks: false),
+    ];
+
     public static IReadOnlyDictionary<long, OffensiveBuffDefinition> ByStatusId { get; } = All
+        .Concat(PercentageDenominatorOnly)
         .ToDictionary(static item => item.StatusId);
+
+    public static IReadOnlySet<long> PercentageDenominatorOnlyStatusIds { get; } =
+        PercentageDenominatorOnly.Select(static item => item.StatusId).ToHashSet();
+
+    public static double ResolveDamageMultiplier(
+        OffensiveBuffDefinition definition,
+        string recipientJob)
+    {
+        if (definition.StatusId == 3887)
+        {
+            // The Balance is still applicable to every party role, but the official
+            // job guide halves its effect outside melee DPS and tanks.
+            return IsMeleeOrTank(recipientJob) ? 1.06 : 1.03;
+        }
+        if (definition.StatusId == 3889)
+        {
+            // The Spear uses the complementary role rule: ranged DPS and healers
+            // receive 6%, while melee DPS and tanks receive 3%.
+            return IsRangedOrHealer(recipientJob) ? 1.06 : 1.03;
+        }
+        return definition.DamageMultiplier ?? 1;
+    }
+
+    private static bool IsMeleeOrTank(string job)
+        => NormalizeJob(job) is
+            "PLD" or "WAR" or "DRK" or "GNB" or
+            "MNK" or "DRG" or "NIN" or "SAM" or "RPR" or "VPR";
+
+    private static bool IsRangedOrHealer(string job)
+        => NormalizeJob(job) is
+            "BRD" or "MCH" or "DNC" or "BLM" or "SMN" or "RDM" or "PCT" or
+            "WHM" or "SCH" or "AST" or "SGE";
+
+    private static string NormalizeJob(string job)
+        => job.Trim().ToUpperInvariant() switch
+        {
+            "PALADIN" => "PLD",
+            "WARRIOR" => "WAR",
+            "DARKKNIGHT" => "DRK",
+            "GUNBREAKER" => "GNB",
+            "MONK" => "MNK",
+            "DRAGOON" => "DRG",
+            "NINJA" => "NIN",
+            "SAMURAI" => "SAM",
+            "REAPER" => "RPR",
+            "VIPER" => "VPR",
+            "BARD" => "BRD",
+            "MACHINIST" => "MCH",
+            "DANCER" => "DNC",
+            "BLACKMAGE" => "BLM",
+            "SUMMONER" => "SMN",
+            "REDMAGE" => "RDM",
+            "PICTOMANCER" => "PCT",
+            "WHITEMAGE" => "WHM",
+            "SCHOLAR" => "SCH",
+            "ASTROLOGIAN" => "AST",
+            "SAGE" => "SGE",
+            var value => value,
+        };
 
     private static OffensiveBuffDefinition Rate(
         string providerJob,
@@ -119,7 +212,7 @@ internal static class OffensiveBuffRegistry
         => new(
             providerJob, actionIds, actionName, statusId, dimension, criticalRate, directRate, null,
             magnitude, scope, targeting, partyWide, singleTarget, debuffOnEnemy, selfAlsoAffected,
-            source, GameVersion, coveredByProduction,
+            true, source, GameVersion, coveredByProduction,
             "Action IDs: cached FFLogs masterData; status IDs: cached FFLogs events/DamageDone taken[]", note);
 
     private static OffensiveBuffDefinition Percentage(
@@ -140,9 +233,26 @@ internal static class OffensiveBuffRegistry
         => new(
             providerJob, actionIds, actionName, statusId, OffensiveBuffDimension.PercentageDamage,
             0, 0, multiplier, magnitude, scope, targeting, partyWide, singleTarget, debuffOnEnemy,
-            true, source, GameVersion, coveredByProduction,
+            true, true, source, GameVersion, coveredByProduction,
             "Action IDs: cached FFLogs masterData; status IDs: cached FFLogs events/DamageDone taken[]",
             analysisNote);
+
+    private static OffensiveBuffDefinition PersonalPercentage(
+        string job,
+        IReadOnlyList<long> actionIds,
+        string actionName,
+        long statusId,
+        double multiplier,
+        string source,
+        bool debuffOnEnemy = false,
+        bool affectsAutoAttacks = true)
+        => new(
+            job, actionIds, actionName, statusId, OffensiveBuffDimension.PercentageDamage,
+            0, 0, multiplier, $"{multiplier - 1:P0}", "self only",
+            debuffOnEnemy ? "enemy debuff" : "self", false, false, debuffOnEnemy, true,
+            affectsAutoAttacks, source, GameVersion, false,
+            "Action IDs: cached FFLogs masterData; status IDs: cached FFLogs events",
+            "Denominator-only diagnostic status; never eligible for self rDPS credit.");
 }
 
 internal sealed record GuaranteedHitDefinition(

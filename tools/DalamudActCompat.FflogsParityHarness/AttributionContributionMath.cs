@@ -1,5 +1,15 @@
 namespace DalamudActCompat.FflogsParityHarness;
 
+internal enum PercentageCalculationMode
+{
+    ProductionBeforeFix,
+    CurrentProduction,
+    PublishedMathLegacyMetadata,
+    AuthoritativeMetadata,
+    AuthoritativeAllActiveDenominator,
+    AuthoritativeSelfStrippedBasis,
+}
+
 internal static class AttributionContributionMath
 {
     public static double CalculateRateContribution(
@@ -73,29 +83,82 @@ internal static class AttributionContributionMath
         MatrixEventAttributionState state,
         MatrixBuffExposureEntry providerBuff,
         bool productionInputs)
+        => CalculatePercentageContribution(
+            item,
+            state,
+            providerBuff,
+            productionInputs
+                ? PercentageCalculationMode.CurrentProduction
+                : PercentageCalculationMode.AuthoritativeMetadata);
+
+    public static double CalculatePercentageContribution(
+        NormalizedFflogsEvent item,
+        MatrixEventAttributionState state,
+        MatrixBuffExposureEntry providerBuff,
+        PercentageCalculationMode mode)
     {
         if (providerBuff.IsSelfSourced ||
             providerBuff.Definition.Dimension != OffensiveBuffDimension.PercentageDamage ||
-            providerBuff.DamageMultiplier <= 1 ||
-            ResolvePercentageMultiplier(state, productionInputs) <= 1)
+            ResolveProviderMultiplier(providerBuff, mode) <= 1 ||
+            ResolvePercentageMultiplier(state, mode) <= 1)
         {
             return 0;
         }
-        var percentageMultiplier = ResolvePercentageMultiplier(state, productionInputs);
-        var damageWithoutPercentageBuffs = item.Amount / percentageMultiplier;
-        var lostDamage = item.Amount - damageWithoutPercentageBuffs;
-        return lostDamage * Math.Log(providerBuff.DamageMultiplier) /
+        var percentageMultiplier = ResolvePercentageMultiplier(state, mode);
+        var selfMultiplier = mode == PercentageCalculationMode.AuthoritativeSelfStrippedBasis
+            ? ResolveSelfPercentageMultiplier(state)
+            : 1;
+        var damageBasis = item.Amount / selfMultiplier;
+        var damageWithoutPercentageBuffs = damageBasis / percentageMultiplier;
+        var lostDamage = damageBasis - damageWithoutPercentageBuffs;
+        var providerMultiplier = ResolveProviderMultiplier(providerBuff, mode);
+        return lostDamage * Math.Log(providerMultiplier) /
                Math.Log(percentageMultiplier);
     }
 
     private static double ResolvePercentageMultiplier(
         MatrixEventAttributionState state,
         bool productionInputs)
+        => ResolvePercentageMultiplier(
+            state,
+            productionInputs
+                ? PercentageCalculationMode.CurrentProduction
+                : PercentageCalculationMode.AuthoritativeMetadata);
+
+    private static double ResolvePercentageMultiplier(
+        MatrixEventAttributionState state,
+        PercentageCalculationMode mode)
         => state.Buffs
-            .Where(static buff => !buff.IsSelfSourced)
+            .Where(buff => mode == PercentageCalculationMode.AuthoritativeAllActiveDenominator ||
+                           !buff.IsSelfSourced)
             .Where(static buff => buff.Definition.Dimension == OffensiveBuffDimension.PercentageDamage)
-            .Where(static buff => buff.DamageMultiplier > 1)
-            .Where(buff => !productionInputs || buff.Definition.CoveredByProduction)
+            .Where(buff => ResolveProviderMultiplier(buff, mode) > 1)
+            .Where(buff => mode switch
+            {
+                PercentageCalculationMode.CurrentProduction => buff.Definition.CoveredByProduction,
+                // This historical mode keeps the original cache replay measurable after the
+                // proven Mage's Ballad coverage fix without mutating any FFLogs reference.
+                PercentageCalculationMode.ProductionBeforeFix =>
+                    buff.Definition.CoveredByProduction && buff.Definition.StatusId != 2217,
+                _ => true,
+            })
+            .Aggregate(1d, (current, buff) => current * ResolveProviderMultiplier(buff, mode));
+
+    private static double ResolveProviderMultiplier(
+        MatrixBuffExposureEntry buff,
+        PercentageCalculationMode mode)
+        => mode is PercentageCalculationMode.CurrentProduction or
+            PercentageCalculationMode.AuthoritativeMetadata or
+            PercentageCalculationMode.AuthoritativeAllActiveDenominator or
+            PercentageCalculationMode.AuthoritativeSelfStrippedBasis
+            ? buff.DamageMultiplier
+            : buff.LegacyDamageMultiplier;
+
+    private static double ResolveSelfPercentageMultiplier(MatrixEventAttributionState state)
+        => state.Buffs
+            .Where(static buff => buff.IsSelfSourced &&
+                                  buff.Definition.Dimension == OffensiveBuffDimension.PercentageDamage &&
+                                  buff.DamageMultiplier > 1)
             .Aggregate(1d, static (current, buff) => current * buff.DamageMultiplier);
 
     private static double CalculateDot(

@@ -191,7 +191,7 @@ internal static class DevilmentPerActionProbe
 
         var partyIds = fight.Party.Select(static actor => actor.Id).ToHashSet();
         var contexts = new List<ActionProbeContext>();
-        foreach (var item in fight.Events)
+        foreach (var item in DactRdpsReplay.OrderEventsForAttribution(fight.Events))
         {
             var timestamp = DactRdpsReplay.ToTimestamp(fight.ReportStartTime, item.Timestamp);
             if (FflogsEventNormalizer.IsStatusApply(item.Type))

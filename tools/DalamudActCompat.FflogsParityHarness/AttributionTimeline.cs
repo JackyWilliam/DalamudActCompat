@@ -1,5 +1,13 @@
 namespace DalamudActCompat.FflogsParityHarness;
 
+internal enum AttributionTimelineSemantics
+{
+    CurrentProduction,
+    PacketOrdered,
+    ExplicitRemoval,
+    ObservedEventState,
+}
+
 internal sealed record MatrixBuffExposureEntry(
     OffensiveBuffDefinition Definition,
     int SourceActorId,
@@ -7,7 +15,10 @@ internal sealed record MatrixBuffExposureEntry(
     string SourceJob,
     int TargetActorId,
     bool IsSelfSourced,
-    double DamageMultiplier);
+    double DamageMultiplier,
+    double LegacyDamageMultiplier,
+    double WindowStart,
+    double WindowEnd);
 
 internal sealed record MatrixEventAttributionState(
     IReadOnlyList<MatrixBuffExposureEntry> Buffs,
@@ -50,21 +61,49 @@ internal sealed class AttributionTimeline
     public MatrixEventAttributionState Resolve(
         NormalizedFflogsEvent item,
         FflogsActor owner)
+        => Resolve(item, owner, AttributionTimelineSemantics.CurrentProduction);
+
+    public MatrixEventAttributionState Resolve(
+        NormalizedFflogsEvent item,
+        FflogsActor owner,
+        AttributionTimelineSemantics semantics)
+        => Resolve(item, owner, semantics, snapshotPeriodic: true);
+
+    public MatrixEventAttributionState ResolveAtHitTime(
+        NormalizedFflogsEvent item,
+        FflogsActor owner,
+        AttributionTimelineSemantics semantics)
+        => Resolve(item, owner, semantics, snapshotPeriodic: false);
+
+    private MatrixEventAttributionState Resolve(
+        NormalizedFflogsEvent item,
+        FflogsActor owner,
+        AttributionTimelineSemantics semantics,
+        bool snapshotPeriodic)
     {
         var attributionTimestamp = item.Timestamp;
+        var attributionSequence = item.AttributionSequence;
         var timing = "hit_time";
-        if (item.IsPeriodic && TryResolvePeriodicApplication(item, out var application))
+        if (snapshotPeriodic && item.IsPeriodic && TryResolvePeriodicApplication(item, out var application))
         {
             attributionTimestamp = application.Start;
+            attributionSequence = application.StartSequence;
             timing = "dot_snapshot";
         }
 
         var buffs = ResolveApplicableStatuses(
                 attributionTimestamp,
+                attributionSequence,
                 owner.Id,
                 item.SourceId,
-                item.TargetId)
+                item.TargetId,
+                semantics)
             .Where(status => OffensiveBuffRegistry.ByStatusId.ContainsKey(status.AbilityId))
+            .Where(status =>
+                !OffensiveBuffRegistry.PercentageDenominatorOnlyStatusIds.Contains(status.AbilityId) ||
+                status.SourceId == owner.Id)
+            .Where(status => OffensiveBuffRegistry.ByStatusId[status.AbilityId].AffectsAutoAttacks ||
+                             item.AbilityId != 7)
             .GroupBy(static status => (status.AbilityId, status.SourceId))
             .Select(group =>
             {
@@ -78,7 +117,13 @@ internal sealed class AttributionTimeline
                     source?.Job ?? definition.ProviderJob,
                     status.TargetId,
                     status.SourceId == owner.Id,
-                    ResolvePercentageMultiplier(status, definition));
+                    ResolvePercentageMultiplier(status, definition, owner.Job),
+                    ResolveLegacyPercentageMultiplier(status, definition),
+                    status.Start,
+                    semantics is AttributionTimelineSemantics.ExplicitRemoval or
+                        AttributionTimelineSemantics.ObservedEventState
+                        ? status.ObservedEnd
+                        : status.ProductionEnd);
             })
             .ToArray();
         var external = buffs.Where(static buff => !buff.IsSelfSourced).ToArray();
@@ -127,12 +172,25 @@ internal sealed class AttributionTimeline
 
     private double ResolvePercentageMultiplier(
         StatusInterval status,
-        OffensiveBuffDefinition definition)
+        OffensiveBuffDefinition definition,
+        string recipientJob)
     {
         if (definition.StatusId != 1822)
         {
-            return definition.DamageMultiplier ?? 1;
+            return OffensiveBuffRegistry.ResolveDamageMultiplier(definition, recipientJob);
         }
+        return ResolveTechnicalFinishMultiplier(status);
+    }
+
+    private double ResolveLegacyPercentageMultiplier(
+        StatusInterval status,
+        OffensiveBuffDefinition definition)
+        => definition.StatusId == 1822
+            ? ResolveTechnicalFinishMultiplier(status)
+            : definition.DamageMultiplier ?? 1;
+
+    private double ResolveTechnicalFinishMultiplier(StatusInterval status)
+    {
         var finish = fight.Events
             .Where(item => item.SourceId == status.SourceId &&
                            item.AbilityId is 16193 or 16194 or 16195 or 16196 or
@@ -153,15 +211,57 @@ internal sealed class AttributionTimeline
 
     private IReadOnlyList<StatusInterval> ResolveApplicableStatuses(
         double timestamp,
+        long attributionSequence,
         int ownerId,
         int sourceId,
-        int targetId)
+        int targetId,
+        AttributionTimelineSemantics semantics)
         => statuses
-            .Where(status => status.Start <= timestamp && timestamp < status.End)
+            .Where(status => IsActive(status, timestamp, attributionSequence, semantics))
             .Where(status => status.TargetId == ownerId ||
                              status.TargetId == sourceId ||
                              status.TargetId == targetId)
             .ToArray();
+
+    private static bool IsActive(
+        StatusInterval status,
+        double timestamp,
+        long attributionSequence,
+        AttributionTimelineSemantics semantics)
+    {
+        var sequenceAware = semantics is AttributionTimelineSemantics.CurrentProduction or
+            AttributionTimelineSemantics.PacketOrdered or
+            AttributionTimelineSemantics.ObservedEventState;
+        var observedEnd = semantics is AttributionTimelineSemantics.ExplicitRemoval or
+            AttributionTimelineSemantics.ObservedEventState;
+        var end = observedEnd ? status.ObservedEnd : status.ProductionEnd;
+        if (!sequenceAware)
+        {
+            return status.Start <= timestamp && timestamp < end;
+        }
+
+        // FFLogs calculateddamage can share a timestamp with apply/remove events.
+        // Preserving packet order avoids treating a pre-application action as buffed.
+        var afterStart = timestamp > status.Start ||
+                         timestamp == status.Start && attributionSequence >= status.StartSequence;
+        var endSequence = observedEnd ? status.ObservedEndSequence : long.MinValue;
+        var beforeEnd = timestamp < end ||
+                        timestamp == end && attributionSequence < endSequence;
+        return afterStart && beforeEnd;
+    }
+
+    private IReadOnlyList<StatusInterval> ResolveApplicableStatuses(
+        double timestamp,
+        int ownerId,
+        int sourceId,
+        int targetId)
+        => ResolveApplicableStatuses(
+            timestamp,
+            long.MaxValue,
+            ownerId,
+            sourceId,
+            targetId,
+            AttributionTimelineSemantics.CurrentProduction);
 
     private bool TryResolvePeriodicApplication(
         NormalizedFflogsEvent item,
@@ -171,7 +271,7 @@ internal sealed class AttributionTimeline
         var resolved = statuses
             .Where(status => status.SourceId == item.SourceId && status.TargetId == item.TargetId)
             .Where(status => NormalizeEffectName(status.AbilityName) == effectName)
-            .Where(status => status.Start <= item.Timestamp && item.Timestamp < status.End)
+            .Where(status => status.Start <= item.Timestamp && item.Timestamp < status.ProductionEnd)
             .OrderByDescending(static status => status.Start)
             .FirstOrDefault();
         if (resolved is not null)
@@ -198,7 +298,7 @@ internal sealed class AttributionTimeline
                              .ToArray())
                 {
                     var cleared = active[keyToClear];
-                    cleared.End = Math.Min(cleared.End, item.Timestamp);
+                    cleared.ObserveRemoval(item.Timestamp, item.AttributionSequence);
                     active.Remove(keyToClear);
                 }
                 continue;
@@ -208,7 +308,7 @@ internal sealed class AttributionTimeline
             {
                 if (active.Remove(key, out var previous))
                 {
-                    previous.End = Math.Min(previous.End, item.Timestamp);
+                    previous.ObserveRemoval(item.Timestamp, item.AttributionSequence);
                 }
                 var duration = item.DurationMilliseconds > 0
                     ? item.DurationMilliseconds
@@ -219,6 +319,7 @@ internal sealed class AttributionTimeline
                     item.SourceId,
                     item.TargetId,
                     item.Timestamp,
+                    item.AttributionSequence,
                     Math.Min(fight.Fight.EndTime, item.Timestamp + Math.Max(1, duration)));
                 active[key] = interval;
                 result.Add(interval);
@@ -229,7 +330,7 @@ internal sealed class AttributionTimeline
             {
                 // A stack decrement is not status expiry. Closing the interval at the
                 // first consumed Inner Release stack would hide later guaranteed hits.
-                removed.End = Math.Min(removed.End, item.Timestamp);
+                removed.ObserveRemoval(item.Timestamp, item.AttributionSequence);
                 removed.Removed = true;
             }
         }
@@ -246,9 +347,9 @@ internal sealed class AttributionTimeline
             var candidates = fight.Events
                 .Where(item => FflogsEventNormalizer.IsDamageEvent(item) &&
                                !item.IsPeriodic && item.AbilityId != 7 && item.Critical &&
-                               Math.Abs(item.Timestamp - surge.End) <= 1)
+                               Math.Abs(item.Timestamp - surge.ObservedEnd) <= 1)
                 .Where(item => FflogsEventNormalizer.ResolveOwnerActor(item.SourceId, fight.Actors)?.Id == surge.TargetId)
-                .OrderBy(item => Math.Abs(item.Timestamp - surge.End))
+                .OrderBy(item => Math.Abs(item.Timestamp - surge.ObservedEnd))
                 .ToArray();
             if (candidates.Length == 0)
             {
@@ -277,7 +378,8 @@ internal sealed class AttributionTimeline
                 .Where(item => FflogsEventNormalizer.IsDamageEvent(item) &&
                                !item.IsPeriodic && item.SourceId == reassemble.SourceId &&
                                ReassembleWeaponskills.Contains(item.AbilityId) &&
-                               item.Timestamp >= reassemble.Start && item.Timestamp <= reassemble.End + 1)
+                               item.Timestamp >= reassemble.Start &&
+                               item.Timestamp <= reassemble.ObservedEnd + 1)
                 .OrderBy(static item => item.Timestamp)
                 .FirstOrDefault();
             if (selected is null)
@@ -328,11 +430,27 @@ internal sealed class AttributionTimeline
         int SourceId,
         int TargetId,
         double Start,
-        double InitialEnd)
+        long StartSequence,
+        double InitialNominalEnd)
     {
-        public double End { get; set; } = InitialEnd;
+        public double NominalEnd { get; } = InitialNominalEnd;
+
+        public double ProductionEnd { get; private set; } = InitialNominalEnd;
+
+        public double ObservedEnd { get; private set; } = InitialNominalEnd;
+
+        public long ObservedEndSequence { get; private set; } = long.MinValue;
 
         public bool Removed { get; set; }
+
+        public void ObserveRemoval(double timestamp, long sequence)
+        {
+            // The explicit status transition is authoritative even when it arrives
+            // slightly after the duration estimate carried by applybuff.
+            ObservedEnd = timestamp;
+            ObservedEndSequence = sequence;
+            ProductionEnd = Math.Min(ProductionEnd, timestamp);
+        }
     }
 
     private readonly record struct ActionKey(double Timestamp, int SourceId, int TargetId, long AbilityId)

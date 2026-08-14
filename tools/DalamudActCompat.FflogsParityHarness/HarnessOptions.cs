@@ -33,6 +33,8 @@ internal sealed record HarnessOptions
 
     public bool TargetedMatrixMining { get; init; }
 
+    public bool PercentageAudit { get; init; }
+
     public bool ShowHelp { get; init; }
 
     public static HarnessOptions Parse(IReadOnlyList<string> args)
@@ -72,6 +74,11 @@ internal sealed record HarnessOptions
                 "--attribution-matrix" => options with
                 {
                     AttributionMatrix = true,
+                    ReplayOnly = true,
+                },
+                "--percentage-audit" => options with
+                {
+                    PercentageAudit = true,
                     ReplayOnly = true,
                 },
                 "--mine-targeted-matrix" => options with
@@ -143,6 +150,7 @@ internal sealed record HarnessOptions
           --devilment-probe Run the cached SAM/DRG per-action Devilment audit without network requests
           --guaranteed-hit-experiment Run cache-only aggregate guaranteed-hit candidate elimination
           --attribution-matrix Run the cache-only cross-provider Crit/DH attribution matrix
+          --percentage-audit Run the cache-only fixed percentage-damage attribution audit
           --mine-targeted-matrix Mine only targeted BRD→G-CDH public fights, cache them, then run the matrix
           --help            Show this help
         """;

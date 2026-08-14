@@ -33,6 +33,8 @@ internal sealed class RaidDpsEstimator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> actorNamesById =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, uint> actorJobIdsById =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> ownerIdsByActorId =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<PeriodicSnapshotKey, PeriodicBuffSnapshotInterval>
@@ -122,6 +124,7 @@ internal sealed class RaidDpsEstimator
             [0xF09] = RaidBuffDefinition.Damage(1.05), // Dokumori
             [0xF2F] = RaidBuffDefinition.Damage(1.06), // The Balance
             [0xF31] = RaidBuffDefinition.Damage(1.06), // The Spear
+            [0x8A9] = RaidBuffDefinition.Damage(1.01), // Mage's Ballad
 
             // Critical/direct-hit buffs.
             [0x312] = RaidBuffDefinition.Critical(0.10), // Battle Litany
@@ -152,6 +155,7 @@ internal sealed class RaidDpsEstimator
             ["The Balance"] = RaidBuffDefinition.Damage(1.06),
             ["太阳神之衡"] = RaidBuffDefinition.Damage(1.06),
             ["The Spear"] = RaidBuffDefinition.Damage(1.06),
+            ["Mage's Ballad"] = RaidBuffDefinition.Damage(1.01),
             ["战争神之枪"] = RaidBuffDefinition.Damage(1.06),
             ["Radiant Finale"] = RaidBuffDefinition.Damage(1.04),
             ["光明神的最终乐章"] = RaidBuffDefinition.Damage(1.04),
@@ -210,6 +214,7 @@ internal sealed class RaidDpsEstimator
             contributedBuffDamageByKind.Clear();
             hitBaselines.Clear();
             actorNamesById.Clear();
+            actorJobIdsById.Clear();
             ownerIdsByActorId.Clear();
             activePeriodicSnapshots.Clear();
             periodicSnapshotHistory.Clear();
@@ -237,7 +242,7 @@ internal sealed class RaidDpsEstimator
             {
                 lock (syncRoot)
                 {
-                    RememberActor(fields[2], fields[3]);
+                    RememberActor(fields[2], fields[3], fields[4]);
                     if (IsActorId(fields[6]))
                     {
                         ownerIdsByActorId[fields[2]] = fields[6];
@@ -347,6 +352,7 @@ internal sealed class RaidDpsEstimator
                 fields[3],
                 sourceId,
                 sourceName,
+                targetId,
                 out var definition);
             if (!isRaidBuff && IsTechnicalFinishStatus(statusId, fields[3]))
             {
@@ -1053,6 +1059,7 @@ internal sealed class RaidDpsEstimator
         string statusName,
         string sourceId,
         string sourceName,
+        string targetId,
         out RaidBuffDefinition definition)
     {
         if (IsTechnicalFinishStatus(statusId, statusName))
@@ -1071,9 +1078,51 @@ internal sealed class RaidDpsEstimator
             return false;
         }
 
+        if (IsAstrologianCard(statusId, statusName))
+        {
+            var targetJobId = ResolveActorJobId(targetId);
+            var isBalance = statusId == 0xF2F ||
+                            string.Equals(statusName.Trim(), "The Balance", StringComparison.OrdinalIgnoreCase);
+            var isFullStrength = isBalance
+                ? IsMeleeOrTank(targetJobId)
+                : IsRangedOrHealer(targetJobId);
+            // AddCombatant normally provides the target job before status traffic. Retain
+            // the historical 6% fallback when a third-party parser omits that metadata.
+            definition = RaidBuffDefinition.Damage(targetJobId == 0 || isFullStrength ? 1.06 : 1.03);
+            return true;
+        }
+
         return StatusesById.TryGetValue(statusId, out definition) ||
                StatusesByName.TryGetValue(statusName.Trim(), out definition);
     }
+
+    private static bool IsAstrologianCard(uint statusId, string statusName)
+        => statusId is 0xF2F or 0xF31 ||
+           string.Equals(statusName.Trim(), "The Balance", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(statusName.Trim(), "The Spear", StringComparison.OrdinalIgnoreCase);
+
+    private uint ResolveActorJobId(string actorId)
+    {
+        var normalized = NormalizeActorId(actorId);
+        if (actorJobIdsById.TryGetValue(normalized, out var jobId))
+        {
+            return jobId;
+        }
+        if (ownerIdsByActorId.TryGetValue(actorId, out var ownerId) ||
+            ownerIdsByActorId.TryGetValue(normalized, out ownerId))
+        {
+            return actorJobIdsById.GetValueOrDefault(NormalizeActorId(ownerId));
+        }
+        return 0;
+    }
+
+    private static bool IsMeleeOrTank(uint jobId)
+        // AddCombatant carries stable ClassJob row IDs, so role selection remains
+        // language-independent and does not depend on display-name metadata.
+        => jobId is 19 or 20 or 21 or 22 or 30 or 32 or 34 or 37 or 39 or 41;
+
+    private static bool IsRangedOrHealer(uint jobId)
+        => jobId is 23 or 24 or 25 or 27 or 28 or 31 or 33 or 35 or 38 or 40 or 42;
 
     private static bool IsTechnicalFinishStatus(uint statusId, string statusName)
         => statusId == 0x71E ||
@@ -1323,11 +1372,16 @@ internal sealed class RaidDpsEstimator
         }
     }
 
-    private void RememberActor(string actorId, string actorName)
+    private void RememberActor(string actorId, string actorName, string jobId = "")
     {
         if (IsActorId(actorId) && !string.IsNullOrWhiteSpace(actorName))
         {
             actorNamesById[actorId] = NormalizeActorName(actorName);
+            if (uint.TryParse(jobId, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsedJobId) &&
+                parsedJobId > 0)
+            {
+                actorJobIdsById[NormalizeActorId(actorId)] = parsedJobId;
+            }
         }
     }
 

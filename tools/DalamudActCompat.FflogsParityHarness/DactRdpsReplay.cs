@@ -30,7 +30,7 @@ internal static class DactRdpsReplay
         var unmatchedCalculatedDamageCount = 0;
         var unmatchedDirectDamageCount = 0;
         var periodicDamageEventCount = 0;
-        foreach (var item in fight.Events)
+        foreach (var item in OrderEventsForAttribution(fight.Events))
         {
             var timestamp = ToTimestamp(fight.ReportStartTime, item.Timestamp);
             if (FflogsEventNormalizer.IsStatusApply(item.Type))
@@ -265,11 +265,30 @@ internal static class DactRdpsReplay
             "time",
             FormatActorId(actor.Id),
             Sanitize(actor.Name),
-            "00",
+            ResolveJobId(actor.Job).ToString("X2", CultureInfo.InvariantCulture),
             "00",
             actor.PetOwnerId is { } ownerId ? FormatActorId(ownerId) : "0000",
             "00",
             string.Empty);
+
+    internal static IOrderedEnumerable<NormalizedFflogsEvent> OrderEventsForAttribution(
+        IEnumerable<NormalizedFflogsEvent> events)
+        // Direct damage inherits the earlier calculateddamage timestamp and ordering.
+        // The later damage-row sequence must not move it across same-time apply/remove packets.
+        => events.OrderBy(static item => item.Timestamp)
+            .ThenBy(static item => item.AttributionSequence)
+            .ThenBy(static item => item.Sequence);
+
+    private static uint ResolveJobId(string job)
+        => job.Trim().ToUpperInvariant() switch
+        {
+            "PALADIN" => 19, "WARRIOR" => 21, "DARKKNIGHT" => 32, "GUNBREAKER" => 37,
+            "MONK" => 20, "DRAGOON" => 22, "NINJA" => 30, "SAMURAI" => 34,
+            "REAPER" => 39, "VIPER" => 41, "BARD" => 23, "MACHINIST" => 31,
+            "DANCER" => 38, "BLACKMAGE" => 25, "SUMMONER" => 27, "REDMAGE" => 35,
+            "PICTOMANCER" => 42, "WHITEMAGE" => 24, "SCHOLAR" => 28,
+            "ASTROLOGIAN" => 33, "SAGE" => 40, _ => 0,
+        };
 
     internal static string BuildStatusLine(
         NormalizedFflogsEvent item,

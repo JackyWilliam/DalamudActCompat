@@ -87,7 +87,7 @@ internal static class CrossProviderAttributionMatrixExperiment
         var partyIds = fight.Party.Select(static actor => actor.Id).ToHashSet();
         ValidateRawDamageParity(fight, partyIds);
         var accumulators = new Dictionary<ConstraintKey, ConstraintAccumulator>();
-        foreach (var item in fight.Events)
+        foreach (var item in DactRdpsReplay.OrderEventsForAttribution(fight.Events))
         {
             var timestamp = DactRdpsReplay.ToTimestamp(fight.ReportStartTime, item.Timestamp);
             if (FflogsEventNormalizer.IsStatusApply(item.Type))

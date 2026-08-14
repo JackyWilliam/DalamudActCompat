@@ -68,6 +68,7 @@ internal sealed class FightAttributionTimeline
             [0xF09] = 1.05,
             [0xF2F] = 1.06,
             [0xF31] = 1.06,
+            [0x8A9] = 1.01,
         };
 
     private static readonly IReadOnlyDictionary<long, (double Critical, double Direct)> RateBuffs =
@@ -130,21 +131,24 @@ internal sealed class FightAttributionTimeline
     public ProbeAttributionState Resolve(NormalizedFflogsEvent item, FflogsActor owner)
     {
         var attributionTimestamp = item.Timestamp;
+        var attributionSequence = item.AttributionSequence;
         var timing = "hit_time";
         if (item.IsPeriodic && TryResolvePeriodicApplication(item, out var application))
         {
             attributionTimestamp = application.Start;
+            attributionSequence = application.StartSequence;
             timing = "dot_snapshot";
         }
 
         var external = ResolveExternalStatuses(
             attributionTimestamp,
+            attributionSequence,
             owner.Id,
             item.SourceId,
             item.TargetId);
         var percentageMultiplier = external.Aggregate(
             1d,
-            (current, status) => current * ResolvePercentageMultiplier(status));
+            (current, status) => current * ResolvePercentageMultiplier(status, owner.Job));
         var criticalIncrease = 0d;
         var directIncrease = 0d;
         var devilmentCritical = 0d;
@@ -168,6 +172,7 @@ internal sealed class FightAttributionTimeline
 
         var activeAtHit = ResolveExternalStatuses(
                 item.Timestamp,
+                item.AttributionSequence,
                 owner.Id,
                 item.SourceId,
                 item.TargetId)
@@ -194,13 +199,16 @@ internal sealed class FightAttributionTimeline
         FflogsActor owner)
     {
         var attributionTimestamp = item.Timestamp;
+        var attributionSequence = item.AttributionSequence;
         if (item.IsPeriodic && TryResolvePeriodicApplication(item, out var application))
         {
             attributionTimestamp = application.Start;
+            attributionSequence = application.StartSequence;
         }
 
         var statusesAttributionApplies = ResolveApplicableStatuses(
                 attributionTimestamp,
+                attributionSequence,
                 owner.Id,
                 item.SourceId,
                 item.TargetId)
@@ -226,20 +234,25 @@ internal sealed class FightAttributionTimeline
 
     private IReadOnlyList<ProbeStatusInterval> ResolveExternalStatuses(
         double timestamp,
+        long attributionSequence,
         int ownerId,
         int sourceId,
         int targetId)
-        => ResolveApplicableStatuses(timestamp, ownerId, sourceId, targetId)
+        => ResolveApplicableStatuses(timestamp, attributionSequence, ownerId, sourceId, targetId)
             .Where(status => status.SourceId != ownerId)
             .ToArray();
 
     private IReadOnlyList<ProbeStatusInterval> ResolveApplicableStatuses(
         double timestamp,
+        long attributionSequence,
         int ownerId,
         int sourceId,
         int targetId)
         => statuses
-            .Where(status => status.Start <= timestamp && timestamp < status.End)
+            .Where(status => status.Start < timestamp ||
+                             status.Start == timestamp && status.StartSequence <= attributionSequence)
+            .Where(status => timestamp < status.End ||
+                             timestamp == status.End && attributionSequence < status.EndSequence)
             .Where(status => status.TargetId == ownerId ||
                              status.TargetId == sourceId ||
                              status.TargetId == targetId)
@@ -250,11 +263,21 @@ internal sealed class FightAttributionTimeline
             .Select(static group => group.First())
             .ToArray();
 
-    private double ResolvePercentageMultiplier(ProbeStatusInterval status)
+    private IReadOnlyList<ProbeStatusInterval> ResolveApplicableStatuses(
+        double timestamp,
+        int ownerId,
+        int sourceId,
+        int targetId)
+        => ResolveApplicableStatuses(timestamp, long.MaxValue, ownerId, sourceId, targetId);
+
+    private double ResolvePercentageMultiplier(ProbeStatusInterval status, string recipientJob)
     {
         if (PercentageMultipliers.TryGetValue(status.AbilityId, out var multiplier))
         {
-            return multiplier;
+            return status.AbilityId is 0xF2F or 0xF31 &&
+                   OffensiveBuffRegistry.ByStatusId.TryGetValue(status.AbilityId, out var definition)
+                ? OffensiveBuffRegistry.ResolveDamageMultiplier(definition, recipientJob)
+                : multiplier;
         }
         if (status.AbilityId != 0x71E)
         {
@@ -303,7 +326,7 @@ internal sealed class FightAttributionTimeline
             {
                 if (active.Remove(key, out var previous))
                 {
-                    previous.End = Math.Min(previous.End, item.Timestamp);
+                    previous.ObserveEnd(item.Timestamp, item.AttributionSequence);
                 }
                 var duration = item.DurationMilliseconds > 0
                     ? item.DurationMilliseconds
@@ -314,6 +337,7 @@ internal sealed class FightAttributionTimeline
                     item.SourceId,
                     item.TargetId,
                     item.Timestamp,
+                    item.AttributionSequence,
                     Math.Min(fight.Fight.EndTime, item.Timestamp + Math.Max(1, duration)),
                     Window: null);
                 active[key] = interval;
@@ -321,7 +345,7 @@ internal sealed class FightAttributionTimeline
             }
             else if (FflogsEventNormalizer.IsStatusRemove(item.Type) && active.Remove(key, out var removed))
             {
-                removed.End = Math.Min(removed.End, item.Timestamp);
+                removed.ObserveEnd(item.Timestamp, item.AttributionSequence);
                 removed.Removed = true;
             }
         }
@@ -423,12 +447,28 @@ internal sealed class FightAttributionTimeline
         int SourceId,
         int TargetId,
         double Start,
+        long StartSequence,
         double InitialEnd,
         int? Window)
     {
         public double End { get; set; } = InitialEnd;
 
+        public long EndSequence { get; private set; } = long.MinValue;
+
         public bool Removed { get; set; }
+
+        public void ObserveEnd(double timestamp, long sequence)
+        {
+            if (timestamp < End)
+            {
+                End = timestamp;
+                EndSequence = sequence;
+            }
+            else if (timestamp == End)
+            {
+                EndSequence = sequence;
+            }
+        }
     }
 
     private readonly record struct ProbeActionKey(
