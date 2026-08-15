@@ -28,10 +28,23 @@ public sealed record FflogsActiveEncounter(
     string EncounterName,
     int Difficulty);
 
-public sealed record FflogsEstimate(double Percentile, Vector4 Color, string EncounterName)
+public sealed record FflogsEstimate(
+    double Percentile,
+    Vector4 Color,
+    string EncounterName,
+    DateTimeOffset DataUpdatedAt,
+    string Metric,
+    bool IsStale)
 {
     public int Score => Math.Clamp((int)Math.Round(Percentile), 0, 100);
 }
+
+public sealed record FflogsReferenceSnapshot(
+    string Region,
+    int Partition,
+    string Metric,
+    DateTimeOffset? LatestDataUpdatedAt,
+    int CurveCount);
 
 public sealed class FflogsEstimateService : IAsyncDisposable
 {
@@ -39,7 +52,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private const string GraphQlEndpoint = "https://www.fflogs.com/api/v2/client";
     private const int PageSize = 100;
     private const int MaximumPage = 4096;
-    internal const int CurrentCurveFormatVersion = 1;
+    internal const int CurrentCurveFormatVersion = 2;
     private static readonly double[] PercentilePoints =
     [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
@@ -104,6 +117,24 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
     }
 
+    public FflogsReferenceSnapshot ReferenceSnapshot
+    {
+        get
+        {
+            lock (cacheLock)
+            {
+                return new FflogsReferenceSnapshot(
+                    CurrentFflogsEncounterTable.RankingRegion,
+                    CurrentFflogsEncounterTable.RankingPartition,
+                    CurrentFflogsEncounterTable.RankingMetric.ToUpperInvariant(),
+                    curves.Count == 0
+                        ? null
+                        : curves.Values.Max(static curve => curve.FetchedAt),
+                    curves.Count);
+            }
+        }
+    }
+
     internal static IReadOnlyList<double> CurveSamplePercentiles => PercentilePoints;
 
     public FflogsActiveEncounter? ActiveEncounter
@@ -149,10 +180,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     public Encounter CaptureAvailableEstimates(Encounter encounter)
     {
         var settings = GetSettingsSnapshot();
-        if (!HasApiAccess(settings))
+        if (!settings.Enabled)
         {
             return encounter;
         }
+        var canRefresh = HasApiAccess(settings);
 
         var rankingEncounter = encounter.FflogsRankingEncounter ?? encounter;
         if (rankingEncounter.EffectiveDuration.TotalSeconds < 15)
@@ -190,11 +222,19 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                     return combatant;
                 }
 
+                if (estimate.IsStale)
+                {
+                    missingSpecs.Add(ToFflogsSpecName(rankingCombatant.Job));
+                }
+
                 changed = true;
                 return combatant with
                 {
                     FflogsPercentile = estimate.Percentile,
                     FflogsEncounterName = estimate.EncounterName,
+                    FflogsDataUpdatedAt = estimate.DataUpdatedAt,
+                    FflogsMetric = estimate.Metric,
+                    FflogsDataStale = estimate.IsStale,
                 };
             })
             .ToArray();
@@ -202,7 +242,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         // Active snapshots warm every party job in the background. A finished
         // encounter only persists already available estimates and must not start
         // new network work during shutdown/finalization.
-        if (rankingEncounter.IsActive)
+        if (rankingEncounter.IsActive && canRefresh)
         {
             foreach (var specName in missingSpecs)
             {
@@ -223,7 +263,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         var settings = GetSettingsSnapshot();
-        if (!CanUseApi(settings))
+        if (!settings.Enabled)
         {
             return null;
         }
@@ -241,10 +281,17 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             updateStatus: true);
         if (estimate is not null)
         {
+            if (estimate.IsStale && HasApiAccess(settings))
+            {
+                QueueCurveLoad(ToFflogsSpecName(combatant.Job));
+            }
             return estimate;
         }
 
-        QueueCurveLoad(ToFflogsSpecName(combatant.Job));
+        if (CanUseApi(settings))
+        {
+            QueueCurveLoad(ToFflogsSpecName(combatant.Job));
+        }
         return null;
     }
 
@@ -254,7 +301,13 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             !double.IsFinite(percentile) ||
             percentile < 0 ||
             percentile > 100 ||
-            string.IsNullOrWhiteSpace(combatant.FflogsEncounterName))
+            string.IsNullOrWhiteSpace(combatant.FflogsEncounterName) ||
+            combatant.FflogsDataUpdatedAt is not { } updatedAt ||
+            updatedAt == default ||
+            !string.Equals(
+                combatant.FflogsMetric,
+                CurrentFflogsEncounterTable.RankingMetric,
+                StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -262,7 +315,10 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         return new FflogsEstimate(
             percentile,
             ColorForPercentile(percentile),
-            combatant.FflogsEncounterName);
+            combatant.FflogsEncounterName,
+            updatedAt,
+            CurrentFflogsEncounterTable.RankingMetric.ToUpperInvariant(),
+            combatant.FflogsDataStale);
     }
 
     private FflogsEstimate? TryGetCachedEstimate(
@@ -291,17 +347,16 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             curves.TryGetValue(key, out curve);
         }
 
-        if (curve is null || IsExpired(curve.FetchedAt, settings.CacheHours))
+        if (curve is null)
         {
             return null;
         }
 
-        var encounterDps = combatant.Rdps > 0
-            ? combatant.Rdps
-            : combatant.EncDps > 0
-                ? combatant.EncDps
-                : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+        var encounterDps = combatant.Dps > 0
+            ? combatant.Dps
+            : combatant.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
         var percentile = EstimatePercentile(curve.Points, encounterDps);
+        var isStale = IsExpired(curve.FetchedAt, settings.CacheHours);
         if (updateStatus)
         {
             SetStatus(
@@ -311,7 +366,10 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         return new FflogsEstimate(
             percentile,
             ColorForPercentile(percentile),
-            curve.EncounterName);
+            curve.EncounterName,
+            curve.FetchedAt,
+            curve.Metric.ToUpperInvariant(),
+            isStale);
     }
 
     public void RequestRefresh(Encounter? encounter)
@@ -1203,7 +1261,12 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         => fetchedAt == default || fetchedAt.AddHours(Math.Clamp(hours, 1, 168)) <= DateTimeOffset.UtcNow;
 
     private static string CurveKey(int encounterId, int difficulty, string specName)
-        => $"{encounterId}:{difficulty}:{specName}";
+        // The key repeats the persisted validation fields so an in-memory cache can
+        // never cross a partition or metric boundary after a product update.
+        => $"{CurrentFflogsEncounterTable.RankingRegion}:" +
+           $"{CurrentFflogsEncounterTable.RankingPartition}:" +
+           $"{CurrentFflogsEncounterTable.RankingMetric}:" +
+           $"{encounterId}:{difficulty}:{specName}";
 
     private static string ToFflogsSpecName(string job) => job.Trim().ToUpperInvariant() switch
     {

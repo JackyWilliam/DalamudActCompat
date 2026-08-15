@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <AssemblyName>DalamudActCompat.FflogsParityHarness</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The harness references the production assembly so replay cannot drift into a second rDPS implementation. -->
+    <ProjectReference Include="..\..\src\DalamudActCompat.ActRuntime\DalamudActCompat.ActRuntime.csproj" />
+  </ItemGroup>
+</Project>

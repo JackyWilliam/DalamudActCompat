@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0",
+  "source": "fixture-exact-reference",
+  "fight": {
+    "reportCode": "fixture",
+    "fightId": "1",
+    "zone": "Fixture Zone",
+    "encounterName": "Event Reconciliation",
+    "start": "2026-08-12T20:10:00+08:00",
+    "end": "2026-08-12T20:10:15+08:00"
+  },
+  "actors": [
+    { "id": "10000001", "name": "Player One", "type": "Player", "ownerId": "" },
+    { "id": "40000001", "instanceId": 1, "name": "Player Pet", "type": "Pet", "ownerId": "10000001" },
+    { "id": "40000002", "instanceId": 2, "name": "Player Pet", "type": "Pet", "ownerId": "10000001" }
+  ],
+  "targets": [
+    { "id": "40000010", "name": "Boss", "type": "Boss", "ownerId": "" },
+    { "id": "40000011", "name": "Trash", "type": "NPC", "ownerId": "" }
+  ],
+  "damageEvents": [
+    { "sequence": 1, "timestamp": "2026-08-12T20:10:01+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000010", "targetName": "Boss", "abilityId": "1000", "abilityName": "Opening Hit", "amount": 950, "critical": false, "directHit": false, "packetId": "00000001" },
+    { "sequence": 2, "timestamp": "2026-08-12T20:10:02+08:00", "sourceId": "40000001", "sourceInstanceId": 1, "sourceName": "Player Pet", "targetId": "40000010", "targetName": "Boss", "abilityId": "1001", "abilityName": "Pet Hit", "amount": 2000, "critical": false, "directHit": false, "packetId": "00000002" },
+    { "sequence": 3, "timestamp": "2026-08-12T20:10:03+08:00", "sourceId": "40000002", "sourceInstanceId": 2, "sourceName": "Player Pet", "targetId": "40000010", "targetName": "Boss", "abilityId": "1002", "abilityName": "Pet Respawn Hit", "amount": 2500, "critical": false, "directHit": false, "packetId": "00000003" },
+    { "sequence": 4, "timestamp": "2026-08-12T20:10:06+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000011", "targetName": "Trash", "abilityId": "1005", "abilityName": "Trash Hit", "amount": 500, "critical": false, "directHit": false, "packetId": "00000006" },
+    { "sequence": 5, "timestamp": "2026-08-12T20:10:07+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000010", "targetName": "Boss", "abilityId": "2000", "abilityName": "Burn", "amount": 600, "critical": false, "directHit": false, "packetId": "" },
+    { "sequence": 6, "timestamp": "2026-08-12T20:10:07+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000010", "targetName": "Boss", "abilityId": "2001", "abilityName": "Poison", "amount": 450, "critical": false, "directHit": false, "packetId": "" },
+    { "sequence": 7, "timestamp": "2026-08-12T20:10:08+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000010", "targetName": "Boss", "abilityId": "1007", "abilityName": "Large Hit", "amount": 67227, "overkill": 100, "critical": false, "directHit": true, "packetId": "00000008" },
+    { "sequence": 8, "timestamp": "2026-08-12T20:10:12+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000010", "targetName": "Boss", "abilityId": "1012", "abilityName": "Parser Only", "amount": 800, "critical": false, "directHit": false, "packetId": "00000012" },
+    { "sequence": 9, "timestamp": "2026-08-12T20:10:13+08:00", "sourceId": "40000002", "sourceInstanceId": 2, "sourceName": "Player Pet", "targetId": "40000010", "targetName": "Boss", "abilityId": "1013", "abilityName": "Duplicate Candidate", "amount": 1200, "critical": false, "directHit": false, "packetId": "00000013" },
+    { "sequence": 10, "timestamp": "2026-08-12T20:10:14+08:00", "sourceId": "10000001", "sourceName": "Player One", "targetId": "40000010", "targetName": "Boss", "abilityId": "1014", "abilityName": "Reference Only", "amount": 333, "critical": false, "directHit": false, "packetId": "00000014" }
+  ]
+}

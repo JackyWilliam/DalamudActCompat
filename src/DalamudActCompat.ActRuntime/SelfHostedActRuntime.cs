@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,6 +14,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
+using DalamudActCompat.ActRuntime.Parity;
 
 namespace DalamudActCompat.ActRuntime;
 
@@ -59,12 +61,18 @@ public sealed class SelfHostedActRuntime : IDisposable
         getOverlayWindowSettingsSnapshot;
     private readonly Action persistOverlaySettings;
     private readonly Func<bool> debugMode;
+    private readonly Func<bool> parityDiagnosticsEnabled;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
     private readonly object networkCaptureSync = new();
     private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly RaidDpsEstimator raidDpsEstimator = new();
+    private readonly RaidDpsEstimator raidDpsEstimator;
+    private readonly EffectiveDamageLedger effectiveDamageLedger = new();
+    private readonly EncounterDurationTracker encounterDurationTracker = new();
+    private int effectiveDamageEventCursor;
+    private EncounterData? effectiveDamageEncounter;
+    private readonly FflogsParityDiagnosticRecorder parityDiagnosticRecorder = new();
     private IINACT.FfxivActPluginWrapper? parser;
     private ActPluginData? parserPluginData;
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
@@ -111,6 +119,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool activeEncounterNamesLogged;
     private bool networkSentCaptureRequested;
     private bool networkSentSubscribed;
+    private int parityDiagnosticFaulted;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -130,6 +139,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         Func<IReadOnlyDictionary<string, HtmlOverlayWindowSettings>> getOverlayWindowSettingsSnapshot,
         Action persistOverlaySettings,
         Func<bool> debugMode,
+        Func<bool> parityDiagnosticsEnabled,
         Func<string, ActCapability, bool> permissionCheck)
     {
         this.pluginInterface = pluginInterface;
@@ -147,6 +157,18 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.getOverlayWindowSettingsSnapshot = getOverlayWindowSettingsSnapshot;
         this.persistOverlaySettings = persistOverlaySettings;
         this.debugMode = debugMode;
+        this.parityDiagnosticsEnabled = parityDiagnosticsEnabled;
+        HashSet<uint> weaponskillActionIds;
+        try
+        {
+            weaponskillActionIds = LoadWeaponskillActionIds(dataManager);
+        }
+        catch (Exception ex)
+        {
+            weaponskillActionIds = [];
+            log.Warning(ex, "Weaponskill action metadata could not be loaded; contextual guarantees will fail closed.");
+        }
+        raidDpsEstimator = new RaidDpsEstimator(weaponskillActionIds.Contains);
         HashSet<string> limitBreakActionNames;
         try
         {
@@ -1629,6 +1651,10 @@ public sealed class SelfHostedActRuntime : IDisposable
         lock (encounterSync)
         {
             raidDpsEstimator.Reset();
+            effectiveDamageLedger.Reset();
+            encounterDurationTracker.Reset();
+            effectiveDamageEventCursor = 0;
+            effectiveDamageEncounter = null;
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
             activeEncounterPartyCapacity = 0;
@@ -1642,6 +1668,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             observedDeaths.Clear();
             ResetChatEncounterUnsafe();
         }
+        parityDiagnosticRecorder.ResetEncounter();
+        Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
     }
 
     private static ActPluginData RegisterSystemPlugin(IActPluginV1 plugin, string fileName)
@@ -1688,7 +1716,14 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
-        if (raidDpsEstimator.ObserveNetworkLine(
+        if (parityDiagnosticsEnabled())
+        {
+            // Phase 0 records the raw parser input in a sidecar only. It must never
+            // mutate the log line or influence the production encounter pipeline.
+            ObserveParityRawLine(logInfo.originalLogLine);
+        }
+
+        if (effectiveDamageLedger.ObserveRawLine(
                 new DateTimeOffset(logInfo.detectedTime),
                 logInfo.originalLogLine))
         {
@@ -1697,6 +1732,22 @@ public sealed class SelfHostedActRuntime : IDisposable
                 transitionStateDirty = true;
             }
         }
+
+        if (encounterDurationTracker.ObserveRawLine(
+                new DateTimeOffset(logInfo.detectedTime),
+                logInfo.originalLogLine,
+                gameStateProvider.Identities))
+        {
+            lock (encounterSync)
+            {
+                transitionStateDirty = true;
+            }
+        }
+
+        raidDpsEstimator.ObserveNetworkLine(
+            new DateTimeOffset(logInfo.detectedTime),
+            logInfo.originalLogLine);
+        ObserveCommittedDamageEvents(gameStateProvider.Identities);
 
         var fields = logInfo.originalLogLine.Split('|');
         if (fields.Length < 5 || fields[0] != "00")
@@ -1936,12 +1987,6 @@ public sealed class SelfHostedActRuntime : IDisposable
             return;
         }
 
-        var encounter = action.combatAction.ParentEncounter;
-        if (encounter is null)
-        {
-            return;
-        }
-
         var swing = action.combatAction;
         var identities = gameStateProvider.Identities;
         var attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Attacker);
@@ -1950,16 +1995,49 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, ownerName);
         }
+        var encounter = swing.ParentEncounter;
+        if (parityDiagnosticsEnabled())
+        {
+            // Observe before DACT's current party and swing filters so every excluded
+            // MasterSwing has a concrete reason in the parity ledger.
+            ObserveParityCombatAction(
+                swing,
+                identities,
+                attackerIdentity,
+                encounter is not null);
+        }
+        if (encounter is null)
+        {
+            return;
+        }
+
         var victimIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Victim);
+        var actionTime = swing.Time == default
+            ? DateTimeOffset.Now
+            : new DateTimeOffset(swing.Time);
+        lock (encounterSync)
+        {
+            if (!ReferenceEquals(effectiveDamageEncounter, encounter))
+            {
+                raidDpsEstimator.StartEncounter(actionTime);
+                effectiveDamageEventCursor = 0;
+                effectiveDamageLedger.StartEncounter(identities);
+                encounterDurationTracker.StartEncounter(actionTime, identities);
+                effectiveDamageEncounter = encounter;
+            }
+        }
+        effectiveDamageLedger.ObserveCombatAction(
+            swing,
+            identities,
+            attackerIdentity,
+            victimIdentity);
+        ObserveCommittedDamageEvents(identities);
         if (attackerIdentity is null && victimIdentity is null)
         {
             return;
         }
 
         var isDamageSwing = RaidDpsEstimator.IsDamageSwing(swing);
-        var actionTime = swing.Time == default
-            ? DateTimeOffset.Now
-            : new DateTimeOffset(swing.Time);
         if (!isDamageSwing)
         {
             lock (encounterSync)
@@ -1981,24 +2059,57 @@ public sealed class SelfHostedActRuntime : IDisposable
             if (!ReferenceEquals(activeEncounter, encounter))
             {
                 activeEncounterRelevantStart = actionTime;
-                raidDpsEstimator.StartEncounter(actionTime);
             }
             lastRelevantCombatAction = actionTime;
         }
 
-        var victimName = victimIdentity?.Name ?? swing.Victim;
-        // Incoming enemy damage also reaches this callback. Only party-owned damage
-        // can contribute to a party member's rDPS attribution.
-        if (attackerIdentity is not null)
-        {
-            raidDpsEstimator.ObserveDamage(
-                swing,
-                attackerIdentity.Name,
-                victimName,
-                swing.Attacker);
-        }
-
         PublishEncounter(encounter, false);
+    }
+
+    private void ObserveCommittedDamageEvents(IReadOnlyList<ActPlayerIdentity> identities)
+    {
+        lock (encounterSync)
+        {
+            var knownIdentities = identities
+                .Concat(activeEncounterIdentities.Values)
+                .GroupBy(static identity => identity.EntityId)
+                .Select(static group => group.First())
+                .ToArray();
+            var events = effectiveDamageLedger.GetCommittedEventsSince(
+                effectiveDamageEventCursor,
+                out var nextIndex);
+            effectiveDamageEventCursor = nextIndex;
+            foreach (var item in events)
+            {
+                ActPlayerIdentity? owner = null;
+                if (uint.TryParse(
+                        item.OwnerId,
+                        NumberStyles.HexNumber,
+                        CultureInfo.InvariantCulture,
+                        out var ownerId) && ownerId != 0)
+                {
+                    owner = knownIdentities.FirstOrDefault(identity => identity.EntityId == ownerId);
+                }
+                if (owner is null && uint.TryParse(
+                        item.SourceId,
+                        NumberStyles.HexNumber,
+                        CultureInfo.InvariantCulture,
+                        out var sourceId) && sourceId != 0)
+                {
+                    owner = knownIdentities.FirstOrDefault(identity => identity.EntityId == sourceId);
+                }
+                owner ??= ActPlayerIdentityResolver.Resolve(knownIdentities, item.SourceName);
+                if (owner is null &&
+                    raidDpsEstimator.TryResolvePetOwner(item.SourceName, out var ownerName))
+                {
+                    owner = ActPlayerIdentityResolver.Resolve(knownIdentities, ownerName);
+                }
+                if (owner is not null)
+                {
+                    raidDpsEstimator.ObserveEffectiveDamage(item, owner.Name);
+                }
+            }
+        }
     }
 
     private void OnAfterCombatEnd(EncounterData encounter)
@@ -2062,6 +2173,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             ActEncounterSnapshot? snapshot = null;
             ActEncounterSnapshot? fallbackSnapshot = null;
             string? unmatchedNames = null;
+            ParityCompletionRequest? parityCompletion = null;
             lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
             {
                 lock (encounterSync)
@@ -2103,15 +2215,12 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 : new DateTimeOffset(encounter.EndTime)
                             : lastRelevantCombatAction
                         : null;
-                    var encounterSeconds = Math.Max(
-                        1,
-                        ((endTime ?? DateTimeOffset.Now) - startTime).TotalSeconds);
                     var measurementEndTime = endTime ?? DateTimeOffset.Now;
-                    var effectiveEncounterSeconds = Math.Max(
-                        1,
-                        raidDpsEstimator.ResolveEffectiveDamageDurationSeconds(
+                    var damageMetricDuration = encounterDurationTracker
+                        .ResolveDamageMetricDurationSeconds(
                             measurementEndTime,
-                            useObservedDamageEnd: finished));
+                            useObservedDamageEnd: finished);
+                    var effectiveEncounterSeconds = Math.Max(1, damageMetricDuration);
                     var identities = gameStateProvider.Identities;
                     // The largest live roster seen in this pull is the slot count. Cached
                     // identities only fill temporarily empty slots and never expand the party.
@@ -2120,6 +2229,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                         identities.Count);
                     CacheActiveEncounterIdentities(identities);
                     var cachedIdentities = activeEncounterIdentities.Values.ToArray();
+                    if (finished)
+                    {
+                        effectiveDamageLedger.PrepareFinalSnapshot();
+                        ObserveCommittedDamageEvents(identities);
+                    }
                     var combatants = ResolveEncounterCombatants(
                             encounter,
                             identities,
@@ -2130,6 +2244,14 @@ public sealed class SelfHostedActRuntime : IDisposable
                             var hitCounts = GetDamageHitCounts(item.Combatant);
                             var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
                             var actorName = item.Identity?.Name ?? item.Combatant.Name;
+                            var effectiveDamage = 0L;
+                            var hasEffectiveDamage = item.Identity is { EntityId: not 0 } &&
+                                                     effectiveDamageLedger.TryResolveDamage(
+                                                         item.Identity,
+                                                         out effectiveDamage);
+                            var totalDamage = hasEffectiveDamage
+                                ? effectiveDamage
+                                : item.Combatant.Damage;
                             var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
                                                 string.Equals(
                                                     item.Combatant.Name,
@@ -2144,25 +2266,25 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 displayName,
                                 item.Identity?.Job ?? string.Empty,
                                 isLocalPlayer,
-                                item.Combatant.Damage,
+                                totalDamage,
                                 item.Combatant.Healed,
                                 Math.Max(
                                     item.Combatant.Deaths,
                                     Math.Max(
                                         observedDeaths.GetValueOrDefault(displayName),
                                         observedDeaths.GetValueOrDefault(item.Combatant.Name))),
-                                item.Combatant.Damage / effectiveEncounterSeconds,
-                                item.Combatant.Damage / effectiveEncounterSeconds,
+                                totalDamage / effectiveEncounterSeconds,
+                                totalDamage / effectiveEncounterSeconds,
                                 item.Combatant.ExtDPS,
                                 hitCounts.DamageHits,
                                 hitCounts.CriticalHits,
                                 hitCounts.CriticalDirectHits,
-                                raidDpsEstimator.ResolveRate(
-                                    actorName,
-                                    item.Combatant.Damage,
-                                    encounterSeconds,
-                                    useObservedDamageWindow: finished,
-                                    measurementEndTime: measurementEndTime));
+                                hasEffectiveDamage
+                                    ? raidDpsEstimator.ResolveRate(
+                                        actorName,
+                                        totalDamage,
+                                        effectiveEncounterSeconds)
+                                    : 0);
                         })
                         .ToArray();
 
@@ -2179,7 +2301,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                             combatants)
                         {
                             CombatDuration = TimeSpan.FromSeconds(effectiveEncounterSeconds),
-                            IsTransitioning = !finished && raidDpsEstimator.IsTransitioning,
+                            IsTransitioning = !finished &&
+                                              encounterDurationTracker.IsTransitioningAt(
+                                                  measurementEndTime),
                             CurrentPartyMemberIds = identities
                                 .Select(static identity => identity.DisplayName)
                                 .ToArray(),
@@ -2196,7 +2320,34 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     if (finished)
                     {
+                        if (parityDiagnosticsEnabled() && Volatile.Read(ref parityDiagnosticFaulted) == 0)
+                        {
+                            var diagnosticStart = encounter.StartTime == DateTime.MaxValue
+                                ? startTime
+                                : new DateTimeOffset(encounter.StartTime);
+                            var diagnosticEnd = encounter.EndTime == DateTime.MinValue
+                                ? endTime
+                                : new DateTimeOffset(encounter.EndTime);
+                            parityCompletion = new ParityCompletionRequest(
+                                activeEncounterId,
+                                encounter.ZoneName ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty,
+                                encounter.Title ?? string.Empty,
+                                diagnosticStart,
+                                diagnosticEnd,
+                                cachedIdentities,
+                                ActGlobals.oFormActMain.DroppedLogLines,
+                                ActGlobals.oFormActMain.DroppedCombatActions);
+                        }
+                        else
+                        {
+                            parityDiagnosticRecorder.ResetEncounter();
+                            Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
+                        }
+
                         raidDpsEstimator.FinishEncounter();
+                        effectiveDamageLedger.FinishEncounter();
+                        encounterDurationTracker.FinishEncounter();
+                        effectiveDamageEncounter = null;
                         activeEncounter = null;
                         if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)
                         {
@@ -2217,6 +2368,39 @@ public sealed class SelfHostedActRuntime : IDisposable
                         observedDeaths.Clear();
                         ResetChatEncounterUnsafe();
                     }
+                }
+            }
+
+            if (parityCompletion is not null)
+            {
+                try
+                {
+                    var diagnostic = parityDiagnosticRecorder.Complete(
+                        parityCompletion.EncounterId,
+                        parityCompletion.Zone,
+                        parityCompletion.EncounterName,
+                        parityCompletion.FightStart,
+                        parityCompletion.FightEnd,
+                        parityCompletion.Identities,
+                        parityCompletion.DroppedRawLogLines,
+                        parityCompletion.DroppedNormalizedActions);
+                    var output = FflogsParityReportWriter.Write(
+                        Path.Combine(
+                            pluginInterface.ConfigDirectory.FullName,
+                            "logs",
+                            "parity"),
+                        diagnostic);
+                    log.Information(
+                        $"FFLogs parity diagnostic written to '{output.JsonPath}' and '{output.MarkdownPath}'.");
+                    Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
+                }
+                catch (Exception ex)
+                {
+                    // A developer diagnostic is lower priority than encounter publication;
+                    // preserve the existing fault-isolation contract on every write failure.
+                    log.Warning(ex, "FFLogs parity diagnostic could not be written.");
+                    parityDiagnosticRecorder.ResetEncounter();
+                    Interlocked.Exchange(ref parityDiagnosticFaulted, 0);
                 }
             }
 
@@ -2255,6 +2439,52 @@ public sealed class SelfHostedActRuntime : IDisposable
            SnapshotTotalDamage(fallback) > 0 &&
            (primary is null || SnapshotTotalDamage(primary) <= 0);
 
+    private void ObserveParityRawLine(string rawLine)
+    {
+        if (Volatile.Read(ref parityDiagnosticFaulted) != 0)
+        {
+            return;
+        }
+        try
+        {
+            parityDiagnosticRecorder.ObserveRawLine(rawLine);
+        }
+        catch (Exception ex)
+        {
+            if (Interlocked.Exchange(ref parityDiagnosticFaulted, 1) == 0)
+            {
+                log.Warning(ex, "FFLogs parity raw observer was isolated for the current encounter.");
+            }
+        }
+    }
+
+    private void ObserveParityCombatAction(
+        MasterSwing swing,
+        IReadOnlyList<ActPlayerIdentity> identities,
+        ActPlayerIdentity? attackerIdentity,
+        bool hasEncounter)
+    {
+        if (Volatile.Read(ref parityDiagnosticFaulted) != 0)
+        {
+            return;
+        }
+        try
+        {
+            parityDiagnosticRecorder.ObserveCombatAction(
+                swing,
+                identities,
+                attackerIdentity,
+                hasEncounter);
+        }
+        catch (Exception ex)
+        {
+            if (Interlocked.Exchange(ref parityDiagnosticFaulted, 1) == 0)
+            {
+                log.Warning(ex, "FFLogs parity normalized observer was isolated for the current encounter.");
+            }
+        }
+    }
+
     private static HashSet<string> LoadLimitBreakActionNames(IDataManager dataManager)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2273,6 +2503,12 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
         return names;
     }
+
+    private static HashSet<uint> LoadWeaponskillActionIds(IDataManager dataManager)
+        => dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>()
+            .Where(static action => action.ActionCategory.RowId == 3)
+            .Select(static action => action.RowId)
+            .ToHashSet();
 
     private void RestoreHtmlOverlays()
     {
@@ -2461,6 +2697,16 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         public int CriticalDirectHits { get; set; }
     }
+
+    private sealed record ParityCompletionRequest(
+        Guid EncounterId,
+        string Zone,
+        string EncounterName,
+        DateTimeOffset? FightStart,
+        DateTimeOffset? FightEnd,
+        IReadOnlyList<ActPlayerIdentity> Identities,
+        long DroppedRawLogLines,
+        long DroppedNormalizedActions);
 
     private sealed class OverlayConnectionAttempt(
         OverlayConnectionMode mode) : IDisposable

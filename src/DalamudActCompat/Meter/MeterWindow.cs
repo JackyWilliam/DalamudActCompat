@@ -679,7 +679,7 @@ public sealed class MeterWindow : Window
             PrimaryRateLabel(sortMode, settings),
             rows.Select(row => $"{(sortMode == MeterSortMode.Hps ? row.Hps : row.Dps):N0}")));
         MeterColumn? fflogs = showFflogs
-            ? Take(Measure("FFLogs", ["~100", "--"]))
+            ? Take(Measure("FFLogs", ["100", "--"]))
             : null;
 
         return new MeterColumnLayout(
@@ -736,6 +736,28 @@ public sealed class MeterWindow : Window
         DrawColumnHeader(text.Get("直暴", "CDH"), layout.CriticalDirectHit);
         DrawColumnHeader(text.Get("占比", "DMG%"), layout.DamagePercent);
         DrawColumnHeader(text.Get("死亡", "KO"), layout.Deaths);
+
+        var primaryHovered = ImGui.IsMouseHoveringRect(
+            new Vector2(start.X + layout.PrimaryRate.Offset, start.Y),
+            new Vector2(start.X + layout.PrimaryRate.Offset + layout.PrimaryRate.Width, end.Y));
+        if (primaryHovered && settings.DpsMetric == DpsMetric.Rdps)
+        {
+            ImGui.SetTooltip(text.Get(
+                "rDPS（预估）\n基于本地战斗事件与团队增益归因实时估算的团队贡献伤害。结果仅供参考，可能因游戏版本、战斗事件状态及统计口径产生少量差异。",
+                "rDPS (estimated)\nReal-time raid-contribution damage estimated from local combat events and party buffs. Results are informational and may vary slightly with game versions, event state, and statistical conventions."));
+        }
+        else if (layout.Fflogs is { } fflogsColumn && ImGui.IsMouseHoveringRect(
+                     new Vector2(start.X + fflogsColumn.Offset, start.Y),
+                     new Vector2(start.X + fflogsColumn.Offset + fflogsColumn.Width, end.Y)))
+        {
+            var reference = fflogsEstimateService.ReferenceSnapshot;
+            var updated = reference.LatestDataUpdatedAt is { } date
+                ? date.ToLocalTime().ToString("yyyy/MM/dd")
+                : "--";
+            ImGui.SetTooltip(text.Get(
+                $"DPS Parse 预估\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{updated}",
+                $"Estimated DPS Parse\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {updated}"));
+        }
     }
 
     private void DrawCombatantRow(
@@ -888,7 +910,7 @@ public sealed class MeterWindow : Window
             DrawColumn(
                 isLimitBreak
                     ? string.Empty
-                    : estimate is null ? "--" : $"~{estimate.Score}",
+                    : estimate is null ? "--" : estimate.Score.ToString(),
                 fflogsColumn,
                 estimate?.Color ?? new Vector4(0.66f, 0.69f, 0.74f, 1));
         }
@@ -902,8 +924,8 @@ public sealed class MeterWindow : Window
         if (estimate is not null && hovered)
         {
             ImGui.SetTooltip(text.Get(
-                $"FFLogs 公开排名样本估算：{estimate.Score}（基于本地 rDPS 归因，非官方实时成绩）",
-                $"FFLogs public-ranking estimate: {estimate.Score} (based on local rDPS attribution; not an official live parse)"));
+                $"DPS Parse 预估：{estimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
+                $"Estimated DPS Parse: {estimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }
     }
 

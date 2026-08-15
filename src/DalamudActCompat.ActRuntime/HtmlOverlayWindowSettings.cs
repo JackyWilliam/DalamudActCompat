@@ -66,13 +66,11 @@ public sealed class HtmlOverlayWindowSettings
     public void SetEditing(bool editing)
     {
         IsEditing = editing;
-        if (editing)
-        {
-            // Positioning needs both browser input and native drag handling. Keep this
-            // temporary mode separate from the user's normal lock/click-through choices.
-            IsClickThrough = false;
-            IsLocked = false;
-        }
+
+        // Editing is temporary: finishing must restore both passive overlay settings
+        // so the window cannot keep intercepting game input or resemble an editor.
+        IsClickThrough = !editing;
+        IsLocked = !editing;
     }
 
     public void SetClickThrough(bool clickThrough)

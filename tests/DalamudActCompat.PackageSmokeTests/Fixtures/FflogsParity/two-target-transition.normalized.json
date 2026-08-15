@@ -1,0 +1,152 @@
+{
+  "schemaVersion": "0.1",
+  "name": "two-target-transition-normalized",
+  "layer": "normalized-event",
+  "zone": "Fixture Zone",
+  "encounterName": "Two Target Transition",
+  "partyActorIds": [ "10000001" ],
+  "events": [
+    {
+      "kind": "EncounterBoundary",
+      "timestamp": "2026-08-12T20:00:00+08:00",
+      "sequence": 1,
+      "evidence": "start"
+    },
+    {
+      "kind": "Actor",
+      "timestamp": "2026-08-12T20:00:00+08:00",
+      "sequence": 2,
+      "sourceId": "10000001",
+      "sourceName": "Player One",
+      "job": "SMN",
+      "isPartyMember": true
+    },
+    {
+      "kind": "Actor",
+      "timestamp": "2026-08-12T20:00:00+08:00",
+      "sequence": 3,
+      "sourceId": "40000001",
+      "sourceName": "Player Pet",
+      "ownerId": "10000001"
+    },
+    {
+      "kind": "Damage",
+      "timestamp": "2026-08-12T20:00:01+08:00",
+      "sequence": 4,
+      "sourceId": "10000001",
+      "sourceName": "Player One",
+      "targetId": "40000010",
+      "targetName": "Boss Red",
+      "abilityName": "Opening Hit",
+      "amount": 1000,
+      "critical": true,
+      "isPartyMember": true,
+      "isDamageSwing": true,
+      "damageKind": "Direct",
+      "rawLineType": "MasterSwing"
+    },
+    {
+      "kind": "Targetability",
+      "timestamp": "2026-08-12T20:00:02+08:00",
+      "sequence": 5,
+      "targetId": "40000010",
+      "targetName": "Boss Red",
+      "targetable": false
+    },
+    {
+      "kind": "Damage",
+      "timestamp": "2026-08-12T20:00:03+08:00",
+      "sequence": 6,
+      "sourceId": "40000001",
+      "sourceName": "Player Pet",
+      "ownerId": "10000001",
+      "targetId": "40000011",
+      "targetName": "Boss Blue",
+      "abilityName": "Pet Hit",
+      "amount": 2000,
+      "directHit": true,
+      "isDamageSwing": true,
+      "damageKind": "Direct",
+      "rawLineType": "MasterSwing"
+    },
+    {
+      "kind": "Targetability",
+      "timestamp": "2026-08-12T20:00:04+08:00",
+      "sequence": 7,
+      "targetId": "40000011",
+      "targetName": "Boss Blue",
+      "targetable": false
+    },
+    {
+      "kind": "Targetability",
+      "timestamp": "2026-08-12T20:00:05+08:00",
+      "sequence": 8,
+      "targetId": "40000010",
+      "targetName": "Boss Red",
+      "targetable": true
+    },
+    {
+      "kind": "Targetability",
+      "timestamp": "2026-08-12T20:00:06+08:00",
+      "sequence": 9,
+      "targetId": "40000011",
+      "targetName": "Boss Blue",
+      "targetable": true
+    },
+    {
+      "kind": "Damage",
+      "timestamp": "2026-08-12T20:00:07+08:00",
+      "sequence": 10,
+      "sourceId": "10000001",
+      "sourceName": "Player One",
+      "targetId": "40000010",
+      "targetName": "Boss Red",
+      "abilityName": "Finisher",
+      "amount": 3000,
+      "critical": true,
+      "directHit": true,
+      "isPartyMember": true,
+      "isDamageSwing": true,
+      "damageKind": "Direct",
+      "rawLineType": "MasterSwing"
+    },
+    {
+      "kind": "Damage",
+      "timestamp": "2026-08-12T20:00:07.1000000+08:00",
+      "sequence": 11,
+      "sourceId": "10000009",
+      "sourceName": "Nearby Stranger",
+      "targetId": "40000010",
+      "targetName": "Boss Red",
+      "abilityName": "Foreign Hit",
+      "amount": 999,
+      "isDamageSwing": true,
+      "damageKind": "Direct",
+      "rawLineType": "MasterSwing"
+    },
+    {
+      "kind": "Damage",
+      "timestamp": "2026-08-12T20:00:07.2000000+08:00",
+      "sequence": 12,
+      "sourceId": "10000001",
+      "sourceName": "Player One",
+      "targetId": "10000001",
+      "targetName": "Player One",
+      "abilityName": "Fixture Heal",
+      "amount": 500,
+      "isPartyMember": true,
+      "isDamageSwing": false,
+      "damageKind": "Unknown",
+      "rawLineType": "MasterSwing"
+    },
+    {
+      "kind": "EncounterBoundary",
+      "timestamp": "2026-08-12T20:00:08+08:00",
+      "sequence": 13,
+      "evidence": "end"
+    }
+  ],
+  "expectedIncludedDamage": 6000,
+  "expectedCurrentDamageMetricDurationSeconds": 2.0,
+  "notes": "Canonical events isolate ledger and timeline math from FFXIV_ACT_Plugin parsing."
+}

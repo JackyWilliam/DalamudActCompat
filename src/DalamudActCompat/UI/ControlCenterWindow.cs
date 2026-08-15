@@ -11,6 +11,7 @@ using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.Quality;
 using System.Numerics;
 
 namespace DalamudActCompat.UI;
@@ -62,6 +63,7 @@ public sealed class ControlCenterWindow : Window
     private readonly PluginLogger logger;
     private readonly UiText text;
     private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly CombatQualitySnapshot? combatQualitySnapshot;
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
     private readonly ISharedImmediateTexture helpTexture;
@@ -136,6 +138,7 @@ public sealed class ControlCenterWindow : Window
         PluginLogger logger,
         UiText text,
         FflogsEstimateService fflogsEstimateService,
+        CombatQualitySnapshot? combatQualitySnapshot,
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
         ISharedImmediateTexture helpTexture,
@@ -181,6 +184,7 @@ public sealed class ControlCenterWindow : Window
         this.logger = logger;
         this.text = text;
         this.fflogsEstimateService = fflogsEstimateService;
+        this.combatQualitySnapshot = combatQualitySnapshot;
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
         this.helpTexture = helpTexture;
@@ -707,6 +711,12 @@ public sealed class ControlCenterWindow : Window
                     }
                 }
                 ImGui.EndCombo();
+            }
+            if (configuration.Meter.DpsMetric == DpsMetric.Rdps)
+            {
+                ImGui.TextDisabled(text.Get(
+                    "rDPS（预估）：基于本地战斗事件与团队增益归因实时估算的团队贡献伤害。结果仅供参考，可能因游戏版本、战斗事件状态及统计口径产生少量差异。",
+                    "rDPS (estimated): real-time raid-contribution damage estimated from local combat events and party buffs. Results are informational and may vary slightly with game versions, event state, and statistical conventions."));
             }
 
             changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
@@ -1990,6 +2000,89 @@ public sealed class ControlCenterWindow : Window
         return changed;
     }
 
+    private void DrawCombatQuality()
+    {
+        ImGui.Spacing();
+        if (!ImGui.CollapsingHeader("Combat Quality"))
+        {
+            return;
+        }
+
+        void DrawRow(string label, string value)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableSetColumnIndex(0);
+            ImGui.TextDisabled(label);
+            ImGui.TableSetColumnIndex(1);
+            ImGui.TextUnformatted(value);
+        }
+
+        void DrawSection(string title)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableSetColumnIndex(0);
+            ImGui.TextColored(IceBlue, title);
+            ImGui.TableSetColumnIndex(1);
+            ImGui.TextUnformatted(string.Empty);
+        }
+
+        if (!ImGui.BeginTable(
+                "combat-quality-table",
+                2,
+                ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
+        {
+            return;
+        }
+
+        var snapshot = combatQualitySnapshot;
+        DrawSection("Combat Engine");
+        DrawRow("Raw Damage", snapshot is null
+            ? "Unavailable"
+            : $"{(snapshot.RawParityExactCount == snapshot.RawParitySampleCount ? "Exact" : "Mismatch")} " +
+              $"({snapshot.RawParityExactCount}/{snapshot.RawParitySampleCount})");
+        DrawRow("Direct Packets", snapshot is null
+            ? "Unavailable"
+            : $"{(snapshot.DirectPacketMatched == snapshot.DirectPacketExpected ? "Exact" : "Mismatch")} " +
+              $"({snapshot.DirectPacketMatched}/{snapshot.DirectPacketExpected})");
+        DrawRow("rDPS Model", snapshot?.ModelIdentifier ?? RaidDpsModelInfo.OwnershipModel);
+        DrawRow("Status Engine", snapshot?.StatusEngine ?? RaidDpsModelInfo.StatusEngine);
+
+        var reference = fflogsEstimateService.ReferenceSnapshot;
+        DrawSection("FFLogs Reference");
+        DrawRow("Region", reference.Region);
+        DrawRow("Partition", reference.Partition.ToString());
+        DrawRow("Parse Metric", reference.Metric);
+        DrawRow(
+            "Percentile Data",
+            reference.LatestDataUpdatedAt is { } updatedAt
+                ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd")
+                : "--");
+
+        DrawSection("rDPS Validation");
+        DrawRow("Samples", snapshot?.Samples.ToString() ?? "--");
+        DrawRow("Mean Δ", snapshot is null ? "--" : snapshot.MeanDelta.ToString("F3"));
+        DrawRow("Median Δ", snapshot is null ? "--" : snapshot.MedianDelta.ToString("F3"));
+        DrawRow("MAE", snapshot is null ? "--" : snapshot.Mae.ToString("F3"));
+        DrawRow("P90 |Δ|", snapshot is null ? "--" : snapshot.P90AbsoluteDelta.ToString("F3"));
+        DrawRow("P95 |Δ|", snapshot is null ? "--" : snapshot.P95AbsoluteDelta.ToString("F3"));
+        DrawRow("Max |Δ|", snapshot is null ? "--" : snapshot.MaxAbsoluteDelta.ToString("F3"));
+
+        DrawSection("Parity Harness");
+        DrawRow(
+            "Last Run",
+            snapshot is null ? "--" : snapshot.LastRun.ToLocalTime().ToString("yyyy/MM/dd HH:mm"));
+        DrawRow("Raw Parity", snapshot is null
+            ? "Unavailable"
+            : $"{snapshot.RawParityExactCount}/{snapshot.RawParitySampleCount}");
+        DrawRow("Direct Packet Match", snapshot is null
+            ? "Unavailable"
+            : $"{snapshot.DirectPacketMatched}/{snapshot.DirectPacketExpected}");
+        DrawRow(
+            "Normalization Warnings",
+            snapshot?.NormalizationWarnings.ToString() ?? "--");
+        ImGui.EndTable();
+    }
+
     private bool DrawDiagnostics()
     {
         DrawPageHeader(
@@ -2060,6 +2153,20 @@ public sealed class ControlCenterWindow : Window
             ImGui.EndCombo();
         }
         changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);
+        if (configuration.DebugMode)
+        {
+            changed |= Checkbox(
+                text.Get("记录 FFLogs parity 诊断", "Record FFLogs parity diagnostics"),
+                configuration.EnableFflogsParityRecorder,
+                value => configuration.EnableFflogsParityRecorder = value);
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "仅在手动启用后记录；普通 Debug 不会自动启动 parity 工具。",
+                    "Records only when explicitly enabled; ordinary Debug does not start the parity tool."));
+            }
+            DrawCombatQuality();
+        }
         changed |= Checkbox(text.Get("显示 ACT 快捷按钮", "Show ACT quick button"), configuration.ShowLauncherButton, value => configuration.ShowLauncherButton = value);
         var launcherButtonSize = configuration.LauncherButtonSize;
         if (ImGui.SliderInt(text.Get("快捷按钮尺寸（像素）", "Quick-button size (pixels)"), ref launcherButtonSize, 56, 128))
@@ -2223,7 +2330,7 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.TextDisabled(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
         if (ImGui.Button(settings.IsEditing
-                ? text.Get("完成并操作网页", "Finish and interact with page")
+                ? text.Get("完成位置编辑", "Finish position editing")
                 : text.Get("编辑位置和大小", "Edit position and size")))
         {
             var beginEditing = !settings.IsEditing;
@@ -2243,8 +2350,8 @@ public sealed class ControlCenterWindow : Window
                 "单击可操作网页；按住并拖动可移动，拖动右下角斜纹可缩放。",
                 "Click to use the page; hold and drag to move, or drag the striped bottom-right grip to resize.")
             : text.Get(
-                "关闭穿透时可操作网页；打开穿透后，鼠标点击会传给游戏。",
-                "With click-through off, the page is interactive; when enabled, mouse clicks pass to the game."));
+                "位置编辑时会暂时关闭穿透与锁定；完成后会恢复。",
+                "Position editing temporarily disables click-through and locking; finishing restores them."));
         ImGui.PopID();
 
         if (changed)
@@ -2424,10 +2531,17 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("FFLogs 实时估算", "FFLogs live estimate"));
+        ImGui.TextColored(Gold, text.Get("FFLogs DPS Parse 预估", "FFLogs DPS Parse estimate"));
         ImGui.TextWrapped(text.Get(
-            "后台按团队增益归因计算 rDPS，再用 FFLogs 公共排名样本估算百分位；显示为带“~”的颜色与数字，不是官方实时日志分数。",
-            "Calculate estimated rDPS from raid-buff attribution in the background, then estimate its percentile from public FFLogs ranking samples. The colored number is prefixed with '~' and is not an official live-log score."));
+            "根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算 Parse 数字与颜色。缓存缺失时显示“--”，不会猜测百分位。",
+            "Estimate the Parse number and color from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition. Missing cache data is shown as '--'; no percentile is guessed."));
+        var reference = fflogsEstimateService.ReferenceSnapshot;
+        var referenceDate = reference.LatestDataUpdatedAt is { } updatedAt
+            ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd")
+            : "--";
+        ImGui.TextDisabled(text.Get(
+            $"区域 {reference.Region} · 分区 {reference.Partition} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
+            $"Region {reference.Region} · Partition {reference.Partition} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
 
         var changed = false;
         if (ImGui.BeginTable(

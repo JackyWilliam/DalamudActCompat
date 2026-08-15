@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 8;
+    private const int CurrentVersion = 9;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -18,6 +18,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool AutoStartParser { get; set; } = true;
 
     public bool DebugMode { get; set; }
+
+    public bool EnableFflogsParityRecorder { get; set; }
 
     public bool AutoCheckBundledPluginUpdates { get; set; } = true;
 
@@ -213,6 +215,14 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 8;
             changed = true;
         }
+        if (Version < 9)
+        {
+            // Debug mode historically implied parity capture. Make the expensive
+            // research recorder an explicit opt-in without changing other diagnostics.
+            EnableFflogsParityRecorder = false;
+            Version = 9;
+            changed = true;
+        }
 
         return changed;
     }
@@ -223,6 +233,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         EnableParsing = true;
         AutoStartParser = true;
         DebugMode = false;
+        EnableFflogsParityRecorder = false;
         AutoCheckBundledPluginUpdates = true;
         SuppressFoxTtsProPrompt = false;
         HistoryLimit = 20;
@@ -259,6 +270,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         EnableParsing = snapshot.EnableParsing;
         AutoStartParser = snapshot.AutoStartParser;
         DebugMode = snapshot.DebugMode;
+        EnableFflogsParityRecorder = snapshot.EnableFflogsParityRecorder;
         AutoCheckBundledPluginUpdates = snapshot.AutoCheckBundledPluginUpdates;
         SuppressFoxTtsProPrompt = snapshot.SuppressFoxTtsProPrompt;
         HistoryLimit = snapshot.HistoryLimit;

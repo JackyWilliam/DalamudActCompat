@@ -13,6 +13,7 @@ using System.Xml;
 using Advanced_Combat_Tracker;
 using Dalamud.Plugin.Services;
 using DalamudActCompat.ActRuntime;
+using DalamudActCompat.ActRuntime.Parity;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
@@ -62,6 +63,7 @@ try
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     ValidateRaidDpsEstimator();
+    ValidateFflogsParityReplay(testRoot);
     ValidateEncounterParticipantsSurvivePartyDeparture();
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
@@ -715,7 +717,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 8 &&
+        legacyConfiguration.Version == 9 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -745,7 +747,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 8 &&
+        parserMigration.Version == 9 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -759,16 +761,30 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 8 &&
+        newConfiguration.Version == 9 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser &&
+        !newConfiguration.EnableFflogsParityRecorder &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
         "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
+
+    var previousDebugConfiguration = new PluginConfiguration
+    {
+        Version = 8,
+        DebugMode = true,
+        EnableFflogsParityRecorder = true,
+    };
+    Assert(
+        previousDebugConfiguration.ApplyMigrations() &&
+        previousDebugConfiguration.Version == 9 &&
+        previousDebugConfiguration.DebugMode &&
+        !previousDebugConfiguration.EnableFflogsParityRecorder,
+        "The version-9 migration did not detach ordinary Debug from parity recording.");
 
     var previousV6Configuration = new PluginConfiguration
     {
@@ -777,7 +793,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 8 &&
+        previousV6Configuration.Version == 9 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -801,7 +817,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 8 &&
+        previousGenericPluginUser.Version == 9 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -813,7 +829,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 8 &&
+        previousEdpsUser.Version == 9 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -829,7 +845,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 8 &&
+        previousCustomMetricUser.Version == 9 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -858,7 +874,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 8 &&
+        previousTimelineUser.Version == 9 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -947,7 +963,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 8 &&
+        previousV5CactbotUser.Version == 9 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1047,6 +1063,39 @@ static void ValidateMeterRows()
     Assert(
         Math.Abs(rows.Sum(row => row.DamagePercent) - 100) < 0.01,
         "Meter damage percentages did not cover the encounter total.");
+
+    var transientZeroHitCombatants = encounter.Combatants
+        .Select(static combatant => combatant.Id == "tank"
+            ? combatant with
+            {
+                DamageHits = 0,
+                CriticalHits = 0,
+                CriticalDirectHits = 0,
+            }
+            : combatant)
+        .ToArray();
+    state.UpdateCurrent(encounter with { Combatants = transientZeroHitCombatants });
+    Thread.Sleep(settings.RefreshIntervalMs + 20);
+    rows = meter.GetRows();
+    var tankWithTransientZeroHits = rows.Single(static row => row.Id == "tank");
+    Assert(
+        tankWithTransientZeroHits.CriticalHitPercent == 25 &&
+        tankWithTransientZeroHits.CriticalDirectHitPercent == 10,
+        "A transient zero-hit ACT snapshot inserted '--' between valid Meter percentages.");
+
+    state.UpdateCurrent(encounter with
+    {
+        Id = Guid.NewGuid(),
+        Combatants = transientZeroHitCombatants,
+    });
+    rows = meter.GetRows();
+    var tankInNewEncounter = rows.Single(static row => row.Id == "tank");
+    Assert(
+        tankInNewEncounter.CriticalHitPercent is null &&
+        tankInNewEncounter.CriticalDirectHitPercent is null,
+        "The Meter carried a cached hit rate into a different encounter.");
+
+    state.UpdateCurrent(encounter);
 
     settings.DpsMetric = DpsMetric.Rdps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
@@ -1380,11 +1429,11 @@ static void ValidateFflogsEstimateCurve()
         new(16, 19_196.895),
         new(17, 19_320.374),
     ];
-    var observedLindwurmPaladinRdps = (double)estimatePercentile.Invoke(
+    var observedLindwurmPaladinDps = (double)estimatePercentile.Invoke(
         null,
         [lindwurmPaladinLowCurve, 19_245.4d])!;
     Assert(
-        Math.Round(observedLindwurmPaladinRdps, MidpointRounding.AwayFromZero) == 16,
+        Math.Round(observedLindwurmPaladinDps, MidpointRounding.AwayFromZero) == 16,
         "Dense low-percentile sampling did not reproduce the observed Lindwurm Paladin parse.");
 
     FflogsCurvePoint[] lindwurmBlackMageLowCurve =
@@ -1392,11 +1441,11 @@ static void ValidateFflogsEstimateCurve()
         new(1, 18_235.211),
         new(2, 19_999.254),
     ];
-    var observedLindwurmBlackMageRdps = (double)estimatePercentile.Invoke(
+    var observedLindwurmBlackMageDps = (double)estimatePercentile.Invoke(
         null,
         [lindwurmBlackMageLowCurve, 19_437.3d])!;
     Assert(
-        Math.Round(observedLindwurmBlackMageRdps, MidpointRounding.AwayFromZero) == 2,
+        Math.Round(observedLindwurmBlackMageDps, MidpointRounding.AwayFromZero) == 2,
         "Dense low-percentile sampling did not reproduce the observed Lindwurm Black Mage parse.");
 
     FflogsCurvePoint[] tyrantPaladinCurve =
@@ -1404,24 +1453,24 @@ static void ValidateFflogsEstimateCurve()
         new(25, 18_718.784),
         new(50, 20_830.289),
     ];
-    var observedPaladinRdps = (double)estimatePercentile.Invoke(
+    var observedPaladinDps = (double)estimatePercentile.Invoke(
         null,
         [tyrantPaladinCurve, 20_550d])!;
     Assert(
-        Math.Round(observedPaladinRdps, MidpointRounding.AwayFromZero) == 47,
-        "The corrected local Paladin rDPS did not calibrate to the observed CN ranking of 47.");
+        Math.Round(observedPaladinDps, MidpointRounding.AwayFromZero) == 47,
+        "The local Paladin DPS did not calibrate to the observed CN ranking of 47.");
 
     FflogsCurvePoint[] tyrantMachinistCurve =
     [
         new(25, 29_403.226),
         new(50, 32_079.946),
     ];
-    var observedMachinistRdps = (double)estimatePercentile.Invoke(
+    var observedMachinistDps = (double)estimatePercentile.Invoke(
         null,
         [tyrantMachinistCurve, 30_601d])!;
     Assert(
-        Math.Round(observedMachinistRdps, MidpointRounding.AwayFromZero) == 36,
-        "The corrected local Machinist rDPS did not calibrate to the observed CN ranking of 36.");
+        Math.Round(observedMachinistDps, MidpointRounding.AwayFromZero) == 36,
+        "The local Machinist DPS did not calibrate to the observed CN ranking of 36.");
 
     var fflogsSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
@@ -1435,8 +1484,9 @@ static void ValidateFflogsEstimateCurve()
             "metric = CurrentFflogsEncounterTable.RankingMetric",
             StringComparison.Ordinal) &&
         fflogsSource.Contains("serverRegion: $serverRegion", StringComparison.Ordinal) &&
-        fflogsSource.Contains("partition: $partition", StringComparison.Ordinal),
-        "FFLogs curves are no longer sourced from the CN rDPS ranking population.");
+        fflogsSource.Contains("partition: $partition", StringComparison.Ordinal) &&
+        fflogsSource.Contains("var encounterDps = combatant.Dps", StringComparison.Ordinal),
+        "FFLogs curves are no longer sourced from the CN DPS ranking population or the lookup stopped using actual DPS.");
 
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
@@ -1489,7 +1539,7 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
                 101,
                 "CN",
                 9,
-                "rdps",
+                "dps",
                 FflogsEstimateService.CurrentCurveFormatVersion)])));
 
     var settings = new FflogsSettings
@@ -1514,10 +1564,10 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
         "Lindwurm",
         [new Combatant(
             "local", "Player", "PLD", true, 90_000, 0, 0,
-            Dps: 3_000,
-            EncDps: 3_000,
-            ExtDps: 3_000,
-            Rdps: 2_000)],
+            Dps: 2_000,
+            EncDps: 2_500,
+            ExtDps: 2_750,
+            Rdps: 3_000)],
         [],
         [],
         [],
@@ -1532,7 +1582,9 @@ static async Task ValidateFflogsPersistenceAsync(string testRoot)
     var capturedCombatant = captured.Combatants.Single();
     Assert(
         capturedCombatant.FflogsPercentile == 50 &&
-        capturedCombatant.FflogsEncounterName == "Lindwurm",
+        capturedCombatant.FflogsEncounterName == "Lindwurm" &&
+        capturedCombatant.FflogsMetric == "DPS" &&
+        capturedCombatant.FflogsDataUpdatedAt is not null,
         "An FFLogs estimate already visible at encounter end was not captured for history.");
 
     var dutyFinalizedFromAnActiveBoss = service.CaptureAvailableEstimates(encounter with
@@ -2217,7 +2269,7 @@ static void ValidateControlCenterPresentation()
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
         historySource.Contains("FflogsEstimateService.GetPersistedEstimate", StringComparison.Ordinal) &&
-        historySource.Contains("FFLogs ~", StringComparison.Ordinal) &&
+        historySource.Contains("FFLogs {", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "Combat History lost its branded frame, navigation rail, or saved FFLogs display.");
@@ -3274,7 +3326,7 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
                     100,
                     "CN",
                     9,
-                    "rdps",
+                    "dps",
                     FflogsEstimateService.CurrentCurveFormatVersion),
             ]));
     await File.WriteAllTextAsync(
@@ -4111,12 +4163,16 @@ static void ValidateRaidDpsEstimator()
 {
     var start = DateTimeOffset.UtcNow;
     var estimator = new RaidDpsEstimator();
+    static string TechnicalFinishAction(string actionId) =>
+        $"22|time|10000001|Dancer|{actionId}|Technical Finish|10000001|Dancer|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0";
+
     Assert(
         RaidDpsEstimator.IsDamageSwingType(1) &&
         RaidDpsEstimator.IsDamageSwingType(2) &&
         !RaidDpsEstimator.IsDamageSwingType(3),
         "ACT healing swings can still enter the DPS/rDPS damage window.");
     estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C1"));
     estimator.ObserveStatusLine(
         start,
         "26|time|71E|技巧舞步结束|20.00|10000001|Dancer|10000002|Paladin@Alpha|");
@@ -4124,16 +4180,16 @@ static void ValidateRaidDpsEstimator()
         start.AddSeconds(1),
         "Paladin",
         "Boss",
-        1_050,
+        1_030,
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Paladin@Alpha") + 50) < 0.001 &&
-        Math.Abs(estimator.ResolveDamageAdjustment("Dancer") - 50) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin@Alpha") + 30) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Dancer") - 30) < 0.001 &&
         Math.Abs(
             estimator.ResolveDamageAdjustment("Paladin") +
             estimator.ResolveDamageAdjustment("Dancer")) < 0.001,
-        "Percentage raid-buff damage was not transferred from the receiver to the provider.");
+        "Three-step Technical Finish was not attributed at 3%.");
 
     estimator.ObserveStatusLine(
         start.AddSeconds(2),
@@ -4146,8 +4202,110 @@ static void ValidateRaidDpsEstimator()
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Paladin") + 50) < 0.001,
+        Math.Abs(estimator.ResolveDamageAdjustment("Paladin") + 30) < 0.001,
         "A removed raid buff continued changing rDPS attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Paladin") - 50) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 50) < 0.001,
+        "Four-step Technical Finish was not attributed at 5%.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C1"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|839|Standard Finish|60.00|10000001|Dancer|10000002|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        10_815,
+        critical: false,
+        directHit: false);
+    var overlapTotals = estimator.ResolveAttributionTotals(
+        RaidDpsEstimator.AttributionKind.Percentage);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Paladin") - 815) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 815) < 0.001 &&
+        Math.Abs(overlapTotals.Received - overlapTotals.Contributed) < 0.001,
+        "Standard and three-step Technical overlap stopped using multiplicative conservation.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C1"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1234|Eukrasian Dosis III|30.00|10000002|Sage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|71E|Technical Finish|0.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000002",
+            "Sage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Eukrasian Dosis III (*)",
+            1_030,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Sage");
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 30) < 0.001,
+        "A periodic snapshot did not retain its three-step Technical multiplier.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1234|Eukrasian Dosis III|30.00|10000002|Sage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|71E|Technical Finish|0.00|10000001|Dancer|10000002|Sage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000002",
+            "Sage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Eukrasian Dosis III (*)",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Sage");
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 50) < 0.001,
+        "A periodic snapshot did not retain its four-step Technical multiplier.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
@@ -4168,21 +4326,61 @@ static void ValidateRaidDpsEstimator()
         Math.Abs(paladinAdjustment + dragoonAdjustment) < 0.001,
         "Critical-hit raid-buff attribution was not positive and damage-conserving.");
 
+    var percentageFirst = new RaidDpsEstimator(
+        ownershipModel: RaidDpsOwnershipModel.PercentageFirst);
+    var sharedBaseLog = new RaidDpsEstimator(
+        ownershipModel: RaidDpsOwnershipModel.SharedBaseLog);
+    foreach (var ownershipEstimator in new[] { percentageFirst, sharedBaseLog })
+    {
+        ownershipEstimator.StartEncounter(start);
+        ownershipEstimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+        ownershipEstimator.ObserveStatusLine(
+            start,
+            "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000002|Paladin|");
+        ownershipEstimator.ObserveStatusLine(
+            start,
+            "26|time|312|Battle Litany|20.00|10000003|Dragoon|10000002|Paladin|");
+        ownershipEstimator.ObserveDamage(
+            start.AddSeconds(1),
+            "Paladin",
+            "Boss",
+            1_600,
+            critical: true,
+            directHit: false);
+    }
+    var currentPercentage = percentageFirst.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.Percentage);
+    var sharedPercentage = sharedBaseLog.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.Percentage);
+    var currentTotal = percentageFirst.ResolveReceivedDamage("Paladin");
+    var sharedTotal = sharedBaseLog.ResolveReceivedDamage("Paladin");
+    Assert(
+        sharedPercentage < currentPercentage &&
+        Math.Abs(sharedTotal - currentTotal) < 0.001 &&
+        Math.Abs(
+            sharedBaseLog.ResolveAttributionTotals().Received -
+            sharedBaseLog.ResolveAttributionTotals().Contributed) < 0.001,
+        "SharedBaseLog did not reassign only the percentage/rate interaction while preserving total conservation.");
+
     estimator.Reset();
     estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
     estimator.ObserveStatusLine(
         start,
-        "26|time|71E|技巧舞步结束|20.00|10000002|Paladin|10000002|Paladin|");
+        "26|time|71E|技巧舞步结束|20.00|10000001|Dancer|10000001|Dancer|");
     estimator.ObserveDamage(
         start.AddSeconds(1),
-        "Paladin",
+        "Dancer",
         "Boss",
         1_050,
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Paladin")) < 0.001,
-        "A self-provided damage buff was incorrectly treated as external rDPS contribution.");
+        Math.Abs(estimator.ResolveContributedDamage("Dancer")) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Dancer")) < 0.001,
+        "Dancer self Technical damage was incorrectly treated as rDPS contribution.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
@@ -4201,10 +4399,43 @@ static void ValidateRaidDpsEstimator()
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveObservedDamageDurationSeconds() - 10) < 0.001 &&
-        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: false) - (1_000d / 30)) < 0.001 &&
-        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30, useObservedDamageWindow: true) - 100) < 0.001,
-        "Finished rDPS did not trim non-damage tail time while active rDPS retained wall-clock duration.");
+        Math.Abs(estimator.ResolveRate("Paladin", 1_000, 30) - (1_000d / 30)) < 0.001,
+        "rDPS did not use the authoritative DamageMetricDuration supplied by the encounter tracker.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000009|Summoner|1B|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|40000001|Solar Bahamut|00|64|10000009|00||");
+    Assert(
+        estimator.TryResolvePetOwner("Solar Bahamut", out var petOwner) &&
+        petOwner == "Summoner",
+        "A party pet was not resolved back to its owner from AddCombatant data.");
+    estimator.ObserveNetworkLine(start, TechnicalFinishAction("81C2"));
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|10000009|Summoner|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|71E|Technical Finish|20.00|10000001|Dancer|40000001|Solar Bahamut|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Summoner",
+        "Boss",
+        1_050,
+        critical: false,
+        directHit: false,
+        damageSourceName: "Solar Bahamut");
+    var petTechnicalTotals = estimator.ResolveAttributionTotals(
+        RaidDpsEstimator.AttributionKind.Percentage);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Summoner") - 50) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Dancer") - 50) < 0.001 &&
+        Math.Abs(petTechnicalTotals.Received - petTechnicalTotals.Contributed) < 0.001,
+        "Pet damage under Technical was not owner-attributed exactly once and conserved.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
@@ -4214,10 +4445,6 @@ static void ValidateRaidDpsEstimator()
     estimator.ObserveNetworkLine(
         start,
         "03|time|40000001|Solar Bahamut|00|64|10000001|00||");
-    Assert(
-        estimator.TryResolvePetOwner("Solar Bahamut", out var petOwner) &&
-        petOwner == "Summoner",
-        "A party pet was not resolved back to its owner from AddCombatant data.");
     estimator.ObserveStatusLine(
         start,
         "26|time|F2F|The Balance|20.00|10000002|Astrologian|10000001|Summoner|");
@@ -4228,53 +4455,1269 @@ static void ValidateRaidDpsEstimator()
         start.AddSeconds(1),
         "Summoner",
         "Boss",
-        1_060,
+        1_030,
         critical: false,
         directHit: false,
         damageSourceName: "Solar Bahamut");
     Assert(
-        Math.Abs(estimator.ResolveDamageAdjustment("Summoner") + 60) < 0.001 &&
-        Math.Abs(estimator.ResolveDamageAdjustment("Astrologian") - 60) < 0.001,
-        "Pet damage or the AST single-target card was not included exactly once in rDPS attribution.");
+        Math.Abs(estimator.ResolveDamageAdjustment("Summoner") + 30) < 0.001 &&
+        Math.Abs(estimator.ResolveDamageAdjustment("Astrologian") - 30) < 0.001,
+        "The Balance did not use its official 3% off-role multiplier for pet-owner damage.");
 
     estimator.Reset();
     estimator.StartEncounter(start);
-    estimator.ObserveDamage(
+    estimator.ObserveNetworkLine(
         start,
-        "Paladin",
-        "Lindwurm",
-        1_000,
-        critical: false,
-        directHit: false);
-    Assert(
-        estimator.ObserveNetworkLine(
-            start.AddSeconds(330),
-            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|00|") &&
-        estimator.IsTransitioning,
-        "NameToggle 00 did not switch the active encounter to transition state.");
-    Assert(
-        estimator.ObserveNetworkLine(
-            start.AddSeconds(352.145),
-            "34|time|4001C225|Lindwurm|4001C225|Lindwurm|01|") &&
-        !estimator.IsTransitioning,
-        "NameToggle 01 did not switch the encounter back to running state.");
+        "03|time|10000001|Paladin|13|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000002|Black Mage|19|64|0000|434|Test World|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000003|Astrologian|10000001|Paladin|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F31|The Spear|20.00|10000003|Astrologian|10000002|Black Mage|");
     estimator.ObserveDamage(
-        start.AddSeconds(397.974),
+        start.AddSeconds(1),
         "Paladin",
-        "Lindwurm",
-        374_829,
+        "Boss",
+        1_060,
+        critical: false,
+        directHit: false);
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Black Mage",
+        "Boss",
+        1_060,
         critical: false,
         directHit: false);
     Assert(
-        Math.Abs(estimator.ResolveDamageDowntimeSeconds(start.AddSeconds(397.974)) - 22.145) < 0.001 &&
-        Math.Abs(estimator.ResolveEffectiveDamageDurationSeconds() - 375.829) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Astrologian") - 120) < 0.001,
+        "AST cards did not retain their official 6% multipliers on matching target roles.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000001|Paladin|13|64|0000|434|Test World|");
+    estimator.ObserveNetworkLine(
+        start,
+        "03|time|10000002|Black Mage|19|64|0000|434|Test World|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F2F|The Balance|20.00|10000003|Astrologian|10000002|Black Mage|");
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|F31|The Spear|20.00|10000003|Astrologian|10000001|Paladin|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Paladin",
+        "Boss",
+        1_030,
+        critical: false,
+        directHit: false);
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Black Mage",
+        "Boss",
+        1_030,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveContributedDamage("Astrologian") - 60) < 0.001,
+        "AST cards did not use their official 3% multipliers on off-role targets.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|8A9|Mage's Ballad|45.00|10000003|Bard|10000002|Sage|");
+    estimator.ObserveDamage(
+        start.AddSeconds(1),
+        "Sage",
+        "Boss",
+        1_010,
+        critical: false,
+        directHit: false);
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Sage") - 10) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Bard") - 10) < 0.001,
+        "Mage's Ballad was not attributed at its official fixed 1% multiplier.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|511|Embolden|20.00|10000003|Red Mage|10000002|Sage|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1234|Eukrasian Dosis III|30.00|10000002|Sage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|511|Embolden|0.00|10000003|Red Mage|10000002|Sage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000002",
+            "Sage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Eukrasian Dosis III (*)",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Sage");
+    var dotSnapshotTransfer = 50d;
+    var attributionTotals = estimator.ResolveAttributionTotals();
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Sage") - dotSnapshotTransfer) < 0.001 &&
+        Math.Abs(estimator.ResolveContributedDamage("Red Mage") - dotSnapshotTransfer) < 0.001 &&
+        Math.Abs(attributionTotals.Received - attributionTotals.Contributed) < 0.001,
+        "Percentage DoT attribution did not retain its application-time external buff snapshot.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|1235|Dia|30.00|10000004|White Mage|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|511|Embolden|20.00|10000003|Red Mage|10000004|White Mage|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000004",
+            "White Mage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Dia (DoT)",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "White Mage");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000004",
+            "White Mage",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Glare",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: false),
+        "White Mage");
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("White Mage") - 50) < 0.001,
+        "An unbuffed DoT snapshot used tick-time buffs or direct damage stopped using hit-time buffs.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|511|Embolden|20.00|10000003|Red Mage|10000005|Dark Knight|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|2ED|Salted Earth|15.00|10000005|Dark Knight|10000005|Dark Knight|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|511|Embolden|0.00|10000003|Red Mage|10000005|Dark Knight|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000005",
+            "Dark Knight",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Salted Earth",
+            1_050,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Dark Knight");
+    Assert(
+        Math.Abs(estimator.ResolveReceivedDamage("Dark Knight") - 50) < 0.001,
+        "A self-status ground effect did not reuse its application snapshot on enemy ticks.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    var guaranteedSamurai =
+        "21|time|10000006|Samurai|1D3F|Midare Setsugekka|40000001|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000011|0|raw-11";
+    estimator.ObserveNetworkLine(start.AddSeconds(1), guaranteedSamurai);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(1),
+            "10000006",
+            "Samurai",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Midare Setsugekka",
+            100,
+            Critical: true,
+            DirectHit: false,
+            IsPeriodic: false),
+        "Samurai");
+    var samuraiBaseline = estimator.ResolveHitBaseline("Samurai");
+    Assert(
+        samuraiBaseline.CriticalSamples == 0 &&
+        samuraiBaseline.DirectHitSamples == 1 &&
+        samuraiBaseline.DirectHits == 0,
+        "A guaranteed-Crit action polluted Crit samples or incorrectly removed its natural DH sample.");
+
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveNetworkLine(start.AddSeconds(3), guaranteedSamurai);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(3),
+            "10000006",
+            "Samurai",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Midare Setsugekka",
+            1_600,
+            Critical: true,
+            DirectHit: false,
+            IsPeriodic: false),
+        "Samurai");
+    var deterministicCriticalTransfer = 1_600 - (1_600 / 1.0375);
+    Assert(
         Math.Abs(
-            estimator.ResolveRate(
-                "Paladin",
-                375_829,
-                397.974,
-                useObservedDamageWindow: true) - 1_000) < 0.001,
-        "The verified Lindwurm transition interval was not removed from DPS/rDPS duration.");
+            estimator.ResolveContributedDamage(
+                "Scholar",
+                RaidDpsEstimator.AttributionKind.Critical) -
+            deterministicCriticalTransfer) < 0.001,
+        "Guaranteed Crit damage did not use deterministic rate-buff scaling.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|353|Reassemble|5.00|10000008|Machinist|10000008|Machinist|");
+    var reassembledDrill =
+        "21|time|10000008|Machinist|4072|Drill|40000001|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000012|0|raw-12";
+    estimator.ObserveNetworkLine(start.AddSeconds(1), reassembledDrill);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(1),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Drill",
+            100,
+            Critical: true,
+            DirectHit: true,
+            IsPeriodic: false),
+        "Machinist");
+    var machinistBaseline = estimator.ResolveHitBaseline("Machinist");
+    Assert(
+        machinistBaseline.CriticalSamples == 0 && machinistBaseline.DirectHitSamples == 0,
+        "A Reassemble-guaranteed CDH action polluted a natural HitBaseline dimension.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|721|Devilment|20.00|10000009|Dancer|10000008|Machinist|");
+    var fullMetalField =
+        "21|time|10000008|Machinist|9076|Full Metal Field|40000001|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000013|0|raw-13";
+    estimator.ObserveNetworkLine(start.AddSeconds(1), fullMetalField);
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(1),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Full Metal Field",
+            1_000,
+            Critical: true,
+            DirectHit: true,
+            IsPeriodic: false),
+        "Machinist");
+    var guaranteedCritical = estimator.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.Critical);
+    var guaranteedDirect = estimator.ResolveContributedDamage(
+        "Dancer",
+        RaidDpsEstimator.AttributionKind.DirectHit);
+    var combinedDeterministicRatio = 1.075 * 1.04;
+    Assert(
+        guaranteedCritical > 0 && guaranteedDirect > 0 &&
+        Math.Abs(
+            guaranteedCritical + guaranteedDirect -
+            (1_000 - (1_000 / combinedDeterministicRatio))) < 0.001,
+        "A guaranteed CDH action did not retain deterministic Crit/DH overlap attribution.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "30|time|4C5|Chain Stratagem|0.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Bioblaster (*)",
+            1_000,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Machinist");
+    var applyInTickOut = estimator.ResolveContributedDamage(
+        "Scholar",
+        RaidDpsEstimator.AttributionKind.Critical);
+    Assert(
+        applyInTickOut > 0,
+        "A periodic tick lost its application-time Crit/DH buff snapshot.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(2),
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(3),
+        "30|time|4C5|Chain Stratagem|0.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Bioblaster (*)",
+            1_000,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Machinist");
+    Assert(
+        estimator.ResolveContributedDamage(
+            "Scholar",
+            RaidDpsEstimator.AttributionKind.Critical) > 0,
+        "A periodic refresh did not replace its Crit/DH application snapshot.");
+
+    estimator.Reset();
+    estimator.StartEncounter(start);
+    estimator.ObserveStatusLine(
+        start,
+        "26|time|1236|Bioblaster|15.00|10000008|Machinist|40000001|Boss|");
+    estimator.ObserveStatusLine(
+        start.AddSeconds(1),
+        "26|time|4C5|Chain Stratagem|20.00|10000007|Scholar|40000001|Boss|");
+    estimator.ObserveEffectiveDamage(
+        new EffectiveDamageEvent(
+            start.AddSeconds(4),
+            "10000008",
+            "Machinist",
+            string.Empty,
+            "40000001",
+            "Boss",
+            "Bioblaster (*)",
+            1_000,
+            Critical: false,
+            DirectHit: false,
+            IsPeriodic: true),
+        "Machinist");
+    var applyOutTickIn = estimator.ResolveContributedDamage(
+        "Scholar",
+        RaidDpsEstimator.AttributionKind.Critical);
+    var criticalTotals = estimator.ResolveAttributionTotals(RaidDpsEstimator.AttributionKind.Critical);
+    Assert(
+        Math.Abs(applyOutTickIn) < 0.001 &&
+        Math.Abs(criticalTotals.Received - criticalTotals.Contributed) < 0.001,
+        "A periodic tick inherited tick-time Crit/DH buffs or broke category conservation.");
+
+    ValidateLifeSurgeGuaranteedCriticalState(start);
+}
+
+static void ValidateLifeSurgeGuaranteedCriticalState(DateTimeOffset start)
+{
+    const string dragoonId = "10000010";
+    const string dancerId = "10000009";
+    const string firstTargetId = "40000001";
+    const string secondTargetId = "40000002";
+
+    static RaidDpsEstimator NewEstimator() => new(actionId =>
+        actionId is 0x64AB or 0x9058 or 0x0DE4 or 0x56);
+
+    static string CriticalAction(string actionId, string actionName, string targetId) =>
+        string.Join(
+            '|',
+            "21", "time", dragoonId, "Dragoon", actionId, actionName,
+            targetId, targetId == firstTargetId ? "Boss A" : "Boss B",
+            "00002003", "00640000",
+            "0", "0", "0", "0", "0", "0", "0", "0",
+            "0", "0", "0", "0", "0", "0");
+
+    static EffectiveDamageEvent Damage(
+        DateTimeOffset timestamp,
+        string actionName,
+        string targetId) =>
+        new(
+            timestamp,
+            dragoonId,
+            "Dragoon",
+            string.Empty,
+            targetId,
+            targetId == firstTargetId ? "Boss A" : "Boss B",
+            actionName,
+            1_000,
+            Critical: true,
+            DirectHit: false,
+            IsPeriodic: false);
+
+    static void ApplyDevilmentAndLifeSurge(RaidDpsEstimator estimator, DateTimeOffset timestamp)
+    {
+        estimator.ObserveStatusLine(
+            timestamp,
+            $"26|time|721|Devilment|20.00|{dancerId}|Dancer|{dragoonId}|Dragoon|");
+        estimator.ObserveStatusLine(
+            timestamp,
+            $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    }
+
+    void AssertCoveredWeaponskill(string actionId, string actionName, bool removeBeforeAction)
+    {
+        var estimator = NewEstimator();
+        estimator.StartEncounter(start);
+        ApplyDevilmentAndLifeSurge(estimator, start);
+        var hitTime = start.AddSeconds(1);
+        if (removeBeforeAction)
+        {
+            estimator.ObserveStatusLine(
+                hitTime,
+                $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+        }
+        estimator.ObserveNetworkLine(hitTime, CriticalAction(actionId, actionName, firstTargetId));
+        if (!removeBeforeAction)
+        {
+            estimator.ObserveStatusLine(
+                hitTime,
+                $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+        }
+        estimator.ObserveEffectiveDamage(Damage(hitTime, actionName, firstTargetId), "Dragoon");
+
+        var expectedContribution = 1_000 - (1_000 / 1.075);
+        Assert(
+            Math.Abs(
+                estimator.ResolveContributedDamage(
+                    "Dancer",
+                    RaidDpsEstimator.AttributionKind.Critical) -
+                expectedContribution) < 0.001,
+            $"Life Surge did not mark {actionName} as contextual guaranteed Crit.");
+    }
+
+    // Both packet orders occur in real/parser-replayed data: the effective ledger commits
+    // after the action/status pair, so the consume must bind regardless of their order.
+    AssertCoveredWeaponskill("64AB", "Heavens' Thrust", removeBeforeAction: false);
+    AssertCoveredWeaponskill("9058", "Drakesbane", removeBeforeAction: true);
+    AssertCoveredWeaponskill("DE4", "Wheeling Thrust", removeBeforeAction: false);
+
+    var nonWeaponskill = NewEstimator();
+    nonWeaponskill.StartEncounter(start);
+    nonWeaponskill.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    var randomCritTime = start.AddSeconds(1);
+    nonWeaponskill.ObserveNetworkLine(
+        randomCritTime,
+        CriticalAction("4057", "High Jump", firstTargetId));
+    nonWeaponskill.ObserveEffectiveDamage(
+        Damage(randomCritTime, "High Jump", firstTargetId),
+        "Dragoon");
+    var weaponskillTime = start.AddSeconds(2);
+    nonWeaponskill.ObserveNetworkLine(
+        weaponskillTime,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    nonWeaponskill.ObserveStatusLine(
+        weaponskillTime,
+        $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    nonWeaponskill.ObserveEffectiveDamage(
+        Damage(weaponskillTime, "Heavens' Thrust", firstTargetId),
+        "Dragoon");
+    Assert(
+        nonWeaponskill.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "A random-Crit ability consumed Life Surge or the following weaponskill lost the guarantee.");
+
+    var expired = NewEstimator();
+    expired.StartEncounter(start);
+    expired.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|1.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    var afterExpiry = start.AddSeconds(2);
+    expired.ObserveNetworkLine(
+        afterExpiry,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    expired.ObserveEffectiveDamage(Damage(afterExpiry, "Heavens' Thrust", firstTargetId), "Dragoon");
+    Assert(
+        expired.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "An expired Life Surge still guaranteed a later weaponskill.");
+
+    var removed = NewEstimator();
+    removed.StartEncounter(start);
+    removed.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    removed.ObserveStatusLine(
+        start.AddSeconds(1),
+        $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    var afterRemove = start.AddSeconds(2);
+    removed.ObserveNetworkLine(
+        afterRemove,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    removed.ObserveEffectiveDamage(Damage(afterRemove, "Heavens' Thrust", firstTargetId), "Dragoon");
+    Assert(
+        removed.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "A Life Surge remove without a same-timestamp weaponskill leaked into a later action.");
+
+    var multiTarget = NewEstimator();
+    multiTarget.StartEncounter(start);
+    ApplyDevilmentAndLifeSurge(multiTarget, start);
+    var aoeTime = start.AddSeconds(1);
+    multiTarget.ObserveNetworkLine(
+        aoeTime,
+        CriticalAction("56", "Doom Spike", firstTargetId));
+    multiTarget.ObserveStatusLine(
+        aoeTime,
+        $"30|time|74|Life Surge|0.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    multiTarget.ObserveNetworkLine(
+        aoeTime,
+        CriticalAction("56", "Doom Spike", secondTargetId));
+    multiTarget.ObserveEffectiveDamage(Damage(aoeTime, "Doom Spike", firstTargetId), "Dragoon");
+    multiTarget.ObserveEffectiveDamage(Damage(aoeTime, "Doom Spike", secondTargetId), "Dragoon");
+    var expectedMultiTargetContribution = 2 * (1_000 - (1_000 / 1.075));
+    Assert(
+        Math.Abs(
+            multiTarget.ResolveContributedDamage(
+                "Dancer",
+                RaidDpsEstimator.AttributionKind.Critical) -
+            expectedMultiTargetContribution) < 0.001 &&
+        Math.Abs(
+            multiTarget.ResolveContributedDamage(
+                "Dancer",
+                RaidDpsEstimator.AttributionKind.DirectHit)) < 0.001,
+        "Life Surge multi-target damage consumed the guarantee too early or more than once.");
+
+    var deathReset = NewEstimator();
+    deathReset.StartEncounter(start);
+    deathReset.ObserveStatusLine(
+        start,
+        $"26|time|74|Life Surge|5.00|{dragoonId}|Dragoon|{dragoonId}|Dragoon|");
+    deathReset.ObserveNetworkLine(
+        start.AddSeconds(1),
+        $"25|time|{dragoonId}|Dragoon|E0000000||death|");
+    var afterDeath = start.AddSeconds(2);
+    deathReset.ObserveNetworkLine(
+        afterDeath,
+        CriticalAction("64AB", "Heavens' Thrust", firstTargetId));
+    deathReset.ObserveEffectiveDamage(Damage(afterDeath, "Heavens' Thrust", firstTargetId), "Dragoon");
+    Assert(
+        deathReset.ResolveHitBaseline("Dragoon").CriticalSamples == 1,
+        "Life Surge state survived player death/reset cleanup.");
+}
+
+static void ValidateFflogsParityReplay(string testRoot)
+{
+    Assert(
+        FflogsParityRawNormalizer.TryDecodeDamageEffect(
+            "754003",
+            "06FF4001",
+            out var largeDamage,
+            out var largeCritical,
+            out var largeDirectHit) &&
+        largeDamage == 67_327 &&
+        !largeCritical &&
+        largeDirectHit,
+        "Raw parity normalizer no longer matches FFXIV_ACT_Plugin's large-damage encoding or hit flags.");
+    ValidateEffectiveDamageLedger();
+    ValidateEncounterDurationTracker();
+
+    var fixtureDirectory = Path.Combine(
+        FindProjectRoot(),
+        "tests",
+        "DalamudActCompat.PackageSmokeTests",
+        "Fixtures",
+        "FflogsParity");
+    var rawFixture = FflogsParityReplay.ReadRawFixture(
+        Path.Combine(fixtureDirectory, "two-target-transition.raw.json"));
+    var rawDiagnostic = FflogsParityReplay.ReplayRaw(rawFixture);
+    Assert(
+        rawDiagnostic.IncludedDamage == rawFixture.ExpectedIncludedDamage,
+        "Raw parity replay did not reproduce the expected DamageLedger total.");
+    Assert(
+        Math.Abs(
+            rawDiagnostic.Durations.CurrentDamageMetricDurationSeconds -
+            rawFixture.ExpectedCurrentDamageMetricDurationSeconds) < 0.001,
+        "Raw parity replay did not reproduce current union-downtime duration semantics.");
+    Assert(
+        Math.Abs(rawDiagnostic.Durations.CandidateDamageMetricDurationSeconds - 5) < 0.001,
+        "Raw parity replay did not isolate the all-targets-unavailable candidate duration.");
+    Assert(
+        rawDiagnostic.DamageLedger.Count(static entry =>
+            entry.Decision == ParityLedgerDecision.Excluded &&
+            entry.ExclusionReason == ParityExclusionReason.NonPartySource) == 1,
+        "Raw parity replay did not retain a non-party damage exclusion reason.");
+    Assert(
+        rawDiagnostic.Actors.Single(static actor => actor.Name == "Player One") is
+        {
+            IncludedDamage: 6000,
+            CriticalHits: 2,
+            DirectHits: 2,
+            CriticalDirectHits: 1,
+            CriticalRate: > 0.666 and < 0.667,
+            DirectHitRate: > 0.666 and < 0.667,
+            CriticalDirectRate: > 0.333 and < 0.334,
+        },
+        "Raw parity replay lost pet ownership or critical/direct-hit aggregation.");
+
+    var normalizedFixture = FflogsParityReplay.ReadNormalizedFixture(
+        Path.Combine(fixtureDirectory, "two-target-transition.normalized.json"));
+    var normalizedDiagnostic = FflogsParityReplay.ReplayNormalized(normalizedFixture);
+    Assert(
+        normalizedDiagnostic.IncludedDamage == normalizedFixture.ExpectedIncludedDamage,
+        "Normalized parity replay did not reproduce the expected DamageLedger total.");
+    Assert(
+        Math.Abs(
+            normalizedDiagnostic.Durations.CurrentDamageMetricDurationSeconds -
+            normalizedFixture.ExpectedCurrentDamageMetricDurationSeconds) < 0.001,
+        "Normalized parity replay did not reproduce current union-downtime duration semantics.");
+    Assert(
+        normalizedDiagnostic.Durations.FightDurationSeconds == 8,
+        "Normalized parity replay changed explicit fight boundaries.");
+    Assert(
+        normalizedDiagnostic.DamageLedger.Any(static entry =>
+            entry.ExclusionReason == ParityExclusionReason.NotDamageSwing),
+        "Normalized parity replay did not explain why a non-damage swing was excluded.");
+
+    var reportDirectory = Path.Combine(testRoot, "parity-report");
+    var reportPaths = FflogsParityReportWriter.Write(reportDirectory, normalizedDiagnostic);
+    Assert(
+        File.Exists(reportPaths.JsonPath) && File.Exists(reportPaths.MarkdownPath),
+        "Parity diagnostic report files were not written.");
+    var markdown = File.ReadAllText(reportPaths.MarkdownPath);
+    Assert(
+        markdown.Contains("FightDuration", StringComparison.Ordinal) &&
+        markdown.Contains("DamageMetricDuration", StringComparison.Ordinal) &&
+        markdown.Contains("all-targets-unavailable", StringComparison.Ordinal) &&
+        markdown.Contains("## Damage Ledger", StringComparison.Ordinal) &&
+        markdown.Contains("NonPartySource", StringComparison.Ordinal),
+        "Parity report omitted required duration, downtime, or ledger evidence.");
+
+    var reconciliationFixture = FflogsParityReplay.ReadReconciliationFixture(
+        Path.Combine(fixtureDirectory, "event-reconciliation.json"));
+    var reconciliationDiagnostic = FflogsParityReplay.ReplayReconciliation(
+        reconciliationFixture,
+        fixtureDirectory);
+    var reconciliation = reconciliationDiagnostic.Reconciliation;
+    Assert(
+        reconciliationDiagnostic.IncludedDamage == reconciliationFixture.ExpectedIncludedDamage,
+        "Paired parity replay changed the expected included DamageLedger total.");
+    Assert(
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Matched) ==
+        reconciliationFixture.ExpectedMatched &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Ambiguous) ==
+        reconciliationFixture.ExpectedAmbiguous &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedRaw) ==
+        reconciliationFixture.ExpectedUnmatchedRaw &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedNormalized) ==
+        reconciliationFixture.ExpectedUnmatchedNormalized &&
+        reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedReference) == 1,
+        $"Paired parity replay states changed: matched={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Matched)}, " +
+        $"ambiguous={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.Ambiguous)}, " +
+        $"unmatchedRaw={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedRaw)}, " +
+        $"unmatchedNormalized={reconciliation.Events.Count(static item => item.Status == ParityCorrelationStatus.UnmatchedNormalized)}.");
+    Assert(
+        reconciliation.Conservation is
+        {
+            RawConserved: true,
+            NormalizedConserved: true,
+            OwnerAttributionConserved: true,
+        } &&
+        reconciliation.Conservation.RawClassifiedDamage ==
+        reconciliation.Conservation.MatchedRawDamage +
+        reconciliation.Conservation.IntentionallyIgnoredRawDamage +
+        reconciliation.Conservation.UnmatchedRawDamage &&
+        reconciliation.Conservation.UnmatchedRawDamage ==
+        reconciliation.Conservation.AmbiguousRawDamage +
+        reconciliation.Conservation.UnmatchedRawOnlyDamage &&
+        reconciliation.Conservation.NormalizedDamage ==
+        reconciliation.Conservation.IncludedLedgerDamage +
+        reconciliation.Conservation.ExcludedLedgerDamage &&
+        reconciliation.Conservation.SourceDamageBeforeOwnerAttribution ==
+        reconciliation.Conservation.OwnerAttributedDamage,
+        "Raw, normalized, or pet-owner damage conservation failed.");
+    Assert(
+        reconciliation.Events.Any(static item =>
+            item.Status == ParityCorrelationStatus.Ambiguous &&
+            item.Category == "DoTNormalizationCandidate") &&
+        reconciliation.Events.Any(static item => item.Category == "FriendlyTargetCandidate") &&
+        reconciliation.Events.Any(static item => item.Category == "EnvironmentCandidate") &&
+        reconciliation.Events.Any(static item => item.Category == "OverkillCandidate") &&
+        reconciliation.Events.Any(static item => item.TargetName == "Trash") &&
+        reconciliation.Events.Count(static item => item.Category == "PetOwnerAttribution") >= 2,
+        "Reconciliation fixture lost DoT, friendly, environment, overkill, target-scope, or pet-respawn coverage.");
+    Assert(
+        reconciliation.TopPositiveReferenceDeltaEvents.Count >= 2 &&
+        reconciliation.TopPositiveReferenceDeltaEvents[0].AbilityName == "Large Hit" &&
+        reconciliation.TopPositiveReferenceDeltaEvents[0].NormalizedAmount -
+        reconciliation.TopPositiveReferenceDeltaEvents[0].ReferenceAmount == 100 &&
+        reconciliation.TopActorDeltas.Count > 0 &&
+        reconciliation.TopAbilityDeltas.Count > 0 &&
+        reconciliation.TopTargetDeltas.Count > 0,
+        "Exact reference pairing did not expose positive event-level deltas.");
+    Assert(
+        reconciliationDiagnostic.DeltaBreakdown.Any(static item =>
+            item.Category.StartsWith("ParserNormalization/", StringComparison.Ordinal)),
+        "Parser normalization was not expanded into event-addressable categories.");
+
+    var jsonReference = ParityReferenceFightImporter.Read(
+        Path.Combine(fixtureDirectory, "event-reconciliation.reference.json"));
+    var csvReference = ParityReferenceFightImporter.Read(
+        Path.Combine(fixtureDirectory, "event-reconciliation.reference.csv"));
+    Assert(
+        jsonReference.DamageEvents.Count == 10 &&
+        csvReference.DamageEvents is [{ SourceName: "Player, One", Amount: 950, Overkill: 50 }],
+        "JSON or quoted CSV reference import boundary changed.");
+
+    var reconciliationMarkdown = FflogsParityReportWriter.BuildMarkdown(reconciliationDiagnostic);
+    Assert(
+        reconciliationMarkdown.Contains("## Event Reconciliation", StringComparison.Ordinal) &&
+        reconciliationMarkdown.Contains("Top 50 unmatched normalized events", StringComparison.Ordinal) &&
+        reconciliationMarkdown.Contains("Top actors contributing to delta", StringComparison.Ordinal) &&
+        reconciliationMarkdown.Contains("Owner conservation", StringComparison.Ordinal),
+        "Parity Markdown omitted Phase 1A reconciliation evidence.");
+}
+
+static void ValidateEffectiveDamageLedger()
+{
+    var player = new ActPlayerIdentity("Player One", string.Empty, "SMN", true, false)
+    {
+        EntityId = 0x10000001,
+    };
+    var identities = new[] { player };
+    var ledger = new EffectiveDamageLedger();
+    ledger.ObserveRawLine(
+        DateTimeOffset.Parse("2026-08-12T20:10:00+08:00"),
+        "03|2026-08-12T20:10:00+08:00|40000001|Player Pet|00|64|10000001|00||");
+
+    var first = DateTimeOffset.Parse("2026-08-12T20:10:01+08:00");
+    ledger.ObserveRawLine(
+        first,
+        "21|2026-08-12T20:10:01+08:00|10000001|Player One|07|Attack|40000010|Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000001|0|raw-01");
+    ledger.StartEncounter(identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            first,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Attack",
+            100,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveRawLine(
+        first.AddMilliseconds(500),
+        "37|2026-08-12T20:10:01.500+08:00|40000010|Boss|00000001|400|");
+
+    var rejected = first.AddSeconds(1);
+    ledger.ObserveRawLine(
+        rejected,
+        "21|2026-08-12T20:10:02+08:00|10000001|Player One|07|Attack|40000010|Boss|000003|00190000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|400|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000002|0|raw-02");
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            rejected,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Attack",
+            25,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+
+    var direct = first.AddSeconds(2);
+    ledger.ObserveRawLine(
+        direct,
+        "21|2026-08-12T20:10:03+08:00|10000001|Player One|1000|Direct Hit|40000010|Boss|000003|00C80000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|400|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000003|0|raw-03");
+    ledger.ObserveRawLine(
+        direct.AddMilliseconds(500),
+        "37|2026-08-12T20:10:03.500+08:00|40000010|Boss|00000003|200|");
+
+    var periodic = first.AddSeconds(3);
+    ledger.ObserveRawLine(
+        periodic,
+        "24|2026-08-12T20:10:04+08:00|40000010|Boss|DoT|0|0064|200|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-04");
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Burn (*)",
+            60,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "40000001",
+            "Player Pet",
+            "10000001",
+            "40000010",
+            "Boss",
+            "Pet Burn (*)",
+            40,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "10000001",
+            "Player One",
+            "Shield (*)",
+            500,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: true),
+        identities);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            periodic,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Attack",
+            30,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveRawLine(
+        periodic,
+        "21|2026-08-12T20:10:04+08:00|10000001|Player One|07|Attack|40000010|Boss|000003|001E0000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|200|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000004|0|raw-04a");
+
+    var lethal = first.AddSeconds(4);
+    ledger.ObserveRawLine(
+        lethal,
+        "21|2026-08-12T20:10:05+08:00|40000001|Player Pet|1001|Pet Hit|40000010|Boss|000003|00960000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|100|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000005|0|raw-05");
+    ledger.ObserveRawLine(
+        lethal.AddMilliseconds(500),
+        "37|2026-08-12T20:10:05.500+08:00|40000010|Boss|00000005|1|");
+
+    var overkillTick = first.AddSeconds(5);
+    ledger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            overkillTick,
+            "10000001",
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Burn (*)",
+            50,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    ledger.ObserveRawLine(
+        overkillTick,
+        "24|2026-08-12T20:10:06+08:00|40000010|Boss|DoT|0|0032|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-06");
+
+    var snapshot = ledger.GetSnapshot();
+    var committed = ledger.GetCommittedEventsSince(0, out var nextEventIndex);
+    Assert(
+        ledger.TryResolveDamage(player, out var playerDamage) &&
+        playerDamage == 500 &&
+        snapshot.SourceDamage == 500 &&
+        snapshot.OwnerDamage == 500 &&
+        snapshot.SourceTotals["10000001"] == 360 &&
+        snapshot.SourceTotals["40000001"] == 140,
+        "Effective DamageLedger lost confirmed autos/periodics, admitted an unconfirmed event, " +
+        "failed event-level overkill exclusion, or broke pet-owner conservation.");
+    Assert(
+        committed.Count == 5 &&
+        committed.Sum(static item => item.Amount) == snapshot.OwnerDamage &&
+        committed.Count(static item => item.IsPeriodic) == 2 &&
+        committed[0].Timestamp == first &&
+        committed.Any(static item => item.SourceId == "40000001" && item.OwnerId == "10000001") &&
+        nextEventIndex == committed.Count,
+        "The immutable effective-event stream diverged from ledger totals, periodics, or pet ownership.");
+
+    var delayedPeriodicLedger = new EffectiveDamageLedger();
+    delayedPeriodicLedger.StartEncounter(identities);
+    var delayedPeriodic = first.AddSeconds(10);
+    delayedPeriodicLedger.ObserveRawLine(
+        delayedPeriodic,
+        "24|2026-08-12T20:10:11+08:00|40000010|Boss|DoT|0|0064|1000|1000|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-07");
+    delayedPeriodicLedger.ObserveRawLine(
+        delayedPeriodic.AddMilliseconds(44),
+        "37|2026-08-12T20:10:11.044+08:00|40000010|Boss|00000006|900|");
+    delayedPeriodicLedger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            delayedPeriodic,
+            string.Empty,
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Burn (*)",
+            60,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    delayedPeriodicLedger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            delayedPeriodic,
+            "40000001",
+            "Player Pet",
+            "10000001",
+            "40000010",
+            "Boss",
+            "Pet Burn (*)",
+            40,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    delayedPeriodicLedger.ObserveRawLine(
+        delayedPeriodic.AddSeconds(2.001),
+        "39|2026-08-12T20:10:13.001+08:00|10000001|Player One|100000|100000|10000|10000||||||||raw-08");
+    var delayedSnapshot = delayedPeriodicLedger.GetSnapshot();
+    Assert(
+        delayedPeriodicLedger.TryResolveDamage(player, out var delayedDamage) &&
+        delayedDamage == 100 &&
+        delayedSnapshot.OwnerDamage == 100 &&
+        delayedSnapshot.SourceTotals["10000001"] == 60 &&
+        delayedSnapshot.SourceTotals["40000001"] == 40,
+        "Parser-delayed periodic candidates were flushed before complete player/pet attribution or remained under a name-only owner key.");
+}
+
+static void ValidateEncounterDurationTracker()
+{
+    var player = new ActPlayerIdentity("Player One", string.Empty, "PLD", true, false)
+    {
+        EntityId = 0x10000001,
+    };
+    var identities = new[] { player };
+    var start = DateTimeOffset.Parse("2026-08-12T20:20:00+08:00");
+
+    var rotating = new EncounterDurationTracker();
+    rotating.ObserveTargetPresence(start.AddSeconds(-1), "40000010", "Boss A");
+    rotating.ObserveTargetPresence(start.AddSeconds(-1), "40000011", "Boss B");
+    rotating.StartEncounter(start, identities);
+    rotating.ObserveConfirmedDamage(
+        start,
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000010",
+        "Boss A");
+    rotating.ObserveTargetability(start.AddSeconds(2), "40000010", "Boss A", false);
+    rotating.ObserveTargetability(start.AddSeconds(3), "40000011", "Boss B", true);
+    rotating.ObserveConfirmedDamage(
+        start.AddSeconds(3),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000011",
+        "Boss B");
+    rotating.ObserveTargetability(start.AddSeconds(4), "40000011", "Boss B", false);
+    Assert(
+        rotating.IsTransitioningAt(start.AddSeconds(4.5)),
+        "The duration tracker did not expose phase-global target unavailability.");
+    rotating.ObserveTargetability(start.AddSeconds(5), "40000010", "Boss A", true);
+    rotating.ObserveConfirmedDamage(
+        start.AddSeconds(5),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000010",
+        "Boss A");
+    rotating.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000010",
+        "Boss A");
+    Assert(
+        Math.Abs(rotating.ResolveFightDurationSeconds(start.AddSeconds(12)) - 12) < 0.001 &&
+        Math.Abs(rotating.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(12),
+            useObservedDamageEnd: true) - 9) < 0.001 &&
+        Math.Abs(rotating.ResolveActorActiveTimeSeconds("10000001") - 10) < 0.001,
+        "FightDuration, phase-global DamageMetricDuration, and ActorActiveTime were not kept separate.");
+    Assert(
+        !rotating.IsTransitioningAt(start.AddSeconds(5.5)),
+        "One available target did not end the phase-global transition state.");
+
+    var adds = new EncounterDurationTracker();
+    adds.ObserveTargetPresence(start.AddSeconds(-1), "40000020", "Boss");
+    adds.ObserveTargetPresence(start.AddSeconds(2), "40000021", "Add");
+    adds.StartEncounter(start, identities);
+    adds.ObserveConfirmedDamage(start, "10000001", "Player One", string.Empty, "40000020", "Boss");
+    adds.ObserveConfirmedDamage(start.AddSeconds(3), "10000001", "Player One", string.Empty, "40000021", "Add");
+    adds.ObserveConfirmedDamage(
+        start.AddSeconds(4),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000021",
+        "Add");
+    adds.ObserveRawLine(
+        start.AddSeconds(4.1),
+        "25|time|40000021|Add|E0000000||death-add",
+        identities);
+    adds.ObserveTargetability(start.AddSeconds(6), "40000020", "Boss", false);
+    adds.ObserveTargetability(start.AddSeconds(7), "40000020", "Boss", true);
+    adds.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000020", "Boss");
+    Assert(
+        Math.Abs(adds.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 9) < 0.001,
+        "A defeated add remained in the historical target intersection and hid later boss downtime.");
+
+    var hpFloor = new EncounterDurationTracker();
+    hpFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000060", "Floor Boss");
+    hpFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000061", "Other Boss");
+    hpFloor.ObserveRawLine(
+        start,
+        "21|time|10000001|Player One|1000|Floor Hit|40000060|Floor Boss|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000010|0|floor-hit",
+        identities);
+    hpFloor.StartEncounter(start, identities);
+    hpFloor.ObserveRawLine(
+        start.AddSeconds(0.1),
+        "37|time|40000060|Floor Boss|00000010|1|",
+        identities);
+    hpFloor.ObserveTargetability(start.AddSeconds(1), "40000061", "Other Boss", false);
+    hpFloor.ObserveTargetability(start.AddSeconds(2), "40000060", "Floor Boss", false);
+    hpFloor.ObserveRawLine(
+        start.AddSeconds(2.5),
+        "24|time|40000060|Floor Boss|DoT|0|0064|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||floor-overkill",
+        identities);
+    hpFloor.ObserveTargetability(start.AddSeconds(3), "40000060", "Floor Boss", true);
+    hpFloor.ObserveTargetability(start.AddSeconds(5), "40000061", "Other Boss", true);
+    hpFloor.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000061",
+        "Other Boss");
+    Assert(
+        Math.Abs(hpFloor.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 8.9) < 0.001,
+        "An HP floor retired a live target or hid its later targetable interval and overkill evidence.");
+
+    var periodicFloor = new EncounterDurationTracker();
+    periodicFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000062", "Periodic Floor Boss");
+    periodicFloor.ObserveTargetPresence(start.AddSeconds(-1), "40000063", "Periodic Other Boss");
+    periodicFloor.StartEncounter(start, identities);
+    periodicFloor.ObserveConfirmedDamage(
+        start,
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000062",
+        "Periodic Floor Boss");
+    periodicFloor.ObserveRawLine(
+        start.AddSeconds(1),
+        "24|time|40000062|Periodic Floor Boss|DoT|0|0002|2|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||periodic-floor",
+        identities);
+    periodicFloor.ObserveTargetability(
+        start.AddSeconds(2),
+        "40000063",
+        "Periodic Other Boss",
+        false);
+    periodicFloor.ObserveRawLine(
+        start.AddSeconds(2.5),
+        "24|time|40000062|Periodic Floor Boss|DoT|0|0002|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||periodic-overkill",
+        identities);
+    periodicFloor.ObserveTargetability(
+        start.AddSeconds(5),
+        "40000063",
+        "Periodic Other Boss",
+        true);
+    periodicFloor.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000063",
+        "Periodic Other Boss");
+    Assert(
+        Math.Abs(periodicFloor.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 10) < 0.001,
+        "A lethal-looking periodic or later overkill incorrectly retired target membership.");
+
+    var despawned = new EncounterDurationTracker();
+    despawned.ObserveTargetPresence(start.AddSeconds(-1), "40000022", "Despawn Boss");
+    despawned.ObserveTargetPresence(start.AddSeconds(2), "40000023", "Despawn Add");
+    despawned.StartEncounter(start, identities);
+    despawned.ObserveConfirmedDamage(
+        start,
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000022",
+        "Despawn Boss");
+    despawned.ObserveConfirmedDamage(
+        start.AddSeconds(3),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000023",
+        "Despawn Add");
+    despawned.ObserveRawLine(
+        start.AddSeconds(4),
+        "261|time|Remove|40000023|despawn-add",
+        identities);
+    despawned.ObserveTargetability(start.AddSeconds(6), "40000022", "Despawn Boss", false);
+    despawned.ObserveTargetability(start.AddSeconds(7), "40000022", "Despawn Boss", true);
+    despawned.ObserveConfirmedDamage(
+        start.AddSeconds(10),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000022",
+        "Despawn Boss");
+    Assert(
+        Math.Abs(despawned.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 9) < 0.001,
+        "An explicit despawn did not retire an add before later boss downtime.");
+
+    var replacement = new EncounterDurationTracker();
+    replacement.ObserveTargetPresence(start.AddSeconds(-1), "40000030", "Phase One");
+    replacement.ObserveTargetPresence(start.AddSeconds(5), "40000031", "Phase Two");
+    replacement.StartEncounter(start, identities);
+    replacement.ObserveConfirmedDamage(start, "10000001", "Player One", string.Empty, "40000030", "Phase One");
+    replacement.ObserveTargetability(start.AddSeconds(3), "40000030", "Phase One", false);
+    replacement.ObserveConfirmedDamage(start.AddSeconds(5), "10000001", "Player One", string.Empty, "40000031", "Phase Two");
+    replacement.ObserveTargetability(start.AddSeconds(7), "40000031", "Phase Two", false);
+    replacement.ObserveTargetability(start.AddSeconds(8), "40000031", "Phase Two", true);
+    replacement.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000031", "Phase Two");
+    Assert(
+        Math.Abs(replacement.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 7) < 0.001,
+        "A phase replacement did not retire the old target while preserving the targetless transition.");
+
+    var departed = new EncounterDurationTracker();
+    departed.ObserveTargetPresence(start.AddSeconds(-1), "40000040", "Twin A");
+    departed.ObserveTargetPresence(start.AddSeconds(-1), "40000041", "Twin B");
+    departed.StartEncounter(start, identities);
+    departed.ObserveConfirmedDamage(start, "10000001", "Player One", string.Empty, "40000040", "Twin A");
+    departed.ObserveConfirmedDamage(start.AddSeconds(1), "10000001", "Player One", string.Empty, "40000041", "Twin B");
+    departed.ObserveTargetability(start.AddSeconds(3), "40000040", "Twin A", false);
+    departed.ObserveTargetability(start.AddSeconds(6), "40000041", "Twin B", false);
+    departed.ObserveTargetability(start.AddSeconds(7), "40000041", "Twin B", true);
+    departed.ObserveConfirmedDamage(start.AddSeconds(10), "10000001", "Player One", string.Empty, "40000041", "Twin B");
+    Assert(
+        Math.Abs(departed.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(10),
+            useObservedDamageEnd: true) - 9) < 0.001,
+        "A permanently departed twin polluted the current phase target set.");
+
+    var captured = new EncounterDurationTracker();
+    captured.ObserveTargetPresence(start.AddSeconds(-1), "40000050", "Red");
+    captured.ObserveTargetPresence(start.AddSeconds(-1), "40000051", "Blue");
+    var firstAction =
+        "21|time|10000001|Player One|1000|Opening Hit|40000050|Red|000003|00640000|0|0|0|0|0|0|0|0|0|0|0|0|0|0|500|500|10000|10000|||0|0|0|0|100000|100000|10000|10000|||0|0|0|0|00000001|0|raw-01";
+    captured.ObserveRawLine(start, firstAction, identities);
+    captured.StartEncounter(start, identities);
+    captured.ObserveRawLine(
+        start.AddSeconds(0.757),
+        "37|time|40000050|Red|00000001|400|",
+        identities);
+    captured.ObserveConfirmedDamage(
+        start.AddSeconds(82),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000051",
+        "Blue");
+    captured.ObserveTargetability(start.AddSeconds(79.998), "40000050", "Red", false);
+    captured.ObserveTargetability(start.AddSeconds(96.303), "40000051", "Blue", false);
+    captured.ObserveTargetability(start.AddSeconds(107.490), "40000051", "Blue", true);
+    captured.ObserveTargetability(start.AddSeconds(148.141), "40000050", "Red", true);
+    captured.ObserveTargetability(start.AddSeconds(158.081), "40000050", "Red", false);
+    captured.ObserveTargetability(start.AddSeconds(158.081), "40000051", "Blue", false);
+    captured.ObserveTargetability(start.AddSeconds(173.540), "40000050", "Red", true);
+    captured.ObserveTargetability(start.AddSeconds(173.540), "40000051", "Blue", true);
+    captured.ObserveConfirmedDamage(
+        start.AddSeconds(423.540),
+        "10000001",
+        "Player One",
+        string.Empty,
+        "40000051",
+        "Blue");
+    captured.ObserveRawLine(
+        start.AddSeconds(424),
+        firstAction.Replace(
+            "|00000001|0|raw-01",
+            "|00000002|0|raw-02",
+            StringComparison.Ordinal),
+        identities);
+    Assert(
+        Math.Abs(captured.ResolveDamageMetricDurationSeconds(
+            start.AddSeconds(424),
+            useObservedDamageEnd: true) - 396.137) < 0.001,
+        "The captured dual-boss boundary did not use confirmed EffectResult time or phase-global downtime.");
 }
 
 static void ValidateDalamudGameStateBridge()
@@ -4450,6 +5893,15 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "HelpWindow.cs"));
+    var macroPluginSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "Plugin.cs"));
+    var readmeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "README.md"));
     var helpIconPath = Path.Combine(
         FindProjectRoot(),
         "src",
@@ -4503,10 +5955,31 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
         helpWindowSource.Contains("不要去绿玩面前跳脸。", StringComparison.Ordinal) &&
         helpWindowSource.Contains("一经发现立刻踢出！", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("宏指令", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("ImGui.SetClipboardText(command);", StringComparison.Ordinal) &&
+        new[]
+        {
+            "/actcompat on",
+            "/actcompat meter",
+            "/actcompat history",
+            "/actcompat logs",
+            "/actcompat status",
+            "/actcompat cactbot",
+            "/actcompat overlay",
+            "/actcompat clear",
+            "/actcompat install",
+            "/actcompat factory-reset",
+            "/actcompat host",
+            "/actcompat stop",
+            "/actcompat sample",
+        }.All(command => helpWindowSource.Contains(command, StringComparison.Ordinal)) &&
+        macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
+        !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
+        !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
         helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),
-        "The flat overview help entry or independent branded help document regressed.");
+        "The help entry, macro command reference, copy action, or branded help document regressed.");
     Assert(
         controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
         controlCenterSource.Contains(
@@ -4578,8 +6051,8 @@ static void ValidateHtmlOverlayDefaults()
         "HTML overlay editing mode did not disable click-through and locking together.");
     settings.SetEditing(false);
     Assert(
-        !settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
-        "Finishing HTML overlay editing changed the user's unlocked interactive state.");
+        !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
+        "Finishing HTML overlay editing did not restore click-through and locking together.");
     settings.SetEditing(true);
     settings.SetLocked(true);
     Assert(
@@ -4997,8 +6470,8 @@ static void ValidateHtmlOverlayDefaults()
         "Windowed WebView2 did not keep page clicks enabled while editing an overlay.");
     settings.SetEditing(false);
     Assert(
-        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
-        "Windowed WebView2 did not preserve page interaction after the overlay was locked.");
+        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == false,
+        "Windowed WebView2 still captured page input after editing restored click-through.");
     var calculateExtendedStyle = formType.GetMethod(
                                      "CalculateOverlayExtendedStyle",
                                      BindingFlags.Static | BindingFlags.NonPublic)
@@ -5533,16 +7006,16 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         });
         settings.SetEditing(false);
         applySettings.Invoke(instance, null);
-        var normalInteractionRestoresContentRegion = false;
+        var finishedEditingRestoresClickThrough = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
             var interactiveWindow = await WindowAtProxyPointAsync(
                 liveProxy,
                 new System.Drawing.Point(100, 65));
-            normalInteractionRestoresContentRegion = interactiveWindow != proxyHandle &&
-                                                      interactiveWindow != hostHandle;
-            if (normalInteractionRestoresContentRegion)
+            finishedEditingRestoresClickThrough = interactiveWindow != proxyHandle &&
+                                                  interactiveWindow != hostHandle;
+            if (finishedEditingRestoresClickThrough)
             {
                 break;
             }
@@ -5551,11 +7024,11 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(
-            normalInteractionRestoresContentRegion &&
-            !settings.IsLocked &&
-            !settings.IsClickThrough &&
+            finishedEditingRestoresClickThrough &&
+            settings.IsLocked &&
+            settings.IsClickThrough &&
             !settings.IsEditing,
-            "Finishing HTML overlay editing did not restore transparent unlocked page interaction.");
+            "Finishing HTML overlay editing did not restore the locked click-through state.");
         if (editChromeField.GetValue(instance) is Form hiddenChrome)
         {
             Assert(

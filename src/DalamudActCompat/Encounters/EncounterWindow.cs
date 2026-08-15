@@ -431,7 +431,7 @@ public sealed class EncounterWindow : Window
             .FirstOrDefault(static estimate => estimate is not null);
         if (localEstimate is not null)
         {
-            detail += $"  ·  FFLogs ~{localEstimate.Score}";
+            detail += $"  ·  FFLogs {localEstimate.Score}";
         }
         drawList.AddText(start + new Vector2(10, 32), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), TrimToWidth(detail, width - 20));
         ImGui.PopID();
@@ -521,7 +521,7 @@ public sealed class EncounterWindow : Window
             : null;
         if (fflogsEstimate is not null)
         {
-            DrawRight($"FFLogs ~{fflogsEstimate.Score}", fflogsEstimate.Color);
+            DrawRight($"FFLogs {fflogsEstimate.Score}", fflogsEstimate.Color);
         }
 
         DrawRight(text.Get($"死亡 {combatant.Deaths}", $"KO {combatant.Deaths}"), new Vector4(0.78f, 0.80f, 0.84f, 1));
@@ -539,8 +539,8 @@ public sealed class EncounterWindow : Window
         if (hovered && fflogsEstimate is not null)
         {
             ImGui.SetTooltip(text.Get(
-                $"FFLogs 公开排名样本估算：{fflogsEstimate.Score}（{fflogsEstimate.EncounterName}，基于本地 rDPS 归因，非官方实时成绩）",
-                $"FFLogs public-ranking estimate: {fflogsEstimate.Score} ({fflogsEstimate.EncounterName}; based on local rDPS attribution; not an official live parse)"));
+                $"DPS Parse 预估：{fflogsEstimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{fflogsEstimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
+                $"Estimated DPS Parse: {fflogsEstimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {fflogsEstimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }
     }
 

@@ -292,6 +292,9 @@ internal sealed class DutyEncounterAccumulator
         private int criticalDirectHits;
         private double? fflogsPercentile;
         private string? fflogsEncounterName;
+        private DateTimeOffset? fflogsDataUpdatedAt;
+        private string? fflogsMetric;
+        private bool fflogsDataStale;
         private double personalDamageDurationSeconds;
         private double externalDamageDurationSeconds;
         private double raidContributionDamage;
@@ -331,6 +334,9 @@ internal sealed class DutyEncounterAccumulator
             {
                 fflogsPercentile = percentile;
                 fflogsEncounterName = combatant.FflogsEncounterName;
+                fflogsDataUpdatedAt = combatant.FflogsDataUpdatedAt;
+                fflogsMetric = combatant.FflogsMetric;
+                fflogsDataStale = combatant.FflogsDataStale;
             }
             personalDamageDurationSeconds += ResolveDamageDuration(
                 combatant.TotalDamage,
@@ -363,6 +369,9 @@ internal sealed class DutyEncounterAccumulator
                 criticalDirectHits = criticalDirectHits,
                 fflogsPercentile = fflogsPercentile,
                 fflogsEncounterName = fflogsEncounterName,
+                fflogsDataUpdatedAt = fflogsDataUpdatedAt,
+                fflogsMetric = fflogsMetric,
+                fflogsDataStale = fflogsDataStale,
                 personalDamageDurationSeconds = personalDamageDurationSeconds,
                 externalDamageDurationSeconds = externalDamageDurationSeconds,
                 raidContributionDamage = raidContributionDamage,
@@ -397,7 +406,10 @@ internal sealed class DutyEncounterAccumulator
                 criticalDirectHits,
                 fflogsPercentile,
                 fflogsEncounterName,
-                raidContributionDamage / durationSeconds);
+                raidContributionDamage / durationSeconds,
+                fflogsDataUpdatedAt,
+                fflogsMetric,
+                fflogsDataStale);
         }
 
         private static double ResolveDamageDuration(

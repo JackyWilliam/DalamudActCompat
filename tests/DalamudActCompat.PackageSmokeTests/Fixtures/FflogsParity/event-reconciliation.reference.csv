@@ -1,0 +1,2 @@
+timestamp,sequence,sourceId,sourceInstanceId,sourceName,targetId,targetInstanceId,targetName,abilityId,abilityName,amount,overkill,absorbed,critical,directHit,packetId
+2026-08-12T20:10:01+08:00,1,10000001,,"Player, One",40000010,,Boss,1000,Opening Hit,950,50,0,true,false,00000001

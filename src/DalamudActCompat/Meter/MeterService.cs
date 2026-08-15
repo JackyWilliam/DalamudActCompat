@@ -8,6 +8,8 @@ public sealed class MeterService
     private readonly EncounterStateStore stateStore;
     private readonly MeterSettings settings;
     private readonly object cacheLock = new();
+    private readonly Dictionary<string, HitRateSnapshot> lastKnownHitRates =
+        new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<CombatantRow> cachedRows = Array.Empty<CombatantRow>();
     private Guid cachedEncounterId;
     private DateTimeOffset nextRefresh;
@@ -38,6 +40,11 @@ public sealed class MeterService
         lock (cacheLock)
         {
             var now = DateTimeOffset.UtcNow;
+            if (cachedEncounterId != encounter.Id)
+            {
+                // Never carry a player's final percentages into the next pull.
+                lastKnownHitRates.Clear();
+            }
             if (cachedEncounterId == encounter.Id && now < nextRefresh)
             {
                 return cachedRows;
@@ -54,19 +61,23 @@ public sealed class MeterService
     {
         var duration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
-        var rows = encounter.Combatants.Select(combatant => new CombatantRow(
-            combatant.Id,
-            combatant.Name,
-            combatant.Job,
-            combatant.IsLocalPlayer,
-            ResolveDps(combatant, duration),
-            combatant.TotalHealing / duration,
-            combatant.TotalDamage,
-            combatant.TotalHealing,
-            combatant.TotalDamage * 100.0 / totalDamage,
-            CalculateHitRate(combatant.CriticalHits, combatant.DamageHits),
-            CalculateHitRate(combatant.CriticalDirectHits, combatant.DamageHits),
-            combatant.Deaths));
+        var rows = encounter.Combatants.Select(combatant =>
+        {
+            var hitRates = ResolveHitRates(combatant);
+            return new CombatantRow(
+                combatant.Id,
+                combatant.Name,
+                combatant.Job,
+                combatant.IsLocalPlayer,
+                ResolveDps(combatant, duration),
+                combatant.TotalHealing / duration,
+                combatant.TotalDamage,
+                combatant.TotalHealing,
+                combatant.TotalDamage * 100.0 / totalDamage,
+                hitRates.CriticalHitPercent,
+                hitRates.CriticalDirectHitPercent,
+                combatant.Deaths);
+        });
 
         var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
         {
@@ -115,6 +126,29 @@ public sealed class MeterService
         => damageHits > 0
             ? Math.Clamp(matchingHits, 0, damageHits) * 100.0 / damageHits
             : null;
+
+    private HitRateSnapshot ResolveHitRates(Combatant combatant)
+    {
+        var key = string.IsNullOrWhiteSpace(combatant.Id)
+            ? combatant.Name
+            : combatant.Id;
+        var current = new HitRateSnapshot(
+            CalculateHitRate(combatant.CriticalHits, combatant.DamageHits),
+            CalculateHitRate(combatant.CriticalDirectHits, combatant.DamageHits));
+        if (current.CriticalHitPercent is not null)
+        {
+            lastKnownHitRates[key] = current;
+            return current;
+        }
+
+        // ACT can briefly publish a zero-hit snapshot while rebuilding live totals.
+        // Keep the last valid display value so a refresh cannot insert "--" between numbers.
+        return lastKnownHitRates.GetValueOrDefault(key, current);
+    }
+
+    private readonly record struct HitRateSnapshot(
+        double? CriticalHitPercent,
+        double? CriticalDirectHitPercent);
 }
 
 public sealed record CombatantRow(
