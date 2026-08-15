@@ -314,7 +314,7 @@ public sealed class HelpWindow : Window
     {
         DrawPageHeader(
             text.Get("快速开始", "Getting started"),
-            text.Get("按顺序完成首次确认、启动检查和第一场战斗。", "Complete first-run confirmation, startup checks, and your first encounter in order."));
+            text.Get("按顺序完成首次确认、认识控制中心并检查第一场战斗。", "Complete first-run confirmation, learn the control center, and check your first encounter in order."));
         DrawCard("help-start-parser", text.Get("第一次打开插件", "Opening the plugin for the first time"), 292, () =>
         {
             DrawBullet(text.Get(
@@ -326,6 +326,24 @@ public sealed class HelpWindow : Window
             DrawBullet(text.Get(
                 "如果一直停在初始化，输入 /actcompat status：先看解析器，再看共享 Host、抹茶 Host 和通用 Host，不要反复重载整个游戏。",
                 "If initialization does not finish, use /actcompat status. Check the parser first, then the shared, Matcha, and generic Hosts instead of repeatedly reloading the whole game."));
+        });
+        DrawCard("help-start-control-center", text.Get("控制中心五个页面怎么用", "Using the five control-center pages"), 420, () =>
+        {
+            DrawBullet(text.Get(
+                "概览：查看解析器是否运行，开关解析和自动启动，并打开战斗统计、战斗历史、运行状态或 FFLogs 原始日志目录。日常确认状态从这里开始。",
+                "Overview: check whether the parser is running, control parsing and automatic startup, and open Combat Meter, history, Runtime Status, or the raw FFLogs log folder. Start routine checks here."));
+            DrawBullet(text.Get(
+                "战斗统计：显示或定位统计窗，调整锁定、穿透、自动隐藏、DPS/HPS 排序、DPS 口径、职业显示、匿名显示和 FFLogs DPS Parse 预估。",
+                "Combat Meter: show or locate the meter and configure lock, click-through, auto hide, DPS/HPS sorting, DPS metric, job labels, anonymization, and estimated FFLogs DPS Parse."));
+            DrawBullet(text.Get(
+                "悬浮窗：安装或设置 Cactbot，从本地模板添加窗口，或用可信网址创建 HTML 悬浮窗；打开过的窗口在上方列表中分别管理。",
+                "Overlays: install or configure Cactbot, add windows from local templates, or create an HTML overlay from a trusted URL. Previously opened windows are managed individually in the upper list."));
+            DrawBullet(text.Get(
+                "扩展：启停 FFXIV_ACT_Plugin、OverlayPlugin 和 ACT 扩展，打开扩展配置，检查版本与来源，安装 DLL/ZIP，并在页面下方设置权限。",
+                "Extensions: enable or disable FFXIV_ACT_Plugin, OverlayPlugin, and ACT extensions; open extension configuration, check versions and sources, install DLL/ZIP files, and set permissions at the bottom of the page."));
+            DrawBullet(text.Get(
+                "设置：重启解析器、打开详细运行状态、复制诊断日志、调整语言和快捷按钮。恢复出厂设置会移动现有数据，只应作为最后手段。",
+                "Settings: restart the parser, open detailed Runtime Status, copy diagnostics, and configure language and the quick button. Factory reset moves existing data and is a last resort."));
         });
         DrawCard("help-start-first-fight", text.Get("第一场战斗怎么确认成功", "Confirming your first encounter"), 246, () =>
         {
@@ -364,8 +382,11 @@ public sealed class HelpWindow : Window
         DrawPageHeader(
             text.Get("战斗统计", "Combat Meter"),
             text.Get("看懂显示方式、DPS 口径、暴直率和 FFLogs 预估。", "Understand display behavior, DPS metrics, hit rates, and FFLogs estimates."));
-        DrawCard("help-meter-display", text.Get("窗口显示与交互", "Window display and interaction"), 210, () =>
+        DrawCard("help-meter-display", text.Get("窗口显示与交互", "Window display and interaction"), 270, () =>
         {
+            DrawBullet(text.Get(
+                "在“控制中心 → 战斗统计”开启“显示战斗统计”；找不到窗口时点击“定位到战斗统计”。也可右键 ACT 快捷按钮或输入 /actcompat meter。",
+                "Under Control Center > Combat Meter, enable Show Combat Meter. If the window is lost, select Open Combat Meter window. You may also right-click the ACT quick button or use /actcompat meter."));
             DrawBullet(text.Get(
                 "锁定窗口用于固定位置；只有同时开启“锁定时鼠标穿透”时，点击才会传给游戏。",
                 "Lock window fixes its position. Clicks pass through to the game only when Click-through when locked is also enabled."));
@@ -375,6 +396,21 @@ public sealed class HelpWindow : Window
             DrawBullet(text.Get(
                 "紧凑模式、字体缩放、透明度和列宽只影响显示，不会改变计算结果。",
                 "Compact mode, font scale, opacity, and column widths affect presentation only and do not change calculations."));
+        });
+        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 334, () =>
+        {
+            DrawBullet(text.Get(
+                "先关闭“锁定窗口”，把统计窗拖到需要的位置，再重新锁定；需要让鼠标操作游戏时同时开启“锁定时鼠标穿透”。",
+                "First disable Lock window, move the meter to the desired position, then lock it again. Also enable Click-through when locked when mouse input should go to the game."));
+            DrawBullet(text.Get(
+                "“排序 / 主要数据”决定按 DPS 还是 HPS 排序；“DPS 口径”决定主列使用个人有效时长、整场时长、兼容字段或预估 rDPS。",
+                "Sort / primary metric chooses DPS or HPS ordering. DPS metric chooses personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the main column."));
+            DrawBullet(text.Get(
+                "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
+                "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
+            DrawBullet(text.Get(
+                "“重置当前战斗”需要二次确认，只清空当前显示。战斗历史和已经写入磁盘的原始 Network 日志不会被删除。",
+                "Reset current encounter requires confirmation and clears only the current display. Encounter history and raw Network logs already written to disk are not deleted."));
         });
         DrawCard("help-meter-metrics", text.Get("DPS / HPS 数值口径", "DPS / HPS metric definitions"), 340, () =>
         {
@@ -418,6 +454,21 @@ public sealed class HelpWindow : Window
             ImGui.TextWrapped(text.Get(
                 "“重置当前战斗”只清空当前显示；历史记录和已经写入磁盘的原始日志不受影响。",
                 "Reset current encounter clears only the current display; history and raw logs already written to disk are unaffected."));
+        });
+        DrawCard("help-meter-fflogs-setup", text.Get("如何开启 FFLogs DPS Parse 预估", "Enabling the FFLogs DPS Parse estimate"), 362, () =>
+        {
+            DrawBullet(text.Get(
+                "进入“控制中心 → 战斗统计 → FFLogs DPS Parse 预估”，开启“启用 FFLogs 在线估算”。预估功能与上传战斗报告是两件事。",
+                "Go to Control Center > Combat Meter > FFLogs DPS Parse estimate and enable the online estimate. Estimation and uploading a combat report are separate features."));
+            DrawBullet(text.Get(
+                "首次使用时展开“如何创建 FFLogs API Client”，或点击“创建 / 管理 API Client”，登录 FFLogs 创建免费的 Client。没有自己的网址时可按页面提示填写 https://example.com。",
+                "On first use, expand How to create an FFLogs API client or select Create / manage API client, then sign in to FFLogs and create a free client. If you have no URL, use https://example.com as instructed."));
+            DrawBullet(text.Get(
+                "把 Client ID 和 Client Secret 分别填入对应输入框，点击“测试并刷新”，确认状态不再报错。Client Secret 只保存在本机配置中，不要截图或发送给他人。",
+                "Enter Client ID and Client Secret in their matching fields, select Test and refresh, and confirm the status no longer reports an error. The Client Secret is stored only in local configuration; do not screenshot or share it."));
+            DrawBullet(text.Get(
+                "进入已支持的副本并产生有效 DPS 后才会显示预估；没有缓存、职业或副本无法映射、凭据错误或尚无 DPS 时都会显示 --。",
+                "An estimate appears only after valid DPS is recorded in a supported duty. Missing cache data, an unmapped job or encounter, invalid credentials, or no DPS yet will display --."));
         });
     }
 
@@ -544,6 +595,36 @@ public sealed class HelpWindow : Window
                 "安装成功后如果页面提示重启，请按扩展所在的 Host 重启；不要为了一个 ACT 扩展先重启整个游戏。",
                 "If an installed extension asks for a restart, restart the Host assigned to that extension. Do not restart the whole game first for one ACT extension."));
         });
+        DrawCard("help-extension-enable", text.Get("启用扩展并打开它的配置", "Enabling and configuring an extension"), 286, () =>
+        {
+            DrawBullet(text.Get(
+                "进入“控制中心 → 扩展”。先确认扩展显示“已安装”，再勾选扩展名称；显示“已启用”只代表它会被加载，不代表所有高风险权限都已开放。",
+                "Go to Control Center > Extensions. First confirm that the extension is installed, then enable its checkbox. Enabled means it will be loaded; it does not mean every high-risk permission has been granted."));
+            DrawBullet(text.Get(
+                "扩展启用后点击同一行的“打开配置”。Triggernometry 的触发器导入与启停、FoxTTS 的音色和语音服务、鲶鱼精或提醒扩展的选项都在各自配置中完成。",
+                "After enabling an extension, select Open configuration on the same row. Trigger import and enablement, FoxTTS voices and speech services, and PostNamazu or notification-extension options are configured in their own windows."));
+            DrawBullet(text.Get(
+                "启停兼容扩展或保存权限时 DACT 会自动重启对应 Host；如果磁盘 DLL 被外部工具替换，则需要在运行状态页手动重启对应 Host。",
+                "DACT automatically restarts the assigned Host when a compatibility extension is enabled/disabled or permissions are saved. If an external tool replaces the DLL on disk, manually restart the assigned Host from Runtime Status."));
+        });
+        DrawCard("help-extension-permissions", text.Get("如何给扩展开权限", "How to grant extension permissions"), 520, () =>
+        {
+            DrawBullet(text.Get(
+                "首次安装 DACT 或内置扩展更新后：先在“三方扩展声明”中阅读作者、来源、版本和哈希，点击“知悉并安装 / 更新”；安装完成后选择“同意并启用完整权限”，或选择安全模式后稍后逐项开放。",
+                "After first installing DACT or updating bundled extensions, review author, source, version, and hash under Third-party extension notice, then select Acknowledge and install / update. When installation finishes, accept full permissions or keep safe mode and grant individual permissions later."));
+            DrawBullet(text.Get(
+                "给内置扩展补权限：打开“控制中心 → 扩展”，滚动到“ACT 插件权限边界”，展开鲶鱼精、Triggernometry、银山雀儿或抹茶，勾选需要的能力。更改会保存并自动重启对应 Host。",
+                "To grant permissions to a bundled extension, open Control Center > Extensions, scroll to ACT plugin permission boundary, expand PostNamazu, Triggernometry, SilverDasher, or Matcha, and enable the required capabilities. Changes are saved and the assigned Host restarts automatically."));
+            DrawBullet(text.Get(
+                "给自行导入的普通 ACT 插件授权：在“用户安装的普通 ACT 插件”中找到显示“未授权”的项目，点击“查看并授权”，核对预检清单后点击“授权并启用”。它随后会在通用 Host 中运行。",
+                "To authorize an imported generic ACT plugin, find the Not authorized item under User-installed generic ACT plugins, select Review and authorize, verify the preflight list, then select Authorize and enable. It will then run in Generic Host."));
+            DrawBullet(text.Get(
+                "按实际用途开放：联网更新或查询需要“网络请求”；写配置、缓存或导出需要“写入文件”；鲶鱼精命令与标点需要“发送游戏指令”，部分原版功能还需要“访问游戏原生内存”或“调用 Windows 原生接口”；高级触发器脚本需要“运行高风险脚本”。",
+                "Grant only what the feature needs: updates or online lookups need Network requests; configuration, cache, or export needs Write files; PostNamazu commands and markers need Send game commands, and some original features also need Access native game memory or Call native Windows APIs; advanced trigger scripts need Run high-risk scripts."));
+            DrawBullet(text.Get(
+                "权限勾选后功能仍不可用时，先确认扩展本身也已启用，再用 /actcompat status 检查对应 Host。权限和“启用扩展”是两个独立条件。",
+                "If a feature still fails after permission is granted, confirm the extension itself is also enabled, then use /actcompat status to inspect the assigned Host. Permission and extension enablement are separate requirements."));
+        });
         DrawCard("help-extension-update", text.Get("版本、更新与“重启 ACT”", "Versions, updates, and 'restart ACT'"), 382, () =>
         {
             DrawBullet(text.Get(
@@ -559,7 +640,7 @@ public sealed class HelpWindow : Window
                 "抹茶更新后重启“抹茶 Host”；普通自行导入扩展更新后重启“通用 Host”。只有对应 Host 无法停止或 DACT 自身更新要求重载时，才考虑完整重启游戏。",
                 "Restart Matcha Host after a Matcha update and Generic Host after updating an ordinary imported extension. Restart the whole game only if the assigned Host cannot stop or DACT itself requires a reload."));
         });
-        DrawCard("help-extension-safety", text.Get("权限与安全要求", "Permissions and security requirements"), 250, () =>
+        DrawCard("help-extension-safety", text.Get("权限与安全要求", "Permissions and security requirements"), 286, () =>
         {
             ImGui.TextColored(Warning, text.Get("只安装你信任并能确认来源的 DLL、ZIP 和网页。", "Install only DLLs, ZIPs, and pages whose source you trust and can verify."));
             ImGui.TextWrapped(text.Get(
@@ -569,6 +650,9 @@ public sealed class HelpWindow : Window
             ImGui.TextWrapped(text.Get(
                 "关闭某项权限后，对应网络、文件、命令、原生内存或脚本功能可能失效，这是安全边界生效，不一定是插件故障。权限保存后 DACT 会自动重启相关 Host。",
                 "Disabling a permission can intentionally disable network, file, command, native-memory, or scripting features. Saving permissions automatically restarts the related Host."));
+            ImGui.TextWrapped(text.Get(
+                "“同意完整权限”表示允许该扩展声明的全部能力，不等于 DACT 已证明第三方代码绝对安全。来源不明时应保持安全模式，只按需要逐项开放。",
+                "Accept full permissions allows every capability declared by that extension; it does not mean DACT has proven the third-party code absolutely safe. Keep safe mode for unknown sources and grant only what is needed."));
             if (ImGui.Button(text.Get("查看内置第三方 DLL 的作者与来源", "View bundled DLL authors and sources")))
             {
                 openThirdPartyNotice();
@@ -608,29 +692,80 @@ public sealed class HelpWindow : Window
                 "DACT 本体更新或 Host 无法在状态页停止：先尝试 Dalamud 重载；仍失败再完整退出游戏和启动器。",
                 "DACT itself updated, or a Host cannot stop from Runtime Status: try a Dalamud reload first, then fully exit the game and launcher if needed."));
         });
-        DrawCard("help-troubleshooting-steps", text.Get("没有数据或功能失败", "Missing data or failed features"), 292, () =>
+        DrawCard("help-troubleshooting-plugin-unavailable", text.Get("插件打不开、命令没反应或一直初始化", "Plugin does not open, commands do nothing, or initialization never finishes"), 354, () =>
         {
             DrawBullet(text.Get(
-                "先确认概览状态为“运行中”，再查看解析器和各 Host 是否成功启动。",
-                "First confirm Overview says Running, then check whether the parser and each Host started successfully."));
+                "先输入 /actcompat on。若聊天框提示命令不存在，或连控制中心都无法打开，请在卫月插件安装器中确认 Dalamud ACT Compat 已安装、已启用且没有加载错误；此时插件内帮助和重启按钮本身也无法工作。",
+                "First use /actcompat on. If chat reports an unknown command or the control center never opens, verify in the Dalamud plugin installer that Dalamud ACT Compat is installed, enabled, and has no load error. In this state, in-plugin help and restart controls cannot work either."));
             DrawBullet(text.Get(
-                "悬浮窗有画面但无数据时，查看自动协议检测状态并执行“重新检测”。",
-                "If an overlay renders but has no data, inspect automatic protocol detection and use Detect again."));
+                "若控制中心能打开，在“概览”确认“启用解析”和“自动启动解析器”已勾选。解析器长时间停在“已停止”“初始化中”或“错误”时，到“设置”点击“重启解析器”。",
+                "If the control center opens, confirm Enable parsing and Auto start parser on Overview. If the parser remains Stopped, Initializing, or Error, go to Settings and select Restart parser."));
             DrawBullet(text.Get(
-                "第三方扩展失败时复制失败窗口的日志；其他问题使用设置页中的诊断日志。",
-                "For extension failures, copy the log from the failure window. For other issues, use the diagnostic log in Settings."));
+                "再输入 /actcompat status，从上到下寻找第一个不是“运行中 / 已连接”的组件。先修第一个失败的上游，不要在解析器未运行时反复重装悬浮窗或扩展。",
+                "Then use /actcompat status and find the first component from the top that is not Running / Connected. Fix that first upstream failure instead of repeatedly reinstalling overlays or extensions while the parser is stopped."));
             DrawBullet(text.Get(
-                "上传 FFLogs 使用原始 Network 日志；诊断日志不能代替战斗日志。",
-                "Use raw Network logs for FFLogs uploads; diagnostic logs cannot replace combat logs."));
+                "仍无法启动时，在“设置”点击“复制诊断日志”，反馈 DACT 版本、刚才执行的操作、页面显示的状态与错误原文。只说“无法使用”不足以判断失败层。",
+                "If startup still fails, select Copy diagnostic log under Settings and report the DACT version, the action performed, visible states, and exact error text. Saying only that it does not work is not enough to identify the failed layer."));
+        });
+        DrawCard("help-troubleshooting-no-meter", text.Get("没有战斗统计、没有队员或窗口不见了", "No combat data, missing party members, or a lost meter window"), 430, () =>
+        {
             DrawBullet(text.Get(
-                "版本号已变化但功能仍像旧版，说明磁盘 DLL 已更新而 Host 仍持有旧程序集；重启对应 Host 后再测试。",
-                "If the version changed but behavior is still old, the DLL on disk was updated while the Host still holds the old assembly. Restart the assigned Host and test again."));
+                "先输入 /actcompat meter；也可在“控制中心 → 战斗统计”开启“显示战斗统计”并点击“定位到战斗统计”。排查期间先关闭“脱战自动隐藏”，避免把隐藏误认为没有窗口。",
+                "First use /actcompat meter. You may also enable Show Combat Meter under Control Center > Combat Meter and select Open Combat Meter window. Disable Auto hide out of combat while testing so a hidden window is not mistaken for a missing one."));
+            DrawBullet(text.Get(
+                "确认概览和 /actcompat status 中的解析器为“运行中”，然后攻击木人或副本敌人并实际造成几次有效伤害。仅打开窗口、进本、选中目标或站在战斗区域不会产生统计。",
+                "Confirm that the parser is Running on Overview and in /actcompat status, then attack a striking dummy or duty enemy and deal several valid hits. Opening the window, entering a duty, targeting an enemy, or merely standing in combat does not create statistics."));
+            DrawBullet(text.Get(
+                "“收起（只显示自己）”开启时只显示自己；取消后才显示当前小队。联盟其他小队、宠物和普通 NPC 不作为独立玩家行，离队与补位成员也按当前小队容量处理。",
+                "Collapsed (self only) shows only you; disable it to show the current party. Other alliance parties, pets, and ordinary NPCs are not separate player rows, and replacements are kept within the current party capacity."));
+            DrawBullet(text.Get(
+                "解析器已运行且已造成伤害，但数次刷新后仍完全没有行：先重启解析器并重新打一个全新的木人或副本样本。不要用重置当前战斗或恢复出厂设置代替这一步。",
+                "If the parser is running and damage was dealt but no rows appear after several refreshes, restart the parser and create a new striking-dummy or duty sample. Do not substitute Reset current encounter or Factory reset for this check."));
+            DrawBullet(text.Get(
+                "仍无数据时，同时保留“打开 FFLogs 上传日志”目录中的当场 Network 日志，并复制诊断日志。Network 日志证明原始战斗事件，诊断日志说明 DACT 与解析器状态，两者用途不同。",
+                "If data is still missing, keep the matching Network log from Open FFLogs upload logs and copy the diagnostic log. The Network log shows raw combat events; diagnostics show DACT and parser state. They serve different purposes."));
+        });
+        DrawCard("help-troubleshooting-extension-failed", text.Get("只有某个扩展、TTS、触发器或标点不能用", "Only one extension, TTS, trigger, or marker feature fails"), 394, () =>
+        {
+            DrawBullet(text.Get(
+                "到“控制中心 → 扩展”同时确认三件事：扩展已安装、扩展复选框已启用、所需权限已勾选。显示“未授权”的普通插件必须点击“查看并授权”。",
+                "Under Control Center > Extensions, confirm all three conditions: the extension is installed, its checkbox is enabled, and required permissions are granted. A generic plugin shown as Not authorized must be reviewed and authorized."));
+            DrawBullet(text.Get(
+                "然后点击该扩展的“打开配置”，确认功能本身已在扩展内部启用。例如触发器需要已经导入并启用，FoxTTS 需要可用语音服务、音色和输出设备。",
+                "Then open that extension's configuration and confirm the feature is enabled inside the extension itself. For example, triggers must be imported and enabled, while FoxTTS needs a working speech service, voice, and output device."));
+            DrawBullet(text.Get(
+                "用 /actcompat status 检查它所在的 Host：Triggernometry、鲶鱼精、FoxTTS、银山雀儿看共享 Host；抹茶看抹茶 Host；普通导入插件看通用 Host。只重启对应 Host。",
+                "Use /actcompat status to inspect its assigned Host: Shared Host for Triggernometry, PostNamazu, FoxTTS, and SilverDasher; Matcha Host for Matcha; Generic Host for imported plugins. Restart only that Host."));
+            DrawBullet(text.Get(
+                "若共享 Host 整体运行而仅一个动作失败，优先看权限和该扩展配置；若整个 Host 报错，复制状态页或扩展失败窗口中的完整诊断，不要只截最后一行。",
+                "If Shared Host is running and only one action fails, check permissions and that extension's settings first. If the entire Host errors, copy the complete diagnostic from Runtime Status or the extension-failure window instead of capturing only its last line."));
+        });
+        DrawCard("help-troubleshooting-update-old", text.Get("已经更新但仍像旧版本", "Updated, but behavior still looks old"), 238, () =>
+        {
+            DrawBullet(text.Get(
+                "先在扩展页看实际 DLL 版本；实际版本与清单版本不同不一定是错误，外部工具箱可能只替换了 DLL。",
+                "First inspect the actual DLL version on Extensions. A difference between DLL and manifest is not necessarily an error; an external toolbox may have replaced only the DLL."));
+            DrawBullet(text.Get(
+                "磁盘版本已更新但行为没变，说明运行中的 Host 仍持有旧程序集。按扩展归属重启共享、抹茶或通用 Host；DACT 本体更新则执行 Dalamud 重载，必要时完整退出游戏和启动器。",
+                "If the DLL on disk is new but behavior is unchanged, the running Host still holds the old assembly. Restart Shared, Matcha, or Generic Host as assigned. For a DACT update, reload Dalamud and fully exit the game and launcher only if needed."));
         });
         DrawCard("help-troubleshooting-notifications", text.Get("通知没有出现", "Notifications did not appear"), 160, () =>
         {
             ImGui.TextWrapped(text.Get(
                 "抹茶和银山雀儿在游戏位于前台时使用游戏内卫月通知；切到其他应用时使用 Windows 通知中心。Windows 投递失败时会回退到游戏内通知。请同时检查 Windows 专注助手、游戏内通知设置和对应 Host 日志。",
                 "Matcha and SilverDasher use Dalamud notifications while the game is foreground. When another app is foreground, they use Windows Notification Center and fall back to Dalamud if Windows delivery fails. Check Windows Focus Assist, in-game notification settings, and the assigned Host log."));
+        });
+        DrawCard("help-troubleshooting-report", text.Get("反馈问题时请提供什么", "What to include in a problem report"), 286, () =>
+        {
+            DrawBullet(text.Get(
+                "必须说明：DACT 版本、问题发生时间、当时在做什么、预期结果、实际现象，以及能否稳定复现。",
+                "Always include the DACT version, occurrence time, what you were doing, expected result, actual behavior, and whether it reproduces consistently."));
+            DrawBullet(text.Get(
+                "插件、解析器、Host、悬浮窗或扩展启动问题：提供“复制诊断日志”的完整内容和 /actcompat status 中最先失败的组件。",
+                "For DACT, parser, Host, overlay, or extension startup problems, provide the full Copy diagnostic log output and the first failed component in /actcompat status."));
+            DrawBullet(text.Get(
+                "战斗统计缺失、数值明显异常或 FFLogs 对不上：除诊断日志外，保留对应时间的原始 Network 日志。发送前自行检查角色名、服务器名和本地路径。",
+                "For missing combat data, clearly incorrect values, or FFLogs discrepancies, keep the matching raw Network log in addition to diagnostics. Review character names, worlds, and local paths before sharing."));
         });
         if (ImGui.Button(text.Get("打开运行状态", "Open runtime status"), new Vector2(170, 34)))
         {
@@ -648,6 +783,18 @@ public sealed class HelpWindow : Window
         DrawPageHeader(
             text.Get("常见问题", "Frequently asked questions"),
             text.Get("对照用户最常遇到的更新、统计、隐私和操作问题。", "Answers to common update, statistics, privacy, and interaction questions."));
+        DrawCard("help-faq-no-meter", text.Get("为什么打开了插件却没有战斗统计？", "Why is there no combat data after opening the plugin?"), 214, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "打开插件只会显示界面，不会生成战斗数据。请确认解析器为“运行中”，用 /actcompat meter 打开统计窗，然后对木人或副本敌人实际造成有效伤害。窗口仍为空时关闭脱战自动隐藏、重启解析器并重新产生一场新样本；继续失败请同时保留 Network 日志和诊断日志。",
+                "Opening the plugin only shows its UI; it does not generate combat data. Confirm the parser is Running, use /actcompat meter, and deal valid damage to a striking dummy or duty enemy. If the meter stays empty, disable auto hide, restart the parser, and create a new sample. If it still fails, keep both the Network log and diagnostic log."));
+        });
+        DrawCard("help-faq-permissions", text.Get("权限在哪里开？需要全部打开吗？", "Where are permissions granted, and must all be enabled?"), 238, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "进入“控制中心 → 扩展”，在页面下方展开“ACT 插件权限边界”中的对应扩展并勾选所需能力；显示“未授权”的普通插件使用“查看并授权”。不要求全部打开，应根据实际功能逐项授权。权限保存后对应 Host 自动重启；扩展本身还必须处于“已启用”。",
+                "Go to Control Center > Extensions and expand the target extension under ACT plugin permission boundary, then enable the capabilities it needs. For a generic plugin shown as Not authorized, use Review and authorize. You do not need to enable everything; grant only what the feature requires. The assigned Host restarts after saving, and the extension itself must also be Enabled."));
+        });
         DrawCard("help-faq-restart-act", text.Get("提示“重启 ACT”，需要重启游戏吗？", "Does 'restart ACT' mean restarting the game?"), 190, () =>
         {
             ImGui.TextWrapped(text.Get(
@@ -738,6 +885,7 @@ public sealed class HelpWindow : Window
         [
             Entry(HelpPage.UsageNotice, "help-notice-rules", "使用前请确认", "Before use", "第三方工具规则与使用边界。", "Rules and boundaries for third-party tools.", "用户协议 PVP 跳脸 骚扰 safety rules"),
             Entry(HelpPage.GettingStarted, "help-start-parser", "第一次打开插件", "First launch", "确认扩展来源并等待主页显示运行中。", "Review extension sources and wait for Home to show Running.", "首次安装 初始化 parser 解析器 permissions 权限"),
+            Entry(HelpPage.GettingStarted, "help-start-control-center", "控制中心五个页面", "Five control-center pages", "说明概览、战斗统计、悬浮窗、扩展和设置分别怎么用。", "How to use Overview, Combat Meter, Overlays, Extensions, and Settings.", "主页 用户手册 功能说明 overview settings diagnostics"),
             Entry(HelpPage.GettingStarted, "help-start-first-fight", "第一场战斗", "First encounter", "确认战斗统计出现自己和当前小队。", "Confirm Combat Meter shows you and the current party.", "没有数据 木人 副本 party meter history"),
             Entry(HelpPage.GettingStarted, "help-start-shortcuts", "常用入口", "Common entry points", "快捷按钮、控制中心和运行状态入口。", "Quick button, control center, and runtime status shortcuts.", "/actcompat on status 快捷按钮"),
             Entry(HelpPage.GettingStarted, "help-start-data", "战斗日志与诊断日志", "Combat and diagnostic logs", "区分 FFLogs 上传日志与排错日志。", "Distinguish FFLogs upload logs from troubleshooting logs.", "Network 原始日志 upload privacy 隐私"),
@@ -745,21 +893,31 @@ public sealed class HelpWindow : Window
             Entry(HelpPage.MacroCommands, "help-commands-overlays", "悬浮窗命令", "Overlay commands", "打开 Cactbot 或指定 HTML 模板。", "Open Cactbot or a named HTML template.", "cactbot overlay template 模板"),
             Entry(HelpPage.MacroCommands, "help-commands-maintenance", "维护与诊断命令", "Maintenance commands", "清空、安装、Host、停止和恢复出厂设置。", "Clear, install, Host, stop, and factory reset commands.", "clear install host stop factory-reset sample DLL ZIP"),
             Entry(HelpPage.CombatMeter, "help-meter-display", "窗口显示与交互", "Meter display", "锁定、穿透、自动隐藏和界面缩放。", "Lock, click-through, auto hide, and display scaling.", "锁定 鼠标穿透 compact opacity font"),
+            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置位置、排序、口径、收起、匿名和重置。", "Configure position, sorting, metrics, collapsed mode, anonymization, and reset.", "定位 只显示自己 全队 玩家 ID 清空 当前战斗"),
             Entry(HelpPage.CombatMeter, "help-meter-metrics", "DPS 与 HPS 口径", "DPS and HPS metrics", "解释 DPS、EncDPS、ExtDPS、rDPS 和 HPS。", "Definitions for DPS, EncDPS, ExtDPS, rDPS, and HPS.", "团队贡献 预估 active duration damage healing"),
             Entry(HelpPage.CombatMeter, "help-meter-hit-rates", "暴击率与直暴率", "CRIT and CDH rates", "解释百分比跳动、有效样本与 --。", "Explains changing percentages, valid samples, and --.", "暴击 直击 直暴 crit direct hit CDH 数字跳动 闪"),
             Entry(HelpPage.CombatMeter, "help-meter-fflogs", "DPS Parse 与 FFLogs", "DPS Parse and FFLogs", "解释本地预估、缓存日期和正式成绩差异。", "Explains local estimates, cache dates, and final-report differences.", "排名 percentile partition 分区 curve 曲线 上传"),
+            Entry(HelpPage.CombatMeter, "help-meter-fflogs-setup", "开启 FFLogs DPS Parse 预估", "Enable FFLogs DPS Parse estimate", "创建 API Client、填写凭据并测试刷新。", "Create an API client, enter credentials, and test refresh.", "Client ID Client Secret example.com 在线估算 凭据 --"),
             Entry(HelpPage.Overlays, "help-overlay-cactbot", "Cactbot 悬浮窗", "Cactbot overlays", "文字提醒、时间轴与旧组合窗的关系。", "Alerts, Timeline, and the legacy combined window.", "raidboss timeline alerts 文字提醒 时间轴"),
             Entry(HelpPage.Overlays, "help-overlay-html", "创建 HTML 悬浮窗", "Create HTML overlays", "从模板或可信网址创建并保存独立设置。", "Create from templates or trusted URLs with independent settings.", "http https file URL websocket ACTWS"),
             Entry(HelpPage.Overlays, "help-overlay-edit", "编辑位置与网页交互", "Edit and interact", "拖动、缩放、完成编辑、锁定与鼠标穿透。", "Move, resize, finish editing, lock, and click-through behavior.", "完成位置编辑 操作网页 滚轮 页面缩放"),
             Entry(HelpPage.Overlays, "help-overlay-empty", "悬浮窗没有数据", "Overlay has no data", "检查现代协议、ACTWS、解析器和网址要求。", "Check modern protocol, ACTWS, parser, and URL requirements.", "空白 重新检测 connected 连接"),
             Entry(HelpPage.Extensions, "help-extension-bundled", "内置兼容扩展", "Bundled compatibility extensions", "Triggernometry、鲶鱼精、FoxTTS、银山雀儿与抹茶分别做什么。", "What Triggernometry, PostNamazu, FoxTTS, SilverDasher, and Matcha do.", "触发器 PostNamazu TTS Matcha SilverDasher 共享 Host"),
             Entry(HelpPage.Extensions, "help-extension-install", "安装 DLL 或 ZIP", "Install DLL or ZIP", "静态预检、授权、失败诊断和 Host 分配。", "Static preflight, authorization, failure diagnostics, and Host assignment.", "第三方插件 import 导入 generic 通用"),
+            Entry(HelpPage.Extensions, "help-extension-enable", "启用扩展和打开配置", "Enable and configure extensions", "说明已安装、已启用、扩展配置和 Host 重启。", "Explains installation, enablement, extension settings, and Host restarts.", "复选框 打开配置 Triggernometry FoxTTS 语音 音色"),
+            Entry(HelpPage.Extensions, "help-extension-permissions", "如何给扩展开权限", "Grant extension permissions", "首次完整授权、内置扩展逐项授权和普通插件授权流程。", "Full first-run consent, per-capability bundled grants, and generic-plugin authorization.", "同意完整权限 安全模式 ACT 插件权限边界 查看并授权 网络 文件 游戏指令 原生内存 高风险脚本"),
             Entry(HelpPage.Extensions, "help-extension-update", "版本、更新与重启 ACT", "Versions, updates, and restart ACT", "实际 DLL 版本、清单版本和更新后重启对应 Host。", "Actual DLL version, manifest version, and restarting the assigned Host after updates.", "1.3.6.7 工具箱 toolbox FileVersion SHA-256 /actcompat status 重启共享 Host"),
             Entry(HelpPage.Extensions, "help-extension-safety", "扩展权限与安全", "Extension permissions and safety", "理解网络、文件、命令、内存和脚本权限。", "Understand network, file, command, memory, and scripting permissions.", "授权 Windows API 来源 风险"),
             Entry(HelpPage.Troubleshooting, "help-troubleshooting-layers", "按层排错", "Layered troubleshooting", "从解析器和 Host 中找到最先失败的一层。", "Find the first failing layer among the parser and Hosts.", "运行状态 初始化 删除配置 factory reset"),
             Entry(HelpPage.Troubleshooting, "help-troubleshooting-restart", "应该重启哪一个", "What to restart", "共享、抹茶、通用 Host 与解析器的对应关系。", "Mapping between Shared, Matcha, Generic Hosts, and the parser.", "重启游戏 reload ACT PostNamazu"),
-            Entry(HelpPage.Troubleshooting, "help-troubleshooting-steps", "没有数据或功能失败", "Missing data or failed features", "版本已变但仍是旧行为、悬浮窗无数据和扩展报错。", "Updated version with old behavior, overlay data loss, and extension errors.", "诊断 logs version old assembly"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-plugin-unavailable", "插件打不开或一直初始化", "Plugin unavailable or stuck initializing", "从命令、卫月加载状态、解析器和诊断日志逐步检查。", "Check commands, Dalamud load state, parser state, and diagnostics in order.", "无法使用 没反应 unknown command 命令不存在 加载错误 重启解析器"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-no-meter", "没有战斗统计", "No combat data", "找回窗口并确认解析器、有效伤害、小队显示和所需日志。", "Find the meter and verify parser state, valid damage, party display, and required logs.", "没数据 没有队员 窗口不见 木人 auto hide 脱战自动隐藏 Network"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-extension-failed", "某个扩展或 TTS 不能用", "One extension or TTS fails", "检查安装、启用、权限、扩展内部配置和对应 Host。", "Check installation, enablement, permissions, extension settings, and assigned Host.", "触发器 标点 鲶鱼 TTS 语音 未授权 配置"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-update-old", "更新后仍是旧行为", "Old behavior after update", "核对实际 DLL 版本并重启仍持有旧程序集的 Host。", "Check the actual DLL version and restart the Host that still holds the old assembly.", "版本号 更新没生效 缓存 old assembly 工具箱"),
             Entry(HelpPage.Troubleshooting, "help-troubleshooting-notifications", "通知没有出现", "Missing notifications", "检查游戏前台、Windows 通知和专注助手。", "Check game focus, Windows notifications, and Focus Assist.", "抹茶 银山雀儿 toast notification"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-report", "反馈问题需要的材料", "Problem report checklist", "版本、时间、复现步骤、运行状态、诊断日志和 Network 日志。", "Version, time, reproduction steps, runtime state, diagnostics, and Network logs.", "怎么反馈 截图 日志 error report 角色名 服务器名"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-no-meter", "打开插件却没有战斗统计", "No data after opening the plugin", "说明打开界面不等于已经产生战斗数据。", "Opening the UI does not itself produce combat data.", "空白 没人 没统计 有效伤害"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-permissions", "权限在哪里开", "Where to grant permissions", "在扩展页逐项授权，并同时启用扩展。", "Grant capabilities on Extensions and also enable the extension.", "怎么开权限 全部打开 安全模式 未授权"),
             Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-restart-act", "重启 ACT 是否等于重启游戏", "Does restart ACT mean restart game", "DACT 通常只需重启对应共享 Host。", "DACT normally needs only the assigned Shared Host restarted.", "鲶鱼精 更新 status"),
             Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-version", "版本与清单不同", "Version differs from manifest", "外部工具替换 DLL 后的显示与安全记录。", "Display and safety records after an external tool replaces a DLL.", "实际版本 悬停 mismatch"),
             Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-fflogs", "本地数值与 FFLogs 不同", "Local values differ from FFLogs", "解释 DPS、rDPS、Parse 与正式报告口径。", "Explains DPS, rDPS, Parse, and final-report conventions.", "低 离谱 奶妈 healer DoT"),

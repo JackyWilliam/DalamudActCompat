@@ -5998,6 +5998,11 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
         helpWindowSource.Contains("CreateSearchEntries", StringComparison.Ordinal) &&
         helpWindowSource.Contains("常见问题", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("控制中心五个页面怎么用", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
         helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
         helpWindowSource.Contains("实际 FileVersion", StringComparison.Ordinal) &&
         new[]
@@ -6020,6 +6025,9 @@ static void ValidateHtmlOverlayDefaults()
         !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
         readmeSource.Contains("## 用户使用指南", StringComparison.Ordinal) &&
+        readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
+        readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
+        readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
         readmeSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
         helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
