@@ -9,6 +9,7 @@ internal sealed class DutyEncounterAccumulator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> completedSegmentIds = [];
     private readonly HashSet<Guid> segmentIds = [];
+    private readonly List<Encounter> completedSegments = [];
     private readonly List<string> displayRoster = [];
     private double completedDurationSeconds;
     private int partyCapacity;
@@ -32,13 +33,6 @@ internal sealed class DutyEncounterAccumulator
         int observedPartyCapacity = 0)
     {
         ArgumentNullException.ThrowIfNull(segment);
-        if (completedSegmentIds.Count > 0 && !completedSegmentIds.Contains(segment.Id))
-        {
-            // A new ACT segment inside the same duty is a new pull. Checkpointed phases
-            // change where the pull begins, but must never inherit a wiped pull's totals.
-            Reset();
-        }
-
         BeginOrUpdateSession(segment);
         UpdateDisplayRoster(segment, currentPartyMemberIds, observedPartyCapacity);
         latestSegment = segment;
@@ -48,6 +42,7 @@ internal sealed class DutyEncounterAccumulator
             var segmentDurationSeconds = ResolveSegmentDurationSeconds(segment, now);
             AddCombatants(segment.Combatants, segmentDurationSeconds);
             completedDurationSeconds += segmentDurationSeconds;
+            completedSegments.Add(CompleteSegmentRecord(segment, now));
         }
 
         var activeSegment = !finished && !completedSegmentIds.Contains(segment.Id)
@@ -69,6 +64,7 @@ internal sealed class DutyEncounterAccumulator
             var segmentDurationSeconds = ResolveSegmentDurationSeconds(latestSegment, endTime);
             AddCombatants(latestSegment.Combatants, segmentDurationSeconds);
             completedDurationSeconds += segmentDurationSeconds;
+            completedSegments.Add(CompleteSegmentRecord(latestSegment, endTime));
         }
 
         var completed = Build(activeSegment: null, endTime, endTime);
@@ -81,6 +77,7 @@ internal sealed class DutyEncounterAccumulator
         completedCombatants.Clear();
         completedSegmentIds.Clear();
         segmentIds.Clear();
+        completedSegments.Clear();
         displayRoster.Clear();
         completedDurationSeconds = 0;
         partyCapacity = 0;
@@ -253,16 +250,36 @@ internal sealed class DutyEncounterAccumulator
             Array.Empty<ActionSummary>(),
             jobs)
         {
-            // FFLogs comparisons must use the concrete ACT segment, never an aggregate
-            // containing data from a previous pull.
+            // FFLogs comparisons must use a concrete ACT record, never the pull folder
+            // aggregate that can span several phase records.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
             TerritoryId = territoryId,
-            IsTransitioning = activeSegment?.IsTransitioning == true,
+            IsTransitioning = (activeSegment ?? latestSegment)?.IsTransitioning == true,
+            SegmentRecords = BuildSegmentRecords(activeSegment),
             // ACT treats merged fragments as the sum of their active encounter durations.
             // Transition downtime inside one pull must not lower DPS.
             CombatDuration = TimeSpan.FromSeconds(durationSeconds),
         };
     }
+
+    private IReadOnlyList<Encounter> BuildSegmentRecords(Encounter? activeSegment)
+    {
+        if (activeSegment is null || completedSegmentIds.Contains(activeSegment.Id))
+        {
+            return completedSegments.ToArray();
+        }
+
+        return completedSegments.Append(activeSegment).ToArray();
+    }
+
+    private static Encounter CompleteSegmentRecord(
+        Encounter segment,
+        DateTimeOffset fallbackEndTime)
+        => segment with
+        {
+            EndTime = segment.EndTime ?? fallbackEndTime,
+            SegmentRecords = [],
+        };
 
     private static double ResolveSegmentDurationSeconds(
         Encounter segment,

@@ -18,6 +18,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly IFramework framework;
     private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
+    private readonly Func<bool> isInCombat;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
@@ -31,6 +32,7 @@ public sealed class IinactAdapter : IParserEngine
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
     private volatile bool wasBoundByDuty;
+    private volatile bool wasInCombat;
     private bool disposed;
 
     public IinactAdapter(
@@ -42,6 +44,7 @@ public sealed class IinactAdapter : IParserEngine
         IFramework framework,
         Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
+        Func<bool> isInCombat,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
         Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
@@ -55,6 +58,7 @@ public sealed class IinactAdapter : IParserEngine
         this.framework = framework;
         this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
+        this.isInCombat = isInCombat;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
@@ -62,6 +66,7 @@ public sealed class IinactAdapter : IParserEngine
         actRuntime.EncounterChanged += OnEncounterChanged;
         framework.Update += OnFrameworkUpdate;
         wasBoundByDuty = isBoundByDuty();
+        wasInCombat = isInCombat();
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -187,7 +192,7 @@ public sealed class IinactAdapter : IParserEngine
 
     private void StopCore(bool updateStatus)
     {
-        FinalizeDutySession(DateTimeOffset.UtcNow);
+        FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
@@ -228,6 +233,7 @@ public sealed class IinactAdapter : IParserEngine
             dutySession.Reset();
         }
 
+        wasInCombat = isInCombat();
         stateStore.ResetCurrent();
     }
 
@@ -292,6 +298,9 @@ public sealed class IinactAdapter : IParserEngine
         {
             Encounter displayEncounter;
             Encounter? completedAttempt = null;
+            var inCombat = isInCombat();
+            // The framework callback owns the previous combat state; updating it here could
+            // consume the wipe edge before the pull folder has been finalized.
             lock (dutySessionLock)
             {
                 wasBoundByDuty = true;
@@ -301,7 +310,7 @@ public sealed class IinactAdapter : IParserEngine
                     DateTimeOffset.UtcNow,
                     snapshot.CurrentPartyMemberIds,
                     snapshot.PartyCapacity);
-                if (finished)
+                if (finished && !inCombat)
                 {
                     RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
                     completedAttempt = dutySession.Complete(
@@ -342,7 +351,7 @@ public sealed class IinactAdapter : IParserEngine
                 }
             }
 
-            FinalizeDutySession(DateTimeOffset.UtcNow);
+            FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
             lock (dutySessionLock)
             {
                 if (sameDutyZone || finalizedDutySegmentIds.Contains(snapshot.Id))
@@ -365,24 +374,37 @@ public sealed class IinactAdapter : IParserEngine
     private void OnFrameworkUpdate(IFramework _)
     {
         var boundByDuty = isBoundByDuty();
+        var inCombat = isInCombat();
         if (boundByDuty)
         {
+            var pullEnded = wasBoundByDuty && wasInCombat && !inCombat;
             wasBoundByDuty = true;
+            wasInCombat = inCombat;
+            if (pullEnded)
+            {
+                // The game combat flag spans phase transitions, while ACT may split them.
+                // Only the true in-combat -> out-of-combat edge closes the pull folder.
+                FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: false);
+            }
             return;
         }
 
         if (wasBoundByDuty)
         {
-            FinalizeDutySession(DateTimeOffset.UtcNow);
+            FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
         }
+        wasInCombat = inCombat;
     }
 
-    private void FinalizeDutySession(DateTimeOffset endTime)
+    private void FinalizeDutyAttempt(DateTimeOffset endTime, bool leavingDuty)
     {
         Encounter? completed;
         lock (dutySessionLock)
         {
-            wasBoundByDuty = false;
+            if (leavingDuty)
+            {
+                wasBoundByDuty = false;
+            }
             RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
             completed = dutySession.Complete(endTime);
         }

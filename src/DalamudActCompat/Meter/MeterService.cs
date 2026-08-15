@@ -59,7 +59,8 @@ public sealed class MeterService
 
     private IReadOnlyList<CombatantRow> BuildRows(Encounter encounter)
     {
-        var duration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
+        var damageDuration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
+        var healingDuration = Math.Max(1.0, encounter.Duration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
         var rows = encounter.Combatants.Select(combatant =>
         {
@@ -69,8 +70,8 @@ public sealed class MeterService
                 combatant.Name,
                 combatant.Job,
                 combatant.IsLocalPlayer,
-                ResolveDps(combatant, duration),
-                combatant.TotalHealing / duration,
+                ResolveDps(combatant, damageDuration),
+                combatant.TotalHealing / healingDuration,
                 combatant.TotalDamage,
                 combatant.TotalHealing,
                 combatant.TotalDamage * 100.0 / totalDamage,

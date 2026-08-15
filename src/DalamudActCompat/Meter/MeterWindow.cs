@@ -13,8 +13,8 @@ public sealed class MeterWindow : Window
 {
     internal const float CombatantRowSpacing = 3;
     internal const string LimitBreakDisplayName = "LB (Limit Break)";
-    internal const float MinimumTableWidthWithFflogs = 533;
-    internal const float MinimumTableWidthWithoutFflogs = 481;
+    internal const float MinimumTableWidthWithFflogs = 373;
+    internal const float MinimumTableWidthWithoutFflogs = 326;
     internal const float MinimumExpandedWindowWidth = 380;
     internal const float MinimumExpandedWindowHeight = 170;
     internal const float DefaultExpandedWindowWidth = 500;
@@ -25,6 +25,14 @@ public sealed class MeterWindow : Window
     private const float CompactDragHandleHeight = 26;
     private const float CompactToggleSize = 26;
     private const float WindowResizeAnimationDurationSeconds = 0.18f;
+    private const float MinimumNameRegionWidth = 92;
+    private const float TableRightPadding = 9;
+    private const float ColumnSpacing = 3;
+    private const float FflogsColumnWidth = 44;
+    private const float RateColumnWidth = 50;
+    private const float HitRateColumnWidth = 43;
+    private const float DamagePercentColumnWidth = 46;
+    private const float DeathsColumnWidth = 28;
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
@@ -184,8 +192,9 @@ public sealed class MeterWindow : Window
         var rows = SelectVisibleRows(allRows, settings.CompactMode);
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         var showFflogs = ShouldShowFflogsColumn(configuration.Fflogs.Enabled, settings);
+        var columnWidths = MeasureColumnWidths(rows, settings, showFflogs);
         var availableTableWidth = ImGui.GetContentRegionAvail().X;
-        var minimumTableWidth = CalculateMinimumTableWidth(settings, showFflogs) * settings.FontScale;
+        var minimumTableWidth = CalculateRequiredTableWidth(columnWidths, settings.FontScale);
         var useHorizontalScroll = ShouldEnableHorizontalScroll(
             availableTableWidth,
             minimumTableWidth);
@@ -211,9 +220,8 @@ public sealed class MeterWindow : Window
         {
             var layout = BuildColumnLayout(
                 ImGui.GetContentRegionAvail().X,
-                rows,
-                settings,
-                showFflogs);
+                columnWidths,
+                settings.FontScale);
             DrawTableHeader(layout, settings);
             for (var index = 0; index < rows.Count; index++)
             {
@@ -657,59 +665,42 @@ public sealed class MeterWindow : Window
 
     private MeterColumnLayout BuildColumnLayout(
         float availableWidth,
-        IReadOnlyList<CombatantRow> rows,
-        MeterSettings settings,
-        bool showFflogs)
+        MeterColumnWidths widths,
+        float fontScale)
     {
-        float Measure(string header, IEnumerable<string> values)
-            => Math.Max(
-                ImGui.CalcTextSize(header).X,
-                values.Select(value => ImGui.CalcTextSize(value).X).DefaultIfEmpty(0).Max());
-
-        var right = Math.Max(0, availableWidth - 9);
+        var scale = Math.Clamp(fontScale, 0.75f, 1.8f);
+        var right = Math.Max(0, availableWidth - (TableRightPadding * scale));
         MeterColumn Take(float width)
         {
             right -= width;
             var column = new MeterColumn(right, width);
-            right -= 4;
+            right -= ColumnSpacing * scale;
             return column;
         }
 
-        MeterColumn? deaths = settings.ShowDeaths
-            ? Take(Measure(
-                text.Get("死亡", "KO"),
-                rows.Select(static row => row.Deaths.ToString())))
+        MeterColumn? deaths = widths.Deaths is { } deathsWidth
+            ? Take(deathsWidth)
             : null;
-        MeterColumn? damagePercent = settings.ShowDamagePercent
-            ? Take(Measure(
-                text.Get("占比", "DMG%"),
-                rows.Select(static row => $"{row.DamagePercent:N1}%")))
+        MeterColumn? damagePercent = widths.DamagePercent is { } damagePercentWidth
+            ? Take(damagePercentWidth)
             : null;
-        MeterColumn? criticalDirectHit = settings.ShowCriticalDirectHitRate
-            ? Take(Measure(
-                text.Get("直暴", "CDH"),
-                rows.Select(static row => FormatHitRateValue(row.CriticalDirectHitPercent))))
+        MeterColumn? criticalDirectHit = widths.CriticalDirectHit is { } criticalDirectHitWidth
+            ? Take(criticalDirectHitWidth)
             : null;
-        MeterColumn? directHit = settings.ShowDirectHitRate
-            ? Take(Measure(
-                text.Get("直击", "DH"),
-                rows.Select(static row => FormatHitRateValue(row.DirectHitPercent))))
+        MeterColumn? directHit = widths.DirectHit is { } directHitWidth
+            ? Take(directHitWidth)
             : null;
-        MeterColumn? criticalHit = settings.ShowCriticalHitRate
-            ? Take(Measure(
-                text.Get("暴击", "CRIT"),
-                rows.Select(static row => FormatHitRateValue(row.CriticalHitPercent))))
+        MeterColumn? criticalHit = widths.CriticalHit is { } criticalHitWidth
+            ? Take(criticalHitWidth)
             : null;
-        MeterColumn? hps = settings.ShowHps
-            ? Take(Measure("HPS", rows.Select(static row => $"{row.Hps:N0}")))
+        MeterColumn? hps = widths.Hps is { } hpsWidth
+            ? Take(hpsWidth)
             : null;
-        MeterColumn? dps = settings.ShowDps
-            ? Take(Measure(
-                PrimaryRateLabel(MeterSortMode.Dps, settings),
-                rows.Select(static row => $"{row.Dps:N0}")))
+        MeterColumn? dps = widths.Dps is { } dpsWidth
+            ? Take(dpsWidth)
             : null;
-        MeterColumn? fflogs = showFflogs
-            ? Take(Measure("FFLogs", ["100", "--"]))
+        MeterColumn? fflogs = widths.Fflogs is { } fflogsWidth
+            ? Take(fflogsWidth)
             : null;
 
         return new MeterColumnLayout(
@@ -722,6 +713,66 @@ public sealed class MeterWindow : Window
             criticalDirectHit,
             damagePercent,
             deaths);
+    }
+
+    private MeterColumnWidths MeasureColumnWidths(
+        IReadOnlyList<CombatantRow> rows,
+        MeterSettings settings,
+        bool showFflogs)
+    {
+        var scale = Math.Clamp(settings.FontScale, 0.75f, 1.8f);
+        float StableWidth(float nominalWidth, string header, IEnumerable<string> values)
+            => Math.Max(
+                nominalWidth * scale,
+                Math.Max(
+                    ImGui.CalcTextSize(header).X,
+                    values.Select(value => ImGui.CalcTextSize(value).X)
+                        .DefaultIfEmpty(0)
+                        .Max()));
+
+        return new MeterColumnWidths(
+            showFflogs
+                ? StableWidth(FflogsColumnWidth, "FFLogs", ["100", "--"])
+                : null,
+            settings.ShowDps
+                ? StableWidth(
+                    RateColumnWidth,
+                    PrimaryRateLabel(MeterSortMode.Dps, settings),
+                    rows.Select(static row => $"{row.Dps:N0}"))
+                : null,
+            settings.ShowHps
+                ? StableWidth(RateColumnWidth, "HPS", rows.Select(static row => $"{row.Hps:N0}"))
+                : null,
+            settings.ShowCriticalHitRate
+                ? StableWidth(
+                    HitRateColumnWidth,
+                    text.Get("暴击", "CRIT"),
+                    rows.Select(static row => FormatHitRateValue(row.CriticalHitPercent)))
+                : null,
+            settings.ShowDirectHitRate
+                ? StableWidth(
+                    HitRateColumnWidth,
+                    text.Get("直击", "DH"),
+                    rows.Select(static row => FormatHitRateValue(row.DirectHitPercent)))
+                : null,
+            settings.ShowCriticalDirectHitRate
+                ? StableWidth(
+                    HitRateColumnWidth,
+                    text.Get("直暴", "CDH"),
+                    rows.Select(static row => FormatHitRateValue(row.CriticalDirectHitPercent)))
+                : null,
+            settings.ShowDamagePercent
+                ? StableWidth(
+                    DamagePercentColumnWidth,
+                    text.Get("占比", "DMG%"),
+                    rows.Select(static row => $"{row.DamagePercent:N1}%"))
+                : null,
+            settings.ShowDeaths
+                ? StableWidth(
+                    DeathsColumnWidth,
+                    text.Get("死亡", "KO"),
+                    rows.Select(static row => row.Deaths.ToString()))
+                : null);
     }
 
     private void DrawTableHeader(MeterColumnLayout layout, MeterSettings settings)
@@ -1077,8 +1128,7 @@ public sealed class MeterWindow : Window
 
     internal static float CalculateMinimumTableWidth(MeterSettings settings, bool showFflogs)
     {
-        const float nameWidth = 100;
-        var width = nameWidth + 9;
+        var width = MinimumNameRegionWidth + TableRightPadding;
         var columnCount = 0;
 
         void Add(bool visible, float columnWidth)
@@ -1092,15 +1142,38 @@ public sealed class MeterWindow : Window
             columnCount++;
         }
 
-        Add(showFflogs, 48);
-        Add(settings.ShowDps, 58);
-        Add(settings.ShowHps, 58);
-        Add(settings.ShowCriticalHitRate, 48);
-        Add(settings.ShowDirectHitRate, 48);
-        Add(settings.ShowCriticalDirectHitRate, 48);
-        Add(settings.ShowDamagePercent, 52);
-        Add(settings.ShowDeaths, 32);
-        return width + (columnCount * 4);
+        Add(showFflogs, FflogsColumnWidth);
+        Add(settings.ShowDps, RateColumnWidth);
+        Add(settings.ShowHps, RateColumnWidth);
+        Add(settings.ShowCriticalHitRate, HitRateColumnWidth);
+        Add(settings.ShowDirectHitRate, HitRateColumnWidth);
+        Add(settings.ShowCriticalDirectHitRate, HitRateColumnWidth);
+        Add(settings.ShowDamagePercent, DamagePercentColumnWidth);
+        Add(settings.ShowDeaths, DeathsColumnWidth);
+        return width + (columnCount * ColumnSpacing);
+    }
+
+    private static float CalculateRequiredTableWidth(
+        MeterColumnWidths widths,
+        float fontScale)
+    {
+        var scale = Math.Clamp(fontScale, 0.75f, 1.8f);
+        var visibleWidths = new float?[]
+        {
+            widths.Fflogs,
+            widths.Dps,
+            widths.Hps,
+            widths.CriticalHit,
+            widths.DirectHit,
+            widths.CriticalDirectHit,
+            widths.DamagePercent,
+            widths.Deaths,
+        }.Where(static width => width is not null)
+            .Select(static width => width!.Value)
+            .ToArray();
+        return ((MinimumNameRegionWidth + TableRightPadding) * scale) +
+               visibleWidths.Sum() +
+               (visibleWidths.Length * ColumnSpacing * scale);
     }
 
     internal static bool ShouldShowFflogsColumn(bool integrationEnabled, MeterSettings settings)
@@ -1126,6 +1199,16 @@ public sealed class MeterWindow : Window
         => isLocalPlayer ? LocalRateBright : IceBlue;
 
     private readonly record struct MeterColumn(float Offset, float Width);
+
+    private sealed record MeterColumnWidths(
+        float? Fflogs,
+        float? Dps,
+        float? Hps,
+        float? CriticalHit,
+        float? DirectHit,
+        float? CriticalDirectHit,
+        float? DamagePercent,
+        float? Deaths);
 
     private sealed record MeterColumnLayout(
         float NameRight,
@@ -1156,7 +1239,7 @@ public sealed class MeterWindow : Window
             return value;
         }
 
-        const string ellipsis = "…";
+        const string ellipsis = "...";
         var length = value.Length;
         while (length > 1 && ImGui.CalcTextSize(value[..length] + ellipsis).X > maximumWidth)
         {

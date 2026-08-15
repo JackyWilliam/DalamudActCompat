@@ -22,6 +22,10 @@ public sealed record Encounter(
 
     public bool IsTransitioning { get; init; }
 
+    // One duty pull is the folder; ACT may create several concrete records inside it
+    // during phase changes, and users still need those records without flattening the pull.
+    public IReadOnlyList<Encounter> SegmentRecords { get; init; } = [];
+
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
 
     [System.Text.Json.Serialization.JsonIgnore]

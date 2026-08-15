@@ -296,6 +296,7 @@ public sealed class Plugin : IDalamudPlugin
             framework,
             () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
+            () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,

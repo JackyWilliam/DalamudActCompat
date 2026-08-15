@@ -1021,7 +1021,11 @@ static void ValidateMeterRows()
         [],
         [],
         [],
-        []);
+        [])
+    {
+        // Damage time excludes target downtime; HPS must still use the full ten-second pull.
+        CombatDuration = TimeSpan.FromSeconds(5),
+    };
     var state = new EncounterStateStore();
     state.Replace(encounter, []);
     var settings = new MeterSettings
@@ -1116,7 +1120,11 @@ static void ValidateMeterRows()
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
     Assert(rows[0].Name == "Healer@Beta", "HPS sorting did not promote the highest-healing player.");
-    Assert(rows[0].Hps == 20_000, "HPS did not use encounter duration.");
+    Assert(
+        encounter.EffectiveDuration == TimeSpan.FromSeconds(5) &&
+        encounter.Duration == TimeSpan.FromSeconds(10) &&
+        rows[0].Hps == 20_000,
+        "HPS reused the phase-adjusted damage duration instead of the full pull duration.");
     Assert(
         rows[^1].Name == "Limit Break" && rows[^1].Rank is null,
         "Limit Break participated in HPS ranking or was not pinned to the final row.");
@@ -1253,18 +1261,18 @@ static void ValidateMeterLayout()
             "CombatEnded.png")),
         "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
-        MeterWindow.MinimumTableWidthWithFflogs == 533 &&
-        MeterWindow.MinimumTableWidthWithoutFflogs == 481 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(550, 533) &&
-        MeterWindow.ShouldEnableHorizontalScroll(500, 533),
-        "The Meter width does not account for its complete default column set.");
+        MeterWindow.MinimumTableWidthWithFflogs == 373 &&
+        MeterWindow.MinimumTableWidthWithoutFflogs == 326 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(380, 373) &&
+        MeterWindow.ShouldEnableHorizontalScroll(360, 373),
+        "The compact default Meter width no longer delays horizontal scrolling.");
     var defaultColumns = new MeterSettings();
     Assert(
         defaultColumns.ShowFflogs &&
         defaultColumns.ShowDps &&
-        defaultColumns.ShowHps &&
+        !defaultColumns.ShowHps &&
         defaultColumns.ShowCriticalHitRate &&
-        defaultColumns.ShowDirectHitRate &&
+        !defaultColumns.ShowDirectHitRate &&
         defaultColumns.ShowCriticalDirectHitRate &&
         defaultColumns.ShowDamagePercent &&
         defaultColumns.ShowDeaths &&
@@ -1272,7 +1280,12 @@ static void ValidateMeterLayout()
         MeterWindow.MinimumTableWidthWithFflogs &&
         MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) ==
         MeterWindow.MinimumTableWidthWithoutFflogs,
-        "The complete customizable Meter column set is not enabled or sized by default.");
+        "The requested FFLogs/DPS/CRIT/CDH/damage/deaths default column set is not preserved.");
+    var existingColumnChoices = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
+        "{\"ShowHps\":true,\"ShowDirectHitRate\":true}")!;
+    Assert(
+        existingColumnChoices.ShowHps && existingColumnChoices.ShowDirectHitRate,
+        "The new defaults overwrite explicit HPS or DH choices from an existing configuration.");
     Assert(
         MeterWindow.ShouldShowFflogsColumn(integrationEnabled: true, defaultColumns) &&
         !MeterWindow.ShouldShowFflogsColumn(integrationEnabled: false, defaultColumns),
@@ -1281,6 +1294,15 @@ static void ValidateMeterLayout()
     Assert(
         !MeterWindow.ShouldShowFflogsColumn(integrationEnabled: true, defaultColumns),
         "The FFLogs column ignores the user's visibility choice.");
+    defaultColumns.ShowFflogs = true;
+    defaultColumns.ShowHps = true;
+    defaultColumns.ShowDirectHitRate = true;
+    Assert(
+        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 472 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(500, 472) &&
+        MeterWindow.ShouldEnableHorizontalScroll(460, 472),
+        "Enabling every Meter column shows a horizontal scrollbar before name compression is exhausted.");
+    defaultColumns.ShowFflogs = false;
     defaultColumns.ShowDps = false;
     defaultColumns.ShowHps = false;
     defaultColumns.ShowCriticalHitRate = false;
@@ -1289,7 +1311,7 @@ static void ValidateMeterLayout()
     defaultColumns.ShowDamagePercent = false;
     defaultColumns.ShowDeaths = false;
     Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) == 109,
+        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) == 101,
         "Hidden Meter columns still reserve horizontal layout width.");
     var restoredColumns = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
         Newtonsoft.Json.JsonConvert.SerializeObject(defaultColumns));
@@ -1910,26 +1932,19 @@ static void ValidateDutyEncounterAggregation()
     };
     var afterFirst = accumulator.Update(first, finished: true, start.AddMinutes(2));
     Assert(
-        afterFirst.IsActive && afterFirst.TotalDamage == 100,
-        "The completed pull was not available for immediate finalization.");
+        afterFirst.IsActive &&
+        afterFirst.TotalDamage == 100 &&
+        afterFirst.SegmentRecords.Count == 1 &&
+        afterFirst.SegmentRecords[0].Id == first.Id,
+        "The first ACT record was not retained inside the active pull folder.");
     Assert(
         afterFirst.FflogsRankingEncounter?.EnemyName == "Boss A" &&
         afterFirst.FflogsRankingEncounter.TotalDamage == 100,
         "Duty aggregation did not retain the concrete boss segment for FFLogs estimation.");
     var duplicateFirst = accumulator.Update(first, finished: true, start.AddMinutes(3));
     Assert(
-        duplicateFirst.TotalDamage == 100,
-        "A repeated completed pull snapshot was counted twice.");
-
-    var firstCompleted = accumulator.Complete(start.AddMinutes(2))
-                         ?? throw new InvalidOperationException(
-                             "The first duty pull produced no completed encounter.");
-    Assert(
-        !firstCompleted.IsActive &&
-        firstCompleted.TotalDamage == 100 &&
-        firstCompleted.TotalHealing == 20 &&
-        firstCompleted.TotalDeaths == 1,
-        "The first duty pull was not finalized independently.");
+        duplicateFirst.TotalDamage == 100 && duplicateFirst.SegmentRecords.Count == 1,
+        "A repeated completed ACT record was counted twice inside its pull folder.");
 
     var secondId = Guid.NewGuid();
     var secondActive = CreateDutySegment(
@@ -1950,13 +1965,16 @@ static void ValidateDutyEncounterAggregation()
     };
     var combinedActive = accumulator.Update(secondActive, finished: false, start.AddMinutes(5));
     Assert(
-        combinedActive.Id != afterFirst.Id &&
-        combinedActive.TotalDamage == 50 &&
-        combinedActive.TotalHealing == 10 &&
-        combinedActive.TotalDeaths == 0 &&
+        combinedActive.Id == afterFirst.Id &&
+        combinedActive.TotalDamage == 150 &&
+        combinedActive.TotalHealing == 30 &&
+        combinedActive.TotalDeaths == 1 &&
         combinedActive.IsTransitioning &&
-        combinedActive.EnemyName == "测试副本",
-        "A new pull inherited totals from the completed pull or lost transition state.");
+        combinedActive.EnemyName == "测试副本" &&
+        combinedActive.SegmentRecords.Count == 2 &&
+        combinedActive.SegmentRecords[0].Id == first.Id &&
+        combinedActive.SegmentRecords[1].Id == secondId,
+        "ACT records from one pull were not accumulated inside the same folder.");
     Assert(
         combinedActive.FflogsRankingEncounter?.Id == secondId &&
         combinedActive.FflogsRankingEncounter.TotalDamage == 50,
@@ -1986,25 +2004,38 @@ static void ValidateDutyEncounterAggregation()
             },
         ],
     };
-    _ = accumulator.Update(secondFinished, finished: true, start.AddMinutes(6));
+    var folderBeforeCompletion = accumulator.Update(
+        secondFinished,
+        finished: true,
+        start.AddMinutes(6));
+    Assert(
+        folderBeforeCompletion.IsActive &&
+        folderBeforeCompletion.TotalDamage == 180 &&
+        folderBeforeCompletion.TotalHealing == 35 &&
+        folderBeforeCompletion.TotalDeaths == 1 &&
+        folderBeforeCompletion.SegmentRecords.Count == 2,
+        "Completing an ACT record closed or fragmented the active pull folder.");
     var completed = accumulator.Complete(start.AddMinutes(6))
                     ?? throw new InvalidOperationException(
-                        "The second duty pull produced no completed ACT encounter.");
+                        "The duty pull folder produced no completed encounter.");
     Assert(
         !completed.IsActive &&
-        completed.TotalDamage == 80 &&
-        completed.TotalHealing == 15 &&
-        completed.TotalDeaths == 0 &&
-        completed.Combatants[0].DamageHits == 8 &&
-        completed.Combatants[0].CriticalHits == 2 &&
-        completed.Combatants[0].DirectHits == 3 &&
-        completed.Combatants[0].CriticalDirectHits == 1,
-        "The second pull retained totals from the first pull.");
+        completed.TotalDamage == 180 &&
+        completed.TotalHealing == 35 &&
+        completed.TotalDeaths == 1 &&
+        completed.Combatants[0].DamageHits == 18 &&
+        completed.Combatants[0].CriticalHits == 5 &&
+        completed.Combatants[0].DirectHits == 7 &&
+        completed.Combatants[0].CriticalDirectHits == 2 &&
+        completed.SegmentRecords.Count == 2 &&
+        completed.SegmentRecords.All(static segment => !segment.IsActive) &&
+        completed.SegmentRecords.All(static segment => segment.SegmentRecords.Count == 0),
+        "The completed pull folder lost its aggregate totals or concrete child records.");
     Assert(
-        completed.Duration == TimeSpan.FromMinutes(2) &&
-        completed.EffectiveDuration == TimeSpan.FromMinutes(2) &&
-        Math.Abs(completed.Combatants[0].EncDps - (80d / 120)) < 0.0001,
-        "The second pull's DPS duration included the previous pull or duty downtime.");
+        completed.Duration == TimeSpan.FromMinutes(6) &&
+        completed.EffectiveDuration == TimeSpan.FromMinutes(4) &&
+        Math.Abs(completed.Combatants[0].EncDps - (180d / 240)) < 0.0001,
+        "The pull folder did not preserve separate wall-time and active-damage durations.");
     Assert(
         completed.FflogsRankingEncounter?.Id == secondId &&
         completed.FflogsRankingEncounter.TotalDamage == 80,
@@ -2019,28 +2050,36 @@ static void ValidateDutyEncounterAggregation()
                    ?? throw new InvalidOperationException(
                        "The completed duty pull could not be restored from JSON.");
     Assert(
-        restored.CombatDuration == TimeSpan.FromMinutes(2) &&
-        restored.EffectiveDuration == TimeSpan.FromMinutes(2) &&
+        restored.CombatDuration == TimeSpan.FromMinutes(4) &&
+        restored.EffectiveDuration == TimeSpan.FromMinutes(4) &&
         restored.TerritoryId == 777 &&
+        restored.SegmentRecords.Count == 2 &&
+        restored.SegmentRecords[0].Id == first.Id &&
+        restored.SegmentRecords[1].Id == secondId &&
         restored.Combatants[0].FflogsPercentile == 75 &&
         restored.Combatants[0].FflogsEncounterName == "Boss B",
-        "The pull duration or Territory ID was not preserved in encounter history.");
+        "The pull folder, duration, or Territory ID was not preserved in encounter history.");
+    Assert(
+        EncounterWindow.FindRecentEncounter([restored], restored.Id)?.Id == restored.Id &&
+        EncounterWindow.FindRecentEncounter([restored], secondId)?.Id == secondId &&
+        EncounterWindow.FindRecentEncounter([restored], Guid.NewGuid()) is null,
+        "Combat History cannot select the pull folder and its child ACT records independently.");
 
-    var resetGuard = new DutyEncounterAccumulator();
-    _ = resetGuard.Update(first, finished: true, start.AddMinutes(2));
-    var nextPullWithoutExplicitComplete = resetGuard.Update(
+    var nextPull = accumulator.Update(
         secondActive,
         finished: false,
         start.AddMinutes(5));
     Assert(
-        nextPullWithoutExplicitComplete.TotalDamage == 50 &&
-        nextPullWithoutExplicitComplete.TotalHealing == 10 &&
-        nextPullWithoutExplicitComplete.TotalDeaths == 0,
-        "A new duty pull inherited a completed pull when its caller had not finalized it yet.");
+        nextPull.Id != completed.Id &&
+        nextPull.TotalDamage == 50 &&
+        nextPull.TotalHealing == 10 &&
+        nextPull.TotalDeaths == 0 &&
+        nextPull.SegmentRecords.Count == 1,
+        "A new pull folder inherited records or totals from the completed pull.");
 
-    resetGuard.Reset();
+    accumulator.Reset();
     Assert(
-        !resetGuard.HasData && resetGuard.SegmentIds.Count == 0,
+        !accumulator.HasData && accumulator.SegmentIds.Count == 0,
         "Resetting the current pull left accumulator state that could republish old totals.");
 }
 
@@ -2388,6 +2427,9 @@ static void ValidateControlCenterPresentation()
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
         historySource.Contains("FflogsEstimateService.GetPersistedEstimate", StringComparison.Ordinal) &&
         historySource.Contains("FFLogs {", StringComparison.Ordinal) &&
+        historySource.Contains("expandedRecentFolderIds", StringComparison.Ordinal) &&
+        historySource.Contains("FindRecentEncounter", StringComparison.Ordinal) &&
+        historySource.Contains("本把文件夹包含", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "Combat History lost its branded frame, navigation rail, or saved FFLogs display.");
@@ -6112,6 +6154,11 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("宏指令", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.SetClipboardText(command);", StringComparison.Ordinal) &&
         helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("help-search-card", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("ImGui.Dummy(new Vector2(0, 8))", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("ImGui.Button(\"Search\"", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("searchDraft", StringComparison.Ordinal) &&
+        !helpWindowSource.Contains("text.Get(\"清除\", \"Clear\")", StringComparison.Ordinal) &&
         helpWindowSource.Contains("CreateSearchEntries", StringComparison.Ordinal) &&
         helpWindowSource.Contains("常见问题", StringComparison.Ordinal) &&
         helpWindowSource.Contains("控制中心五个页面怎么用", StringComparison.Ordinal) &&
@@ -6119,6 +6166,9 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
         helpWindowSource.Contains("团灭后重新开怪会从 0 开始", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("历史记录以“一把”为一个可展开文件夹", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
         helpWindowSource.Contains("设为 0 时背景完全透明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%", StringComparison.Ordinal) &&
@@ -6149,6 +6199,9 @@ static void ValidateHtmlOverlayDefaults()
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
         readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
         readmeSource.Contains("副本统计按每次开怪独立计算", StringComparison.Ordinal) &&
+        readmeSource.Contains("一把”为一个可展开文件夹", StringComparison.Ordinal) &&
+        readmeSource.Contains("`HPS` 使用一把战斗从开怪到结束的完整经过时间", StringComparison.Ordinal) &&
+        readmeSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
         readmeSource.Contains("不会让旧数值回弹", StringComparison.Ordinal) &&
         readmeSource.Contains("设为 `0` 时底色完全透明", StringComparison.Ordinal) &&
         readmeSource.Contains("可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%", StringComparison.Ordinal) &&
@@ -6163,6 +6216,9 @@ static void ValidateHtmlOverlayDefaults()
         parserAdapterSource.Contains(
             "RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds)",
             StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("wasInCombat && !inCombat", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("leavingDuty: false", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutySession.Reset();", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("QueueFinishedEncounter(completedAttempt)", StringComparison.Ordinal),
         "Encounter reset can still republish an old pull, or duty attempts are no longer finalized independently.");
@@ -6227,6 +6283,8 @@ static void ValidateHtmlOverlayDefaults()
         meterWindowSource.Contains("meter-column-header", StringComparison.Ordinal) &&
         meterWindowSource.Contains("#  玩家", StringComparison.Ordinal) &&
         meterWindowSource.Contains("layout.DirectHit", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("MeasureColumnWidths", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("const string ellipsis = \"...\"", StringComparison.Ordinal) &&
         meterWindowSource.Contains("ApplyBackgroundOpacity", StringComparison.Ordinal) &&
         controlCenterSource.Contains("configuration.Meter.ShowFflogs", StringComparison.Ordinal) &&
         controlCenterSource.Contains("configuration.Meter.ShowDirectHitRate", StringComparison.Ordinal) &&
@@ -7961,6 +8019,15 @@ static void ValidateActEncounterMapping()
         local.DamageHits == 40 && local.CriticalHits == 12 &&
         local.DirectHits == 16 && local.CriticalDirectHits == 4,
         "ACT critical, direct, and critical-direct hit counts were not mapped.");
+    var legacyHistoryJson = System.Text.Json.Nodes.JsonNode
+        .Parse(JsonSerializer.Serialize(encounter))!
+        .AsObject();
+    legacyHistoryJson.Remove(nameof(Encounter.SegmentRecords));
+    var legacyHistoryEncounter = JsonSerializer.Deserialize<Encounter>(
+        legacyHistoryJson.ToJsonString());
+    Assert(
+        legacyHistoryEncounter?.SegmentRecords.Count == 0,
+        "History files saved before pull folders were introduced are no longer readable.");
     var early = encounter.Combatants.Single(static combatant => combatant.Name == "Early Pull");
     Assert(early.Dps == 0 && early.EncDps == 0 && early.ExtDps == 0 && early.Rdps == 0,
         "Non-finite ACT rates were not normalized before persistence.");

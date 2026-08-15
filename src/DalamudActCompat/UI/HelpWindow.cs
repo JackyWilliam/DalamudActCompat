@@ -35,6 +35,7 @@ public sealed class HelpWindow : Window
     private readonly Action openLogDirectory;
     private readonly Action openThirdPartyNotice;
     private HelpPage selectedPage;
+    private string searchDraft = string.Empty;
     private string searchQuery = string.Empty;
     private string? pendingSectionId;
     private bool outerFrameStylePushed;
@@ -133,6 +134,7 @@ public sealed class HelpWindow : Window
     public void OpenCommands()
     {
         selectedPage = HelpPage.MacroCommands;
+        searchDraft = string.Empty;
         searchQuery = string.Empty;
         pendingSectionId = null;
         IsOpen = true;
@@ -159,6 +161,7 @@ public sealed class HelpWindow : Window
         if (nextPage != selectedPage)
         {
             selectedPage = nextPage;
+            searchDraft = string.Empty;
             searchQuery = string.Empty;
             pendingSectionId = null;
         }
@@ -200,18 +203,45 @@ public sealed class HelpWindow : Window
 
     private void DrawSearchBar()
     {
-        ImGui.SetNextItemWidth(-82);
-        ImGui.InputTextWithHint(
-            "##help-search",
-            text.Get("搜索功能、问题、命令或关键词……", "Search features, problems, commands, or keywords..."),
-            ref searchQuery,
-            128);
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("清除", "Clear"), new Vector2(70, 0)))
+        ImGui.Dummy(new Vector2(0, 8));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
+        if (ImGui.BeginChild(
+                "help-search-card",
+                new Vector2(-1, 58),
+                true,
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
-            searchQuery = string.Empty;
-            pendingSectionId = null;
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 7);
+            ImGui.PushStyleColor(ImGuiCol.FrameBg, Navy);
+            ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.09f, 0.14f, 0.20f, 1));
+            ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new Vector4(0.11f, 0.18f, 0.25f, 1));
+            ImGui.SetNextItemWidth(-94);
+            var submitted = ImGui.InputTextWithHint(
+                "##help-search",
+                text.Get("搜索功能、问题、命令或关键词……", "Search features, problems, commands, or keywords..."),
+                ref searchDraft,
+                128,
+                ImGuiInputTextFlags.EnterReturnsTrue);
+            ImGui.PopStyleColor(3);
+            ImGui.SameLine();
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.29f, 0.38f, 1));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.17f, 0.38f, 0.49f, 1));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.20f, 0.44f, 0.56f, 1));
+            ImGui.PushStyleColor(ImGuiCol.Text, IceBlue);
+            submitted |= ImGui.Button("Search", new Vector2(82, 0));
+            ImGui.PopStyleColor(4);
+            if (submitted)
+            {
+                searchQuery = searchDraft.Trim();
+                pendingSectionId = null;
+            }
         }
+        ImGui.EndChild();
+        ImGui.PopStyleVar();
+        ImGui.PopStyleColor(2);
+        ImGui.Spacing();
     }
 
     private void DrawSearchResults()
@@ -246,6 +276,7 @@ public sealed class HelpWindow : Window
                 {
                     selectedPage = entry.Page;
                     pendingSectionId = entry.SectionId;
+                    searchDraft = string.Empty;
                     searchQuery = string.Empty;
                 }
             });
@@ -397,7 +428,7 @@ public sealed class HelpWindow : Window
                 "背景透明度会统一作用于窗口、标题、表头、玩家行和进度条的底色；设为 0 时背景完全透明，但文字和图标仍会显示。它不会改变计算结果。",
                 "Background opacity applies consistently to the window, title, table header, player rows, and bar fills. At zero the background is fully transparent while text and icons remain visible. It does not change calculations."));
         });
-        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 414, () =>
+        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 492, () =>
         {
             DrawBullet(text.Get(
                 "先关闭“锁定窗口”，把统计窗拖到需要的位置，再重新锁定；需要让鼠标操作游戏时同时开启“锁定时鼠标穿透”。",
@@ -406,14 +437,17 @@ public sealed class HelpWindow : Window
                 "“排序 / 主要数据”只决定按 DPS 还是 HPS 排名；“DPS 口径”决定 DPS 列使用个人有效时长、整场时长、兼容字段或预估 rDPS。它们不会强制打开或关闭显示列。",
                 "Sort / primary metric controls only DPS or HPS ranking. DPS metric selects personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the DPS column. Neither setting forces a display column on or off."));
             DrawBullet(text.Get(
-                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%和死亡。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
-                "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, and deaths. FFLogs appears only when both online estimates and its display column are enabled."));
+                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%和死亡。新配置默认显示 FFLogs、DPS、暴击%、直暴%、伤害占比%和死亡；HPS 与直击%默认关闭，也可以自行打开。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
+                "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, and deaths. New configurations show FFLogs, DPS, CRIT %, CDH %, damage %, and deaths by default; HPS and DH % remain available but start disabled. FFLogs appears only when both online estimates and its display column are enabled."));
             DrawBullet(text.Get(
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
                 "副本统计按每次开怪独立计算：团灭后重新开怪会从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
                 "Duty statistics are independent for every pull. A repull starts from zero after a wipe, even when a checkpoint starts the duty from an intermediate phase such as P2."));
+            DrawBullet(text.Get(
+                "历史记录以“一把”为一个可展开文件夹；同一把中因转阶段产生的多条 ACT 战斗记录会保留在文件夹内，文件夹本身显示整把累计。真正脱战后文件夹才结束，下一把会新建文件夹。",
+                "History stores each pull as one expandable folder. ACT records created by phase transitions remain as child records, while the folder shows the pull aggregate. The folder closes only after leaving combat, and the next pull creates a new folder."));
             DrawBullet(text.Get(
                 "“重置当前战斗”需要二次确认，会结束并清空本把统计；同一底层战斗段的后续刷新不会把旧数据带回。已保存的历史和原始 Network 日志不会被删除。",
                 "Reset current encounter requires confirmation and closes and clears the current pull. Later refreshes from the same underlying combat segment cannot restore old totals. Saved history and raw Network logs are not deleted."));
@@ -433,8 +467,8 @@ public sealed class HelpWindow : Window
                 "rDPS（预估）：根据本地事件估算移除别人给你的团辅、加回你给队友的贡献。它是实时近似值，不是 FFLogs 的权威实现。",
                 "rDPS (estimated) removes estimated buffs received from others and adds estimated contribution you gave the party. It is a live approximation, not the authoritative FFLogs implementation."));
             DrawBullet(text.Get(
-                "切换到 HPS 时主列显示治疗速率；伤害、治疗、死亡和百分比的原始累计不会因切换排序而改变。",
-                "In HPS mode the main column shows healing rate. Switching sort mode does not alter accumulated damage, healing, deaths, or percentages."));
+                "HPS 用本把从开怪到结束的完整经过时间计算，包括转阶段和目标不可选中的时间；不会套用排除阶段空档的伤害有效时长。切换排序不会改变伤害、治疗、死亡和百分比的原始累计。",
+                "HPS uses the pull's full elapsed time from engagement to end, including transitions and untargetable periods; it does not reuse the damage duration that excludes phase downtime. Switching sort mode does not alter accumulated damage, healing, deaths, or percentages."));
         });
         DrawCard("help-meter-hit-rates", text.Get("暴击率、直暴率为什么会变化", "Why CRIT and CDH rates change"), 218, () =>
         {
@@ -899,7 +933,7 @@ public sealed class HelpWindow : Window
             Entry(HelpPage.MacroCommands, "help-commands-overlays", "悬浮窗命令", "Overlay commands", "打开 Cactbot 或指定 HTML 模板。", "Open Cactbot or a named HTML template.", "cactbot overlay template 模板"),
             Entry(HelpPage.MacroCommands, "help-commands-maintenance", "维护与诊断命令", "Maintenance commands", "清空、安装、Host、停止和恢复出厂设置。", "Clear, install, Host, stop, and factory reset commands.", "clear install host stop factory-reset sample DLL ZIP"),
             Entry(HelpPage.CombatMeter, "help-meter-display", "窗口显示与交互", "Meter display", "锁定、穿透、自动隐藏和界面缩放。", "Lock, click-through, auto hide, and display scaling.", "锁定 鼠标穿透 compact opacity font"),
-            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置位置、排序、口径、显示列、收起、匿名和重置。", "Configure position, sorting, metrics, visible columns, collapsed mode, anonymization, and reset.", "定位 只显示自己 全队 玩家 ID 清空 当前战斗 FFLogs DPS HPS 暴击 直击 直暴 占比 死亡"),
+            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置位置、排序、口径、显示列、每把文件夹、收起、匿名和重置。", "Configure position, sorting, metrics, visible columns, pull folders, collapsed mode, anonymization, and reset.", "定位 只显示自己 全队 玩家 ID 清空 当前战斗 FFLogs DPS HPS 暴击 直击 直暴 占比 死亡 文件夹 一把 分段 记录"),
             Entry(HelpPage.CombatMeter, "help-meter-metrics", "DPS 与 HPS 口径", "DPS and HPS metrics", "解释 DPS、EncDPS、ExtDPS、rDPS 和 HPS。", "Definitions for DPS, EncDPS, ExtDPS, rDPS, and HPS.", "团队贡献 预估 active duration damage healing"),
             Entry(HelpPage.CombatMeter, "help-meter-hit-rates", "暴击率、直击率与直暴率", "CRIT, DH, and CDH rates", "解释百分比跳动、有效样本与 --。", "Explains changing percentages, valid samples, and --.", "暴击 直击 直暴 crit direct hit DH CDH 数字跳动 闪"),
             Entry(HelpPage.CombatMeter, "help-meter-fflogs", "DPS Parse 与 FFLogs", "DPS Parse and FFLogs", "解释本地预估、缓存日期和正式成绩差异。", "Explains local estimates, cache dates, and final-report differences.", "排名 percentile partition 分区 curve 曲线 上传"),
