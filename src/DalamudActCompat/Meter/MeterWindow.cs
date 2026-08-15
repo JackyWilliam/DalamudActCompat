@@ -13,8 +13,8 @@ public sealed class MeterWindow : Window
 {
     internal const float CombatantRowSpacing = 3;
     internal const string LimitBreakDisplayName = "LB (Limit Break)";
-    internal const float MinimumTableWidthWithFflogs = 410;
-    internal const float MinimumTableWidthWithoutFflogs = 350;
+    internal const float MinimumTableWidthWithFflogs = 533;
+    internal const float MinimumTableWidthWithoutFflogs = 481;
     internal const float MinimumExpandedWindowWidth = 380;
     internal const float MinimumExpandedWindowHeight = 170;
     internal const float DefaultExpandedWindowWidth = 500;
@@ -120,15 +120,26 @@ public sealed class MeterWindow : Window
             Flags |= ImGuiWindowFlags.NoInputs;
         }
 
-        ImGui.SetNextWindowBgAlpha(Math.Clamp(settings.BackgroundOpacity, 0.05f, 1));
+        var backgroundOpacity = NormalizeBackgroundOpacity(settings.BackgroundOpacity);
+        ImGui.SetNextWindowBgAlpha(backgroundOpacity);
         ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.035f, 0.055f, 0.09f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.62f, 0.52f, 0.28f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.50f, 0.42f, 0.24f, 0.75f));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.17f, 0.25f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.17f, 0.25f, 0.35f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.15f, 0.21f, 0.29f, 1));
+        ImGui.PushStyleColor(
+            ImGuiCol.Border,
+            ApplyBackgroundOpacity(new Vector4(0.62f, 0.52f, 0.28f, 0.85f), backgroundOpacity));
+        ImGui.PushStyleColor(
+            ImGuiCol.Separator,
+            ApplyBackgroundOpacity(new Vector4(0.50f, 0.42f, 0.24f, 0.75f), backgroundOpacity));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, ApplyBackgroundOpacity(NavyRaised, backgroundOpacity));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, ApplyBackgroundOpacity(NavyHover, backgroundOpacity));
+        ImGui.PushStyleColor(
+            ImGuiCol.Button,
+            ApplyBackgroundOpacity(new Vector4(0.11f, 0.17f, 0.25f, 1), backgroundOpacity));
+        ImGui.PushStyleColor(
+            ImGuiCol.ButtonHovered,
+            ApplyBackgroundOpacity(new Vector4(0.17f, 0.25f, 0.35f, 1), backgroundOpacity));
+        ImGui.PushStyleColor(
+            ImGuiCol.Header,
+            ApplyBackgroundOpacity(new Vector4(0.15f, 0.21f, 0.29f, 1), backgroundOpacity));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 7);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 4);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10, 9));
@@ -172,11 +183,9 @@ public sealed class MeterWindow : Window
 
         var rows = SelectVisibleRows(allRows, settings.CompactMode);
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
-        var showFflogs = configuration.Fflogs.Enabled && sortMode != MeterSortMode.Hps;
+        var showFflogs = ShouldShowFflogsColumn(configuration.Fflogs.Enabled, settings);
         var availableTableWidth = ImGui.GetContentRegionAvail().X;
-        var minimumTableWidth = (showFflogs
-            ? MinimumTableWidthWithFflogs
-            : MinimumTableWidthWithoutFflogs) * settings.FontScale;
+        var minimumTableWidth = CalculateMinimumTableWidth(settings, showFflogs) * settings.FontScale;
         var useHorizontalScroll = ShouldEnableHorizontalScroll(
             availableTableWidth,
             minimumTableWidth);
@@ -244,7 +253,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + new Vector2(width, EmptyStateHeight),
-            ImGui.GetColorU32(NavyRaised),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.BackgroundOpacity)),
             6);
         var textWidth = Math.Max(20, toggleStart.X - start.X - 16);
         drawList.AddText(
@@ -278,7 +287,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + new Vector2(width, EncounterHeaderHeight),
-            ImGui.GetColorU32(NavyRaised),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.BackgroundOpacity)),
             6);
         DrawEncounterStateIcon(drawList, encounter, start + new Vector2(9, 5));
         var titleRight = Math.Max(start.X + 36, toggleStart.X - 6);
@@ -573,7 +582,11 @@ public sealed class MeterWindow : Window
         {
             accent.W = 0.72f;
         }
-        drawList.AddRectFilled(start, end, ImGui.GetColorU32(fill), 4);
+        drawList.AddRectFilled(
+            start,
+            end,
+            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.BackgroundOpacity)),
+            4);
         drawList.AddRect(
             start,
             end,
@@ -648,7 +661,6 @@ public sealed class MeterWindow : Window
         MeterSettings settings,
         bool showFflogs)
     {
-        var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         float Measure(string header, IEnumerable<string> values)
             => Math.Max(
                 ImGui.CalcTextSize(header).X,
@@ -663,21 +675,39 @@ public sealed class MeterWindow : Window
             return column;
         }
 
-        var deaths = Take(Measure(
-            text.Get("死亡", "KO"),
-            rows.Select(static row => row.Deaths.ToString())));
-        var damagePercent = Take(Measure(
-            text.Get("占比", "DMG%"),
-            rows.Select(static row => $"{row.DamagePercent:N1}%")));
-        var criticalDirectHit = Take(Measure(
-            text.Get("直暴", "CDH"),
-            rows.Select(static row => FormatHitRateValue(row.CriticalDirectHitPercent))));
-        var criticalHit = Take(Measure(
-            text.Get("暴击", "CRIT"),
-            rows.Select(static row => FormatHitRateValue(row.CriticalHitPercent))));
-        var primaryRate = Take(Measure(
-            PrimaryRateLabel(sortMode, settings),
-            rows.Select(row => $"{(sortMode == MeterSortMode.Hps ? row.Hps : row.Dps):N0}")));
+        MeterColumn? deaths = settings.ShowDeaths
+            ? Take(Measure(
+                text.Get("死亡", "KO"),
+                rows.Select(static row => row.Deaths.ToString())))
+            : null;
+        MeterColumn? damagePercent = settings.ShowDamagePercent
+            ? Take(Measure(
+                text.Get("占比", "DMG%"),
+                rows.Select(static row => $"{row.DamagePercent:N1}%")))
+            : null;
+        MeterColumn? criticalDirectHit = settings.ShowCriticalDirectHitRate
+            ? Take(Measure(
+                text.Get("直暴", "CDH"),
+                rows.Select(static row => FormatHitRateValue(row.CriticalDirectHitPercent))))
+            : null;
+        MeterColumn? directHit = settings.ShowDirectHitRate
+            ? Take(Measure(
+                text.Get("直击", "DH"),
+                rows.Select(static row => FormatHitRateValue(row.DirectHitPercent))))
+            : null;
+        MeterColumn? criticalHit = settings.ShowCriticalHitRate
+            ? Take(Measure(
+                text.Get("暴击", "CRIT"),
+                rows.Select(static row => FormatHitRateValue(row.CriticalHitPercent))))
+            : null;
+        MeterColumn? hps = settings.ShowHps
+            ? Take(Measure("HPS", rows.Select(static row => $"{row.Hps:N0}")))
+            : null;
+        MeterColumn? dps = settings.ShowDps
+            ? Take(Measure(
+                PrimaryRateLabel(MeterSortMode.Dps, settings),
+                rows.Select(static row => $"{row.Dps:N0}")))
+            : null;
         MeterColumn? fflogs = showFflogs
             ? Take(Measure("FFLogs", ["100", "--"]))
             : null;
@@ -685,8 +715,10 @@ public sealed class MeterWindow : Window
         return new MeterColumnLayout(
             Math.Max(20, right),
             fflogs,
-            primaryRate,
+            dps,
+            hps,
             criticalHit,
+            directHit,
             criticalDirectHit,
             damagePercent,
             deaths);
@@ -704,7 +736,9 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(new Vector4(NavyRaised.X, NavyRaised.Y, NavyRaised.Z, 0.78f)),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(
+                new Vector4(NavyRaised.X, NavyRaised.Y, NavyRaised.Z, 0.78f),
+                settings.BackgroundOpacity)),
             4);
         drawList.AddLine(
             new Vector2(start.X, end.Y),
@@ -729,18 +763,39 @@ public sealed class MeterWindow : Window
         {
             DrawColumnHeader("FFLogs", fflogs);
         }
-        DrawColumnHeader(
-            PrimaryRateLabel(MeterSortModeOptions.Normalize(settings.SortMode), settings),
-            layout.PrimaryRate);
-        DrawColumnHeader(text.Get("暴击", "CRIT"), layout.CriticalHit);
-        DrawColumnHeader(text.Get("直暴", "CDH"), layout.CriticalDirectHit);
-        DrawColumnHeader(text.Get("占比", "DMG%"), layout.DamagePercent);
-        DrawColumnHeader(text.Get("死亡", "KO"), layout.Deaths);
+        if (layout.Dps is { } dps)
+        {
+            DrawColumnHeader(PrimaryRateLabel(MeterSortMode.Dps, settings), dps);
+        }
+        if (layout.Hps is { } hps)
+        {
+            DrawColumnHeader("HPS", hps);
+        }
+        if (layout.CriticalHit is { } criticalHit)
+        {
+            DrawColumnHeader(text.Get("暴击", "CRIT"), criticalHit);
+        }
+        if (layout.DirectHit is { } directHit)
+        {
+            DrawColumnHeader(text.Get("直击", "DH"), directHit);
+        }
+        if (layout.CriticalDirectHit is { } criticalDirectHit)
+        {
+            DrawColumnHeader(text.Get("直暴", "CDH"), criticalDirectHit);
+        }
+        if (layout.DamagePercent is { } damagePercent)
+        {
+            DrawColumnHeader(text.Get("占比", "DMG%"), damagePercent);
+        }
+        if (layout.Deaths is { } deaths)
+        {
+            DrawColumnHeader(text.Get("死亡", "KO"), deaths);
+        }
 
-        var primaryHovered = ImGui.IsMouseHoveringRect(
-            new Vector2(start.X + layout.PrimaryRate.Offset, start.Y),
-            new Vector2(start.X + layout.PrimaryRate.Offset + layout.PrimaryRate.Width, end.Y));
-        if (primaryHovered && settings.DpsMetric == DpsMetric.Rdps)
+        var dpsHovered = layout.Dps is { } dpsColumn && ImGui.IsMouseHoveringRect(
+            new Vector2(start.X + dpsColumn.Offset, start.Y),
+            new Vector2(start.X + dpsColumn.Offset + dpsColumn.Width, end.Y));
+        if (dpsHovered && settings.DpsMetric == DpsMetric.Rdps)
         {
             ImGui.SetTooltip(text.Get(
                 "rDPS（预估）\n基于本地战斗事件与团队增益归因实时估算的团队贡献伤害。结果仅供参考，可能因游戏版本、战斗事件状态及统计口径产生少量差异。",
@@ -776,7 +831,13 @@ public sealed class MeterWindow : Window
 
         var drawList = ImGui.GetWindowDrawList();
         var hovered = ImGui.IsItemHovered();
-        drawList.AddRectFilled(start, end, ImGui.GetColorU32(hovered ? NavyHover : NavyRaised), 5);
+        drawList.AddRectFilled(
+            start,
+            end,
+            ImGui.GetColorU32(ApplyBackgroundOpacity(
+                hovered ? NavyHover : NavyRaised,
+                settings.BackgroundOpacity)),
+            5);
 
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         var jobColor = JobColor(row.Job);
@@ -789,7 +850,11 @@ public sealed class MeterWindow : Window
                 configuredLocalColor.Z,
                 Math.Clamp(configuredLocalColor.W, 0.12f, 0.65f))
             : new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.20f);
-        drawList.AddRectFilled(start, new Vector2(start.X + width * ratio, end.Y), ImGui.GetColorU32(barColor), 5);
+        drawList.AddRectFilled(
+            start,
+            new Vector2(start.X + width * ratio, end.Y),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(barColor, settings.BackgroundOpacity)),
+            5);
         if (row.IsLocalPlayer)
         {
             var borderColor = new Vector4(
@@ -800,7 +865,6 @@ public sealed class MeterWindow : Window
             drawList.AddRect(start, end, ImGui.GetColorU32(borderColor), 5, ImDrawFlags.None, 1.5f);
         }
 
-        var primary = sortMode == MeterSortMode.Hps ? row.Hps : row.Dps;
         var isLimitBreak = MeterService.IsLimitBreak(row.Id, row.Name);
         var combatant = encounter.Combatants.FirstOrDefault(item =>
             string.Equals(item.Id, row.Id, StringComparison.OrdinalIgnoreCase));
@@ -860,7 +924,9 @@ public sealed class MeterWindow : Window
             drawList.AddRectFilled(
                 new Vector2(currentX, textY - 1),
                 new Vector2(currentX, textY - 1) + badgeSize,
-                ImGui.GetColorU32(new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f)),
+                ImGui.GetColorU32(ApplyBackgroundOpacity(
+                    new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f),
+                    settings.BackgroundOpacity)),
                 4);
             drawList.AddText(
                 new Vector2(currentX + (badgeSize.X - jobSize.X) * 0.5f, textY + 1),
@@ -885,26 +951,46 @@ public sealed class MeterWindow : Window
             drawList.AddText(new Vector2(columnX, lineY), ImGui.GetColorU32(color), value);
         }
 
-        DrawColumn(
-            row.Deaths.ToString(),
-            layout.Deaths,
-            new Vector4(0.78f, 0.80f, 0.84f, 1));
-        DrawColumn(
-            $"{row.DamagePercent:N1}%",
-            layout.DamagePercent,
-            new Vector4(0.72f, 0.78f, 0.84f, 1));
-        DrawColumn(
-            FormatHitRateValue(row.CriticalHitPercent),
-            layout.CriticalHit,
-            new Vector4(0.82f, 0.68f, 0.92f, 1));
-        DrawColumn(
-            FormatHitRateValue(row.CriticalDirectHitPercent),
-            layout.CriticalDirectHit,
-            new Vector4(0.95f, 0.62f, 0.45f, 1));
-        DrawColumn(
-            $"{primary:N0}",
-            layout.PrimaryRate,
-            PrimaryRateColor(row.IsLocalPlayer));
+        if (layout.Deaths is { } deaths)
+        {
+            DrawColumn(row.Deaths.ToString(), deaths, new Vector4(0.78f, 0.80f, 0.84f, 1));
+        }
+        if (layout.DamagePercent is { } damagePercent)
+        {
+            DrawColumn(
+                $"{row.DamagePercent:N1}%",
+                damagePercent,
+                new Vector4(0.72f, 0.78f, 0.84f, 1));
+        }
+        if (layout.CriticalHit is { } criticalHit)
+        {
+            DrawColumn(
+                FormatHitRateValue(row.CriticalHitPercent),
+                criticalHit,
+                new Vector4(0.82f, 0.68f, 0.92f, 1));
+        }
+        if (layout.DirectHit is { } directHit)
+        {
+            DrawColumn(
+                FormatHitRateValue(row.DirectHitPercent),
+                directHit,
+                new Vector4(0.52f, 0.78f, 0.92f, 1));
+        }
+        if (layout.CriticalDirectHit is { } criticalDirectHit)
+        {
+            DrawColumn(
+                FormatHitRateValue(row.CriticalDirectHitPercent),
+                criticalDirectHit,
+                new Vector4(0.95f, 0.62f, 0.45f, 1));
+        }
+        if (layout.Hps is { } hps)
+        {
+            DrawColumn($"{row.Hps:N0}", hps, new Vector4(0.48f, 0.84f, 0.62f, 1));
+        }
+        if (layout.Dps is { } dps)
+        {
+            DrawColumn($"{row.Dps:N0}", dps, PrimaryRateColor(row.IsLocalPlayer));
+        }
         if (layout.Fflogs is { } fflogsColumn)
         {
             DrawColumn(
@@ -927,6 +1013,17 @@ public sealed class MeterWindow : Window
                 $"DPS Parse 预估：{estimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
                 $"Estimated DPS Parse: {estimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }
+    }
+
+    internal static float NormalizeBackgroundOpacity(float opacity)
+        => float.IsFinite(opacity)
+            ? Math.Clamp(opacity, 0, 1)
+            : 0.85f;
+
+    internal static Vector4 ApplyBackgroundOpacity(Vector4 color, float opacity)
+    {
+        color.W *= NormalizeBackgroundOpacity(opacity);
+        return color;
     }
 
     internal static string FormatHitRateValue(double? rate)
@@ -978,6 +1075,37 @@ public sealed class MeterWindow : Window
     internal static float CalculateJobIconSize(float rowHeight, float textLineHeight)
         => Math.Min(rowHeight - 4, Math.Max(22, textLineHeight + 4));
 
+    internal static float CalculateMinimumTableWidth(MeterSettings settings, bool showFflogs)
+    {
+        const float nameWidth = 100;
+        var width = nameWidth + 9;
+        var columnCount = 0;
+
+        void Add(bool visible, float columnWidth)
+        {
+            if (!visible)
+            {
+                return;
+            }
+
+            width += columnWidth;
+            columnCount++;
+        }
+
+        Add(showFflogs, 48);
+        Add(settings.ShowDps, 58);
+        Add(settings.ShowHps, 58);
+        Add(settings.ShowCriticalHitRate, 48);
+        Add(settings.ShowDirectHitRate, 48);
+        Add(settings.ShowCriticalDirectHitRate, 48);
+        Add(settings.ShowDamagePercent, 52);
+        Add(settings.ShowDeaths, 32);
+        return width + (columnCount * 4);
+    }
+
+    internal static bool ShouldShowFflogsColumn(bool integrationEnabled, MeterSettings settings)
+        => integrationEnabled && settings.ShowFflogs;
+
     internal static bool ShouldEnableHorizontalScroll(float availableWidth, float requiredWidth)
         => requiredWidth > availableWidth + 1;
 
@@ -1002,11 +1130,13 @@ public sealed class MeterWindow : Window
     private sealed record MeterColumnLayout(
         float NameRight,
         MeterColumn? Fflogs,
-        MeterColumn PrimaryRate,
-        MeterColumn CriticalHit,
-        MeterColumn CriticalDirectHit,
-        MeterColumn DamagePercent,
-        MeterColumn Deaths);
+        MeterColumn? Dps,
+        MeterColumn? Hps,
+        MeterColumn? CriticalHit,
+        MeterColumn? DirectHit,
+        MeterColumn? CriticalDirectHit,
+        MeterColumn? DamagePercent,
+        MeterColumn? Deaths);
 
     private static Vector4 JobColor(string job)
     {

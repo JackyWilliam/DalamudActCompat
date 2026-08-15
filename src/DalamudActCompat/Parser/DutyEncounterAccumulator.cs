@@ -32,6 +32,13 @@ internal sealed class DutyEncounterAccumulator
         int observedPartyCapacity = 0)
     {
         ArgumentNullException.ThrowIfNull(segment);
+        if (completedSegmentIds.Count > 0 && !completedSegmentIds.Contains(segment.Id))
+        {
+            // A new ACT segment inside the same duty is a new pull. Checkpointed phases
+            // change where the pull begins, but must never inherit a wiped pull's totals.
+            Reset();
+        }
+
         BeginOrUpdateSession(segment);
         UpdateDisplayRoster(segment, currentPartyMemberIds, observedPartyCapacity);
         latestSegment = segment;
@@ -151,7 +158,7 @@ internal sealed class DutyEncounterAccumulator
         {
             // During a vacancy the most recent roster fills the empty slot. Once a replacement
             // makes the live roster full, this branch is skipped and the departed member leaves
-            // the duty-wide ranking without transferring their totals to another player.
+            // the current pull's ranking without transferring their totals to another player.
             AddRosterMembers(nextRoster, displayRoster);
             AddRosterMembers(
                 nextRoster,
@@ -246,13 +253,13 @@ internal sealed class DutyEncounterAccumulator
             Array.Empty<ActionSummary>(),
             jobs)
         {
-            // Duty totals remain on the meter, while FFLogs comparisons must use one
-            // concrete boss segment instead of cumulative damage from the whole duty.
+            // FFLogs comparisons must use the concrete ACT segment, never an aggregate
+            // containing data from a previous pull.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
             TerritoryId = territoryId,
             IsTransitioning = activeSegment?.IsTransitioning == true,
-            // ACT treats merged encounters as the sum of their active encounter
-            // durations. Travel, cutscenes, and waits between pulls must not lower DPS.
+            // ACT treats merged fragments as the sum of their active encounter durations.
+            // Transition downtime inside one pull must not lower DPS.
             CombatDuration = TimeSpan.FromSeconds(durationSeconds),
         };
     }
@@ -289,6 +296,7 @@ internal sealed class DutyEncounterAccumulator
         private int deaths;
         private int damageHits;
         private int criticalHits;
+        private int directHits;
         private int criticalDirectHits;
         private double? fflogsPercentile;
         private string? fflogsEncounterName;
@@ -325,6 +333,7 @@ internal sealed class DutyEncounterAccumulator
             deaths += combatant.Deaths;
             damageHits += combatant.DamageHits;
             criticalHits += combatant.CriticalHits;
+            directHits += combatant.DirectHits;
             criticalDirectHits += combatant.CriticalDirectHits;
             if (combatant.FflogsPercentile is { } percentile &&
                 double.IsFinite(percentile) &&
@@ -366,6 +375,7 @@ internal sealed class DutyEncounterAccumulator
                 deaths = deaths,
                 damageHits = damageHits,
                 criticalHits = criticalHits,
+                directHits = directHits,
                 criticalDirectHits = criticalDirectHits,
                 fflogsPercentile = fflogsPercentile,
                 fflogsEncounterName = fflogsEncounterName,
@@ -409,7 +419,8 @@ internal sealed class DutyEncounterAccumulator
                 raidContributionDamage / durationSeconds,
                 fflogsDataUpdatedAt,
                 fflogsMetric,
-                fflogsDataStale);
+                fflogsDataStale,
+                directHits);
         }
 
         private static double ResolveDamageDuration(

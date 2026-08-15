@@ -212,6 +212,25 @@ public sealed class IinactAdapter : IParserEngine
         }
     }
 
+    public void ResetCurrentEncounter()
+    {
+        var currentEncounterId = stateStore.GetSnapshot().Current?.Id;
+        lock (dutySessionLock)
+        {
+            RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
+            if (currentEncounterId is { } id && id != Guid.Empty)
+            {
+                RememberFinalizedSegmentsUnsafe([id]);
+            }
+
+            // Resetting only the UI lets the next ACT refresh republish the same totals.
+            // Closing the underlying segment keeps the meter empty until a genuinely new pull.
+            dutySession.Reset();
+        }
+
+        stateStore.ResetCurrent();
+    }
+
     public async ValueTask DisposeAsync()
     {
         await lifecycleLock.WaitAsync().ConfigureAwait(false);
@@ -260,30 +279,46 @@ public sealed class IinactAdapter : IParserEngine
         // Queue every party job's ranking curve as soon as combat data appears.
         // This must not depend on whether the compact meter happens to draw that row.
         encounter = CaptureFflogsEstimatesSafely(encounter);
-        var boundByDuty = isBoundByDuty();
-        if (boundByDuty)
-        {
-            Encounter dutyEncounter;
-            lock (dutySessionLock)
-            {
-                wasBoundByDuty = true;
-                dutyEncounter = dutySession.Update(
-                    encounter,
-                    finished,
-                    DateTimeOffset.UtcNow,
-                    snapshot.CurrentPartyMemberIds,
-                    snapshot.PartyCapacity);
-            }
-            stateStore.UpdateCurrent(dutyEncounter);
-            return;
-        }
-
         lock (dutySessionLock)
         {
             if (finalizedDutySegmentIds.Contains(snapshot.Id))
             {
                 return;
             }
+        }
+
+        var boundByDuty = isBoundByDuty();
+        if (boundByDuty)
+        {
+            Encounter displayEncounter;
+            Encounter? completedAttempt = null;
+            lock (dutySessionLock)
+            {
+                wasBoundByDuty = true;
+                displayEncounter = dutySession.Update(
+                    encounter,
+                    finished,
+                    DateTimeOffset.UtcNow,
+                    snapshot.CurrentPartyMemberIds,
+                    snapshot.PartyCapacity);
+                if (finished)
+                {
+                    RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
+                    completedAttempt = dutySession.Complete(
+                        encounter.EndTime ?? DateTimeOffset.UtcNow);
+                }
+            }
+
+            if (completedAttempt is null)
+            {
+                stateStore.UpdateCurrent(displayEncounter);
+                return;
+            }
+
+            completedAttempt = CaptureFflogsEstimatesSafely(completedAttempt);
+            stateStore.UpdateCurrent(completedAttempt);
+            encounterService.QueueFinishedEncounter(completedAttempt);
+            return;
         }
 
         if (wasBoundByDuty)
@@ -348,19 +383,7 @@ public sealed class IinactAdapter : IParserEngine
         lock (dutySessionLock)
         {
             wasBoundByDuty = false;
-            foreach (var segmentId in dutySession.SegmentIds)
-            {
-                if (!finalizedDutySegmentIds.Add(segmentId))
-                {
-                    continue;
-                }
-
-                finalizedDutySegmentOrder.Enqueue(segmentId);
-                while (finalizedDutySegmentOrder.Count > 256)
-                {
-                    finalizedDutySegmentIds.Remove(finalizedDutySegmentOrder.Dequeue());
-                }
-            }
+            RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
             completed = dutySession.Complete(endTime);
         }
 
@@ -372,6 +395,23 @@ public sealed class IinactAdapter : IParserEngine
         completed = CaptureFflogsEstimatesSafely(completed);
         stateStore.UpdateCurrent(completed);
         encounterService.QueueFinishedEncounter(completed);
+    }
+
+    private void RememberFinalizedSegmentsUnsafe(IEnumerable<Guid> segmentIds)
+    {
+        foreach (var segmentId in segmentIds)
+        {
+            if (segmentId == Guid.Empty || !finalizedDutySegmentIds.Add(segmentId))
+            {
+                continue;
+            }
+
+            finalizedDutySegmentOrder.Enqueue(segmentId);
+            while (finalizedDutySegmentOrder.Count > 256)
+            {
+                finalizedDutySegmentIds.Remove(finalizedDutySegmentOrder.Dequeue());
+            }
+        }
     }
 
     internal static bool HasMeaningfulActivity(Encounter encounter)

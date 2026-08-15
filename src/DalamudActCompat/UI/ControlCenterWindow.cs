@@ -648,7 +648,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.SameLine();
         changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
         changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide out of combat"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
-        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0.05f, 1, value => configuration.Meter.BackgroundOpacity = value);
+        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0, 1, value => configuration.Meter.BackgroundOpacity = value);
         changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
 
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
@@ -662,14 +662,14 @@ public sealed class ControlCenterWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
         var meterDisplayDescription = text.Get(
-            "每名玩家固定一行；排序仅支持 DPS 与 HPS。",
-            "Each player uses one row; sorting supports only DPS and HPS.");
+            "每名玩家固定一行；排序方式与实际显示列可以分别选择。",
+            "Each player uses one row; sorting and visible columns can be selected independently.");
         var meterDisplayHint = text.Get(
-            "每名玩家固定显示当前 DPS/HPS、占比、暴击率、直暴率和死亡数。",
-            "Every player always shows current DPS/HPS, percentage, critical rate, critical-direct rate, and deaths.");
+            "FFLogs 列仅在在线预估已开启且下方勾选时显示；其他列可自由组合。",
+            "The FFLogs column appears only when online estimates are enabled and selected below; other columns can be combined freely.");
         var meterDisplayHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
-            (ImGui.GetFrameHeightWithSpacing() * 8) +
+            (ImGui.GetFrameHeightWithSpacing() * 12) +
             (ImGui.GetTextLineHeightWithSpacing() * 4) +
             (ImGui.GetStyle().ItemSpacing.Y * 3);
         if (ImGui.BeginChild(
@@ -726,6 +726,20 @@ public sealed class ControlCenterWindow : Window
                 text.Get("收起（只显示自己）", "Collapsed (self only)"),
                 configuration.Meter.CompactMode,
                 value => configuration.Meter.CompactMode = value);
+            ImGui.TextUnformatted(text.Get("显示列", "Visible columns"));
+            changed |= Checkbox("FFLogs", configuration.Meter.ShowFflogs, value => configuration.Meter.ShowFflogs = value);
+            ImGui.SameLine();
+            changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
+            ImGui.SameLine();
+            changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
+            changed |= Checkbox(text.Get("暴击 %", "CRIT %"), configuration.Meter.ShowCriticalHitRate, value => configuration.Meter.ShowCriticalHitRate = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("直击 %", "DH %"), configuration.Meter.ShowDirectHitRate, value => configuration.Meter.ShowDirectHitRate = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("直暴 %", "CDH %"), configuration.Meter.ShowCriticalDirectHitRate, value => configuration.Meter.ShowCriticalDirectHitRate = value);
+            changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
             if (configuration.Meter.ShowJob)
             {
                 var jobStyle = configuration.Meter.JobDisplayStyle;

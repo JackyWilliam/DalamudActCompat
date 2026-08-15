@@ -13,4 +13,6 @@ public interface IParserEngine : IAsyncDisposable
     Task StopAsync(CancellationToken cancellationToken);
 
     Task RestartAsync(CancellationToken cancellationToken);
+
+    void ResetCurrentEncounter();
 }

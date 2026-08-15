@@ -394,23 +394,29 @@ public sealed class HelpWindow : Window
                 "“脱战自动隐藏”只改变显示状态，不会停止解析或删除战斗数据。",
                 "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
             DrawBullet(text.Get(
-                "紧凑模式、字体缩放、透明度和列宽只影响显示，不会改变计算结果。",
-                "Compact mode, font scale, opacity, and column widths affect presentation only and do not change calculations."));
+                "背景透明度会统一作用于窗口、标题、表头、玩家行和进度条的底色；设为 0 时背景完全透明，但文字和图标仍会显示。它不会改变计算结果。",
+                "Background opacity applies consistently to the window, title, table header, player rows, and bar fills. At zero the background is fully transparent while text and icons remain visible. It does not change calculations."));
         });
-        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 334, () =>
+        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 414, () =>
         {
             DrawBullet(text.Get(
                 "先关闭“锁定窗口”，把统计窗拖到需要的位置，再重新锁定；需要让鼠标操作游戏时同时开启“锁定时鼠标穿透”。",
                 "First disable Lock window, move the meter to the desired position, then lock it again. Also enable Click-through when locked when mouse input should go to the game."));
             DrawBullet(text.Get(
-                "“排序 / 主要数据”决定按 DPS 还是 HPS 排序；“DPS 口径”决定主列使用个人有效时长、整场时长、兼容字段或预估 rDPS。",
-                "Sort / primary metric chooses DPS or HPS ordering. DPS metric chooses personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the main column."));
+                "“排序 / 主要数据”只决定按 DPS 还是 HPS 排名；“DPS 口径”决定 DPS 列使用个人有效时长、整场时长、兼容字段或预估 rDPS。它们不会强制打开或关闭显示列。",
+                "Sort / primary metric controls only DPS or HPS ranking. DPS metric selects personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the DPS column. Neither setting forces a display column on or off."));
+            DrawBullet(text.Get(
+                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%和死亡。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
+                "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, and deaths. FFLogs appears only when both online estimates and its display column are enabled."));
             DrawBullet(text.Get(
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
-                "“重置当前战斗”需要二次确认，只清空当前显示。战斗历史和已经写入磁盘的原始 Network 日志不会被删除。",
-                "Reset current encounter requires confirmation and clears only the current display. Encounter history and raw Network logs already written to disk are not deleted."));
+                "副本统计按每次开怪独立计算：团灭后重新开怪会从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
+                "Duty statistics are independent for every pull. A repull starts from zero after a wipe, even when a checkpoint starts the duty from an intermediate phase such as P2."));
+            DrawBullet(text.Get(
+                "“重置当前战斗”需要二次确认，会结束并清空本把统计；同一底层战斗段的后续刷新不会把旧数据带回。已保存的历史和原始 Network 日志不会被删除。",
+                "Reset current encounter requires confirmation and closes and clears the current pull. Later refreshes from the same underlying combat segment cannot restore old totals. Saved history and raw Network logs are not deleted."));
         });
         DrawCard("help-meter-metrics", text.Get("DPS / HPS 数值口径", "DPS / HPS metric definitions"), 340, () =>
         {
@@ -433,8 +439,8 @@ public sealed class HelpWindow : Window
         DrawCard("help-meter-hit-rates", text.Get("暴击率、直暴率为什么会变化", "Why CRIT and CDH rates change"), 218, () =>
         {
             DrawBullet(text.Get(
-                "暴击率 = 暴击伤害命中数 ÷ 伤害命中数；直暴率 = 同时暴击并直击的命中数 ÷ 伤害命中数。它们不是角色面板属性。",
-                "CRIT rate is critical damage hits divided by damage hits; CDH rate is simultaneous critical-direct hits divided by damage hits. They are not character-sheet attributes."));
+                "暴击率 = 暴击伤害命中数 ÷ 伤害命中数；直击率 = 直击伤害命中数 ÷ 伤害命中数；直暴率 = 同时暴击并直击的命中数 ÷ 伤害命中数。它们不是角色面板属性。",
+                "CRIT rate is critical damage hits divided by damage hits; DH rate is direct damage hits divided by damage hits; CDH rate is simultaneous critical-direct hits divided by damage hits. They are not character-sheet attributes."));
             DrawBullet(text.Get(
                 "战斗样本较少时，每次新命中都会让百分比明显跳动，这是正常统计变化。短暂零命中快照会沿用本场最近有效数字，不再在两次数字之间插入 --。",
                 "With few samples, every new hit can move the percentage sharply. Brief zero-hit snapshots retain the latest valid value for the encounter instead of inserting -- between numbers."));
@@ -452,8 +458,8 @@ public sealed class HelpWindow : Window
                 "-- means no usable distribution, unresolved job/encounter mapping, or no valid DPS yet. It does not mean a zero parse."));
             ImGui.Spacing();
             ImGui.TextWrapped(text.Get(
-                "“重置当前战斗”只清空当前显示；历史记录和已经写入磁盘的原始日志不受影响。",
-                "Reset current encounter clears only the current display; history and raw logs already written to disk are unaffected."));
+                "团灭重开和手动重置都会让下一把预估从 0 开始；历史记录和已经写入磁盘的原始日志不受影响。",
+                "A repull after a wipe and a manual reset both start the next estimate from zero; history and raw logs already written to disk are unaffected."));
         });
         DrawCard("help-meter-fflogs-setup", text.Get("如何开启 FFLogs DPS Parse 预估", "Enabling the FFLogs DPS Parse estimate"), 362, () =>
         {
@@ -813,11 +819,11 @@ public sealed class HelpWindow : Window
                 "它们使用不同口径。本地 DPS/EncDPS 的分母不同；rDPS 是基于本地事件的实时团队贡献估算；DPS Parse 是把本场实际 DPS 代入缓存分布；上传后的 FFLogs 还会执行服务器端归属、阶段、过滤和版本规则。小幅差异正常，明显差异请保留原始 Network 日志排查。",
                 "They use different conventions. Local DPS and EncDPS use different durations; rDPS is a live local contribution estimate; DPS Parse maps actual DPS into a cached distribution; uploaded FFLogs additionally applies server-side attribution, phase, filtering, and version rules. Small differences are expected; keep the raw Network log when differences are large."));
         });
-        DrawCard("help-faq-dashes", text.Get("--、数字跳动和暴直率分别表示什么？", "What do --, changing numbers, CRIT, and CDH mean?"), 192, () =>
+        DrawCard("help-faq-dashes", text.Get("--、数字跳动和暴直率分别表示什么？", "What do -- and changing hit rates mean?"), 210, () =>
         {
             ImGui.TextWrapped(text.Get(
-                "-- 表示当前还没有有效值，不等于 0。战斗中新命中持续加入样本，DPS、百分比、暴击率和直暴率会自然变化。暴击率统计暴击命中，直暴率统计同时暴击并直击的命中；它们都不是角色面板概率。",
-                "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT rate, and CDH rate. CRIT counts critical hits; CDH counts hits that were both critical and direct. Neither is a character-sheet probability."));
+                "-- 表示当前还没有有效值，不等于 0。战斗中新命中持续加入样本，DPS、百分比、暴击率、直击率和直暴率会自然变化。暴击率统计暴击命中，直击率统计直击命中，直暴率统计同时暴击并直击的命中；它们都不是角色面板概率。",
+                "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT, DH, and CDH rates. CRIT counts critical hits, DH counts direct hits, and CDH counts hits that were both critical and direct. None is a character-sheet probability."));
         });
         DrawCard("help-faq-upload", text.Get("DACT 会自动上传战斗或个人信息吗？", "Does DACT automatically upload combat or personal data?"), 170, () =>
         {
@@ -893,9 +899,9 @@ public sealed class HelpWindow : Window
             Entry(HelpPage.MacroCommands, "help-commands-overlays", "悬浮窗命令", "Overlay commands", "打开 Cactbot 或指定 HTML 模板。", "Open Cactbot or a named HTML template.", "cactbot overlay template 模板"),
             Entry(HelpPage.MacroCommands, "help-commands-maintenance", "维护与诊断命令", "Maintenance commands", "清空、安装、Host、停止和恢复出厂设置。", "Clear, install, Host, stop, and factory reset commands.", "clear install host stop factory-reset sample DLL ZIP"),
             Entry(HelpPage.CombatMeter, "help-meter-display", "窗口显示与交互", "Meter display", "锁定、穿透、自动隐藏和界面缩放。", "Lock, click-through, auto hide, and display scaling.", "锁定 鼠标穿透 compact opacity font"),
-            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置位置、排序、口径、收起、匿名和重置。", "Configure position, sorting, metrics, collapsed mode, anonymization, and reset.", "定位 只显示自己 全队 玩家 ID 清空 当前战斗"),
+            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置位置、排序、口径、显示列、收起、匿名和重置。", "Configure position, sorting, metrics, visible columns, collapsed mode, anonymization, and reset.", "定位 只显示自己 全队 玩家 ID 清空 当前战斗 FFLogs DPS HPS 暴击 直击 直暴 占比 死亡"),
             Entry(HelpPage.CombatMeter, "help-meter-metrics", "DPS 与 HPS 口径", "DPS and HPS metrics", "解释 DPS、EncDPS、ExtDPS、rDPS 和 HPS。", "Definitions for DPS, EncDPS, ExtDPS, rDPS, and HPS.", "团队贡献 预估 active duration damage healing"),
-            Entry(HelpPage.CombatMeter, "help-meter-hit-rates", "暴击率与直暴率", "CRIT and CDH rates", "解释百分比跳动、有效样本与 --。", "Explains changing percentages, valid samples, and --.", "暴击 直击 直暴 crit direct hit CDH 数字跳动 闪"),
+            Entry(HelpPage.CombatMeter, "help-meter-hit-rates", "暴击率、直击率与直暴率", "CRIT, DH, and CDH rates", "解释百分比跳动、有效样本与 --。", "Explains changing percentages, valid samples, and --.", "暴击 直击 直暴 crit direct hit DH CDH 数字跳动 闪"),
             Entry(HelpPage.CombatMeter, "help-meter-fflogs", "DPS Parse 与 FFLogs", "DPS Parse and FFLogs", "解释本地预估、缓存日期和正式成绩差异。", "Explains local estimates, cache dates, and final-report differences.", "排名 percentile partition 分区 curve 曲线 上传"),
             Entry(HelpPage.CombatMeter, "help-meter-fflogs-setup", "开启 FFLogs DPS Parse 预估", "Enable FFLogs DPS Parse estimate", "创建 API Client、填写凭据并测试刷新。", "Create an API client, enter credentials, and test refresh.", "Client ID Client Secret example.com 在线估算 凭据 --"),
             Entry(HelpPage.Overlays, "help-overlay-cactbot", "Cactbot 悬浮窗", "Cactbot overlays", "文字提醒、时间轴与旧组合窗的关系。", "Alerts, Timeline, and the legacy combined window.", "raidboss timeline alerts 文字提醒 时间轴"),

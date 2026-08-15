@@ -87,10 +87,26 @@ public sealed class MeterSettings
 
     public JobDisplayStyle JobDisplayStyle { get; set; } = JobDisplayStyle.Abbreviation;
 
+    public bool ShowFflogs { get; set; } = true;
+
+    public bool ShowDps { get; set; } = true;
+
+    public bool ShowDamagePercent { get; set; } = true;
+
+    public bool ShowDeaths { get; set; } = true;
+
+    public bool ShowCriticalHitRate { get; set; } = true;
+
+    public bool ShowDirectHitRate { get; set; } = true;
+
+    public bool ShowCriticalDirectHitRate { get; set; } = true;
+
+    // Retained for old configuration JSON. The one-line meter now exposes explicit columns.
     public bool ShowDamage { get; set; } = true;
 
     public bool ShowHps { get; set; } = true;
 
+    // Retained for old configuration JSON. The one-line meter now exposes explicit columns.
     public bool ShowHealing { get; set; } = true;
 
     public Vector4 LocalPlayerColor { get; set; } = DefaultLocalPlayerColor;

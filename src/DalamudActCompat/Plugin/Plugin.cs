@@ -463,7 +463,7 @@ public sealed class Plugin : IDalamudPlugin
             CloseHtmlOverlay,
             DeleteHtmlOverlay,
             StartFactoryReset,
-            stateStore.ResetCurrent,
+            parserEngine.ResetCurrentEncounter,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
             configuration,
@@ -654,7 +654,7 @@ public sealed class Plugin : IDalamudPlugin
                 });
                 break;
             case "clear":
-                stateStore.ResetCurrent();
+                parserEngine.ResetCurrentEncounter();
                 break;
             case "factory-reset":
                 settingsWindow.ShowAnimated();
