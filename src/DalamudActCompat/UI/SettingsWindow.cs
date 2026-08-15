@@ -795,7 +795,7 @@ public sealed class SettingsWindow : Window
         var editing = settings.IsEditing;
         if (ImGui.Button(
                 editing
-                    ? $"{text.Get("完成并操作网页", "Finish and interact with page")}###{name}-edit-mode"
+                    ? $"{text.Get("完成编辑悬浮窗", "Finish editing overlay")}###{name}-edit-mode"
                     : $"{text.Get("编辑位置和大小", "Edit position and size")}###{name}-edit-mode"))
         {
             var beginEditing = !editing;
@@ -812,8 +812,8 @@ public sealed class SettingsWindow : Window
                 "单击可操作网页按钮；按住并拖动可移动，拖动右下角斜纹可缩放。编辑期间游戏鼠标操作会暂时关闭。",
                 "Click page controls normally; hold and drag to move, or drag the striped bottom-right grip to resize. Game mouse input is temporarily blocked while editing.")
             : text.Get(
-                "编辑按钮会关闭穿透并解除位置锁定；完成后保持关闭穿透，网页仍可操作。",
-                "Editing disables click-through and unlocks the layout; finishing keeps click-through off so the page remains interactive."));
+                "编辑会暂时关闭穿透并解除位置锁定；完成后恢复穿透与锁定。",
+                "Editing temporarily disables click-through and unlocks the layout; finishing restores both."));
         changed |= Checkbox(
             $"{text.Get("鼠标穿透", "Click-through")}###{name}-click-through",
             settings.IsClickThrough,

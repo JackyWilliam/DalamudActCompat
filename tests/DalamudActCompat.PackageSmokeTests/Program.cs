@@ -6051,8 +6051,8 @@ static void ValidateHtmlOverlayDefaults()
         "HTML overlay editing mode did not disable click-through and locking together.");
     settings.SetEditing(false);
     Assert(
-        !settings.IsEditing && !settings.IsClickThrough && !settings.IsLocked,
-        "Finishing HTML overlay editing changed the user's unlocked interactive state.");
+        !settings.IsEditing && settings.IsClickThrough && settings.IsLocked,
+        "Finishing HTML overlay editing did not restore click-through and locking together.");
     settings.SetEditing(true);
     settings.SetLocked(true);
     Assert(
@@ -6470,8 +6470,8 @@ static void ValidateHtmlOverlayDefaults()
         "Windowed WebView2 did not keep page clicks enabled while editing an overlay.");
     settings.SetEditing(false);
     Assert(
-        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == true,
-        "Windowed WebView2 did not preserve page interaction after the overlay was locked.");
+        shouldEnableBrowserInput.Invoke(null, [settings]) as bool? == false,
+        "Windowed WebView2 still captured page input after editing restored click-through.");
     var calculateExtendedStyle = formType.GetMethod(
                                      "CalculateOverlayExtendedStyle",
                                      BindingFlags.Static | BindingFlags.NonPublic)
@@ -7006,16 +7006,16 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         });
         settings.SetEditing(false);
         applySettings.Invoke(instance, null);
-        var normalInteractionRestoresContentRegion = false;
+        var finishedEditingRestoresClickThrough = false;
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
             var interactiveWindow = await WindowAtProxyPointAsync(
                 liveProxy,
                 new System.Drawing.Point(100, 65));
-            normalInteractionRestoresContentRegion = interactiveWindow != proxyHandle &&
-                                                      interactiveWindow != hostHandle;
-            if (normalInteractionRestoresContentRegion)
+            finishedEditingRestoresClickThrough = interactiveWindow != proxyHandle &&
+                                                  interactiveWindow != hostHandle;
+            if (finishedEditingRestoresClickThrough)
             {
                 break;
             }
@@ -7024,11 +7024,11 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(
-            normalInteractionRestoresContentRegion &&
-            !settings.IsLocked &&
-            !settings.IsClickThrough &&
+            finishedEditingRestoresClickThrough &&
+            settings.IsLocked &&
+            settings.IsClickThrough &&
             !settings.IsEditing,
-            "Finishing HTML overlay editing did not restore transparent unlocked page interaction.");
+            "Finishing HTML overlay editing did not restore the locked click-through state.");
         if (editChromeField.GetValue(instance) is Form hiddenChrome)
         {
             Assert(

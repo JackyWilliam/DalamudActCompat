@@ -2330,7 +2330,7 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.TextDisabled(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
         if (ImGui.Button(settings.IsEditing
-                ? text.Get("完成并操作网页", "Finish and interact with page")
+                ? text.Get("完成位置编辑", "Finish position editing")
                 : text.Get("编辑位置和大小", "Edit position and size")))
         {
             var beginEditing = !settings.IsEditing;
@@ -2350,8 +2350,8 @@ public sealed class ControlCenterWindow : Window
                 "单击可操作网页；按住并拖动可移动，拖动右下角斜纹可缩放。",
                 "Click to use the page; hold and drag to move, or drag the striped bottom-right grip to resize.")
             : text.Get(
-                "关闭穿透时可操作网页；打开穿透后，鼠标点击会传给游戏。",
-                "With click-through off, the page is interactive; when enabled, mouse clicks pass to the game."));
+                "位置编辑时会暂时关闭穿透与锁定；完成后会恢复。",
+                "Position editing temporarily disables click-through and locking; finishing restores them."));
         ImGui.PopID();
 
         if (changed)
