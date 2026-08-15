@@ -88,6 +88,7 @@ try
     ValidateDutyEncounterPartySizes();
     ValidateDutyEncounterRosterReplacement();
     ValidateControlCenterPresentation();
+    ValidateInstalledPluginVersionDisplay(testRoot);
     ValidateDiagnosticReport(testRoot);
     ValidateFflogsEstimateCurve();
     await ValidateFflogsPersistenceAsync(testRoot);
@@ -2486,6 +2487,41 @@ static void ValidateControlCenterPresentation()
         $"The new control center lost legacy setting paths: {string.Join(", ", missingLegacyPaths)}");
 }
 
+static void ValidateInstalledPluginVersionDisplay(string testRoot)
+{
+    var paths = new PluginPaths(Path.Combine(testRoot, "detected-plugin-version"));
+    var installDirectory = Path.Combine(paths.ActPluginDirectory, "postnamazu");
+    Directory.CreateDirectory(installDirectory);
+    var entryAssembly = Path.Combine(installDirectory, "PostNamazu.dll");
+    File.Copy(typeof(ActPluginPackageInstaller).Assembly.Location, entryAssembly);
+    var detectedVersion = FileVersionInfo.GetVersionInfo(entryAssembly).FileVersion
+                          ?? throw new InvalidOperationException(
+                              "The version detection fixture has no FileVersion metadata.");
+    var manifest = new ActPluginManifest
+    {
+        Id = "postnamazu",
+        Name = "PostNamazu",
+        Version = "1.3.6.6",
+        SourceSha256 = "fixture",
+        EntryAssembly = "PostNamazu.dll",
+        EntryType = "PostNamazu.PostNamazu",
+        HostApiVersion = 1,
+    };
+    File.WriteAllText(
+        Path.Combine(installDirectory, ActPluginManifest.FileName),
+        JsonSerializer.Serialize(manifest));
+
+    var installed = new ActPluginPackageInstaller(paths)
+        .Discover(new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+        .Single();
+    Assert(
+        installed.Manifest.Version == "1.3.6.6" &&
+        installed.DetectedVersion == detectedVersion &&
+        installed.DisplayVersion == detectedVersion &&
+        installed.HasVersionMismatch,
+        "The Extensions page did not prefer the actual DLL version while retaining manifest metadata.");
+}
+
 static void ValidateChinese755hOpcodes()
 {
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
@@ -2960,8 +2996,10 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     var installedSilverDasher = installed.Single(plugin =>
         plugin.Manifest.Id == "silverdasher");
     Assert(
-        !installedSilverDasher.Enabled,
-        "The bundled SilverDasher install did not preserve its disabled default.");
+        !installedSilverDasher.Enabled &&
+        installedSilverDasher.DisplayVersion == "0.6.0.4" &&
+        !installedSilverDasher.HasVersionMismatch,
+        "The bundled SilverDasher install did not preserve its disabled default or Core version.");
     Assert(
         installed.Where(plugin => plugin.Manifest.Id != "silverdasher").All(plugin => plugin.Enabled),
         "Installing SilverDasher unexpectedly changed another bundled extension's enabled state.");
@@ -5957,6 +5995,11 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("一经发现立刻踢出！", StringComparison.Ordinal) &&
         helpWindowSource.Contains("宏指令", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.SetClipboardText(command);", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("CreateSearchEntries", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("常见问题", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("实际 FileVersion", StringComparison.Ordinal) &&
         new[]
         {
             "/actcompat on",
@@ -5976,10 +6019,18 @@ static void ValidateHtmlOverlayDefaults()
         macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
         !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
+        readmeSource.Contains("## 用户使用指南", StringComparison.Ordinal) &&
+        readmeSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
         helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),
         "The help entry, macro command reference, copy action, or branded help document regressed.");
+    Assert(
+        HelpWindow.MatchesSearch("鲶鱼 重启", "鲶鱼精更新后重启共享 Host") &&
+        HelpWindow.MatchesSearch("postnamazu HOST", "PostNamazu uses Shared Host") &&
+        !HelpWindow.MatchesSearch("FFLogs 上传", "FFLogs 本地预估") &&
+        !HelpWindow.MatchesSearch("   ", "任意内容"),
+        "Help search no longer supports case-insensitive multi-keyword matching or empty-query handling.");
     Assert(
         controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
         controlCenterSource.Contains(

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -111,7 +112,7 @@ public sealed partial class ActPluginPackageInstaller
             }
 
             Directory.Move(stagingDirectory, installDirectory);
-            return new InstalledActPlugin(manifest, installDirectory, true);
+            return CreateInstalledPlugin(manifest, installDirectory, enabled: true);
         }
         catch
         {
@@ -150,7 +151,7 @@ public sealed partial class ActPluginPackageInstaller
             {
                 var manifest = ReadManifest(directory);
                 ValidateManifest(manifest, directory);
-                plugins.Add(new InstalledActPlugin(
+                plugins.Add(CreateInstalledPlugin(
                     manifest,
                     directory,
                     !disabledPluginIds.Contains(manifest.Id)));
@@ -165,6 +166,42 @@ public sealed partial class ActPluginPackageInstaller
             .OrderBy(plugin => GetPluginOrder(plugin.Manifest.Id))
             .ThenBy(plugin => plugin.Manifest.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static InstalledActPlugin CreateInstalledPlugin(
+        ActPluginManifest manifest,
+        string installDirectory,
+        bool enabled)
+    {
+        string? detectedVersion = null;
+        try
+        {
+            var entryAssembly = Path.Combine(installDirectory, manifest.EntryAssembly);
+            var versionAssembly = string.Equals(
+                    manifest.Id,
+                    "silverdasher",
+                    StringComparison.OrdinalIgnoreCase)
+                ? Directory
+                      .EnumerateFiles(
+                          installDirectory,
+                          "SilverDasher.Core.dll",
+                          SearchOption.AllDirectories)
+                      .FirstOrDefault() ?? entryAssembly
+                : entryAssembly;
+            // SilverDasher's loader and feature-bearing Core intentionally use different versions.
+            detectedVersion = FileVersionInfo.GetVersionInfo(versionAssembly).FileVersion;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)
+        {
+            // Manifest metadata remains the safe fallback when Windows cannot inspect a DLL.
+        }
+
+        return new InstalledActPlugin(
+            manifest,
+            installDirectory,
+            enabled,
+            detectedVersion);
     }
 
     public async Task<string?> UninstallAsync(

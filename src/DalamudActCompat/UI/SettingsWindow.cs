@@ -142,7 +142,7 @@ public sealed class SettingsWindow : Window
                           (!isGeneric || configuration.TrustedGenericActPluginIds.Contains(
                               plugin.Manifest.Id));
             if (ImGui.Checkbox(
-                    $"{plugin.Manifest.Name} {plugin.Manifest.Version}###{plugin.Manifest.Id}",
+                    $"{plugin.Manifest.Name} {plugin.DisplayVersion}###{plugin.Manifest.Id}",
                     ref enabled))
             {
                 var genericNeedsConsent = enabled && isGeneric &&

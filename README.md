@@ -56,6 +56,49 @@ be terminated without terminating FFXIV.
 - Optional ACT plugin packages with manifest validation, safe ZIP extraction, atomic installation, upgrade backup, enable/disable composition, and isolated load contexts.
 - Recoverable factory reset: mutable state is moved to a timestamped backup before default system plugins and settings are restored.
 
+## 用户使用指南
+
+游戏内点击主页右上角的帮助入口可打开完整“使用帮助”。帮助页支持中英文关键词搜索，可搜索功能名称、错误现象、扩展名称或 `/actcompat` 命令，并直接跳转到对应章节。
+
+### 第一次使用
+
+1. 阅读首次启动时显示的第三方扩展作者、来源、版本和权限，确认后才会安装并加载对应扩展。
+2. 在主页保持“启用解析”和“自动启动解析器”开启；顶部显示“运行中”后再进入战斗。
+3. 输入 `/actcompat` 打开战斗统计，输入 `/actcompat history` 查看已结束战斗，输入 `/actcompat status` 查看解析器和各 Host。
+4. “打开 FFLogs 上传日志”只打开本地 Network 日志目录并复制路径，不会自动上传；诊断日志用于排错，不能代替 FFLogs 战斗日志。
+
+### 战斗统计口径
+
+- `DPS` 使用每名玩家自己的有效动作时长；`EncDPS` 使用整场战斗时长；`ExtDPS` 是保留给旧 ACT 扩展的兼容字段。
+- `rDPS` 是基于本地战斗事件和团队增益归属的实时估算，不等于 FFLogs 服务器端权威结果。
+- `DPS Parse` 把本场实际 DPS 代入同职业、副本、难度、区域和分区的缓存曲线；它不是上传后的正式排名。
+- 暴击率和直暴率来自本场已发生的伤害命中样本，因此战斗中会随新命中变化。`--` 表示还没有有效值，不表示零分。
+
+### 悬浮窗
+
+- “编辑位置和大小”用于拖动和缩放；“完成位置编辑”会恢复位置锁定与鼠标穿透，把鼠标交还游戏。
+- 要点击网页按钮或滚动网页，请单独关闭该悬浮窗的鼠标穿透；页面缩放和窗口大小是两项独立设置。
+- 页面能显示不等于数据协议已连接。无数据时先确认解析器与 OverlayPlugin 运行，再查看现代协议/ACTWS 检测状态。
+
+### 扩展更新与重启
+
+扩展页显示入口 DLL 的实际 `FileVersion`。如果外部工具只替换 DLL、没有更新 `actcompat.plugin.json`，页面仍显示实际版本；悬停版本号可同时查看安装清单记录。清单继续用于来源、授权和哈希门禁。
+
+传统 ACT 扩展更新后通常不需要重启整个游戏：
+
+| 扩展 | DACT 中需要执行的操作 |
+| --- | --- |
+| Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher | `/actcompat status` → “重启共享 Host” |
+| Matcha | `/actcompat status` → “重启抹茶 Host” |
+| 自行导入的普通 ACT 扩展 | `/actcompat status` → “重启通用 Host” |
+| FFXIV_ACT_Plugin / OverlayPlugin 系统状态变更 | 控制中心设置页 → “重启解析器” |
+
+只有对应 Host 无法停止、或 DACT 本体更新无法正常重载时，才需要完整退出游戏和启动器。
+
+### 排错顺序
+
+先输入 `/actcompat status`，从解析器开始找到第一个不是“运行中/已连接”的层级，再重启对应组件。不要把恢复出厂设置作为第一步；该操作会把配置、日志、历史、悬浮窗和扩展目录移动到备份位置。扩展错误优先复制扩展失败窗口日志，解析器或界面问题使用控制中心的诊断日志。
+
 ## Build
 
 Use a Windows machine with .NET 10 SDK and XIVLauncher/Dalamud API 15 development files, then run:

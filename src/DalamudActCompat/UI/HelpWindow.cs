@@ -17,6 +17,7 @@ public sealed class HelpWindow : Window
         Overlays,
         Extensions,
         Troubleshooting,
+        FrequentlyAskedQuestions,
         Copyright,
     }
 
@@ -34,6 +35,8 @@ public sealed class HelpWindow : Window
     private readonly Action openLogDirectory;
     private readonly Action openThirdPartyNotice;
     private HelpPage selectedPage;
+    private string searchQuery = string.Empty;
+    private string? pendingSectionId;
     private bool outerFrameStylePushed;
 
     public HelpWindow(
@@ -104,11 +107,19 @@ public sealed class HelpWindow : Window
             }
 
             DrawNavigation();
+            DrawSearchBar();
             ImGui.Spacing();
             if (ImGui.BeginChild("help-document-content", new Vector2(-1, -1), true))
             {
                 ImGui.PushTextWrapPos(0);
-                DrawSelectedPage();
+                if (string.IsNullOrWhiteSpace(searchQuery))
+                {
+                    DrawSelectedPage();
+                }
+                else
+                {
+                    DrawSearchResults();
+                }
                 ImGui.PopTextWrapPos();
             }
             ImGui.EndChild();
@@ -122,6 +133,8 @@ public sealed class HelpWindow : Window
     public void OpenCommands()
     {
         selectedPage = HelpPage.MacroCommands;
+        searchQuery = string.Empty;
+        pendingSectionId = null;
         IsOpen = true;
     }
 
@@ -136,12 +149,19 @@ public sealed class HelpWindow : Window
             text.Get("悬浮窗", "Overlays"),
             text.Get("扩展", "Extensions"),
             text.Get("排错", "Fixes"),
+            text.Get("常见问题", "FAQ"),
             text.Get("版权声明", "Copyright"),
         };
-        selectedPage = (HelpPage)BrandedWindowChrome.DrawNavigationRail(
+        var nextPage = (HelpPage)BrandedWindowChrome.DrawNavigationRail(
             "help-document-navigation",
             labels,
             (int)selectedPage);
+        if (nextPage != selectedPage)
+        {
+            selectedPage = nextPage;
+            searchQuery = string.Empty;
+            pendingSectionId = null;
+        }
     }
 
     private void DrawSelectedPage()
@@ -169,11 +189,91 @@ public sealed class HelpWindow : Window
             case HelpPage.Troubleshooting:
                 DrawTroubleshooting();
                 break;
+            case HelpPage.FrequentlyAskedQuestions:
+                DrawFrequentlyAskedQuestions();
+                break;
             case HelpPage.Copyright:
                 DrawCopyright();
                 break;
         }
     }
+
+    private void DrawSearchBar()
+    {
+        ImGui.SetNextItemWidth(-82);
+        ImGui.InputTextWithHint(
+            "##help-search",
+            text.Get("搜索功能、问题、命令或关键词……", "Search features, problems, commands, or keywords..."),
+            ref searchQuery,
+            128);
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("清除", "Clear"), new Vector2(70, 0)))
+        {
+            searchQuery = string.Empty;
+            pendingSectionId = null;
+        }
+    }
+
+    private void DrawSearchResults()
+    {
+        var results = CreateSearchEntries()
+            .Where(entry => MatchesSearch(searchQuery, entry.SearchText))
+            .ToArray();
+        DrawPageHeader(
+            text.Get("搜索结果", "Search results"),
+            text.Get(
+                $"找到 {results.Length} 条相关说明。点击结果可跳转到对应章节。",
+                $"Found {results.Length} relevant entries. Select one to jump to its section."));
+        if (results.Length == 0)
+        {
+            DrawCard("help-search-empty", text.Get("没有找到", "No results"), 120, () =>
+            {
+                ImGui.TextWrapped(text.Get(
+                    "请尝试更短的关键词，例如“鲶鱼”“重启”“悬浮窗”“FFLogs”或命令中的参数。",
+                    "Try a shorter keyword such as PostNamazu, restart, overlay, FFLogs, or a command argument."));
+            });
+            return;
+        }
+
+        foreach (var entry in results)
+        {
+            DrawCard($"help-search-{entry.SectionId}", entry.Title, 112, () =>
+            {
+                ImGui.TextDisabled(GetPageLabel(entry.Page));
+                ImGui.TextWrapped(entry.Summary);
+                if (ImGui.Selectable(
+                        $"{text.Get("打开这一节", "Open this section")}##open-{entry.SectionId}"))
+                {
+                    selectedPage = entry.Page;
+                    pendingSectionId = entry.SectionId;
+                    searchQuery = string.Empty;
+                }
+            });
+        }
+    }
+
+    internal static bool MatchesSearch(string query, string content)
+    {
+        var tokens = query.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return tokens.Length > 0 && tokens.All(token =>
+            content.Contains(token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string GetPageLabel(HelpPage page) => page switch
+    {
+        HelpPage.UsageNotice => text.Get("使用须知", "Notice"),
+        HelpPage.GettingStarted => text.Get("快速开始", "Getting started"),
+        HelpPage.MacroCommands => text.Get("宏指令", "Commands"),
+        HelpPage.CombatMeter => text.Get("战斗统计", "Combat Meter"),
+        HelpPage.Overlays => text.Get("悬浮窗", "Overlays"),
+        HelpPage.Extensions => text.Get("扩展", "Extensions"),
+        HelpPage.Troubleshooting => text.Get("排错", "Troubleshooting"),
+        HelpPage.FrequentlyAskedQuestions => text.Get("常见问题", "FAQ"),
+        HelpPage.Copyright => text.Get("版权声明", "Copyright"),
+        _ => page.ToString(),
+    };
 
     private void DrawUsageNotice()
     {
@@ -214,24 +314,48 @@ public sealed class HelpWindow : Window
     {
         DrawPageHeader(
             text.Get("快速开始", "Getting started"),
-            text.Get("启动解析、打开常用入口并理解日志用途。", "Start parsing, use common entry points, and understand the available logs."));
-        DrawCard("help-start-parser", text.Get("第一次使用", "First use"), 190, () =>
+            text.Get("按顺序完成首次确认、启动检查和第一场战斗。", "Complete first-run confirmation, startup checks, and your first encounter in order."));
+        DrawCard("help-start-parser", text.Get("第一次打开插件", "Opening the plugin for the first time"), 292, () =>
         {
             DrawBullet(text.Get(
-                "保持“启用解析”和“自动启动解析器”开启；概览状态显示“运行中”后即可记录战斗。",
-                "Keep Enable parsing and Auto start parser enabled. Combat recording is ready when Overview shows Running."));
+                "首次启动会显示第三方扩展的作者、来源、版本和权限。请阅读后再确认；未确认的扩展不会加载。",
+                "First launch shows each third-party extension's author, source, version, and permissions. Review them before accepting; unaccepted extensions are not loaded."));
             DrawBullet(text.Get(
-                "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开设置，右键打开战斗统计，按住中键拖动。",
-                "Show ACT quick button controls the in-game entry: left-click settings, right-click Combat Meter, and hold middle mouse to drag."));
+                "打开主页，保持“启用解析”和“自动启动解析器”开启。顶部显示“运行中”后，战斗日志才会进入统计。",
+                "On Home, keep Enable parsing and Auto start parser enabled. Combat logs enter the meter only after the header shows Running."));
             DrawBullet(text.Get(
-                "“战斗历史”查看已结束的战斗；“运行状态”查看解析器和各 Host。",
-                "Encounter history shows completed encounters; Runtime status shows the parser and each Host."));
+                "如果一直停在初始化，输入 /actcompat status：先看解析器，再看共享 Host、抹茶 Host 和通用 Host，不要反复重载整个游戏。",
+                "If initialization does not finish, use /actcompat status. Check the parser first, then the shared, Matcha, and generic Hosts instead of repeatedly reloading the whole game."));
         });
-        DrawCard("help-start-data", text.Get("数据与日志", "Data and logs"), 158, () =>
+        DrawCard("help-start-first-fight", text.Get("第一场战斗怎么确认成功", "Confirming your first encounter"), 246, () =>
         {
-            ImGui.TextWrapped(text.Get(
-                "战斗数据由内置 FFXIV_ACT_Plugin 解析。“打开 FFLogs 上传日志”只会打开原始 Network 日志目录并复制路径，不会自动上传任何文件。诊断日志用于排查插件问题，两者用途不同。",
-                "Combat data is parsed by the bundled FFXIV_ACT_Plugin. Open FFLogs upload logs only opens the raw Network log folder and copies its path; it never uploads files. Diagnostic logs are for troubleshooting and serve a different purpose."));
+            DrawBullet(text.Get(
+                "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟其他小队、宠物和普通 NPC 不会作为独立玩家行显示。",
+                "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party; other alliance parties, pets, and ordinary NPCs are not separate player rows."));
+            DrawBullet(text.Get(
+                "右键 ACT 快捷按钮或输入 /actcompat 打开战斗统计；战斗结束后用 /actcompat history 查看近期战斗。",
+                "Right-click the ACT quick button or use /actcompat to open Combat Meter. After combat, use /actcompat history for recent encounters."));
+            DrawBullet(text.Get(
+                "没有数据时先检查运行状态和当前是否真的产生伤害日志，再检查窗口是否被“脱战自动隐藏”，不要先删除配置。",
+                "If no data appears, first check runtime status and whether damage logs were actually generated, then check Auto hide out of combat. Do not delete configuration first."));
+        });
+        DrawCard("help-start-shortcuts", text.Get("常用入口", "Common entry points"), 190, () =>
+        {
+            DrawBullet(text.Get(
+                "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开控制中心，右键打开战斗统计，按住中键拖动。",
+                "Show ACT quick button controls the in-game entry: left-click the control center, right-click Combat Meter, and hold middle mouse to drag."));
+            DrawBullet(text.Get(
+                "/actcompat on 打开控制中心；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
+                "/actcompat on opens the control center; /actcompat status opens runtime status. Every command can be copied from the Commands page."));
+        });
+        DrawCard("help-start-data", text.Get("战斗日志与诊断日志不是同一种文件", "Combat logs and diagnostic logs are different"), 200, () =>
+        {
+            DrawBullet(text.Get(
+                "“打开 FFLogs 上传日志”打开原始 Network 日志目录并复制路径；它不会自动上传任何内容。",
+                "Open FFLogs upload logs opens the raw Network log folder and copies its path. It does not upload anything automatically."));
+            DrawBullet(text.Get(
+                "“复制诊断日志”用于排查 DACT、解析器、Host 或扩展错误，不能代替 FFLogs 战斗日志。分享前仍应检查角色名、服务器名和路径。",
+                "Copy diagnostic log is for DACT, parser, Host, or extension failures and cannot replace an FFLogs combat log. Inspect names, worlds, and paths before sharing."));
         });
     }
 
@@ -239,8 +363,8 @@ public sealed class HelpWindow : Window
     {
         DrawPageHeader(
             text.Get("战斗统计", "Combat Meter"),
-            text.Get("显示行为、数值口径和数据清理范围。", "Display behavior, metric definitions, and data-reset scope."));
-        DrawCard("help-meter-display", text.Get("显示与交互", "Display and interaction"), 158, () =>
+            text.Get("看懂显示方式、DPS 口径、暴直率和 FFLogs 预估。", "Understand display behavior, DPS metrics, hit rates, and FFLogs estimates."));
+        DrawCard("help-meter-display", text.Get("窗口显示与交互", "Window display and interaction"), 210, () =>
         {
             DrawBullet(text.Get(
                 "锁定窗口用于固定位置；只有同时开启“锁定时鼠标穿透”时，点击才会传给游戏。",
@@ -248,12 +372,48 @@ public sealed class HelpWindow : Window
             DrawBullet(text.Get(
                 "“脱战自动隐藏”只改变显示状态，不会停止解析或删除战斗数据。",
                 "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
+            DrawBullet(text.Get(
+                "紧凑模式、字体缩放、透明度和列宽只影响显示，不会改变计算结果。",
+                "Compact mode, font scale, opacity, and column widths affect presentation only and do not change calculations."));
         });
-        DrawCard("help-meter-metrics", text.Get("数值口径", "Metrics"), 190, () =>
+        DrawCard("help-meter-metrics", text.Get("DPS / HPS 数值口径", "DPS / HPS metric definitions"), 340, () =>
         {
-            ImGui.TextWrapped(text.Get(
-                "排序可选择 DPS 或 HPS。DPS 口径决定主数值使用个人动作时长、整场时长或 FF Logs 团队贡献估算。带“估算”的项目不是上传 FF Logs 后的最终排名。",
-                "Sort by DPS or HPS. The DPS metric chooses personal active time, full encounter time, or an estimated FF Logs contribution metric. Estimated values are not final rankings from an FF Logs upload."));
+            DrawBullet(text.Get(
+                "DPS：按玩家自己的有效动作时长计算，晚开怪、死亡或长时间停手时与整场口径差异会更明显。",
+                "DPS uses each player's active duration, so late engagement, death, or long inactivity can differ noticeably from full-encounter metrics."));
+            DrawBullet(text.Get(
+                "EncDPS：用整场战斗时长计算，适合比较同一场战斗中所有成员。",
+                "EncDPS uses the full encounter duration and is suitable for comparing party members in the same encounter."));
+            DrawBullet(text.Get(
+                "ExtDPS：保留 ACT 兼容字段，供旧悬浮窗或扩展使用；它不代表额外伤害。",
+                "ExtDPS preserves the ACT compatibility field for legacy overlays or extensions; it does not mean extra damage."));
+            DrawBullet(text.Get(
+                "rDPS（预估）：根据本地事件估算移除别人给你的团辅、加回你给队友的贡献。它是实时近似值，不是 FFLogs 的权威实现。",
+                "rDPS (estimated) removes estimated buffs received from others and adds estimated contribution you gave the party. It is a live approximation, not the authoritative FFLogs implementation."));
+            DrawBullet(text.Get(
+                "切换到 HPS 时主列显示治疗速率；伤害、治疗、死亡和百分比的原始累计不会因切换排序而改变。",
+                "In HPS mode the main column shows healing rate. Switching sort mode does not alter accumulated damage, healing, deaths, or percentages."));
+        });
+        DrawCard("help-meter-hit-rates", text.Get("暴击率、直暴率为什么会变化", "Why CRIT and CDH rates change"), 218, () =>
+        {
+            DrawBullet(text.Get(
+                "暴击率 = 暴击伤害命中数 ÷ 伤害命中数；直暴率 = 同时暴击并直击的命中数 ÷ 伤害命中数。它们不是角色面板属性。",
+                "CRIT rate is critical damage hits divided by damage hits; CDH rate is simultaneous critical-direct hits divided by damage hits. They are not character-sheet attributes."));
+            DrawBullet(text.Get(
+                "战斗样本较少时，每次新命中都会让百分比明显跳动，这是正常统计变化。短暂零命中快照会沿用本场最近有效数字，不再在两次数字之间插入 --。",
+                "With few samples, every new hit can move the percentage sharply. Brief zero-hit snapshots retain the latest valid value for the encounter instead of inserting -- between numbers."));
+        });
+        DrawCard("help-meter-fflogs", text.Get("DPS Parse 与 FFLogs", "DPS Parse and FFLogs"), 246, () =>
+        {
+            DrawBullet(text.Get(
+                "DPS Parse 预估使用本场实际 DPS，对照同职业、同副本、同难度、同区域与同分区的缓存分布。鼠标悬停可查看 FFLogs 数据日期。",
+                "Estimated DPS Parse compares this encounter's actual DPS with cached distributions for the same job, encounter, difficulty, region, and partition. Hover it to see the FFLogs data date."));
+            DrawBullet(text.Get(
+                "它不会读取你上传后的正式报告，也不会包含 FFLogs 服务器端所有过滤、分段和归属逻辑，因此可能与最终成绩不同。",
+                "It does not read your uploaded report and cannot include every FFLogs server-side filter, phase rule, or attribution rule, so it may differ from the final result."));
+            DrawBullet(text.Get(
+                "显示 -- 表示当前没有可用分布、职业/副本无法映射，或本场尚无有效 DPS；这不是零分。",
+                "-- means no usable distribution, unresolved job/encounter mapping, or no valid DPS yet. It does not mean a zero parse."));
             ImGui.Spacing();
             ImGui.TextWrapped(text.Get(
                 "“重置当前战斗”只清空当前显示；历史记录和已经写入磁盘的原始日志不受影响。",
@@ -295,14 +455,17 @@ public sealed class HelpWindow : Window
     {
         DrawPageHeader(
             text.Get("悬浮窗", "Overlays"),
-            text.Get("Cactbot 与自定义 HTML 悬浮窗的创建和交互规则。", "Creation and interaction rules for Cactbot and custom HTML overlays."));
-        DrawCard("help-overlay-cactbot", "Cactbot", 130, () =>
+            text.Get("创建、编辑、操作和排查 Cactbot 与 HTML 悬浮窗。", "Create, edit, interact with, and troubleshoot Cactbot and HTML overlays."));
+        DrawCard("help-overlay-cactbot", "Cactbot", 222, () =>
         {
-            ImGui.TextWrapped(text.Get(
-                "Cactbot 使用插件安装到本地的页面。文字提醒与时间轴可以同时打开；它们与旧版组合窗口互斥。",
-                "Cactbot uses pages installed locally by the plugin. Alerts and Timeline may run together; both conflict with the legacy combined window."));
+            DrawBullet(text.Get(
+                "“文字提醒”和“时间轴”可以同时打开；旧版“文字+时间轴组合窗”与这两个独立窗口互斥，打开一方会关闭另一方。",
+                "Alerts and Timeline may run together. The legacy combined Alerts + Timeline window conflicts with both independent windows; opening one side closes the other."));
+            DrawBullet(text.Get(
+                "Cactbot 页面来自插件安装到本地的资源，不需要手动粘贴网址。没有提醒时先确认副本、语言、时间轴资源和 OverlayPlugin 事件源。",
+                "Cactbot pages come from resources installed locally by the plugin; no URL is required. If alerts are missing, check the duty, language, timeline resources, and OverlayPlugin event source."));
         });
-        DrawCard("help-overlay-html", text.Get("HTML 悬浮窗", "HTML overlays"), 254, () =>
+        DrawCard("help-overlay-html", text.Get("创建 HTML 悬浮窗", "Creating HTML overlays"), 270, () =>
         {
             DrawBullet(text.Get(
                 "可从解析器模板或完整的 http、https、file 地址创建；只添加你信任的页面。",
@@ -314,8 +477,29 @@ public sealed class HelpWindow : Window
                 "位置、大小、显示名称、锁定、穿透和缩放会按每个悬浮窗分别保存。",
                 "Position, size, display name, lock, click-through, and zoom are stored per overlay."));
             DrawBullet(text.Get(
-                "未启用鼠标穿透时可向网页传递点击和滚轮；自动检测失败后可重新检测或手动微调。",
-                "Clicks and wheel input reach the page while click-through is off. If detection fails, retry it or make a manual adjustment."));
+                "同一网页可以创建多个悬浮窗，但名称必须能区分；“关闭”只关闭窗口，“删除悬浮窗”才会移除保存记录。",
+                "The same page may be used by multiple overlays, but their names must be distinguishable. Close hides the window; Delete overlay removes the saved entry."));
+        });
+        DrawCard("help-overlay-edit", text.Get("编辑位置、大小和网页交互", "Editing position, size, and page input"), 292, () =>
+        {
+            DrawBullet(text.Get(
+                "点击“编辑位置和大小”后可拖动窗口、拖右下角缩放，并临时关闭锁定和鼠标穿透。",
+                "After selecting Edit position and size, drag the window or its lower-right corner; lock and click-through are temporarily disabled."));
+            DrawBullet(text.Get(
+                "点击“完成位置编辑”会恢复位置锁定和鼠标穿透，把鼠标交还游戏。若要点击网页按钮，请在悬浮窗设置里手动关闭鼠标穿透。",
+                "Finish position editing restores position lock and click-through, returning mouse input to the game. To click page controls, manually disable click-through in overlay settings."));
+            DrawBullet(text.Get(
+                "页面缩放只改变网页内容比例；窗口大小决定可视区域。文字太小先调页面缩放，内容被截断再调窗口大小。",
+                "Page zoom changes web-content scale; window size controls the visible area. Increase zoom for tiny text and resize the window for clipped content."));
+        });
+        DrawCard("help-overlay-empty", text.Get("有画面但没有数据", "Page renders but has no data"), 230, () =>
+        {
+            DrawBullet(text.Get(
+                "查看连接状态：现代悬浮窗通常使用现代 OverlayPlugin 协议，旧页面可能使用 ACTWS。自动检测失败时点击“重新检测”。",
+                "Check connection status. Modern overlays usually use the modern OverlayPlugin protocol; older pages may use ACTWS. Use Detect again if automatic detection fails."));
+            DrawBullet(text.Get(
+                "网页能打开不代表数据协议已经连接。先确认解析器与 OverlayPlugin 正在运行，再检查网址本身是否要求外网或额外配置。",
+                "A rendered page does not guarantee a data connection. Confirm the parser and OverlayPlugin are running, then check whether the URL needs internet access or extra configuration."));
         });
     }
 
@@ -323,8 +507,26 @@ public sealed class HelpWindow : Window
     {
         DrawPageHeader(
             text.Get("扩展与权限", "Extensions and permissions"),
-            text.Get("安装流程、权限边界和用户需要承担的安全判断。", "Installation flow, permission boundaries, and the security decisions expected of users."));
-        DrawCard("help-extension-install", text.Get("安装 DLL / ZIP", "Install DLL / ZIP"), 238, () =>
+            text.Get("认识内置扩展，理解版本、更新、重启和权限边界。", "Understand bundled extensions, versions, updates, restarts, and permission boundaries."));
+        DrawCard("help-extension-bundled", text.Get("随 DACT 提供的兼容扩展", "Compatibility extensions included with DACT"), 350, () =>
+        {
+            DrawBullet(text.Get(
+                "Triggernometry（触发器）：读取战斗日志并运行用户导入的触发器、时间条件和动作。",
+                "Triggernometry runs user-imported triggers, timing conditions, and actions from combat logs."));
+            DrawBullet(text.Get(
+                "PostNamazu（鲶鱼精邮差）：为经过授权的触发器提供命令、头标、地标、队列等游戏动作。高风险动作仍受 DACT 权限控制。",
+                "PostNamazu provides authorized triggers with commands, marks, waymarks, queues, and related game actions. High-risk actions remain permission-gated by DACT."));
+            DrawBullet(text.Get(
+                "ACT.FoxTTS：把触发器或 Cactbot 的文字提醒转换为语音；语音服务、音色和 Pro 选项在扩展配置中设置。",
+                "ACT.FoxTTS converts Triggernometry or Cactbot text alerts to speech. Configure the speech service, voice, and Pro option from the extension."));
+            DrawBullet(text.Get(
+                "银山雀儿：默认关闭，启用后提供其原有通知与网络功能；抹茶使用单独的专属 Host。",
+                "SilverDasher is disabled by default and retains its original notification/network features when enabled. Matcha runs in a separate dedicated Host."));
+            DrawBullet(text.Get(
+                "Triggernometry、鲶鱼精、FoxTTS 和银山雀儿共用“共享 ACT Host”；普通自行导入扩展使用“通用 Host”。",
+                "Triggernometry, PostNamazu, FoxTTS, and SilverDasher share the Shared ACT Host. Ordinary imported extensions use the Generic Host."));
+        });
+        DrawCard("help-extension-install", text.Get("安装 DLL / ZIP", "Install DLL / ZIP"), 286, () =>
         {
             DrawBullet(text.Get(
                 "选择文件后先进行静态预检；此阶段不会执行 DLL，并会生成需要的权限清单。",
@@ -338,13 +540,35 @@ public sealed class HelpWindow : Window
             DrawBullet(text.Get(
                 "导入失败对话会显示原因并允许复制诊断；关闭对话只清除失败提示缓存。",
                 "The import-failure window shows the reason and can copy diagnostics; closing it clears only the failure-notice cache."));
+            DrawBullet(text.Get(
+                "安装成功后如果页面提示重启，请按扩展所在的 Host 重启；不要为了一个 ACT 扩展先重启整个游戏。",
+                "If an installed extension asks for a restart, restart the Host assigned to that extension. Do not restart the whole game first for one ACT extension."));
         });
-        DrawCard("help-extension-safety", text.Get("安全要求", "Security requirements"), 190, () =>
+        DrawCard("help-extension-update", text.Get("版本、更新与“重启 ACT”", "Versions, updates, and 'restart ACT'"), 382, () =>
+        {
+            DrawBullet(text.Get(
+                "扩展页显示入口 DLL 的实际 FileVersion，不再只显示安装清单。实际 DLL 与清单不一致时，把鼠标移到版本号上可查看两者。",
+                "The Extensions page shows the entry DLL's actual FileVersion instead of only the install manifest. Hover the version when the DLL and manifest differ to see both."));
+            DrawBullet(text.Get(
+                "DACT 自带更新检查会下载作者发布的候选并校验版本与 SHA-256；外部工具箱可能只替换 DLL，不会同步 DACT 的安装清单。",
+                "DACT's updater downloads author-published candidates and verifies version and SHA-256. External toolboxes may replace only the DLL without updating DACT's install manifest."));
+            DrawBullet(text.Get(
+                "Triggernometry 工具箱更新鲶鱼精后，输入 /actcompat status，点击“重启共享 Host”。这就是 DACT 对应的“重启 ACT”，通常不需要退出游戏。",
+                "After Triggernometry Toolbox updates PostNamazu, use /actcompat status and select Restart shared Host. This is DACT's equivalent of 'restart ACT' and normally does not require exiting the game."));
+            DrawBullet(text.Get(
+                "抹茶更新后重启“抹茶 Host”；普通自行导入扩展更新后重启“通用 Host”。只有对应 Host 无法停止或 DACT 自身更新要求重载时，才考虑完整重启游戏。",
+                "Restart Matcha Host after a Matcha update and Generic Host after updating an ordinary imported extension. Restart the whole game only if the assigned Host cannot stop or DACT itself requires a reload."));
+        });
+        DrawCard("help-extension-safety", text.Get("权限与安全要求", "Permissions and security requirements"), 250, () =>
         {
             ImGui.TextColored(Warning, text.Get("只安装你信任并能确认来源的 DLL、ZIP 和网页。", "Install only DLLs, ZIPs, and pages whose source you trust and can verify."));
             ImGui.TextWrapped(text.Get(
                 "DLL 仍是桌面代码。权限清单约束兼容接口，但无法拦截 DLL 直接调用 Windows API。授权前请自行判断来源和风险；分享日志前请检查其中的角色名、服务器名和本地路径。",
                 "A DLL remains desktop code. The permission list governs compatibility APIs but cannot intercept direct Windows API calls. Judge the source and risk before authorization, and inspect character names, server names, and local paths before sharing logs."));
+            ImGui.Spacing();
+            ImGui.TextWrapped(text.Get(
+                "关闭某项权限后，对应网络、文件、命令、原生内存或脚本功能可能失效，这是安全边界生效，不一定是插件故障。权限保存后 DACT 会自动重启相关 Host。",
+                "Disabling a permission can intentionally disable network, file, command, native-memory, or scripting features. Saving permissions automatically restarts the related Host."));
             if (ImGui.Button(text.Get("查看内置第三方 DLL 的作者与来源", "View bundled DLL authors and sources")))
             {
                 openThirdPartyNotice();
@@ -356,14 +580,35 @@ public sealed class HelpWindow : Window
     {
         DrawPageHeader(
             text.Get("通知与排错", "Notifications and troubleshooting"),
-            text.Get("先定位故障层级，再复制对应日志。", "Identify the failing layer before copying the relevant log."));
-        DrawCard("help-troubleshooting-notifications", text.Get("通知策略", "Notification routing"), 140, () =>
+            text.Get("先判断是解析器、悬浮窗还是扩展，再重启对应组件。", "Decide whether the parser, overlay, or extension failed before restarting the relevant component."));
+        DrawCard("help-troubleshooting-layers", text.Get("先看运行状态，不要先删配置", "Check runtime status before deleting configuration"), 244, () =>
         {
-            ImGui.TextWrapped(text.Get(
-                "抹茶和银山雀儿在游戏位于前台时使用游戏内卫月通知；切到其他应用时使用 Windows 通知中心。Windows 投递失败时会回退到游戏内通知。",
-                "Matcha and SilverDasher use Dalamud notifications while the game is foreground. When another app is foreground, they use Windows Notification Center and fall back to Dalamud if Windows delivery fails."));
+            DrawBullet(text.Get(
+                "解析器负责读取战斗日志；共享 Host 负责 Triggernometry、鲶鱼精、FoxTTS 和银山雀儿；抹茶与普通扩展各有自己的 Host。",
+                "The parser reads combat logs. Shared Host runs Triggernometry, PostNamazu, FoxTTS, and SilverDasher. Matcha and ordinary imported extensions use their own Hosts."));
+            DrawBullet(text.Get(
+                "输入 /actcompat status，找到最先不是“运行中/已连接”的一层。下游一起报错时先修上游，例如解析器未运行时不要先重装悬浮窗。",
+                "Use /actcompat status and find the first layer that is not Running/Connected. When downstream layers fail together, fix the upstream layer first; for example, do not reinstall overlays while the parser is stopped."));
+            DrawBullet(text.Get(
+                "恢复出厂设置会移动配置、日志、历史和扩展目录，属于最后手段；普通故障先使用重启按钮和诊断日志。",
+                "Factory reset moves configuration, logs, history, and extensions and is a last resort. Use restart controls and diagnostics first."));
         });
-        DrawCard("help-troubleshooting-steps", text.Get("没有数据或功能失败", "Missing data or failed features"), 238, () =>
+        DrawCard("help-troubleshooting-restart", text.Get("应该重启哪一个", "What should be restarted"), 276, () =>
+        {
+            DrawBullet(text.Get(
+                "鲶鱼精、Triggernometry、FoxTTS、银山雀儿：重启共享 Host。",
+                "PostNamazu, Triggernometry, FoxTTS, or SilverDasher: restart Shared Host."));
+            DrawBullet(text.Get(
+                "抹茶：重启抹茶 Host。自行导入的普通 ACT 插件：重启通用 Host。",
+                "Matcha: restart Matcha Host. Ordinary imported ACT plugins: restart Generic Host."));
+            DrawBullet(text.Get(
+                "战斗统计没有任何日志、系统 FFXIV_ACT_Plugin/OverlayPlugin 状态变化：重启解析器。",
+                "No combat logs at all, or changed system FFXIV_ACT_Plugin/OverlayPlugin state: restart the parser."));
+            DrawBullet(text.Get(
+                "DACT 本体更新或 Host 无法在状态页停止：先尝试 Dalamud 重载；仍失败再完整退出游戏和启动器。",
+                "DACT itself updated, or a Host cannot stop from Runtime Status: try a Dalamud reload first, then fully exit the game and launcher if needed."));
+        });
+        DrawCard("help-troubleshooting-steps", text.Get("没有数据或功能失败", "Missing data or failed features"), 292, () =>
         {
             DrawBullet(text.Get(
                 "先确认概览状态为“运行中”，再查看解析器和各 Host 是否成功启动。",
@@ -377,6 +622,15 @@ public sealed class HelpWindow : Window
             DrawBullet(text.Get(
                 "上传 FFLogs 使用原始 Network 日志；诊断日志不能代替战斗日志。",
                 "Use raw Network logs for FFLogs uploads; diagnostic logs cannot replace combat logs."));
+            DrawBullet(text.Get(
+                "版本号已变化但功能仍像旧版，说明磁盘 DLL 已更新而 Host 仍持有旧程序集；重启对应 Host 后再测试。",
+                "If the version changed but behavior is still old, the DLL on disk was updated while the Host still holds the old assembly. Restart the assigned Host and test again."));
+        });
+        DrawCard("help-troubleshooting-notifications", text.Get("通知没有出现", "Notifications did not appear"), 160, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "抹茶和银山雀儿在游戏位于前台时使用游戏内卫月通知；切到其他应用时使用 Windows 通知中心。Windows 投递失败时会回退到游戏内通知。请同时检查 Windows 专注助手、游戏内通知设置和对应 Host 日志。",
+                "Matcha and SilverDasher use Dalamud notifications while the game is foreground. When another app is foreground, they use Windows Notification Center and fall back to Dalamud if Windows delivery fails. Check Windows Focus Assist, in-game notification settings, and the assigned Host log."));
         });
         if (ImGui.Button(text.Get("打开运行状态", "Open runtime status"), new Vector2(170, 34)))
         {
@@ -387,6 +641,49 @@ public sealed class HelpWindow : Window
         {
             openLogDirectory();
         }
+    }
+
+    private void DrawFrequentlyAskedQuestions()
+    {
+        DrawPageHeader(
+            text.Get("常见问题", "Frequently asked questions"),
+            text.Get("对照用户最常遇到的更新、统计、隐私和操作问题。", "Answers to common update, statistics, privacy, and interaction questions."));
+        DrawCard("help-faq-restart-act", text.Get("提示“重启 ACT”，需要重启游戏吗？", "Does 'restart ACT' mean restarting the game?"), 190, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "通常不需要。在 DACT 中，传统 ACT 扩展运行在独立 Host。鲶鱼精等共享扩展更新后，输入 /actcompat status 并点击“重启共享 Host”即可。只有 Host 无法退出或 DACT 本体无法重载时才完整重启游戏。",
+                "Usually not. Traditional ACT extensions run in independent Hosts. After updating a shared extension such as PostNamazu, use /actcompat status and select Restart shared Host. Restart the whole game only if the Host cannot exit or DACT itself cannot reload."));
+        });
+        DrawCard("help-faq-version", text.Get("为什么扩展版本和安装清单不同？", "Why does the extension version differ from the manifest?"), 176, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "外部工具箱可能只替换 DLL。扩展页优先显示 DLL 的实际版本，悬停版本号会显示清单版本。清单继续用于来源、授权和哈希记录，不会被静默改写。",
+                "An external toolbox may replace only the DLL. Extensions shows the DLL's actual version and reveals the manifest version on hover. The manifest remains unchanged for source, consent, and hash records."));
+        });
+        DrawCard("help-faq-fflogs", text.Get("为什么本地 DPS、rDPS、Parse 和 FFLogs 不完全一样？", "Why do local DPS, rDPS, Parse, and FFLogs differ?"), 226, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "它们使用不同口径。本地 DPS/EncDPS 的分母不同；rDPS 是基于本地事件的实时团队贡献估算；DPS Parse 是把本场实际 DPS 代入缓存分布；上传后的 FFLogs 还会执行服务器端归属、阶段、过滤和版本规则。小幅差异正常，明显差异请保留原始 Network 日志排查。",
+                "They use different conventions. Local DPS and EncDPS use different durations; rDPS is a live local contribution estimate; DPS Parse maps actual DPS into a cached distribution; uploaded FFLogs additionally applies server-side attribution, phase, filtering, and version rules. Small differences are expected; keep the raw Network log when differences are large."));
+        });
+        DrawCard("help-faq-dashes", text.Get("--、数字跳动和暴直率分别表示什么？", "What do --, changing numbers, CRIT, and CDH mean?"), 192, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "-- 表示当前还没有有效值，不等于 0。战斗中新命中持续加入样本，DPS、百分比、暴击率和直暴率会自然变化。暴击率统计暴击命中，直暴率统计同时暴击并直击的命中；它们都不是角色面板概率。",
+                "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT rate, and CDH rate. CRIT counts critical hits; CDH counts hits that were both critical and direct. Neither is a character-sheet probability."));
+        });
+        DrawCard("help-faq-upload", text.Get("DACT 会自动上传战斗或个人信息吗？", "Does DACT automatically upload combat or personal data?"), 170, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "“打开 FFLogs 上传日志”只打开本地目录并复制路径，不会自动上传。第三方扩展可能具有网络权限，应在扩展权限和来源声明中单独判断。分享任何日志前请自行检查角色名、服务器名和本地路径。",
+                "Open FFLogs upload logs only opens a local folder and copies its path; it does not upload automatically. Third-party extensions may have network permission and must be judged separately from their source and permission notice. Inspect names, worlds, and local paths before sharing logs."));
+        });
+        DrawCard("help-faq-overlay-input", text.Get("为什么点不到悬浮窗，或鼠标不能操作游戏？", "Why can I not click the overlay, or why does it capture game input?"), 192, () =>
+        {
+            ImGui.TextWrapped(text.Get(
+                "鼠标穿透开启时，点击会传给游戏，所以网页不能操作；关闭穿透后网页会接收点击和滚轮。“完成位置编辑”会恢复锁定与穿透，这是正常结束状态。要临时操作网页，请单独关闭该悬浮窗的鼠标穿透。",
+                "With click-through enabled, clicks go to the game and the web page cannot be controlled. Disabling it sends clicks and wheel input to the page. Finish position editing restores lock and click-through by design; temporarily disable click-through to operate the page."));
+        });
     }
 
     private void DrawCopyright()
@@ -421,6 +718,58 @@ public sealed class HelpWindow : Window
         }
     }
 
+    private IReadOnlyList<HelpSearchEntry> CreateSearchEntries()
+    {
+        HelpSearchEntry Entry(
+            HelpPage page,
+            string sectionId,
+            string chineseTitle,
+            string englishTitle,
+            string chineseSummary,
+            string englishSummary,
+            string keywords) => new(
+                page,
+                sectionId,
+                text.Get(chineseTitle, englishTitle),
+                text.Get(chineseSummary, englishSummary),
+                $"{chineseTitle} {englishTitle} {chineseSummary} {englishSummary} {keywords}");
+
+        return
+        [
+            Entry(HelpPage.UsageNotice, "help-notice-rules", "使用前请确认", "Before use", "第三方工具规则与使用边界。", "Rules and boundaries for third-party tools.", "用户协议 PVP 跳脸 骚扰 safety rules"),
+            Entry(HelpPage.GettingStarted, "help-start-parser", "第一次打开插件", "First launch", "确认扩展来源并等待主页显示运行中。", "Review extension sources and wait for Home to show Running.", "首次安装 初始化 parser 解析器 permissions 权限"),
+            Entry(HelpPage.GettingStarted, "help-start-first-fight", "第一场战斗", "First encounter", "确认战斗统计出现自己和当前小队。", "Confirm Combat Meter shows you and the current party.", "没有数据 木人 副本 party meter history"),
+            Entry(HelpPage.GettingStarted, "help-start-shortcuts", "常用入口", "Common entry points", "快捷按钮、控制中心和运行状态入口。", "Quick button, control center, and runtime status shortcuts.", "/actcompat on status 快捷按钮"),
+            Entry(HelpPage.GettingStarted, "help-start-data", "战斗日志与诊断日志", "Combat and diagnostic logs", "区分 FFLogs 上传日志与排错日志。", "Distinguish FFLogs upload logs from troubleshooting logs.", "Network 原始日志 upload privacy 隐私"),
+            Entry(HelpPage.MacroCommands, "help-commands-common", "常用宏指令", "Common commands", "打开控制中心、统计、历史、日志和状态。", "Open the control center, meter, history, logs, and status.", "/actcompat /actcompat on meter history logs status copy 复制"),
+            Entry(HelpPage.MacroCommands, "help-commands-overlays", "悬浮窗命令", "Overlay commands", "打开 Cactbot 或指定 HTML 模板。", "Open Cactbot or a named HTML template.", "cactbot overlay template 模板"),
+            Entry(HelpPage.MacroCommands, "help-commands-maintenance", "维护与诊断命令", "Maintenance commands", "清空、安装、Host、停止和恢复出厂设置。", "Clear, install, Host, stop, and factory reset commands.", "clear install host stop factory-reset sample DLL ZIP"),
+            Entry(HelpPage.CombatMeter, "help-meter-display", "窗口显示与交互", "Meter display", "锁定、穿透、自动隐藏和界面缩放。", "Lock, click-through, auto hide, and display scaling.", "锁定 鼠标穿透 compact opacity font"),
+            Entry(HelpPage.CombatMeter, "help-meter-metrics", "DPS 与 HPS 口径", "DPS and HPS metrics", "解释 DPS、EncDPS、ExtDPS、rDPS 和 HPS。", "Definitions for DPS, EncDPS, ExtDPS, rDPS, and HPS.", "团队贡献 预估 active duration damage healing"),
+            Entry(HelpPage.CombatMeter, "help-meter-hit-rates", "暴击率与直暴率", "CRIT and CDH rates", "解释百分比跳动、有效样本与 --。", "Explains changing percentages, valid samples, and --.", "暴击 直击 直暴 crit direct hit CDH 数字跳动 闪"),
+            Entry(HelpPage.CombatMeter, "help-meter-fflogs", "DPS Parse 与 FFLogs", "DPS Parse and FFLogs", "解释本地预估、缓存日期和正式成绩差异。", "Explains local estimates, cache dates, and final-report differences.", "排名 percentile partition 分区 curve 曲线 上传"),
+            Entry(HelpPage.Overlays, "help-overlay-cactbot", "Cactbot 悬浮窗", "Cactbot overlays", "文字提醒、时间轴与旧组合窗的关系。", "Alerts, Timeline, and the legacy combined window.", "raidboss timeline alerts 文字提醒 时间轴"),
+            Entry(HelpPage.Overlays, "help-overlay-html", "创建 HTML 悬浮窗", "Create HTML overlays", "从模板或可信网址创建并保存独立设置。", "Create from templates or trusted URLs with independent settings.", "http https file URL websocket ACTWS"),
+            Entry(HelpPage.Overlays, "help-overlay-edit", "编辑位置与网页交互", "Edit and interact", "拖动、缩放、完成编辑、锁定与鼠标穿透。", "Move, resize, finish editing, lock, and click-through behavior.", "完成位置编辑 操作网页 滚轮 页面缩放"),
+            Entry(HelpPage.Overlays, "help-overlay-empty", "悬浮窗没有数据", "Overlay has no data", "检查现代协议、ACTWS、解析器和网址要求。", "Check modern protocol, ACTWS, parser, and URL requirements.", "空白 重新检测 connected 连接"),
+            Entry(HelpPage.Extensions, "help-extension-bundled", "内置兼容扩展", "Bundled compatibility extensions", "Triggernometry、鲶鱼精、FoxTTS、银山雀儿与抹茶分别做什么。", "What Triggernometry, PostNamazu, FoxTTS, SilverDasher, and Matcha do.", "触发器 PostNamazu TTS Matcha SilverDasher 共享 Host"),
+            Entry(HelpPage.Extensions, "help-extension-install", "安装 DLL 或 ZIP", "Install DLL or ZIP", "静态预检、授权、失败诊断和 Host 分配。", "Static preflight, authorization, failure diagnostics, and Host assignment.", "第三方插件 import 导入 generic 通用"),
+            Entry(HelpPage.Extensions, "help-extension-update", "版本、更新与重启 ACT", "Versions, updates, and restart ACT", "实际 DLL 版本、清单版本和更新后重启对应 Host。", "Actual DLL version, manifest version, and restarting the assigned Host after updates.", "1.3.6.7 工具箱 toolbox FileVersion SHA-256 /actcompat status 重启共享 Host"),
+            Entry(HelpPage.Extensions, "help-extension-safety", "扩展权限与安全", "Extension permissions and safety", "理解网络、文件、命令、内存和脚本权限。", "Understand network, file, command, memory, and scripting permissions.", "授权 Windows API 来源 风险"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-layers", "按层排错", "Layered troubleshooting", "从解析器和 Host 中找到最先失败的一层。", "Find the first failing layer among the parser and Hosts.", "运行状态 初始化 删除配置 factory reset"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-restart", "应该重启哪一个", "What to restart", "共享、抹茶、通用 Host 与解析器的对应关系。", "Mapping between Shared, Matcha, Generic Hosts, and the parser.", "重启游戏 reload ACT PostNamazu"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-steps", "没有数据或功能失败", "Missing data or failed features", "版本已变但仍是旧行为、悬浮窗无数据和扩展报错。", "Updated version with old behavior, overlay data loss, and extension errors.", "诊断 logs version old assembly"),
+            Entry(HelpPage.Troubleshooting, "help-troubleshooting-notifications", "通知没有出现", "Missing notifications", "检查游戏前台、Windows 通知和专注助手。", "Check game focus, Windows notifications, and Focus Assist.", "抹茶 银山雀儿 toast notification"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-restart-act", "重启 ACT 是否等于重启游戏", "Does restart ACT mean restart game", "DACT 通常只需重启对应共享 Host。", "DACT normally needs only the assigned Shared Host restarted.", "鲶鱼精 更新 status"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-version", "版本与清单不同", "Version differs from manifest", "外部工具替换 DLL 后的显示与安全记录。", "Display and safety records after an external tool replaces a DLL.", "实际版本 悬停 mismatch"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-fflogs", "本地数值与 FFLogs 不同", "Local values differ from FFLogs", "解释 DPS、rDPS、Parse 与正式报告口径。", "Explains DPS, rDPS, Parse, and final-report conventions.", "低 离谱 奶妈 healer DoT"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-dashes", "-- 与数字跳动", "Dashes and changing numbers", "没有有效值、样本变化、暴击与直暴定义。", "No valid value, changing samples, CRIT, and CDH definitions.", "闪烁 概率"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-upload", "上传与隐私", "Uploads and privacy", "DACT 不会自动上传，第三方网络权限需单独判断。", "DACT does not auto-upload; judge third-party network permissions separately.", "个人信息 角色名 服务器名 path"),
+            Entry(HelpPage.FrequentlyAskedQuestions, "help-faq-overlay-input", "悬浮窗点不到或抢鼠标", "Overlay input problems", "理解穿透、锁定和完成位置编辑。", "Understand click-through, lock, and finishing position editing.", "编辑版 鼠标 游戏"),
+            Entry(HelpPage.Copyright, "help-copyright-project", "版权与 GPL-3.0", "Copyright and GPL-3.0", "DACT 自有代码的许可证和第三方边界。", "License for DACT-owned code and third-party boundaries.", "license source 源代码 warranty"),
+        ];
+    }
+
     private void DrawPageHeader(string title, string description)
     {
         ImGui.TextColored(Gold, title);
@@ -428,8 +777,14 @@ public sealed class HelpWindow : Window
         ImGui.Spacing();
     }
 
-    private static void DrawCard(string id, string title, float height, Action drawContent)
+    private void DrawCard(string id, string title, float height, Action drawContent)
     {
+        if (string.Equals(pendingSectionId, id, StringComparison.Ordinal))
+        {
+            ImGui.SetScrollHereY(0);
+            pendingSectionId = null;
+        }
+
         if (BrandedWindowChrome.BeginGoldCard(id, height, allowScrolling: false))
         {
             ImGui.TextColored(IceBlue, title);
@@ -439,6 +794,13 @@ public sealed class HelpWindow : Window
         BrandedWindowChrome.EndGoldCard();
         ImGui.Spacing();
     }
+
+    private sealed record HelpSearchEntry(
+        HelpPage Page,
+        string SectionId,
+        string Title,
+        string Summary,
+        string SearchText);
 
     private static void DrawBullet(string value)
     {

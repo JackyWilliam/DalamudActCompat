@@ -1870,7 +1870,7 @@ public sealed class ControlCenterWindow : Window
                     ? text.Get("已禁用", "Disabled")
                     : text.Get("未授权", "Not authorized"));
         ImGui.SameLine();
-        ImGui.TextDisabled($"v{plugin.Manifest.Version}");
+        DrawInstalledVersion(plugin);
         if (!trusted)
         {
             ImGui.SameLine();
@@ -1992,12 +1992,26 @@ public sealed class ControlCenterWindow : Window
                 openPluginConfiguration(pluginId);
             }
             ImGui.SameLine();
-            ImGui.TextDisabled($"v{installed.Manifest.Version}");
+            DrawInstalledVersion(installed);
         }
 
         ImGui.TextDisabled(description);
         ImGui.PopID();
         return changed;
+    }
+
+    private void DrawInstalledVersion(InstalledActPlugin plugin)
+    {
+        ImGui.TextDisabled($"v{plugin.DisplayVersion}");
+        if (!plugin.HasVersionMismatch || !ImGui.IsItemHovered())
+        {
+            return;
+        }
+
+        // Keep the signed-off manifest visible for diagnosis without presenting it as the loaded DLL version.
+        ImGui.SetTooltip(text.Get(
+            $"实际 DLL 版本为 {plugin.DisplayVersion}；安装清单记录为 {plugin.Manifest.Version}。",
+            $"The DLL version is {plugin.DisplayVersion}; the install manifest records {plugin.Manifest.Version}."));
     }
 
     private void DrawCombatQuality()
