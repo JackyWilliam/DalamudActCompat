@@ -22,8 +22,8 @@ public sealed record Encounter(
 
     public bool IsTransitioning { get; init; }
 
-    // One duty pull is the folder; ACT may create several concrete records inside it
-    // during phase changes, and users still need those records without flattening the pull.
+    // A folder represents one duty entry; its child records are independent pulls so a
+    // wipe never leaks totals into the next attempt.
     public IReadOnlyList<Encounter> SegmentRecords { get; init; } = [];
 
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;

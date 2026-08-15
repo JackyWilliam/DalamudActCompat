@@ -446,13 +446,13 @@ public sealed class HelpWindow : Window
                 "副本统计按每次开怪独立计算：团灭后重新开怪会从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
                 "Duty statistics are independent for every pull. A repull starts from zero after a wipe, even when a checkpoint starts the duty from an intermediate phase such as P2."));
             DrawBullet(text.Get(
-                "历史记录以“一把”为一个可展开文件夹；同一把中因转阶段产生的多条 ACT 战斗记录会保留在文件夹内，文件夹本身显示整把累计。真正脱战后文件夹才结束，下一把会新建文件夹。",
-                "History stores each pull as one expandable folder. ACT records created by phase transitions remain as child records, while the folder shows the pull aggregate. The folder closes only after leaving combat, and the next pull creates a new folder."));
+                "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录才是一把独立战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
+                "History stores one duty entry as an expandable folder, with each child representing an independent pull. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
             DrawBullet(text.Get(
                 "“重置当前战斗”需要二次确认，会结束并清空本把统计；同一底层战斗段的后续刷新不会把旧数据带回。已保存的历史和原始 Network 日志不会被删除。",
                 "Reset current encounter requires confirmation and closes and clears the current pull. Later refreshes from the same underlying combat segment cannot restore old totals. Saved history and raw Network logs are not deleted."));
         });
-        DrawCard("help-meter-metrics", text.Get("DPS / HPS 数值口径", "DPS / HPS metric definitions"), 340, () =>
+        DrawCard("help-meter-metrics", text.Get("DPS / HPS 数值口径", "DPS / HPS metric definitions"), 390, () =>
         {
             DrawBullet(text.Get(
                 "DPS：按玩家自己的有效动作时长计算，晚开怪、死亡或长时间停手时与整场口径差异会更明显。",
@@ -467,8 +467,8 @@ public sealed class HelpWindow : Window
                 "rDPS（预估）：根据本地事件估算移除别人给你的团辅、加回你给队友的贡献。它是实时近似值，不是 FFLogs 的权威实现。",
                 "rDPS (estimated) removes estimated buffs received from others and adds estimated contribution you gave the party. It is a live approximation, not the authoritative FFLogs implementation."));
             DrawBullet(text.Get(
-                "HPS 用本把从开怪到结束的完整经过时间计算，包括转阶段和目标不可选中的时间；不会套用排除阶段空档的伤害有效时长。切换排序不会改变伤害、治疗、死亡和百分比的原始累计。",
-                "HPS uses the pull's full elapsed time from engagement to end, including transitions and untargetable periods; it does not reuse the damage duration that excludes phase downtime. Switching sort mode does not alter accumulated damage, healing, deaths, or percentages."));
+                "HPS 用本把从开怪到结束的完整经过时间计算，包括转阶段和目标不可选中的时间；伤害技能附带的自疗也会从原始效果中补充累计。没有新治疗时累计治疗不会归零，但分母仍随时间增加，所以 HPS 会逐步下降。切换排序不会改变原始累计。",
+                "HPS uses the pull's full elapsed time, including transitions and untargetable periods. Self-healing embedded in damage actions is supplemented from raw effects. With no new healing, the healing total remains while HPS gradually falls as elapsed time grows. Sorting never changes raw totals."));
         });
         DrawCard("help-meter-hit-rates", text.Get("暴击率、直暴率为什么会变化", "Why CRIT and CDH rates change"), 218, () =>
         {

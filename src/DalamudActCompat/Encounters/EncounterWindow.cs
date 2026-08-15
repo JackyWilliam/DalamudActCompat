@@ -178,11 +178,16 @@ public sealed class EncounterWindow : Window
             : null;
         if (selectedEncounter is null)
         {
-            selectedRecentId = recent[0].Id;
-            selectedEncounter = recent[0];
             if (recent[0].SegmentRecords.Count > 0)
             {
                 expandedRecentFolderIds.Add(recent[0].Id);
+                selectedEncounter = recent[0].SegmentRecords[^1];
+                selectedRecentId = selectedEncounter.Id;
+            }
+            else
+            {
+                selectedRecentId = recent[0].Id;
+                selectedEncounter = recent[0];
             }
         }
 
@@ -193,17 +198,21 @@ public sealed class EncounterWindow : Window
             ImGui.Separator();
             foreach (var encounter in recent)
             {
-                var selected = encounter.Id == selectedRecentId;
                 var isFolder = encounter.SegmentRecords.Count > 0;
+                var selected = encounter.Id == selectedRecentId ||
+                               isFolder && encounter.SegmentRecords.Any(
+                                   item => item.Id == selectedRecentId);
                 var expanded = isFolder && expandedRecentFolderIds.Contains(encounter.Id);
                 if (DrawEncounterListCard(encounter, selected, isFolder, expanded))
                 {
-                    selectedRecentId = encounter.Id;
-                    selectedEncounter = encounter;
                     if (isFolder && !expandedRecentFolderIds.Remove(encounter.Id))
                     {
                         expandedRecentFolderIds.Add(encounter.Id);
                     }
+                    selectedEncounter = isFolder
+                        ? encounter.SegmentRecords[^1]
+                        : encounter;
+                    selectedRecentId = selectedEncounter.Id;
                 }
                 if (expanded)
                 {
@@ -346,22 +355,26 @@ public sealed class EncounterWindow : Window
 
     private void DrawEncounterDetails(Encounter encounter)
     {
+        if (encounter.SegmentRecords.Count > 0)
+        {
+            ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
+            ImGui.TextDisabled(text.Get(
+                $"本次副本包含 {encounter.SegmentRecords.Count} 把战斗，请在近期战斗中选择其中一把。",
+                $"This duty contains {encounter.SegmentRecords.Count} pulls; select one under Recent encounters."));
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+            DrawEncounterDetails(encounter.SegmentRecords[^1]);
+            return;
+        }
+
         var damageDurationSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
         var healingDurationSeconds = Math.Max(1, encounter.Duration.TotalSeconds);
-        var displayDuration = encounter.SegmentRecords.Count > 0
-            ? encounter.Duration
-            : encounter.EffectiveDuration;
         ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
         ImGui.TextDisabled(
             $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  " +
             $"{encounter.StartTime.LocalDateTime:yyyy-MM-dd HH:mm:ss}  ·  " +
-            $"{FormatDuration(displayDuration)}");
-        if (encounter.SegmentRecords.Count > 0)
-        {
-            ImGui.TextDisabled(text.Get(
-                $"本把文件夹包含 {encounter.SegmentRecords.Count} 条战斗记录",
-                $"This pull folder contains {encounter.SegmentRecords.Count} combat records"));
-        }
+            $"{FormatDuration(encounter.EffectiveDuration)}");
         ImGui.Spacing();
 
         if (ImGui.BeginTable("encounter-summary", 4, ImGuiTableFlags.SizingStretchSame))
@@ -484,7 +497,10 @@ public sealed class EncounterWindow : Window
             ? text.Get($"{encounter.SegmentRecords.Count} 条记录  ·  ", $"{encounter.SegmentRecords.Count} records  ·  ")
             : string.Empty;
         var displayDuration = isFolder ? encounter.Duration : encounter.EffectiveDuration;
-        var detail = $"{recordCount}{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(displayDuration)}  ·  {encounter.TotalDeaths} {text.Get("死亡", "KO")}";
+        var deaths = isFolder
+            ? encounter.SegmentRecords.Sum(static pull => pull.TotalDeaths)
+            : encounter.TotalDeaths;
+        var detail = $"{recordCount}{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(displayDuration)}  ·  {deaths} {text.Get("死亡", "KO")}";
         var localEstimate = encounter.Combatants
             .Where(static combatant => combatant.IsLocalPlayer)
             .Select(FflogsEstimateService.GetPersistedEstimate)

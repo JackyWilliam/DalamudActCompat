@@ -85,6 +85,7 @@ try
     ValidatePictoActOverlayCommands();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
+    ValidateDutyEncounterFolderAggregation();
     ValidateDutyEncounterPartySizes();
     ValidateDutyEncounterRosterReplacement();
     ValidateControlCenterPresentation();
@@ -2083,6 +2084,68 @@ static void ValidateDutyEncounterAggregation()
         "Resetting the current pull left accumulator state that could republish old totals.");
 }
 
+static void ValidateDutyEncounterFolderAggregation()
+{
+    var start = new DateTimeOffset(2026, 8, 15, 23, 47, 41, TimeSpan.FromHours(8));
+    var firstPull = CreateDutySegment(
+        Guid.NewGuid(),
+        start,
+        start.AddSeconds(28),
+        "The Navel",
+        "Titan",
+        damage: 1_274_880,
+        healing: 170_222,
+        deaths: 1,
+        damageHits: 10,
+        criticalHits: 3,
+        directHits: 4,
+        criticalDirectHits: 1) with
+    {
+        SegmentRecords = [SampleEncounterFactory.Create(start)],
+    };
+    var secondPull = CreateDutySegment(
+        Guid.NewGuid(),
+        start.AddSeconds(46),
+        start.AddSeconds(51),
+        "The Navel",
+        "Titan",
+        damage: 44_315,
+        healing: 0,
+        deaths: 1,
+        damageHits: 2,
+        criticalHits: 0,
+        directHits: 1,
+        criticalDirectHits: 0);
+
+    var accumulator = new DutyEncounterFolderAccumulator();
+    var afterFirst = accumulator.Add(firstPull);
+    var afterSecond = accumulator.Add(secondPull);
+    Assert(
+        afterSecond.Id == afterFirst.Id &&
+        afterSecond.SegmentRecords.Count == 2 &&
+        afterSecond.SegmentRecords[0].Id == firstPull.Id &&
+        afterSecond.SegmentRecords[1].Id == secondPull.Id &&
+        afterSecond.SegmentRecords.All(static pull => pull.SegmentRecords.Count == 0) &&
+        afterSecond.Combatants.Count == 0 &&
+        afterSecond.SegmentRecords.Sum(static pull => pull.TotalDeaths) == 2 &&
+        afterSecond.SegmentRecords[0].TotalDamage == 1_274_880 &&
+        afterSecond.SegmentRecords[1].TotalDamage == 44_315,
+        "Two wipes from one duty entry were split into folders or their pull totals were accumulated together.");
+
+    var completed = accumulator.Complete()
+                    ?? throw new InvalidOperationException("The duty folder produced no history entry.");
+    Assert(
+        completed.Id == afterFirst.Id &&
+        completed.SegmentRecords.Count == 2 &&
+        !accumulator.HasData,
+        "Completing a duty entry lost its stable folder ID or retained stale pull state.");
+
+    var nextDuty = accumulator.Add(secondPull);
+    Assert(
+        nextDuty.Id != completed.Id && nextDuty.SegmentRecords.Count == 1,
+        "A later duty entry reused the previous duty folder.");
+}
+
 static void ValidateDutyEncounterPartySizes()
 {
     foreach (var partySize in new[] { 4, 8, 24 })
@@ -2429,7 +2492,7 @@ static void ValidateControlCenterPresentation()
         historySource.Contains("FFLogs {", StringComparison.Ordinal) &&
         historySource.Contains("expandedRecentFolderIds", StringComparison.Ordinal) &&
         historySource.Contains("FindRecentEncounter", StringComparison.Ordinal) &&
-        historySource.Contains("本把文件夹包含", StringComparison.Ordinal) &&
+        historySource.Contains("本次副本包含", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         historySource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "Combat History lost its branded frame, navigation rail, or saved FFLogs display.");
@@ -3919,15 +3982,23 @@ static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
     {
         EndTime = DateTimeOffset.UtcNow,
     };
+    var updatedEncounter = encounter with
+    {
+        EnemyName = "Updated duty folder",
+        SegmentRecords = [encounter],
+    };
 
     service.QueueFinishedEncounter(encounter);
+    service.QueueFinishedEncounter(updatedEncounter);
     await service.DisposeAsync();
     await service.DisposeAsync();
 
     var persisted = await repository.LoadRecentAsync(CancellationToken.None);
     Assert(
-        persisted.Count == 1 && persisted[0].Id == encounter.Id,
-        "An encounter submitted immediately before shutdown was not flushed to history.");
+        persisted.Count == 1 &&
+        persisted[0].Id == encounter.Id &&
+        persisted[0].EnemyName == "Updated duty folder",
+        "A repeated duty-folder snapshot was duplicated or not flushed to history.");
     Assert(
         Directory.EnumerateFiles(paths.EncounterLogDirectory, "*.json").Count() == 1,
         "An encounter submitted immediately before shutdown did not write its individual log.");
@@ -5413,6 +5484,23 @@ static void ValidateFflogsParityReplay(string testRoot)
 
 static void ValidateEffectiveDamageLedger()
 {
+    Assert(
+        FfxivActionEffectDecoder.TryDecodeHealing(
+            "4",
+            "90448000",
+            out var normalHealing,
+            out var normalHealingCritical) &&
+        normalHealing == 36_932 &&
+        !normalHealingCritical &&
+        FfxivActionEffectDecoder.TryDecodeHealing(
+            "200004",
+            "E47C8000",
+            out var criticalHealing,
+            out var criticalHealingCritical) &&
+        criticalHealing == 58_492 &&
+        criticalHealingCritical,
+        "Raw ActionEffect healing no longer decodes normal and critical self-heals.");
+
     var player = new ActPlayerIdentity("Player One", string.Empty, "SMN", true, false)
     {
         EntityId = 0x10000001,
@@ -5564,6 +5652,19 @@ static void ValidateEffectiveDamageLedger()
         overkillTick,
         "24|2026-08-12T20:10:06+08:00|40000010|Boss|DoT|0|0032|1|500|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-06");
 
+    ledger.ObserveRawLine(
+        first.AddSeconds(5.5),
+        "21|2026-08-12T20:10:06.500+08:00|10000001|Player One|404B|Confiteor|40000010|Boss|754003|10224002|4|90448000|0|0|0|0|0|0|0|0|0|0|0|0|15051162|15394639|10000|10000|||99.96|92.82|0.00|0.03|414116|416649|10000|10000|||100.15|98.42|0.00|-3.11|00002A7B|0|1|00||01|404B|404B|0.600|0166|raw-heal");
+    ledger.ObserveRawLine(
+        first.AddSeconds(5.6),
+        "21|2026-08-12T20:10:06.600+08:00|10000001|Player One|6494|Blade of Faith|40000010|Boss|752003|E2EF4001|200004|E47C8000|0|0|0|0|0|0|0|0|0|0|0|0|14868114|15394639|10000|10000|||99.96|92.82|0.00|0.03|416649|416649|9200|10000|||100.15|98.32|0.00|-3.11|00002A7E|0|1|00||01|6494|6494|0.600|0166|raw-heal-2");
+    ledger.ObserveRawLine(
+        first.AddSeconds(5.7),
+        "21|2026-08-12T20:10:06.700+08:00|10000001|Player One|6495|Blade of Truth|40000010|Boss|750003|6DA84001|4|90768000|0|0|0|0|0|0|0|0|0|0|0|0|14730212|15394639|10000|10000|||99.96|92.82|0.00|0.03|416649|416649|8200|10000|||100.15|98.32|0.00|-3.11|00002A80|0|1|00||01|6495|6495|0.600|0166|raw-heal-3");
+    ledger.ObserveRawLine(
+        first.AddSeconds(5.8),
+        "21|2026-08-12T20:10:06.800+08:00|10000001|Player One|6496|Blade of Valor|40000010|Boss|750003|B6234001|4|93B88000|0|0|0|0|0|0|0|0|0|0|0|0|14622348|15394639|10000|10000|||99.96|92.82|0.00|0.03|416649|416649|7400|10000|||100.15|98.32|0.00|-3.11|00002A83|0|1|00||01|6496|6496|0.600|0166|raw-heal-4");
+
     var snapshot = ledger.GetSnapshot();
     var committed = ledger.GetCommittedEventsSince(0, out var nextEventIndex);
     Assert(
@@ -5575,6 +5676,15 @@ static void ValidateEffectiveDamageLedger()
         snapshot.SourceTotals["40000001"] == 140,
         "Effective DamageLedger lost confirmed autos/periodics, admitted an unconfirmed event, " +
         "failed event-level overkill exclusion, or broke pet-owner conservation.");
+    Assert(
+        ledger.TryResolveHealing(player, out var playerHealing) && playerHealing == 170_222,
+        "Self-heals embedded in damage actions did not remain cumulative in the player's HPS numerator.");
+    ledger.ObserveRawLine(
+        first.AddSeconds(5.9),
+        "24|2026-08-12T20:10:06.900+08:00|10000001|Player One|HoT|0|505A|416649|416649|7400|10000|||99.83|100.73|0.00|-3.11|10000001|Player One|0|416649|416649|7400|10000|||99.83|100.73|0.00|-3.11|raw-hot");
+    Assert(
+        ledger.TryResolveHealing(player, out playerHealing) && playerHealing == 190_792,
+        "Periodic healing was not added to the same cumulative HPS numerator.");
     Assert(
         committed.Count == 5 &&
         committed.Sum(static item => item.Amount) == snapshot.OwnerDamage &&
@@ -6166,7 +6276,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
         helpWindowSource.Contains("团灭后重新开怪会从 0 开始", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("历史记录以“一把”为一个可展开文件夹", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
         helpWindowSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
@@ -6199,7 +6309,8 @@ static void ValidateHtmlOverlayDefaults()
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
         readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
         readmeSource.Contains("副本统计按每次开怪独立计算", StringComparison.Ordinal) &&
-        readmeSource.Contains("一把”为一个可展开文件夹", StringComparison.Ordinal) &&
+        readmeSource.Contains("“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
+        readmeSource.Contains("文件夹内每条子记录才代表一把独立战斗", StringComparison.Ordinal) &&
         readmeSource.Contains("`HPS` 使用一把战斗从开怪到结束的完整经过时间", StringComparison.Ordinal) &&
         readmeSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
         readmeSource.Contains("不会让旧数值回弹", StringComparison.Ordinal) &&
@@ -6220,7 +6331,8 @@ static void ValidateHtmlOverlayDefaults()
         parserAdapterSource.Contains("leavingDuty: false", StringComparison.Ordinal) &&
         macroPluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutySession.Reset();", StringComparison.Ordinal) &&
-        parserAdapterSource.Contains("QueueFinishedEncounter(completedAttempt)", StringComparison.Ordinal),
+        parserAdapterSource.Contains("dutyFolder.Add(completedPull)", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("QueueFinishedEncounter(folderSnapshot)", StringComparison.Ordinal),
         "Encounter reset can still republish an old pull, or duty attempts are no longer finalized independently.");
     Assert(
         HelpWindow.MatchesSearch("鲶鱼 重启", "鲶鱼精更新后重启共享 Host") &&

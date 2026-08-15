@@ -2258,6 +2258,17 @@ public sealed class SelfHostedActRuntime : IDisposable
                             var totalDamage = hasEffectiveDamage
                                 ? effectiveDamage
                                 : item.Combatant.Damage;
+                            var rawHealing = 0L;
+                            var hasRawHealing = item.Identity is { EntityId: not 0 } &&
+                                                effectiveDamageLedger.TryResolveHealing(
+                                                    item.Identity,
+                                                    out rawHealing);
+                            // Some damage actions carry a secondary self-heal that ACT omits.
+                            // The cumulative raw total supplements ACT without double-counting
+                            // ordinary heals that both pipelines already observed.
+                            var totalHealing = hasRawHealing
+                                ? Math.Max(item.Combatant.Healed, rawHealing)
+                                : item.Combatant.Healed;
                             var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
                                                 string.Equals(
                                                     item.Combatant.Name,
@@ -2273,7 +2284,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 item.Identity?.Job ?? string.Empty,
                                 isLocalPlayer,
                                 totalDamage,
-                                item.Combatant.Healed,
+                                totalHealing,
                                 Math.Max(
                                     item.Combatant.Deaths,
                                     Math.Max(

@@ -27,6 +27,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
     private readonly DutyEncounterAccumulator dutySession = new();
+    private readonly DutyEncounterFolderAccumulator dutyFolder = new();
     private readonly HashSet<Guid> finalizedDutySegmentIds = [];
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
@@ -298,6 +299,7 @@ public sealed class IinactAdapter : IParserEngine
         {
             Encounter displayEncounter;
             Encounter? completedAttempt = null;
+            Encounter? folderSnapshot = null;
             var inCombat = isInCombat();
             // The framework callback owns the previous combat state; updating it here could
             // consume the wipe edge before the pull folder has been finalized.
@@ -315,6 +317,11 @@ public sealed class IinactAdapter : IParserEngine
                     RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
                     completedAttempt = dutySession.Complete(
                         encounter.EndTime ?? DateTimeOffset.UtcNow);
+                    if (completedAttempt is not null)
+                    {
+                        completedAttempt = CaptureFflogsEstimatesSafely(completedAttempt);
+                        folderSnapshot = dutyFolder.Add(completedAttempt);
+                    }
                 }
             }
 
@@ -324,9 +331,8 @@ public sealed class IinactAdapter : IParserEngine
                 return;
             }
 
-            completedAttempt = CaptureFflogsEstimatesSafely(completedAttempt);
             stateStore.UpdateCurrent(completedAttempt);
-            encounterService.QueueFinishedEncounter(completedAttempt);
+            encounterService.QueueFinishedEncounter(folderSnapshot!);
             return;
         }
 
@@ -398,7 +404,8 @@ public sealed class IinactAdapter : IParserEngine
 
     private void FinalizeDutyAttempt(DateTimeOffset endTime, bool leavingDuty)
     {
-        Encounter? completed;
+        Encounter? completedPull;
+        Encounter? folderSnapshot;
         lock (dutySessionLock)
         {
             if (leavingDuty)
@@ -406,17 +413,31 @@ public sealed class IinactAdapter : IParserEngine
                 wasBoundByDuty = false;
             }
             RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
-            completed = dutySession.Complete(endTime);
+            completedPull = dutySession.Complete(endTime);
+            if (completedPull is not null)
+            {
+                completedPull = CaptureFflogsEstimatesSafely(completedPull);
+                folderSnapshot = dutyFolder.Add(completedPull);
+            }
+            else
+            {
+                folderSnapshot = null;
+            }
+
+            if (leavingDuty)
+            {
+                folderSnapshot = dutyFolder.Complete() ?? folderSnapshot;
+            }
         }
 
-        if (completed is null)
+        if (completedPull is not null)
         {
-            return;
+            stateStore.UpdateCurrent(completedPull);
         }
-
-        completed = CaptureFflogsEstimatesSafely(completed);
-        stateStore.UpdateCurrent(completed);
-        encounterService.QueueFinishedEncounter(completed);
+        if (folderSnapshot is not null)
+        {
+            encounterService.QueueFinishedEncounter(folderSnapshot);
+        }
     }
 
     private void RememberFinalizedSegmentsUnsafe(IEnumerable<Guid> segmentIds)
