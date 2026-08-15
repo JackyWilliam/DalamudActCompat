@@ -5893,6 +5893,15 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "HelpWindow.cs"));
+    var macroPluginSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "Plugin.cs"));
+    var readmeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "README.md"));
     var helpIconPath = Path.Combine(
         FindProjectRoot(),
         "src",
@@ -5946,10 +5955,31 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
         helpWindowSource.Contains("不要去绿玩面前跳脸。", StringComparison.Ordinal) &&
         helpWindowSource.Contains("一经发现立刻踢出！", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("宏指令", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("ImGui.SetClipboardText(command);", StringComparison.Ordinal) &&
+        new[]
+        {
+            "/actcompat on",
+            "/actcompat meter",
+            "/actcompat history",
+            "/actcompat logs",
+            "/actcompat status",
+            "/actcompat cactbot",
+            "/actcompat overlay",
+            "/actcompat clear",
+            "/actcompat install",
+            "/actcompat factory-reset",
+            "/actcompat host",
+            "/actcompat stop",
+            "/actcompat sample",
+        }.All(command => helpWindowSource.Contains(command, StringComparison.Ordinal)) &&
+        macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
+        !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
+        !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
         helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),
-        "The flat overview help entry or independent branded help document regressed.");
+        "The help entry, macro command reference, copy action, or branded help document regressed.");
     Assert(
         controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
         controlCenterSource.Contains(

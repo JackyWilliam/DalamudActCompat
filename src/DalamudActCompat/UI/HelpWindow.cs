@@ -12,6 +12,7 @@ public sealed class HelpWindow : Window
     {
         UsageNotice,
         GettingStarted,
+        MacroCommands,
         CombatMeter,
         Overlays,
         Extensions,
@@ -118,16 +119,23 @@ public sealed class HelpWindow : Window
         }
     }
 
+    public void OpenCommands()
+    {
+        selectedPage = HelpPage.MacroCommands;
+        IsOpen = true;
+    }
+
     private void DrawNavigation()
     {
         var labels = new[]
         {
             text.Get("使用须知", "Notice"),
             text.Get("快速开始", "Start"),
+            text.Get("宏指令", "Commands"),
             text.Get("战斗统计", "Meter"),
             text.Get("悬浮窗", "Overlays"),
             text.Get("扩展", "Extensions"),
-            text.Get("排错", "Troubleshooting"),
+            text.Get("排错", "Fixes"),
             text.Get("版权声明", "Copyright"),
         };
         selectedPage = (HelpPage)BrandedWindowChrome.DrawNavigationRail(
@@ -145,6 +153,9 @@ public sealed class HelpWindow : Window
                 break;
             case HelpPage.GettingStarted:
                 DrawGettingStarted();
+                break;
+            case HelpPage.MacroCommands:
+                DrawMacroCommands();
                 break;
             case HelpPage.CombatMeter:
                 DrawCombatMeter();
@@ -247,6 +258,36 @@ public sealed class HelpWindow : Window
             ImGui.TextWrapped(text.Get(
                 "“重置当前战斗”只清空当前显示；历史记录和已经写入磁盘的原始日志不受影响。",
                 "Reset current encounter clears only the current display; history and raw logs already written to disk are unaffected."));
+        });
+    }
+
+    private void DrawMacroCommands()
+    {
+        DrawPageHeader(
+            text.Get("宏指令", "Macro commands"),
+            text.Get("点击“复制”即可放入剪贴板，再粘贴到游戏聊天框或宏中。", "Use Copy to place a command on the clipboard, then paste it into game chat or a macro."));
+        DrawCard("help-commands-common", text.Get("常用入口", "Common entry points"), 365, () =>
+        {
+            DrawCommand("on", "/actcompat on", text.Get("打开插件控制中心。", "Open the plugin control center."));
+            DrawCommand("meter-default", "/actcompat", text.Get("打开战斗统计；保留现有无参数宏的行为。", "Open Combat Meter; preserves existing argument-free macros."));
+            DrawCommand("meter", "/actcompat meter", text.Get("打开战斗统计。", "Open Combat Meter."));
+            DrawCommand("history", "/actcompat history", text.Get("打开近期战斗。", "Open recent encounters."));
+            DrawCommand("logs", "/actcompat logs", text.Get("打开已保存的日志文件列表。", "Open the saved log-file list."));
+            DrawCommand("status", "/actcompat status", text.Get("打开解析器与 Host 运行状态。", "Open parser and Host runtime status."));
+        });
+        DrawCard("help-commands-overlays", text.Get("悬浮窗", "Overlays"), 150, () =>
+        {
+            DrawCommand("cactbot", "/actcompat cactbot", text.Get("打开当前选择的 Cactbot 悬浮窗。", "Open the selected Cactbot overlay."));
+            DrawCommand("overlay", "/actcompat overlay", text.Get("打开当前选择的 HTML 悬浮窗；可在后面追加模板名。", "Open the selected HTML overlay; optionally append a template name."));
+        });
+        DrawCard("help-commands-maintenance", text.Get("维护与诊断", "Maintenance and diagnostics"), 380, () =>
+        {
+            DrawCommand("clear", "/actcompat clear", text.Get("立即清空当前战斗显示，不删除历史或原始日志。", "Immediately clear the current encounter display without deleting history or raw logs."));
+            DrawCommand("install", "/actcompat install \"<DLL 或 ZIP 路径>\"", text.Get("静态预检并导入第三方 ACT 扩展；路径含空格时保留引号。", "Preflight and import a third-party ACT extension; keep quotes around paths containing spaces."));
+            DrawCommand("factory-reset", "/actcompat factory-reset", text.Get("打开控制中心；恢复出厂设置仍需在界面中确认。", "Open the control center; factory reset still requires confirmation in the UI."));
+            DrawCommand("host", "/actcompat host", text.Get("启动兼容 Host 并重启解析器，主要用于诊断。", "Start the compatibility Host and restart the parser, primarily for diagnostics."));
+            DrawCommand("stop", "/actcompat stop", text.Get("停止解析器与共享兼容 Host，主要用于诊断。", "Stop the parser and shared compatibility Host, primarily for diagnostics."));
+            DrawCommand("sample", "/actcompat sample", text.Get("载入本地样例战斗，仅用于开发与界面检查。", "Load a local sample encounter for development and UI checks only."));
         });
     }
 
@@ -404,6 +445,20 @@ public sealed class HelpWindow : Window
         ImGui.Bullet();
         ImGui.SameLine();
         ImGui.TextWrapped(value);
+    }
+
+    private void DrawCommand(string id, string command, string description)
+    {
+        if (ImGui.SmallButton($"{text.Get("复制", "Copy")}##help-command-{id}"))
+        {
+            ImGui.SetClipboardText(command);
+        }
+        ImGui.SameLine();
+        ImGui.TextColored(IceBlue, command);
+        ImGui.Indent();
+        ImGui.TextWrapped(description);
+        ImGui.Unindent();
+        ImGui.Spacing();
     }
 
     private void OpenUrl(string url)

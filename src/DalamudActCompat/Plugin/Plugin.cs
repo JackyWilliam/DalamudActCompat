@@ -490,7 +490,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open ACT Compat UI. Args: meter, cactbot, overlay [template], history, status, settings, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open Combat Meter. Args: on, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -596,6 +596,11 @@ public sealed class Plugin : IDalamudPlugin
         var remainder = separator < 0 ? string.Empty : trimmedArguments[(separator + 1)..].Trim();
         switch (verb)
         {
+            case "on":
+                // `on` is the established player-facing macro for the control center;
+                // keep it explicit so removing the unused `settings` alias cannot affect it.
+                settingsWindow.ShowAnimated();
+                break;
             case "history":
                 encounterWindow.OpenRecent();
                 break;
@@ -604,9 +609,6 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "status":
                 statusWindow.IsOpen = true;
-                break;
-            case "settings":
-                settingsWindow.ShowAnimated();
                 break;
             case "cactbot":
                 OpenCactbotOverlay();
@@ -665,7 +667,9 @@ public sealed class Plugin : IDalamudPlugin
                 meterWindow.IsOpen = true;
                 break;
             default:
-                settingsWindow.ShowAnimated();
+                // Unknown macros should show the authoritative command list instead of
+                // silently acting as `on`; this also makes the removed `settings` alias inert.
+                helpWindow.OpenCommands();
                 break;
         }
     }

@@ -95,9 +95,13 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 
 ```text
 /actcompat
+/actcompat on
+/actcompat meter
 /actcompat history
-/actcompat settings
+/actcompat logs
 /actcompat status
+/actcompat cactbot
+/actcompat overlay [template]
 /actcompat sample
 /actcompat clear
 /actcompat host
@@ -105,6 +109,10 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat install "C:\path\plugin.zip"
 /actcompat factory-reset
 ```
+
+`/actcompat on` opens the plugin control center. `/actcompat` and
+`/actcompat meter` open Combat Meter. The in-game Help window contains the
+complete command reference with a clipboard-copy button for every entry.
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
 
