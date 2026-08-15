@@ -137,6 +137,7 @@ internal sealed class EffectiveDamageLedger
                 return;
             }
             UpdatePartyActorsUnsafe(identities);
+            item = ResolveNormalizedSourceIdentity(item, identities);
             PruneNormalizedCandidatesUnsafe(item.Timestamp);
             if (item.IsDamageSwing || item.Amount <= 0 || !item.IsPartyOwned || item.IsPartyTarget)
             {
@@ -387,8 +388,9 @@ internal sealed class EffectiveDamageLedger
 
     private bool FlushPeriodicEffectsUnsafe(DateTimeOffset beforeTimestamp)
     {
+        var force = beforeTimestamp == DateTimeOffset.MaxValue;
         var pending = pendingPeriodicEffects
-            .Where(item => item.Timestamp < beforeTimestamp)
+            .Where(item => force || beforeTimestamp - item.Timestamp > NormalizedCandidateLifetime)
             .ToArray();
         var changed = false;
         foreach (var item in pending)
@@ -531,6 +533,27 @@ internal sealed class EffectiveDamageLedger
     private bool IsPartyOwnedUnsafe(string sourceId, string ownerId)
         => partyActorIds.Contains(sourceId) ||
            !string.IsNullOrWhiteSpace(ownerId) && partyActorIds.Contains(ownerId);
+
+    private static NormalizedDamageCandidate ResolveNormalizedSourceIdentity(
+        NormalizedDamageCandidate item,
+        IReadOnlyList<ActPlayerIdentity> identities)
+    {
+        if (!string.IsNullOrWhiteSpace(item.SourceId))
+        {
+            return item;
+        }
+
+        var identity = ActPlayerIdentityResolver.Resolve(identities, item.SourceName);
+        if (identity?.EntityId is null or 0)
+        {
+            return item;
+        }
+
+        // Simulated periodic swings can omit SourceId even though ACT has already
+        // resolved the player name. Use the party identity so owner totals remain
+        // addressable by the entity ID consumed by TryResolveDamage.
+        return item with { SourceId = FormatActorId(identity.EntityId) };
+    }
 
     private void PruneNormalizedCandidatesUnsafe(DateTimeOffset timestamp)
         => normalizedCandidates.RemoveAll(item => timestamp - item.Timestamp > NormalizedCandidateLifetime);

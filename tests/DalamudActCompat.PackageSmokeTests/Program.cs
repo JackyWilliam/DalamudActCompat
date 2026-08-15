@@ -5393,6 +5393,55 @@ static void ValidateEffectiveDamageLedger()
         committed.Any(static item => item.SourceId == "40000001" && item.OwnerId == "10000001") &&
         nextEventIndex == committed.Count,
         "The immutable effective-event stream diverged from ledger totals, periodics, or pet ownership.");
+
+    var delayedPeriodicLedger = new EffectiveDamageLedger();
+    delayedPeriodicLedger.StartEncounter(identities);
+    var delayedPeriodic = first.AddSeconds(10);
+    delayedPeriodicLedger.ObserveRawLine(
+        delayedPeriodic,
+        "24|2026-08-12T20:10:11+08:00|40000010|Boss|DoT|0|0064|1000|1000|10000|10000|||||||10000001|Player One|0|100000|100000|10000|10000|||||||raw-07");
+    delayedPeriodicLedger.ObserveRawLine(
+        delayedPeriodic.AddMilliseconds(44),
+        "37|2026-08-12T20:10:11.044+08:00|40000010|Boss|00000006|900|");
+    delayedPeriodicLedger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            delayedPeriodic,
+            string.Empty,
+            "Player One",
+            string.Empty,
+            "40000010",
+            "Boss",
+            "Burn (*)",
+            60,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    delayedPeriodicLedger.ObserveNormalizedDamage(
+        new NormalizedDamageCandidate(
+            delayedPeriodic,
+            "40000001",
+            "Player Pet",
+            "10000001",
+            "40000010",
+            "Boss",
+            "Pet Burn (*)",
+            40,
+            IsDamageSwing: false,
+            IsPartyOwned: true,
+            IsPartyTarget: false),
+        identities);
+    delayedPeriodicLedger.ObserveRawLine(
+        delayedPeriodic.AddSeconds(2.001),
+        "39|2026-08-12T20:10:13.001+08:00|10000001|Player One|100000|100000|10000|10000||||||||raw-08");
+    var delayedSnapshot = delayedPeriodicLedger.GetSnapshot();
+    Assert(
+        delayedPeriodicLedger.TryResolveDamage(player, out var delayedDamage) &&
+        delayedDamage == 100 &&
+        delayedSnapshot.OwnerDamage == 100 &&
+        delayedSnapshot.SourceTotals["10000001"] == 60 &&
+        delayedSnapshot.SourceTotals["40000001"] == 40,
+        "Parser-delayed periodic candidates were flushed before complete player/pet attribution or remained under a name-only owner key.");
 }
 
 static void ValidateEncounterDurationTracker()
