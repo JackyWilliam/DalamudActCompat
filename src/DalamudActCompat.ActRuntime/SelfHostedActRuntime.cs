@@ -65,7 +65,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
     private readonly object networkCaptureSync = new();
-    private readonly Dictionary<string, CriticalDirectHitCounter> criticalDirectHitCounters =
+    private readonly Dictionary<string, DamageHitCounter> damageHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator;
     private readonly EffectiveDamageLedger effectiveDamageLedger = new();
@@ -103,6 +103,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, long> chatDamageTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> chatDamageHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> chatCriticalHitTotals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> chatDirectHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> chatCriticalDirectHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
@@ -1812,6 +1813,10 @@ public sealed class SelfHostedActRuntime : IDisposable
             {
                 chatCriticalHitTotals[actor] = chatCriticalHitTotals.GetValueOrDefault(actor) + 1;
             }
+            if (isDirectHit)
+            {
+                chatDirectHitTotals[actor] = chatDirectHitTotals.GetValueOrDefault(actor) + 1;
+            }
             if (isCritical && isDirectHit)
             {
                 chatCriticalDirectHitTotals[actor] =
@@ -1958,7 +1963,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                     pair.Value / elapsedSeconds,
                     chatDamageHitTotals.GetValueOrDefault(pair.Key),
                     chatCriticalHitTotals.GetValueOrDefault(pair.Key),
-                    chatCriticalDirectHitTotals.GetValueOrDefault(pair.Key));
+                    chatCriticalDirectHitTotals.GetValueOrDefault(pair.Key),
+                    DirectHits: chatDirectHitTotals.GetValueOrDefault(pair.Key));
             })
             .Where(static combatant => combatant is not null)
             .Select(static combatant => combatant!)
@@ -2181,7 +2187,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     if (!ReferenceEquals(activeEncounter, encounter))
                     {
                         var continuesChatEncounter = chatEncounterId != Guid.Empty;
-                        criticalDirectHitCounters.Clear();
+                        damageHitCounters.Clear();
                         activeEncounterIdentities.Clear();
                         activeEncounterPartyCapacity = 0;
                         activeEncounter = encounter;
@@ -2252,6 +2258,17 @@ public sealed class SelfHostedActRuntime : IDisposable
                             var totalDamage = hasEffectiveDamage
                                 ? effectiveDamage
                                 : item.Combatant.Damage;
+                            var rawHealing = 0L;
+                            var hasRawHealing = item.Identity is { EntityId: not 0 } &&
+                                                effectiveDamageLedger.TryResolveHealing(
+                                                    item.Identity,
+                                                    out rawHealing);
+                            // Some damage actions carry a secondary self-heal that ACT omits.
+                            // The cumulative raw total supplements ACT without double-counting
+                            // ordinary heals that both pipelines already observed.
+                            var totalHealing = hasRawHealing
+                                ? Math.Max(item.Combatant.Healed, rawHealing)
+                                : item.Combatant.Healed;
                             var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
                                                 string.Equals(
                                                     item.Combatant.Name,
@@ -2267,7 +2284,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 item.Identity?.Job ?? string.Empty,
                                 isLocalPlayer,
                                 totalDamage,
-                                item.Combatant.Healed,
+                                totalHealing,
                                 Math.Max(
                                     item.Combatant.Deaths,
                                     Math.Max(
@@ -2284,7 +2301,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                                         actorName,
                                         totalDamage,
                                         effectiveEncounterSeconds)
-                                    : 0);
+                                    : 0,
+                                hitCounts.DirectHits);
                         })
                         .ToArray();
 
@@ -2659,41 +2677,49 @@ public sealed class SelfHostedActRuntime : IDisposable
             return new CombatantHitCounts(
                 Math.Max(0, combatant.Hits),
                 Math.Max(0, combatant.CritHits),
+                0,
                 0);
         }
 
-        if (!criticalDirectHitCounters.TryGetValue(combatant.Name, out var counter) ||
+        if (!damageHitCounters.TryGetValue(combatant.Name, out var counter) ||
             !ReferenceEquals(counter.Source, allDamage) ||
             counter.ProcessedSwings > allDamage.Items.Count)
         {
-            counter = new CriticalDirectHitCounter(allDamage);
+            counter = new DamageHitCounter(allDamage);
         }
 
         for (var index = counter.ProcessedSwings; index < allDamage.Items.Count; index++)
         {
             var swing = allDamage.Items[index];
-            if (swing.Critical &&
-                swing.Tags.TryGetValue("DirectHit", out var directHit) &&
-                string.Equals(directHit?.ToString(), "True", StringComparison.Ordinal))
+            var isDirectHit = swing.Tags.TryGetValue("DirectHit", out var directHit) &&
+                              string.Equals(directHit?.ToString(), "True", StringComparison.Ordinal);
+            if (isDirectHit)
+            {
+                counter.DirectHits++;
+            }
+            if (swing.Critical && isDirectHit)
             {
                 counter.CriticalDirectHits++;
             }
         }
 
         counter.ProcessedSwings = allDamage.Items.Count;
-        criticalDirectHitCounters[combatant.Name] = counter;
+        damageHitCounters[combatant.Name] = counter;
 
         return new CombatantHitCounts(
             Math.Max(0, combatant.Hits),
             Math.Max(0, combatant.CritHits),
+            counter.DirectHits,
             counter.CriticalDirectHits);
     }
 
-    private sealed class CriticalDirectHitCounter(AttackType source)
+    private sealed class DamageHitCounter(AttackType source)
     {
         public AttackType Source { get; } = source;
 
         public int ProcessedSwings { get; set; }
+
+        public int DirectHits { get; set; }
 
         public int CriticalDirectHits { get; set; }
     }
@@ -2725,6 +2751,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly record struct CombatantHitCounts(
         int DamageHits,
         int CriticalHits,
+        int DirectHits,
         int CriticalDirectHits);
 
     private void TrackPlayerDeaths(IReadOnlyList<ActPlayerIdentity> identities)
@@ -2789,6 +2816,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatDamageTotals.Clear();
         chatDamageHitTotals.Clear();
         chatCriticalHitTotals.Clear();
+        chatDirectHitTotals.Clear();
         chatCriticalDirectHitTotals.Clear();
         chatParser.Clear();
         chatEnemy = string.Empty;

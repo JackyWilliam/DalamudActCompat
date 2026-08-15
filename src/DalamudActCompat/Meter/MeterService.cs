@@ -59,7 +59,8 @@ public sealed class MeterService
 
     private IReadOnlyList<CombatantRow> BuildRows(Encounter encounter)
     {
-        var duration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
+        var damageDuration = Math.Max(1.0, encounter.EffectiveDuration.TotalSeconds);
+        var healingDuration = Math.Max(1.0, encounter.Duration.TotalSeconds);
         var totalDamage = Math.Max(1, encounter.TotalDamage);
         var rows = encounter.Combatants.Select(combatant =>
         {
@@ -69,12 +70,13 @@ public sealed class MeterService
                 combatant.Name,
                 combatant.Job,
                 combatant.IsLocalPlayer,
-                ResolveDps(combatant, duration),
-                combatant.TotalHealing / duration,
+                ResolveDps(combatant, damageDuration),
+                combatant.TotalHealing / healingDuration,
                 combatant.TotalDamage,
                 combatant.TotalHealing,
                 combatant.TotalDamage * 100.0 / totalDamage,
                 hitRates.CriticalHitPercent,
+                hitRates.DirectHitPercent,
                 hitRates.CriticalDirectHitPercent,
                 combatant.Deaths);
         });
@@ -134,6 +136,7 @@ public sealed class MeterService
             : combatant.Id;
         var current = new HitRateSnapshot(
             CalculateHitRate(combatant.CriticalHits, combatant.DamageHits),
+            CalculateHitRate(combatant.DirectHits, combatant.DamageHits),
             CalculateHitRate(combatant.CriticalDirectHits, combatant.DamageHits));
         if (current.CriticalHitPercent is not null)
         {
@@ -148,6 +151,7 @@ public sealed class MeterService
 
     private readonly record struct HitRateSnapshot(
         double? CriticalHitPercent,
+        double? DirectHitPercent,
         double? CriticalDirectHitPercent);
 }
 
@@ -162,6 +166,7 @@ public sealed record CombatantRow(
     long TotalHealing,
     double DamagePercent,
     double? CriticalHitPercent,
+    double? DirectHitPercent,
     double? CriticalDirectHitPercent,
     int Deaths,
     int? Rank = null);

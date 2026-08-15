@@ -368,7 +368,7 @@ public sealed class SettingsWindow : Window
         changed |= Checkbox(text.Get("锁定窗口", "Window locked"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
         changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
         changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
-        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0.05f, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
+        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
         changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
         if (ImGui.SliderInt(text.Get("DPS 刷新间隔（毫秒）", "DPS refresh interval (ms)"), ref refreshInterval, 250, 2000))
@@ -397,6 +397,14 @@ public sealed class SettingsWindow : Window
             configuration.Meter.CompactMode,
             value => configuration.Meter.CompactMode = value);
         changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
+        changed |= Checkbox("FFLogs", configuration.Meter.ShowFflogs, value => configuration.Meter.ShowFflogs = value);
+        changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
+        changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
+        changed |= Checkbox(text.Get("暴击 %", "CRIT %"), configuration.Meter.ShowCriticalHitRate, value => configuration.Meter.ShowCriticalHitRate = value);
+        changed |= Checkbox(text.Get("直击 %", "DH %"), configuration.Meter.ShowDirectHitRate, value => configuration.Meter.ShowDirectHitRate = value);
+        changed |= Checkbox(text.Get("直暴 %", "CDH %"), configuration.Meter.ShowCriticalDirectHitRate, value => configuration.Meter.ShowCriticalDirectHitRate = value);
+        changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
+        changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
         if (configuration.Meter.ShowJob)
         {
             var jobStyle = configuration.Meter.JobDisplayStyle;
@@ -419,8 +427,8 @@ public sealed class SettingsWindow : Window
             }
         }
         ImGui.TextDisabled(text.Get(
-            "每名玩家固定一行，显示当前 DPS/HPS、伤害占比、暴击率、直暴率和死亡数。",
-            "Each player uses one row showing current DPS/HPS, damage percentage, critical rate, critical-direct rate, and deaths."));
+            "排序与显示列彼此独立；FFLogs 还需要开启在线预估。",
+            "Sorting and visible columns are independent; FFLogs also requires online estimates to be enabled."));
         var localPlayerColor = configuration.Meter.LocalPlayerColor;
         if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
         {

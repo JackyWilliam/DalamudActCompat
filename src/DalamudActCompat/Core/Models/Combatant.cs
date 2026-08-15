@@ -19,4 +19,5 @@ public sealed record Combatant(
     double Rdps = 0,
     DateTimeOffset? FflogsDataUpdatedAt = null,
     string? FflogsMetric = null,
-    bool FflogsDataStale = false);
+    bool FflogsDataStale = false,
+    int DirectHits = 0);

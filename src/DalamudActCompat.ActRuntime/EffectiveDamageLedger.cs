@@ -25,6 +25,8 @@ internal sealed class EffectiveDamageLedger
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> ownerDamage =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> ownerHealing =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly List<EffectiveDamageEvent> committedEvents = [];
     private bool encounterActive;
 
@@ -39,6 +41,7 @@ internal sealed class EffectiveDamageLedger
             targetEffectiveHp.Clear();
             sourceDamage.Clear();
             ownerDamage.Clear();
+            ownerHealing.Clear();
             committedEvents.Clear();
             partyActorIds.Clear();
             UpdatePartyActorsUnsafe(identities);
@@ -89,6 +92,7 @@ internal sealed class EffectiveDamageLedger
             targetEffectiveHp.Clear();
             sourceDamage.Clear();
             ownerDamage.Clear();
+            ownerHealing.Clear();
             committedEvents.Clear();
         }
     }
@@ -200,6 +204,16 @@ internal sealed class EffectiveDamageLedger
         }
     }
 
+    public bool TryResolveHealing(ActPlayerIdentity identity, out long healing)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        lock (syncRoot)
+        {
+            healing = ownerHealing.GetValueOrDefault(FormatActorId(identity.EntityId));
+            return encounterActive;
+        }
+    }
+
     internal EffectiveDamageLedgerSnapshot GetSnapshot()
     {
         lock (syncRoot)
@@ -281,8 +295,20 @@ internal sealed class EffectiveDamageLedger
             pendingActions.Add(key, queue);
         }
 
+        var healingChanged = false;
         for (var effectIndex = 8; effectIndex < 24; effectIndex += 2)
         {
+            if (FfxivActionEffectDecoder.TryDecodeHealing(
+                    fields[effectIndex],
+                    fields[effectIndex + 1],
+                    out var healing,
+                    out _) && healing > 0)
+            {
+                AddHealingUnsafe(sourceId, fields[3], ownerId, healing);
+                healingChanged = true;
+                continue;
+            }
+
             if (!FfxivActionEffectDecoder.TryDecodeDamage(
                     fields[effectIndex],
                     fields[effectIndex + 1],
@@ -313,7 +339,7 @@ internal sealed class EffectiveDamageLedger
         {
             pendingActions.Remove(key);
         }
-        return false;
+        return healingChanged;
     }
 
     private bool ObserveEffectResultUnsafe(IReadOnlyList<string> fields)
@@ -364,8 +390,25 @@ internal sealed class EffectiveDamageLedger
 
     private bool ObservePeriodicEffectUnsafe(DateTimeOffset timestamp, IReadOnlyList<string> fields)
     {
-        if (fields.Count < 20 || !string.Equals(fields[4], "DoT", StringComparison.Ordinal) ||
+        if (fields.Count < 20 ||
             !long.TryParse(fields[6], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rawAmount))
+        {
+            return false;
+        }
+
+        if (string.Equals(fields[4], "HoT", StringComparison.Ordinal))
+        {
+            var sourceId = NormalizeActorId(fields[17]);
+            var ownerId = ownerIdsByActorId.GetValueOrDefault(sourceId, string.Empty);
+            if (rawAmount <= 0 || !IsPartyOwnedUnsafe(sourceId, ownerId))
+            {
+                return false;
+            }
+
+            AddHealingUnsafe(sourceId, fields[18], ownerId, rawAmount);
+            return true;
+        }
+        if (!string.Equals(fields[4], "DoT", StringComparison.Ordinal))
         {
             return false;
         }
@@ -515,6 +558,19 @@ internal sealed class EffectiveDamageLedger
         // Downstream metrics consume this immutable decision instead of reclassifying
         // the parser swing and silently diverging from the authoritative totals.
         committedEvents.Add(item);
+    }
+
+    private void AddHealingUnsafe(
+        string sourceId,
+        string sourceName,
+        string ownerId,
+        long amount)
+    {
+        var sourceKey = ActorKey(sourceId, sourceName);
+        var ownerKey = !string.IsNullOrWhiteSpace(ownerId)
+            ? NormalizeActorId(ownerId)
+            : sourceKey;
+        ownerHealing[ownerKey] = ownerHealing.GetValueOrDefault(ownerKey) + amount;
     }
 
     private void UpdatePartyActorsUnsafe(IReadOnlyList<ActPlayerIdentity> identities)

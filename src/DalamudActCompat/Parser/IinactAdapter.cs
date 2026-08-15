@@ -18,6 +18,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly IFramework framework;
     private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
+    private readonly Func<bool> isInCombat;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
@@ -26,11 +27,13 @@ public sealed class IinactAdapter : IParserEngine
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
     private readonly DutyEncounterAccumulator dutySession = new();
+    private readonly DutyEncounterFolderAccumulator dutyFolder = new();
     private readonly HashSet<Guid> finalizedDutySegmentIds = [];
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
     private volatile bool wasBoundByDuty;
+    private volatile bool wasInCombat;
     private bool disposed;
 
     public IinactAdapter(
@@ -42,6 +45,7 @@ public sealed class IinactAdapter : IParserEngine
         IFramework framework,
         Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
+        Func<bool> isInCombat,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
         Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
@@ -55,6 +59,7 @@ public sealed class IinactAdapter : IParserEngine
         this.framework = framework;
         this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
+        this.isInCombat = isInCombat;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
@@ -62,6 +67,7 @@ public sealed class IinactAdapter : IParserEngine
         actRuntime.EncounterChanged += OnEncounterChanged;
         framework.Update += OnFrameworkUpdate;
         wasBoundByDuty = isBoundByDuty();
+        wasInCombat = isInCombat();
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -187,7 +193,7 @@ public sealed class IinactAdapter : IParserEngine
 
     private void StopCore(bool updateStatus)
     {
-        FinalizeDutySession(DateTimeOffset.UtcNow);
+        FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
@@ -210,6 +216,26 @@ public sealed class IinactAdapter : IParserEngine
         {
             lifecycleLock.Release();
         }
+    }
+
+    public void ResetCurrentEncounter()
+    {
+        var currentEncounterId = stateStore.GetSnapshot().Current?.Id;
+        lock (dutySessionLock)
+        {
+            RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
+            if (currentEncounterId is { } id && id != Guid.Empty)
+            {
+                RememberFinalizedSegmentsUnsafe([id]);
+            }
+
+            // Resetting only the UI lets the next ACT refresh republish the same totals.
+            // Closing the underlying segment keeps the meter empty until a genuinely new pull.
+            dutySession.Reset();
+        }
+
+        wasInCombat = isInCombat();
+        stateStore.ResetCurrent();
     }
 
     public async ValueTask DisposeAsync()
@@ -260,30 +286,54 @@ public sealed class IinactAdapter : IParserEngine
         // Queue every party job's ranking curve as soon as combat data appears.
         // This must not depend on whether the compact meter happens to draw that row.
         encounter = CaptureFflogsEstimatesSafely(encounter);
-        var boundByDuty = isBoundByDuty();
-        if (boundByDuty)
-        {
-            Encounter dutyEncounter;
-            lock (dutySessionLock)
-            {
-                wasBoundByDuty = true;
-                dutyEncounter = dutySession.Update(
-                    encounter,
-                    finished,
-                    DateTimeOffset.UtcNow,
-                    snapshot.CurrentPartyMemberIds,
-                    snapshot.PartyCapacity);
-            }
-            stateStore.UpdateCurrent(dutyEncounter);
-            return;
-        }
-
         lock (dutySessionLock)
         {
             if (finalizedDutySegmentIds.Contains(snapshot.Id))
             {
                 return;
             }
+        }
+
+        var boundByDuty = isBoundByDuty();
+        if (boundByDuty)
+        {
+            Encounter displayEncounter;
+            Encounter? completedAttempt = null;
+            Encounter? folderSnapshot = null;
+            var inCombat = isInCombat();
+            // The framework callback owns the previous combat state; updating it here could
+            // consume the wipe edge before the pull folder has been finalized.
+            lock (dutySessionLock)
+            {
+                wasBoundByDuty = true;
+                displayEncounter = dutySession.Update(
+                    encounter,
+                    finished,
+                    DateTimeOffset.UtcNow,
+                    snapshot.CurrentPartyMemberIds,
+                    snapshot.PartyCapacity);
+                if (finished && !inCombat)
+                {
+                    RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
+                    completedAttempt = dutySession.Complete(
+                        encounter.EndTime ?? DateTimeOffset.UtcNow);
+                    if (completedAttempt is not null)
+                    {
+                        completedAttempt = CaptureFflogsEstimatesSafely(completedAttempt);
+                        folderSnapshot = dutyFolder.Add(completedAttempt);
+                    }
+                }
+            }
+
+            if (completedAttempt is null)
+            {
+                stateStore.UpdateCurrent(displayEncounter);
+                return;
+            }
+
+            stateStore.UpdateCurrent(completedAttempt);
+            encounterService.QueueFinishedEncounter(folderSnapshot!);
+            return;
         }
 
         if (wasBoundByDuty)
@@ -307,7 +357,7 @@ public sealed class IinactAdapter : IParserEngine
                 }
             }
 
-            FinalizeDutySession(DateTimeOffset.UtcNow);
+            FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
             lock (dutySessionLock)
             {
                 if (sameDutyZone || finalizedDutySegmentIds.Contains(snapshot.Id))
@@ -330,48 +380,81 @@ public sealed class IinactAdapter : IParserEngine
     private void OnFrameworkUpdate(IFramework _)
     {
         var boundByDuty = isBoundByDuty();
+        var inCombat = isInCombat();
         if (boundByDuty)
         {
+            var pullEnded = wasBoundByDuty && wasInCombat && !inCombat;
             wasBoundByDuty = true;
+            wasInCombat = inCombat;
+            if (pullEnded)
+            {
+                // The game combat flag spans phase transitions, while ACT may split them.
+                // Only the true in-combat -> out-of-combat edge closes the pull folder.
+                FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: false);
+            }
             return;
         }
 
         if (wasBoundByDuty)
         {
-            FinalizeDutySession(DateTimeOffset.UtcNow);
+            FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
+        }
+        wasInCombat = inCombat;
+    }
+
+    private void FinalizeDutyAttempt(DateTimeOffset endTime, bool leavingDuty)
+    {
+        Encounter? completedPull;
+        Encounter? folderSnapshot;
+        lock (dutySessionLock)
+        {
+            if (leavingDuty)
+            {
+                wasBoundByDuty = false;
+            }
+            RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
+            completedPull = dutySession.Complete(endTime);
+            if (completedPull is not null)
+            {
+                completedPull = CaptureFflogsEstimatesSafely(completedPull);
+                folderSnapshot = dutyFolder.Add(completedPull);
+            }
+            else
+            {
+                folderSnapshot = null;
+            }
+
+            if (leavingDuty)
+            {
+                folderSnapshot = dutyFolder.Complete() ?? folderSnapshot;
+            }
+        }
+
+        if (completedPull is not null)
+        {
+            stateStore.UpdateCurrent(completedPull);
+        }
+        if (folderSnapshot is not null)
+        {
+            encounterService.QueueFinishedEncounter(folderSnapshot);
         }
     }
 
-    private void FinalizeDutySession(DateTimeOffset endTime)
+    private void RememberFinalizedSegmentsUnsafe(IEnumerable<Guid> segmentIds)
     {
-        Encounter? completed;
-        lock (dutySessionLock)
+        foreach (var segmentId in segmentIds)
         {
-            wasBoundByDuty = false;
-            foreach (var segmentId in dutySession.SegmentIds)
+            if (segmentId == Guid.Empty || !finalizedDutySegmentIds.Add(segmentId))
             {
-                if (!finalizedDutySegmentIds.Add(segmentId))
-                {
-                    continue;
-                }
-
-                finalizedDutySegmentOrder.Enqueue(segmentId);
-                while (finalizedDutySegmentOrder.Count > 256)
-                {
-                    finalizedDutySegmentIds.Remove(finalizedDutySegmentOrder.Dequeue());
-                }
+                continue;
             }
-            completed = dutySession.Complete(endTime);
-        }
 
-        if (completed is null)
-        {
-            return;
+            finalizedDutySegmentOrder.Enqueue(segmentId);
+            while (finalizedDutySegmentOrder.Count > 256)
+            {
+                finalizedDutySegmentIds.Remove(finalizedDutySegmentOrder.Dequeue());
+            }
         }
-
-        completed = CaptureFflogsEstimatesSafely(completed);
-        stateStore.UpdateCurrent(completed);
-        encounterService.QueueFinishedEncounter(completed);
     }
 
     internal static bool HasMeaningfulActivity(Encounter encounter)

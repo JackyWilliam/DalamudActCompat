@@ -9,6 +9,7 @@ internal sealed class DutyEncounterAccumulator
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> completedSegmentIds = [];
     private readonly HashSet<Guid> segmentIds = [];
+    private readonly List<Encounter> completedSegments = [];
     private readonly List<string> displayRoster = [];
     private double completedDurationSeconds;
     private int partyCapacity;
@@ -41,6 +42,7 @@ internal sealed class DutyEncounterAccumulator
             var segmentDurationSeconds = ResolveSegmentDurationSeconds(segment, now);
             AddCombatants(segment.Combatants, segmentDurationSeconds);
             completedDurationSeconds += segmentDurationSeconds;
+            completedSegments.Add(CompleteSegmentRecord(segment, now));
         }
 
         var activeSegment = !finished && !completedSegmentIds.Contains(segment.Id)
@@ -62,6 +64,7 @@ internal sealed class DutyEncounterAccumulator
             var segmentDurationSeconds = ResolveSegmentDurationSeconds(latestSegment, endTime);
             AddCombatants(latestSegment.Combatants, segmentDurationSeconds);
             completedDurationSeconds += segmentDurationSeconds;
+            completedSegments.Add(CompleteSegmentRecord(latestSegment, endTime));
         }
 
         var completed = Build(activeSegment: null, endTime, endTime);
@@ -74,6 +77,7 @@ internal sealed class DutyEncounterAccumulator
         completedCombatants.Clear();
         completedSegmentIds.Clear();
         segmentIds.Clear();
+        completedSegments.Clear();
         displayRoster.Clear();
         completedDurationSeconds = 0;
         partyCapacity = 0;
@@ -151,7 +155,7 @@ internal sealed class DutyEncounterAccumulator
         {
             // During a vacancy the most recent roster fills the empty slot. Once a replacement
             // makes the live roster full, this branch is skipped and the departed member leaves
-            // the duty-wide ranking without transferring their totals to another player.
+            // the current pull's ranking without transferring their totals to another player.
             AddRosterMembers(nextRoster, displayRoster);
             AddRosterMembers(
                 nextRoster,
@@ -246,16 +250,36 @@ internal sealed class DutyEncounterAccumulator
             Array.Empty<ActionSummary>(),
             jobs)
         {
-            // Duty totals remain on the meter, while FFLogs comparisons must use one
-            // concrete boss segment instead of cumulative damage from the whole duty.
+            // FFLogs comparisons must use a concrete ACT record, never the pull folder
+            // aggregate that can span several phase records.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
             TerritoryId = territoryId,
-            IsTransitioning = activeSegment?.IsTransitioning == true,
-            // ACT treats merged encounters as the sum of their active encounter
-            // durations. Travel, cutscenes, and waits between pulls must not lower DPS.
+            IsTransitioning = (activeSegment ?? latestSegment)?.IsTransitioning == true,
+            SegmentRecords = BuildSegmentRecords(activeSegment),
+            // ACT treats merged fragments as the sum of their active encounter durations.
+            // Transition downtime inside one pull must not lower DPS.
             CombatDuration = TimeSpan.FromSeconds(durationSeconds),
         };
     }
+
+    private IReadOnlyList<Encounter> BuildSegmentRecords(Encounter? activeSegment)
+    {
+        if (activeSegment is null || completedSegmentIds.Contains(activeSegment.Id))
+        {
+            return completedSegments.ToArray();
+        }
+
+        return completedSegments.Append(activeSegment).ToArray();
+    }
+
+    private static Encounter CompleteSegmentRecord(
+        Encounter segment,
+        DateTimeOffset fallbackEndTime)
+        => segment with
+        {
+            EndTime = segment.EndTime ?? fallbackEndTime,
+            SegmentRecords = [],
+        };
 
     private static double ResolveSegmentDurationSeconds(
         Encounter segment,
@@ -289,6 +313,7 @@ internal sealed class DutyEncounterAccumulator
         private int deaths;
         private int damageHits;
         private int criticalHits;
+        private int directHits;
         private int criticalDirectHits;
         private double? fflogsPercentile;
         private string? fflogsEncounterName;
@@ -325,6 +350,7 @@ internal sealed class DutyEncounterAccumulator
             deaths += combatant.Deaths;
             damageHits += combatant.DamageHits;
             criticalHits += combatant.CriticalHits;
+            directHits += combatant.DirectHits;
             criticalDirectHits += combatant.CriticalDirectHits;
             if (combatant.FflogsPercentile is { } percentile &&
                 double.IsFinite(percentile) &&
@@ -366,6 +392,7 @@ internal sealed class DutyEncounterAccumulator
                 deaths = deaths,
                 damageHits = damageHits,
                 criticalHits = criticalHits,
+                directHits = directHits,
                 criticalDirectHits = criticalDirectHits,
                 fflogsPercentile = fflogsPercentile,
                 fflogsEncounterName = fflogsEncounterName,
@@ -409,7 +436,8 @@ internal sealed class DutyEncounterAccumulator
                 raidContributionDamage / durationSeconds,
                 fflogsDataUpdatedAt,
                 fflogsMetric,
-                fflogsDataStale);
+                fflogsDataStale,
+                directHits);
         }
 
         private static double ResolveDamageDuration(

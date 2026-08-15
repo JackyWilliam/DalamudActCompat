@@ -37,6 +37,7 @@ public sealed class EncounterWindow : Window
     private readonly Action saveConfiguration;
     private HistoryPage selectedPage;
     private Guid? selectedRecentId;
+    private readonly HashSet<Guid> expandedRecentFolderIds = [];
     private string? selectedFile;
     private Encounter? selectedFileEncounter;
     private string rawJson = string.Empty;
@@ -172,9 +173,22 @@ public sealed class EncounterWindow : Window
             return;
         }
 
-        if (selectedRecentId is null || recent.All(encounter => encounter.Id != selectedRecentId))
+        var selectedEncounter = selectedRecentId is { } selectedId
+            ? FindRecentEncounter(recent, selectedId)
+            : null;
+        if (selectedEncounter is null)
         {
-            selectedRecentId = recent[0].Id;
+            if (recent[0].SegmentRecords.Count > 0)
+            {
+                expandedRecentFolderIds.Add(recent[0].Id);
+                selectedEncounter = recent[0].SegmentRecords[^1];
+                selectedRecentId = selectedEncounter.Id;
+            }
+            else
+            {
+                selectedRecentId = recent[0].Id;
+                selectedEncounter = recent[0];
+            }
         }
 
         var listWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.30f, 240, 320);
@@ -184,10 +198,36 @@ public sealed class EncounterWindow : Window
             ImGui.Separator();
             foreach (var encounter in recent)
             {
-                var selected = encounter.Id == selectedRecentId;
-                if (DrawEncounterListCard(encounter, selected))
+                var isFolder = encounter.SegmentRecords.Count > 0;
+                var selected = encounter.Id == selectedRecentId ||
+                               isFolder && encounter.SegmentRecords.Any(
+                                   item => item.Id == selectedRecentId);
+                var expanded = isFolder && expandedRecentFolderIds.Contains(encounter.Id);
+                if (DrawEncounterListCard(encounter, selected, isFolder, expanded))
                 {
-                    selectedRecentId = encounter.Id;
+                    if (isFolder && !expandedRecentFolderIds.Remove(encounter.Id))
+                    {
+                        expandedRecentFolderIds.Add(encounter.Id);
+                    }
+                    selectedEncounter = isFolder
+                        ? encounter.SegmentRecords[^1]
+                        : encounter;
+                    selectedRecentId = selectedEncounter.Id;
+                }
+                if (expanded)
+                {
+                    for (var index = 0; index < encounter.SegmentRecords.Count; index++)
+                    {
+                        var segment = encounter.SegmentRecords[index];
+                        if (DrawSegmentListCard(
+                                segment,
+                                index,
+                                segment.Id == selectedRecentId))
+                        {
+                            selectedRecentId = segment.Id;
+                            selectedEncounter = segment;
+                        }
+                    }
                 }
                 ImGui.Spacing();
             }
@@ -197,7 +237,7 @@ public sealed class EncounterWindow : Window
         ImGui.SameLine();
         if (ImGui.BeginChild("recent-encounter-details", new Vector2(-1, -1), true))
         {
-            DrawEncounterDetails(recent.First(encounter => encounter.Id == selectedRecentId.Value));
+            DrawEncounterDetails(selectedEncounter);
         }
         ImGui.EndChild();
     }
@@ -315,7 +355,21 @@ public sealed class EncounterWindow : Window
 
     private void DrawEncounterDetails(Encounter encounter)
     {
-        var durationSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+        if (encounter.SegmentRecords.Count > 0)
+        {
+            ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
+            ImGui.TextDisabled(text.Get(
+                $"本次副本包含 {encounter.SegmentRecords.Count} 把战斗，请在近期战斗中选择其中一把。",
+                $"This duty contains {encounter.SegmentRecords.Count} pulls; select one under Recent encounters."));
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+            DrawEncounterDetails(encounter.SegmentRecords[^1]);
+            return;
+        }
+
+        var damageDurationSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+        var healingDurationSeconds = Math.Max(1, encounter.Duration.TotalSeconds);
         ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
         ImGui.TextDisabled(
             $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  " +
@@ -330,7 +384,7 @@ public sealed class EncounterWindow : Window
                 text.Get("队伍人数", "Party"),
                 encounter.Combatants.Count(static combatant => !MeterService.IsLimitBreak(combatant)).ToString());
             SummaryCell("damage", text.Get("总伤害", "Damage"), encounter.TotalDamage.ToString("N0"));
-            SummaryCell("dps", "DPS", (encounter.TotalDamage / durationSeconds).ToString("N0"));
+            SummaryCell("dps", "DPS", (encounter.TotalDamage / damageDurationSeconds).ToString("N0"));
             SummaryCell("deaths", text.Get("死亡", "Deaths"), encounter.TotalDeaths.ToString());
             ImGui.EndTable();
         }
@@ -345,6 +399,9 @@ public sealed class EncounterWindow : Window
             $"Job display: {JobDisplayFormatter.Label(configuration.Meter.JobDisplayStyle, text)} (follows Combat Meter)"));
 
         var sortMode = MeterSortModeOptions.Normalize(configuration.Meter.SortMode);
+        var rateDurationSeconds = sortMode == MeterSortMode.Hps
+            ? healingDurationSeconds
+            : damageDurationSeconds;
         DrawMetricButton(MeterSortMode.Dps, DpsRateLabel());
         ImGui.SameLine();
         DrawMetricButton(MeterSortMode.Hps, "HPS");
@@ -354,12 +411,16 @@ public sealed class EncounterWindow : Window
 
         var ordered = OrderCombatantsForDisplay(
                 encounter,
-                durationSeconds,
+                rateDurationSeconds,
                 sortMode,
                 configuration.Meter.DpsMetric)
             .Select(combatant => new CombatantPerformance(
                 combatant,
-                ResolveRate(combatant, durationSeconds, sortMode, configuration.Meter.DpsMetric),
+                ResolveRate(
+                    combatant,
+                    rateDurationSeconds,
+                    sortMode,
+                    configuration.Meter.DpsMetric),
                 ResolvePercent(combatant, encounter, sortMode)))
             .ToArray();
         var maximumRate = Math.Max(1, ordered.Select(item => item.Rate).DefaultIfEmpty(1).Max());
@@ -407,7 +468,11 @@ public sealed class EncounterWindow : Window
             $"{encounter.DeathEvents.Count} {text.Get("死亡", "deaths")}");
     }
 
-    private bool DrawEncounterListCard(Encounter encounter, bool selected)
+    private bool DrawEncounterListCard(
+        Encounter encounter,
+        bool selected,
+        bool isFolder,
+        bool expanded)
     {
         const float height = 58;
         var width = ImGui.GetContentRegionAvail().X;
@@ -423,8 +488,19 @@ public sealed class EncounterWindow : Window
             drawList.AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(IceBlue), 6, ImDrawFlags.None, 1.5f);
             drawList.AddRectFilled(start, start + new Vector2(3, height), ImGui.GetColorU32(IceBlue), 6);
         }
-        drawList.AddText(start + new Vector2(10, 8), ImGui.GetColorU32(selected ? IceBlue : Vector4.One), TrimToWidth(EncounterTitle(encounter), width - 20));
-        var detail = $"{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(encounter.EffectiveDuration)}  ·  {encounter.TotalDeaths} {text.Get("死亡", "KO")}";
+        var prefix = isFolder ? expanded ? "▼ " : "▶ " : string.Empty;
+        drawList.AddText(
+            start + new Vector2(10, 8),
+            ImGui.GetColorU32(selected ? IceBlue : Vector4.One),
+            TrimToWidth(prefix + EncounterTitle(encounter), width - 20));
+        var recordCount = isFolder
+            ? text.Get($"{encounter.SegmentRecords.Count} 条记录  ·  ", $"{encounter.SegmentRecords.Count} records  ·  ")
+            : string.Empty;
+        var displayDuration = isFolder ? encounter.Duration : encounter.EffectiveDuration;
+        var deaths = isFolder
+            ? encounter.SegmentRecords.Sum(static pull => pull.TotalDeaths)
+            : encounter.TotalDeaths;
+        var detail = $"{recordCount}{encounter.StartTime.LocalDateTime:MM-dd HH:mm}  ·  {FormatDuration(displayDuration)}  ·  {deaths} {text.Get("死亡", "KO")}";
         var localEstimate = encounter.Combatants
             .Where(static combatant => combatant.IsLocalPlayer)
             .Select(FflogsEstimateService.GetPersistedEstimate)
@@ -436,6 +512,72 @@ public sealed class EncounterWindow : Window
         drawList.AddText(start + new Vector2(10, 32), ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)), TrimToWidth(detail, width - 20));
         ImGui.PopID();
         return clicked;
+    }
+
+    private bool DrawSegmentListCard(Encounter segment, int index, bool selected)
+    {
+        const float height = 48;
+        var restoreCursorX = ImGui.GetCursorPosX();
+        var fullWidth = ImGui.GetContentRegionAvail().X;
+        var width = Math.Max(40, fullWidth - 18);
+        var start = ImGui.GetCursorScreenPos() + new Vector2(18, 0);
+        ImGui.SetCursorScreenPos(start);
+        ImGui.PushID($"segment-{segment.Id:N}");
+        ImGui.InvisibleButton("card", new Vector2(width, height));
+        var clicked = ImGui.IsItemClicked();
+        var hovered = ImGui.IsItemHovered();
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(
+            start,
+            start + new Vector2(width, height),
+            ImGui.GetColorU32(hovered ? NavyHover : new Vector4(NavyRaised.X, NavyRaised.Y, NavyRaised.Z, 0.72f)),
+            5);
+        if (selected)
+        {
+            drawList.AddRect(
+                start,
+                start + new Vector2(width, height),
+                ImGui.GetColorU32(IceBlue),
+                5,
+                ImDrawFlags.None,
+                1.25f);
+        }
+        var title = text.Get(
+            $"记录 {index + 1} · {EncounterTitle(segment)}",
+            $"Record {index + 1} · {EncounterTitle(segment)}");
+        drawList.AddText(
+            start + new Vector2(9, 6),
+            ImGui.GetColorU32(selected ? IceBlue : Vector4.One),
+            TrimToWidth(title, width - 18));
+        var detail = $"{segment.StartTime.LocalDateTime:HH:mm:ss}  ·  {FormatDuration(segment.EffectiveDuration)}";
+        drawList.AddText(
+            start + new Vector2(9, 26),
+            ImGui.GetColorU32(new Vector4(0.62f, 0.66f, 0.72f, 1)),
+            TrimToWidth(detail, width - 18));
+        ImGui.PopID();
+        ImGui.SetCursorPosX(restoreCursorX);
+        return clicked;
+    }
+
+    internal static Encounter? FindRecentEncounter(
+        IReadOnlyList<Encounter> recent,
+        Guid encounterId)
+    {
+        foreach (var encounter in recent)
+        {
+            if (encounter.Id == encounterId)
+            {
+                return encounter;
+            }
+
+            var segment = encounter.SegmentRecords.FirstOrDefault(item => item.Id == encounterId);
+            if (segment is not null)
+            {
+                return segment;
+            }
+        }
+
+        return null;
     }
 
     private static bool DrawLogFileCard(string file, string label, bool selected)

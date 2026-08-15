@@ -67,7 +67,11 @@ public sealed class EncounterService : IAsyncDisposable
         try
         {
             await previousSave.ConfigureAwait(false);
-            recent = recent.Prepend(encounter)
+            // A duty folder is saved after every pull with one stable ID. Replacing its
+            // previous snapshot keeps all attempts under one history entry.
+            recent = recent
+                .Where(item => item.Id != encounter.Id)
+                .Prepend(encounter)
                 .Take(Math.Max(1, configuration.HistoryLimit))
                 .ToArray();
             stateStore.UpdateRecent(recent);

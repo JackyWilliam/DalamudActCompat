@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.12",
+    "AssemblyVersion":  "0.3.9.15",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.12/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.15/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.12/DalamudActCompat.zip",
-    "LastUpdate":  1786787378804,
-    "Changelog":  "v0.3.9.12 扩展页自动显示实际 DLL 版本，并新增可搜索的详细使用帮助与扩展更新重启说明。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.15/DalamudActCompat.zip",
+    "LastUpdate":  1786810085905,
+    "Changelog":  "v0.3.9.15 战斗记录按一次副本进入归入文件夹、每把独立结算，并补全伤害技能附带自疗的 HPS。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

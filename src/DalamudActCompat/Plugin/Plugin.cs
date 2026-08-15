@@ -296,6 +296,7 @@ public sealed class Plugin : IDalamudPlugin
             framework,
             () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
+            () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
@@ -463,7 +464,7 @@ public sealed class Plugin : IDalamudPlugin
             CloseHtmlOverlay,
             DeleteHtmlOverlay,
             StartFactoryReset,
-            stateStore.ResetCurrent,
+            parserEngine.ResetCurrentEncounter,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name));
         launcherWindow = new LauncherWindow(
             configuration,
@@ -654,7 +655,7 @@ public sealed class Plugin : IDalamudPlugin
                 });
                 break;
             case "clear":
-                stateStore.ResetCurrent();
+                parserEngine.ResetCurrentEncounter();
                 break;
             case "factory-reset":
                 settingsWindow.ShowAnimated();

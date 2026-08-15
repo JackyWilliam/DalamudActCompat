@@ -22,6 +22,8 @@ public sealed class ParserEngine : IParserEngine
 
     public Task RestartAsync(CancellationToken cancellationToken) => inner.RestartAsync(cancellationToken);
 
+    public void ResetCurrentEncounter() => inner.ResetCurrentEncounter();
+
     public async ValueTask DisposeAsync()
     {
         inner.StatusChanged -= OnInnerStatusChanged;

@@ -22,6 +22,10 @@ public sealed record Encounter(
 
     public bool IsTransitioning { get; init; }
 
+    // A folder represents one duty entry; its child records are independent pulls so a
+    // wipe never leaks totals into the next attempt.
+    public IReadOnlyList<Encounter> SegmentRecords { get; init; } = [];
+
     public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
 
     [System.Text.Json.Serialization.JsonIgnore]
