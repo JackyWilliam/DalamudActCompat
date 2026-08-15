@@ -1064,6 +1064,39 @@ static void ValidateMeterRows()
         Math.Abs(rows.Sum(row => row.DamagePercent) - 100) < 0.01,
         "Meter damage percentages did not cover the encounter total.");
 
+    var transientZeroHitCombatants = encounter.Combatants
+        .Select(static combatant => combatant.Id == "tank"
+            ? combatant with
+            {
+                DamageHits = 0,
+                CriticalHits = 0,
+                CriticalDirectHits = 0,
+            }
+            : combatant)
+        .ToArray();
+    state.UpdateCurrent(encounter with { Combatants = transientZeroHitCombatants });
+    Thread.Sleep(settings.RefreshIntervalMs + 20);
+    rows = meter.GetRows();
+    var tankWithTransientZeroHits = rows.Single(static row => row.Id == "tank");
+    Assert(
+        tankWithTransientZeroHits.CriticalHitPercent == 25 &&
+        tankWithTransientZeroHits.CriticalDirectHitPercent == 10,
+        "A transient zero-hit ACT snapshot inserted '--' between valid Meter percentages.");
+
+    state.UpdateCurrent(encounter with
+    {
+        Id = Guid.NewGuid(),
+        Combatants = transientZeroHitCombatants,
+    });
+    rows = meter.GetRows();
+    var tankInNewEncounter = rows.Single(static row => row.Id == "tank");
+    Assert(
+        tankInNewEncounter.CriticalHitPercent is null &&
+        tankInNewEncounter.CriticalDirectHitPercent is null,
+        "The Meter carried a cached hit rate into a different encounter.");
+
+    state.UpdateCurrent(encounter);
+
     settings.DpsMetric = DpsMetric.Rdps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
