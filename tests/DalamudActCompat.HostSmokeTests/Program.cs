@@ -1781,15 +1781,43 @@ void ValidateTriggernometryLaunchProcessPatch()
         .Methods
         .Single(method =>
             method.Name == "DisableTriggerSetTts" && method.Parameters.Count == 2);
-    var suppressionGuardCalls = disableCactbotTriggerSetTts.Body.Instructions.Count(instruction =>
+    var compatibilityBridgeCalls = disableCactbotTriggerSetTts.Body.Instructions.Count(instruction =>
         instruction.Operand is MethodReference called &&
-        called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
-        called.Name == nameof(HostPluginBridge.AllowTriggernometryCactbotTtsSuppression));
+        called.DeclaringType.FullName == typeof(HostPluginBridge).FullName);
+
+    // U7b intentionally delegates duplicate-suppression to Triggernometry. Comparing the real
+    // upstream and rewritten method bodies ensures the compatibility layer preserves that behavior.
+    using var outerDefinition = AssemblyDefinition.ReadAssembly(triggernometryAssembly!);
+    var implementationResource = outerDefinition.MainModule.Resources
+                                     .OfType<EmbeddedResource>()
+                                     .Single(resource => resource.Name ==
+                                         "costura.triggernometryplugin.dll.compressed");
+    using var compressedImplementation = implementationResource.GetResourceStream();
+    using var decompressor = new DeflateStream(
+        compressedImplementation,
+        CompressionMode.Decompress);
+    using var originalImage = new MemoryStream();
+    decompressor.CopyTo(originalImage);
+    originalImage.Position = 0;
+    using var originalDefinition = AssemblyDefinition.ReadAssembly(originalImage);
+    var originalDisableCactbotTriggerSetTts = originalDefinition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeCactbot")
+        .Methods
+        .Single(method =>
+            method.Name == "DisableTriggerSetTts" && method.Parameters.Count == 2);
+    var originalBody = string.Join(
+        '\n',
+        originalDisableCactbotTriggerSetTts.Body.Instructions.Select(static instruction =>
+            instruction.ToString()));
+    var rewrittenBody = string.Join(
+        '\n',
+        disableCactbotTriggerSetTts.Body.Instructions.Select(static instruction =>
+            instruction.ToString()));
     Assert(
-        suppressionGuardCalls == 1 &&
-        !HostPluginBridge.AllowTriggernometryCactbotTtsSuppression("DancingMadUltimate") &&
-        HostPluginBridge.AllowTriggernometryCactbotTtsSuppression("FuturesRewrittenUltimate"),
-        "U7b Cactbot TTS fallback guard was not scoped to DancingMadUltimate.");
+        compatibilityBridgeCalls == 0 &&
+        string.Equals(originalBody, rewrittenBody, StringComparison.Ordinal),
+        "Triggernometry's Cactbot TTS control was changed by the compatibility rewrite.");
 }
 
 void ValidateMatchaAssemblyContract(string packagePath)

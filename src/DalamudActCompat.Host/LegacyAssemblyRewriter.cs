@@ -1762,10 +1762,6 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.CallTriggernometryOverlayHandler),
                 [typeof(object)])!);
-        var allowCactbotTtsSuppression = module.ImportReference(
-            bridgeType.GetMethod(
-                nameof(HostPluginBridge.AllowTriggernometryCactbotTtsSuppression),
-                [typeof(string)])!);
         var adminMethod = module.Types
             .SelectMany(EnumerateTypes)
             .SelectMany(type => type.Methods)
@@ -1911,19 +1907,6 @@ public static class LegacyAssemblyRewriter
 
         postNamazuAdminChecks[0].OpCode = OpCodes.Call;
         postNamazuAdminChecks[0].Operand = checkPostNamazuAdministratorRequirement;
-
-        var disableCactbotTriggerSetTts = module.Types
-            .SelectMany(EnumerateTypes)
-            .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeCactbot")
-            .Methods
-            .Single(method =>
-                method.Name == "DisableTriggerSetTts" &&
-                method.Parameters.Count == 2 &&
-                method.ReturnType.MetadataType == MetadataType.Boolean);
-        InsertBooleanArgumentGuard(
-            disableCactbotTriggerSetTts,
-            allowCactbotTtsSuppression,
-            parameterIndex: 1);
 
         var triggernometryInitializer = module.Types
             .SelectMany(EnumerateTypes)
@@ -2733,32 +2716,6 @@ public static class LegacyAssemblyRewriter
             throw new InvalidOperationException(
                 $"Permission guard has no denied return for {method.FullName}.");
         }
-        processor.InsertBefore(first, processor.Create(OpCodes.Ret));
-    }
-
-    private static void InsertBooleanArgumentGuard(
-        MethodDefinition method,
-        MethodReference isAllowed,
-        int parameterIndex)
-    {
-        if (!method.HasBody ||
-            method.Body.Instructions.Count == 0 ||
-            method.ReturnType.MetadataType != MetadataType.Boolean ||
-            parameterIndex < 0 ||
-            parameterIndex >= method.Parameters.Count)
-        {
-            throw new InvalidOperationException(
-                $"Cannot add an argument permission guard to {method.FullName}.");
-        }
-
-        var processor = method.Body.GetILProcessor();
-        var first = method.Body.Instructions[0];
-        processor.InsertBefore(
-            first,
-            processor.Create(OpCodes.Ldarg, method.Parameters[parameterIndex]));
-        processor.InsertBefore(first, processor.Create(OpCodes.Call, isAllowed));
-        processor.InsertBefore(first, processor.Create(OpCodes.Brtrue, first));
-        processor.InsertBefore(first, processor.Create(OpCodes.Ldc_I4_0));
         processor.InsertBefore(first, processor.Create(OpCodes.Ret));
     }
 

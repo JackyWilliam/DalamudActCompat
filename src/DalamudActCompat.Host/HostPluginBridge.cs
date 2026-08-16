@@ -695,25 +695,6 @@ public static class HostPluginBridge
         return true;
     }
 
-    public static bool AllowTriggernometryCactbotTtsSuppression(string? triggerSetName)
-    {
-        if (!string.Equals(
-                triggerSetName?.Trim(),
-                "DancingMadUltimate",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // The currently distributed U7b resource disables this Cactbot set on entry but never
-        // restores it. Keep Cactbot as the fallback announcer so one resource load cannot leave
-        // the entire ultimate silent for the rest of the session.
-        Console.WriteLine(
-            "Triggernometry compatibility: kept DancingMadUltimate Cactbot TTS enabled because " +
-            "the U7b resource does not restore it after suppression.");
-        return false;
-    }
-
     public static bool IsExpectedTriggernometryCompatibilityNotice(string? message)
         => !string.IsNullOrWhiteSpace(message) &&
            message.Contains("鲶鱼精邮差扩展", StringComparison.Ordinal) &&
