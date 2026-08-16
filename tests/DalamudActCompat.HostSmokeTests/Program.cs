@@ -1745,6 +1745,51 @@ void ValidateTriggernometryLaunchProcessPatch()
         "The Triggernometry/PostNamazu administrator notice did not route through " +
         $"the native-runtime-aware token check: bridge={noticeBridgeCalls}, " +
         $"realChecks={realAdministratorChecks}.");
+
+    var bridgeNamazu = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type =>
+            type.FullName == "Triggernometry.PluginBridges.BridgeNamazu.BridgeNamazu");
+    var wrappedPluginGetter = bridgeNamazu.Methods.Single(method =>
+        method.Name == "get_WrappedPlugin" && method.Parameters.Count == 0);
+    var pluginObjectReads = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin/PluginWrapper" &&
+        called.Name == "get_pluginObj");
+    var instanceHookCalls = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin/InstanceDelegate" &&
+        called.Name == "Invoke");
+    var correctedPluginNames = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.OpCode.Code == Code.Ldstr &&
+        string.Equals(instruction.Operand as string, "PostNamazu.dll", StringComparison.Ordinal));
+    var misspelledPluginNames = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.OpCode.Code == Code.Ldstr &&
+        string.Equals(instruction.Operand as string, "PostNamzu.dll", StringComparison.Ordinal));
+    Assert(
+        pluginObjectReads == 1 &&
+        instanceHookCalls == 1 &&
+        correctedPluginNames == 1 &&
+        misspelledPluginNames == 0,
+        "Triggernometry did not retry the PostNamazu wrapper after an early empty lookup: " +
+        $"pluginObjectReads={pluginObjectReads}, hooks={instanceHookCalls}, " +
+        $"correctNames={correctedPluginNames}, misspelledNames={misspelledPluginNames}.");
+
+    var disableCactbotTriggerSetTts = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeCactbot")
+        .Methods
+        .Single(method =>
+            method.Name == "DisableTriggerSetTts" && method.Parameters.Count == 2);
+    var suppressionGuardCalls = disableCactbotTriggerSetTts.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+        called.Name == nameof(HostPluginBridge.AllowTriggernometryCactbotTtsSuppression));
+    Assert(
+        suppressionGuardCalls == 1 &&
+        !HostPluginBridge.AllowTriggernometryCactbotTtsSuppression("DancingMadUltimate") &&
+        HostPluginBridge.AllowTriggernometryCactbotTtsSuppression("FuturesRewrittenUltimate"),
+        "U7b Cactbot TTS fallback guard was not scoped to DancingMadUltimate.");
 }
 
 void ValidateMatchaAssemblyContract(string packagePath)

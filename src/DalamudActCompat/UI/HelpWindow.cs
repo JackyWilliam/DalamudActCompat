@@ -382,8 +382,8 @@ public sealed class HelpWindow : Window
                 "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟其他小队、宠物和普通 NPC 不会作为独立玩家行显示。",
                 "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party; other alliance parties, pets, and ordinary NPCs are not separate player rows."));
             DrawBullet(text.Get(
-                "右键 ACT 快捷按钮或输入 /actcompat 打开战斗统计；战斗结束后用 /actcompat history 查看近期战斗。",
-                "Right-click the ACT quick button or use /actcompat to open Combat Meter. After combat, use /actcompat history for recent encounters."));
+                "右键 ACT 快捷按钮或输入 /actcompat meter 打开战斗统计；战斗结束后用 /actcompat history 查看近期战斗。",
+                "Right-click the ACT quick button or use /actcompat meter to open Combat Meter. After combat, use /actcompat history for recent encounters."));
             DrawBullet(text.Get(
                 "没有数据时先检查运行状态和当前是否真的产生伤害日志，再检查窗口是否被“脱战自动隐藏”，不要先删除配置。",
                 "If no data appears, first check runtime status and whether damage logs were actually generated, then check Auto hide out of combat. Do not delete configuration first."));
@@ -394,8 +394,8 @@ public sealed class HelpWindow : Window
                 "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开控制中心，右键打开战斗统计，按住中键拖动。",
                 "Show ACT quick button controls the in-game entry: left-click the control center, right-click Combat Meter, and hold middle mouse to drag."));
             DrawBullet(text.Get(
-                "/actcompat on 打开控制中心；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
-                "/actcompat on opens the control center; /actcompat status opens runtime status. Every command can be copied from the Commands page."));
+                "/actcompat 打开控制中心（/actcompat on 为兼容别名）；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
+                "/actcompat opens the control center (/actcompat on is a compatible alias); /actcompat status opens runtime status. Every command can be copied from the Commands page."));
         });
         DrawCard("help-start-data", text.Get("战斗日志与诊断日志不是同一种文件", "Combat logs and diagnostic logs are different"), 200, () =>
         {
@@ -519,8 +519,8 @@ public sealed class HelpWindow : Window
             text.Get("点击“复制”即可放入剪贴板，再粘贴到游戏聊天框或宏中。", "Use Copy to place a command on the clipboard, then paste it into game chat or a macro."));
         DrawCard("help-commands-common", text.Get("常用入口", "Common entry points"), 365, () =>
         {
-            DrawCommand("on", "/actcompat on", text.Get("打开插件控制中心。", "Open the plugin control center."));
-            DrawCommand("meter-default", "/actcompat", text.Get("打开战斗统计；保留现有无参数宏的行为。", "Open Combat Meter; preserves existing argument-free macros."));
+            DrawCommand("control-default", "/actcompat", text.Get("打开插件控制中心。", "Open the plugin control center."));
+            DrawCommand("on", "/actcompat on", text.Get("打开插件控制中心；保留旧宏兼容。", "Open the plugin control center; retained for old macro compatibility."));
             DrawCommand("meter", "/actcompat meter", text.Get("打开战斗统计。", "Open Combat Meter."));
             DrawCommand("history", "/actcompat history", text.Get("打开近期战斗。", "Open recent encounters."));
             DrawCommand("logs", "/actcompat logs", text.Get("打开已保存的日志文件列表。", "Open the saved log-file list."));
@@ -735,8 +735,8 @@ public sealed class HelpWindow : Window
         DrawCard("help-troubleshooting-plugin-unavailable", text.Get("插件打不开、命令没反应或一直初始化", "Plugin does not open, commands do nothing, or initialization never finishes"), 354, () =>
         {
             DrawBullet(text.Get(
-                "先输入 /actcompat on。若聊天框提示命令不存在，或连控制中心都无法打开，请在卫月插件安装器中确认 Dalamud ACT Compat 已安装、已启用且没有加载错误；此时插件内帮助和重启按钮本身也无法工作。",
-                "First use /actcompat on. If chat reports an unknown command or the control center never opens, verify in the Dalamud plugin installer that Dalamud ACT Compat is installed, enabled, and has no load error. In this state, in-plugin help and restart controls cannot work either."));
+                "先输入 /actcompat。若聊天框提示命令不存在，或连控制中心都无法打开，请在卫月插件安装器中确认 Dalamud ACT Compat 已安装、已启用且没有加载错误；此时插件内帮助和重启按钮本身也无法工作。",
+                "First use /actcompat. If chat reports an unknown command or the control center never opens, verify in the Dalamud plugin installer that Dalamud ACT Compat is installed, enabled, and has no load error. In this state, in-plugin help and restart controls cannot work either."));
             DrawBullet(text.Get(
                 "若控制中心能打开，在“概览”确认“启用解析”和“自动启动解析器”已勾选。解析器长时间停在“已停止”“初始化中”或“错误”时，到“设置”点击“重启解析器”。",
                 "If the control center opens, confirm Enable parsing and Auto start parser on Overview. If the parser remains Stopped, Initializing, or Error, go to Settings and select Restart parser."));

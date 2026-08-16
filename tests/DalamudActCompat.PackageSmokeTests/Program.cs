@@ -6302,6 +6302,16 @@ static void ValidateHtmlOverlayDefaults()
             "/actcompat sample",
         }.All(command => helpWindowSource.Contains(command, StringComparison.Ordinal)) &&
         macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            macroPluginSource,
+            "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.ShowAnimated\\(\\);") &&
+        Regex.IsMatch(
+            macroPluginSource,
+            "case \\\"meter\\\":\\s+meterWindow\\.IsOpen = true;") &&
+        macroPluginSource.Contains(
+            "Cafe.Matcha configuration requires the WriteFiles capability.",
+            StringComparison.Ordinal) &&
+        macroPluginSource.Contains("settingsWindow.ShowExtensionsPage();", StringComparison.Ordinal) &&
         !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
         readmeSource.Contains("## 用户使用指南", StringComparison.Ordinal) &&

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.RegularExpressions;
 using System.Xml;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Protocol;
@@ -28,6 +29,7 @@ if (!overlayTemplates.Any(template => template.Name == "Kagerou" && !template.Is
         "OverlayPlugin built-in HTML templates were not exposed by the runtime.");
 }
 AssertActorCastExtraRotationCompatibility();
+AssertUltimateExtraLogCompatibility();
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
 AssemblyLoadContext.Default.Resolving += ResolveDependency;
@@ -323,6 +325,60 @@ static void AssertActorCastExtraRotationCompatibility()
     catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException)
     {
         // Expected: unknown packet layouts must fail closed instead of emitting corrupt 0x107 logs.
+    }
+}
+
+static void AssertUltimateExtraLogCompatibility()
+{
+    var overlayPlugin = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly;
+    Dictionary<string, uint> expectedExtraLogIds = new(StringComparer.Ordinal)
+    {
+        ["LineActorCastExtra"] = 263,
+        ["LineAbilityExtra"] = 264,
+        ["LineSpawnNpcExtra"] = 272,
+        ["LineActorControlExtra"] = 273,
+    };
+    foreach (var (typeName, expectedId) in expectedExtraLogIds)
+    {
+        var processorType = overlayPlugin.GetType(
+            $"RainbowMage.OverlayPlugin.NetworkProcessors.{typeName}",
+            throwOnError: true)!;
+        var actualId = Convert.ToUInt32(
+            processorType.GetField(
+                    "LogFileLineID",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetRawConstantValue());
+        if (actualId != expectedId)
+        {
+            throw new InvalidOperationException(
+                $"OverlayPlugin {typeName} line ID changed from {expectedId} to {actualId}.");
+        }
+    }
+
+    var actorControlType = overlayPlugin.GetType(
+        "RainbowMage.OverlayPlugin.NetworkProcessors.LineActorControlExtra",
+        throwOnError: true)!;
+    var allowedCategories = actorControlType.GetField(
+            "AllowedActorControlCategories",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!
+        .GetValue(null) as Array;
+    if (allowedCategories is null ||
+        !allowedCategories.Cast<object>().Any(category =>
+            string.Equals(category.ToString(), "EObjAnimation", StringComparison.Ordinal)))
+    {
+        throw new InvalidOperationException(
+            "OverlayPlugin no longer emits the EObjAnimation event required by U7b.");
+    }
+
+    var halfRoomTrigger = new Regex(
+        @"^.{15}\S+ AAA:204:[^:]*:80:4.{7}:[^:]*:[^:]*:(?<baseId>201516[45])",
+        RegexOptions.CultureInvariant);
+    const string u7bSample =
+        "[21:40:07.677] _EObjAnimation AAA:204:40:80:40018959::0:2015164:92:27:15:0";
+    if (!halfRoomTrigger.IsMatch(u7bSample))
+    {
+        throw new InvalidOperationException(
+            "The OverlayPlugin AAA compatibility format no longer satisfies U7b's half-room trigger.");
     }
 }
 

@@ -62,7 +62,7 @@ be terminated without terminating FFXIV.
 
 ### 控制中心各页面
 
-输入 `/actcompat on` 打开控制中心。五个页面分别负责：
+输入 `/actcompat` 打开控制中心；`/actcompat on` 继续作为兼容别名。五个页面分别负责：
 
 | 页面 | 主要用途 |
 | --- | --- |
@@ -76,7 +76,7 @@ be terminated without terminating FFXIV.
 
 1. 阅读首次启动时显示的第三方扩展作者、来源、版本和权限，确认后才会安装并加载对应扩展。
 2. 在主页保持“启用解析”和“自动启动解析器”开启；顶部显示“运行中”后再进入战斗。
-3. 输入 `/actcompat` 打开战斗统计，输入 `/actcompat history` 查看已结束战斗，输入 `/actcompat status` 查看解析器和各 Host。
+3. 输入 `/actcompat meter` 打开战斗统计，输入 `/actcompat history` 查看已结束战斗，输入 `/actcompat status` 查看解析器和各 Host。
 4. “打开 FFLogs 上传日志”只打开本地 Network 日志目录并复制路径，不会自动上传；诊断日志用于排错，不能代替 FFLogs 战斗日志。
 
 ### 战斗统计口径
@@ -148,7 +148,7 @@ be terminated without terminating FFXIV.
 
 #### 插件打不开、命令没反应或一直初始化
 
-1. 输入 `/actcompat on`。如果提示命令不存在或控制中心完全打不开，到卫月插件安装器确认 Dalamud ACT Compat 已安装、已启用且没有加载错误。
+1. 输入 `/actcompat`。如果提示命令不存在或控制中心完全打不开，到卫月插件安装器确认 Dalamud ACT Compat 已安装、已启用且没有加载错误。
 2. 控制中心能打开时，在“概览”确认“启用解析”和“自动启动解析器”已勾选。
 3. 解析器长时间为“已停止”“初始化中”或“错误”时，在“设置”点击“重启解析器”。
 4. 输入 `/actcompat status`，先处理第一个失败的上游组件。
@@ -231,8 +231,8 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat factory-reset
 ```
 
-`/actcompat on` opens the plugin control center. `/actcompat` and
-`/actcompat meter` open Combat Meter. The in-game Help window contains the
+`/actcompat` opens the plugin control center, and `/actcompat on` remains a
+compatible alias. `/actcompat meter` opens Combat Meter. The in-game Help window contains the
 complete command reference with a clipboard-copy button for every entry.
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.
