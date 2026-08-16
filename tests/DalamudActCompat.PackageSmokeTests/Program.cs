@@ -85,6 +85,7 @@ try
     ValidatePictoActOverlayCommands();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
+    ValidateDutyWipeTracking();
     ValidateDutyEncounterFolderAggregation();
     ValidateDutyEncounterPartySizes();
     ValidateDutyEncounterRosterReplacement();
@@ -2144,6 +2145,36 @@ static void ValidateDutyEncounterFolderAggregation()
     Assert(
         nextDuty.Id != completed.Id && nextDuty.SegmentRecords.Count == 1,
         "A later duty entry reused the previous duty folder.");
+}
+
+static void ValidateDutyWipeTracking()
+{
+    var tracker = new DutyWipeTracker();
+    Assert(
+        !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: false) &&
+        !tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: false),
+        "An ordinary combat exit was mistaken for a party wipe.");
+    Assert(
+        !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: true) &&
+        tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: true) &&
+        !tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: true),
+        "A real party wipe was not latched until combat ended, or it reset more than once.");
+    Assert(
+        !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: false) &&
+        tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: true),
+        "A later repull could not produce its own independent wipe reset.");
+    Assert(
+        !tracker.Observe(boundByDuty: false, inCombat: false, partyWiped: true),
+        "Leaving a duty was incorrectly reported as an in-duty wipe.");
+    Assert(
+        Plugin.IsDutyPartyWiped(
+            boundByDuty: true,
+            localPlayerUnconscious: true,
+            anyPartyMemberAlive: false) &&
+        !Plugin.IsDutyPartyWiped(true, true, anyPartyMemberAlive: true) &&
+        !Plugin.IsDutyPartyWiped(true, localPlayerUnconscious: false, false) &&
+        !Plugin.IsDutyPartyWiped(boundByDuty: false, true, false),
+        "The party-wipe predicate no longer requires a bound duty, local death, and no survivor.");
 }
 
 static void ValidateDutyEncounterPartySizes()
@@ -6275,7 +6306,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("团灭后重新开怪会从 0 开始", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
         helpWindowSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
@@ -6317,9 +6348,9 @@ static void ValidateHtmlOverlayDefaults()
         readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
         readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
-        readmeSource.Contains("副本统计按每次开怪独立计算", StringComparison.Ordinal) &&
+        readmeSource.Contains("副本内的战斗统计持续累计", StringComparison.Ordinal) &&
         readmeSource.Contains("“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
-        readmeSource.Contains("文件夹内每条子记录才代表一把独立战斗", StringComparison.Ordinal) &&
+        readmeSource.Contains("每条子记录代表一次团灭前累计的完整战斗", StringComparison.Ordinal) &&
         readmeSource.Contains("`HPS` 使用一把战斗从开怪到结束的完整经过时间", StringComparison.Ordinal) &&
         readmeSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
         readmeSource.Contains("不会让旧数值回弹", StringComparison.Ordinal) &&
@@ -6336,7 +6367,11 @@ static void ValidateHtmlOverlayDefaults()
         parserAdapterSource.Contains(
             "RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds)",
             StringComparison.Ordinal) &&
-        parserAdapterSource.Contains("wasInCombat && !inCombat", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("dutyWipeTracker.Observe", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("isDutyPartyWiped()", StringComparison.Ordinal) &&
+        !parserAdapterSource.Contains("finished && !inCombat", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("ConditionFlag.Unconscious", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("IsDutyPartyWiped", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("leavingDuty: false", StringComparison.Ordinal) &&
         macroPluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutySession.Reset();", StringComparison.Ordinal) &&

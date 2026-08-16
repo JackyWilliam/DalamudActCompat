@@ -443,11 +443,11 @@ public sealed class HelpWindow : Window
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
-                "副本统计按每次开怪独立计算：团灭后重新开怪会从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
-                "Duty statistics are independent for every pull. A repull starts from zero after a wipe, even when a checkpoint starts the duty from an intermediate phase such as P2."));
+                "副本内的战斗统计持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
+                "Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
             DrawBullet(text.Get(
-                "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录才是一把独立战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
-                "History stores one duty entry as an expandable folder, with each child representing an independent pull. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
+                "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
+                "History stores one duty entry as an expandable folder, with each child representing the complete totals accumulated before a wipe. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
             DrawBullet(text.Get(
                 "“重置当前战斗”需要二次确认，会结束并清空本把统计；同一底层战斗段的后续刷新不会把旧数据带回。已保存的历史和原始 Network 日志不会被删除。",
                 "Reset current encounter requires confirmation and closes and clears the current pull. Later refreshes from the same underlying combat segment cannot restore old totals. Saved history and raw Network logs are not deleted."));

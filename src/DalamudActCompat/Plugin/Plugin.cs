@@ -34,6 +34,12 @@ public sealed class Plugin : IDalamudPlugin
     private const uint MatchaWorldChangedIconId = 61835;
     private const uint MatchaDutyEnteredIconId = 61832;
 
+    internal static bool IsDutyPartyWiped(
+        bool boundByDuty,
+        bool localPlayerUnconscious,
+        bool anyPartyMemberAlive)
+        => boundByDuty && localPlayerUnconscious && !anyPartyMemberAlive;
+
     private readonly PluginServices services;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
     private readonly PluginConfiguration configuration;
@@ -148,6 +154,10 @@ public sealed class Plugin : IDalamudPlugin
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
             partyList.Count > 1 &&
             partyList.Any(member => member.CurrentHP > 0);
+        var dutyPartyWiped = () => IsDutyPartyWiped(
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious],
+            partyList.Any(member => member.CurrentHP > 0));
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         var configurationMigrated = configuration.ApplyMigrations();
         configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
@@ -297,6 +307,7 @@ public sealed class Plugin : IDalamudPlugin
             () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
+            dutyPartyWiped,
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
