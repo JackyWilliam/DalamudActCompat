@@ -402,6 +402,9 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
 
 static void ValidatePictoActOverlayCommands()
 {
+    Assert(
+        PictoActNativeVfxBackend.UsesExpectedFieldLayout,
+        "PictoACT native VFX fields drifted from the current FFXIVClientStructs layout.");
     var beforeParse = DateTimeOffset.UtcNow;
     var commands = PictoActOverlayService.Parse(
         "Omen: Circle\nTag: ACTCOMPAT_SMOKE\nt: 5\nPos: <1.25, 2.5, -3.75>\n" +
@@ -435,7 +438,7 @@ static void ValidatePictoActOverlayCommands()
                 Kind: PictoActShapeKind.Rectangle,
                 PrimaryScale: 2.5f,
                 SecondaryScale: 28,
-                Color: { X: 1, Y: 1, Z: 1, W: 1 },
+                Color: { X: 1, Y: 0.82f, Z: 0.18f, W: 0.85f },
             },
         } &&
         commands[1].Shape!.StartsAt >= beforeParse.AddSeconds(2.4) &&
@@ -468,16 +471,256 @@ static void ValidatePictoActOverlayCommands()
     overlay.Apply(
         "Omen: Circle\nTag: ACTCOMPAT_REPLACE\nt: 5\nPos: 1, 2, 3\nScale: 5");
     Assert(
-        overlay.ShapeCount == 3,
-        "PictoACT explicit-tag replacement no longer preserves one shape per tag.");
+        overlay.ShapeCount == 4,
+        "PictoACT shapes sharing one selector tag did not coexist.");
     overlay.Apply("Action: Remove\nRegex: ^Auto$");
     Assert(
-        overlay.ShapeCount == 1,
+        overlay.ShapeCount == 2,
         "PictoACT Regex removal did not remove all matching Auto-tag shapes.");
     overlay.Apply("Action: Remove");
     Assert(
         overlay.ShapeCount == 0,
         "PictoACT unfiltered removal did not clear every shape.");
+
+    var ex7gCommands = PictoActOverlayService.Parse(
+        "Omen: m131om_setu0f\nTag: Ex7g_塔\nt: 6.7\nO: 100, 100\n" +
+        "θ: pi\nScale: 0.6, 25, 0.3\nColor: 1, 1, 5, 1\n---\n" +
+        "Omen: k5d1_omen_o01pg\nTag: Ex7g_追踪球_1\nt: 22.7\n" +
+        "Pos: 0, -3\nO: 100, 100\nθ: pi\nScale: 6, 6, 10\n" +
+        "Color: 1, 0.5, 0.5, 1.2\n---\n" +
+        "Action: Change\nRegex: ^Ex7g_追踪球_1$\nO: 110, 90\nθ: pi/2");
+    Assert(
+        ex7gCommands.Count == 3 &&
+        ex7gCommands[0].Shape is
+        {
+            Kind: PictoActShapeKind.NativeOnly,
+            VfxPath: "vfx/omen/eff/m131om_setu0f.avfx",
+            Position.X: 100,
+            Position.Z: 100,
+            Color.Z: 5,
+        } &&
+        ex7gCommands[1].Shape is
+        {
+            Kind: PictoActShapeKind.NativeOnly,
+            VfxPath: "vfx/omen/eff/k5d1_omen_o01pg.avfx",
+            Position.X: 100,
+            Position.Z: 97,
+        } &&
+        ex7gCommands[2] is
+        {
+            Change: true,
+            Regex: not null,
+            Patch:
+            {
+                TransformCenterSpecified: true,
+                TransformRotationSpecified: true,
+            },
+        },
+        "PictoACT did not parse the Ex7g custom omens or local O/θ transform commands.");
+
+    overlay.Apply(
+        "Omen: k5d1_omen_o01pg\nTag: Ex7g_追踪球_1\nt: 22.7\n" +
+        "Pos: 0, -3\nO: 100, 100\nθ: pi\nScale: 6, 6, 10\n" +
+        "Color: 1, 0.5, 0.5, 1.2");
+    overlay.Apply("Action: Change\nRegex: ^Ex7g_追踪球_1$\nO: 110, 90\nθ: pi/2");
+    Assert(
+        overlay.ShapeSnapshot.Single() is
+        {
+            Position.X: 113,
+            Position.Z: 90,
+            Angle: var changedAngle,
+        } &&
+        MathF.Abs(changedAngle - MathF.PI / 2) < 0.0001f,
+        "PictoACT Change did not update an existing Ex7g drawing in its local coordinate frame.");
+
+    var bbyCommands = PictoActOverlayService.Parse(
+        "Action: ExaFlare\nTag: Ex7x\ndelay0: 1.7\nt: 3\ndt: 1.1\n" +
+        "O: 100, 100, 0\nθ: pi\ndPos: 0, -8\nn: 3\n" +
+        "Omen: yazirushi1o0c\nScale: 6, 6, 5\n---\n" +
+        "Omen: z6r1_b4_ibox_01k1\nTag: Ex7f\nt: 22\n" +
+        "Pos: 95, 285\nScale: 5, 20, 1");
+    Assert(
+        bbyCommands.Count == 4 &&
+        bbyCommands.Take(3).All(command =>
+            command.Shape is
+            {
+                Kind: PictoActShapeKind.NativeOnly,
+                VfxPath: "vfx/omen/eff/yazirushi1o0c.avfx",
+            }) &&
+        bbyCommands[0].Shape!.StartsAt < bbyCommands[1].Shape!.StartsAt &&
+        bbyCommands[1].Shape!.StartsAt < bbyCommands[2].Shape!.StartsAt &&
+        bbyCommands[0].Shape!.Position.Z == 100 &&
+        bbyCommands[1].Shape!.Position.Z == 92 &&
+        bbyCommands[2].Shape!.Position.Z == 84 &&
+        bbyCommands[3].Shape is
+        {
+            Kind: PictoActShapeKind.NativeOnly,
+            VfxPath: "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
+        },
+        "PictoACT did not generically expand BBY ExaFlare or arbitrary omen resources.");
+
+    var protocolCommands = PictoActOverlayService.Parse(
+        "Omen: m0532om_don01x\nTag: CYL\nt: 5\nO: 100, 100\n" +
+        "DirN4: 3 > 2 ? 1 : 0\nPos: polar 6, 90°, 0.1\n" +
+        "ScaleCyl: 5√2 - 6, 30\n---\n" +
+        "Omen: m131om_setu0f\nTag: TARGET\nt: 5\nO: 100, 100\nθ: pi\n" +
+        "Pos: 2, -19\nTarget: -2, 19\nScale: 0.5, _d, 0\n---\n" +
+        "Omen: m131om_setu0f\nTag: ENTITY\nt: 5\n" +
+        "Pos: 1073741825\nTarget: 0x40000002\nScale: 0.1, _d + 14, 1",
+        raw => raw switch
+        {
+            "1073741825" => new System.Numerics.Vector3(10, 1, 20),
+            "0x40000002" => new System.Numerics.Vector3(13, 2, 24),
+            _ => null,
+        });
+    Assert(
+        protocolCommands.Count == 3 &&
+        protocolCommands[0].Shape is
+        {
+            Position.X: var polarX,
+            Position.Y: 0.1f,
+            Position.Z: var polarZ,
+            PrimaryScale: var cylindricalRadius,
+            SecondaryScale: var cylindricalRadius2,
+            TertiaryScale: 30,
+            Angle: var directionAngle,
+        } &&
+        MathF.Abs(polarX - (100 - 3 * MathF.Sqrt(2))) < 0.0001f &&
+        MathF.Abs(polarZ - (100 - 3 * MathF.Sqrt(2))) < 0.0001f &&
+        MathF.Abs(cylindricalRadius - (5 * MathF.Sqrt(2) - 6)) < 0.0001f &&
+        MathF.Abs(cylindricalRadius2 - cylindricalRadius) < 0.0001f &&
+        MathF.Abs(directionAngle + MathF.PI / 4) < 0.0001f &&
+        protocolCommands[1].Shape is
+        {
+            Position.X: 102,
+            Position.Z: 81,
+            SecondaryScale: var targetDistance,
+            TertiaryScale: 0,
+            Angle: var targetAngle,
+        } &&
+        MathF.Abs(targetDistance - MathF.Sqrt(1460)) < 0.0001f &&
+        MathF.Abs(targetAngle - MathF.Atan2(-4, 38)) < 0.0001f &&
+        protocolCommands[2].Shape is
+        {
+            Position.X: 10,
+            Position.Y: 1,
+            Position.Z: 20,
+            SecondaryScale: 19,
+            Angle: var entityAngle,
+        } &&
+        MathF.Abs(entityAngle - MathF.Atan2(3, 4)) < 0.0001f,
+        "PictoACT Target, ScaleCyl, DirN, polar, entity-position, or math compatibility failed.");
+
+    var directionAndScaleDefaults = PictoActOverlayService.Parse(
+        "Omen: Circle\nt: 5\nDir4: 0\nPos: 1, 2\nScale: 3").Single();
+    Assert(
+        directionAndScaleDefaults.Shape is
+        {
+            Position.X: var northX,
+            Position.Z: var northZ,
+            Angle: var northAngle,
+            PrimaryScale: 3,
+            SecondaryScale: 3,
+            TertiaryScale: 1,
+        } &&
+        MathF.Abs(northX - 1) < 0.0001f &&
+        MathF.Abs(northZ - 2) < 0.0001f &&
+        MathF.Abs(MathF.Abs(northAngle) - MathF.PI) < 0.0001f,
+        "PictoACT Dir north or single-value Scale defaults drifted from the original protocol.");
+
+    var polygonCommand = PictoActOverlayService.Parse(
+        "Action: △\nTag: POLYGON\nt: 8\nO: 100, 100\nθ: pi\n" +
+        "Points: 0, -12; 3, -20; -3, -20; 0.001, -12; 0, -16\n" +
+        "Color: 0, 1.2, 6, 1.5").Single();
+    Assert(
+        polygonCommand.Shape is
+        {
+            Kind: PictoActShapeKind.Polygon,
+            SourcePolygon: { Count: 3 },
+            Polygon: { Count: 3 } polygon,
+        } &&
+        MathF.Abs(polygon[0].X - 100) < 0.0001f &&
+        MathF.Abs(polygon[0].Z - 88) < 0.0001f,
+        "PictoACT △/Triangulate polygon parsing or trailing seed removal failed.");
+
+    overlay.Apply("Action: Remove");
+    overlay.Apply(
+        "Action: Triangulate\nTag: POLYGON\nt: 8\nO: 100, 100\nθ: pi\n" +
+        "Points: 0, -12; 3, -20; -3, -20\nColor: 0, 1.2, 6, 1.5");
+    overlay.Apply("Action: Change\nTag: POLYGON\nO: 110, 90\nθ: pi/2");
+    Assert(
+        overlay.ShapeSnapshot.Single() is
+        {
+            Kind: PictoActShapeKind.Polygon,
+            Polygon: { } changedPolygon,
+        } &&
+        MathF.Abs(changedPolygon[0].X - 122) < 0.0001f &&
+        MathF.Abs(changedPolygon[0].Z - 90) < 0.0001f,
+        "PictoACT Change did not update a Triangulate polygon transform.");
+
+    overlay.Apply("Action: Remove");
+    overlay.Apply(
+        "Omen: m131om_setu0f\nTag: TARGET_CHANGE\nt: 5\nPos: 0, 0\n" +
+        "Target: 0, 10\nScale: 0.2, _d, 0.2");
+    overlay.Apply(
+        "Action: Change\nTag: TARGET_CHANGE\nPos: 2, 1\nTarget: 5, 5\n" +
+        "Scale: 0.3, _d + 1, 0");
+    Assert(
+        overlay.ShapeSnapshot.Single() is
+        {
+            Position.X: 2,
+            Position.Z: 1,
+            SecondaryScale: 6,
+            TertiaryScale: 0,
+            Angle: var changedTargetAngle,
+        } &&
+        MathF.Abs(changedTargetAngle - MathF.Atan2(3, 4)) < 0.0001f,
+        "PictoACT Change did not recalculate Target angle or _d scale.");
+
+    overlay.Apply("Action: Remove");
+    overlay.Apply("Omen: Circle\nTag: DELAYED\nt: 30\nPos: 1, 2\nScale: 3");
+    overlay.Apply("Action: Change\nTag: DELAYED\nDelay: 10\nPos: 8, 9");
+    Assert(
+        overlay.ShapeSnapshot.Single().SourcePosition.X == 1,
+        "PictoACT executed a delayed Change immediately.");
+    overlay.ProcessPending(DateTimeOffset.UtcNow.AddSeconds(11));
+    Assert(
+        overlay.ShapeSnapshot.Single().SourcePosition is { X: 8, Z: 9 },
+        "PictoACT did not execute a delayed Change when it became due.");
+
+    overlay.Apply("Action: Remove\nTag: DELAYED\nDelay: 10");
+    overlay.Apply("Action: Remove\nTag: DELAYED");
+    overlay.ProcessPending(DateTimeOffset.UtcNow.AddSeconds(11));
+    Assert(
+        overlay.ShapeSnapshot.Count == 0,
+        "PictoACT Remove did not cancel matching delayed operations.");
+
+    overlay.Apply(
+        "Omen: Rect\nTag: ANGLE_MODE\nt: 30\nPos: 0, 0\nTarget: 0, 10\nScale: 1, 10, 1");
+    overlay.Apply("Action: Change\nTag: ANGLE_MODE\nAngle: pi/2");
+    Assert(
+        overlay.ShapeSnapshot.Single() is
+        {
+            SourceTarget: null,
+            SourceAngle: var angleModeAngle,
+        } &&
+        MathF.Abs(angleModeAngle - MathF.PI / 2) < 0.0001f,
+        "PictoACT Angle Change did not switch a Target shape back to angle mode.");
+
+    var rejectedTargetAndAngle = false;
+    try
+    {
+        _ = PictoActOverlayService.Parse(
+            "Omen: Rect\nt: 5\nPos: 0, 0\nTarget: 0, 10\nAngle: 0");
+    }
+    catch (InvalidDataException)
+    {
+        rejectedTargetAndAngle = true;
+    }
+
+    Assert(
+        rejectedTargetAndAngle,
+        "PictoACT accepted mutually exclusive Target and Angle fields.");
 }
 
 static void ValidatePluginRepositoryMetadata()
@@ -2192,6 +2435,25 @@ static void ValidateDutyEncounterFolderAggregation()
 
 static void ValidateDutyWipeTracking()
 {
+    var openWorldTracker = new OpenWorldCombatResetTracker(
+        boundByDuty: false,
+        inCombat: false);
+    Assert(
+        !openWorldTracker.Observe(boundByDuty: false, inCombat: true) &&
+        openWorldTracker.Observe(boundByDuty: false, inCombat: false) &&
+        !openWorldTracker.Observe(boundByDuty: false, inCombat: false),
+        "An open-world combat exit did not reset exactly once.");
+
+    var dutyBoundaryTracker = new OpenWorldCombatResetTracker(
+        boundByDuty: true,
+        inCombat: true);
+    Assert(
+        !dutyBoundaryTracker.Observe(boundByDuty: true, inCombat: false) &&
+        !dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: false) &&
+        !dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: true) &&
+        dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: false),
+        "A duty transition reset the open-world meter or blocked the next real outdoor reset.");
+
     var tracker = new DutyWipeTracker();
     Assert(
         !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: false) &&
@@ -6349,6 +6611,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("副本外每次脱战后会立即清空实时统计", StringComparison.Ordinal) &&
         helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
@@ -6381,7 +6644,9 @@ static void ValidateHtmlOverlayDefaults()
             "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.ShowAnimated\\(\\);") &&
         Regex.IsMatch(
             macroPluginSource,
-            "case \\\"meter\\\":\\s+meterWindow\\.IsOpen = true;") &&
+            "case \\\"meter\\\":\\s+SetMeterVisible\\(true\\);") &&
+        macroPluginSource.Contains("() => SetMeterVisible(true)", StringComparison.Ordinal) &&
+        !macroPluginSource.Contains("private void ToggleMeter()", StringComparison.Ordinal) &&
         !macroPluginSource.Contains(
             "Cafe.Matcha configuration requires the WriteFiles capability.",
             StringComparison.Ordinal) &&
@@ -6391,7 +6656,8 @@ static void ValidateHtmlOverlayDefaults()
         readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
         readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
-        readmeSource.Contains("副本内的战斗统计持续累计", StringComparison.Ordinal) &&
+        readmeSource.Contains("副本外每次脱战后会立即清空实时统计", StringComparison.Ordinal) &&
+        readmeSource.Contains("副本内则持续累计", StringComparison.Ordinal) &&
         readmeSource.Contains("“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         readmeSource.Contains("每条子记录代表一次团灭前累计的完整战斗", StringComparison.Ordinal) &&
         readmeSource.Contains("`HPS` 使用一把战斗从开怪到结束的完整经过时间", StringComparison.Ordinal) &&

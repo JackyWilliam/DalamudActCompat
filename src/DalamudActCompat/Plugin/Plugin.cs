@@ -148,7 +148,12 @@ public sealed class Plugin : IDalamudPlugin
             condition,
             gameInteropProvider,
             notificationManager);
-        pictoActOverlay = new PictoActOverlayService(gameGui);
+        pictoActOverlay = new PictoActOverlayService(
+            gameGui,
+            sigScanner,
+            gameInteropProvider,
+            log,
+            objectTable);
         var localDeathWhilePartyContinues = () =>
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious] &&
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
@@ -482,7 +487,7 @@ public sealed class Plugin : IDalamudPlugin
             launcherTexture,
             text,
             settingsWindow.ToggleAnimated,
-            ToggleMeter,
+            () => SetMeterVisible(true),
             SaveConfiguration)
         {
             IsOpen = true,
@@ -556,6 +561,7 @@ public sealed class Plugin : IDalamudPlugin
         services.PluginInterface.UiBuilder.Draw -= Draw;
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         services.PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
+        pictoActOverlay.Dispose();
         settingsWindow.Detach();
         advancedSettingsWindow.Detach();
         statusWindow.Detach();
@@ -586,12 +592,6 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenMainUi()
         => settingsWindow.ShowAnimated();
-
-    private void ToggleMeter()
-    {
-        var shouldShow = !configuration.Meter.IsVisible || !meterWindow.IsOpen;
-        SetMeterVisible(shouldShow);
-    }
 
     private void SetMeterVisible(bool visible)
     {
@@ -631,7 +631,7 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "sample":
                 LoadSampleEncounter();
-                meterWindow.IsOpen = true;
+                SetMeterVisible(true);
                 break;
             case "host":
                 StartBackgroundOperation(async () =>
@@ -674,7 +674,7 @@ public sealed class Plugin : IDalamudPlugin
                 InstallActPlugin(remainder);
                 break;
             case "meter":
-                meterWindow.IsOpen = true;
+                SetMeterVisible(true);
                 break;
             default:
                 // Unknown macros should show the authoritative command list instead of
@@ -2998,6 +2998,14 @@ public sealed class Plugin : IDalamudPlugin
                     }
                     else if (invocation.Request.Command == "postnamazu.pictoact")
                     {
+                        if (!configuration.IsActCapabilityAllowed(
+                                "postnamazu",
+                                ActCapability.NativeGameMemory))
+                        {
+                            throw new UnauthorizedAccessException(
+                                "PostNamazu native game-memory capability is denied.");
+                        }
+
                         pictoActOverlay.Apply(payload);
                     }
                     else if (invocation.Request.Command == "postnamazu.preset")

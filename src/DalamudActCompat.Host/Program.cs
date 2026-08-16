@@ -114,6 +114,11 @@ internal static class Program
         var pluginRuntimeReady = 0;
         var pluginRuntimeDisposed = 0;
         var pluginStartupStarted = 0;
+        var criticalStateSync = new object();
+        var pendingRuntimeEvents = new LinkedList<(
+            Action<LegacyPluginRuntime> Replay,
+            int LogCount)>();
+        var pendingRuntimeLogCount = 0;
         var heartbeat = Task.Factory.StartNew(
             () => HeartbeatLoop(
                 options,
@@ -123,7 +128,9 @@ internal static class Program
                 () => Volatile.Read(ref pluginRuntimeReady) == 1
                     ? pluginRuntime?.GetPluginHealth() ?? []
                     : [],
-                () => pluginRuntime?.GetStages() ?? [],
+                () => Volatile.Read(ref pluginRuntimeReady) == 1
+                    ? pluginRuntime?.GetStages() ?? []
+                    : [],
                 shutdown.Token),
             shutdown.Token,
             TaskCreationOptions.LongRunning,
@@ -218,7 +225,30 @@ internal static class Program
                                     options,
                                     outbound,
                                     () => Interlocked.Increment(ref sendSequence),
-                                    () => Interlocked.Exchange(ref pluginRuntimeReady, 1),
+                                    () =>
+                                    {
+                                        lock (criticalStateSync)
+                                        {
+                                            Interlocked.Exchange(ref pluginRuntimeReady, 1);
+                                            foreach (var pending in pendingRuntimeEvents)
+                                            {
+                                                try
+                                                {
+                                                    pending.Replay(runtime);
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    HostPluginBridge.ReportException(
+                                                        "act-host",
+                                                        "Startup event replay",
+                                                        ex);
+                                                }
+                                            }
+
+                                            pendingRuntimeEvents.Clear();
+                                            pendingRuntimeLogCount = 0;
+                                        }
+                                    },
                                     shutdown.Token),
                                 CancellationToken.None);
                             _ = MonitorPluginStartupAsync(
@@ -283,10 +313,41 @@ internal static class Program
                         }
                         break;
                     case HostMessageTypes.LogBatch:
-                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        var logs = envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? [];
+                        lock (criticalStateSync)
                         {
-                            pluginRuntime?.AcceptLogs(
-                                envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? []);
+                            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                            {
+                                pluginRuntime?.AcceptLogs(logs);
+                            }
+                            else
+                            {
+                                while (pendingRuntimeLogCount + logs.Count >
+                                       HostProtocol.DataQueueCapacity)
+                                {
+                                    var oldestLogs = pendingRuntimeEvents.First;
+                                    while (oldestLogs is not null && oldestLogs.Value.LogCount == 0)
+                                    {
+                                        oldestLogs = oldestLogs.Next;
+                                    }
+
+                                    if (oldestLogs is null)
+                                    {
+                                        break;
+                                    }
+
+                                    pendingRuntimeLogCount -= oldestLogs.Value.LogCount;
+                                    pendingRuntimeEvents.Remove(oldestLogs);
+                                }
+
+                                if (logs.Count <= HostProtocol.DataQueueCapacity)
+                                {
+                                    pendingRuntimeEvents.AddLast((
+                                        runtime => runtime.AcceptLogs(logs),
+                                        logs.Count));
+                                    pendingRuntimeLogCount += logs.Count;
+                                }
+                            }
                         }
                         break;
                     case HostMessageTypes.SilverDasherLogBatch:
@@ -296,9 +357,20 @@ internal static class Program
                     case HostMessageTypes.ZoneChanged:
                         if (envelope.Payload.Deserialize<HostZoneEvent>() is { } zone)
                         {
-                            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                            lock (criticalStateSync)
                             {
-                                pluginRuntime?.ChangeZone(zone.TerritoryId, zone.ZoneName);
+                                if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                                {
+                                    pluginRuntime?.ChangeZone(zone.TerritoryId, zone.ZoneName);
+                                }
+                                else
+                                {
+                                    pendingRuntimeEvents.AddLast((
+                                        runtime => runtime.ChangeZone(
+                                            zone.TerritoryId,
+                                            zone.ZoneName),
+                                        0));
+                                }
                             }
                         }
                         break;
@@ -326,15 +398,33 @@ internal static class Program
                             envelope.Type == HostMessageTypes.MatchaNetworkSent);
                         break;
                     case HostMessageTypes.CombatStarted:
-                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        lock (criticalStateSync)
                         {
-                            pluginRuntime?.SetCombatState(true);
+                            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                            {
+                                pluginRuntime?.SetCombatState(true);
+                            }
+                            else
+                            {
+                                pendingRuntimeEvents.AddLast((
+                                    runtime => runtime.SetCombatState(true),
+                                    0));
+                            }
                         }
                         break;
                     case HostMessageTypes.CombatEnded:
-                        if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                        lock (criticalStateSync)
                         {
-                            pluginRuntime?.SetCombatState(false);
+                            if (Volatile.Read(ref pluginRuntimeReady) == 1)
+                            {
+                                pluginRuntime?.SetCombatState(false);
+                            }
+                            else
+                            {
+                                pendingRuntimeEvents.AddLast((
+                                    runtime => runtime.SetCombatState(false),
+                                    0));
+                            }
                         }
                         break;
                     case HostMessageTypes.PluginOpen:
@@ -463,7 +553,6 @@ internal static class Program
         try
         {
             runtime.Start();
-            markReady();
             var degraded = runtime.GetStages().Any(stage =>
                 string.Equals(stage.State, "failed", StringComparison.OrdinalIgnoreCase));
             await EnqueueControlAsync(
@@ -478,6 +567,18 @@ internal static class Program
                         $"Loaded out-of-process: {string.Join(", ", runtime.LoadedPluginIds)}",
                         DateTimeOffset.UtcNow)),
                 cancellationToken).ConfigureAwait(false);
+            try
+            {
+                markReady();
+            }
+            catch (Exception ex)
+            {
+                HostPluginBridge.ReportException(
+                    "act-host",
+                    "Startup critical-state replay",
+                    ex);
+                Console.Error.WriteLine($"ACT Host critical-state replay failed: {ex}");
+            }
         }
         catch (Exception ex)
         {

@@ -20,9 +20,12 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private readonly bool matchaOnly;
     private readonly bool genericOnly;
     private readonly List<LegacyPluginHandle> plugins = [];
+    private LegacyPluginHandle[] pluginSnapshot = [];
     private readonly ConcurrentDictionary<string, HostPluginStage> stages =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ManualResetEventSlim ready = new();
+    private System.Threading.Timer? diagnosticTimer;
+    private int diagnosticPollActive;
     private Thread? actUiThread;
     private FormActMain? actMain;
     private Exception? startupFailure;
@@ -32,6 +35,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
     private MatchaDataSubscription? matchaSubscription;
     private MatchaWindowsNotifier? matchaWindowsNotifier;
     private long acceptedLogLines;
+    private bool pendingCombatStart;
     private bool disposed;
 
     public LegacyPluginRuntime(
@@ -105,7 +109,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
     }
 
     public IReadOnlyList<string> LoadedPluginIds
-        => plugins.Select(plugin => plugin.Id).ToArray();
+        => PluginSnapshot.Select(plugin => plugin.Id).ToArray();
 
     public IReadOnlyList<HostPluginStage> GetStages()
     {
@@ -115,30 +119,6 @@ internal sealed class LegacyPluginRuntime : IDisposable
             "success",
             $"accepted={Volatile.Read(ref acceptedLogLines)}",
             DateTimeOffset.UtcNow);
-        foreach (var plugin in plugins)
-        {
-            try
-            {
-                plugin.PollDiagnostics();
-                if (plugin.GetRuntimeStage() is { } runtimeStage)
-                {
-                    stages[$"{runtimeStage.PluginId}|{runtimeStage.Stage}"] = runtimeStage;
-                }
-            }
-            catch (Exception ex)
-            {
-                HostPluginBridge.ReportException(
-                    plugin.Id,
-                    "Diagnostic/status polling",
-                    ex);
-                SetStage(
-                    plugin.Id,
-                    "Diagnostic/status polling",
-                    "failed",
-                    ex.Message);
-            }
-        }
-
         return stages.Values
             .OrderBy(stage => stage.PluginId, StringComparer.Ordinal)
             .ThenBy(stage => stage.Stage, StringComparer.Ordinal)
@@ -190,6 +170,13 @@ internal sealed class LegacyPluginRuntime : IDisposable
         Directory.CreateDirectory(pluginRoot);
         Directory.CreateDirectory(configRoot);
         Directory.CreateDirectory(Path.Combine(configRoot, "Config"));
+        if (!matchaOnly && !genericOnly &&
+            allowedPluginIds.Contains("triggernometry") &&
+            TriggernometryConfigurationRecovery.TryRecover(configRoot) is { } recoveryMessage)
+        {
+            Console.WriteLine(recoveryMessage);
+        }
+
         if (!matchaOnly && !genericOnly && FoxTtsConfigurationDefaults.Ensure(configRoot))
         {
             Console.WriteLine(
@@ -229,8 +216,9 @@ internal sealed class LegacyPluginRuntime : IDisposable
             SetStage(
                 "matcha",
                 "Bidirectional network",
-                plugins.Any(plugin => plugin.Id == "matcha") ? "success" : "failed",
+                PluginSnapshot.Any(plugin => plugin.Id == "matcha") ? "success" : "failed",
                 "Received and sent packets use a Matcha-only bounded dispatcher in a separate process.");
+            StartDiagnosticPolling();
             return;
         }
         if (genericOnly)
@@ -238,6 +226,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
             LoadManifestPlugins();
             HostPluginBridge.ConfigureTtsWriter(null);
             actMain!.PlayTtsMethod = HostPluginBridge.SendGenericTts;
+            StartDiagnosticPolling();
             return;
         }
 
@@ -259,8 +248,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
         SetStage(
             "postnamazu",
             "Triggernometry discovery",
-            plugins.Any(plugin => plugin.Id == "triggernometry") ? "success" : "failed",
-            plugins.Any(plugin => plugin.Id == "triggernometry")
+            PluginSnapshot.Any(plugin => plugin.Id == "triggernometry") ? "success" : "failed",
+            PluginSnapshot.Any(plugin => plugin.Id == "triggernometry")
                 ? "Triggernometry is present in the ACT plugin list before PostNamazu initialization."
                 : "Triggernometry was not loaded into the external ACT plugin list.");
         TryLoad(
@@ -268,7 +257,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
             "PostNamazu.dll",
             "PostNamazu.PostNamazu");
         LoadManifestPlugins();
-        var isolatedTtsWriter = plugins
+        var isolatedTtsWriter = PluginSnapshot
             .Select(plugin => plugin.TtsWriter)
             .FirstOrDefault(writer => writer is not null);
         Action<string>? hostTtsWriter = isolatedTtsWriter is null
@@ -278,6 +267,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
                 : isolatedTtsWriter;
         HostPluginBridge.ConfigureTtsWriter(hostTtsWriter);
         actMain!.PlayTtsMethod = HostPluginBridge.SendTts;
+        StartDiagnosticPolling();
     }
 
     public void AcceptLogs(IReadOnlyList<HostLogEvent> logs)
@@ -300,20 +290,47 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
     public void ChangeZone(uint territoryId, string zoneName)
     {
-        actMain?.ChangeZone(zoneName);
+        var target = actMain;
+        target?.ChangeZone(zoneName);
+        if (target is not null && pendingCombatStart)
+        {
+            pendingCombatStart = false;
+            SetCombatState(true);
+        }
+
+        // Initialize ACT's zone before replaying combat, but publish the external zone
+        // event afterward so plugins still observe the original queued event order.
         HostPluginBridge.PublishTriggernometryZoneChange(territoryId, zoneName);
     }
 
     public void SetCombatState(bool inCombat)
     {
         var target = actMain;
-        if (target is null || target.InCombat == inCombat)
+        if (target is null)
+        {
+            return;
+        }
+
+        if (!inCombat)
+        {
+            pendingCombatStart = false;
+        }
+
+        if (target.InCombat == inCombat)
         {
             return;
         }
 
         if (inCombat)
         {
+            if (target.ActiveZone is null || string.IsNullOrWhiteSpace(target.CurrentZone))
+            {
+                // The game can publish combat before the initial zone during Host startup.
+                // Defer it so ACT never dereferences an uninitialized ActiveZone.
+                pendingCombatStart = true;
+                return;
+            }
+
             target.SetEncounter(DateTime.Now, "ACT_HOST", "ACT_HOST");
         }
         else
@@ -324,7 +341,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
     public bool OpenPluginUi(string pluginId)
     {
-        var plugin = plugins.FirstOrDefault(candidate => string.Equals(
+        var plugin = PluginSnapshot.FirstOrDefault(candidate => string.Equals(
             candidate.Id,
             pluginId,
             StringComparison.OrdinalIgnoreCase));
@@ -333,7 +350,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
     public bool InvokePlugin(HostPluginInvocation invocation)
     {
-        var plugin = plugins.FirstOrDefault(candidate => string.Equals(
+        var plugin = PluginSnapshot.FirstOrDefault(candidate => string.Equals(
             candidate.Id,
             invocation.PluginId,
             StringComparison.OrdinalIgnoreCase));
@@ -378,6 +395,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
         }
 
         disposed = true;
+        diagnosticTimer?.Dispose();
+        diagnosticTimer = null;
         HostPluginBridge.ConfigureTtsWriter(null);
         HostPluginBridge.ConfigureSilverDasherNotificationWriter(null);
         HostPluginBridge.ConfigureMatchaNotificationWriter(null);
@@ -385,9 +404,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
         {
             actMain.BeforeLogLineRead -= OnMatchaLogLine;
         }
-        for (var index = plugins.Count - 1; index >= 0; index--)
+        var snapshot = PluginSnapshot;
+        Volatile.Write(ref pluginSnapshot, []);
+        for (var index = snapshot.Length - 1; index >= 0; index--)
         {
-            plugins[index].Dispose();
+            snapshot[index].Dispose();
         }
         silverDasherWindowsNotifier?.Dispose();
         silverDasherWindowsNotifier = null;
@@ -557,6 +578,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
             var handle = LegacyPluginHandle.Load(id, assemblyPath, entryType);
             plugins.Add(handle);
+            Volatile.Write(ref pluginSnapshot, plugins.ToArray());
             Console.WriteLine($"Legacy plugin '{id}' loaded out-of-process. Status: {handle.Status}");
             SetStage(id, "InitPlugin", "success", handle.Status);
             if (id == "postnamazu")
@@ -755,6 +777,64 @@ internal sealed class LegacyPluginRuntime : IDisposable
         if (!isImport)
         {
             HostPluginBridge.RelayMatchaLogLine(args.logLine);
+        }
+    }
+
+    private LegacyPluginHandle[] PluginSnapshot => Volatile.Read(ref pluginSnapshot);
+
+    private void StartDiagnosticPolling()
+    {
+        diagnosticTimer = new System.Threading.Timer(
+            _ =>
+            {
+                if (disposed || Interlocked.Exchange(ref diagnosticPollActive, 1) != 0)
+                {
+                    return;
+                }
+
+                // Third-party diagnostics may enter their UI thread. Keep that work off
+                // the heartbeat path and never queue a second poll behind a stalled one.
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        RefreshPluginDiagnostics();
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref diagnosticPollActive, 0);
+                    }
+                });
+            },
+            null,
+            TimeSpan.Zero,
+            TimeSpan.FromSeconds(5));
+    }
+
+    private void RefreshPluginDiagnostics()
+    {
+        foreach (var plugin in PluginSnapshot)
+        {
+            try
+            {
+                plugin.PollDiagnostics();
+                if (plugin.GetRuntimeStage() is { } runtimeStage)
+                {
+                    stages[$"{runtimeStage.PluginId}|{runtimeStage.Stage}"] = runtimeStage;
+                }
+            }
+            catch (Exception ex)
+            {
+                HostPluginBridge.ReportException(
+                    plugin.Id,
+                    "Diagnostic/status polling",
+                    ex);
+                SetStage(
+                    plugin.Id,
+                    "Diagnostic/status polling",
+                    "failed",
+                    ex.Message);
+            }
         }
     }
 

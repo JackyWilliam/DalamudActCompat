@@ -41,6 +41,7 @@ if (!File.Exists(hostExecutable))
 await ValidateHandshakeCommandBoundaryAndShutdownAsync();
 ValidateForegroundNotificationRouting();
 ValidateFoxTtsDefaultConfiguration();
+ValidateTriggernometryConfigurationRecovery();
 await ValidateSequenceRegressionTerminatesHostAsync();
 await ValidateExpiredMessageIsDroppedAsync();
 await ValidateHostCrashBreaksOnlyPipeAsync();
@@ -212,6 +213,56 @@ void ValidateFoxTtsDefaultConfiguration()
             throw new InvalidOperationException(
                 "Repairing a stale FoxTTS encoding declaration overwrote unrelated settings.");
         }
+    }
+    finally
+    {
+        if (Directory.Exists(temporaryRoot))
+        {
+            Directory.Delete(temporaryRoot, recursive: true);
+        }
+    }
+}
+
+void ValidateTriggernometryConfigurationRecovery()
+{
+    var temporaryRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"DalamudActCompat-Triggernometry-Recovery-{Guid.NewGuid():N}");
+    try
+    {
+        var configurationDirectory = Path.Combine(temporaryRoot, "Config");
+        Directory.CreateDirectory(configurationDirectory);
+        var configurationPath = Path.Combine(
+            configurationDirectory,
+            "Triggernometry.config.xml");
+        var previousPath = configurationPath + ".previous";
+        File.WriteAllText(configurationPath, "<Configuration><Root>");
+        File.WriteAllText(
+            previousPath,
+            "<?xml version=\"1.0\"?><Configuration><Root /></Configuration>");
+
+        var recoveryType = typeof(HostPluginBridge).Assembly.GetType(
+                               "DalamudActCompat.Host.TriggernometryConfigurationRecovery")
+                           ?? throw new TypeLoadException(
+                               "Triggernometry configuration recovery was not found.");
+        var recover = recoveryType.GetMethod(
+                          "TryRecover",
+                          BindingFlags.Static | BindingFlags.NonPublic)
+                      ?? throw new MissingMethodException(recoveryType.FullName, "TryRecover");
+        var result = recover.Invoke(null, [temporaryRoot]) as string;
+        Assert(
+            result?.Contains("Recovered", StringComparison.Ordinal) == true &&
+            XDocument.Load(configurationPath).Root?.Name.LocalName == "Configuration" &&
+            File.Exists(previousPath) &&
+            Directory.EnumerateFiles(
+                    configurationDirectory,
+                    "Triggernometry.config.xml.corrupt-*.xml")
+                .Count() == 1,
+            "Triggernometry did not atomically restore a valid previous configuration while preserving the damaged bytes.");
+
+        Assert(
+            recover.Invoke(null, [temporaryRoot]) is null,
+            "Triggernometry recovery rewrote an already valid primary configuration.");
     }
     finally
     {
@@ -1093,12 +1144,61 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                         ["triggernometry", "postnamazu", "act.foxtts"]),
                     "legacy-permissions"),
                 CancellationToken.None);
+            // Reproduce the real startup race: combat may arrive before both plugin
+            // initialization and the first zone, but neither state may be discarded.
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    3,
+                    HostMessageTypes.CombatStarted,
+                    HostMessagePriority.Critical,
+                    new HostCombatEvent(true, DateTimeOffset.UtcNow)),
+                CancellationToken.None);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    4,
+                    HostMessageTypes.ZoneChanged,
+                    HostMessagePriority.Critical,
+                    new HostZoneEvent(1, "Host Smoke Zone", DateTimeOffset.UtcNow)),
+                CancellationToken.None);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    5,
+                    HostMessageTypes.LogBatch,
+                    HostMessagePriority.Data,
+                    new[]
+                    {
+                        new HostLogEvent(
+                            DateTimeOffset.UtcNow,
+                            "00|2026-07-31T00:00:00.9000000+08:00|0000|ACTCOMPAT_ZONE_LINE|",
+                            false),
+                    }),
+                CancellationToken.None);
             var healthEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
             var health = healthEnvelope.Payload.Deserialize<HostHealth>()
                          ?? throw new InvalidDataException("Host returned no plugin health.");
             Assert(
                 health.State == "plugins.ready",
                 $"Legacy plugin runtime did not become ready: {health.Detail}");
+            var clientSequence = 6L;
+            await ReadAndCompleteExpectedTtsSetAsync(
+                "ACTCOMPAT_COMBAT_START",
+                "ACTCOMPAT_ZONE_MATCH");
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.CombatEnded,
+                    HostMessagePriority.Critical,
+                    new HostCombatEvent(false, DateTimeOffset.UtcNow)),
+                CancellationToken.None);
+            await ReadAndCompleteExpectedTtsAsync("ACTCOMPAT_COMBAT_END");
             ValidateTriggernometryLaunchProcessPatch();
             var persistedConfiguration = new System.Xml.XmlDocument();
             persistedConfiguration.Load(Path.Combine(
@@ -1127,7 +1227,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 pipe.Writer,
                 HostEnvelope.Create(
                     session,
-                    3,
+                    clientSequence++,
                     HostMessageTypes.FfxivEntities,
                     HostMessagePriority.State,
                     CreateTestFfxivSnapshot()),
@@ -1136,7 +1236,7 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 pipe.Writer,
                 HostEnvelope.Create(
                     session,
-                    4,
+                    clientSequence++,
                     HostMessageTypes.LogBatch,
                     HostMessagePriority.Data,
                     new[]
@@ -1178,7 +1278,6 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                     "ACTCOMPAT_LEGACY_ECHO_MATCH",
                 ]),
                 "Triggernometry did not complete standard-log, ACT-legacy-log, and FFXIV-network-equivalent regex/TTS paths.");
-            var clientSequence = 5L;
             foreach (var request in ttsRequests)
             {
                 await HostFrameCodec.WriteAsync(
@@ -1297,51 +1396,6 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                 "Delay: 2.5",
                 "Angle: 0 + pi/2",
                 "Pos: 1.25, -3.75, 2.5");
-            await HostFrameCodec.WriteAsync(
-                pipe.Writer,
-                HostEnvelope.Create(
-                    session,
-                    clientSequence++,
-                    HostMessageTypes.ZoneChanged,
-                    HostMessagePriority.Critical,
-                    new HostZoneEvent(1, "Host Smoke Zone", DateTimeOffset.UtcNow)),
-                CancellationToken.None);
-            await HostFrameCodec.WriteAsync(
-                pipe.Writer,
-                HostEnvelope.Create(
-                    session,
-                    clientSequence++,
-                    HostMessageTypes.LogBatch,
-                    HostMessagePriority.Data,
-                    new[]
-                    {
-                        new HostLogEvent(
-                            DateTimeOffset.UtcNow,
-                            "00|2026-07-31T00:00:01.0000000+08:00|0000|ACTCOMPAT_ZONE_LINE|",
-                            false),
-                    }),
-                CancellationToken.None);
-            await ReadAndCompleteExpectedTtsAsync("ACTCOMPAT_ZONE_MATCH");
-            await HostFrameCodec.WriteAsync(
-                pipe.Writer,
-                HostEnvelope.Create(
-                    session,
-                    clientSequence++,
-                    HostMessageTypes.CombatStarted,
-                    HostMessagePriority.Critical,
-                    new HostCombatEvent(true, DateTimeOffset.UtcNow)),
-                CancellationToken.None);
-            await ReadAndCompleteExpectedTtsAsync("ACTCOMPAT_COMBAT_START");
-            await HostFrameCodec.WriteAsync(
-                pipe.Writer,
-                HostEnvelope.Create(
-                    session,
-                    clientSequence++,
-                    HostMessageTypes.CombatEnded,
-                    HostMessagePriority.Critical,
-                    new HostCombatEvent(false, DateTimeOffset.UtcNow)),
-                CancellationToken.None);
-            await ReadAndCompleteExpectedTtsAsync("ACTCOMPAT_COMBAT_END");
             if (hasFoxTts)
             {
                 await HostFrameCodec.WriteAsync(
@@ -1606,6 +1660,43 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                         new HostCommandResult(true, "completed", "smoke"),
                         envelope.CorrelationId),
                     CancellationToken.None);
+            }
+
+            async Task ReadAndCompleteExpectedTtsSetAsync(params string[] expectedTexts)
+            {
+                var receivedTexts = new HashSet<string>(StringComparer.Ordinal);
+                for (var index = 0; index < expectedTexts.Length; index++)
+                {
+                    var envelope = await ReadTriggerCommandAsync(pipe);
+                    var request = envelope.Payload.Deserialize<HostCommandRequest>()
+                                  ?? throw new InvalidDataException(
+                                      "Triggernometry sent an invalid TTS request.");
+                    var receivedText = request.Arguments.GetValueOrDefault("text");
+                    Assert(
+                        request.PluginId == "triggernometry" &&
+                        request.Command == "tts" &&
+                        receivedText is not null,
+                        "Triggernometry startup replay sent a non-TTS command.");
+                    receivedTexts.Add(receivedText!);
+                    Assert(
+                        !string.IsNullOrWhiteSpace(envelope.CorrelationId),
+                        "Triggernometry TTS request had no correlation identifier.");
+                    await HostFrameCodec.WriteAsync(
+                        pipe.Writer,
+                        HostEnvelope.Create(
+                            session,
+                            clientSequence++,
+                            HostMessageTypes.CommandResult,
+                            HostMessagePriority.Control,
+                            new HostCommandResult(true, "completed", "smoke"),
+                            envelope.CorrelationId),
+                        CancellationToken.None);
+                }
+
+                Assert(
+                    receivedTexts.SetEquals(expectedTexts),
+                    $"Triggernometry startup replay expected [{string.Join(", ", expectedTexts)}], " +
+                    $"received [{string.Join(", ", receivedTexts)}].");
             }
 
             async Task ReadAndCompleteExpectedPostNamazuAsync(

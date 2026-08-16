@@ -30,6 +30,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly DutyEncounterAccumulator dutySession = new();
     private readonly DutyEncounterFolderAccumulator dutyFolder = new();
     private readonly DutyWipeTracker dutyWipeTracker = new();
+    private readonly OpenWorldCombatResetTracker openWorldCombatResetTracker;
     private readonly HashSet<Guid> finalizedDutySegmentIds = [];
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
@@ -70,6 +71,9 @@ public sealed class IinactAdapter : IParserEngine
         actRuntime.EncounterChanged += OnEncounterChanged;
         framework.Update += OnFrameworkUpdate;
         wasBoundByDuty = isBoundByDuty();
+        openWorldCombatResetTracker = new OpenWorldCombatResetTracker(
+            wasBoundByDuty,
+            isInCombat());
         dutyWipeTracker.Reset(isDutyPartyWiped());
     }
 
@@ -355,14 +359,23 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
-        stateStore.UpdateCurrent(encounter);
         encounterService.QueueFinishedEncounter(encounter);
+        if (isInCombat())
+        {
+            stateStore.UpdateCurrent(encounter);
+            return;
+        }
+
+        // Open-world history is still saved, but a delayed ACT completion must not refill
+        // the live meter after the game has already reported that combat ended.
+        stateStore.ResetCurrent();
     }
 
     private void OnFrameworkUpdate(IFramework _)
     {
         var boundByDuty = isBoundByDuty();
         var inCombat = isInCombat();
+        var resetOpenWorldMeter = openWorldCombatResetTracker.Observe(boundByDuty, inCombat);
         if (boundByDuty)
         {
             wasBoundByDuty = true;
@@ -382,6 +395,13 @@ public sealed class IinactAdapter : IParserEngine
         if (wasBoundByDuty)
         {
             FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
+        }
+
+        if (resetOpenWorldMeter)
+        {
+            // Runtime completion saves the encounter independently; the live meter should
+            // clear on the game-state edge instead of waiting for ACT's completion callback.
+            stateStore.ResetCurrent();
         }
     }
 
