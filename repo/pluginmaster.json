@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.16",
+    "AssemblyVersion":  "0.3.9.17",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.16/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.17/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.16/DalamudActCompat.zip",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.17/DalamudActCompat.zip",
     "LastUpdate":  1786863575218,
-    "Changelog":  "v0.3.9.16 修复抹茶配置权限提示、Triggernometry 邮差绑定与绝妖星语音兜底，并让默认命令打开控制中心。",
+    "Changelog":  "v0.3.9.17 修复旧 Host 进程锁定文件时独立 Host 无法更新，进而导致抹茶等扩展无法加载的问题。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
