@@ -382,8 +382,8 @@ public sealed class HelpWindow : Window
                 "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟其他小队、宠物和普通 NPC 不会作为独立玩家行显示。",
                 "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party; other alliance parties, pets, and ordinary NPCs are not separate player rows."));
             DrawBullet(text.Get(
-                "右键 ACT 快捷按钮或输入 /actcompat 打开战斗统计；战斗结束后用 /actcompat history 查看近期战斗。",
-                "Right-click the ACT quick button or use /actcompat to open Combat Meter. After combat, use /actcompat history for recent encounters."));
+                "右键 ACT 快捷按钮或输入 /actcompat meter 打开战斗统计；战斗结束后用 /actcompat history 查看近期战斗。",
+                "Right-click the ACT quick button or use /actcompat meter to open Combat Meter. After combat, use /actcompat history for recent encounters."));
             DrawBullet(text.Get(
                 "没有数据时先检查运行状态和当前是否真的产生伤害日志，再检查窗口是否被“脱战自动隐藏”，不要先删除配置。",
                 "If no data appears, first check runtime status and whether damage logs were actually generated, then check Auto hide out of combat. Do not delete configuration first."));
@@ -394,8 +394,8 @@ public sealed class HelpWindow : Window
                 "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开控制中心，右键打开战斗统计，按住中键拖动。",
                 "Show ACT quick button controls the in-game entry: left-click the control center, right-click Combat Meter, and hold middle mouse to drag."));
             DrawBullet(text.Get(
-                "/actcompat on 打开控制中心；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
-                "/actcompat on opens the control center; /actcompat status opens runtime status. Every command can be copied from the Commands page."));
+                "/actcompat 打开控制中心（/actcompat on 为兼容别名）；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
+                "/actcompat opens the control center (/actcompat on is a compatible alias); /actcompat status opens runtime status. Every command can be copied from the Commands page."));
         });
         DrawCard("help-start-data", text.Get("战斗日志与诊断日志不是同一种文件", "Combat logs and diagnostic logs are different"), 200, () =>
         {
@@ -443,11 +443,11 @@ public sealed class HelpWindow : Window
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
-                "副本统计按每次开怪独立计算：团灭后重新开怪会从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
-                "Duty statistics are independent for every pull. A repull starts from zero after a wipe, even when a checkpoint starts the duty from an intermediate phase such as P2."));
+                "副本内的战斗统计持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
+                "Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
             DrawBullet(text.Get(
-                "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录才是一把独立战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
-                "History stores one duty entry as an expandable folder, with each child representing an independent pull. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
+                "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
+                "History stores one duty entry as an expandable folder, with each child representing the complete totals accumulated before a wipe. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
             DrawBullet(text.Get(
                 "“重置当前战斗”需要二次确认，会结束并清空本把统计；同一底层战斗段的后续刷新不会把旧数据带回。已保存的历史和原始 Network 日志不会被删除。",
                 "Reset current encounter requires confirmation and closes and clears the current pull. Later refreshes from the same underlying combat segment cannot restore old totals. Saved history and raw Network logs are not deleted."));
@@ -519,8 +519,8 @@ public sealed class HelpWindow : Window
             text.Get("点击“复制”即可放入剪贴板，再粘贴到游戏聊天框或宏中。", "Use Copy to place a command on the clipboard, then paste it into game chat or a macro."));
         DrawCard("help-commands-common", text.Get("常用入口", "Common entry points"), 365, () =>
         {
-            DrawCommand("on", "/actcompat on", text.Get("打开插件控制中心。", "Open the plugin control center."));
-            DrawCommand("meter-default", "/actcompat", text.Get("打开战斗统计；保留现有无参数宏的行为。", "Open Combat Meter; preserves existing argument-free macros."));
+            DrawCommand("control-default", "/actcompat", text.Get("打开插件控制中心。", "Open the plugin control center."));
+            DrawCommand("on", "/actcompat on", text.Get("打开插件控制中心；保留旧宏兼容。", "Open the plugin control center; retained for old macro compatibility."));
             DrawCommand("meter", "/actcompat meter", text.Get("打开战斗统计。", "Open Combat Meter."));
             DrawCommand("history", "/actcompat history", text.Get("打开近期战斗。", "Open recent encounters."));
             DrawCommand("logs", "/actcompat logs", text.Get("打开已保存的日志文件列表。", "Open the saved log-file list."));
@@ -659,8 +659,8 @@ public sealed class HelpWindow : Window
                 "给自行导入的普通 ACT 插件授权：在“用户安装的普通 ACT 插件”中找到显示“未授权”的项目，点击“查看并授权”，核对预检清单后点击“授权并启用”。它随后会在通用 Host 中运行。",
                 "To authorize an imported generic ACT plugin, find the Not authorized item under User-installed generic ACT plugins, select Review and authorize, verify the preflight list, then select Authorize and enable. It will then run in Generic Host."));
             DrawBullet(text.Get(
-                "按实际用途开放：联网更新或查询需要“网络请求”；写配置、缓存或导出需要“写入文件”；鲶鱼精命令与标点需要“发送游戏指令”，部分原版功能还需要“访问游戏原生内存”或“调用 Windows 原生接口”；高级触发器脚本需要“运行高风险脚本”。",
-                "Grant only what the feature needs: updates or online lookups need Network requests; configuration, cache, or export needs Write files; PostNamazu commands and markers need Send game commands, and some original features also need Access native game memory or Call native Windows APIs; advanced trigger scripts need Run high-risk scripts."));
+                "按实际用途开放：联网更新或查询需要“网络请求”；写扩展缓存或导出到用户选择的文件需要“写入文件”（抹茶保存专属目录内的自身配置不需要）；鲶鱼精命令与标点需要“发送游戏指令”，部分原版功能还需要“访问游戏原生内存”或“调用 Windows 原生接口”；高级触发器脚本需要“运行高风险脚本”。",
+                "Grant only what the feature needs: updates or online lookups need Network requests; extension cache writes or exports to a user-selected file need Write files (Matcha can save its own path-confined configuration without it); PostNamazu commands and markers need Send game commands, and some original features also need Access native game memory or Call native Windows APIs; advanced trigger scripts need Run high-risk scripts."));
             DrawBullet(text.Get(
                 "权限勾选后功能仍不可用时，先确认扩展本身也已启用，再用 /actcompat status 检查对应 Host。权限和“启用扩展”是两个独立条件。",
                 "If a feature still fails after permission is granted, confirm the extension itself is also enabled, then use /actcompat status to inspect the assigned Host. Permission and extension enablement are separate requirements."));
@@ -735,8 +735,8 @@ public sealed class HelpWindow : Window
         DrawCard("help-troubleshooting-plugin-unavailable", text.Get("插件打不开、命令没反应或一直初始化", "Plugin does not open, commands do nothing, or initialization never finishes"), 354, () =>
         {
             DrawBullet(text.Get(
-                "先输入 /actcompat on。若聊天框提示命令不存在，或连控制中心都无法打开，请在卫月插件安装器中确认 Dalamud ACT Compat 已安装、已启用且没有加载错误；此时插件内帮助和重启按钮本身也无法工作。",
-                "First use /actcompat on. If chat reports an unknown command or the control center never opens, verify in the Dalamud plugin installer that Dalamud ACT Compat is installed, enabled, and has no load error. In this state, in-plugin help and restart controls cannot work either."));
+                "先输入 /actcompat。若聊天框提示命令不存在，或连控制中心都无法打开，请在卫月插件安装器中确认 Dalamud ACT Compat 已安装、已启用且没有加载错误；此时插件内帮助和重启按钮本身也无法工作。",
+                "First use /actcompat. If chat reports an unknown command or the control center never opens, verify in the Dalamud plugin installer that Dalamud ACT Compat is installed, enabled, and has no load error. In this state, in-plugin help and restart controls cannot work either."));
             DrawBullet(text.Get(
                 "若控制中心能打开，在“概览”确认“启用解析”和“自动启动解析器”已勾选。解析器长时间停在“已停止”“初始化中”或“错误”时，到“设置”点击“重启解析器”。",
                 "If the control center opens, confirm Enable parsing and Auto start parser on Overview. If the parser remains Stopped, Initializing, or Error, go to Settings and select Restart parser."));

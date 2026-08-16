@@ -1828,11 +1828,57 @@ public static class LegacyAssemblyRewriter
             loadInstance: false,
             loadParameters: true);
 
-        var bridgeNamazuInitializer = module.Types
+        var bridgeNamazu = module.Types
             .SelectMany(EnumerateTypes)
             .Single(type =>
                 type.FullName ==
-                "Triggernometry.PluginBridges.BridgeNamazu.BridgeNamazu")
+                "Triggernometry.PluginBridges.BridgeNamazu.BridgeNamazu");
+        var wrappedPluginGetter = bridgeNamazu.Methods.Single(method =>
+            method.Name == "get_WrappedPlugin" && method.Parameters.Count == 0);
+        var wrappedPluginField = bridgeNamazu.Fields.Single(field =>
+            field.Name == "_wrappedPlugin" && field.IsStatic);
+        var wrappedPluginType = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.Core.RealPlugin/PluginWrapper");
+        var pluginObjectGetter = wrappedPluginType.Methods.Single(method =>
+            method.Name == "get_pluginObj" && method.Parameters.Count == 0);
+        var instanceHookGetter = wrappedPluginGetter.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .Single(method =>
+                method.DeclaringType.FullName == "Triggernometry.Core.RealPlugin" &&
+                method.Name == "get_InstanceHook");
+        var instanceHookInvoke = wrappedPluginGetter.Body.Instructions
+            .Select(instruction => instruction.Operand)
+            .OfType<MethodReference>()
+            .Single(method =>
+                method.DeclaringType.FullName ==
+                    "Triggernometry.Core.RealPlugin/InstanceDelegate" &&
+                method.Name == "Invoke");
+
+        // Triggernometry starts before PostNamazu so PostNamazu can discover it in ACT's plugin
+        // list. The upstream getter permanently caches the first empty wrapper from that order.
+        // Retry only while the cached wrapper has no plugin object, preserving normal caching once
+        // PostNamazu is available and correcting the upstream filename typo at the same boundary.
+        wrappedPluginGetter.Body = new Mono.Cecil.Cil.MethodBody(wrappedPluginGetter);
+        var wrappedPluginIl = wrappedPluginGetter.Body.GetILProcessor();
+        var resolveWrappedPlugin = wrappedPluginIl.Create(OpCodes.Call, instanceHookGetter);
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ldsfld, wrappedPluginField));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Brfalse, resolveWrappedPlugin));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ldsfld, wrappedPluginField));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Callvirt, pluginObjectGetter));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Brfalse, resolveWrappedPlugin));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ldsfld, wrappedPluginField));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ret));
+        wrappedPluginIl.Append(resolveWrappedPlugin);
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ldstr, "PostNamazu.dll"));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ldstr, "PostNamazu.PostNamazu"));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Callvirt, instanceHookInvoke));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Dup));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Stsfld, wrappedPluginField));
+        wrappedPluginIl.Append(wrappedPluginIl.Create(OpCodes.Ret));
+
+        var bridgeNamazuInitializer = bridgeNamazu
             .Methods
             .Single(method => method.IsConstructor && method.IsStatic);
         var postNamazuAdminChecks = bridgeNamazuInitializer.Body.Instructions

@@ -19,6 +19,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
     private readonly Func<bool> isInCombat;
+    private readonly Func<bool> isDutyPartyWiped;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
@@ -28,12 +29,12 @@ public sealed class IinactAdapter : IParserEngine
     private readonly object dutySessionLock = new();
     private readonly DutyEncounterAccumulator dutySession = new();
     private readonly DutyEncounterFolderAccumulator dutyFolder = new();
+    private readonly DutyWipeTracker dutyWipeTracker = new();
     private readonly HashSet<Guid> finalizedDutySegmentIds = [];
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
     private volatile bool wasBoundByDuty;
-    private volatile bool wasInCombat;
     private bool disposed;
 
     public IinactAdapter(
@@ -46,6 +47,7 @@ public sealed class IinactAdapter : IParserEngine
         Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
         Func<bool> isInCombat,
+        Func<bool> isDutyPartyWiped,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
         Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
@@ -60,6 +62,7 @@ public sealed class IinactAdapter : IParserEngine
         this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
         this.isInCombat = isInCombat;
+        this.isDutyPartyWiped = isDutyPartyWiped;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
@@ -67,7 +70,7 @@ public sealed class IinactAdapter : IParserEngine
         actRuntime.EncounterChanged += OnEncounterChanged;
         framework.Update += OnFrameworkUpdate;
         wasBoundByDuty = isBoundByDuty();
-        wasInCombat = isInCombat();
+        dutyWipeTracker.Reset(isDutyPartyWiped());
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -232,9 +235,9 @@ public sealed class IinactAdapter : IParserEngine
             // Resetting only the UI lets the next ACT refresh republish the same totals.
             // Closing the underlying segment keeps the meter empty until a genuinely new pull.
             dutySession.Reset();
+            dutyWipeTracker.Reset(isDutyPartyWiped());
         }
 
-        wasInCombat = isInCombat();
         stateStore.ResetCurrent();
     }
 
@@ -298,11 +301,6 @@ public sealed class IinactAdapter : IParserEngine
         if (boundByDuty)
         {
             Encounter displayEncounter;
-            Encounter? completedAttempt = null;
-            Encounter? folderSnapshot = null;
-            var inCombat = isInCombat();
-            // The framework callback owns the previous combat state; updating it here could
-            // consume the wipe edge before the pull folder has been finalized.
             lock (dutySessionLock)
             {
                 wasBoundByDuty = true;
@@ -312,27 +310,11 @@ public sealed class IinactAdapter : IParserEngine
                     DateTimeOffset.UtcNow,
                     snapshot.CurrentPartyMemberIds,
                     snapshot.PartyCapacity);
-                if (finished && !inCombat)
-                {
-                    RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
-                    completedAttempt = dutySession.Complete(
-                        encounter.EndTime ?? DateTimeOffset.UtcNow);
-                    if (completedAttempt is not null)
-                    {
-                        completedAttempt = CaptureFflogsEstimatesSafely(completedAttempt);
-                        folderSnapshot = dutyFolder.Add(completedAttempt);
-                    }
-                }
             }
 
-            if (completedAttempt is null)
-            {
-                stateStore.UpdateCurrent(displayEncounter);
-                return;
-            }
-
-            stateStore.UpdateCurrent(completedAttempt);
-            encounterService.QueueFinishedEncounter(folderSnapshot!);
+            // ACT may finish individual records during downtime or a phase boundary. Those
+            // records remain part of the live cumulative display until the game confirms a wipe.
+            stateStore.UpdateCurrent(displayEncounter);
             return;
         }
 
@@ -383,23 +365,24 @@ public sealed class IinactAdapter : IParserEngine
         var inCombat = isInCombat();
         if (boundByDuty)
         {
-            var pullEnded = wasBoundByDuty && wasInCombat && !inCombat;
             wasBoundByDuty = true;
-            wasInCombat = inCombat;
-            if (pullEnded)
+            if (dutyWipeTracker.Observe(
+                    boundByDuty: true,
+                    inCombat,
+                    isDutyPartyWiped()))
             {
-                // The game combat flag spans phase transitions, while ACT may split them.
-                // Only the true in-combat -> out-of-combat edge closes the pull folder.
+                // Only an observed all-party death creates the next pull. Ordinary combat
+                // flag drops keep accumulating exactly like the original meter behavior.
                 FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: false);
             }
             return;
         }
 
+        dutyWipeTracker.Reset();
         if (wasBoundByDuty)
         {
             FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
         }
-        wasInCombat = inCombat;
     }
 
     private void FinalizeDutyAttempt(DateTimeOffset endTime, bool leavingDuty)

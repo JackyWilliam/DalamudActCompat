@@ -1745,6 +1745,79 @@ void ValidateTriggernometryLaunchProcessPatch()
         "The Triggernometry/PostNamazu administrator notice did not route through " +
         $"the native-runtime-aware token check: bridge={noticeBridgeCalls}, " +
         $"realChecks={realAdministratorChecks}.");
+
+    var bridgeNamazu = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type =>
+            type.FullName == "Triggernometry.PluginBridges.BridgeNamazu.BridgeNamazu");
+    var wrappedPluginGetter = bridgeNamazu.Methods.Single(method =>
+        method.Name == "get_WrappedPlugin" && method.Parameters.Count == 0);
+    var pluginObjectReads = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin/PluginWrapper" &&
+        called.Name == "get_pluginObj");
+    var instanceHookCalls = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == "Triggernometry.Core.RealPlugin/InstanceDelegate" &&
+        called.Name == "Invoke");
+    var correctedPluginNames = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.OpCode.Code == Code.Ldstr &&
+        string.Equals(instruction.Operand as string, "PostNamazu.dll", StringComparison.Ordinal));
+    var misspelledPluginNames = wrappedPluginGetter.Body.Instructions.Count(instruction =>
+        instruction.OpCode.Code == Code.Ldstr &&
+        string.Equals(instruction.Operand as string, "PostNamzu.dll", StringComparison.Ordinal));
+    Assert(
+        pluginObjectReads == 1 &&
+        instanceHookCalls == 1 &&
+        correctedPluginNames == 1 &&
+        misspelledPluginNames == 0,
+        "Triggernometry did not retry the PostNamazu wrapper after an early empty lookup: " +
+        $"pluginObjectReads={pluginObjectReads}, hooks={instanceHookCalls}, " +
+        $"correctNames={correctedPluginNames}, misspelledNames={misspelledPluginNames}.");
+
+    var disableCactbotTriggerSetTts = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeCactbot")
+        .Methods
+        .Single(method =>
+            method.Name == "DisableTriggerSetTts" && method.Parameters.Count == 2);
+    var compatibilityBridgeCalls = disableCactbotTriggerSetTts.Body.Instructions.Count(instruction =>
+        instruction.Operand is MethodReference called &&
+        called.DeclaringType.FullName == typeof(HostPluginBridge).FullName);
+
+    // U7b intentionally delegates duplicate-suppression to Triggernometry. Comparing the real
+    // upstream and rewritten method bodies ensures the compatibility layer preserves that behavior.
+    using var outerDefinition = AssemblyDefinition.ReadAssembly(triggernometryAssembly!);
+    var implementationResource = outerDefinition.MainModule.Resources
+                                     .OfType<EmbeddedResource>()
+                                     .Single(resource => resource.Name ==
+                                         "costura.triggernometryplugin.dll.compressed");
+    using var compressedImplementation = implementationResource.GetResourceStream();
+    using var decompressor = new DeflateStream(
+        compressedImplementation,
+        CompressionMode.Decompress);
+    using var originalImage = new MemoryStream();
+    decompressor.CopyTo(originalImage);
+    originalImage.Position = 0;
+    using var originalDefinition = AssemblyDefinition.ReadAssembly(originalImage);
+    var originalDisableCactbotTriggerSetTts = originalDefinition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeCactbot")
+        .Methods
+        .Single(method =>
+            method.Name == "DisableTriggerSetTts" && method.Parameters.Count == 2);
+    var originalBody = string.Join(
+        '\n',
+        originalDisableCactbotTriggerSetTts.Body.Instructions.Select(static instruction =>
+            instruction.ToString()));
+    var rewrittenBody = string.Join(
+        '\n',
+        disableCactbotTriggerSetTts.Body.Instructions.Select(static instruction =>
+            instruction.ToString()));
+    Assert(
+        compatibilityBridgeCalls == 0 &&
+        string.Equals(originalBody, rewrittenBody, StringComparison.Ordinal),
+        "Triggernometry's Cactbot TTS control was changed by the compatibility rewrite.");
 }
 
 void ValidateMatchaAssemblyContract(string packagePath)
@@ -2256,12 +2329,27 @@ void ValidateMatchaUserTemplateFileBoundary()
         configurePermissions.Invoke(null, [new HostPermissionSnapshot(
             new Dictionary<string, IReadOnlyList<string>>
             {
-                ["matcha"] = ["ReadLocalConfiguration", "WriteFiles"],
+                ["matcha"] = ["ReadLocalConfiguration"],
             },
             ["matcha"])]);
         configureContext.Invoke(null, [pluginRoot, configRoot, null]);
 
+        var configurationPath = Path.Combine(configRoot, "Config", "Cafe.Matcha.config");
+        HostPluginBridge.WriteMatchaTextFile(configurationPath, "{\"telemetry\":false}");
+        Assert(
+            File.ReadAllText(configurationPath) == "{\"telemetry\":false}",
+            "Matcha could not persist its path-confined configuration without arbitrary file-write permission.");
+
         var templatePath = Path.Combine(userRoot, "watch-list.json");
+        AssertThrows<UnauthorizedAccessException>(
+            () => HostPluginBridge.WriteMatchaUserTextFile(templatePath, "[1,2,3]"),
+            "Matcha exported a user-selected JSON template without WriteFiles permission.");
+        configurePermissions.Invoke(null, [new HostPermissionSnapshot(
+            new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["matcha"] = ["ReadLocalConfiguration", "WriteFiles"],
+            },
+            ["matcha"])]);
         HostPluginBridge.WriteMatchaUserTextFile(templatePath, "[1,2,3]");
         Assert(
             HostPluginBridge.ReadMatchaUserTextFile(templatePath) == "[1,2,3]",

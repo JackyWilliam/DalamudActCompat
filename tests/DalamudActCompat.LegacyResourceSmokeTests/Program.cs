@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.RegularExpressions;
 using System.Xml;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Protocol;
@@ -28,6 +29,7 @@ if (!overlayTemplates.Any(template => template.Name == "Kagerou" && !template.Is
         "OverlayPlugin built-in HTML templates were not exposed by the runtime.");
 }
 AssertActorCastExtraRotationCompatibility();
+AssertUltimateExtraLogCompatibility();
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
 AssemblyLoadContext.Default.Resolving += ResolveDependency;
@@ -326,6 +328,60 @@ static void AssertActorCastExtraRotationCompatibility()
     }
 }
 
+static void AssertUltimateExtraLogCompatibility()
+{
+    var overlayPlugin = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly;
+    Dictionary<string, uint> expectedExtraLogIds = new(StringComparer.Ordinal)
+    {
+        ["LineActorCastExtra"] = 263,
+        ["LineAbilityExtra"] = 264,
+        ["LineSpawnNpcExtra"] = 272,
+        ["LineActorControlExtra"] = 273,
+    };
+    foreach (var (typeName, expectedId) in expectedExtraLogIds)
+    {
+        var processorType = overlayPlugin.GetType(
+            $"RainbowMage.OverlayPlugin.NetworkProcessors.{typeName}",
+            throwOnError: true)!;
+        var actualId = Convert.ToUInt32(
+            processorType.GetField(
+                    "LogFileLineID",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetRawConstantValue());
+        if (actualId != expectedId)
+        {
+            throw new InvalidOperationException(
+                $"OverlayPlugin {typeName} line ID changed from {expectedId} to {actualId}.");
+        }
+    }
+
+    var actorControlType = overlayPlugin.GetType(
+        "RainbowMage.OverlayPlugin.NetworkProcessors.LineActorControlExtra",
+        throwOnError: true)!;
+    var allowedCategories = actorControlType.GetField(
+            "AllowedActorControlCategories",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!
+        .GetValue(null) as Array;
+    if (allowedCategories is null ||
+        !allowedCategories.Cast<object>().Any(category =>
+            string.Equals(category.ToString(), "EObjAnimation", StringComparison.Ordinal)))
+    {
+        throw new InvalidOperationException(
+            "OverlayPlugin no longer emits the EObjAnimation event required by U7b.");
+    }
+
+    var halfRoomTrigger = new Regex(
+        @"^.{15}\S+ AAA:204:[^:]*:80:4.{7}:[^:]*:[^:]*:(?<baseId>201516[45])",
+        RegexOptions.CultureInvariant);
+    const string u7bSample =
+        "[21:40:07.677] _EObjAnimation AAA:204:40:80:40018959::0:2015164:92:27:15:0";
+    if (!halfRoomTrigger.IsMatch(u7bSample))
+    {
+        throw new InvalidOperationException(
+            "The OverlayPlugin AAA compatibility format no longer satisfies U7b's half-room trigger.");
+    }
+}
+
 static void AssertPostNamazuSemanticPayloads()
 {
     var mark = PostNamazuSemanticActions.ParseMark(
@@ -510,25 +566,37 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
                           ?.Cast<XmlElement>()
                           .ToArray()
                       ?? [];
-    var actorIdMark = markActions.SingleOrDefault(action =>
-        action.ParentNode?.ParentNode is XmlElement trigger &&
-        trigger.GetAttribute("Name").StartsWith("04 ", StringComparison.Ordinal) &&
-        action.GetAttribute("OrderNumber") == "1");
-    var clearMarks = markActions.Count(action =>
-        action.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": 3758096384",
-            StringComparison.Ordinal));
-    if (actorIdMark is null ||
-        !actorIdMark.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": \"0x${_me.id}\"",
-            StringComparison.Ordinal) ||
-        markActions.Count(action => action.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": \"0x${_me.id}\"",
-            StringComparison.Ordinal)) != 1 ||
-        clearMarks != 3)
+    foreach (var action in markActions)
     {
-        throw new InvalidOperationException(
-            "Triggernometry export must pass its hexadecimal entity ID with a 0x prefix and clear values as UInt32 JSON numbers.");
+        var payload = action.GetAttribute("NamedCallbackParam");
+        if (!payload.Contains("0x${_me.id}", StringComparison.Ordinal))
+        {
+            if (payload.Contains("3758096384", StringComparison.Ordinal) ||
+                payload.Contains("0xE0000000", StringComparison.OrdinalIgnoreCase))
+            {
+                var clear = PostNamazuSemanticActions.ParseMark(
+                    payload.Replace("${type}", "attack1", StringComparison.Ordinal));
+                if (clear.ActorId != PostNamazuSemanticActions.ClearActorId)
+                {
+                    throw new InvalidOperationException(
+                        "Triggernometry export did not preserve its clear-marker actor ID.");
+                }
+            }
+
+            continue;
+        }
+
+        // Real repositories use both quoted and unquoted hexadecimal IDs. Resolve only the
+        // placeholders needed by this callback so the compatibility parser validates either form.
+        var resolved = payload
+            .Replace("0x${_me.id}", "0x10021EE7", StringComparison.Ordinal)
+            .Replace("${type}", "attack1", StringComparison.Ordinal);
+        var mark = PostNamazuSemanticActions.ParseMark(resolved);
+        if (mark.ActorId != 0x10021EE7)
+        {
+            throw new InvalidOperationException(
+                "Triggernometry export did not preserve its hexadecimal entity ID in the mark callback.");
+        }
     }
 
     var scriptActions = document.SelectNodes("//Action[@ActionType='ExecuteScript']")

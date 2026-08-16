@@ -62,7 +62,7 @@ be terminated without terminating FFXIV.
 
 ### 控制中心各页面
 
-输入 `/actcompat on` 打开控制中心。五个页面分别负责：
+输入 `/actcompat` 打开控制中心；`/actcompat on` 继续作为兼容别名。五个页面分别负责：
 
 | 页面 | 主要用途 |
 | --- | --- |
@@ -76,7 +76,7 @@ be terminated without terminating FFXIV.
 
 1. 阅读首次启动时显示的第三方扩展作者、来源、版本和权限，确认后才会安装并加载对应扩展。
 2. 在主页保持“启用解析”和“自动启动解析器”开启；顶部显示“运行中”后再进入战斗。
-3. 输入 `/actcompat` 打开战斗统计，输入 `/actcompat history` 查看已结束战斗，输入 `/actcompat status` 查看解析器和各 Host。
+3. 输入 `/actcompat meter` 打开战斗统计，输入 `/actcompat history` 查看已结束战斗，输入 `/actcompat status` 查看解析器和各 Host。
 4. “打开 FFLogs 上传日志”只打开本地 Network 日志目录并复制路径，不会自动上传；诊断日志用于排错，不能代替 FFLogs 战斗日志。
 
 ### 战斗统计口径
@@ -86,8 +86,8 @@ be terminated without terminating FFXIV.
 - `DPS Parse` 把本场实际 DPS 代入同职业、副本、难度、区域和分区的缓存曲线；它不是上传后的正式排名。
 - `HPS` 使用一把战斗从开怪到结束的完整经过时间，包括转阶段和目标不可选中的时间，不会套用排除阶段空档的伤害有效时长。伤害技能附带的自疗也会从原始效果中补充统计；没有新治疗时，累计治疗保持不变，但随着经过时间增加，HPS 会逐步下降。
 - 暴击率、直击率和直暴率来自本场已发生的伤害命中样本，因此战斗中会随新命中变化。`--` 表示还没有有效值，不表示零分。
-- 副本统计按每次开怪独立计算。团灭后重新开怪会从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。
-- 历史记录以“一次副本进入”为一个可展开文件夹，文件夹内每条子记录才代表一把独立战斗。团灭重开会在同一文件夹新增下一条记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把因转阶段产生的 ACT 片段只在内部合并，不会拆成多把，也不会把多把数据相加后显示给用户。
+- 副本内的战斗统计持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。
+- 历史记录以“一次副本进入”为一个可展开文件夹，文件夹内每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增下一条记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把因转阶段产生的 ACT 片段只在内部合并，不会拆成多把。
 
 第一次配置统计窗时，在“控制中心 → 战斗统计”开启“显示战斗统计”并点击“定位到战斗统计”。先关闭锁定，把窗口拖到需要的位置，再恢复锁定；要让点击传给游戏，同时开启“锁定时鼠标穿透”。“收起（只显示自己）”只隐藏队员行，不会停止统计。“显示列”可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%和死亡；新配置默认显示 FFLogs、DPS、暴击%、直暴%、伤害占比%和死亡，HPS 与直击%默认关闭但仍可自行开启；FFLogs 只有在线预估已开启且该列已勾选时才显示。背景透明度统一控制窗口、标题、表头、玩家行和进度条底色，设为 `0` 时底色完全透明但文字和图标保留。玩家 ID 遮盖只影响界面显示，不会改写原始日志。“重置当前战斗”会结束并清空本把统计，同一底层战斗段的后续刷新不会让旧数值回弹；已保存的历史和原始 Network 日志不会被删除。
 
@@ -136,7 +136,7 @@ be terminated without terminating FFXIV.
 常见权限与用途：
 
 - 在线查询或更新：网络请求。
-- 保存配置、缓存或导出：写入文件。
+- 写入扩展缓存或导出到用户选择的文件：写入文件。Matcha 保存其专属目录内的自身配置不需要此权限。
 - 鲶鱼精命令和标点：发送游戏指令；部分原版能力还需要访问游戏原生内存或调用 Windows 原生接口。
 - Triggernometry 高级脚本：运行高风险脚本。
 
@@ -148,7 +148,7 @@ be terminated without terminating FFXIV.
 
 #### 插件打不开、命令没反应或一直初始化
 
-1. 输入 `/actcompat on`。如果提示命令不存在或控制中心完全打不开，到卫月插件安装器确认 Dalamud ACT Compat 已安装、已启用且没有加载错误。
+1. 输入 `/actcompat`。如果提示命令不存在或控制中心完全打不开，到卫月插件安装器确认 Dalamud ACT Compat 已安装、已启用且没有加载错误。
 2. 控制中心能打开时，在“概览”确认“启用解析”和“自动启动解析器”已勾选。
 3. 解析器长时间为“已停止”“初始化中”或“错误”时，在“设置”点击“重启解析器”。
 4. 输入 `/actcompat status`，先处理第一个失败的上游组件。
@@ -231,8 +231,8 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat factory-reset
 ```
 
-`/actcompat on` opens the plugin control center. `/actcompat` and
-`/actcompat meter` open Combat Meter. The in-game Help window contains the
+`/actcompat` opens the plugin control center, and `/actcompat on` remains a
+compatible alias. `/actcompat meter` opens Combat Meter. The in-game Help window contains the
 complete command reference with a clipboard-copy button for every entry.
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.

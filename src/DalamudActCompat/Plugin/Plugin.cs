@@ -34,6 +34,12 @@ public sealed class Plugin : IDalamudPlugin
     private const uint MatchaWorldChangedIconId = 61835;
     private const uint MatchaDutyEnteredIconId = 61832;
 
+    internal static bool IsDutyPartyWiped(
+        bool boundByDuty,
+        bool localPlayerUnconscious,
+        bool anyPartyMemberAlive)
+        => boundByDuty && localPlayerUnconscious && !anyPartyMemberAlive;
+
     private readonly PluginServices services;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
     private readonly PluginConfiguration configuration;
@@ -148,6 +154,10 @@ public sealed class Plugin : IDalamudPlugin
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
             partyList.Count > 1 &&
             partyList.Any(member => member.CurrentHP > 0);
+        var dutyPartyWiped = () => IsDutyPartyWiped(
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious],
+            partyList.Any(member => member.CurrentHP > 0));
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         var configurationMigrated = configuration.ApplyMigrations();
         configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
@@ -297,6 +307,7 @@ public sealed class Plugin : IDalamudPlugin
             () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
+            dutyPartyWiped,
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
@@ -491,7 +502,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Combat Meter. Args: on, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open Control Center. Args: on, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -598,8 +609,7 @@ public sealed class Plugin : IDalamudPlugin
         switch (verb)
         {
             case "on":
-                // `on` is the established player-facing macro for the control center;
-                // keep it explicit so removing the unused `settings` alias cannot affect it.
+            case "":
                 settingsWindow.ShowAnimated();
                 break;
             case "history":
@@ -664,7 +674,6 @@ public sealed class Plugin : IDalamudPlugin
                 InstallActPlugin(remainder);
                 break;
             case "meter":
-            case "":
                 meterWindow.IsOpen = true;
                 break;
             default:
