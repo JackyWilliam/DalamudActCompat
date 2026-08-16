@@ -6,14 +6,39 @@ using Dalamud.Plugin.Services;
 
 namespace DalamudActCompat.Overlay;
 
-internal sealed partial class PictoActOverlayService(IGameGui gameGui)
+internal sealed partial class PictoActOverlayService : IDisposable
 {
     private const int CurveSegments = 72;
-    private static readonly Vector4 DefaultColor = Vector4.One;
+    private static readonly Vector4 DefaultColor = new(1f, 0.82f, 0.18f, 0.85f);
+    private readonly IGameGui gameGui;
+    private readonly IObjectTable? objectTable;
+    private readonly IPluginLog? log;
+    private readonly PictoActNativeVfxBackend? nativeVfx;
     private readonly object syncRoot = new();
     private readonly Dictionary<string, StoredPictoActShape> shapes =
         new(StringComparer.OrdinalIgnoreCase);
-    private long automaticTagSequence;
+    private readonly List<PictoActOverlayCommand> pendingCommands = [];
+    private readonly List<nint> pendingNativeRemovals = [];
+    private long shapeSequence;
+
+    internal PictoActOverlayService(
+        IGameGui gameGui,
+        ISigScanner? sigScanner = null,
+        IGameInteropProvider? gameInteropProvider = null,
+        IPluginLog? log = null,
+        IObjectTable? objectTable = null)
+    {
+        this.gameGui = gameGui;
+        this.log = log;
+        this.objectTable = objectTable;
+        if (sigScanner is not null && gameInteropProvider is not null && log is not null)
+        {
+            nativeVfx = PictoActNativeVfxBackend.TryCreate(
+                sigScanner,
+                gameInteropProvider,
+                log);
+        }
+    }
 
     internal int ShapeCount
     {
@@ -28,31 +53,67 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
 
     internal void Apply(string payload)
     {
-        foreach (var command in Parse(payload))
+        foreach (var command in Parse(payload, ResolveEntityPosition))
         {
             lock (syncRoot)
             {
-                if (command.Remove)
+                if (command.ExecuteAt > DateTimeOffset.UtcNow)
                 {
-                    RemoveMatching(command.Tag, command.Regex);
+                    pendingCommands.Add(command);
                     continue;
                 }
 
-                var semanticTag = string.IsNullOrWhiteSpace(command.Tag)
-                    ? "Auto"
-                    : command.Tag;
-                var storageKey = string.IsNullOrWhiteSpace(command.Tag)
-                    ? $"Auto:{Interlocked.Increment(ref automaticTagSequence)}"
-                    : $"Tag:{command.Tag}";
-                shapes[storageKey] = new StoredPictoActShape(semanticTag, command.Shape!);
+                ExecuteCommand(command);
             }
         }
     }
+
+    private void ExecuteCommand(PictoActOverlayCommand command)
+    {
+        if (command.Remove)
+        {
+            CancelPendingMatching(command.Tag, command.Regex);
+            RemoveMatching(command.Tag, command.Regex);
+            return;
+        }
+
+        if (command.Change)
+        {
+            ChangeMatching(command);
+            return;
+        }
+
+        var semanticTag = string.IsNullOrWhiteSpace(command.Tag)
+            ? "Auto"
+            : command.Tag;
+        // PictoACT tags are selectors, not unique identifiers: several VFX with
+        // one tag must coexist so a later Change/Remove can update the whole group.
+        var storageKey = $"Shape:{Interlocked.Increment(ref shapeSequence)}";
+        shapes[storageKey] = new StoredPictoActShape(semanticTag, command.Shape!);
+    }
+
+    private void CancelPendingMatching(string? tag, Regex? regex)
+    {
+        pendingCommands.RemoveAll(command => MatchesSelector(
+            string.IsNullOrWhiteSpace(command.Tag) ? "Auto" : command.Tag,
+            tag,
+            regex));
+    }
+
+    private static bool MatchesSelector(string semanticTag, string? tag, Regex? regex)
+        => !string.IsNullOrWhiteSpace(tag)
+            ? string.Equals(semanticTag, tag, StringComparison.OrdinalIgnoreCase)
+            : regex is null || regex.IsMatch(semanticTag);
 
     private void RemoveMatching(string? tag, Regex? regex)
     {
         if (string.IsNullOrWhiteSpace(tag) && regex is null)
         {
+            foreach (var stored in shapes.Values)
+            {
+                QueueNativeRemoval(stored.NativeHandle);
+            }
+
             shapes.Clear();
             return;
         }
@@ -68,64 +129,274 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
                      .Select(pair => pair.Key)
                      .ToArray())
         {
+            QueueNativeRemoval(shapes[key].NativeHandle);
             shapes.Remove(key);
         }
     }
 
+    private void ChangeMatching(PictoActOverlayCommand command)
+    {
+        foreach (var key in MatchingKeys(command.Tag, command.Regex))
+        {
+            var stored = shapes[key];
+            stored.Shape = ApplyPatch(stored.Shape, command.Patch!);
+            stored.NativeDirty = stored.NativeHandle != nint.Zero;
+        }
+    }
+
+    internal IReadOnlyList<PictoActShape> ShapeSnapshot
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return shapes.Values.Select(value => value.Shape).ToArray();
+            }
+        }
+    }
+
+    private string[] MatchingKeys(string? tag, Regex? regex)
+        => shapes
+            .Where(pair =>
+                !string.IsNullOrWhiteSpace(tag)
+                    ? string.Equals(
+                        pair.Value.SemanticTag,
+                        tag,
+                        StringComparison.OrdinalIgnoreCase)
+                    : regex is null || regex.IsMatch(pair.Value.SemanticTag))
+            .Select(pair => pair.Key)
+            .ToArray();
+
     internal void Draw()
     {
-        PictoActShape[] snapshot;
+        List<PictoActShape> fallbackShapes = [];
         var now = DateTimeOffset.UtcNow;
         lock (syncRoot)
         {
+            ProcessPending(now);
+            DrainNativeRemovals();
             foreach (var expired in shapes
                          .Where(pair => pair.Value.Shape.ExpiresAt <= now)
                          .Select(pair => pair.Key)
                          .ToArray())
             {
+                QueueNativeRemoval(shapes[expired].NativeHandle);
                 shapes.Remove(expired);
             }
 
-            snapshot = shapes.Values
-                .Select(value => value.Shape)
-                .Where(shape => shape.StartsAt <= now)
-                .ToArray();
+            DrainNativeRemovals();
+            foreach (var stored in shapes.Values.Where(value => value.Shape.StartsAt <= now))
+            {
+                ActivateOrUpdateNative(stored);
+                if (stored.NativeHandle == nint.Zero &&
+                    stored.Shape.Kind != PictoActShapeKind.NativeOnly)
+                {
+                    fallbackShapes.Add(stored.Shape);
+                }
+            }
         }
 
-        if (snapshot.Length == 0)
+        if (fallbackShapes.Count == 0)
         {
             return;
         }
 
         var drawList = ImGui.GetBackgroundDrawList();
-        foreach (var shape in snapshot)
+        foreach (var shape in fallbackShapes)
         {
-            DrawWorldPath(drawList, BuildWorldPath(shape), shape.Color);
+            DrawWorldShape(drawList, shape);
         }
     }
 
-    private void DrawWorldPath(
-        ImDrawListPtr drawList,
-        IReadOnlyList<Vector3> worldPath,
-        Vector4 colorValue)
+    public void Dispose()
     {
-        Vector2? previous = null;
-        var color = ImGui.ColorConvertFloat4ToU32(colorValue);
-        foreach (var world in worldPath)
+        lock (syncRoot)
         {
-            if (!gameGui.WorldToScreen(world, out var screen))
+            foreach (var stored in shapes.Values)
             {
-                previous = null;
+                QueueNativeRemoval(stored.NativeHandle);
+            }
+
+            shapes.Clear();
+            pendingCommands.Clear();
+            DrainNativeRemovals();
+            nativeVfx?.Dispose();
+        }
+    }
+
+    internal void ProcessPending(DateTimeOffset now)
+    {
+        lock (syncRoot)
+        {
+            var due = pendingCommands
+                .Where(command => command.ExecuteAt <= now)
+                .OrderBy(command => command.ExecuteAt)
+                .ToArray();
+            foreach (var command in due)
+            {
+                if (!pendingCommands.Remove(command))
+                {
+                    // A due Remove can cancel another command from the same snapshot.
+                    continue;
+                }
+
+                ExecuteCommand(command);
+            }
+        }
+    }
+
+    private void ActivateOrUpdateNative(StoredPictoActShape stored)
+    {
+        if (nativeVfx is null || stored.NativeCreationFailed ||
+            stored.Shape.Kind == PictoActShapeKind.Polygon)
+        {
+            return;
+        }
+
+        try
+        {
+            if (stored.NativeHandle == nint.Zero)
+            {
+                stored.NativeHandle = nativeVfx.Create(stored.Shape);
+                stored.NativeDirty = false;
+            }
+            else if (stored.NativeDirty)
+            {
+                if (!nativeVfx.Update(stored.NativeHandle, stored.Shape))
+                {
+                    // An external game teardown already destroyed this VFX. Do not
+                    // recreate stale encounter geometry in the next territory.
+                    stored.NativeHandle = nint.Zero;
+                    stored.NativeCreationFailed = true;
+                }
+
+                stored.NativeDirty = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            QueueNativeRemoval(stored.NativeHandle);
+            stored.NativeHandle = nint.Zero;
+            stored.NativeCreationFailed = true;
+            log?.Warning(ex, $"PictoACT native VFX '{stored.Shape.VfxPath}' failed.");
+        }
+    }
+
+    private void QueueNativeRemoval(nint handle)
+    {
+        if (handle != nint.Zero)
+        {
+            pendingNativeRemovals.Add(handle);
+        }
+    }
+
+    private void DrainNativeRemovals()
+    {
+        if (nativeVfx is null || pendingNativeRemovals.Count == 0)
+        {
+            pendingNativeRemovals.Clear();
+            return;
+        }
+
+        foreach (var handle in pendingNativeRemovals)
+        {
+            try
+            {
+                _ = nativeVfx.Remove(handle);
+            }
+            catch (Exception ex)
+            {
+                log?.Warning(ex, $"PictoACT native VFX 0x{handle:X} could not be removed.");
+            }
+        }
+
+        pendingNativeRemovals.Clear();
+    }
+
+    private void DrawWorldShape(ImDrawListPtr drawList, PictoActShape shape)
+    {
+        var worldPath = BuildWorldPath(shape);
+        var projected = new Vector2?[worldPath.Count];
+        var allVisible = true;
+        for (var index = 0; index < worldPath.Count; index++)
+        {
+            if (!gameGui.WorldToScreen(worldPath[index], out var screen))
+            {
+                allVisible = false;
                 continue;
             }
 
-            if (previous is { } from)
+            projected[index] = screen;
+        }
+
+        var displayColor = NormalizeDisplayColor(
+            shape.HasExplicitColor ? shape.Color : DefaultColor);
+        if (allVisible)
+        {
+            var points = projected.Select(point => point!.Value).ToArray();
+            var fillColor = displayColor with
             {
-                drawList.AddLine(from, screen, color, 3f);
+                W = Math.Clamp(displayColor.W * 0.24f, 0.05f, 0.34f),
+            };
+            var fill = ImGui.ColorConvertFloat4ToU32(fillColor);
+            if (shape.Kind == PictoActShapeKind.Polygon)
+            {
+                foreach (var (first, second, third) in TriangulatePolygon(points))
+                {
+                    drawList.AddTriangleFilled(first, second, third, fill);
+                }
+            }
+            else if (shape.Kind == PictoActShapeKind.Fan)
+            {
+                for (var index = 1; index + 1 < points.Length; index++)
+                {
+                    drawList.AddTriangleFilled(points[0], points[index], points[index + 1], fill);
+                }
+            }
+            else
+            {
+                var uniqueCount = points.Length > 1 && points[0] == points[^1]
+                    ? points.Length - 1
+                    : points.Length;
+                var center = Vector2.Zero;
+                for (var index = 0; index < uniqueCount; index++)
+                {
+                    center += points[index];
+                }
+
+                center /= Math.Max(1, uniqueCount);
+                for (var index = 0; index < uniqueCount; index++)
+                {
+                    drawList.AddTriangleFilled(
+                        center,
+                        points[index],
+                        points[(index + 1) % uniqueCount],
+                        fill);
+                }
+            }
+        }
+
+        var outline = ImGui.ColorConvertFloat4ToU32(displayColor);
+        Vector2? previous = null;
+        foreach (var point in projected)
+        {
+            if (point is { } current && previous is { } from)
+            {
+                drawList.AddLine(from, current, outline, 3f);
             }
 
-            previous = screen;
+            previous = point;
         }
+    }
+
+    private static Vector4 NormalizeDisplayColor(Vector4 color)
+    {
+        var maximum = Math.Max(1f, Math.Max(color.X, Math.Max(color.Y, color.Z)));
+        return new Vector4(
+            Math.Clamp(color.X / maximum, 0, 1),
+            Math.Clamp(color.Y / maximum, 0, 1),
+            Math.Clamp(color.Z / maximum, 0, 1),
+            Math.Clamp(color.W, 0, 1));
     }
 
     private static IReadOnlyList<Vector3> BuildWorldPath(PictoActShape shape)
@@ -136,8 +407,93 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             PictoActShapeKind.BidirectionalRectangle =>
                 BuildRectanglePath(shape, bidirectional: true),
             PictoActShapeKind.Fan => BuildFanPath(shape),
+            PictoActShapeKind.Polygon => BuildPolygonPath(shape),
             _ => throw new ArgumentOutOfRangeException(nameof(shape)),
         };
+
+    private static IReadOnlyList<Vector3> BuildPolygonPath(PictoActShape shape)
+    {
+        var points = shape.Polygon ??
+                     throw new InvalidDataException("PictoACT polygon has no points.");
+        return [.. points, points[0]];
+    }
+
+    private static IReadOnlyList<(Vector2 First, Vector2 Second, Vector2 Third)>
+        TriangulatePolygon(IReadOnlyList<Vector2> closedPoints)
+    {
+        var count = closedPoints.Count > 1 && closedPoints[0] == closedPoints[^1]
+            ? closedPoints.Count - 1
+            : closedPoints.Count;
+        if (count < 3)
+        {
+            return [];
+        }
+
+        var indices = Enumerable.Range(0, count).ToList();
+        var signedArea = 0f;
+        for (var index = 0; index < count; index++)
+        {
+            var current = closedPoints[index];
+            var next = closedPoints[(index + 1) % count];
+            signedArea += current.X * next.Y - next.X * current.Y;
+        }
+
+        if (signedArea < 0)
+        {
+            indices.Reverse();
+        }
+
+        var triangles = new List<(Vector2, Vector2, Vector2)>(count - 2);
+        while (indices.Count > 3)
+        {
+            var clipped = false;
+            for (var index = 0; index < indices.Count; index++)
+            {
+                var previous = indices[(index - 1 + indices.Count) % indices.Count];
+                var current = indices[index];
+                var next = indices[(index + 1) % indices.Count];
+                var a = closedPoints[previous];
+                var b = closedPoints[current];
+                var c = closedPoints[next];
+                if (Cross(a, b, c) <= 0.00001f || indices.Any(candidate =>
+                        candidate != previous && candidate != current && candidate != next &&
+                        IsInsideTriangle(closedPoints[candidate], a, b, c)))
+                {
+                    continue;
+                }
+
+                triangles.Add((a, b, c));
+                indices.RemoveAt(index);
+                clipped = true;
+                break;
+            }
+
+            if (!clipped)
+            {
+                // Degenerate user points should still show an outline instead of
+                // spinning forever in the renderer.
+                return triangles;
+            }
+        }
+
+        if (indices.Count == 3)
+        {
+            triangles.Add((
+                closedPoints[indices[0]],
+                closedPoints[indices[1]],
+                closedPoints[indices[2]]));
+        }
+
+        return triangles;
+    }
+
+    private static float Cross(Vector2 a, Vector2 b, Vector2 c)
+        => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+
+    private static bool IsInsideTriangle(Vector2 point, Vector2 a, Vector2 b, Vector2 c)
+        => Cross(a, b, point) > 0.00001f &&
+           Cross(b, c, point) > 0.00001f &&
+           Cross(c, a, point) > 0.00001f;
 
     private static IReadOnlyList<Vector3> BuildCirclePath(PictoActShape shape)
     {
@@ -195,7 +551,140 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             0,
             MathF.Cos(angle) * distance);
 
-    internal static IReadOnlyList<PictoActOverlayCommand> Parse(string payload)
+    private static PictoActShape ApplyPatch(
+        PictoActShape shape,
+        PictoActShapePatch patch)
+    {
+        var sourcePosition = patch.Position ?? shape.SourcePosition;
+        var sourceTarget = patch.TargetSpecified
+            ? patch.Target
+            : patch.Angle.HasValue
+                ? null
+                : shape.SourceTarget;
+        var sourceAngle = patch.Angle ??
+            (sourceTarget.HasValue && (patch.Position.HasValue || patch.TargetSpecified)
+                ? DirectionTo(sourcePosition, sourceTarget.Value)
+                : shape.SourceAngle);
+        var transformCenter = patch.TransformCenterSpecified
+            ? patch.TransformCenter
+            : shape.TransformCenter;
+        var transformRotation = patch.TransformRotationSpecified
+            ? patch.TransformRotation
+            : shape.TransformRotation;
+        var keepX = patch.KeepX ?? shape.KeepX;
+        var keepY = patch.KeepY ?? shape.KeepY;
+        var (position, angle) = ResolveTransform(
+            sourcePosition,
+            sourceAngle,
+            transformCenter,
+            transformRotation,
+            keepX,
+            keepY);
+        var polygon = shape.SourcePolygon?
+            .Select(point => ResolveTransform(
+                point,
+                MathF.PI,
+                transformCenter,
+                transformRotation,
+                keepX,
+                keepY).Position)
+            .ToArray();
+        var scale = patch.ScaleExpression is not null
+            ? ParseScale(
+                patch.ScaleExpression,
+                patch.ScaleIsCylindrical,
+                DistanceTo(sourcePosition, sourceTarget))
+            : (Vector3?)null;
+        return shape with
+        {
+            SourcePosition = sourcePosition,
+            SourceTarget = sourceTarget,
+            Position = position,
+            PrimaryScale = MathF.Abs(scale?.X ?? shape.PrimaryScale),
+            SecondaryScale = MathF.Abs(scale?.Y ?? shape.SecondaryScale),
+            TertiaryScale = MathF.Abs(scale?.Z ?? shape.TertiaryScale),
+            SourceAngle = sourceAngle,
+            Angle = angle,
+            Pitch = patch.Pitch ?? shape.Pitch,
+            Yaw = patch.Yaw ?? shape.Yaw,
+            Color = patch.Color ?? shape.Color,
+            HasExplicitColor = patch.Color.HasValue || shape.HasExplicitColor,
+            TransformCenter = transformCenter,
+            TransformRotation = transformRotation,
+            KeepX = keepX,
+            KeepY = keepY,
+            Polygon = polygon,
+        };
+    }
+
+    private Vector3? ResolveEntityPosition(string value)
+    {
+        if (objectTable is null)
+        {
+            return null;
+        }
+
+        var candidates = new HashSet<uint>();
+        var normalized = value.Trim();
+        if (uint.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out var decimalId))
+        {
+            candidates.Add(decimalId);
+        }
+
+        var hexadecimal = normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? normalized[2..]
+            : normalized;
+        if (uint.TryParse(hexadecimal, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hexId))
+        {
+            // Trigger resources use both decimal entity IDs and ACT-style hexadecimal IDs.
+            candidates.Add(hexId);
+        }
+
+        return objectTable
+            .FirstOrDefault(gameObject => candidates.Contains(gameObject.EntityId))
+            ?.Position;
+    }
+
+    private static (Vector3 Position, float Angle) ResolveTransform(
+        Vector3 sourcePosition,
+        float sourceAngle,
+        Vector3? transformCenter,
+        float? transformRotation,
+        bool keepX,
+        bool keepY)
+    {
+        if (transformCenter is null && transformRotation is null && keepX && keepY)
+        {
+            return (sourcePosition, sourceAngle);
+        }
+
+        var center = transformCenter ?? Vector3.Zero;
+        var rotation = transformRotation ?? MathF.PI;
+        var sourceX = sourcePosition.X * (keepX ? 1 : -1);
+        var sourceY = sourcePosition.Z * (keepY ? 1 : -1);
+        var sin = MathF.Sin(rotation);
+        var cos = MathF.Cos(rotation);
+        var transformed = new Vector3(
+            -sourceX * cos - sourceY * sin + center.X,
+            sourcePosition.Y + center.Y,
+            sourceX * sin - sourceY * cos + center.Z);
+        var angle = sourceAngle;
+        if (!keepX)
+        {
+            angle *= -1;
+        }
+
+        if (!keepY)
+        {
+            angle = MathF.PI - angle;
+        }
+
+        return (transformed, angle + rotation - MathF.PI);
+    }
+
+    internal static IReadOnlyList<PictoActOverlayCommand> Parse(
+        string payload,
+        Func<string, Vector3?>? entityResolver = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
         if (payload.Length > 32_768)
@@ -225,74 +714,57 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             }
 
             var action = values.GetValueOrDefault("Action", "Create").Trim();
+            var regex = ParseRegex(regexText);
             if (string.Equals(action, "Remove", StringComparison.OrdinalIgnoreCase))
             {
-                Regex? regex = null;
-                if (!string.IsNullOrWhiteSpace(regexText))
+                commands.Add(new PictoActOverlayCommand(
+                    tag,
+                    regex,
+                    PictoActOverlayAction.Remove,
+                    null,
+                    null)
                 {
-                    regex = new Regex(
-                        regexText,
-                        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
-                        TimeSpan.FromMilliseconds(100));
-                }
+                    ExecuteAt = ParseExecuteAt(values),
+                });
+                continue;
+            }
 
-                commands.Add(new PictoActOverlayCommand(tag, regex, true, null));
+            if (string.Equals(action, "Change", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(action, "Modify", StringComparison.OrdinalIgnoreCase))
+            {
+                commands.Add(new PictoActOverlayCommand(
+                    tag,
+                    regex,
+                    PictoActOverlayAction.Change,
+                    null,
+                    ParsePatch(values, entityResolver))
+                {
+                    ExecuteAt = ParseExecuteAt(values),
+                });
+                continue;
+            }
+
+            if (string.Equals(action, "ExaFlare", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(action, "地火", StringComparison.OrdinalIgnoreCase))
+            {
+                commands.AddRange(ParseExaFlare(values, tag, entityResolver));
+                continue;
+            }
+
+            if (string.Equals(action, "Triangulate", StringComparison.OrdinalIgnoreCase) ||
+                action is "△" or "Δ" or "∆")
+            {
+                commands.Add(ParsePolygon(values, tag, entityResolver));
                 continue;
             }
 
             if (!string.Equals(action, "Create", StringComparison.OrdinalIgnoreCase))
             {
                 throw new NotSupportedException(
-                    $"PictoACT action '{action}' is outside the game-side drawing subset.");
+                    $"PictoACT action '{action}' is unsupported.");
             }
 
-            var omen = Required(values, "Omen");
-            var (kind, fanRadians) = ParseShape(omen);
-            var position = ParseVector3(Required(values, "Pos"), "Pos");
-            var scale = ParseNumbers(Required(values, "Scale"), 1, 3, "Scale");
-            var primaryScale = MathF.Abs(scale[0]);
-            var secondaryScale = MathF.Abs(scale.Length > 1 ? scale[1] : scale[0]);
-            if (!float.IsFinite(primaryScale) || primaryScale is <= 0 or > 1000 ||
-                !float.IsFinite(secondaryScale) || secondaryScale is <= 0 or > 1000)
-            {
-                throw new InvalidDataException("PictoACT Scale is outside 0-1000.");
-            }
-
-            var color = ParseColor(Optional(values, "Color"));
-            var duration = ParseSingle(values.GetValueOrDefault("t", "5"), "t");
-            if (!float.IsFinite(duration) || duration is <= 0 or > 300)
-            {
-                throw new InvalidDataException("PictoACT duration is outside 0-300 seconds.");
-            }
-
-            var delay = ParseSingle(values.GetValueOrDefault("Delay", "0"), "Delay");
-            if (!float.IsFinite(delay) || delay > 300)
-            {
-                throw new InvalidDataException("PictoACT delay is outside 0-300 seconds.");
-            }
-
-            delay = Math.Max(0, delay);
-            var angle = ParseSingle(values.GetValueOrDefault("Angle", "0"), "Angle");
-            if (!float.IsFinite(angle))
-            {
-                throw new InvalidDataException("PictoACT Angle is not finite.");
-            }
-
-            var startsAt = DateTimeOffset.UtcNow.AddSeconds(delay);
-            commands.Add(new PictoActOverlayCommand(
-                tag,
-                null,
-                false,
-                new PictoActShape(
-                    kind,
-                    position,
-                    primaryScale,
-                    secondaryScale,
-                    angle,
-                    fanRadians,
-                    color,
-                    startsAt,
-                    startsAt.AddSeconds(duration))));
+            commands.Add(ParseCreate(values, tag, entityResolver));
         }
 
         return commands.Count > 0
@@ -300,19 +772,465 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             : throw new InvalidDataException("PictoACT payload contains no commands.");
     }
 
-    private static (PictoActShapeKind Kind, float FanRadians) ParseShape(string omen)
+    private static PictoActOverlayCommand ParsePolygon(
+        IReadOnlyDictionary<string, string> values,
+        string? tag,
+        Func<string, Vector3?>? entityResolver)
     {
-        if (string.Equals(omen, "Circle", StringComparison.OrdinalIgnoreCase))
+        var rawPoints = Required(values, "Points")
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (rawPoints.Length is < 3 or > 256)
+        {
+            throw new InvalidDataException("PictoACT polygon requires 3-256 points.");
+        }
+
+        var sourcePoints = rawPoints
+            .Select(point => ParseVector3(point, "Points", entityResolver))
+            .ToList();
+        for (var index = 2; index < sourcePoints.Count - 1; index++)
+        {
+            if (Vector3.DistanceSquared(sourcePoints[0], sourcePoints[index]) > 0.0001f)
+            {
+                continue;
+            }
+
+            // Some resources append one Delaunay seed after explicitly closing the
+            // boundary. The renderer needs only the ordered boundary vertices.
+            sourcePoints.RemoveRange(index, sourcePoints.Count - index);
+            break;
+        }
+
+        if (sourcePoints.Count < 3)
+        {
+            throw new InvalidDataException("PictoACT polygon boundary has fewer than three points.");
+        }
+
+        var transform = ParseTransform(values, entityResolver);
+        var transformed = sourcePoints
+            .Select(point => ResolveTransform(
+                point,
+                MathF.PI,
+                transform.Center,
+                transform.Rotation,
+                transform.KeepX ?? true,
+                transform.KeepY ?? true).Position)
+            .ToArray();
+        var colorText = Optional(values, "Color");
+        var color = ParseColor(colorText);
+        var delay = ParseSingle(values.GetValueOrDefault("Delay", "0"), "Delay");
+        if (!float.IsFinite(delay) || delay > 3600)
+        {
+            throw new InvalidDataException("PictoACT delay is outside 0-3600 seconds.");
+        }
+
+        delay = Math.Max(0, delay);
+        float? duration = null;
+        if (TryGetAny(values, out var durationText, "Time", "t"))
+        {
+            duration = ParseSingle(durationText, "t");
+            if (!float.IsFinite(duration.Value) || duration.Value is < 0 or > 3600)
+            {
+                throw new InvalidDataException("PictoACT duration is outside 0-3600 seconds.");
+            }
+        }
+
+        var startsAt = DateTimeOffset.UtcNow.AddSeconds(delay);
+        return new PictoActOverlayCommand(
+            tag,
+            null,
+            PictoActOverlayAction.Create,
+            new PictoActShape(
+                string.Empty,
+                PictoActShapeKind.Polygon,
+                transformed[0],
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                color,
+                colorText is not null,
+                startsAt,
+                duration.HasValue ? startsAt.AddSeconds(duration.Value) : DateTimeOffset.MaxValue,
+                1,
+                sourcePoints[0],
+                null,
+                0,
+                transform.Center,
+                transform.Rotation,
+                transform.KeepX ?? true,
+                transform.KeepY ?? true,
+                sourcePoints,
+                transformed),
+            null)
+        {
+            ExecuteAt = startsAt,
+        };
+    }
+
+    private static PictoActOverlayCommand ParseCreate(
+        IReadOnlyDictionary<string, string> values,
+        string? tag,
+        Func<string, Vector3?>? entityResolver)
+    {
+        var (vfxPath, kind, fanRadians) = ParseVfx(values);
+        var sourcePosition = ParseVector3(
+            values.GetValueOrDefault("Pos", "0, 0, 0"),
+            "Pos",
+            entityResolver);
+        var sourceTarget = Optional(values, "Target") is { } target
+            ? ParseVector3(target, "Target", entityResolver)
+            : (Vector3?)null;
+        if (sourceTarget.HasValue &&
+            (Optional(values, "Angle") is not null || Optional(values, "Angle3D") is not null))
+        {
+            throw new InvalidDataException(
+                "PictoACT Target and Angle/Angle3D cannot both be set.");
+        }
+        var (scaleExpression, scaleIsCylindrical) = GetScaleExpression(values, required: false);
+        var scale = ParseScale(
+            scaleExpression ?? "1",
+            scaleIsCylindrical,
+            DistanceTo(sourcePosition, sourceTarget));
+        var colorText = Optional(values, "Color");
+        var color = ParseColor(colorText);
+        float? duration = null;
+        if (TryGetAny(values, out var durationText, "Time", "t"))
+        {
+            duration = ParseSingle(durationText, "t");
+            if (!float.IsFinite(duration.Value) || duration.Value is < 0 or > 3600)
+            {
+                throw new InvalidDataException("PictoACT duration is outside 0-3600 seconds.");
+            }
+        }
+
+        var delay = ParseSingle(values.GetValueOrDefault("Delay", "0"), "Delay");
+        if (!float.IsFinite(delay) || delay > 3600)
+        {
+            throw new InvalidDataException("PictoACT delay is outside 0-3600 seconds.");
+        }
+
+        delay = Math.Max(0, delay);
+        var sourceAngles = ParseAngles(values, sourceTarget.HasValue
+            ? DirectionTo(sourcePosition, sourceTarget.Value)
+            : MathF.PI);
+        var transform = ParseTransform(values, entityResolver);
+        var (position, transformedAngle) = ResolveTransform(
+            sourcePosition,
+            sourceAngles.X,
+            transform.Center,
+            transform.Rotation,
+            transform.KeepX ?? true,
+            transform.KeepY ?? true);
+        var startsAt = DateTimeOffset.UtcNow.AddSeconds(delay);
+        return new PictoActOverlayCommand(
+            tag,
+            null,
+            PictoActOverlayAction.Create,
+            new PictoActShape(
+                vfxPath,
+                kind,
+                position,
+                scale.X,
+                scale.Y,
+                transformedAngle,
+                sourceAngles.Y,
+                sourceAngles.Z,
+                fanRadians,
+                color,
+                colorText is not null,
+                startsAt,
+                duration.HasValue ? startsAt.AddSeconds(duration.Value) : DateTimeOffset.MaxValue,
+                scale.Z,
+                sourcePosition,
+                sourceTarget,
+                sourceAngles.X,
+                transform.Center,
+                transform.Rotation,
+                transform.KeepX ?? true,
+                transform.KeepY ?? true,
+                null,
+                null),
+            null)
+        {
+            ExecuteAt = startsAt,
+        };
+    }
+
+    private static IReadOnlyList<PictoActOverlayCommand> ParseExaFlare(
+        IReadOnlyDictionary<string, string> values,
+        string? tag,
+        Func<string, Vector3?>? entityResolver)
+    {
+        var countValue = ParseSingle(
+            TryGetAny(values, out var rawCount, "n", "count")
+                ? rawCount
+                : throw new InvalidDataException("PictoACT ExaFlare requires 'n'."),
+            "n");
+        var count = checked((int)countValue);
+        if (countValue != count || count is <= 0 or > 128)
+        {
+            throw new InvalidDataException("PictoACT ExaFlare n must be an integer from 1-128.");
+        }
+
+        var deltaTime = ParseSingle(Required(values, "dt"), "dt");
+        var initialIndex = Optional(values, "n0") is { } rawInitialIndex
+            ? ParseSingle(rawInitialIndex, "n0")
+            : 0;
+        var initialDelay = TryGetAny(values, out var rawInitialDelay, "Delay0")
+            ? ParseSingle(rawInitialDelay, "Delay0")
+            : 0;
+        var outerDelay = Optional(values, "Delay") is { } rawOuterDelay
+            ? ParseSingle(rawOuterDelay, "Delay")
+            : 0;
+        var basePosition = Optional(values, "Pos") is { } rawPosition
+            ? ParseVector3(rawPosition, "Pos", entityResolver)
+            : Vector3.Zero;
+        var deltaPosition = TryGetAny(values, out var rawDeltaPosition, "dPos")
+            ? ParseVector3(rawDeltaPosition, "dPos", entityResolver)
+            : Vector3.Zero;
+        var deltaRotation = TryGetAny(values, out var rawDeltaRotation, "dθ", "dTheta")
+            ? ParseSingle(rawDeltaRotation, "dTheta")
+            : (float?)null;
+        var baseRotation = TryGetAny(values, out var rawBaseRotation, "θ", "Theta")
+            ? ParseSingle(rawBaseRotation, "Theta")
+            : -MathF.PI;
+        var duration = ParseSingle(
+            TryGetAny(values, out var rawDuration, "Time", "t")
+                ? rawDuration
+                : throw new InvalidDataException("PictoACT ExaFlare requires 't'."),
+            "t");
+
+        var commands = new List<PictoActOverlayCommand>(count);
+        for (var step = 0; step < count; step++)
+        {
+            var index = initialIndex + step;
+            var stepDelay = outerDelay + initialDelay + step * deltaTime;
+            var stepDuration = duration;
+            if (stepDelay < 0)
+            {
+                stepDuration += stepDelay;
+                stepDelay = 0;
+            }
+
+            if (stepDuration < 0)
+            {
+                continue;
+            }
+
+            var expanded = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase)
+            {
+                ["Action"] = "Create",
+                ["Delay"] = stepDelay.ToString("R", CultureInfo.InvariantCulture),
+                ["t"] = stepDuration.ToString("R", CultureInfo.InvariantCulture),
+                ["Pos"] = FormatVector3(basePosition + deltaPosition * index),
+            };
+            if (deltaRotation.HasValue)
+            {
+                expanded["θ"] = (baseRotation + deltaRotation.Value * index)
+                    .ToString("R", CultureInfo.InvariantCulture);
+            }
+
+            commands.Add(ParseCreate(expanded, tag, entityResolver));
+        }
+
+        return commands;
+    }
+
+    private static Regex? ParseRegex(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? null
+            : new Regex(
+                value,
+                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
+                TimeSpan.FromMilliseconds(100));
+
+    private static DateTimeOffset ParseExecuteAt(
+        IReadOnlyDictionary<string, string> values)
+    {
+        var delay = ParseSingle(values.GetValueOrDefault("Delay", "0"), "Delay");
+        if (!float.IsFinite(delay) || delay > 3600)
+        {
+            throw new InvalidDataException("PictoACT delay is outside 0-3600 seconds.");
+        }
+
+        return DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, delay));
+    }
+
+    private static PictoActShapePatch ParsePatch(
+        IReadOnlyDictionary<string, string> values,
+        Func<string, Vector3?>? entityResolver)
+    {
+        var transform = ParseTransform(values, entityResolver);
+        var (scaleExpression, scaleIsCylindrical) = GetScaleExpression(values, required: false);
+        var angles = Optional(values, "Angle3D") is { } angle3D
+            ? ParseAngle3D(angle3D)
+            : (Vector3?)null;
+        var targetSpecified = values.ContainsKey("Target");
+        var target = Optional(values, "Target") is { } targetText &&
+                     !string.Equals(targetText, "clear", StringComparison.OrdinalIgnoreCase)
+            ? ParseVector3(targetText, "Target", entityResolver)
+            : (Vector3?)null;
+        if (targetSpecified && angles.HasValue)
+        {
+            throw new InvalidDataException(
+                "PictoACT Target and Angle/Angle3D cannot both be set.");
+        }
+
+        return new PictoActShapePatch(
+            Optional(values, "Pos") is { } position
+                ? ParseVector3(position, "Pos", entityResolver)
+                : null,
+            target,
+            targetSpecified,
+            scaleExpression,
+            scaleIsCylindrical,
+            angles?.X ?? (Optional(values, "Angle") is { } angle
+                ? ParseSingle(angle, "Angle")
+                : null),
+            angles?.Y,
+            angles?.Z,
+            Optional(values, "Color") is { } color
+                ? ParseColor(color)
+                : null,
+            transform.Center,
+            transform.CenterSpecified,
+            transform.Rotation,
+            transform.RotationSpecified,
+            transform.KeepX,
+            transform.KeepY);
+    }
+
+    private static PictoActTransform ParseTransform(
+        IReadOnlyDictionary<string, string> values,
+        Func<string, Vector3?>? entityResolver)
+    {
+        var centerSpecified = TryGetAny(values, out var centerText, "O", "Center");
+        var rotationSpecified = TryGetAny(values, out var rotationText, "θ", "Theta");
+        var directionFields = values
+            .Select(pair => (Pair: pair, Match: DirectionField().Match(pair.Key)))
+            .Where(candidate => candidate.Match.Success)
+            .ToArray();
+        if (directionFields.Length > 1)
+        {
+            throw new InvalidDataException("PictoACT accepts only one Dir field per command.");
+        }
+
+        var directionField = directionFields.FirstOrDefault();
+        if (rotationSpecified && directionFields.Length == 1)
+        {
+            throw new InvalidDataException("PictoACT θ and Dir fields cannot both be set.");
+        }
+
+        float? rotation = null;
+        if (rotationSpecified &&
+            !string.Equals(rotationText.Trim(), "clear", StringComparison.OrdinalIgnoreCase))
+        {
+            rotation = ParseSingle(rotationText, "Theta");
+        }
+        else if (directionFields.Length == 1)
+        {
+            var divisions = int.Parse(
+                directionField.Match.Groups["divisions"].Value,
+                CultureInfo.InvariantCulture);
+            if (divisions is 0 or > 360)
+            {
+                throw new InvalidDataException("PictoACT Dir divisions must be from 1-360.");
+            }
+
+            var directionIndex = ParseSingle(
+                directionField.Pair.Value,
+                directionField.Pair.Key);
+            if (directionField.Match.Groups["negative"].Success)
+            {
+                // PictoACT's DirN form addresses the half-step between two normal
+                // direction indices; it is not a negative division count.
+                directionIndex += 0.5f;
+            }
+
+            directionIndex = ((directionIndex % divisions) + divisions) % divisions;
+            rotation = directionIndex / divisions * MathF.Tau - MathF.PI;
+            rotationSpecified = true;
+        }
+
+        var center = centerSpecified &&
+                     !string.Equals(centerText, "clear", StringComparison.OrdinalIgnoreCase)
+            ? ParseVector3(centerText, "Center", entityResolver)
+            : (Vector3?)null;
+        return new PictoActTransform(
+            center,
+            centerSpecified,
+            rotation,
+            rotationSpecified,
+            TryGetAny(values, out var keepX, "+X", "KeepX")
+                ? ParseBoolean(keepX, "KeepX")
+                : null,
+            TryGetAny(values, out var keepY, "+Y", "KeepY")
+                ? ParseBoolean(keepY, "KeepY")
+                : null);
+    }
+
+    private static bool TryGetAny(
+        IReadOnlyDictionary<string, string> values,
+        out string value,
+        params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (values.TryGetValue(name, out value!) && !string.IsNullOrWhiteSpace(value))
+            {
+                value = value.Trim();
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static bool ParseBoolean(string value, string name)
+        => value.Trim().ToLowerInvariant() switch
+        {
+            "true" or "1" => true,
+            "false" or "0" => false,
+            _ => throw new InvalidDataException($"PictoACT {name} is not a boolean."),
+        };
+
+    private static (string VfxPath, PictoActShapeKind Kind, float FanRadians) ParseVfx(
+        IReadOnlyDictionary<string, string> values)
+    {
+        var omen = Optional(values, "Omen");
+        var isOmen = omen is not null;
+        var rawPath = omen ?? Required(values, "StaticVfx");
+        var normalizedName = isOmen && OmenAbbreviations.TryGetValue(rawPath, out var expanded)
+            ? expanded
+            : rawPath;
+        var vfxPath = normalizedName.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase)
+            ? normalizedName
+            : isOmen
+                ? $"vfx/omen/eff/{normalizedName}.avfx"
+                : throw new InvalidDataException("PictoACT StaticVfx path must end with .avfx.");
+        var (kind, fanRadians) = ParseFallbackShape(rawPath);
+        return (vfxPath, kind, fanRadians);
+    }
+
+    private static (PictoActShapeKind Kind, float FanRadians) ParseFallbackShape(string omen)
+    {
+        if (string.Equals(omen, "Circle", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(omen, "general_1bf", StringComparison.OrdinalIgnoreCase))
         {
             return (PictoActShapeKind.Circle, 0);
         }
 
-        if (string.Equals(omen, "Rect", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(omen, "Rect", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(omen, "general02f", StringComparison.OrdinalIgnoreCase))
         {
             return (PictoActShapeKind.Rectangle, 0);
         }
 
-        if (string.Equals(omen, "Rect2", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(omen, "Rect2", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(omen, "general_x02f", StringComparison.OrdinalIgnoreCase))
         {
             return (PictoActShapeKind.BidirectionalRectangle, 0);
         }
@@ -329,9 +1247,36 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             return (PictoActShapeKind.Fan, fanDegrees * MathF.PI / 180);
         }
 
-        throw new NotSupportedException(
-            $"PictoACT omen '{omen}' is outside the game-side drawing subset.");
+        return (PictoActShapeKind.NativeOnly, 0);
     }
+
+    private static readonly IReadOnlyDictionary<string, string> OmenAbbreviations =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Rect"] = "general02f",
+            ["Rect2"] = "general_x02f",
+            ["Circle"] = "general_1bf",
+            ["Cross"] = "n4fg_betaest_o0p",
+            ["Fan15"] = "gl_fan015_0x",
+            ["Fan20"] = "gl_fan020_0f",
+            ["Fan30"] = "gl_fan030_1bf",
+            ["Fan40"] = "z5fc_fan40_o0g",
+            ["Fan45"] = "gl_fan045_1bf",
+            ["Fan60"] = "gl_fan060_1bf",
+            ["Fan80"] = "gl_fan80_o0g",
+            ["Fan90"] = "gl_fan090_1bf",
+            ["Fan100"] = "er_gl_fan100_o0v",
+            ["Fan120"] = "gl_fan120_1bf",
+            ["Fan130"] = "gl_fan130_0x",
+            ["Fan135"] = "gl_fan135_c0g",
+            ["Fan145"] = "m0501_fan145_d1",
+            ["Fan150"] = "gl_fan150_1bf",
+            ["Fan180"] = "gl_fan180_1bf",
+            ["Fan210"] = "gl_fan210_1bf",
+            ["Fan225"] = "gl_fan225_c0k1",
+            ["Fan240"] = "x6d3_b1_fan240_p1",
+            ["Fan270"] = "gl_fan270_0100af",
+        };
 
     private static Dictionary<string, string> ParseFields(string segment)
     {
@@ -367,16 +1312,162 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
         => Optional(values, name)
            ?? throw new InvalidDataException($"PictoACT requires '{name}'.");
 
-    private static Vector3 ParseVector3(string value, string name)
+    private static Vector3 ParseVector3(
+        string value,
+        string name,
+        Func<string, Vector3?>? entityResolver = null)
     {
-        var numbers = ParseNumbers(value.Trim().Trim('<', '>', '(', ')', '[', ']'), 2, 3, name);
+        var normalized = value.Trim().Trim('<', '>', '(', ')', '[', ']');
+        if (!normalized.Contains(',') && entityResolver?.Invoke(normalized) is { } entityPosition)
+        {
+            return entityPosition;
+        }
+
+        var polarIndex = normalized.IndexOf("polar", StringComparison.OrdinalIgnoreCase);
+        if (polarIndex >= 0)
+        {
+            var baseText = normalized[..polarIndex].Trim().TrimEnd(',');
+            var basePosition = string.IsNullOrWhiteSpace(baseText)
+                ? Vector3.Zero
+                : ParseVector3(baseText, name, entityResolver);
+            var polar = ParseNumbers(normalized[(polarIndex + "polar".Length)..], 2, 3, name);
+            var radius = polar[0];
+            var angle = polar[1];
+            var height = polar.Length > 2 ? polar[2] : 0;
+            return ValidateCoordinate(
+                basePosition + new Vector3(
+                    MathF.Sin(angle) * radius,
+                    height,
+                    MathF.Cos(angle) * radius),
+                name);
+        }
+
+        var numbers = ParseNumbers(normalized, 2, 3, name);
         // PictoACT follows ACT/FFXIV log coordinates: X/Y are the ground plane and Z is height.
         // Dalamud's world vector follows the client layout: X/Z are the ground plane and Y is height.
         var result = new Vector3(numbers[0], numbers.Length > 2 ? numbers[2] : 0, numbers[1]);
+        return ValidateCoordinate(result, name);
+    }
+
+    private static Vector3 ValidateCoordinate(Vector3 result, string name)
+    {
         if (!float.IsFinite(result.X) || !float.IsFinite(result.Y) ||
             !float.IsFinite(result.Z) || result.LengthSquared() > 30_000_000_000f)
         {
             throw new InvalidDataException($"PictoACT {name} is outside the safe coordinate range.");
+        }
+
+        return result;
+    }
+
+    private static string FormatVector3(Vector3 value)
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{value.X:R}, {value.Z:R}, {value.Y:R}");
+
+    private static (string? Expression, bool Cylindrical) GetScaleExpression(
+        IReadOnlyDictionary<string, string> values,
+        bool required)
+    {
+        var scale = Optional(values, "Scale");
+        var cylindrical = Optional(values, "ScaleCyl");
+        if (scale is not null && cylindrical is not null)
+        {
+            throw new InvalidDataException("PictoACT Scale and ScaleCyl cannot both be set.");
+        }
+
+        var expression = scale ?? cylindrical;
+        if (required && expression is null)
+        {
+            throw new InvalidDataException("PictoACT requires 'Scale' or 'ScaleCyl'.");
+        }
+
+        return (expression, cylindrical is not null);
+    }
+
+    private static Vector3 ParseScale(
+        string value,
+        bool cylindrical = false,
+        float? targetDistance = null)
+    {
+        if (value.Contains("_d", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!targetDistance.HasValue)
+            {
+                throw new InvalidDataException("PictoACT Scale uses _d without a Target.");
+            }
+
+            value = DistanceToken().Replace(
+                value,
+                targetDistance.Value.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        var components = ParseNumbers(value, 1, cylindrical ? 2 : 3, "Scale");
+        var scale = cylindrical
+            ? new Vector3(
+                MathF.Abs(components[0]),
+                MathF.Abs(components[0]),
+                MathF.Abs(components.Length > 1 ? components[1] : components[0]))
+            : new Vector3(
+                MathF.Abs(components[0]),
+                MathF.Abs(components.Length > 1 ? components[1] : components[0]),
+                MathF.Abs(components.Length > 2 ? components[2] : 1));
+        if (!float.IsFinite(scale.X) || scale.X is < 0 or > 1000 ||
+            !float.IsFinite(scale.Y) || scale.Y is < 0 or > 1000 ||
+            !float.IsFinite(scale.Z) || scale.Z is < 0 or > 1000 ||
+            scale == Vector3.Zero)
+        {
+            throw new InvalidDataException("PictoACT Scale is outside 0-1000.");
+        }
+
+        return scale;
+    }
+
+    private static float? DistanceTo(Vector3 source, Vector3? target)
+        => target.HasValue
+            ? Vector2.Distance(
+                new Vector2(source.X, source.Z),
+                new Vector2(target.Value.X, target.Value.Z))
+            : null;
+
+    private static float DirectionTo(Vector3 source, Vector3 target)
+        => MathF.Atan2(target.X - source.X, target.Z - source.Z);
+
+    private static Vector3 ParseAngles(
+        IReadOnlyDictionary<string, string> values,
+        float defaultAngle)
+    {
+        if (Optional(values, "Angle3D") is { } angle3D)
+        {
+            if (Optional(values, "Angle") is not null)
+            {
+                throw new InvalidDataException("PictoACT Angle and Angle3D cannot both be set.");
+            }
+
+            return ParseAngle3D(angle3D);
+        }
+
+        var angle = Optional(values, "Angle") is { } angleText
+            ? ParseSingle(angleText, "Angle")
+            : defaultAngle;
+        if (!float.IsFinite(angle))
+        {
+            throw new InvalidDataException("PictoACT Angle is not finite.");
+        }
+
+        return new Vector3(angle, 0, 0);
+    }
+
+    private static Vector3 ParseAngle3D(string value)
+    {
+        var components = ParseNumbers(value, 1, 3, "Angle3D");
+        var result = new Vector3(
+            components[0],
+            components.Length > 1 ? components[1] : 0,
+            components.Length > 2 ? components[2] : 0);
+        if (!float.IsFinite(result.X) || !float.IsFinite(result.Y) || !float.IsFinite(result.Z))
+        {
+            throw new InvalidDataException("PictoACT Angle3D is not finite.");
         }
 
         return result;
@@ -390,11 +1481,22 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
         }
 
         var colorValues = ParseNumbers(value, 3, 4, "Color");
-        return new Vector4(
-            Math.Clamp(colorValues[0], 0, 1),
-            Math.Clamp(colorValues[1], 0, 1),
-            Math.Clamp(colorValues[2], 0, 1),
-            Math.Clamp(colorValues.Length > 3 ? colorValues[3] : DefaultColor.W, 0, 1));
+        var color = new Vector4(
+            colorValues[0],
+            colorValues[1],
+            colorValues[2],
+            colorValues.Length > 3 ? colorValues[3] : 1f);
+        if (!float.IsFinite(color.X) || !float.IsFinite(color.Y) ||
+            !float.IsFinite(color.Z) || !float.IsFinite(color.W) ||
+            color.X is < 0 or > 32 || color.Y is < 0 or > 32 ||
+            color.Z is < 0 or > 32 || color.W is < 0 or > 32)
+        {
+            throw new InvalidDataException("PictoACT Color is outside 0-32.");
+        }
+
+        // Values above one encode relative VFX intensity. Preserve their hue here and
+        // normalize only while drawing the SDR ImGui fallback.
+        return color;
     }
 
     private static float[] ParseNumbers(
@@ -403,7 +1505,7 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
         int maximum,
         string name)
     {
-        var parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var parts = SplitTopLevel(value);
         if (parts.Length < minimum || parts.Length > maximum)
         {
             throw new InvalidDataException(
@@ -411,6 +1513,42 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
         }
 
         return parts.Select(part => ParseSingle(part, name)).ToArray();
+    }
+
+    private static string[] SplitTopLevel(string value)
+    {
+        var parts = new List<string>();
+        var start = 0;
+        var depth = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            depth += value[index] switch
+            {
+                '(' => 1,
+                ')' => -1,
+                _ => 0,
+            };
+            if (depth < 0)
+            {
+                throw new InvalidDataException("PictoACT number expression has unmatched parentheses.");
+            }
+
+            if (value[index] != ',' || depth != 0)
+            {
+                continue;
+            }
+
+            parts.Add(value[start..index].Trim());
+            start = index + 1;
+        }
+
+        if (depth != 0)
+        {
+            throw new InvalidDataException("PictoACT number expression has unmatched parentheses.");
+        }
+
+        parts.Add(value[start..].Trim());
+        return parts.Where(part => part.Length > 0).ToArray();
     }
 
     private static float ParseSingle(string value, string name)
@@ -433,7 +1571,7 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
 
         internal double Parse()
         {
-            var result = ParseExpression();
+            var result = ParseConditional();
             SkipWhiteSpace();
             if (position != text.Length)
             {
@@ -441,6 +1579,63 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             }
 
             return result;
+        }
+
+        private double ParseConditional()
+        {
+            var condition = ParseComparison();
+            SkipWhiteSpace();
+            if (!Take('?'))
+            {
+                return condition;
+            }
+
+            var whenTrue = ParseConditional();
+            SkipWhiteSpace();
+            if (!Take(':'))
+            {
+                throw new FormatException("Conditional expression is missing ':'.");
+            }
+
+            var whenFalse = ParseConditional();
+            return condition != 0 ? whenTrue : whenFalse;
+        }
+
+        private double ParseComparison()
+        {
+            var result = ParseExpression();
+            while (true)
+            {
+                SkipWhiteSpace();
+                if (TakeString("<="))
+                {
+                    result = result <= ParseExpression() ? 1 : 0;
+                }
+                else if (TakeString(">="))
+                {
+                    result = result >= ParseExpression() ? 1 : 0;
+                }
+                else if (TakeString("==") || Take('='))
+                {
+                    result = Math.Abs(result - ParseExpression()) < 1e-9 ? 1 : 0;
+                }
+                else if (TakeString("!="))
+                {
+                    result = Math.Abs(result - ParseExpression()) >= 1e-9 ? 1 : 0;
+                }
+                else if (Take('<'))
+                {
+                    result = result < ParseExpression() ? 1 : 0;
+                }
+                else if (Take('>'))
+                {
+                    result = result > ParseExpression() ? 1 : 0;
+                }
+                else
+                {
+                    return result;
+                }
+            }
         }
 
         private double ParseExpression()
@@ -478,6 +1673,20 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
                 {
                     result /= ParseUnary();
                 }
+                else if (TakeString("%%"))
+                {
+                    var divisor = ParseUnary();
+                    result = ((result % divisor) + divisor) % divisor;
+                }
+                else if (Take('%'))
+                {
+                    result %= ParseUnary();
+                }
+                else if (CanStartPrimary())
+                {
+                    // PictoACT resources commonly write 5√2 and 2π without '*'.
+                    result *= ParseUnary();
+                }
                 else
                 {
                     return result;
@@ -498,7 +1707,26 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
                 return -ParseUnary();
             }
 
-            return ParsePrimary();
+            if (Take('!'))
+            {
+                return ParseUnary() == 0 ? 1 : 0;
+            }
+
+            if (Take('√'))
+            {
+                return Math.Sqrt(ParseUnary());
+            }
+
+            return ParsePower();
+        }
+
+        private double ParsePower()
+        {
+            var result = ParsePrimary();
+            SkipWhiteSpace();
+            return Take('^')
+                ? Math.Pow(result, ParseUnary())
+                : result;
         }
 
         private double ParsePrimary()
@@ -514,13 +1742,26 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
                     throw new FormatException("Missing closing parenthesis.");
                 }
             }
-            else if (Take('π'))
+            else if (char.IsLetter(Current))
             {
-                result = Math.PI;
-            }
-            else if (TryTakeWord("pi"))
-            {
-                result = Math.PI;
+                var identifier = ParseIdentifier();
+                if (string.Equals(identifier, "pi", StringComparison.OrdinalIgnoreCase) ||
+                    identifier == "π")
+                {
+                    result = Math.PI;
+                }
+                else if (string.Equals(identifier, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = 1;
+                }
+                else if (string.Equals(identifier, "false", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = 0;
+                }
+                else
+                {
+                    result = ParseFunction(identifier);
+                }
             }
             else
             {
@@ -535,6 +1776,70 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
 
             return result;
         }
+
+        private double ParseFunction(string name)
+        {
+            SkipWhiteSpace();
+            if (!Take('('))
+            {
+                throw new FormatException($"Unknown number name '{name}'.");
+            }
+
+            var arguments = new List<double>();
+            SkipWhiteSpace();
+            if (!Take(')'))
+            {
+                while (true)
+                {
+                    arguments.Add(ParseConditional());
+                    SkipWhiteSpace();
+                    if (Take(')'))
+                    {
+                        break;
+                    }
+
+                    if (!Take(','))
+                    {
+                        throw new FormatException($"Function '{name}' has an invalid argument list.");
+                    }
+                }
+            }
+
+            var normalized = name.ToLowerInvariant();
+            return (normalized, arguments.Count) switch
+            {
+                ("sqrt", 1) => Math.Sqrt(arguments[0]),
+                ("abs", 1) => Math.Abs(arguments[0]),
+                ("sin", 1) => Math.Sin(arguments[0]),
+                ("cos", 1) => Math.Cos(arguments[0]),
+                ("tan", 1) => Math.Tan(arguments[0]),
+                ("atan", 1) or ("arctan", 1) => Math.Atan(arguments[0]),
+                ("atan2", 2) or ("arctan2", 2) => Math.Atan2(arguments[0], arguments[1]),
+                ("min", 2) => Math.Min(arguments[0], arguments[1]),
+                ("max", 2) => Math.Max(arguments[0], arguments[1]),
+                ("floor", 1) => Math.Floor(arguments[0]),
+                ("ceil", 1) or ("ceiling", 1) => Math.Ceiling(arguments[0]),
+                ("round", 1) => Math.Round(arguments[0]),
+                ("round", 2) => Math.Round(arguments[0], checked((int)arguments[1])),
+                ("dir2rad", 2) or ("dirtorad", 2) => arguments[0] * Math.Tau / arguments[1],
+                ("deg2rad", 1) or ("degtorad", 1) => arguments[0] * Math.PI / 180,
+                ("rad2deg", 1) or ("radtodeg", 1) => arguments[0] * 180 / Math.PI,
+                ("d", 4) => Math.Sqrt(
+                    Math.Pow(arguments[2] - arguments[0], 2) +
+                    Math.Pow(arguments[3] - arguments[1], 2)),
+                ("θ", 4) => Math.Atan2(
+                    arguments[2] - arguments[0],
+                    arguments[3] - arguments[1]),
+                ("roundir", 2) => PositiveModulo(
+                    Math.Round(arguments[0] / Math.Tau * arguments[1]),
+                    arguments[1]),
+                _ => throw new FormatException(
+                    $"Unknown function '{name}' with {arguments.Count} arguments."),
+            };
+        }
+
+        private static double PositiveModulo(double value, double divisor)
+            => ((value % divisor) + divisor) % divisor;
 
         private double ParseNumber()
         {
@@ -577,17 +1882,35 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
             return result;
         }
 
-        private bool TryTakeWord(string value)
+        private string ParseIdentifier()
         {
-            if (position + value.Length > text.Length ||
-                !text.AsSpan(position, value.Length).Equals(
-                    value,
-                    StringComparison.OrdinalIgnoreCase))
+            var start = position;
+            while (position < text.Length &&
+                   (char.IsLetter(text[position]) || text[position] == '_'))
+            {
+                position++;
+            }
+
+            return text[start..position];
+        }
+
+        private bool CanStartPrimary()
+        {
+            SkipWhiteSpace();
+            return char.IsDigit(Current) ||
+                   Current is '.' or '(' or '√' or 'π' ||
+                   char.IsLetter(Current);
+        }
+
+        private bool TakeString(string expected)
+        {
+            if (position + expected.Length > text.Length ||
+                !text.AsSpan(position, expected.Length).SequenceEqual(expected))
             {
                 return false;
             }
 
-            position += value.Length;
+            position += expected.Length;
             return true;
         }
 
@@ -609,6 +1932,8 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
                 position++;
             }
         }
+
+        private char Current => position < text.Length ? text[position] : '\0';
     }
 
     [GeneratedRegex(@"(?:\r\n|\n|\r)\s*---\s*(?:\r\n|\n|\r)", RegexOptions.CultureInvariant)]
@@ -616,24 +1941,84 @@ internal sealed partial class PictoActOverlayService(IGameGui gameGui)
 
     [GeneratedRegex(@"^Fan(?<degrees>\d{1,3})$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex FanOmen();
+
+    [GeneratedRegex(@"^Dir(?<negative>N)?(?<divisions>\d{1,3})$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex DirectionField();
+
+    [GeneratedRegex(@"(?<![\p{L}\p{N}_])_d(?![\p{L}\p{N}_])", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex DistanceToken();
 }
 
 internal sealed record PictoActOverlayCommand(
     string? Tag,
     Regex? Regex,
-    bool Remove,
-    PictoActShape? Shape);
+    PictoActOverlayAction Action,
+    PictoActShape? Shape,
+    PictoActShapePatch? Patch)
+{
+    internal DateTimeOffset ExecuteAt { get; init; } = DateTimeOffset.UtcNow;
+
+    internal bool Remove => Action == PictoActOverlayAction.Remove;
+
+    internal bool Change => Action == PictoActOverlayAction.Change;
+}
+
+internal enum PictoActOverlayAction
+{
+    Create,
+    Change,
+    Remove,
+}
+
+internal sealed record PictoActShapePatch(
+    Vector3? Position,
+    Vector3? Target,
+    bool TargetSpecified,
+    string? ScaleExpression,
+    bool ScaleIsCylindrical,
+    float? Angle,
+    float? Pitch,
+    float? Yaw,
+    Vector4? Color,
+    Vector3? TransformCenter,
+    bool TransformCenterSpecified,
+    float? TransformRotation,
+    bool TransformRotationSpecified,
+    bool? KeepX,
+    bool? KeepY);
+
+internal sealed record PictoActTransform(
+    Vector3? Center,
+    bool CenterSpecified,
+    float? Rotation,
+    bool RotationSpecified,
+    bool? KeepX,
+    bool? KeepY);
 
 internal sealed record PictoActShape(
+    string VfxPath,
     PictoActShapeKind Kind,
     Vector3 Position,
     float PrimaryScale,
     float SecondaryScale,
     float Angle,
+    float Pitch,
+    float Yaw,
     float FanRadians,
     Vector4 Color,
+    bool HasExplicitColor,
     DateTimeOffset StartsAt,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt,
+    float TertiaryScale,
+    Vector3 SourcePosition,
+    Vector3? SourceTarget,
+    float SourceAngle,
+    Vector3? TransformCenter,
+    float? TransformRotation,
+    bool KeepX,
+    bool KeepY,
+    IReadOnlyList<Vector3>? SourcePolygon,
+    IReadOnlyList<Vector3>? Polygon);
 
 internal enum PictoActShapeKind
 {
@@ -641,6 +2026,19 @@ internal enum PictoActShapeKind
     Rectangle,
     BidirectionalRectangle,
     Fan,
+    Polygon,
+    NativeOnly,
 }
 
-internal sealed record StoredPictoActShape(string SemanticTag, PictoActShape Shape);
+internal sealed class StoredPictoActShape(string semanticTag, PictoActShape shape)
+{
+    internal string SemanticTag { get; } = semanticTag;
+
+    internal PictoActShape Shape { get; set; } = shape;
+
+    internal nint NativeHandle { get; set; }
+
+    internal bool NativeDirty { get; set; }
+
+    internal bool NativeCreationFailed { get; set; }
+}

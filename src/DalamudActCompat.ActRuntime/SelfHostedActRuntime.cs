@@ -1862,8 +1862,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                 if (activeEncounter is null &&
                     !inCombat &&
-                    !localDeathWhilePartyContinues() &&
-                    now - chatLastDamage >= TimeSpan.FromSeconds(3))
+                    !localDeathWhilePartyContinues())
                 {
                     completedChatEncounter = CreateChatEncounterSnapshot(
                         finished: true,
@@ -1876,9 +1875,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
             if (activeEncounter is not null &&
                 !condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
-                !inCombat &&
-                lastRelevantCombatAction != default &&
-                now - lastRelevantCombatAction >= TimeSpan.FromSeconds(3))
+                !inCombat)
             {
                 activeEncounterToEnd = activeEncounter;
             }

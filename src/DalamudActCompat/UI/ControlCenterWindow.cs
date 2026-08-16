@@ -131,6 +131,7 @@ public sealed class ControlCenterWindow : Window
     private string? genericPluginToDeleteId;
     private string? genericPluginToDeleteName;
     private bool genericDeletePopupRequested;
+    private bool focusOnNextDraw;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -240,6 +241,9 @@ public sealed class ControlCenterWindow : Window
     public void ShowAnimated()
     {
         IsOpen = true;
+        // External plugin collectors can invoke OpenMainUi while this window is already open
+        // behind another window, so an "appearing" focus condition alone is insufficient.
+        focusOnNextDraw = true;
         visibilityTransition = VisibilityTransition.Opening;
         visibilityTransitionStartedAt = Environment.TickCount64;
     }
@@ -276,6 +280,12 @@ public sealed class ControlCenterWindow : Window
 
     public override void PreDraw()
     {
+        if (focusOnNextDraw)
+        {
+            ImGui.SetNextWindowFocus();
+            focusOnNextDraw = false;
+        }
+
         var alpha = visibilityTransition switch
         {
             VisibilityTransition.Opening => EaseInOut(TransitionProgress(OpenAnimationMilliseconds)),
