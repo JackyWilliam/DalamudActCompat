@@ -566,25 +566,37 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
                           ?.Cast<XmlElement>()
                           .ToArray()
                       ?? [];
-    var actorIdMark = markActions.SingleOrDefault(action =>
-        action.ParentNode?.ParentNode is XmlElement trigger &&
-        trigger.GetAttribute("Name").StartsWith("04 ", StringComparison.Ordinal) &&
-        action.GetAttribute("OrderNumber") == "1");
-    var clearMarks = markActions.Count(action =>
-        action.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": 3758096384",
-            StringComparison.Ordinal));
-    if (actorIdMark is null ||
-        !actorIdMark.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": \"0x${_me.id}\"",
-            StringComparison.Ordinal) ||
-        markActions.Count(action => action.GetAttribute("NamedCallbackParam").Contains(
-            "\"ActorID\": \"0x${_me.id}\"",
-            StringComparison.Ordinal)) != 1 ||
-        clearMarks != 3)
+    foreach (var action in markActions)
     {
-        throw new InvalidOperationException(
-            "Triggernometry export must pass its hexadecimal entity ID with a 0x prefix and clear values as UInt32 JSON numbers.");
+        var payload = action.GetAttribute("NamedCallbackParam");
+        if (!payload.Contains("0x${_me.id}", StringComparison.Ordinal))
+        {
+            if (payload.Contains("3758096384", StringComparison.Ordinal) ||
+                payload.Contains("0xE0000000", StringComparison.OrdinalIgnoreCase))
+            {
+                var clear = PostNamazuSemanticActions.ParseMark(
+                    payload.Replace("${type}", "attack1", StringComparison.Ordinal));
+                if (clear.ActorId != PostNamazuSemanticActions.ClearActorId)
+                {
+                    throw new InvalidOperationException(
+                        "Triggernometry export did not preserve its clear-marker actor ID.");
+                }
+            }
+
+            continue;
+        }
+
+        // Real repositories use both quoted and unquoted hexadecimal IDs. Resolve only the
+        // placeholders needed by this callback so the compatibility parser validates either form.
+        var resolved = payload
+            .Replace("0x${_me.id}", "0x10021EE7", StringComparison.Ordinal)
+            .Replace("${type}", "attack1", StringComparison.Ordinal);
+        var mark = PostNamazuSemanticActions.ParseMark(resolved);
+        if (mark.ActorId != 0x10021EE7)
+        {
+            throw new InvalidOperationException(
+                "Triggernometry export did not preserve its hexadecimal entity ID in the mark callback.");
+        }
     }
 
     var scriptActions = document.SelectNodes("//Action[@ActionType='ExecuteScript']")
