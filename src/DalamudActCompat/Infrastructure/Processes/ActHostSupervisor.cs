@@ -57,7 +57,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         this.logger = logger;
         this.silverDasherEventsEnabled = silverDasherEventsEnabled ?? (static () => false);
         this.matchaEventsEnabled = matchaEventsEnabled ?? (static () => false);
-        hostExecutable = Path.Combine(hostDirectory, "DalamudActCompat.Host.exe");
+        // A versioned asset directory lets a new plugin build start even when an
+        // older Host process still has the previous executable mapped by Windows.
+        hostExecutable = Path.Combine(
+            assets.TargetDirectory,
+            "DalamudActCompat.Host.exe");
         this.pluginDirectory = pluginDirectory;
         this.configDirectory = configDirectory;
         ipc.Faulted += OnIpcFaulted;

@@ -54,6 +54,7 @@ try
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
+    ValidateVersionedCompatibilityHostExtraction(testRoot);
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
     ValidateMatchaPermissionIsolation();
@@ -354,6 +355,48 @@ finally
     if (Directory.Exists(testRoot))
     {
         Directory.Delete(testRoot, true);
+    }
+}
+
+static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
+{
+    var hostRoot = Path.Combine(testRoot, "versioned-host-assets");
+    Directory.CreateDirectory(hostRoot);
+    var legacyHost = Path.Combine(hostRoot, "DalamudActCompat.Host.exe");
+    File.WriteAllText(legacyHost, "locked previous host build");
+
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var assets = new CompatibilityHostAssets(hostRoot, new PluginLogger(log));
+    Assert(
+        !string.Equals(assets.TargetDirectory, hostRoot, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            Path.GetDirectoryName(assets.TargetDirectory),
+            hostRoot,
+            StringComparison.OrdinalIgnoreCase),
+        "Compatibility Host assets were not isolated under a build-specific directory.");
+
+    // A running previous Host denies replacement of its executable. The current
+    // build must extract elsewhere instead of requiring the user to find and kill it.
+    using (new FileStream(legacyHost, FileMode.Open, FileAccess.Read, FileShare.Read))
+    {
+        assets.EnsureExtracted();
+    }
+
+    var currentHost = Path.Combine(
+        assets.TargetDirectory,
+        "DalamudActCompat.Host.exe");
+    Assert(
+        File.Exists(currentHost),
+        "Compatibility Host was not extracted while the previous executable was locked.");
+    Assert(
+        File.ReadAllText(legacyHost) == "locked previous host build",
+        "Versioned Host extraction modified the locked previous build.");
+
+    // Reloads of the same build should only verify matching files, never replace
+    // the executable that its own Host process is already using.
+    using (new FileStream(currentHost, FileMode.Open, FileAccess.Read, FileShare.Read))
+    {
+        assets.EnsureExtracted();
     }
 }
 
