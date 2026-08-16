@@ -659,8 +659,8 @@ public sealed class HelpWindow : Window
                 "给自行导入的普通 ACT 插件授权：在“用户安装的普通 ACT 插件”中找到显示“未授权”的项目，点击“查看并授权”，核对预检清单后点击“授权并启用”。它随后会在通用 Host 中运行。",
                 "To authorize an imported generic ACT plugin, find the Not authorized item under User-installed generic ACT plugins, select Review and authorize, verify the preflight list, then select Authorize and enable. It will then run in Generic Host."));
             DrawBullet(text.Get(
-                "按实际用途开放：联网更新或查询需要“网络请求”；写配置、缓存或导出需要“写入文件”；鲶鱼精命令与标点需要“发送游戏指令”，部分原版功能还需要“访问游戏原生内存”或“调用 Windows 原生接口”；高级触发器脚本需要“运行高风险脚本”。",
-                "Grant only what the feature needs: updates or online lookups need Network requests; configuration, cache, or export needs Write files; PostNamazu commands and markers need Send game commands, and some original features also need Access native game memory or Call native Windows APIs; advanced trigger scripts need Run high-risk scripts."));
+                "按实际用途开放：联网更新或查询需要“网络请求”；写扩展缓存或导出到用户选择的文件需要“写入文件”（抹茶保存专属目录内的自身配置不需要）；鲶鱼精命令与标点需要“发送游戏指令”，部分原版功能还需要“访问游戏原生内存”或“调用 Windows 原生接口”；高级触发器脚本需要“运行高风险脚本”。",
+                "Grant only what the feature needs: updates or online lookups need Network requests; extension cache writes or exports to a user-selected file need Write files (Matcha can save its own path-confined configuration without it); PostNamazu commands and markers need Send game commands, and some original features also need Access native game memory or Call native Windows APIs; advanced trigger scripts need Run high-risk scripts."));
             DrawBullet(text.Get(
                 "权限勾选后功能仍不可用时，先确认扩展本身也已启用，再用 /actcompat status 检查对应 Host。权限和“启用扩展”是两个独立条件。",
                 "If a feature still fails after permission is granted, confirm the extension itself is also enabled, then use /actcompat status to inspect the assigned Host. Permission and extension enablement are separate requirements."));

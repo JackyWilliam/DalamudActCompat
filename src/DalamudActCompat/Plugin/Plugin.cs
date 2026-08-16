@@ -1948,22 +1948,6 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenActPluginConfiguration(string pluginId)
     {
-        if (string.Equals(pluginId, "matcha", StringComparison.OrdinalIgnoreCase) &&
-            !configuration.IsActCapabilityAllowed("matcha", ActCapability.WriteFiles))
-        {
-            // Matcha persists its telemetry/configuration choice while opening the WinForms UI.
-            // Stop before that write so the user sees the actionable permission page instead of
-            // an unauthorised Host error that can repeat every time the menu is opened.
-            logger.Warning("Cafe.Matcha configuration requires the WriteFiles capability.");
-            settingsWindow.ShowExtensionsPage();
-            services.NotificationManager.AddNotification(new()
-            {
-                Title = "抹茶配置需要写入权限",
-                Content = "已打开“扩展”页。请在 ACT 插件权限边界中展开抹茶，启用“写入文件”；保存后抹茶 Host 会自动重启。",
-            });
-            return;
-        }
-
         var target = string.Equals(pluginId, "matcha", StringComparison.OrdinalIgnoreCase)
             ? matchaHostSupervisor
             : ActPluginPackageInstaller.IsSpecializedPluginId(pluginId)

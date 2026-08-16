@@ -311,7 +311,6 @@ public static class HostPluginBridge
 
     public static void WriteMatchaTextFile(string path, string contents)
     {
-        DemandMatchaCapability("WriteFiles");
         ArgumentNullException.ThrowIfNull(contents);
         if (contents.Length > 8 * 1024 * 1024)
         {
@@ -320,6 +319,10 @@ public static class HostPluginBridge
                 "Matcha file output exceeds 8 MiB.");
         }
 
+        // Matcha cannot open its settings unless it can persist its own configuration and
+        // telemetry choice. This bridge is already confined to the dedicated Matcha config root,
+        // so it is not an arbitrary file-write capability. User-selected JSON exports remain
+        // separately gated by WriteFiles in WriteMatchaUserTextFile.
         var fullPath = ValidateMatchaPath(path, write: true);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, contents);

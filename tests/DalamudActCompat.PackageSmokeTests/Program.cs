@@ -6308,10 +6308,9 @@ static void ValidateHtmlOverlayDefaults()
         Regex.IsMatch(
             macroPluginSource,
             "case \\\"meter\\\":\\s+meterWindow\\.IsOpen = true;") &&
-        macroPluginSource.Contains(
+        !macroPluginSource.Contains(
             "Cafe.Matcha configuration requires the WriteFiles capability.",
             StringComparison.Ordinal) &&
-        macroPluginSource.Contains("settingsWindow.ShowExtensionsPage();", StringComparison.Ordinal) &&
         !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
         readmeSource.Contains("## 用户使用指南", StringComparison.Ordinal) &&

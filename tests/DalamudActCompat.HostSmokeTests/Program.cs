@@ -2301,12 +2301,27 @@ void ValidateMatchaUserTemplateFileBoundary()
         configurePermissions.Invoke(null, [new HostPermissionSnapshot(
             new Dictionary<string, IReadOnlyList<string>>
             {
-                ["matcha"] = ["ReadLocalConfiguration", "WriteFiles"],
+                ["matcha"] = ["ReadLocalConfiguration"],
             },
             ["matcha"])]);
         configureContext.Invoke(null, [pluginRoot, configRoot, null]);
 
+        var configurationPath = Path.Combine(configRoot, "Config", "Cafe.Matcha.config");
+        HostPluginBridge.WriteMatchaTextFile(configurationPath, "{\"telemetry\":false}");
+        Assert(
+            File.ReadAllText(configurationPath) == "{\"telemetry\":false}",
+            "Matcha could not persist its path-confined configuration without arbitrary file-write permission.");
+
         var templatePath = Path.Combine(userRoot, "watch-list.json");
+        AssertThrows<UnauthorizedAccessException>(
+            () => HostPluginBridge.WriteMatchaUserTextFile(templatePath, "[1,2,3]"),
+            "Matcha exported a user-selected JSON template without WriteFiles permission.");
+        configurePermissions.Invoke(null, [new HostPermissionSnapshot(
+            new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["matcha"] = ["ReadLocalConfiguration", "WriteFiles"],
+            },
+            ["matcha"])]);
         HostPluginBridge.WriteMatchaUserTextFile(templatePath, "[1,2,3]");
         Assert(
             HostPluginBridge.ReadMatchaUserTextFile(templatePath) == "[1,2,3]",
