@@ -56,6 +56,8 @@ public sealed class MeterWindow : Window
     private float heightAnimationStart;
     private float heightAnimationTarget;
     private Vector2 dragOffset;
+    private bool locateOnNextDraw;
+    private long locatePreviewExpiresAt;
 
     public MeterWindow(
         MeterService meterService,
@@ -102,11 +104,31 @@ public sealed class MeterWindow : Window
         }
 
         var encounter = meterService.DisplayEncounter;
-        return !settings.AutoHideOutOfCombat || encounter?.IsActive == true;
+        return Environment.TickCount64 < locatePreviewExpiresAt ||
+               !settings.AutoHideOutOfCombat ||
+               encounter?.IsActive == true;
+    }
+
+    public void LocateOnNextDraw()
+    {
+        locateOnNextDraw = true;
+        // Locating must remain visible long enough to prove where the window was moved,
+        // even when the user's normal out-of-combat auto-hide setting is enabled.
+        locatePreviewExpiresAt = Environment.TickCount64 + 3_000;
     }
 
     public override void PreDraw()
     {
+        if (locateOnNextDraw)
+        {
+            var viewport = ImGui.GetMainViewport();
+            ImGui.SetNextWindowPos(
+                viewport.Pos + (viewport.Size * 0.5f),
+                ImGuiCond.Always,
+                new Vector2(0.5f, 0.5f));
+            locateOnNextDraw = false;
+        }
+
         var settings = configuration.Meter;
         SizeConstraints = new WindowSizeConstraints
         {

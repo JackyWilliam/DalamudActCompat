@@ -1874,8 +1874,11 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
 
             if (activeEncounter is not null &&
-                !condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
-                !inCombat)
+                OpenWorldEncounterEndPolicy.ShouldEnd(
+                    condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
+                    inCombat,
+                    lastRelevantCombatAction,
+                    now))
             {
                 activeEncounterToEnd = activeEncounter;
             }

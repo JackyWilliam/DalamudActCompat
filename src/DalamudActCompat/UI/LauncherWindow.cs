@@ -17,7 +17,7 @@ public sealed class LauncherWindow : Window
     private readonly ISharedImmediateTexture buttonTexture;
     private readonly UiText text;
     private readonly Action toggleSettings;
-    private readonly Action openMeter;
+    private readonly Action toggleMeter;
     private readonly Action saveConfiguration;
     private bool isDragging;
     private Vector2 dragOffset;
@@ -27,7 +27,7 @@ public sealed class LauncherWindow : Window
         ISharedImmediateTexture buttonTexture,
         UiText text,
         Action toggleSettings,
-        Action openMeter,
+        Action toggleMeter,
         Action saveConfiguration)
         : base("ACT Launcher###DalamudActCompatLauncher")
     {
@@ -35,7 +35,7 @@ public sealed class LauncherWindow : Window
         this.buttonTexture = buttonTexture;
         this.text = text;
         this.toggleSettings = toggleSettings;
-        this.openMeter = openMeter;
+        this.toggleMeter = toggleMeter;
         this.saveConfiguration = saveConfiguration;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
@@ -106,7 +106,7 @@ public sealed class LauncherWindow : Window
 
         if (rightClicked)
         {
-            openMeter();
+            toggleMeter();
         }
 
         if (middleClicked)
@@ -136,7 +136,9 @@ public sealed class LauncherWindow : Window
         ImGui.TextUnformatted(text.Get("ACT 快捷按钮", "ACT quick button"));
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("左键：打开或关闭设置", "Left click: Open or close settings"));
-        ImGui.TextUnformatted(text.Get("右键：打开战斗统计", "Right click: Open Combat Meter"));
+        ImGui.TextUnformatted(text.Get(
+            "右键：打开或关闭战斗统计",
+            "Right click: Open or close Combat Meter"));
         ImGui.TextUnformatted(text.Get("按住中键：拖动按钮", "Hold middle mouse: Move button"));
         ImGui.EndTooltip();
     }

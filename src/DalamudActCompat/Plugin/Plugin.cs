@@ -264,6 +264,7 @@ public sealed class Plugin : IDalamudPlugin
             () => BuildPlayerIdentities(
                 playerState,
                 partyList,
+                objectTable,
                 condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]),
             chatGui,
             framework,
@@ -451,7 +452,7 @@ public sealed class Plugin : IDalamudPlugin
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
             SetMeterVisible,
-            () => SetMeterVisible(true),
+            OpenMeter,
             encounterWindow.OpenRecent,
             () => statusWindow.IsOpen,
             value => statusWindow.IsOpen = value,
@@ -487,7 +488,7 @@ public sealed class Plugin : IDalamudPlugin
             launcherTexture,
             text,
             settingsWindow.ToggleAnimated,
-            () => SetMeterVisible(true),
+            ToggleMeter,
             SaveConfiguration)
         {
             IsOpen = true,
@@ -588,10 +589,26 @@ public sealed class Plugin : IDalamudPlugin
         fileDialogManager.Draw();
     }
 
-    private void OpenConfigUi() => settingsWindow.ShowAnimated();
+    private void OpenConfigUi() => settingsWindow.LocateAnimated();
 
     private void OpenMainUi()
-        => settingsWindow.ShowAnimated();
+        => settingsWindow.LocateAnimated();
+
+    private void OpenMeter()
+    {
+        meterWindow.LocateOnNextDraw();
+        SetMeterVisible(true);
+    }
+
+    private void ToggleMeter()
+    {
+        var visible = !configuration.Meter.IsVisible;
+        if (visible)
+        {
+            meterWindow.LocateOnNextDraw();
+        }
+        SetMeterVisible(visible);
+    }
 
     private void SetMeterVisible(bool visible)
     {
@@ -610,7 +627,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             case "on":
             case "":
-                settingsWindow.ShowAnimated();
+                settingsWindow.LocateAnimated();
                 break;
             case "history":
                 encounterWindow.OpenRecent();
@@ -631,7 +648,7 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "sample":
                 LoadSampleEncounter();
-                SetMeterVisible(true);
+                OpenMeter();
                 break;
             case "host":
                 StartBackgroundOperation(async () =>
@@ -668,13 +685,13 @@ public sealed class Plugin : IDalamudPlugin
                 parserEngine.ResetCurrentEncounter();
                 break;
             case "factory-reset":
-                settingsWindow.ShowAnimated();
+                settingsWindow.LocateAnimated();
                 break;
             case "install":
                 InstallActPlugin(remainder);
                 break;
             case "meter":
-                SetMeterVisible(true);
+                OpenMeter();
                 break;
             default:
                 // Unknown macros should show the authoritative command list instead of
@@ -2656,11 +2673,14 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
     {
+        var localizedZoneName = zoneNameLocalizer.Localize(territoryId, zoneName);
         fflogsEstimateService.NotifyTerritoryChanged(
             territoryId,
-            zoneNameLocalizer.Localize(territoryId, zoneName));
-        hostSupervisor.PublishZone(territoryId, zoneName);
-        genericHostSupervisor.PublishZone(territoryId, zoneName);
+            localizedZoneName);
+        // ACT exposes the client-language zone name. Trigger packs commonly compare _zone
+        // with that localized value, even when the network parser reports an English name.
+        hostSupervisor.PublishZone(territoryId, localizedZoneName);
+        genericHostSupervisor.PublishZone(territoryId, localizedZoneName);
     }
 
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
@@ -3064,9 +3084,20 @@ public sealed class Plugin : IDalamudPlugin
     private static IReadOnlyList<ActPlayerIdentity> BuildPlayerIdentities(
         IPlayerState playerState,
         IPartyList partyList,
+        IObjectTable objectTable,
         bool localPlayerDead)
     {
         var identities = new Dictionary<string, ActPlayerIdentity>(StringComparer.OrdinalIgnoreCase);
+        var rotations = new Dictionary<uint, float>();
+        foreach (var gameObject in objectTable)
+        {
+            if (gameObject.EntityId != 0)
+            {
+                rotations[gameObject.EntityId] = gameObject.Rotation;
+            }
+        }
+
+        var localGameObject = objectTable.LocalPlayer;
         if (playerState.IsLoaded && !string.IsNullOrWhiteSpace(playerState.CharacterName))
         {
             var identity = new ActPlayerIdentity(
@@ -3083,6 +3114,10 @@ public sealed class Plugin : IDalamudPlugin
                 Level = unchecked((byte)playerState.EffectiveLevel),
                 CurrentHp = localPlayerDead ? 0u : 1u,
                 MaxHp = 1,
+                PositionX = localGameObject?.Position.X ?? 0,
+                PositionY = localGameObject?.Position.Y ?? 0,
+                PositionZ = localGameObject?.Position.Z ?? 0,
+                Rotation = localGameObject?.Rotation ?? 0,
             };
             identities[identity.DisplayName] = identity;
         }
@@ -3116,6 +3151,7 @@ public sealed class Plugin : IDalamudPlugin
                 PositionX = member.Position.X,
                 PositionY = member.Position.Y,
                 PositionZ = member.Position.Z,
+                Rotation = rotations.GetValueOrDefault(member.EntityId),
             };
             identities[identity.DisplayName] = identity;
         }

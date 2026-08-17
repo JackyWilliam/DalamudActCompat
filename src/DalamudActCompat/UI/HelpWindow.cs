@@ -382,8 +382,8 @@ public sealed class HelpWindow : Window
                 "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟其他小队、宠物和普通 NPC 不会作为独立玩家行显示。",
                 "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party; other alliance parties, pets, and ordinary NPCs are not separate player rows."));
             DrawBullet(text.Get(
-                "右键 ACT 快捷按钮或输入 /actcompat meter 打开战斗统计；战斗结束后用 /actcompat history 查看近期战斗。",
-                "Right-click the ACT quick button or use /actcompat meter to open Combat Meter. After combat, use /actcompat history for recent encounters."));
+                "右键 ACT 快捷按钮可打开或关闭战斗统计，输入 /actcompat meter 可打开并定位；战斗结束后用 /actcompat history 查看近期战斗。",
+                "Right-click the ACT quick button to open or close Combat Meter, or use /actcompat meter to open and locate it. After combat, use /actcompat history for recent encounters."));
             DrawBullet(text.Get(
                 "没有数据时先检查运行状态和当前是否真的产生伤害日志，再检查窗口是否被“脱战自动隐藏”，不要先删除配置。",
                 "If no data appears, first check runtime status and whether damage logs were actually generated, then check Auto hide out of combat. Do not delete configuration first."));
@@ -391,8 +391,8 @@ public sealed class HelpWindow : Window
         DrawCard("help-start-shortcuts", text.Get("常用入口", "Common entry points"), 190, () =>
         {
             DrawBullet(text.Get(
-                "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开控制中心，右键打开战斗统计，按住中键拖动。",
-                "Show ACT quick button controls the in-game entry: left-click the control center, right-click Combat Meter, and hold middle mouse to drag."));
+                "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开或关闭控制中心，右键打开或关闭战斗统计，按住中键拖动。",
+                "Show ACT quick button controls the in-game entry: left-click to open or close Control Center, right-click to open or close Combat Meter, and hold middle mouse to drag."));
             DrawBullet(text.Get(
                 "/actcompat 打开控制中心（/actcompat on 为兼容别名）；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
                 "/actcompat opens the control center (/actcompat on is a compatible alias); /actcompat status opens runtime status. Every command can be copied from the Commands page."));
@@ -443,8 +443,8 @@ public sealed class HelpWindow : Window
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
-                "副本外每次脱战后会立即清空实时统计，下一场战斗从 0 开始。副本内则持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
-                "Outside duties, the live meter clears immediately when combat ends and the next fight starts from zero. Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
+                "副本外在本队停止产生相关战斗数据 5 秒后清空实时统计，下一场战斗从 0 开始；队友先开怪时不会因本地角色仍处于脱战状态而反复清空。副本内则持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
+                "Outside duties, the live meter clears after the party produces no relevant combat data for five seconds, so a party member pulling first no longer causes repeated resets while the local player is still out of combat. Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
             DrawBullet(text.Get(
                 "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
                 "History stores one duty entry as an expandable folder, with each child representing the complete totals accumulated before a wipe. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));

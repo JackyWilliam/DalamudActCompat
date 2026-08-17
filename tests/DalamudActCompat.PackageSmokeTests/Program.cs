@@ -61,6 +61,7 @@ try
     await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
+    ValidateReflectionActLoggerOverloads();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     ValidateRaidDpsEstimator();
@@ -982,6 +983,32 @@ static void ValidateActCallbackCircuitBreaker()
     Assert(
         health.Exceptions == 5 && health.CircuitOpen,
         "Five consecutive callback exceptions did not open the per-plugin circuit.");
+}
+
+static void ValidateReflectionActLoggerOverloads()
+{
+    var adapterType = typeof(FormActMain).Assembly.GetType(
+                          "Advanced_Combat_Tracker.ReflectionActLogger",
+                          throwOnError: true)!
+                      ?? throw new TypeLoadException(
+                          "Advanced_Combat_Tracker.ReflectionActLogger");
+    var probe = new OverloadedActLoggerProbe();
+    var adapter = (IActLogger)(Activator.CreateInstance(
+                      adapterType,
+                      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                      binder: null,
+                      args: [probe],
+                      culture: null)
+                  ?? throw new InvalidOperationException(
+                      "Could not create the reflected ACT logger adapter."));
+    var expected = new ArgumentException("original parser failure");
+    adapter.Error(expected, "preserve this failure");
+
+    Assert(
+        ReferenceEquals(probe.Exception, expected) &&
+        probe.Message == "preserve this failure" &&
+        !probe.StringOnlyOverloadCalled,
+        "The ACT logger selected a string overload for an exception and replaced the parser failure.");
 }
 
 static void ValidateMeterRows()
@@ -2738,6 +2765,8 @@ static void ValidateControlCenterPresentation()
     var projectRoot = FindProjectRoot();
     var controlCenterSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var meterWindowSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Meter", "MeterWindow.cs"));
     var historySource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Encounters", "EncounterWindow.cs"));
     var thirdPartySource = File.ReadAllText(Path.Combine(
@@ -4742,6 +4771,22 @@ static void ValidateCombatEventScoping()
             identities),
         "A nearby stranger can still extend the local ACT encounter.");
 
+    var now = DateTimeOffset.UtcNow;
+    Assert(
+        !OpenWorldEncounterEndPolicy.ShouldEnd(
+            boundByDuty: false,
+            localPlayerInCombat: false,
+            lastRelevantCombatAction: now.AddSeconds(-4),
+            now) &&
+        OpenWorldEncounterEndPolicy.ShouldEnd(
+            boundByDuty: false,
+            localPlayerInCombat: false,
+            lastRelevantCombatAction: now.AddSeconds(-5),
+            now) &&
+        !OpenWorldEncounterEndPolicy.ShouldEnd(true, false, now.AddMinutes(-1), now) &&
+        !OpenWorldEncounterEndPolicy.ShouldEnd(false, true, now.AddMinutes(-1), now),
+        "An outdoor party encounter still follows the local combat flag instead of bounded inactivity.");
+
     var runtimeSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -4750,6 +4795,7 @@ static void ValidateCombatEventScoping()
     Assert(
         runtimeSource.Contains("ConditionFlag.BoundByDuty", StringComparison.Ordinal) &&
         runtimeSource.Contains("lastRelevantCombatAction", StringComparison.Ordinal) &&
+        runtimeSource.Contains("OpenWorldEncounterEndPolicy.ShouldEnd", StringComparison.Ordinal) &&
         runtimeSource.Contains("ActGlobals.oFormActMain.EndCombat(true)", StringComparison.Ordinal) &&
         runtimeSource.Contains("counter.DirectHits++;", StringComparison.Ordinal) &&
         runtimeSource.Contains("chatDirectHitTotals", StringComparison.Ordinal),
@@ -6373,6 +6419,7 @@ static void ValidateDalamudGameStateBridge()
             CurrentMp = 10_000,
             MaxMp = 10_000,
             TerritoryId = 1234,
+            Rotation = 1.25f,
         },
         new("Party Member", "Beta", "WHM", false, false)
         {
@@ -6386,6 +6433,7 @@ static void ValidateDalamudGameStateBridge()
             CurrentMp = 9_000,
             MaxMp = 10_000,
             TerritoryId = 1234,
+            Rotation = -0.75f,
         },
     ];
 
@@ -6393,6 +6441,9 @@ static void ValidateDalamudGameStateBridge()
     Assert(provider.Snapshot.GameExists, "Dalamud game state did not report the active game.");
     Assert(provider.Snapshot.InGameCombat, "Dalamud combat state was not preserved.");
     Assert(provider.Snapshot.Player?.JobId == 19, "Dalamud local player job was not preserved.");
+    Assert(
+        Math.Abs((provider.Snapshot.Player?.Rotation ?? 0) - 1.25f) < 0.001f,
+        "Dalamud local player rotation was not preserved for Radar.");
     Assert(provider.Snapshot.Party.Count == 2, "Dalamud party members were not preserved.");
 
     var overlayAssembly = typeof(IDalamudGameStateProvider).Assembly;
@@ -6505,6 +6556,18 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "ControlCenterWindow.cs"));
+    var meterWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterWindow.cs"));
+    var launcherWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "LauncherWindow.cs"));
     var createdOverlayIndex = controlCenterSource.IndexOf(
         "changed |= DrawCreatedHtmlOverlays();",
         StringComparison.Ordinal);
@@ -6611,7 +6674,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("副本外每次脱战后会立即清空实时统计", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
         helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
@@ -6641,12 +6704,22 @@ static void ValidateHtmlOverlayDefaults()
         macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
         Regex.IsMatch(
             macroPluginSource,
-            "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.ShowAnimated\\(\\);") &&
+            "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.LocateAnimated\\(\\);") &&
         Regex.IsMatch(
             macroPluginSource,
-            "case \\\"meter\\\":\\s+SetMeterVisible\\(true\\);") &&
-        macroPluginSource.Contains("() => SetMeterVisible(true)", StringComparison.Ordinal) &&
-        !macroPluginSource.Contains("private void ToggleMeter()", StringComparison.Ordinal) &&
+            "case \\\"meter\\\":\\s+OpenMeter\\(\\);") &&
+        macroPluginSource.Contains("private void ToggleMeter()", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("meterWindow.LocateOnNextDraw();", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("public void LocateAnimated()", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ImGui.SetNextWindowPos", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("public void LocateOnNextDraw()", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("locatePreviewExpiresAt", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("ImGui.SetNextWindowPos", StringComparison.Ordinal) &&
+        launcherWindowSource.Contains("private readonly Action toggleMeter;", StringComparison.Ordinal) &&
+        launcherWindowSource.Contains("打开或关闭战斗统计", StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "hostSupervisor.PublishZone(territoryId, localizedZoneName)",
+            StringComparison.Ordinal) &&
         !macroPluginSource.Contains(
             "Cafe.Matcha configuration requires the WriteFiles capability.",
             StringComparison.Ordinal) &&
@@ -6656,7 +6729,7 @@ static void ValidateHtmlOverlayDefaults()
         readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
         readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
-        readmeSource.Contains("副本外每次脱战后会立即清空实时统计", StringComparison.Ordinal) &&
+        readmeSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
         readmeSource.Contains("副本内则持续累计", StringComparison.Ordinal) &&
         readmeSource.Contains("“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         readmeSource.Contains("每条子记录代表一次团灭前累计的完整战斗", StringComparison.Ordinal) &&
@@ -6735,12 +6808,6 @@ static void ValidateHtmlOverlayDefaults()
         controlCenterSource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         controlCenterSource.Contains("VersionLabel", StringComparison.Ordinal),
         "The control center did not move branding, centered parser state, version, and close control into rounded top chrome.");
-    var meterWindowSource = File.ReadAllText(Path.Combine(
-        FindProjectRoot(),
-        "src",
-        "DalamudActCompat",
-        "Meter",
-        "MeterWindow.cs"));
     Assert(
         !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
         !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal) &&
@@ -9041,6 +9108,24 @@ internal sealed class TestActLogger : IActLogger
 
     public void Warning(string message)
     {
+    }
+}
+
+internal sealed class OverloadedActLoggerProbe
+{
+    public Exception? Exception { get; private set; }
+
+    public string? Message { get; private set; }
+
+    public bool StringOnlyOverloadCalled { get; private set; }
+
+    public void Error(string message, params object[] values)
+        => StringOnlyOverloadCalled = true;
+
+    public void Error(Exception exception, string message, params object[] values)
+    {
+        Exception = exception;
+        Message = message;
     }
 }
 
