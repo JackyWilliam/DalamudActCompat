@@ -112,6 +112,7 @@ public sealed class Plugin : IDalamudPlugin
     private bool backgroundOperationShutdownStarted;
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
+    private IReadOnlyList<ActPlayerIdentity> playerIdentitySnapshot = [];
     private HostPostNamazuHeading? pendingPostNamazuHeading;
     private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
     private Task? cactbotShutdownTask;
@@ -264,11 +265,7 @@ public sealed class Plugin : IDalamudPlugin
             log,
             dataManager,
             () => playerState.CharacterName,
-            () => BuildPlayerIdentities(
-                playerState,
-                partyList,
-                objectTable,
-                condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]),
+            () => Volatile.Read(ref playerIdentitySnapshot),
             chatGui,
             framework,
             condition,
@@ -618,10 +615,8 @@ public sealed class Plugin : IDalamudPlugin
     private void ToggleMeter()
     {
         var visible = !configuration.Meter.IsVisible;
-        if (visible)
-        {
-            meterWindow.LocateOnNextDraw();
-        }
+        // The launcher shortcut is a visibility toggle, so reopening must preserve ImGui's
+        // saved position; recentering is reserved for the explicit window-recovery entry point.
         SetMeterVisible(visible);
     }
 
@@ -2813,6 +2808,14 @@ public sealed class Plugin : IDalamudPlugin
         nextHostEntitySnapshotAt = now.AddMilliseconds(500);
         try
         {
+            // Parser/overlay startup can run on a worker thread, while Dalamud's object table is
+            // framework-thread-only. Publish an immutable identity snapshot for those consumers.
+            var identities = BuildPlayerIdentities(
+                playerState,
+                partyList,
+                objectTable,
+                services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]);
+            Volatile.Write(ref playerIdentitySnapshot, identities);
             var snapshot = FfxivEntitySnapshotBuilder.Build(
                 objectTable,
                 partyList,
