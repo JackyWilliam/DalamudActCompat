@@ -25,6 +25,7 @@ using DalamudActCompat.Quality;
 using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
 using System.Threading.Channels;
+using NativeGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace DalamudActCompat.Plugin;
 
@@ -111,6 +112,7 @@ public sealed class Plugin : IDalamudPlugin
     private bool backgroundOperationShutdownStarted;
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
+    private HostPostNamazuHeading? pendingPostNamazuHeading;
     private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
     private Task? cactbotShutdownTask;
     private bool cactbotShutdownStarted;
@@ -216,6 +218,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
+        hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         var matchaIpcClient = new HostIpcClient(
             stateStore,
@@ -574,6 +577,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
+        hostSupervisor.PostNamazuHeadingRequested -= OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
         matchaHostSupervisor.MatchaNotificationRequested -= OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested -= OnMatchaLogLineRequested;
@@ -584,7 +588,18 @@ public sealed class Plugin : IDalamudPlugin
     private void Draw()
     {
         pictoActOverlay.Draw();
-        OverlayEditShield.Draw(actRuntime.HasVisibleEditingOverlay);
+        // The full-screen shield prevents clicks leaking into the game while an HTML overlay
+        // is being positioned, but it must not sit above the controls used to finish editing.
+        var hasVisibleManagementWindow = settingsWindow.IsOpen ||
+                                         advancedSettingsWindow.IsOpen ||
+                                         statusWindow.IsOpen ||
+                                         helpWindow.IsOpen ||
+                                         launcherWindow.IsOpen ||
+                                         thirdPartyPluginNoticeWindow.IsOpen ||
+                                         encounterWindow.IsOpen;
+        OverlayEditShield.Draw(
+            actRuntime.HasVisibleEditingOverlay,
+            hasVisibleManagementWindow);
         windowSystem.Draw();
         fileDialogManager.Draw();
     }
@@ -2673,6 +2688,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
     {
+        // Trigger repositories are territory-scoped; delayed or indefinite PictoACT VFX from
+        // the old territory can never be valid after a zone transition.
+        pictoActOverlay.Clear();
         var localizedZoneName = zoneNameLocalizer.Localize(territoryId, zoneName);
         fflogsEstimateService.NotifyTerritoryChanged(
             territoryId,
@@ -2786,6 +2804,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdateForHost(IFramework _)
     {
         var now = DateTimeOffset.UtcNow;
+        ApplyPendingPostNamazuHeading(now);
         if (now < nextHostEntitySnapshotAt)
         {
             return;
@@ -2815,6 +2834,39 @@ public sealed class Plugin : IDalamudPlugin
                 logger.Error(ex, "Game-side FFXIV entity snapshot failed.");
             }
         }
+    }
+
+    private void OnPostNamazuHeadingRequested(
+        object? sender,
+        HostPostNamazuHeading heading)
+        => Interlocked.Exchange(ref pendingPostNamazuHeading, heading);
+
+    private unsafe void ApplyPendingPostNamazuHeading(DateTimeOffset now)
+    {
+        var heading = Interlocked.Exchange(ref pendingPostNamazuHeading, null);
+        if (heading is null ||
+            now - heading.Timestamp > TimeSpan.FromSeconds(1) ||
+            !float.IsFinite(heading.Heading) ||
+            !configuration.IsActCapabilityAllowed(
+                "postnamazu",
+                ActCapability.NativeGameMemory))
+        {
+            return;
+        }
+
+        var localPlayer = objectTable.LocalPlayer;
+        if (localPlayer is null ||
+            localPlayer.Address == 0 ||
+            localPlayer.Address != (nint)heading.Address)
+        {
+            return;
+        }
+
+        // The isolated Host supplies the address for legacy callback compatibility, but only the
+        // live local-player pointer is writable. This prevents the bridge from becoming a general
+        // cross-process memory-write primitive while preserving U6b's short heading updates.
+        ((NativeGameObject*)localPlayer.Address)->Rotation =
+            MathF.IEEERemainder(heading.Heading, MathF.Tau);
     }
 
     private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)

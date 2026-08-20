@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.18",
+    "AssemblyVersion":  "0.3.9.19",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.18/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.19/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.18/DalamudActCompat.zip",
-    "LastUpdate":  1786863575218,
-    "Changelog":  "v0.3.9.18 修复 PictoACT 原生地面绘图、同 Tag 多图、Target/方向/圆柱缩放与地火序列；修复绝妖星 Host 心跳和启动事件丢失、Omni 主界面、Trigger 配置恢复、悬窗按钮及副本内外统计重置。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.19/DalamudActCompat.zip",
+    "LastUpdate":  1787234604660,
+    "Changelog":  "v0.3.9.19 修复 PictoACT 原生贴地、实体朝向与切区残留，悬浮窗编辑阻塞、非伤害 LB 误归因、Host 状态队列洪泛及蓝月日志崩溃；补齐绝欧 U6b P1/P2/P3 兼容通道，并更新 7.55 Hotfix 2 解析依赖。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

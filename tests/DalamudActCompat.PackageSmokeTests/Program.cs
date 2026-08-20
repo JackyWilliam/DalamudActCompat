@@ -57,6 +57,7 @@ try
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
+    await ValidatePostNamazuHeadingIpcAsync();
     ValidateMatchaPermissionIsolation();
     await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
@@ -612,6 +613,47 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(entityAngle - MathF.Atan2(3, 4)) < 0.0001f,
         "PictoACT Target, ScaleCyl, DirN, polar, entity-position, or math compatibility failed.");
 
+    var entityThetaCommands = PictoActOverlayService.Parse(
+        "Omen: Fan90\nTag: ENTITY_THETA_HEX\nt: 4\nO: 0x10000001\n" +
+        "θ: 4001ABCD\nScale: 50, 50, 10\n---\n" +
+        "Omen: Fan90\nTag: ENTITY_THETA_DIGITS\nt: 4\nO: 0x10000001\n" +
+        "Theta: 40012345\nScale: 50, 50, 10",
+        raw => raw switch
+        {
+            "0x10000001" => new System.Numerics.Vector3(10, 0, 20),
+            "4001ABCD" => new System.Numerics.Vector3(13, 0, 24),
+            "40012345" => new System.Numerics.Vector3(6, 0, 22),
+            _ => null,
+        });
+    Assert(
+        entityThetaCommands.Count == 2 &&
+        entityThetaCommands[0].Shape is
+        {
+            Position.X: 10,
+            Position.Z: 20,
+            Angle: var hexadecimalEntityTheta,
+        } &&
+        MathF.Abs(hexadecimalEntityTheta - MathF.Atan2(3, 4)) < 0.0001f &&
+        entityThetaCommands[1].Shape is { Angle: var allDigitEntityTheta } &&
+        MathF.Abs(allDigitEntityTheta - MathF.Atan2(-4, 2)) < 0.0001f,
+        "PictoACT θ/Theta did not preserve legacy entity-facing semantics.");
+
+    var entityThetaBase = PictoActOverlayService.Parse(
+        "Omen: Rect\nTag: ENTITY_THETA_CHANGE\nt: 5\nO: 10, 20\nθ: pi\n" +
+        "Pos: 0, 0\nScale: 1, 10, 1").Single().Shape!;
+    var entityThetaPatch = PictoActOverlayService.Parse(
+        "Action: Change\nTag: ENTITY_THETA_CHANGE\nθ: 4001ABCD",
+        raw => raw == "4001ABCD"
+            ? new System.Numerics.Vector3(13, 0, 24)
+            : null).Single().Patch!;
+    var entityThetaChanged = PictoActOverlayService.ApplyPatch(
+        entityThetaBase,
+        entityThetaPatch);
+    Assert(
+        entityThetaChanged.Position is { X: 10, Z: 20 } &&
+        MathF.Abs(entityThetaChanged.Angle - MathF.Atan2(3, 4)) < 0.0001f,
+        "PictoACT Change with an entity θ lost the existing transform center.");
+
     var directionAndScaleDefaults = PictoActOverlayService.Parse(
         "Omen: Circle\nt: 5\nDir4: 0\nPos: 1, 2\nScale: 3").Single();
     Assert(
@@ -695,6 +737,14 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         overlay.ShapeSnapshot.Count == 0,
         "PictoACT Remove did not cancel matching delayed operations.");
+
+    overlay.Apply("Omen: Circle\nTag: OLD_ZONE\nt: 30\nPos: 1, 2\nScale: 3");
+    overlay.Apply("Omen: Circle\nTag: OLD_ZONE_DELAYED\nDelay: 10\nt: 30\nPos: 3, 4\nScale: 3");
+    overlay.Clear();
+    overlay.ProcessPending(DateTimeOffset.UtcNow.AddSeconds(11));
+    Assert(
+        overlay.ShapeSnapshot.Count == 0,
+        "PictoACT territory cleanup left a live or delayed drawing behind.");
 
     overlay.Apply(
         "Omen: Rect\nTag: ANGLE_MODE\nt: 30\nPos: 0, 0\nTarget: 0, 10\nScale: 1, 10, 1");
@@ -846,6 +896,31 @@ static void ValidateBoundedHostQueue()
             new { value = 2 })) &&
         queue.DataCount == 1,
         "State messages were not coalesced to the latest value.");
+
+    queue.Clear();
+    for (var index = 0; index < HostProtocol.ControlQueueCapacity * 4; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                index + 1,
+                index % 2 == 0
+                    ? HostMessageTypes.CombatStarted
+                    : HostMessageTypes.CombatEnded,
+                HostMessagePriority.State,
+                new HostCombatEvent(index % 2 == 0, DateTimeOffset.UtcNow))),
+            "Combat state coalescing rejected a noisy transition.");
+    }
+
+    var latestCombatState = queue.DequeueAsync(CancellationToken.None)
+        .AsTask()
+        .GetAwaiter()
+        .GetResult();
+    Assert(
+        queue.ControlCount == 0 &&
+        queue.DataCount == 0 &&
+        latestCombatState.Type == HostMessageTypes.CombatEnded,
+        "Alternating combat transitions were not coalesced to their single latest state.");
 }
 
 static void ValidateBoundedNotActQueues()
@@ -3184,7 +3259,7 @@ static void ValidateParserDependencyVersions()
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
-        "3.0.2.7",
+        "3.0.2.8",
         "FFXIV_ACT_Plugin");
     var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
     Assert(
@@ -3339,6 +3414,43 @@ static async Task ValidateMatchaTypedIpcAsync()
         logLine?.Line == "00|matcha" &&
         tts is { Text: "matcha speech", Source: "matcha" },
         "Matcha notification, log, or TTS crossed an untyped/shared command channel.");
+}
+
+static async Task ValidatePostNamazuHeadingIpcAsync()
+{
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var client = new HostIpcClient(
+        new EncounterStateStore(),
+        new PluginLogger(log));
+    HostPostNamazuHeading? received = null;
+    client.PostNamazuHeadingRequested += (_, value) => received = value;
+    var applyMessage = typeof(HostIpcClient).GetMethod(
+                           "ApplyMessage",
+                           BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostIpcClient).FullName,
+                           "ApplyMessage");
+    var now = DateTimeOffset.UtcNow;
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "postnamazu-heading-ipc-smoke",
+        1,
+        HostMessageTypes.PostNamazuSetHeading,
+        HostMessagePriority.State,
+        new HostPostNamazuHeading(0x12345678, 1.25f, now))]);
+    Assert(
+        received is { Address: 0x12345678, Heading: 1.25f },
+        "PostNamazu heading did not cross its typed game-side IPC channel.");
+
+    received = null;
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "postnamazu-heading-ipc-smoke",
+        2,
+        HostMessageTypes.PostNamazuSetHeading,
+        HostMessagePriority.State,
+        new HostPostNamazuHeading(0x12345678, 1.25f, now.AddSeconds(-10)))]);
+    Assert(
+        received is null,
+        "A stale PostNamazu heading crossed the game-side IPC validation boundary.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -7425,11 +7537,14 @@ static void ValidateHtmlOverlayDefaults()
                            ?? throw new InvalidOperationException(
                                "The transparent overlay edit shield condition was not found.");
     Assert(
-        isShieldRequired.Invoke(null, [false]) as bool? == false,
+        isShieldRequired.Invoke(null, [false, false]) as bool? == false,
         "The transparent edit shield remained active without a visible editing overlay.");
     Assert(
-        isShieldRequired.Invoke(null, [true]) as bool? == true,
+        isShieldRequired.Invoke(null, [true, false]) as bool? == true,
         "The transparent edit shield did not activate for a visible editing overlay.");
+    Assert(
+        isShieldRequired.Invoke(null, [true, true]) as bool? == false,
+        "The transparent edit shield blocked an open ACT management window.");
 }
 
 static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
@@ -8681,6 +8796,14 @@ static void ValidateChineseCombatChatParsing()
             out _) &&
         contextualActor == "队友",
         "Adjacent split combat lines no longer retain their legitimate attacker context.");
+
+    Assert(
+        SelfHostedActRuntime.IsDamageDealingLimitBreakAction(9, canTargetHostile: true) &&
+        SelfHostedActRuntime.IsDamageDealingLimitBreakAction(15, canTargetHostile: true) &&
+        !SelfHostedActRuntime.IsDamageDealingLimitBreakAction(9, canTargetHostile: false) &&
+        !SelfHostedActRuntime.IsDamageDealingLimitBreakAction(15, canTargetHostile: false) &&
+        !SelfHostedActRuntime.IsDamageDealingLimitBreakAction(2, canTargetHostile: true),
+        "Defensive Limit Break actions can still claim an unrelated damage line.");
 
     var limitBreakContext = new ChineseCombatChatContext(
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "终结时刻" });

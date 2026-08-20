@@ -2508,7 +2508,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var action in dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>())
         {
-            if (action.ActionCategory.RowId is not (9 or 15))
+            if (!IsDamageDealingLimitBreakAction(
+                    action.ActionCategory.RowId,
+                    action.CanTargetHostile))
             {
                 continue;
             }
@@ -2520,6 +2522,16 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
         }
         return names;
+    }
+
+    internal static bool IsDamageDealingLimitBreakAction(
+        uint actionCategoryId,
+        bool canTargetHostile)
+    {
+        // Tank and healer limit breaks share the LB action categories but emit no damage.
+        // Treating them as damage context lets the next unrelated split combat line leak into
+        // the synthetic LB row, so only hostile-targeting LB actions may own damage output.
+        return actionCategoryId is 9 or 15 && canTargetHostile;
     }
 
     private static HashSet<uint> LoadWeaponskillActionIds(IDataManager dataManager)

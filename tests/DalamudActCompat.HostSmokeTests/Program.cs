@@ -17,18 +17,30 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Newtonsoft.Json.Linq;
 
-if (args.Length is not (1 or 2 or 3))
+var focusedProbe = args.Length == 4 ? args[0] : null;
+var entityTimingProbe = string.Equals(
+    focusedProbe,
+    "--probe-triggernometry-entity-timing",
+    StringComparison.Ordinal);
+var mapEffectProbe = string.Equals(
+    focusedProbe,
+    "--probe-triggernometry-mapeffect",
+    StringComparison.Ordinal);
+var effectiveArgs = entityTimingProbe || mapEffectProbe ? args[1..] : args;
+if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
-        "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>.");
+        "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
+        "Use --probe-triggernometry-entity-timing or --probe-triggernometry-mapeffect " +
+        "with the three-path form for a focused probe.");
 }
 
-var hostExecutable = Path.GetFullPath(args[0]);
+var hostExecutable = Path.GetFullPath(effectiveArgs[0]);
 var processLogs = new ConcurrentDictionary<int, ProcessLog>();
-var pluginRoot = args.Length == 3 ? Path.GetFullPath(args[1]) : null;
-var configRoot = args.Length == 3 ? Path.GetFullPath(args[2]) : null;
-var triggernometryAssembly = args.Length == 2
-    ? Path.GetFullPath(args[1])
+var pluginRoot = effectiveArgs.Length == 3 ? Path.GetFullPath(effectiveArgs[1]) : null;
+var configRoot = effectiveArgs.Length == 3 ? Path.GetFullPath(effectiveArgs[2]) : null;
+var triggernometryAssembly = effectiveArgs.Length == 2
+    ? Path.GetFullPath(effectiveArgs[1])
     : pluginRoot is null
         ? null
         : Path.Combine(pluginRoot, "triggernometry", "Triggernometry.dll");
@@ -36,6 +48,30 @@ var postNamazuSmokePort = 0;
 if (!File.Exists(hostExecutable))
 {
     throw new FileNotFoundException("ACT Host executable was not found.", hostExecutable);
+}
+
+if (entityTimingProbe)
+{
+    if (pluginRoot is null || configRoot is null)
+    {
+        throw new ArgumentException(
+            "The entity timing probe requires Host.exe, <plugin-root>, and <config-root>.");
+    }
+
+    await ValidateTriggernometryEntityTimingProbeAsync();
+    return;
+}
+
+if (mapEffectProbe)
+{
+    if (pluginRoot is null || configRoot is null)
+    {
+        throw new ArgumentException(
+            "The MapEffect probe requires Host.exe, <plugin-root>, and <config-root>.");
+    }
+
+    await ValidateTriggernometryMapEffectProbeAsync();
+    return;
 }
 
 await ValidateHandshakeCommandBoundaryAndShutdownAsync();
@@ -53,11 +89,14 @@ ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
 ValidatePostNamazuMarkPayloadNormalization();
 ValidatePostNamazuQueueBreakAllCompatibility();
+await ValidatePostNamazuQueueExecutionLifecycleAsync();
 ValidatePostNamazu1366And1367SurfaceCompatibility();
 ValidateOverlayPluginCompatibilityTypeName();
 ValidateTriggernometryCompatibilityNoticeFilter();
 ValidateTriggernometryWebAddressLaunchUsesShell();
 ValidateTriggernometryPlaceholderProcessTestIsSkipped();
+ValidateTriggernometryU6bCompatibilityPatch();
+ValidateTriggernometryAndPostNamazuPermissionGates();
 if (triggernometryAssembly is not null)
 {
     ValidateTriggernometryAssemblyRewrite(triggernometryAssembly);
@@ -430,7 +469,14 @@ void ValidatePostNamazuQueueBreakAllCompatibility()
                    ?? throw new MissingFieldException(
                        typeof(HostPluginBridge).FullName,
                        "PostNamazuQueueIds");
-    lock (queueIds)
+    var queueLock = typeof(HostPluginBridge).GetField(
+                        "PostNamazuQueueLock",
+                        BindingFlags.Static | BindingFlags.NonPublic)
+                    ?.GetValue(null)
+                    ?? throw new MissingFieldException(
+                        typeof(HostPluginBridge).FullName,
+                        "PostNamazuQueueLock");
+    lock (queueLock)
     {
         queueIds.Clear();
         queueIds.AddRange(["ACTCOMPAT_QUEUE_ONE", "ACTCOMPAT_QUEUE_TWO"]);
@@ -728,6 +774,162 @@ void ValidateTriggernometryPlaceholderProcessTestIsSkipped()
             [new ProcessStartInfo(
                 "https://space.bilibili.com/83429972/channel/collectiondetail?sid=2967544")])!,
         "A real web target was mistaken for a placeholder test.");
+}
+
+void ValidateTriggernometryAndPostNamazuPermissionGates()
+{
+    var bridgeType = typeof(HostPluginBridge);
+    var configurePermissions = bridgeType.GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   bridgeType.FullName,
+                                   "ConfigurePermissions");
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["triggernometry"] = [],
+                    ["postnamazu"] = [],
+                },
+                ["triggernometry", "postnamazu"]),
+        ]);
+
+    Assert(
+        !HostPluginBridge.IsTriggernometryNetworkAllowed() &&
+        !HostPluginBridge.IsTriggernometryHighRiskScriptAllowed(),
+        "Triggernometry network or high-risk script execution bypassed a denied capability.");
+    AssertThrows<UnauthorizedAccessException>(
+        () => HostPluginBridge.StartTriggernometryProcess(new ProcessStartInfo("test")),
+        "Triggernometry launched a process without LaunchExternalProcess permission.");
+    AssertThrows<UnauthorizedAccessException>(
+        () => HostPluginBridge.SendPostNamazuQueue(
+            new RecordingPostNamazuModule(),
+            "[{\"C\":\"command\",\"P\":\"denied\",\"D\":0}]"),
+        "PostNamazu started a compatibility queue without GameCommand permission.");
+    AssertThrows<UnauthorizedAccessException>(
+        () => HostPluginBridge.SendPostNamazuSetHeading((IntPtr)0x12345678, 1.25f),
+        "PostNamazu requested a player heading without NativeGameMemory permission.");
+
+    var configureSender = bridgeType.GetMethod(
+                              "Configure",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new MissingMethodException(bridgeType.FullName, "Configure");
+    string? capturedType = null;
+    HostMessagePriority? capturedPriority = null;
+    object? capturedPayload = null;
+    var capturedHeadingCount = 0;
+    Func<string, HostMessagePriority, object, string?, DateTimeOffset?, bool> capture =
+        (type, priority, payload, _, _) =>
+        {
+            capturedType = type;
+            capturedPriority = priority;
+            capturedPayload = payload;
+            Interlocked.Increment(ref capturedHeadingCount);
+            return true;
+        };
+    configureSender.Invoke(null, [capture]);
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["postnamazu"] = ["NativeGameMemory"],
+                },
+                ["postnamazu"]),
+        ]);
+    HostPluginBridge.SendPostNamazuSetHeading((IntPtr)0x12345678, 1.25f);
+    Assert(
+        SpinWait.SpinUntil(
+            () => capturedPayload is HostPostNamazuHeading,
+            TimeSpan.FromSeconds(1)),
+        "PostNamazu heading dispatcher did not flush its latest state.");
+    var capturedHeading = capturedPayload as HostPostNamazuHeading;
+    Assert(
+        capturedType == HostMessageTypes.PostNamazuSetHeading &&
+        capturedPriority == HostMessagePriority.State &&
+        capturedHeading is
+        {
+            Address: 0x12345678,
+            Heading: 1.25f,
+        },
+        "PostNamazu heading did not use the coalesced, typed state bridge.");
+
+    Thread.Sleep(40);
+    capturedPayload = null;
+    Interlocked.Exchange(ref capturedHeadingCount, 0);
+    for (var headingIndex = 0; headingIndex < 100; headingIndex++)
+    {
+        HostPluginBridge.SendPostNamazuSetHeading(
+            (IntPtr)0x12345678,
+            headingIndex);
+    }
+
+    Assert(
+        SpinWait.SpinUntil(
+            () => capturedPayload is HostPostNamazuHeading { Heading: 99f },
+            TimeSpan.FromSeconds(1)) &&
+        Volatile.Read(ref capturedHeadingCount) < 10,
+        "PostNamazu's 10 ms U6b heading loop was not coalesced to the latest frame state.");
+
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["triggernometry"] = ["NetworkRequest", "HighRiskScript"],
+                    ["postnamazu"] = ["GameCommand"],
+                },
+                ["triggernometry", "postnamazu"]),
+        ]);
+    Assert(
+        HostPluginBridge.IsTriggernometryNetworkAllowed() &&
+        HostPluginBridge.IsTriggernometryHighRiskScriptAllowed(),
+        "Triggernometry explicit network or high-risk script permission was not honored.");
+}
+
+void ValidateTriggernometryU6bCompatibilityPatch()
+{
+    const string p1Condition =
+        "<Condition Enabled=\"true\" Grouping=\"Or\">" +
+        "<ConditionSingle Enabled=\"true\" ExpressionL=\"${_entity[${tid}].HP}\" " +
+        "ExpressionTypeL=\"String\" ExpressionR=\"0\" ExpressionTypeR=\"String\" " +
+        "ConditionType=\"NumericGreater\" /></Condition>";
+    var source =
+        "<TriggernometryExport>" +
+        "<RepositoryItem Id=\"0b7c968a-c565-49ca-a02e-6ac25e096be1\" />" +
+        "<Trigger Id=\"0b7c968a-c565-49ca-a02e-6ac25e096be1\">" +
+        "<Actions><Action ActionType=\"Loop\"><LoopActions />" + p1Condition +
+        "</Action></Actions></Trigger>" +
+        "<Trigger Id=\"df719e7c-6138-4c4e-9d15-bacbf41d88c9\" " +
+        "RegularExpression=\"^101:.{8}:0002....:$\"></Trigger>" +
+        "<Trigger Id=\"unrelated\" RegularExpression=\"101:.{8}:0002\">" +
+        p1Condition + "</Trigger></TriggernometryExport>";
+
+    var patched = HostPluginBridge.PatchTriggernometryExportXml(source);
+    Assert(
+        !patched.Contains(
+            "Id=\"0b7c968a-c565-49ca-a02e-6ac25e096be1\"><Actions>" +
+            "<Action ActionType=\"Loop\"><LoopActions />" + p1Condition,
+            StringComparison.Ordinal) &&
+        patched.Contains(
+            "Id=\"df719e7c-6138-4c4e-9d15-bacbf41d88c9\" " +
+            "RegularExpression=\"^101:[^:]*:0002....:$\"",
+            StringComparison.Ordinal) &&
+        patched.Contains(
+            "Id=\"unrelated\" RegularExpression=\"101:.{8}:0002\">" + p1Condition,
+            StringComparison.Ordinal),
+        "The U6b compatibility patch changed the wrong trigger or missed a targeted assumption.");
+    Assert(
+        string.Equals(
+            patched,
+            HostPluginBridge.PatchTriggernometryExportXml(patched),
+            StringComparison.Ordinal),
+        "The U6b compatibility patch is not idempotent.");
 }
 
 void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
@@ -1771,6 +1973,610 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
     }
 }
 
+async Task ValidatePostNamazuQueueExecutionLifecycleAsync()
+{
+    var bridgeType = typeof(HostPluginBridge);
+    var configurePermissions = bridgeType.GetMethod(
+                                   "ConfigurePermissions",
+                                   BindingFlags.Static | BindingFlags.NonPublic)
+                               ?? throw new MissingMethodException(
+                                   bridgeType.FullName,
+                                   "ConfigurePermissions");
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["postnamazu"] = ["GameCommand"],
+                },
+                ["postnamazu"]),
+        ]);
+
+    var tasks = (HashSet<Task>?)bridgeType.GetField(
+                    "PostNamazuQueueTasks",
+                    BindingFlags.Static | BindingFlags.NonPublic)
+                ?.GetValue(null)
+                ?? throw new MissingFieldException(bridgeType.FullName, "PostNamazuQueueTasks");
+    var taskLock = bridgeType.GetField(
+                       "PostNamazuTaskLock",
+                       BindingFlags.Static | BindingFlags.NonPublic)
+                   ?.GetValue(null)
+                   ?? throw new MissingFieldException(bridgeType.FullName, "PostNamazuTaskLock");
+    bool QueuesFinished()
+    {
+        lock (taskLock)
+        {
+            return tasks.Count == 0;
+        }
+    }
+
+    RecordingPostNamazuPlugin.Reset();
+    HostPluginBridge.SendPostNamazuQueue(
+        new RecordingPostNamazuModule(),
+        "[{\"C\":\"qid\",\"P\":\"ACTCOMPAT_CANCEL\",\"D\":0}," +
+        "{\"C\":\"command\",\"P\":\"must-not-run\",\"D\":500}]");
+    var queueIds = (List<string>?)bridgeType.GetField(
+                       "PostNamazuQueueIds",
+                       BindingFlags.Static | BindingFlags.NonPublic)
+                   ?.GetValue(null)
+                   ?? throw new MissingFieldException(bridgeType.FullName, "PostNamazuQueueIds");
+    var queueLock = bridgeType.GetField(
+                        "PostNamazuQueueLock",
+                        BindingFlags.Static | BindingFlags.NonPublic)
+                    ?.GetValue(null)
+                    ?? throw new MissingFieldException(bridgeType.FullName, "PostNamazuQueueLock");
+    Assert(
+        SpinWait.SpinUntil(
+            () =>
+            {
+                lock (queueLock)
+                {
+                    return queueIds.Contains("ACTCOMPAT_CANCEL");
+                }
+            },
+            TimeSpan.FromSeconds(1)),
+        "PostNamazu queue did not register its qid before the delayed action.");
+    HostPluginBridge.BreakPostNamazuQueue("ACTCOMPAT_CANCEL");
+    Assert(
+        SpinWait.SpinUntil(QueuesFinished, TimeSpan.FromSeconds(2)) &&
+        RecordingPostNamazuPlugin.Invocations.IsEmpty,
+        "PostNamazu qid cancellation still dispatched a delayed action.");
+
+    HostPluginBridge.SendPostNamazuQueue(
+        new RecordingPostNamazuModule(),
+        "[{\"C\":\"qid\",\"P\":\"ACTCOMPAT_RESTART\",\"D\":0}," +
+        "{\"C\":\"command\",\"P\":\"first\",\"D\":0}]");
+    Assert(
+        SpinWait.SpinUntil(
+            () => RecordingPostNamazuPlugin.Invocations.Count == 1 && QueuesFinished(),
+            TimeSpan.FromSeconds(2)),
+        "PostNamazu queue did not finish its first run.");
+    HostPluginBridge.SendPostNamazuQueue(
+        new RecordingPostNamazuModule(),
+        "[{\"C\":\"qid\",\"P\":\"ACTCOMPAT_RESTART\",\"D\":0}," +
+        "{\"C\":\"command\",\"P\":\"second\",\"D\":0}]");
+    Assert(
+        SpinWait.SpinUntil(
+            () => RecordingPostNamazuPlugin.Invocations.Count == 2 && QueuesFinished(),
+            TimeSpan.FromSeconds(2)) &&
+        RecordingPostNamazuPlugin.Invocations.Select(call => call.Payload)
+            .SequenceEqual(["first", "second"]),
+        "PostNamazu queue could not restart a completed qid in order.");
+
+    await Task.CompletedTask;
+}
+
+async Task ValidateTriggernometryEntityTimingProbeAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    var (host, pipe, session) = await StartConnectedHostAsync(
+        loadPlugins: true,
+        faultInjection: true);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            var clientSequence = 1L;
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.Hello,
+                    HostMessagePriority.Control,
+                    new HostHello("entity-timing-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion])),
+                CancellationToken.None);
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.Permissions,
+                    HostMessagePriority.Control,
+                    new HostPermissionSnapshot(
+                        new Dictionary<string, IReadOnlyList<string>>
+                        {
+                            ["triggernometry"] =
+                            [
+                                "ReadCombatLogs",
+                                "ReadLocalConfiguration",
+                                "TextToSpeech",
+                                "Clipboard",
+                                "HighRiskScript",
+                            ],
+                            ["postnamazu"] =
+                            [
+                                "ReadCombatLogs",
+                                "ReadLocalConfiguration",
+                                "Clipboard",
+                                "NetworkRequest",
+                                "GameCommand",
+                            ],
+                        },
+                        ["triggernometry", "postnamazu", "act.foxtts"]),
+                    "entity-timing-permissions"),
+                CancellationToken.None);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.ZoneChanged,
+                    HostMessagePriority.Critical,
+                    new HostZoneEvent(1, "Host Smoke Zone", DateTimeOffset.UtcNow)),
+                CancellationToken.None);
+            var healthEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
+            var health = healthEnvelope.Payload.Deserialize<HostHealth>()
+                         ?? throw new InvalidDataException("Host returned no plugin health.");
+            Assert(
+                health.State == "plugins.ready",
+                $"Legacy plugin runtime did not become ready: {health.Detail}");
+
+            async Task PublishSnapshotAsync(bool includeTarget)
+            {
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.FfxivEntities,
+                        HostMessagePriority.State,
+                        CreateTestFfxivSnapshot(includeTarget)),
+                    CancellationToken.None);
+            }
+
+            async Task PublishProbeLogAsync(string text)
+            {
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.LogBatch,
+                        HostMessagePriority.Data,
+                        new[]
+                        {
+                            new HostLogEvent(
+                                DateTimeOffset.UtcNow,
+                                $"00|2026-08-20T00:00:00.0000000+08:00|0000|{text}|",
+                                false),
+                        }),
+                    CancellationToken.None);
+            }
+
+            async Task CompleteCommandAsync(HostEnvelope envelope)
+            {
+                Assert(
+                    !string.IsNullOrWhiteSpace(envelope.CorrelationId),
+                    "Entity timing probe received a command without a correlation identifier.");
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.CommandResult,
+                        HostMessagePriority.Control,
+                        new HostCommandResult(true, "completed", "entity-timing-probe"),
+                        envelope.CorrelationId),
+                    CancellationToken.None);
+            }
+
+            async Task<(int Creates, int Changes)> ReadScenarioAsync(string mode)
+            {
+                var creates = 0;
+                var changes = 0;
+                for (var commandIndex = 0; commandIndex < 100; commandIndex++)
+                {
+                    var envelope = await ReadTriggerCommandAsync(pipe);
+                    var request = envelope.Payload.Deserialize<HostCommandRequest>()
+                                  ?? throw new InvalidDataException(
+                                      "Entity timing probe received an invalid command request.");
+                    var hasPayload = request.Arguments.TryGetValue("payload", out var payload);
+                    Assert(
+                        request.PluginId == "postnamazu" &&
+                        request.Command == "postnamazu.pictoact" &&
+                        hasPayload && payload is not null,
+                        "Entity timing probe received an unexpected command.");
+                    payload ??= string.Empty;
+
+                    await CompleteCommandAsync(envelope);
+                    if (payload.Contains($"Tag: ACTCOMPAT_ENTITY_{mode}_DONE", StringComparison.Ordinal))
+                    {
+                        return (creates, changes);
+                    }
+
+                    if (!payload.Contains($"Tag: ACTCOMPAT_ENTITY_{mode}_10005678", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (payload.Contains("Action: Change", StringComparison.Ordinal))
+                    {
+                        changes++;
+                        Assert(
+                            payload.Contains("Pos: 91.25, 108.75, 0", StringComparison.Ordinal),
+                            $"Entity coordinates were not mapped to ACT's X/Y ground plane: {payload}");
+                        // Heading is consumed by facing-sensitive trigger packs independently
+                        // of XY, so verify it survives the same real Triggernometry expression path.
+                        Assert(
+                            payload.Contains("Theta: 1.5", StringComparison.Ordinal),
+                            $"Entity heading was not exposed through Triggernometry: {payload}");
+                        Assert(
+                            payload.Contains("PlayerHeading: 0.5", StringComparison.Ordinal) &&
+                            payload.Contains("PlayerAddress: 305419896", StringComparison.Ordinal),
+                            $"P3 player heading/address inputs were not exposed through Triggernometry: {payload}");
+                    }
+                    else
+                    {
+                        creates++;
+                    }
+                }
+
+                throw new InvalidOperationException(
+                    $"Entity timing probe did not reach the {mode} completion marker.");
+            }
+
+            await PublishSnapshotAsync(includeTarget: true);
+            await PublishProbeLogAsync("ACTCOMPAT_ENTITY_ACTUAL:10005678");
+            var present = await ReadScenarioAsync("ACTUAL");
+
+            await PublishSnapshotAsync(includeTarget: false);
+            await PublishProbeLogAsync("ACTCOMPAT_ENTITY_ACTUAL:10005678");
+            var firstActualCommand = await ReadTriggerCommandAsync(pipe);
+            var firstActualRequest = firstActualCommand.Payload.Deserialize<HostCommandRequest>()
+                                     ?? throw new InvalidDataException(
+                                         "Delayed actual-chain probe received an invalid command.");
+            Assert(
+                firstActualRequest.Arguments.GetValueOrDefault("payload")?.Contains(
+                    "Tag: ACTCOMPAT_ENTITY_ACTUAL_10005678",
+                    StringComparison.Ordinal) == true,
+                "Delayed actual-chain probe did not create its initial unpositioned drawing.");
+            await CompleteCommandAsync(firstActualCommand);
+            // Waiting here reproduces the entity-late race that previously ended the loop before
+            // the next game-side snapshot could expose the target.
+            await Task.Delay(50);
+            await PublishSnapshotAsync(includeTarget: true);
+            var delayedActual = await ReadScenarioAsync("ACTUAL");
+
+            await PublishSnapshotAsync(includeTarget: false);
+            await PublishProbeLogAsync("ACTCOMPAT_ENTITY_RETRY:10005678");
+            var firstRetryCommand = await ReadTriggerCommandAsync(pipe);
+            var firstRetryRequest = firstRetryCommand.Payload.Deserialize<HostCommandRequest>()
+                                    ?? throw new InvalidDataException(
+                                        "Delayed retry-chain probe received an invalid command.");
+            Assert(
+                firstRetryRequest.Arguments.GetValueOrDefault("payload")?.Contains(
+                    "Tag: ACTCOMPAT_ENTITY_RETRY_10005678",
+                    StringComparison.Ordinal) == true,
+                "Delayed retry-chain probe did not create its initial unpositioned drawing.");
+            await CompleteCommandAsync(firstRetryCommand);
+            await Task.Delay(50);
+            await PublishSnapshotAsync(includeTarget: true);
+            var delayedRetry = await ReadScenarioAsync("RETRY");
+
+            Assert(
+                present.Creates == 1 && present.Changes > 0,
+                $"An entity present before activation was not resolved: create={present.Creates}, change={present.Changes}.");
+            Assert(
+                delayedRetry.Changes > 0,
+                "Triggernometry did not observe a later DACT entity snapshot from inside an active loop.");
+            Assert(
+                delayedActual.Changes > 0,
+                "The targeted U6b P1 compatibility patch did not recover an entity-late loop.");
+
+            Console.WriteLine(
+                "TRIGGERNOMETRY_ENTITY_TIMING_RESULT=FIXED; " +
+                $"present(create={present.Creates},change={present.Changes}); " +
+                $"actual-delayed(change={delayedActual.Changes}); " +
+                $"retry-delayed(change={delayedRetry.Changes})");
+
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.Shutdown,
+                    HostMessagePriority.Control,
+                    new HostHealth("stopping", "entity timing probe", DateTimeOffset.UtcNow),
+                    "entity-timing-shutdown"),
+                CancellationToken.None);
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch
+        {
+            var (output, error) = processLogs.TryGetValue(host.Id, out var log)
+                ? log.Snapshot()
+                : (string.Empty, string.Empty);
+            Console.Error.WriteLine(
+                $"Entity timing Host output:{Environment.NewLine}{output}" +
+                $"{Environment.NewLine}Entity timing Host errors:{Environment.NewLine}{error}");
+            throw;
+        }
+        finally
+        {
+            if (!host.HasExited)
+            {
+                host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+}
+
+async Task ValidateTriggernometryMapEffectProbeAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    var (host, pipe, session) = await StartConnectedHostAsync(
+        loadPlugins: true,
+        faultInjection: true);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            var clientSequence = 1L;
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.Hello,
+                    HostMessagePriority.Control,
+                    new HostHello("mapeffect-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion])),
+                CancellationToken.None);
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.Permissions,
+                    HostMessagePriority.Control,
+                    new HostPermissionSnapshot(
+                        new Dictionary<string, IReadOnlyList<string>>
+                        {
+                            ["triggernometry"] =
+                            [
+                                "ReadCombatLogs",
+                                "ReadLocalConfiguration",
+                                "HighRiskScript",
+                            ],
+                            ["postnamazu"] =
+                            [
+                                "ReadCombatLogs",
+                                "ReadLocalConfiguration",
+                                "GameCommand",
+                            ],
+                        },
+                        ["triggernometry", "postnamazu"]),
+                    "mapeffect-permissions"),
+                CancellationToken.None);
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.ZoneChanged,
+                    HostMessagePriority.Critical,
+                    new HostZoneEvent(1122, "The Omega Protocol (Ultimate)", DateTimeOffset.UtcNow)),
+                CancellationToken.None);
+            var healthEnvelope = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
+            var health = healthEnvelope.Payload.Deserialize<HostHealth>()
+                         ?? throw new InvalidDataException("Host returned no plugin health.");
+            Assert(
+                health.State == "plugins.ready",
+                $"Legacy plugin runtime did not become ready: {health.Detail}");
+
+            async Task PublishLegacyLineAsync(string actLine)
+            {
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.LogBatch,
+                        HostMessagePriority.Data,
+                        new[]
+                        {
+                            // The Host intentionally prefers ActLine for Triggernometry. This lets the
+                            // probe exercise the exact 257/101 text shape consumed by the U6b regex.
+                            new HostLogEvent(
+                                DateTimeOffset.UtcNow,
+                                "101|2026-08-20T00:00:00.0000000+08:00|probe|",
+                                false,
+                                actLine),
+                        }),
+                    CancellationToken.None);
+            }
+
+            async Task CompleteCommandAsync(HostEnvelope envelope)
+            {
+                Assert(
+                    !string.IsNullOrWhiteSpace(envelope.CorrelationId),
+                    "MapEffect probe received a command without a correlation identifier.");
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.CommandResult,
+                        HostMessagePriority.Control,
+                        new HostCommandResult(true, "completed", "mapeffect-probe"),
+                        envelope.CorrelationId),
+                    CancellationToken.None);
+            }
+
+            async Task<HashSet<string>> ReadMarkersAsync(int minimumCount, TimeSpan quietWindow)
+            {
+                var markers = new HashSet<string>(StringComparer.Ordinal);
+                var quietUntil = DateTimeOffset.UtcNow + quietWindow;
+                while (markers.Count < minimumCount || DateTimeOffset.UtcNow < quietUntil)
+                {
+                    var remaining = markers.Count < minimumCount
+                        ? TimeSpan.FromSeconds(3)
+                        : quietUntil - DateTimeOffset.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        break;
+                    }
+
+                    HostEnvelope? envelope;
+                    using (var readCancellation = new CancellationTokenSource(remaining))
+                    {
+                        try
+                        {
+                            envelope = await HostFrameCodec.ReadAsync(
+                                pipe.Reader,
+                                readCancellation.Token);
+                        }
+                        catch (OperationCanceledException) when (readCancellation.IsCancellationRequested)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (envelope is null)
+                    {
+                        throw new EndOfStreamException("Host pipe closed during the MapEffect probe.");
+                    }
+
+                    if (envelope.Type != HostMessageTypes.CommandRequest)
+                    {
+                        continue;
+                    }
+
+                    var request = envelope.Payload.Deserialize<HostCommandRequest>()
+                                  ?? throw new InvalidDataException(
+                                      "MapEffect probe received an invalid command request.");
+                    var payload = request.Arguments.GetValueOrDefault("payload") ?? string.Empty;
+                    Assert(
+                        request.PluginId == "postnamazu" &&
+                        request.Command == "postnamazu.pictoact" &&
+                        payload.Contains("Tag: ACTCOMPAT_MAP_", StringComparison.Ordinal),
+                        $"MapEffect probe received an unexpected command: {request.PluginId}/{request.Command} {payload}");
+                    await CompleteCommandAsync(envelope);
+
+                    if (payload.Contains("Tag: ACTCOMPAT_MAP_STRICT_", StringComparison.Ordinal))
+                    {
+                        markers.Add("strict");
+                    }
+                    if (payload.Contains("Tag: ACTCOMPAT_MAP_RELAXED_", StringComparison.Ordinal))
+                    {
+                        markers.Add("relaxed");
+                    }
+
+                    // Once one callback arrives, wait a full scheduling window for a sibling
+                    // trigger before concluding that the strict expression remained silent.
+                    if (markers.Count >= minimumCount)
+                    {
+                        quietUntil = DateTimeOffset.UtcNow + quietWindow;
+                    }
+                }
+
+                Assert(
+                    markers.Count >= minimumCount,
+                    $"MapEffect probe received only {string.Join(",", markers)} marker(s).");
+                return markers;
+            }
+
+            await PublishLegacyLineAsync("[02:09:21.900] 257 101:800375AC:00020001:02::");
+            var single = await ReadMarkersAsync(2, TimeSpan.FromMilliseconds(150));
+
+            var multiResults = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var scenario in new[]
+                     {
+                         (Name: "map4", Direction: "04"),
+                         (Name: "map8", Direction: "08"),
+                         (Name: "map12", Direction: "07"),
+                     })
+            {
+                await PublishLegacyLineAsync(
+                    $"[02:09:22.000] 257 101::00020001:{scenario.Direction}::");
+                multiResults[scenario.Name] = await ReadMarkersAsync(
+                    2,
+                    TimeSpan.FromMilliseconds(500));
+            }
+
+            Assert(
+                single.SetEquals(["strict", "relaxed"]),
+                "A single MapEffect line did not match both U6b-style expressions.");
+            foreach (var (scenario, markers) in multiResults)
+            {
+                Assert(
+                    markers.SetEquals(["strict", "relaxed"]),
+                    $"{scenario} did not match both the patched U6b trigger and control: " +
+                    string.Join(",", markers));
+            }
+
+            Console.WriteLine(
+                "TRIGGERNOMETRY_MAPEFFECT_RESULT=FIXED; " +
+                "single(strict=1,relaxed=1); " +
+                string.Join(
+                    "; ",
+                    multiResults.Select(result =>
+                        $"{result.Key}(strict={(result.Value.Contains("strict") ? 1 : 0)}," +
+                        $"relaxed={(result.Value.Contains("relaxed") ? 1 : 0)})")));
+
+            await HostFrameCodec.WriteAsync(
+                pipe.Writer,
+                HostEnvelope.Create(
+                    session,
+                    clientSequence++,
+                    HostMessageTypes.Shutdown,
+                    HostMessagePriority.Control,
+                    new HostHealth("stopping", "MapEffect probe", DateTimeOffset.UtcNow),
+                    "mapeffect-shutdown"),
+                CancellationToken.None);
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch
+        {
+            var (output, error) = processLogs.TryGetValue(host.Id, out var log)
+                ? log.Snapshot()
+                : (string.Empty, string.Empty);
+            Console.Error.WriteLine(
+                $"MapEffect Host output:{Environment.NewLine}{output}" +
+                $"{Environment.NewLine}MapEffect Host errors:{Environment.NewLine}{error}");
+            throw;
+        }
+        finally
+        {
+            if (!host.HasExited)
+            {
+                host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+}
+
 void ValidateTriggernometryLaunchProcessPatch()
 {
     var patchDirectory = Path.Combine(
@@ -1785,6 +2591,76 @@ void ValidateTriggernometryLaunchProcessPatch()
                               "No patched Triggernometry implementation was produced.",
                               patchDirectory);
     using var definition = AssemblyDefinition.ReadAssembly(patchedAssembly.FullName);
+    var repositoryType = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.Core.Repository");
+    var tryLoadLocalBackup = repositoryType.Methods.Single(method =>
+        method.Name == "TryLoadLocalBackup" && method.Parameters.Count == 0);
+    var saveLocalBackup = repositoryType.Methods.Single(method =>
+        method.Name == "SaveLocalBackup" && method.Parameters.Count == 1);
+    var repositoryUpdateMoveNext = repositoryType.NestedTypes
+        .Single(type => type.Name.StartsWith("<CheckAndUpdateAsync>d__", StringComparison.Ordinal))
+        .Methods
+        .Single(method => method.Name == "MoveNext");
+    static int CountCalls(MethodDefinition method, string declaringType, string methodName)
+        => method.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.DeclaringType.FullName == declaringType &&
+            called.Name == methodName);
+
+    Assert(
+        CountCalls(tryLoadLocalBackup, typeof(File).FullName!, nameof(File.Exists)) == 1 &&
+        CountCalls(tryLoadLocalBackup, typeof(File).FullName!, nameof(File.ReadAllBytes)) == 1 &&
+        CountCalls(
+            tryLoadLocalBackup,
+            "Triggernometry.Core.TriggernometryExport",
+            "Unserialize") == 1 &&
+        CountCalls(
+            tryLoadLocalBackup,
+            "Triggernometry.Core.Repository",
+            "AddContentFromExport") == 1 &&
+        CountCalls(saveLocalBackup, typeof(Directory).FullName!, nameof(Directory.CreateDirectory)) == 1 &&
+        CountCalls(saveLocalBackup, typeof(File).FullName!, nameof(File.WriteAllBytes)) == 1 &&
+        CountCalls(
+            repositoryUpdateMoveNext,
+            "Triggernometry.Core.Repository",
+            "get_KeepLocalBackup") >= 2 &&
+        CountCalls(
+            repositoryUpdateMoveNext,
+            "Triggernometry.Core.Repository",
+            "TryLoadLocalBackup") >= 2,
+        "Triggernometry's patched repository updater no longer saves or reloads its local XML backup on startup/update failure.");
+
+    var exportUnserialize = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.Core.TriggernometryExport")
+        .Methods
+        .Single(method =>
+            method.Name == "Unserialize" &&
+            method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String);
+    var entitySetHeading = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName ==
+            "Triggernometry.PluginBridges.BridgeNamazu.Modules.EntityModule")
+        .Methods
+        .Single(method =>
+            method.Name == "SetHeading" &&
+            method.Parameters.Count == 2 &&
+            method.Parameters[0].ParameterType.FullName == typeof(IntPtr).FullName &&
+            method.Parameters[1].ParameterType.MetadataType == MetadataType.Single);
+    Assert(
+        CountCalls(
+            exportUnserialize,
+            typeof(HostPluginBridge).FullName!,
+            nameof(HostPluginBridge.PatchTriggernometryExportXml)) == 1 &&
+        CountCalls(
+            entitySetHeading,
+            typeof(HostPluginBridge).FullName!,
+            nameof(HostPluginBridge.SendPostNamazuSetHeading)) == 1 &&
+        entitySetHeading.Body.Instructions.Count == 4,
+        "Triggernometry did not route U6b repository import and local-player heading through the guarded compatibility bridge.");
+
     var launchMethod = definition.MainModule.Types
         .SelectMany(EnumerateCecilTypes)
         .Single(type =>
@@ -3200,13 +4076,13 @@ IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)
     }
 }
 
-HostFfxivEntitySnapshot CreateTestFfxivSnapshot()
+HostFfxivEntitySnapshot CreateTestFfxivSnapshot(bool includeTarget = false)
     => new(
         TerritoryId: 1,
         CurrentPlayerId: 0x10001234,
         Timestamp: DateTimeOffset.UtcNow,
-        Combatants:
-        [
+        Combatants: new[]
+        {
             new HostFfxivCombatant(
                 Id: 0x10001234,
                 OwnerId: 0,
@@ -3241,7 +4117,45 @@ HostFfxivEntitySnapshot CreateTestFfxivSnapshot()
                 PartyType: 1,
                 Address: 0x12345678,
                 Statuses: [new HostFfxivStatus(1191, 1, 20, 0x10001234)]),
-        ]);
+        }.Concat(includeTarget
+            ?
+            [
+                new HostFfxivCombatant(
+                    Id: 0x10005678,
+                    OwnerId: 0,
+                    Type: 2,
+                    Job: 0,
+                    Level: 100,
+                    Name: "Host Smoke Target",
+                    CurrentHp: 5_000_000,
+                    MaxHp: 5_000_000,
+                    CurrentMp: 0,
+                    MaxMp: 0,
+                    CurrentCp: 0,
+                    MaxCp: 0,
+                    CurrentGp: 0,
+                    MaxGp: 0,
+                    IsCasting: false,
+                    CastId: 0,
+                    CastTargetId: 0,
+                    CastTime: 0,
+                    MaxCastTime: 0,
+                    PosX: 91.25f,
+                    PosY: 2.5f,
+                    PosZ: 108.75f,
+                    Heading: 1.5f,
+                    CurrentWorldId: 0,
+                    WorldId: 0,
+                    WorldName: string.Empty,
+                    BNpcNameId: 12345,
+                    BNpcId: 67890,
+                    TargetId: 0,
+                    EffectiveDistance: 5,
+                    PartyType: 0,
+                    Address: 0x23456789,
+                    Statuses: []),
+            ]
+            : []).ToArray());
 
 async Task PrepareLegacySmokeConfigurationAsync()
 {
@@ -3272,7 +4186,7 @@ async Task PrepareLegacySmokeConfigurationAsync()
               </Trigger>
               <Trigger Enabled="true" Id="51997209-fb1d-4c07-80d5-d6542feeeacb" Name="C# self-reference regression" RegularExpression="ACTCOMPAT_SCRIPT_LINE" Source="Log">
                 <Actions>
-                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;using Triggernometry.PluginBridges.BridgeNamazu;&#xD;&#xA;&#xD;&#xA;_ = BridgeNamazu.NamazuPlugin;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
+                  <Action ActionType="ExecuteScript" OrderNumber="1" ExecScriptExpression="using System.Windows.Forms;&#xD;&#xA;&#xD;&#xA;_ = typeof(MessageBox);&#xD;&#xA;Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, &quot;ACTCOMPAT_SCRIPT_OK&quot;, 1);&#xD;&#xA;System.Console.WriteLine(&quot;ACTCOMPAT_SCRIPT_REFERENCE_OK&quot;);" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="1751009c-1494-44f1-9708-37af4d4dc618" Name="OverlayPlugin handler IPC closed loop" RegularExpression="ACTCOMPAT_OVERLAY_HANDLER_LINE" Source="Log">
@@ -3288,6 +4202,55 @@ async Task PrepareLegacySmokeConfigurationAsync()
               <Trigger Enabled="true" Id="744a6947-da25-49a7-8353-738a88c4086e" Name="PictoACT _me callback closed loop" RegularExpression="ACTCOMPAT_PICTO_LINE" Source="Log">
                 <Actions>
                   <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Rect&#xD;&#xA;Delay: 2.5&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Angle: 0 + pi/2&#xD;&#xA;Scale: 2.5, 28, 1" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="0b7c968a-c565-49ca-a02e-6ac25e096be1" Name="P1 actual entity timing probe" RegularExpression="ACTCOMPAT_ENTITY_ACTUAL:(?&lt;tid&gt;1.{7})" Source="Log" Sequential="True">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_ENTITY_ACTUAL_${tid}&#xD;&#xA;t: 1&#xD;&#xA;Scale: 15" />
+                  <Action ActionType="Loop" OrderNumber="2" LoopDelayExpression="10">
+                    <LoopCondition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${_sincems}" ExpressionTypeL="Numeric" ExpressionR="300" ExpressionTypeR="Numeric" ConditionType="NumericLessEqual" />
+                    </LoopCondition>
+                    <LoopActions>
+                      <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Change&#xD;&#xA;Tag: ACTCOMPAT_ENTITY_ACTUAL_${tid}&#xD;&#xA;Pos: ${_entity[${tid}].XY}, 0&#xD;&#xA;Theta: ${_entity[${tid}].Heading}&#xD;&#xA;PlayerHeading: ${_me.Heading}&#xD;&#xA;PlayerAddress: ${_me.Address}">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${_entity[${tid}].Exist}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                    </LoopActions>
+                    <Condition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${_entity[${tid}].HP}" ExpressionTypeL="String" ExpressionR="0" ExpressionTypeR="String" ConditionType="NumericGreater" />
+                    </Condition>
+                  </Action>
+                  <Action ActionType="NamedCallback" OrderNumber="3" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Tag: ACTCOMPAT_ENTITY_ACTUAL_DONE" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="534a9334-c2a2-4c2b-9edf-f3486098fe22" Name="P1 per-iteration entity timing probe" RegularExpression="ACTCOMPAT_ENTITY_RETRY:(?&lt;tid&gt;1.{7})" Source="Log" Sequential="True">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_ENTITY_RETRY_${tid}&#xD;&#xA;t: 1&#xD;&#xA;Scale: 15" />
+                  <Action ActionType="Loop" OrderNumber="2" LoopDelayExpression="10">
+                    <LoopCondition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${_sincems}" ExpressionTypeL="Numeric" ExpressionR="300" ExpressionTypeR="Numeric" ConditionType="NumericLessEqual" />
+                    </LoopCondition>
+                    <LoopActions>
+                      <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Change&#xD;&#xA;Tag: ACTCOMPAT_ENTITY_RETRY_${tid}&#xD;&#xA;Pos: ${_entity[${tid}].XY}, 0&#xD;&#xA;Theta: ${_entity[${tid}].Heading}&#xD;&#xA;PlayerHeading: ${_me.Heading}&#xD;&#xA;PlayerAddress: ${_me.Address}">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${_entity[${tid}].Exist}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                    </LoopActions>
+                  </Action>
+                  <Action ActionType="NamedCallback" OrderNumber="3" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Tag: ACTCOMPAT_ENTITY_RETRY_DONE" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="df719e7c-6138-4c4e-9d15-bacbf41d88c9" Name="U6b P2 strict MapEffect probe" RegularExpression="^.{15}\S+ 101:.{8}:0002....:(?&lt;dir&gt;0[1-8]):" Source="Log">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Tag: ACTCOMPAT_MAP_STRICT_${dir}" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="a60b0098-abaa-471c-b8fd-9c295a87ce2f" Name="U6b relaxed MapEffect control" RegularExpression="^.{15}\S+ 101:[^:]*:0002....:(?&lt;dir&gt;0[1-8]):" Source="Log">
+                <Actions>
+                  <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Tag: ACTCOMPAT_MAP_RELAXED_${dir}" />
                 </Actions>
               </Trigger>
               <Trigger Enabled="true" Id="80d5ffc0-d534-4fcb-95a7-1ee3b72519b0" Name="Mark _me expression callback closed loop" RegularExpression="ACTCOMPAT_MARK_LINE" Source="Log">
@@ -3343,7 +4306,12 @@ async Task PrepareLegacySmokeConfigurationAsync()
           </RepositoryRoot>
         </Configuration>
         """;
-    await File.WriteAllTextAsync(configurationPath, configuration.Trim());
+    // Repository content reaches this compatibility method through TriggernometryExport.Unserialize.
+    // The smoke fixture is a local configuration, so apply the same boundary explicitly before
+    // exercising Triggernometry's real action scheduler.
+    await File.WriteAllTextAsync(
+        configurationPath,
+        HostPluginBridge.PatchTriggernometryExportXml(configuration.Trim()));
 
     using (var reservation = new TcpListener(IPAddress.Loopback, 0))
     {
@@ -3705,6 +4673,23 @@ internal sealed class ProcessLog
             return (output.ToString(), error.ToString());
         }
     }
+}
+
+internal class RecordingPostNamazuModuleBase
+{
+    public static RecordingPostNamazuPlugin PostNamazu { get; } = new();
+}
+
+internal sealed class RecordingPostNamazuModule : RecordingPostNamazuModuleBase;
+
+internal sealed class RecordingPostNamazuPlugin
+{
+    public static ConcurrentQueue<(string Command, string Payload)> Invocations { get; } = new();
+
+    public static void Reset() => Invocations.Clear();
+
+    public void DoAction(string command, string payload)
+        => Invocations.Enqueue((command, payload));
 }
 
 internal sealed class HostTestPipe : IAsyncDisposable

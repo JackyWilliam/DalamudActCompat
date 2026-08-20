@@ -9,7 +9,6 @@ namespace DalamudActCompat.Overlay;
 internal sealed class PictoActNativeVfxBackend : IDisposable
 {
     private const string VfxPoolName = "Client.System.Scheduler.Instance.VfxObject";
-    private const string StaticVfxRunSignature = "E8 ?? ?? ?? ?? B0 02 EB 02";
     private const string StaticVfxRemoveSignature =
         "40 53 48 83 EC 20 48 8B D9 48 8B 89 ?? ?? ?? ?? 48 85 C9 74 28 " +
         "33 D2 E8 ?? ?? ?? ?? 48 8B 8B ?? ?? ?? ?? 48 85 C9";
@@ -26,7 +25,7 @@ internal sealed class PictoActNativeVfxBackend : IDisposable
     private readonly object syncRoot = new();
     private readonly HashSet<nint> activeHandles = [];
     private readonly StaticVfxCreateDelegate create;
-    private readonly StaticVfxRunDelegate run;
+    private readonly StaticVfxUpdateDelegate update;
     private readonly Hook<StaticVfxRemoveDelegate> removeHook;
     private bool disposed;
 
@@ -47,11 +46,17 @@ internal sealed class PictoActNativeVfxBackend : IDisposable
             throw new InvalidOperationException("FFXIVClientStructs did not resolve VfxObject.Create.");
         }
 
-        var runCallAddress = sigScanner.ScanText(StaticVfxRunSignature);
-        var runAddress = ResolveRelativeCall(runCallAddress);
+        var updateAddress = VfxObject.Addresses.Update.Value;
+        if (updateAddress == nint.Zero)
+        {
+            throw new InvalidOperationException("FFXIVClientStructs did not resolve VfxObject.Update.");
+        }
+
         var removeAddress = sigScanner.ScanText(StaticVfxRemoveSignature);
         create = Marshal.GetDelegateForFunctionPointer<StaticVfxCreateDelegate>(createAddress);
-        run = Marshal.GetDelegateForFunctionPointer<StaticVfxRunDelegate>(runAddress);
+        // Update is a generated FFXIVClientStructs member address. Reusing that authoritative
+        // binding avoids a second caller-pattern signature drifting independently each patch.
+        update = Marshal.GetDelegateForFunctionPointer<StaticVfxUpdateDelegate>(updateAddress);
         removeHook = gameInteropProvider.HookFromAddress<StaticVfxRemoveDelegate>(
             removeAddress,
             OnGameRemove);
@@ -102,7 +107,7 @@ internal sealed class PictoActNativeVfxBackend : IDisposable
             }
 
             WriteState(handle, shape, markDirty: false);
-            _ = run(handle, 0, -1);
+            update(handle, 0, -1);
             return handle;
         }
         catch
@@ -224,16 +229,6 @@ internal sealed class PictoActNativeVfxBackend : IDisposable
         }
     }
 
-    private static nint ResolveRelativeCall(nint instruction)
-    {
-        if (instruction == nint.Zero || Marshal.ReadByte(instruction) != 0xE8)
-        {
-            throw new InvalidDataException("PictoACT VFX run signature did not resolve to CALL rel32.");
-        }
-
-        return instruction + 5 + Marshal.ReadInt32(instruction + 1);
-    }
-
     private static void ValidateVfxPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) ||
@@ -254,7 +249,7 @@ internal sealed class PictoActNativeVfxBackend : IDisposable
     private delegate nint StaticVfxCreateDelegate(nint path, nint poolName);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate nint StaticVfxRunDelegate(nint handle, float deltaSeconds, int flags);
+    private delegate void StaticVfxUpdateDelegate(nint handle, float deltaSeconds, int flags);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private unsafe delegate nint StaticVfxRemoveDelegate(VfxObject* handle);

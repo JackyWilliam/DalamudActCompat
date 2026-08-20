@@ -39,6 +39,7 @@ public static class HostMessageTypes
     public const string CombatStarted = "event.combat.start";
     public const string CombatEnded = "event.combat.end";
     public const string FfxivEntities = "state.ffxiv.entities";
+    public const string PostNamazuSetHeading = "postnamazu.state.heading";
     public const string Snapshot = "snapshot";
     public const string Shutdown = "shutdown";
     public const string ShutdownAck = "shutdown.ack";
@@ -178,6 +179,11 @@ public sealed record HostFfxivEntitySnapshot(
     uint CurrentPlayerId,
     DateTimeOffset Timestamp,
     IReadOnlyList<HostFfxivCombatant> Combatants);
+
+public sealed record HostPostNamazuHeading(
+    long Address,
+    float Heading,
+    DateTimeOffset Timestamp);
 
 public sealed record HostFfxivCombatant(
     uint Id,

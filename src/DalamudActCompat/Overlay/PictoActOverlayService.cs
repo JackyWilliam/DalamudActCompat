@@ -155,6 +155,28 @@ internal sealed partial class PictoActOverlayService : IDisposable
         }
     }
 
+    internal void Clear()
+    {
+        lock (syncRoot)
+        {
+            ClearLocked();
+            // Zone notifications can arrive on the parser thread. Draw drains these handles
+            // on Dalamud's framework thread, where calling the client VFX remover is safe.
+        }
+    }
+
+    private void ClearLocked()
+    {
+        foreach (var stored in shapes.Values)
+        {
+            QueueNativeRemoval(stored.NativeHandle);
+        }
+
+        shapes.Clear();
+        // A delayed create from the previous territory must not resurrect stale VFX later.
+        pendingCommands.Clear();
+    }
+
     private string[] MatchingKeys(string? tag, Regex? regex)
         => shapes
             .Where(pair =>
@@ -212,13 +234,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         lock (syncRoot)
         {
-            foreach (var stored in shapes.Values)
-            {
-                QueueNativeRemoval(stored.NativeHandle);
-            }
-
-            shapes.Clear();
-            pendingCommands.Clear();
+            ClearLocked();
             DrainNativeRemovals();
             nativeVfx?.Dispose();
         }
@@ -551,7 +567,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             0,
             MathF.Cos(angle) * distance);
 
-    private static PictoActShape ApplyPatch(
+    internal static PictoActShape ApplyPatch(
         PictoActShape shape,
         PictoActShapePatch patch)
     {
@@ -569,7 +585,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
             ? patch.TransformCenter
             : shape.TransformCenter;
         var transformRotation = patch.TransformRotationSpecified
-            ? patch.TransformRotation
+            ? patch.TransformRotationTarget is { } rotationTarget
+                ? DirectionTo(transformCenter ?? Vector3.Zero, rotationTarget)
+                : patch.TransformRotation
             : shape.TransformRotation;
         var keepX = patch.KeepX ?? shape.KeepX;
         var keepY = patch.KeepY ?? shape.KeepY;
@@ -1098,6 +1116,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             transform.CenterSpecified,
             transform.Rotation,
             transform.RotationSpecified,
+            transform.RotationTarget,
             transform.KeepX,
             transform.KeepY);
     }
@@ -1108,6 +1127,10 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         var centerSpecified = TryGetAny(values, out var centerText, "O", "Center");
         var rotationSpecified = TryGetAny(values, out var rotationText, "θ", "Theta");
+        var center = centerSpecified &&
+                     !string.Equals(centerText, "clear", StringComparison.OrdinalIgnoreCase)
+            ? ParseVector3(centerText, "Center", entityResolver)
+            : (Vector3?)null;
         var directionFields = values
             .Select(pair => (Pair: pair, Match: DirectionField().Match(pair.Key)))
             .Where(candidate => candidate.Match.Success)
@@ -1124,10 +1147,14 @@ internal sealed partial class PictoActOverlayService : IDisposable
         }
 
         float? rotation = null;
+        Vector3? rotationTarget = null;
         if (rotationSpecified &&
             !string.Equals(rotationText.Trim(), "clear", StringComparison.OrdinalIgnoreCase))
         {
-            rotation = ParseSingle(rotationText, "Theta");
+            (rotation, rotationTarget) = ParseRotation(
+                rotationText,
+                center ?? Vector3.Zero,
+                entityResolver);
         }
         else if (directionFields.Length == 1)
         {
@@ -1154,21 +1181,34 @@ internal sealed partial class PictoActOverlayService : IDisposable
             rotationSpecified = true;
         }
 
-        var center = centerSpecified &&
-                     !string.Equals(centerText, "clear", StringComparison.OrdinalIgnoreCase)
-            ? ParseVector3(centerText, "Center", entityResolver)
-            : (Vector3?)null;
         return new PictoActTransform(
             center,
             centerSpecified,
             rotation,
             rotationSpecified,
+            rotationTarget,
             TryGetAny(values, out var keepX, "+X", "KeepX")
                 ? ParseBoolean(keepX, "KeepX")
                 : null,
             TryGetAny(values, out var keepY, "+Y", "KeepY")
                 ? ParseBoolean(keepY, "KeepY")
                 : null);
+    }
+
+    private static (float Rotation, Vector3? Target) ParseRotation(
+        string value,
+        Vector3 center,
+        Func<string, Vector3?>? entityResolver)
+    {
+        var normalized = value.Trim();
+        if (!normalized.Contains(',') && entityResolver?.Invoke(normalized) is { } target)
+        {
+            // Legacy PictoACT overloads θ with an entity ID to mean "face this entity".
+            // Resolve it before numeric parsing so all-digit ACT IDs remain compatible too.
+            return (DirectionTo(center, target), target);
+        }
+
+        return (ParseSingle(value, "Theta"), null);
     }
 
     private static bool TryGetAny(
@@ -1984,6 +2024,7 @@ internal sealed record PictoActShapePatch(
     bool TransformCenterSpecified,
     float? TransformRotation,
     bool TransformRotationSpecified,
+    Vector3? TransformRotationTarget,
     bool? KeepX,
     bool? KeepY);
 
@@ -1992,6 +2033,7 @@ internal sealed record PictoActTransform(
     bool CenterSpecified,
     float? Rotation,
     bool RotationSpecified,
+    Vector3? RotationTarget,
     bool? KeepX,
     bool? KeepY);
 
