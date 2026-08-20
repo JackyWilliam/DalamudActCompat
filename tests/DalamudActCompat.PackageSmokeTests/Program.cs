@@ -6710,6 +6710,15 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "Plugin",
         "Plugin.cs"));
+    var toggleMeterStart = macroPluginSource.IndexOf(
+        "private void ToggleMeter()",
+        StringComparison.Ordinal);
+    var setMeterVisibleStart = macroPluginSource.IndexOf(
+        "private void SetMeterVisible(bool visible)",
+        StringComparison.Ordinal);
+    var toggleMeterSource = toggleMeterStart >= 0 && setMeterVisibleStart > toggleMeterStart
+        ? macroPluginSource[toggleMeterStart..setMeterVisibleStart]
+        : string.Empty;
     var parserAdapterSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -6821,7 +6830,18 @@ static void ValidateHtmlOverlayDefaults()
             macroPluginSource,
             "case \\\"meter\\\":\\s+OpenMeter\\(\\);") &&
         macroPluginSource.Contains("private void ToggleMeter()", StringComparison.Ordinal) &&
+        toggleMeterSource.Contains("SetMeterVisible(visible);", StringComparison.Ordinal) &&
+        !toggleMeterSource.Contains("LocateOnNextDraw", StringComparison.Ordinal) &&
         macroPluginSource.Contains("meterWindow.LocateOnNextDraw();", StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "() => Volatile.Read(ref playerIdentitySnapshot)",
+            StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "Volatile.Write(ref playerIdentitySnapshot, identities);",
+            StringComparison.Ordinal) &&
+        !macroPluginSource.Contains(
+            "() => BuildPlayerIdentities(",
+            StringComparison.Ordinal) &&
         controlCenterSource.Contains("public void LocateAnimated()", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetNextWindowPos", StringComparison.Ordinal) &&
         meterWindowSource.Contains("public void LocateOnNextDraw()", StringComparison.Ordinal) &&

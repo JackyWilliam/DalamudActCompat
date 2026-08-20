@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.19",
+    "AssemblyVersion":  "0.3.9.20",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.19/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.20/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.19/DalamudActCompat.zip",
-    "LastUpdate":  1787234604660,
-    "Changelog":  "v0.3.9.19 修复 PictoACT 原生贴地、实体朝向与切区残留，悬浮窗编辑阻塞、非伤害 LB 误归因、Host 状态队列洪泛及蓝月日志崩溃；补齐绝欧 U6b P1/P2/P3 兼容通道，并更新 7.55 Hotfix 2 解析依赖。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.20/DalamudActCompat.zip",
+    "LastUpdate":  1787237663287,
+    "Changelog":  "v0.3.9.20 修复更新后解析器因后台线程读取游戏对象而故障，并恢复右键重开战斗统计时的已保存位置。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
