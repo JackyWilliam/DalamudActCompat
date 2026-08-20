@@ -132,6 +132,7 @@ public sealed class ControlCenterWindow : Window
     private string? genericPluginToDeleteName;
     private bool genericDeletePopupRequested;
     private bool focusOnNextDraw;
+    private bool locateOnNextDraw;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -248,6 +249,12 @@ public sealed class ControlCenterWindow : Window
         visibilityTransitionStartedAt = Environment.TickCount64;
     }
 
+    public void LocateAnimated()
+    {
+        locateOnNextDraw = true;
+        ShowAnimated();
+    }
+
     public void HideAnimated()
     {
         if (!IsOpen || visibilityTransition == VisibilityTransition.Closing)
@@ -268,7 +275,7 @@ public sealed class ControlCenterWindow : Window
         }
         else
         {
-            ShowAnimated();
+            LocateAnimated();
         }
     }
 
@@ -280,6 +287,16 @@ public sealed class ControlCenterWindow : Window
 
     public override void PreDraw()
     {
+        if (locateOnNextDraw)
+        {
+            var viewport = ImGui.GetMainViewport();
+            ImGui.SetNextWindowPos(
+                viewport.Pos + (viewport.Size * 0.5f),
+                ImGuiCond.Always,
+                new Vector2(0.5f, 0.5f));
+            locateOnNextDraw = false;
+        }
+
         if (focusOnNextDraw)
         {
             ImGui.SetNextWindowFocus();

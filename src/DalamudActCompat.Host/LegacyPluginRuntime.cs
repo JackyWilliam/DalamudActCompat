@@ -1303,6 +1303,7 @@ internal sealed class LegacyPluginHandle : IDisposable
             $"initialized={initialized}, " +
             $"actHandle={ActGlobals.oFormActMain.IsHandleCreated}, " +
             $"ttsHook={ActGlobals.oFormActMain.PlayTtsMethod is not null}, " +
+            $"ttsBridge={HostPluginBridge.DescribeTtsBridgeState()}, " +
             $"callbacks={callbacks}",
             DateTimeOffset.UtcNow);
     }

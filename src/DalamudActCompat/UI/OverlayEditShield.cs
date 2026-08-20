@@ -8,12 +8,16 @@ internal static class OverlayEditShield
     private const string WindowId = "###DalamudActCompatOverlayEditShield";
     private const string InputId = "###DalamudActCompatOverlayEditShieldInput";
 
-    internal static bool IsRequired(bool hasVisibleEditingOverlay)
-        => hasVisibleEditingOverlay;
+    internal static bool IsRequired(
+        bool hasVisibleEditingOverlay,
+        bool hasVisibleManagementWindow)
+        => hasVisibleEditingOverlay && !hasVisibleManagementWindow;
 
-    public static void Draw(bool hasVisibleEditingOverlay)
+    public static void Draw(
+        bool hasVisibleEditingOverlay,
+        bool hasVisibleManagementWindow)
     {
-        if (!IsRequired(hasVisibleEditingOverlay))
+        if (!IsRequired(hasVisibleEditingOverlay, hasVisibleManagementWindow))
         {
             return;
         }

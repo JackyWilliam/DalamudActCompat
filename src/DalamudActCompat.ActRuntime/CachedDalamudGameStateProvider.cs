@@ -59,6 +59,7 @@ internal sealed class CachedDalamudGameStateProvider : IDalamudGameStateProvider
             PositionX = identity.PositionX,
             PositionY = identity.PositionY,
             PositionZ = identity.PositionZ,
+            Rotation = identity.Rotation,
         };
     }
 }

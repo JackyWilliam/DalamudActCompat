@@ -33,6 +33,8 @@ public sealed record ActPlayerIdentity(
 
     public float PositionZ { get; init; }
 
+    public float Rotation { get; init; }
+
     public string DisplayName
         => string.IsNullOrWhiteSpace(World) ? Name : $"{Name}@{World}";
 }

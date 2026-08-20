@@ -57,10 +57,12 @@ try
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
+    await ValidatePostNamazuHeadingIpcAsync();
     ValidateMatchaPermissionIsolation();
     await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
+    ValidateReflectionActLoggerOverloads();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     ValidateRaidDpsEstimator();
@@ -611,6 +613,47 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(entityAngle - MathF.Atan2(3, 4)) < 0.0001f,
         "PictoACT Target, ScaleCyl, DirN, polar, entity-position, or math compatibility failed.");
 
+    var entityThetaCommands = PictoActOverlayService.Parse(
+        "Omen: Fan90\nTag: ENTITY_THETA_HEX\nt: 4\nO: 0x10000001\n" +
+        "θ: 4001ABCD\nScale: 50, 50, 10\n---\n" +
+        "Omen: Fan90\nTag: ENTITY_THETA_DIGITS\nt: 4\nO: 0x10000001\n" +
+        "Theta: 40012345\nScale: 50, 50, 10",
+        raw => raw switch
+        {
+            "0x10000001" => new System.Numerics.Vector3(10, 0, 20),
+            "4001ABCD" => new System.Numerics.Vector3(13, 0, 24),
+            "40012345" => new System.Numerics.Vector3(6, 0, 22),
+            _ => null,
+        });
+    Assert(
+        entityThetaCommands.Count == 2 &&
+        entityThetaCommands[0].Shape is
+        {
+            Position.X: 10,
+            Position.Z: 20,
+            Angle: var hexadecimalEntityTheta,
+        } &&
+        MathF.Abs(hexadecimalEntityTheta - MathF.Atan2(3, 4)) < 0.0001f &&
+        entityThetaCommands[1].Shape is { Angle: var allDigitEntityTheta } &&
+        MathF.Abs(allDigitEntityTheta - MathF.Atan2(-4, 2)) < 0.0001f,
+        "PictoACT θ/Theta did not preserve legacy entity-facing semantics.");
+
+    var entityThetaBase = PictoActOverlayService.Parse(
+        "Omen: Rect\nTag: ENTITY_THETA_CHANGE\nt: 5\nO: 10, 20\nθ: pi\n" +
+        "Pos: 0, 0\nScale: 1, 10, 1").Single().Shape!;
+    var entityThetaPatch = PictoActOverlayService.Parse(
+        "Action: Change\nTag: ENTITY_THETA_CHANGE\nθ: 4001ABCD",
+        raw => raw == "4001ABCD"
+            ? new System.Numerics.Vector3(13, 0, 24)
+            : null).Single().Patch!;
+    var entityThetaChanged = PictoActOverlayService.ApplyPatch(
+        entityThetaBase,
+        entityThetaPatch);
+    Assert(
+        entityThetaChanged.Position is { X: 10, Z: 20 } &&
+        MathF.Abs(entityThetaChanged.Angle - MathF.Atan2(3, 4)) < 0.0001f,
+        "PictoACT Change with an entity θ lost the existing transform center.");
+
     var directionAndScaleDefaults = PictoActOverlayService.Parse(
         "Omen: Circle\nt: 5\nDir4: 0\nPos: 1, 2\nScale: 3").Single();
     Assert(
@@ -694,6 +737,14 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         overlay.ShapeSnapshot.Count == 0,
         "PictoACT Remove did not cancel matching delayed operations.");
+
+    overlay.Apply("Omen: Circle\nTag: OLD_ZONE\nt: 30\nPos: 1, 2\nScale: 3");
+    overlay.Apply("Omen: Circle\nTag: OLD_ZONE_DELAYED\nDelay: 10\nt: 30\nPos: 3, 4\nScale: 3");
+    overlay.Clear();
+    overlay.ProcessPending(DateTimeOffset.UtcNow.AddSeconds(11));
+    Assert(
+        overlay.ShapeSnapshot.Count == 0,
+        "PictoACT territory cleanup left a live or delayed drawing behind.");
 
     overlay.Apply(
         "Omen: Rect\nTag: ANGLE_MODE\nt: 30\nPos: 0, 0\nTarget: 0, 10\nScale: 1, 10, 1");
@@ -845,6 +896,31 @@ static void ValidateBoundedHostQueue()
             new { value = 2 })) &&
         queue.DataCount == 1,
         "State messages were not coalesced to the latest value.");
+
+    queue.Clear();
+    for (var index = 0; index < HostProtocol.ControlQueueCapacity * 4; index++)
+    {
+        Assert(
+            queue.TryEnqueue(HostEnvelope.Create(
+                session,
+                index + 1,
+                index % 2 == 0
+                    ? HostMessageTypes.CombatStarted
+                    : HostMessageTypes.CombatEnded,
+                HostMessagePriority.State,
+                new HostCombatEvent(index % 2 == 0, DateTimeOffset.UtcNow))),
+            "Combat state coalescing rejected a noisy transition.");
+    }
+
+    var latestCombatState = queue.DequeueAsync(CancellationToken.None)
+        .AsTask()
+        .GetAwaiter()
+        .GetResult();
+    Assert(
+        queue.ControlCount == 0 &&
+        queue.DataCount == 0 &&
+        latestCombatState.Type == HostMessageTypes.CombatEnded,
+        "Alternating combat transitions were not coalesced to their single latest state.");
 }
 
 static void ValidateBoundedNotActQueues()
@@ -982,6 +1058,32 @@ static void ValidateActCallbackCircuitBreaker()
     Assert(
         health.Exceptions == 5 && health.CircuitOpen,
         "Five consecutive callback exceptions did not open the per-plugin circuit.");
+}
+
+static void ValidateReflectionActLoggerOverloads()
+{
+    var adapterType = typeof(FormActMain).Assembly.GetType(
+                          "Advanced_Combat_Tracker.ReflectionActLogger",
+                          throwOnError: true)!
+                      ?? throw new TypeLoadException(
+                          "Advanced_Combat_Tracker.ReflectionActLogger");
+    var probe = new OverloadedActLoggerProbe();
+    var adapter = (IActLogger)(Activator.CreateInstance(
+                      adapterType,
+                      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                      binder: null,
+                      args: [probe],
+                      culture: null)
+                  ?? throw new InvalidOperationException(
+                      "Could not create the reflected ACT logger adapter."));
+    var expected = new ArgumentException("original parser failure");
+    adapter.Error(expected, "preserve this failure");
+
+    Assert(
+        ReferenceEquals(probe.Exception, expected) &&
+        probe.Message == "preserve this failure" &&
+        !probe.StringOnlyOverloadCalled,
+        "The ACT logger selected a string overload for an exception and replaced the parser failure.");
 }
 
 static void ValidateMeterRows()
@@ -2738,6 +2840,8 @@ static void ValidateControlCenterPresentation()
     var projectRoot = FindProjectRoot();
     var controlCenterSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var meterWindowSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Meter", "MeterWindow.cs"));
     var historySource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Encounters", "EncounterWindow.cs"));
     var thirdPartySource = File.ReadAllText(Path.Combine(
@@ -3155,7 +3259,7 @@ static void ValidateParserDependencyVersions()
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
-        "3.0.2.7",
+        "3.0.2.8",
         "FFXIV_ACT_Plugin");
     var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
     Assert(
@@ -3310,6 +3414,43 @@ static async Task ValidateMatchaTypedIpcAsync()
         logLine?.Line == "00|matcha" &&
         tts is { Text: "matcha speech", Source: "matcha" },
         "Matcha notification, log, or TTS crossed an untyped/shared command channel.");
+}
+
+static async Task ValidatePostNamazuHeadingIpcAsync()
+{
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    await using var client = new HostIpcClient(
+        new EncounterStateStore(),
+        new PluginLogger(log));
+    HostPostNamazuHeading? received = null;
+    client.PostNamazuHeadingRequested += (_, value) => received = value;
+    var applyMessage = typeof(HostIpcClient).GetMethod(
+                           "ApplyMessage",
+                           BindingFlags.Instance | BindingFlags.NonPublic)
+                       ?? throw new MissingMethodException(
+                           typeof(HostIpcClient).FullName,
+                           "ApplyMessage");
+    var now = DateTimeOffset.UtcNow;
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "postnamazu-heading-ipc-smoke",
+        1,
+        HostMessageTypes.PostNamazuSetHeading,
+        HostMessagePriority.State,
+        new HostPostNamazuHeading(0x12345678, 1.25f, now))]);
+    Assert(
+        received is { Address: 0x12345678, Heading: 1.25f },
+        "PostNamazu heading did not cross its typed game-side IPC channel.");
+
+    received = null;
+    applyMessage.Invoke(client, [HostEnvelope.Create(
+        "postnamazu-heading-ipc-smoke",
+        2,
+        HostMessageTypes.PostNamazuSetHeading,
+        HostMessagePriority.State,
+        new HostPostNamazuHeading(0x12345678, 1.25f, now.AddSeconds(-10)))]);
+    Assert(
+        received is null,
+        "A stale PostNamazu heading crossed the game-side IPC validation boundary.");
 }
 
 static void ValidateUnscramblerSupportPolicy()
@@ -4742,6 +4883,22 @@ static void ValidateCombatEventScoping()
             identities),
         "A nearby stranger can still extend the local ACT encounter.");
 
+    var now = DateTimeOffset.UtcNow;
+    Assert(
+        !OpenWorldEncounterEndPolicy.ShouldEnd(
+            boundByDuty: false,
+            localPlayerInCombat: false,
+            lastRelevantCombatAction: now.AddSeconds(-4),
+            now) &&
+        OpenWorldEncounterEndPolicy.ShouldEnd(
+            boundByDuty: false,
+            localPlayerInCombat: false,
+            lastRelevantCombatAction: now.AddSeconds(-5),
+            now) &&
+        !OpenWorldEncounterEndPolicy.ShouldEnd(true, false, now.AddMinutes(-1), now) &&
+        !OpenWorldEncounterEndPolicy.ShouldEnd(false, true, now.AddMinutes(-1), now),
+        "An outdoor party encounter still follows the local combat flag instead of bounded inactivity.");
+
     var runtimeSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -4750,6 +4907,7 @@ static void ValidateCombatEventScoping()
     Assert(
         runtimeSource.Contains("ConditionFlag.BoundByDuty", StringComparison.Ordinal) &&
         runtimeSource.Contains("lastRelevantCombatAction", StringComparison.Ordinal) &&
+        runtimeSource.Contains("OpenWorldEncounterEndPolicy.ShouldEnd", StringComparison.Ordinal) &&
         runtimeSource.Contains("ActGlobals.oFormActMain.EndCombat(true)", StringComparison.Ordinal) &&
         runtimeSource.Contains("counter.DirectHits++;", StringComparison.Ordinal) &&
         runtimeSource.Contains("chatDirectHitTotals", StringComparison.Ordinal),
@@ -6373,6 +6531,7 @@ static void ValidateDalamudGameStateBridge()
             CurrentMp = 10_000,
             MaxMp = 10_000,
             TerritoryId = 1234,
+            Rotation = 1.25f,
         },
         new("Party Member", "Beta", "WHM", false, false)
         {
@@ -6386,6 +6545,7 @@ static void ValidateDalamudGameStateBridge()
             CurrentMp = 9_000,
             MaxMp = 10_000,
             TerritoryId = 1234,
+            Rotation = -0.75f,
         },
     ];
 
@@ -6393,6 +6553,9 @@ static void ValidateDalamudGameStateBridge()
     Assert(provider.Snapshot.GameExists, "Dalamud game state did not report the active game.");
     Assert(provider.Snapshot.InGameCombat, "Dalamud combat state was not preserved.");
     Assert(provider.Snapshot.Player?.JobId == 19, "Dalamud local player job was not preserved.");
+    Assert(
+        Math.Abs((provider.Snapshot.Player?.Rotation ?? 0) - 1.25f) < 0.001f,
+        "Dalamud local player rotation was not preserved for Radar.");
     Assert(provider.Snapshot.Party.Count == 2, "Dalamud party members were not preserved.");
 
     var overlayAssembly = typeof(IDalamudGameStateProvider).Assembly;
@@ -6505,6 +6668,18 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "ControlCenterWindow.cs"));
+    var meterWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterWindow.cs"));
+    var launcherWindowSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "LauncherWindow.cs"));
     var createdOverlayIndex = controlCenterSource.IndexOf(
         "changed |= DrawCreatedHtmlOverlays();",
         StringComparison.Ordinal);
@@ -6611,7 +6786,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("副本外每次脱战后会立即清空实时统计", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
         helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
@@ -6641,12 +6816,22 @@ static void ValidateHtmlOverlayDefaults()
         macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
         Regex.IsMatch(
             macroPluginSource,
-            "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.ShowAnimated\\(\\);") &&
+            "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.LocateAnimated\\(\\);") &&
         Regex.IsMatch(
             macroPluginSource,
-            "case \\\"meter\\\":\\s+SetMeterVisible\\(true\\);") &&
-        macroPluginSource.Contains("() => SetMeterVisible(true)", StringComparison.Ordinal) &&
-        !macroPluginSource.Contains("private void ToggleMeter()", StringComparison.Ordinal) &&
+            "case \\\"meter\\\":\\s+OpenMeter\\(\\);") &&
+        macroPluginSource.Contains("private void ToggleMeter()", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("meterWindow.LocateOnNextDraw();", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("public void LocateAnimated()", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("ImGui.SetNextWindowPos", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("public void LocateOnNextDraw()", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("locatePreviewExpiresAt", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("ImGui.SetNextWindowPos", StringComparison.Ordinal) &&
+        launcherWindowSource.Contains("private readonly Action toggleMeter;", StringComparison.Ordinal) &&
+        launcherWindowSource.Contains("打开或关闭战斗统计", StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "hostSupervisor.PublishZone(territoryId, localizedZoneName)",
+            StringComparison.Ordinal) &&
         !macroPluginSource.Contains(
             "Cafe.Matcha configuration requires the WriteFiles capability.",
             StringComparison.Ordinal) &&
@@ -6656,7 +6841,7 @@ static void ValidateHtmlOverlayDefaults()
         readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
         readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
-        readmeSource.Contains("副本外每次脱战后会立即清空实时统计", StringComparison.Ordinal) &&
+        readmeSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
         readmeSource.Contains("副本内则持续累计", StringComparison.Ordinal) &&
         readmeSource.Contains("“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         readmeSource.Contains("每条子记录代表一次团灭前累计的完整战斗", StringComparison.Ordinal) &&
@@ -6735,12 +6920,6 @@ static void ValidateHtmlOverlayDefaults()
         controlCenterSource.Contains("ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
         controlCenterSource.Contains("VersionLabel", StringComparison.Ordinal),
         "The control center did not move branding, centered parser state, version, and close control into rounded top chrome.");
-    var meterWindowSource = File.ReadAllText(Path.Combine(
-        FindProjectRoot(),
-        "src",
-        "DalamudActCompat",
-        "Meter",
-        "MeterWindow.cs"));
     Assert(
         !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
         !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal) &&
@@ -7358,11 +7537,14 @@ static void ValidateHtmlOverlayDefaults()
                            ?? throw new InvalidOperationException(
                                "The transparent overlay edit shield condition was not found.");
     Assert(
-        isShieldRequired.Invoke(null, [false]) as bool? == false,
+        isShieldRequired.Invoke(null, [false, false]) as bool? == false,
         "The transparent edit shield remained active without a visible editing overlay.");
     Assert(
-        isShieldRequired.Invoke(null, [true]) as bool? == true,
+        isShieldRequired.Invoke(null, [true, false]) as bool? == true,
         "The transparent edit shield did not activate for a visible editing overlay.");
+    Assert(
+        isShieldRequired.Invoke(null, [true, true]) as bool? == false,
+        "The transparent edit shield blocked an open ACT management window.");
 }
 
 static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
@@ -8615,6 +8797,14 @@ static void ValidateChineseCombatChatParsing()
         contextualActor == "队友",
         "Adjacent split combat lines no longer retain their legitimate attacker context.");
 
+    Assert(
+        SelfHostedActRuntime.IsDamageDealingLimitBreakAction(9, canTargetHostile: true) &&
+        SelfHostedActRuntime.IsDamageDealingLimitBreakAction(15, canTargetHostile: true) &&
+        !SelfHostedActRuntime.IsDamageDealingLimitBreakAction(9, canTargetHostile: false) &&
+        !SelfHostedActRuntime.IsDamageDealingLimitBreakAction(15, canTargetHostile: false) &&
+        !SelfHostedActRuntime.IsDamageDealingLimitBreakAction(2, canTargetHostile: true),
+        "Defensive Limit Break actions can still claim an unrelated damage line.");
+
     var limitBreakContext = new ChineseCombatChatContext(
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "终结时刻" });
     Assert(
@@ -9041,6 +9231,24 @@ internal sealed class TestActLogger : IActLogger
 
     public void Warning(string message)
     {
+    }
+}
+
+internal sealed class OverloadedActLoggerProbe
+{
+    public Exception? Exception { get; private set; }
+
+    public string? Message { get; private set; }
+
+    public bool StringOnlyOverloadCalled { get; private set; }
+
+    public void Error(string message, params object[] values)
+        => StringOnlyOverloadCalled = true;
+
+    public void Error(Exception exception, string message, params object[] values)
+    {
+        Exception = exception;
+        Message = message;
     }
 }
 

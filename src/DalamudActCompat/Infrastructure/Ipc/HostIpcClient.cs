@@ -58,6 +58,8 @@ public sealed class HostIpcClient : IAsyncDisposable
 
     public event EventHandler<HostCommandInvocation>? CommandRequested;
 
+    public event EventHandler<HostPostNamazuHeading>? PostNamazuHeadingRequested;
+
     public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
 
     public event EventHandler<HostMatchaNotification>? MatchaNotificationRequested;
@@ -514,6 +516,21 @@ public sealed class HostIpcClient : IAsyncDisposable
                     this,
                     new HostCommandInvocation(envelope.CorrelationId, request));
                 break;
+            case HostMessageTypes.PostNamazuSetHeading:
+                var heading = envelope.Payload.Deserialize<HostPostNamazuHeading>();
+                var headingReceivedAt = DateTimeOffset.UtcNow;
+                if (heading is null ||
+                    heading.Address == 0 ||
+                    !float.IsFinite(heading.Heading) ||
+                    heading.Timestamp > headingReceivedAt.AddSeconds(1) ||
+                    heading.Timestamp < headingReceivedAt.AddSeconds(-2))
+                {
+                    logger.Warning("ACT Host sent an invalid or stale PostNamazu heading; request denied.");
+                    break;
+                }
+
+                PostNamazuHeadingRequested?.Invoke(this, heading);
+                break;
             case HostMessageTypes.SilverDasherNotification:
                 var notification = envelope.Payload.Deserialize<HostSilverDasherNotification>();
                 if (notification is null ||
@@ -665,8 +682,15 @@ internal sealed class BoundedHostMessageQueue : IDisposable
                     added = true;
                     break;
                 case HostMessagePriority.State:
-                    added = !state.ContainsKey(envelope.Type);
-                    state[envelope.Type] = envelope;
+                    var stateKey = envelope.Type is
+                        HostMessageTypes.CombatStarted or HostMessageTypes.CombatEnded
+                            ? "event.combat.state"
+                            : envelope.Type;
+                    // Combat start/end are two wire messages for one logical state. Using one
+                    // key preserves the latest transition when a noisy open-world encounter
+                    // produces faster than the isolated Host can consume.
+                    added = !state.ContainsKey(stateKey);
+                    state[stateKey] = envelope;
                     break;
                 case HostMessagePriority.SilverDasherState:
                     added = !silverDasherState.ContainsKey(envelope.Type);

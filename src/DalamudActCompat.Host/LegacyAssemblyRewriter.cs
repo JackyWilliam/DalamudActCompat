@@ -1734,6 +1734,10 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.IsTriggernometryHighRiskScriptAllowed))!);
         var pictoAct = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuPictoAct))!);
+        var setHeading = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuSetHeading))!);
+        var patchExportXml = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.PatchTriggernometryExportXml))!);
         var subscribeZoneChanges = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SubscribeTriggernometryZoneChanges))!);
         var unsubscribeZoneChanges = module.ImportReference(
@@ -1827,6 +1831,45 @@ public static class LegacyAssemblyRewriter
             pictoAct,
             loadInstance: false,
             loadParameters: true);
+
+        var entitySetHeading = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.Modules.EntityModule")
+            .Methods
+            .Single(method =>
+                method.Name == "SetHeading" &&
+                method.Parameters.Count == 2 &&
+                method.Parameters[0].ParameterType.FullName == typeof(IntPtr).FullName &&
+                method.Parameters[1].ParameterType.MetadataType == MetadataType.Single);
+        // The original BridgeNamazu path attaches GreyMagic from the isolated Host. Route only
+        // local-player heading through the permission-gated game-side bridge; other native
+        // PostNamazu operations keep their existing compatibility behavior.
+        ReplaceWithBridge(
+            entitySetHeading,
+            setHeading,
+            loadInstance: false,
+            loadParameters: true);
+
+        var exportUnserialize = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName == "Triggernometry.Core.TriggernometryExport")
+            .Methods
+            .Single(method =>
+                method.Name == "Unserialize" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.String);
+        var exportFirstInstruction = exportUnserialize.Body.Instructions[0];
+        var exportIl = exportUnserialize.Body.GetILProcessor();
+        // Patch the imported repository text before Triggernometry materializes trigger objects,
+        // so refreshed resources cannot silently restore the two incompatible U6b assumptions.
+        exportIl.InsertBefore(
+            exportFirstInstruction,
+            exportIl.Create(OpCodes.Ldarg, exportUnserialize.Parameters[0]));
+        exportIl.InsertBefore(exportFirstInstruction, exportIl.Create(OpCodes.Call, patchExportXml));
+        exportIl.InsertBefore(
+            exportFirstInstruction,
+            exportIl.Create(OpCodes.Starg, exportUnserialize.Parameters[0]));
 
         var bridgeNamazu = module.Types
             .SelectMany(EnumerateTypes)

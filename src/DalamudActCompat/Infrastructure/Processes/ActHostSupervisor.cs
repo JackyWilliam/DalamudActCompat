@@ -66,6 +66,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         this.configDirectory = configDirectory;
         ipc.Faulted += OnIpcFaulted;
         ipc.CommandRequested += OnCommandRequested;
+        ipc.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         ipc.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         ipc.MatchaNotificationRequested += OnMatchaNotificationRequested;
         ipc.MatchaLogLineRequested += OnMatchaLogLineRequested;
@@ -121,6 +122,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         };
 
     public event EventHandler<HostCommandInvocation>? CommandRequested;
+
+    public event EventHandler<HostPostNamazuHeading>? PostNamazuHeadingRequested;
 
     public event EventHandler<HostSilverDasherNotification>? SilverDasherNotificationRequested;
 
@@ -234,7 +237,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     public void PublishZone(uint territoryId, string zoneName)
     {
         lastZone = new HostZoneEvent(territoryId, zoneName, DateTimeOffset.UtcNow);
-        TryPublishCritical(HostMessageTypes.ZoneChanged, lastZone);
+        TryPublishState(HostMessageTypes.ZoneChanged, lastZone);
         PublishSilverDasherZone(lastZone);
     }
 
@@ -261,7 +264,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
         combatState = nextCombatState;
         combatStateKnown = true;
-        TryPublishCritical(
+        TryPublishState(
             finished ? HostMessageTypes.CombatEnded : HostMessageTypes.CombatStarted,
             new HostCombatEvent(nextCombatState, DateTimeOffset.UtcNow));
     }
@@ -341,6 +344,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
         ipc.Faulted -= OnIpcFaulted;
         ipc.CommandRequested -= OnCommandRequested;
+        ipc.PostNamazuHeadingRequested -= OnPostNamazuHeadingRequested;
         ipc.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
         ipc.MatchaNotificationRequested -= OnMatchaNotificationRequested;
         ipc.MatchaLogLineRequested -= OnMatchaLogLineRequested;
@@ -601,6 +605,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private void OnCommandRequested(object? sender, HostCommandInvocation command)
         => CommandRequested?.Invoke(this, command);
 
+    private void OnPostNamazuHeadingRequested(
+        object? sender,
+        HostPostNamazuHeading heading)
+        => PostNamazuHeadingRequested?.Invoke(this, heading);
+
     private void OnSilverDasherNotificationRequested(
         object? sender,
         HostSilverDasherNotification notification)
@@ -707,29 +716,29 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     {
         if (lastZone is not null)
         {
-            TryPublishCritical(HostMessageTypes.ZoneChanged, lastZone);
+            TryPublishState(HostMessageTypes.ZoneChanged, lastZone);
             PublishSilverDasherZone(lastZone);
         }
 
         if (combatStateKnown)
         {
-            TryPublishCritical(
+            TryPublishState(
                 combatState ? HostMessageTypes.CombatStarted : HostMessageTypes.CombatEnded,
                 new HostCombatEvent(combatState, DateTimeOffset.UtcNow));
         }
     }
 
-    private void TryPublishCritical<T>(string type, T payload)
+    private void TryPublishState<T>(string type, T payload)
     {
         if (!ipc.TryEnqueue(
                 type,
-                HostMessagePriority.Critical,
+                HostMessagePriority.State,
                 payload,
                 deadline: DateTimeOffset.UtcNow.AddSeconds(2)))
         {
             Interlocked.Increment(ref droppedPendingLogs);
             logger.Warning(
-                $"Critical ACT Host event '{type}' was not queued; latest state will be replayed after reconnect.");
+                $"ACT Host state event '{type}' was not queued; latest state will be replayed after reconnect.");
         }
     }
 

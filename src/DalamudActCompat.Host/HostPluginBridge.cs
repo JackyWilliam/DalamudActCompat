@@ -38,11 +38,17 @@ public static class HostPluginBridge
     private static readonly object TriggerZoneListenerLock = new();
     private static readonly object PostNamazuQueueLock = new();
     private static readonly object PostNamazuTaskLock = new();
+    private static readonly object PostNamazuHeadingLock = new();
     private static readonly object SilverDasherContextLock = new();
     private static readonly object MatchaContextLock = new();
     private static readonly List<string> PostNamazuQueueIds = [];
     private static readonly HashSet<Task> PostNamazuQueueTasks = [];
     private static readonly CancellationTokenSource PostNamazuQueueShutdown = new();
+    private static readonly System.Threading.Timer PostNamazuHeadingTimer = new(
+        FlushPostNamazuHeading,
+        null,
+        Timeout.InfiniteTimeSpan,
+        Timeout.InfiniteTimeSpan);
     private static WeakReference<object>? triggerZoneListener;
     private static Action<string>? ttsWriter;
     private static Func<string, string, bool>? silverDasherNotificationWriter;
@@ -53,6 +59,8 @@ public static class HostPluginBridge
     private static int pendingOverlayCallCount;
     private static bool postNamazuShutdownStarted;
     private static Task<bool>? postNamazuShutdownTask;
+    private static HostPostNamazuHeading? pendingPostNamazuHeading;
+    private static bool postNamazuHeadingTimerActive;
     private static SilverDasherDataSubscription? silverDasherSubscription;
     private static HostZoneEvent? silverDasherZone;
     private static string? silverDasherRoot;
@@ -80,6 +88,9 @@ public static class HostPluginBridge
     }
 
     internal static FfxivDataRepository FfxivRepository => FfxivRepositoryInstance;
+
+    internal static string DescribeTtsBridgeState()
+        => $"sender={sender is not null},writer={Volatile.Read(ref ttsWriter) is not null},pending={Volatile.Read(ref pendingTtsCount)}";
 
     internal static bool IsGameForeground()
         => GameForegroundDetector.IsGameForeground(FfxivRepositoryInstance.GetGameProcessId());
@@ -889,11 +900,92 @@ public static class HostPluginBridge
     public static void SendPostNamazuPictoAct(string payload)
         => SendPostNamazuSemanticAction("postnamazu.pictoact", payload);
 
+    public static void SendPostNamazuSetHeading(IntPtr address, float heading)
+    {
+        if (!IsAllowed("postnamazu", "NativeGameMemory"))
+        {
+            // The U6b loop calls this path every 10 ms. Denials remain visible, while successful
+            // authorization is already recorded by ConfigurePermissions and must not flood logs.
+            Console.Error.WriteLine(
+                "permission plugin=postnamazu capability=NativeGameMemory decision=deny");
+            throw new UnauthorizedAccessException(
+                "ACT plugin 'postnamazu' is not authorized for capability 'NativeGameMemory'.");
+        }
+
+        if (address == IntPtr.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(address), "Player address is missing.");
+        }
+
+        if (!float.IsFinite(heading))
+        {
+            throw new ArgumentOutOfRangeException(nameof(heading), "Player heading must be finite.");
+        }
+
+        var startTimer = false;
+        lock (PostNamazuHeadingLock)
+        {
+            pendingPostNamazuHeading = new HostPostNamazuHeading(
+                address.ToInt64(),
+                heading,
+                DateTimeOffset.UtcNow);
+            if (!postNamazuHeadingTimerActive)
+            {
+                postNamazuHeadingTimerActive = true;
+                startTimer = true;
+            }
+        }
+
+        if (startTimer)
+        {
+            // U6b requests updates every 10 ms, faster than the game can render. Keeping only the
+            // latest value per 16 ms frame bounds the Host pipe without changing visible motion.
+            PostNamazuHeadingTimer.Change(
+                TimeSpan.Zero,
+                TimeSpan.FromMilliseconds(16));
+        }
+    }
+
     public static void SendPostNamazuPreset(string payload)
         => SendPostNamazuSemanticAction("postnamazu.preset", payload);
 
     public static void SendPostNamazuKey(string payload)
         => SendPostNamazuSemanticAction("postnamazu.sendkey", payload);
+
+    public static string PatchTriggernometryExportXml(string xml)
+    {
+        ArgumentNullException.ThrowIfNull(xml);
+
+        // These two upstream U6b triggers assume ACT observations that are not stable across
+        // compatible log providers. Restricting the rewrite to immutable trigger IDs avoids
+        // changing user-authored rules or globally redefining ACT's established log format.
+        var patched = PatchTriggernometryTriggerSegment(
+            xml,
+            "0b7c968a-c565-49ca-a02e-6ac25e096be1",
+            segment => Regex.Replace(
+                segment,
+                "\\s*<Condition Enabled=\"true\" Grouping=\"Or\">\\s*" +
+                "<ConditionSingle Enabled=\"true\" ExpressionL=\"\\$\\{_entity\\[\\$\\{tid\\}\\]\\.HP\\}\" " +
+                "ExpressionTypeL=\"String\" ExpressionR=\"0\" ExpressionTypeR=\"String\" " +
+                "ConditionType=\"NumericGreater\" />\\s*</Condition>",
+                string.Empty,
+                RegexOptions.CultureInvariant));
+        patched = PatchTriggernometryTriggerSegment(
+            patched,
+            "df719e7c-6138-4c4e-9d15-bacbf41d88c9",
+            segment => segment.Replace(
+                "101:.{8}:0002",
+                "101:[^:]*:0002",
+                StringComparison.Ordinal));
+
+        if (!ReferenceEquals(patched, xml) && !string.Equals(patched, xml, StringComparison.Ordinal))
+        {
+            Console.WriteLine(
+                "Triggernometry applied narrow U6b compatibility fixes for entity timing and MapEffect instance fields.");
+        }
+
+        return patched;
+    }
 
     public static void SendPostNamazuQueue(object module, string payload)
     {
@@ -1045,6 +1137,85 @@ public static class HostPluginBridge
         {
             throw new InvalidOperationException(
                 $"PostNamazu semantic broker queue rejected '{action}'.");
+        }
+    }
+
+    private static string PatchTriggernometryTriggerSegment(
+        string xml,
+        string triggerId,
+        Func<string, string> patch)
+    {
+        var idAttribute = $"Id=\"{triggerId}\"";
+        var searchFrom = 0;
+        var idIndex = -1;
+        var triggerStart = -1;
+        while ((idIndex = xml.IndexOf(idAttribute, searchFrom, StringComparison.Ordinal)) >= 0)
+        {
+            triggerStart = xml.LastIndexOf("<Trigger", idIndex, StringComparison.Ordinal);
+            var openingTagEnd = triggerStart >= 0
+                ? xml.IndexOf('>', triggerStart)
+                : -1;
+            var elementNameEnd = triggerStart + "<Trigger".Length;
+            if (triggerStart >= 0 &&
+                elementNameEnd < xml.Length &&
+                char.IsWhiteSpace(xml[elementNameEnd]) &&
+                openingTagEnd >= idIndex)
+            {
+                break;
+            }
+
+            searchFrom = idIndex + idAttribute.Length;
+            triggerStart = -1;
+        }
+
+        if (idIndex < 0 || triggerStart < 0)
+        {
+            return xml;
+        }
+
+        var closingTagIndex = xml.IndexOf("</Trigger>", idIndex, StringComparison.Ordinal);
+        if (closingTagIndex < 0)
+        {
+            return xml;
+        }
+
+        var triggerEnd = closingTagIndex + "</Trigger>".Length;
+        var originalSegment = xml[triggerStart..triggerEnd];
+        var patchedSegment = patch(originalSegment);
+        if (string.Equals(originalSegment, patchedSegment, StringComparison.Ordinal))
+        {
+            return xml;
+        }
+
+        return string.Concat(xml.AsSpan(0, triggerStart), patchedSegment, xml.AsSpan(triggerEnd));
+    }
+
+    private static void FlushPostNamazuHeading(object? _)
+    {
+        HostPostNamazuHeading? heading;
+        lock (PostNamazuHeadingLock)
+        {
+            heading = pendingPostNamazuHeading;
+            pendingPostNamazuHeading = null;
+            if (heading is null)
+            {
+                PostNamazuHeadingTimer.Change(
+                    Timeout.InfiniteTimeSpan,
+                    Timeout.InfiniteTimeSpan);
+                postNamazuHeadingTimerActive = false;
+                return;
+            }
+        }
+
+        var queued = sender?.Invoke(
+            HostMessageTypes.PostNamazuSetHeading,
+            HostMessagePriority.State,
+            heading,
+            null,
+            heading.Timestamp.AddMilliseconds(500)) == true;
+        if (!queued)
+        {
+            Console.Error.WriteLine("PostNamazu heading state queue rejected the latest update.");
         }
     }
 

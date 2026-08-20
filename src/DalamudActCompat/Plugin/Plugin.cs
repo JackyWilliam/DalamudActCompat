@@ -25,6 +25,7 @@ using DalamudActCompat.Quality;
 using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
 using System.Threading.Channels;
+using NativeGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace DalamudActCompat.Plugin;
 
@@ -111,6 +112,7 @@ public sealed class Plugin : IDalamudPlugin
     private bool backgroundOperationShutdownStarted;
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
+    private HostPostNamazuHeading? pendingPostNamazuHeading;
     private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
     private Task? cactbotShutdownTask;
     private bool cactbotShutdownStarted;
@@ -216,6 +218,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
+        hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         var matchaIpcClient = new HostIpcClient(
             stateStore,
@@ -264,6 +267,7 @@ public sealed class Plugin : IDalamudPlugin
             () => BuildPlayerIdentities(
                 playerState,
                 partyList,
+                objectTable,
                 condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]),
             chatGui,
             framework,
@@ -451,7 +455,7 @@ public sealed class Plugin : IDalamudPlugin
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
             SetMeterVisible,
-            () => SetMeterVisible(true),
+            OpenMeter,
             encounterWindow.OpenRecent,
             () => statusWindow.IsOpen,
             value => statusWindow.IsOpen = value,
@@ -487,7 +491,7 @@ public sealed class Plugin : IDalamudPlugin
             launcherTexture,
             text,
             settingsWindow.ToggleAnimated,
-            () => SetMeterVisible(true),
+            ToggleMeter,
             SaveConfiguration)
         {
             IsOpen = true,
@@ -573,6 +577,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.EncounterChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
+        hostSupervisor.PostNamazuHeadingRequested -= OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
         matchaHostSupervisor.MatchaNotificationRequested -= OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested -= OnMatchaLogLineRequested;
@@ -583,15 +588,42 @@ public sealed class Plugin : IDalamudPlugin
     private void Draw()
     {
         pictoActOverlay.Draw();
-        OverlayEditShield.Draw(actRuntime.HasVisibleEditingOverlay);
+        // The full-screen shield prevents clicks leaking into the game while an HTML overlay
+        // is being positioned, but it must not sit above the controls used to finish editing.
+        var hasVisibleManagementWindow = settingsWindow.IsOpen ||
+                                         advancedSettingsWindow.IsOpen ||
+                                         statusWindow.IsOpen ||
+                                         helpWindow.IsOpen ||
+                                         launcherWindow.IsOpen ||
+                                         thirdPartyPluginNoticeWindow.IsOpen ||
+                                         encounterWindow.IsOpen;
+        OverlayEditShield.Draw(
+            actRuntime.HasVisibleEditingOverlay,
+            hasVisibleManagementWindow);
         windowSystem.Draw();
         fileDialogManager.Draw();
     }
 
-    private void OpenConfigUi() => settingsWindow.ShowAnimated();
+    private void OpenConfigUi() => settingsWindow.LocateAnimated();
 
     private void OpenMainUi()
-        => settingsWindow.ShowAnimated();
+        => settingsWindow.LocateAnimated();
+
+    private void OpenMeter()
+    {
+        meterWindow.LocateOnNextDraw();
+        SetMeterVisible(true);
+    }
+
+    private void ToggleMeter()
+    {
+        var visible = !configuration.Meter.IsVisible;
+        if (visible)
+        {
+            meterWindow.LocateOnNextDraw();
+        }
+        SetMeterVisible(visible);
+    }
 
     private void SetMeterVisible(bool visible)
     {
@@ -610,7 +642,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             case "on":
             case "":
-                settingsWindow.ShowAnimated();
+                settingsWindow.LocateAnimated();
                 break;
             case "history":
                 encounterWindow.OpenRecent();
@@ -631,7 +663,7 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "sample":
                 LoadSampleEncounter();
-                SetMeterVisible(true);
+                OpenMeter();
                 break;
             case "host":
                 StartBackgroundOperation(async () =>
@@ -668,13 +700,13 @@ public sealed class Plugin : IDalamudPlugin
                 parserEngine.ResetCurrentEncounter();
                 break;
             case "factory-reset":
-                settingsWindow.ShowAnimated();
+                settingsWindow.LocateAnimated();
                 break;
             case "install":
                 InstallActPlugin(remainder);
                 break;
             case "meter":
-                SetMeterVisible(true);
+                OpenMeter();
                 break;
             default:
                 // Unknown macros should show the authoritative command list instead of
@@ -2656,11 +2688,17 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
     {
+        // Trigger repositories are territory-scoped; delayed or indefinite PictoACT VFX from
+        // the old territory can never be valid after a zone transition.
+        pictoActOverlay.Clear();
+        var localizedZoneName = zoneNameLocalizer.Localize(territoryId, zoneName);
         fflogsEstimateService.NotifyTerritoryChanged(
             territoryId,
-            zoneNameLocalizer.Localize(territoryId, zoneName));
-        hostSupervisor.PublishZone(territoryId, zoneName);
-        genericHostSupervisor.PublishZone(territoryId, zoneName);
+            localizedZoneName);
+        // ACT exposes the client-language zone name. Trigger packs commonly compare _zone
+        // with that localized value, even when the network parser reports an English name.
+        hostSupervisor.PublishZone(territoryId, localizedZoneName);
+        genericHostSupervisor.PublishZone(territoryId, localizedZoneName);
     }
 
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
@@ -2766,6 +2804,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdateForHost(IFramework _)
     {
         var now = DateTimeOffset.UtcNow;
+        ApplyPendingPostNamazuHeading(now);
         if (now < nextHostEntitySnapshotAt)
         {
             return;
@@ -2795,6 +2834,39 @@ public sealed class Plugin : IDalamudPlugin
                 logger.Error(ex, "Game-side FFXIV entity snapshot failed.");
             }
         }
+    }
+
+    private void OnPostNamazuHeadingRequested(
+        object? sender,
+        HostPostNamazuHeading heading)
+        => Interlocked.Exchange(ref pendingPostNamazuHeading, heading);
+
+    private unsafe void ApplyPendingPostNamazuHeading(DateTimeOffset now)
+    {
+        var heading = Interlocked.Exchange(ref pendingPostNamazuHeading, null);
+        if (heading is null ||
+            now - heading.Timestamp > TimeSpan.FromSeconds(1) ||
+            !float.IsFinite(heading.Heading) ||
+            !configuration.IsActCapabilityAllowed(
+                "postnamazu",
+                ActCapability.NativeGameMemory))
+        {
+            return;
+        }
+
+        var localPlayer = objectTable.LocalPlayer;
+        if (localPlayer is null ||
+            localPlayer.Address == 0 ||
+            localPlayer.Address != (nint)heading.Address)
+        {
+            return;
+        }
+
+        // The isolated Host supplies the address for legacy callback compatibility, but only the
+        // live local-player pointer is writable. This prevents the bridge from becoming a general
+        // cross-process memory-write primitive while preserving U6b's short heading updates.
+        ((NativeGameObject*)localPlayer.Address)->Rotation =
+            MathF.IEEERemainder(heading.Heading, MathF.Tau);
     }
 
     private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)
@@ -3064,9 +3136,20 @@ public sealed class Plugin : IDalamudPlugin
     private static IReadOnlyList<ActPlayerIdentity> BuildPlayerIdentities(
         IPlayerState playerState,
         IPartyList partyList,
+        IObjectTable objectTable,
         bool localPlayerDead)
     {
         var identities = new Dictionary<string, ActPlayerIdentity>(StringComparer.OrdinalIgnoreCase);
+        var rotations = new Dictionary<uint, float>();
+        foreach (var gameObject in objectTable)
+        {
+            if (gameObject.EntityId != 0)
+            {
+                rotations[gameObject.EntityId] = gameObject.Rotation;
+            }
+        }
+
+        var localGameObject = objectTable.LocalPlayer;
         if (playerState.IsLoaded && !string.IsNullOrWhiteSpace(playerState.CharacterName))
         {
             var identity = new ActPlayerIdentity(
@@ -3083,6 +3166,10 @@ public sealed class Plugin : IDalamudPlugin
                 Level = unchecked((byte)playerState.EffectiveLevel),
                 CurrentHp = localPlayerDead ? 0u : 1u,
                 MaxHp = 1,
+                PositionX = localGameObject?.Position.X ?? 0,
+                PositionY = localGameObject?.Position.Y ?? 0,
+                PositionZ = localGameObject?.Position.Z ?? 0,
+                Rotation = localGameObject?.Rotation ?? 0,
             };
             identities[identity.DisplayName] = identity;
         }
@@ -3116,6 +3203,7 @@ public sealed class Plugin : IDalamudPlugin
                 PositionX = member.Position.X,
                 PositionY = member.Position.Y,
                 PositionZ = member.Position.Z,
+                Rotation = rotations.GetValueOrDefault(member.EntityId),
             };
             identities[identity.DisplayName] = identity;
         }
