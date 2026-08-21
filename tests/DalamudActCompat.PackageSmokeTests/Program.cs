@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -39,6 +40,7 @@ using RainbowMage.OverlayPlugin.EventSources;
 using RainbowMage.OverlayPlugin.MemoryProcessors;
 using RainbowMage.OverlayPlugin.MemoryProcessors.InCombat;
 using RainbowMage.OverlayPlugin.MemoryProcessors.Party;
+using RainbowMage.OverlayPlugin.WebSocket;
 
 var testRoot = Path.Combine(Path.GetTempPath(), $"DalamudActCompat-{Guid.NewGuid():N}");
 Directory.CreateDirectory(testRoot);
@@ -72,6 +74,7 @@ try
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
+    await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
     if (string.Equals(
             Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),
@@ -8554,6 +8557,90 @@ static void ValidateOverlayInitialStateEvents()
         "Initial ChangePrimaryPlayer event did not match the OverlayPlugin protocol.");
 }
 
+static async Task ValidateOverlayWebSocketFatalAcceptRecoveryAsync()
+{
+    using var container = new RainbowMage.OverlayPlugin.TinyIoCContainer();
+    var logger = new OverlayServerTestLogger();
+    var config = new OverlayServerTestConfig
+    {
+        WSServerIP = IPAddress.Loopback.ToString(),
+        WSServerPort = 0,
+        WSServerRunning = true,
+    };
+    container.Register<RainbowMage.OverlayPlugin.ILogger>(logger);
+    container.Register<RainbowMage.OverlayPlugin.IPluginConfig>(config);
+
+    var controller = new ServerController(container);
+    controller.Start();
+    Assert(controller.Running, "Overlay WebSocket recovery probe could not start its listener.");
+
+    var originalServer = GetOverlayServer(controller);
+    InvalidateOverlayListener(originalServer);
+
+    var timeout = Stopwatch.StartNew();
+    object? recoveredServer = null;
+    while (timeout.Elapsed < TimeSpan.FromSeconds(5))
+    {
+        recoveredServer = GetOverlayServer(controller, required: false);
+        if (controller.Running &&
+            recoveredServer is not null &&
+            !ReferenceEquals(recoveredServer, originalServer))
+        {
+            break;
+        }
+
+        await Task.Delay(25);
+    }
+
+    Assert(
+        controller.Running &&
+        recoveredServer is not null &&
+        !ReferenceEquals(recoveredServer, originalServer),
+        "A fatal accept error did not replace the invalid WebSocket listener.");
+    Assert(
+        !((NetCoreServer.TcpServer)originalServer).IsAccepting,
+        "The invalid WebSocket listener remained in the recursive accept state.");
+    Assert(
+        logger.Messages.Count(message =>
+            message.Contains("caught an error with code NotSocket", StringComparison.Ordinal)) == 1,
+        "The invalid WebSocket listener emitted more than one NotSocket error before its circuit breaker ran.");
+    Assert(
+        logger.Messages.Any(message =>
+            message.Contains("recovered with a new listener", StringComparison.Ordinal)),
+        "The WebSocket controller did not report successful listener recovery.");
+
+    controller.Stop();
+    await Task.Delay(500);
+    Assert(
+        !controller.Running && GetOverlayServer(controller, required: false) is null,
+        "An explicit WebSocket stop was undone by a pending recovery task.");
+}
+
+static object GetOverlayServer(ServerController controller, bool required = true)
+{
+    var server = typeof(ServerController).GetProperty(
+                     "Server",
+                     BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(controller);
+    if (server is null && required)
+    {
+        throw new InvalidOperationException("Overlay WebSocket controller has no active server.");
+    }
+
+    return server!;
+}
+
+static void InvalidateOverlayListener(object server)
+{
+    var acceptor = typeof(NetCoreServer.TcpServer).GetField(
+                       "_acceptorSocket",
+                       BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(server) as Socket
+                   ?? throw new InvalidOperationException("NetCoreServer acceptor socket was not found.");
+
+    // A native close preserves the managed Socket's live state and reproduces the stale listener from the crash log.
+    var result = NativeSocketProbe.Close(acceptor.Handle);
+    Assert(result == 0, $"The native WebSocket listener close failed with error {Marshal.GetLastWin32Error()}.");
+}
+
 static void ValidateSettingsSerializerMemberTypes()
 {
     var owner = new EnumSettingsOwner();
@@ -9504,6 +9591,65 @@ internal static class NativeInputProbe
         uint dy,
         uint data,
         UIntPtr extraInfo);
+}
+
+internal static class NativeSocketProbe
+{
+    [DllImport("Ws2_32.dll", EntryPoint = "closesocket", SetLastError = true)]
+    public static extern int Close(nint socket);
+}
+
+internal sealed class OverlayServerTestLogger : RainbowMage.OverlayPlugin.ILogger
+{
+    private readonly object syncRoot = new();
+    private readonly List<string> messages = [];
+
+    public IReadOnlyList<string> Messages
+    {
+        get
+        {
+            lock (syncRoot)
+                return messages.ToArray();
+        }
+    }
+
+    public void Log(RainbowMage.OverlayPlugin.LogLevel level, string message)
+    {
+        lock (syncRoot)
+            messages.Add(message);
+    }
+
+    public void Log(RainbowMage.OverlayPlugin.LogLevel level, string format, params object[] args)
+        => Log(level, string.Format(format, args));
+
+    public void RegisterListener(Action<RainbowMage.OverlayPlugin.LogEntry> listener)
+    {
+    }
+
+    public void ClearListener()
+    {
+    }
+}
+
+internal sealed class OverlayServerTestConfig : RainbowMage.OverlayPlugin.IPluginConfig
+{
+    public RainbowMage.OverlayPlugin.OverlayConfigList<RainbowMage.OverlayPlugin.IOverlayConfig> Overlays { get; set; } = null!;
+    public bool HideOverlaysWhenNotActive { get; set; }
+    public bool HideOverlayDuringCutscene { get; set; }
+    public string WSServerIP { get; set; } = IPAddress.Loopback.ToString();
+    public int WSServerPort { get; set; }
+    public bool WSServerSSL { get; set; }
+    public bool WSServerRunning { get; set; }
+    public Version Version { get; set; } = new(1, 0);
+    public Dictionary<string, JObject> EventSourceConfigs { get; set; } = [];
+
+    public void MarkDirty()
+    {
+    }
+
+    public void Save()
+    {
+    }
 }
 
 internal sealed class TestActLogger : IActLogger
