@@ -52,6 +52,7 @@ try
     ValidateActCustomTriggerCompatibility();
     ValidateSynchronousActInvocation();
     ValidatePostNamazuRawLogCompatibility();
+    ValidatePostNamazuOverlayHandlerResponse();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
@@ -3452,6 +3453,50 @@ static void ValidatePostNamazuRawLogCompatibility()
     Assert(
         method is not null && method.ReturnType == typeof(void),
         "The ACT three-argument ParseRawLogLine ABI required by PostNamazu is missing.");
+}
+
+static void ValidatePostNamazuOverlayHandlerResponse()
+{
+    using var container = new RainbowMage.OverlayPlugin.TinyIoCContainer();
+    container.Register<RainbowMage.OverlayPlugin.ILogger>(new OverlayServerTestLogger());
+
+    var dispatcherType = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly.GetType(
+                             "RainbowMage.OverlayPlugin.EventDispatcher",
+                             throwOnError: true)!
+                         ?? throw new InvalidOperationException(
+                             "OverlayPlugin EventDispatcher was not found.");
+    var dispatcher = Activator.CreateInstance(dispatcherType, container)
+                     ?? throw new InvalidOperationException(
+                         "OverlayPlugin EventDispatcher could not be constructed.");
+    container.Register(dispatcherType, dispatcher);
+
+    using var eventSource = new PostNamazuEventSource(container);
+    string? actualCommand = null;
+    string? actualPayload = null;
+    eventSource.SetAction((command, payload) =>
+    {
+        actualCommand = command;
+        actualPayload = payload;
+    });
+
+    // Exercise the real dispatcher contract; invoking HandleAction directly would miss the
+    // object-or-null validation that rejected successful PostNamazu calls in v0.3.9.23.
+    var response = dispatcherType.GetMethod(
+                       "CallHandler",
+                       BindingFlags.Instance | BindingFlags.Public)!
+                   .Invoke(
+                       dispatcher,
+                       [new JObject
+                       {
+                           ["call"] = "PostNamazu",
+                           ["c"] = "command",
+                           ["p"] = "/echo ACTCOMPAT_POSTNAMAZU",
+                       }]);
+    Assert(
+        response is JObject &&
+        actualCommand == "command" &&
+        actualPayload == "/echo ACTCOMPAT_POSTNAMAZU",
+        "PostNamazu OverlayPlugin handler did not return an object after dispatching its action.");
 }
 
 static void ValidateParserDependencyVersions()

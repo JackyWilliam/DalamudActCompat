@@ -38,6 +38,8 @@ internal sealed class PostNamazuEventSource : EventSourceBase
         currentAction(
             message["c"]?.Value<string>() ?? "null",
             message["p"]?.Value<string>() ?? string.Empty);
-        return JValue.CreateNull();
+        // OverlayPlugin handlers accept only objects or a C# null response. Return an object so
+        // both in-process callers and WebSocket callers receive the same successful contract.
+        return new JObject();
     }
 }
