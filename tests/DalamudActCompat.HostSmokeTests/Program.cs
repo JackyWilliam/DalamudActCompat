@@ -88,6 +88,7 @@ await ValidateGenericPluginLoadsOnlyAfterConsentAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
 ValidatePostNamazuMarkPayloadNormalization();
+ValidatePictoActActorRemovalExtraction();
 ValidatePostNamazuQueueBreakAllCompatibility();
 await ValidatePostNamazuQueueExecutionLifecycleAsync();
 ValidatePostNamazu1366And1367SurfaceCompatibility();
@@ -598,6 +599,25 @@ void ValidatePostNamazuMarkPayloadNormalization()
     {
         // Expected: malformed ActorIDs must fail closed before entering the native runtime.
     }
+}
+
+void ValidatePictoActActorRemovalExtraction()
+{
+    var extracted = HostPluginBridge.ExtractPictoActActorRemovalCommands(
+        "Action: Remove\nType: Static\nTag: STATIC\n---\n" +
+        "Action: Remove\nType: ActorVfx\nTag: ACTOR\n---\n" +
+        "Omen: Circle\nTag: CREATE\n---\n" +
+        "Action: Remove\nRegex: ^ALL$");
+    Assert(
+        !extracted.Contains("STATIC", StringComparison.Ordinal) &&
+        !extracted.Contains("CREATE", StringComparison.Ordinal) &&
+        extracted.Contains("ACTOR", StringComparison.Ordinal) &&
+        extracted.Contains("^ALL$", StringComparison.Ordinal) &&
+        System.Text.RegularExpressions.Regex.Matches(
+            extracted,
+            "Action: Remove",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant).Count == 2,
+        "PictoACT ActorVfx/all removal routing did not preserve the upstream-owned subset.");
 }
 
 void ValidateOverlayPluginCompatibilityTypeName()

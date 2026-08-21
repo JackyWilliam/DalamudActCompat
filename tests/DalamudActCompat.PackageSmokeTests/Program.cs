@@ -415,7 +415,7 @@ static void ValidatePictoActOverlayCommands()
         !PictoActOverlayService.ShouldDrawScreenFallback(
             PictoActShapeKind.Circle,
             nativeBackendAvailable: true) &&
-        PictoActOverlayService.ShouldDrawScreenFallback(
+        !PictoActOverlayService.ShouldDrawScreenFallback(
             PictoActShapeKind.Polygon,
             nativeBackendAvailable: true) &&
         !PictoActOverlayService.ShouldDrawScreenFallback(
@@ -485,6 +485,30 @@ static void ValidatePictoActOverlayCommands()
         commands[4] is { Tag: null, Regex: null, Remove: true, Shape: null },
         "Game-side PictoACT base-shape, Auto-tag, delay, or remove parsing failed.");
 
+    var typedRemovals = PictoActOverlayService.Parse(
+        "Action: Remove\nType: StaticVfx\nTag: STATIC\n---\n" +
+        "Action: Remove\nType: Actor\nTag: ACTOR");
+    Assert(
+        typedRemovals[0].RemovalScope == PictoActRemovalScope.Static &&
+        typedRemovals[1].RemovalScope == PictoActRemovalScope.Actor,
+        "PictoACT typed StaticVfx/ActorVfx removal routing was not preserved.");
+
+    var annotatedCommands = PictoActOverlayService.Parse(
+        "这行是上游允许的说明文字\nOmen: Circle\nPos: 1, 2, 3\nScale: 3");
+    Assert(
+        annotatedCommands.Count == 1,
+        "PictoACT free-form annotation lines were not ignored like upstream.");
+    try
+    {
+        _ = PictoActOverlayService.Parse(
+            "Omen: Circle\nomen: Donut\nPos: 1, 2, 3\nScale: 3");
+        throw new InvalidOperationException("PictoACT duplicate keys were unexpectedly accepted.");
+    }
+    catch (InvalidDataException)
+    {
+        // Duplicate fields are ambiguous and upstream rejects them case-insensitively.
+    }
+
     var overlay = new PictoActOverlayService(null!);
     overlay.Apply(
         "Omen: Circle\nt: 5\nPos: 1, 2, 3\nScale: 3\n---\n" +
@@ -499,6 +523,10 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         overlay.ShapeCount == 4,
         "PictoACT shapes sharing one selector tag did not coexist.");
+    overlay.Apply("Action: Remove\nType: ActorVfx\nRegex: .*" );
+    Assert(
+        overlay.ShapeCount == 4,
+        "PictoACT ActorVfx-only removal unexpectedly removed brokered static shapes.");
     overlay.Apply("Action: Remove\nRegex: ^Auto$");
     Assert(
         overlay.ShapeCount == 2,
@@ -662,6 +690,58 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(allDigitEntityTheta - MathF.Atan2(-4, 2)) < 0.0001f,
         "PictoACT θ/Theta did not preserve legacy entity-facing semantics.");
 
+    var dynamicFollow = PictoActOverlayService.Parse(
+        "Omen: Rect\nt: 5\nPos: 40000001\nTarget: 40000002\n" +
+        "Scale: 0.5, _d, 1",
+        raw => raw switch
+        {
+            "40000001" => new System.Numerics.Vector3(10, 0, 20),
+            "40000002" => new System.Numerics.Vector3(13, 0, 24),
+            _ => null,
+        }).Single().Shape!;
+    var refreshedDynamicFollow = PictoActOverlayService.RefreshDynamicShape(
+        dynamicFollow,
+        raw => raw switch
+        {
+            "40000001" => new System.Numerics.Vector3(20, 1, 30),
+            "40000002" => new System.Numerics.Vector3(26, 2, 38),
+            _ => null,
+        },
+        _ => null);
+    Assert(
+        dynamicFollow.RequiresDynamicRefresh &&
+        refreshedDynamicFollow.Position is { X: 20, Y: 1, Z: 30 } &&
+        MathF.Abs(refreshedDynamicFollow.Angle - MathF.Atan2(6, 8)) < 0.0001f &&
+        MathF.Abs(refreshedDynamicFollow.SecondaryScale - 10) < 0.0001f,
+        $"PictoACT moving Pos/Target or _d scale stopped following entity snapshots: " +
+        $"pos={refreshedDynamicFollow.Position}, angle={refreshedDynamicFollow.Angle:R}, " +
+        $"scaleY={refreshedDynamicFollow.SecondaryScale:R}.");
+
+    var dynamicCenter = PictoActOverlayService.Parse(
+        "Omen: Rect\nt: 5\nPos: 0, -3\nO: 10000001\nScale: 1, 6, 1",
+        raw => raw == "10000001"
+            ? new System.Numerics.Vector3(10, 0, 20)
+            : null).Single().Shape!;
+    var refreshedDynamicCenter = PictoActOverlayService.RefreshDynamicShape(
+        dynamicCenter,
+        raw => raw == "10000001"
+            ? new System.Numerics.Vector3(100, 0, 100)
+            : null,
+        raw => raw == "10000001" ? MathF.PI / 2 : null);
+    Assert(
+        refreshedDynamicCenter.Position is { X: var centerX, Z: var centerZ } &&
+        MathF.Abs(centerX - 103) < 0.0001f &&
+        MathF.Abs(centerZ - 100) < 0.0001f &&
+        MathF.Abs(refreshedDynamicCenter.Angle - MathF.PI / 2) < 0.0001f,
+        "PictoACT dynamic O did not inherit the entity's current heading.");
+
+    var coordinateTheta = PictoActOverlayService.Parse(
+        "Omen: Fan90\nt: 5\nO: 10, 20, 0\nTheta: 13, 24, 0\n" +
+        "Scale: 5").Single().Shape!;
+    Assert(
+        MathF.Abs(coordinateTheta.Angle - MathF.Atan2(3, 4)) < 0.0001f,
+        "PictoACT θ/Theta coordinate targeting was not accepted.");
+
     var entityThetaBase = PictoActOverlayService.Parse(
         "Omen: Rect\nTag: ENTITY_THETA_CHANGE\nt: 5\nO: 10, 20\nθ: pi\n" +
         "Pos: 0, 0\nScale: 1, 10, 1").Single().Shape!;
@@ -709,6 +789,47 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(polygon[0].X - 100) < 0.0001f &&
         MathF.Abs(polygon[0].Z - 88) < 0.0001f,
         "PictoACT △/Triangulate polygon parsing or trailing seed removal failed.");
+
+    var nativePolygonShapes = PictoActOverlayService.BuildNativeShapes(polygonCommand.Shape!);
+    Assert(
+        nativePolygonShapes is
+        [
+            {
+                Kind: PictoActShapeKind.NativeOnly,
+                VfxPath: "vfx/omen/eff/x6d3_b2_triangle90_p1.avfx",
+                Position.X: 100,
+                Position.Z: 88,
+                PrimaryScale: var polygonHalfBase,
+                SecondaryScale: var polygonHeight,
+                Color.Z: 6,
+            },
+        ] &&
+        MathF.Abs(polygonHalfBase - 3 * MathF.Sqrt(2)) < 0.0001f &&
+        MathF.Abs(polygonHeight - 8 * MathF.Sqrt(2)) < 0.0001f,
+        "PictoACT Polygon did not map to the original game-native triangle omen geometry.");
+
+    var concavePolygon = PictoActOverlayService.Parse(
+        "Action: Triangulate\nTag: CONCAVE\nt: 8\n" +
+        "Points: 0, 0; 4, 0; 4, 4; 2, 2; 0, 4\n" +
+        "Color: 0.2, 0.8, 1, 0.7").Single().Shape!;
+    var concaveNativeShapes = PictoActOverlayService.BuildNativeShapes(concavePolygon);
+    var nativeTriangleArea = concaveNativeShapes.Sum(shape =>
+        shape.PrimaryScale * shape.SecondaryScale / 2);
+    Assert(
+        concaveNativeShapes.Count >= 3 &&
+        concaveNativeShapes.All(shape =>
+            shape.Kind == PictoActShapeKind.NativeOnly &&
+            shape.VfxPath == "vfx/omen/eff/x6d3_b2_triangle90_p1.avfx" &&
+            shape.HasExplicitColor) &&
+        MathF.Abs(nativeTriangleArea - 12) < 0.001f,
+        $"PictoACT concave Polygon native decomposition changed its filled area " +
+        $"(parts={concaveNativeShapes.Count}, area={nativeTriangleArea:R}).");
+
+    var persistentPolygon = PictoActOverlayService.Parse(
+        "Action: Triangulate\nt: 0\nPoints: 0,0; 4,0; 0,4").Single().Shape!;
+    Assert(
+        persistentPolygon.ExpiresAt == DateTimeOffset.MaxValue,
+        "PictoACT Triangulate t: 0 did not preserve upstream persistent-duration semantics.");
 
     var clippedToViewport = PictoActOverlayService.ClipPolygonToRectangle(
         [

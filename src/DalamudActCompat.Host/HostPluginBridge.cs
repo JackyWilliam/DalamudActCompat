@@ -900,6 +900,48 @@ public static class HostPluginBridge
     public static void SendPostNamazuPictoAct(string payload)
         => SendPostNamazuSemanticAction("postnamazu.pictoact", payload);
 
+    public static string ExtractPictoActActorRemovalCommands(string payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var actorRemovals = Regex.Split(
+                payload,
+                @"(?:\r\n|\n|\r)\s*---\s*(?:\r\n|\n|\r)",
+                RegexOptions.CultureInvariant)
+            .Where(segment => string.Equals(
+                ReadPictoActField(segment, "Action"),
+                "Remove",
+                StringComparison.OrdinalIgnoreCase))
+            .Where(segment => ReadPictoActField(segment, "Type")?.Trim().ToLowerInvariant()
+                is null or "" or "all" or "actor" or "actorvfx")
+            .ToArray();
+        // Static VFX are owned by the game-side broker, while ActorVfx remains owned by
+        // Triggernometry. Forward only the actor-removal subset to the upstream callback.
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, actorRemovals);
+    }
+
+    private static string? ReadPictoActField(string segment, string name)
+    {
+        foreach (var rawLine in segment.Split(['\r', '\n']))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith("//", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var separator = line.IndexOf(':');
+            if (separator > 0 && string.Equals(
+                    line[..separator].Trim(),
+                    name,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return line[(separator + 1)..].Trim();
+            }
+        }
+
+        return null;
+    }
+
     public static void SendPostNamazuSetHeading(IntPtr address, float heading)
     {
         if (!IsAllowed("postnamazu", "NativeGameMemory"))
