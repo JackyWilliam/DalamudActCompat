@@ -29,6 +29,7 @@ if (!overlayTemplates.Any(template => template.Name == "Kagerou" && !template.Is
         "OverlayPlugin built-in HTML templates were not exposed by the runtime.");
 }
 AssertActorCastExtraRotationCompatibility();
+AssertOverlayRepositoryLifecycleCompatibility();
 AssertUltimateExtraLogCompatibility();
 
 var resolver = new AssemblyDependencyResolver(assemblyPath);
@@ -333,6 +334,42 @@ static void AssertActorCastExtraRotationCompatibility()
     catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException)
     {
         // Expected: unknown packet layouts must fail closed instead of emitting corrupt 0x107 logs.
+    }
+}
+
+static void AssertOverlayRepositoryLifecycleCompatibility()
+{
+    var overlayPlugin = typeof(RainbowMage.OverlayPlugin.PluginMain).Assembly;
+    string[] processorTypes =
+    [
+        "RainbowMage.OverlayPlugin.NetworkProcessors.NetworkParser",
+        "RainbowMage.OverlayPlugin.NetworkProcessors.LineActorCastExtra",
+        "RainbowMage.OverlayPlugin.NetworkProcessors.LineActorMove",
+        "RainbowMage.OverlayPlugin.NetworkProcessors.LineSpawnNpcExtra",
+    ];
+    foreach (var typeName in processorTypes)
+    {
+        var processorType = overlayPlugin.GetType(typeName, throwOnError: true)!
+                            ?? throw new InvalidOperationException(
+                                $"OverlayPlugin network processor {typeName} was not found.");
+        var ownerType = processorType;
+        FieldInfo? repositoryField = null;
+        while (ownerType is not null && repositoryField is null)
+        {
+            repositoryField = ownerType.GetField(
+                "ffxiv",
+                BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Static |
+                BindingFlags.Public | BindingFlags.NonPublic);
+            ownerType = ownerType.BaseType;
+        }
+
+        // OverlayPlugin may be initialized again in the same assembly load context. A static
+        // field would preserve a disposed repository and silently stop its network subscriptions.
+        if (repositoryField is null || repositoryField.IsStatic || !repositoryField.IsInitOnly)
+        {
+            throw new InvalidOperationException(
+                $"OverlayPlugin network processor {typeName} does not bind an immutable repository per instance.");
+        }
     }
 }
 
