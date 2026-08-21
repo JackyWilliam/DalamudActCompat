@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.23",
+    "AssemblyVersion":  "0.3.9.24",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.23/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.24/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.23/DalamudActCompat.zip",
-    "LastUpdate":  1787303630501,
-    "Changelog":  "v0.3.9.23 补齐 Polygon 原生贴地与深度遮挡、动态 PictoACT 和 Triggernometry/PostNamazu 兼容，并修复 WebSocket 监听错误递归导致的崩溃。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.24/DalamudActCompat.zip",
+    "LastUpdate":  1787309281140,
+    "Changelog":  "v0.3.9.24 修复 OverlayPlugin 重载后 101–112 网络扩展日志停产，并修正 PostNamazu OverlayPlugin 回调成功响应。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
