@@ -210,8 +210,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
             foreach (var stored in shapes.Values.Where(value => value.Shape.StartsAt <= now))
             {
                 ActivateOrUpdateNative(stored);
-                if (stored.NativeHandle == nint.Zero &&
-                    stored.Shape.Kind != PictoActShapeKind.NativeOnly)
+                if (ShouldDrawScreenFallback(
+                        stored.Shape.Kind,
+                        nativeVfx is not null))
                 {
                     fallbackShapes.Add(stored.Shape);
                 }
@@ -271,6 +272,16 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         try
         {
+            if (stored.NativeHandle != nint.Zero &&
+                !nativeVfx.IsActive(stored.NativeHandle))
+            {
+                // Static omens can be reclaimed by the client before PictoACT's own duration
+                // ends. Recreate the current shape instead of turning later Change commands
+                // into a depthless ImGui outline floating across actors.
+                stored.NativeHandle = nint.Zero;
+                stored.NativeDirty = false;
+            }
+
             if (stored.NativeHandle == nint.Zero)
             {
                 stored.NativeHandle = nativeVfx.Create(stored.Shape);
@@ -280,10 +291,11 @@ internal sealed partial class PictoActOverlayService : IDisposable
             {
                 if (!nativeVfx.Update(stored.NativeHandle, stored.Shape))
                 {
-                    // An external game teardown already destroyed this VFX. Do not
-                    // recreate stale encounter geometry in the next territory.
+                    // The remove hook can run between IsActive and Update. Clear() owns
+                    // territory invalidation, so a still-stored shape is safe to recreate.
                     stored.NativeHandle = nint.Zero;
-                    stored.NativeCreationFailed = true;
+                    stored.NativeDirty = false;
+                    stored.NativeHandle = nativeVfx.Create(stored.Shape);
                 }
 
                 stored.NativeDirty = false;
@@ -296,6 +308,21 @@ internal sealed partial class PictoActOverlayService : IDisposable
             stored.NativeCreationFailed = true;
             log?.Warning(ex, $"PictoACT native VFX '{stored.Shape.VfxPath}' failed.");
         }
+    }
+
+    internal static bool ShouldDrawScreenFallback(
+        PictoActShapeKind kind,
+        bool nativeBackendAvailable)
+    {
+        if (kind == PictoActShapeKind.NativeOnly)
+        {
+            return false;
+        }
+
+        // A native-capable omen with no handle must not silently become a screen overlay:
+        // ImGui has no access to the game's depth buffer and will draw the range over actors.
+        return kind == PictoActShapeKind.Polygon ||
+               !nativeBackendAvailable;
     }
 
     private void QueueNativeRemoval(nint handle)

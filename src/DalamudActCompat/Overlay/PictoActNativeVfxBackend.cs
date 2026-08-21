@@ -147,6 +147,14 @@ internal sealed class PictoActNativeVfxBackend : IDisposable
         return true;
     }
 
+    internal bool IsActive(nint handle)
+    {
+        lock (syncRoot)
+        {
+            return activeHandles.Contains(handle);
+        }
+    }
+
     internal bool Remove(nint handle)
     {
         lock (syncRoot)

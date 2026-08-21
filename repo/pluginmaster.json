@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.21",
+    "AssemblyVersion":  "0.3.9.22",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.21/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.22/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.21/DalamudActCompat.zip",
-    "LastUpdate":  1787284303262,
-    "Changelog":  "v0.3.9.21 修复 M9 BBY 蝙蝠绘图线程异常、国服咏唱朝向解析与 A2 大范围图形只显示线框，并统一解析器后台状态读取。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.22/DalamudActCompat.zip",
+    "LastUpdate":  1787294660942,
+    "Changelog":  "v0.3.9.22 修复 PictoACT 原生范围被客户端提前回收后降级为悬空线框，并阻止原生后端可用时圆形、矩形和扇形落入无深度屏幕回退。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

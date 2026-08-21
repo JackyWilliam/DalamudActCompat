@@ -408,6 +408,20 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         PictoActNativeVfxBackend.UsesExpectedFieldLayout,
         "PictoACT native VFX fields drifted from the current FFXIVClientStructs layout.");
+    Assert(
+        PictoActOverlayService.ShouldDrawScreenFallback(
+            PictoActShapeKind.Circle,
+            nativeBackendAvailable: false) &&
+        !PictoActOverlayService.ShouldDrawScreenFallback(
+            PictoActShapeKind.Circle,
+            nativeBackendAvailable: true) &&
+        PictoActOverlayService.ShouldDrawScreenFallback(
+            PictoActShapeKind.Polygon,
+            nativeBackendAvailable: true) &&
+        !PictoActOverlayService.ShouldDrawScreenFallback(
+            PictoActShapeKind.NativeOnly,
+            nativeBackendAvailable: false),
+        "PictoACT native-capable omens can regress to a depthless screen fallback.");
     var pluginSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(), "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
     Assert(
