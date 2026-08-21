@@ -20,6 +20,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
     private readonly List<PictoActOverlayCommand> pendingCommands = [];
     private readonly List<nint> pendingNativeRemovals = [];
     private long shapeSequence;
+    private DateTimeOffset nextDynamicRefreshAt;
 
     internal PictoActOverlayService(
         IGameGui gameGui,
@@ -72,6 +73,13 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         if (command.Remove)
         {
+            if (command.RemovalScope == PictoActRemovalScope.Actor)
+            {
+                // Actor VFX live in Triggernometry's upstream manager in the Host. The
+                // rewritten callback forwards that half there and brokers only static VFX.
+                return;
+            }
+
             CancelPendingMatching(command.Tag, command.Regex);
             RemoveMatching(command.Tag, command.Regex);
             return;
@@ -111,7 +119,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
         {
             foreach (var stored in shapes.Values)
             {
-                QueueNativeRemoval(stored.NativeHandle);
+                QueueNativeRemovals(stored.NativeHandles);
             }
 
             shapes.Clear();
@@ -129,7 +137,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
                      .Select(pair => pair.Key)
                      .ToArray())
         {
-            QueueNativeRemoval(shapes[key].NativeHandle);
+            QueueNativeRemovals(shapes[key].NativeHandles);
             shapes.Remove(key);
         }
     }
@@ -140,7 +148,8 @@ internal sealed partial class PictoActOverlayService : IDisposable
         {
             var stored = shapes[key];
             stored.Shape = ApplyPatch(stored.Shape, command.Patch!);
-            stored.NativeDirty = stored.NativeHandle != nint.Zero;
+            stored.NativeShapes = null;
+            stored.NativeDirty = stored.NativeHandles.Count > 0;
         }
     }
 
@@ -169,7 +178,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         foreach (var stored in shapes.Values)
         {
-            QueueNativeRemoval(stored.NativeHandle);
+            QueueNativeRemovals(stored.NativeHandles);
         }
 
         shapes.Clear();
@@ -196,13 +205,21 @@ internal sealed partial class PictoActOverlayService : IDisposable
         lock (syncRoot)
         {
             ProcessPending(now);
+            if (now >= nextDynamicRefreshAt)
+            {
+                RefreshDynamicShapes();
+                // Upstream PictoACT samples moving entities at roughly 100 ms. Matching that
+                // cadence avoids needless object-table scans without changing visible behavior.
+                nextDynamicRefreshAt = now.AddMilliseconds(100);
+            }
+
             DrainNativeRemovals();
             foreach (var expired in shapes
                          .Where(pair => pair.Value.Shape.ExpiresAt <= now)
                          .Select(pair => pair.Key)
                          .ToArray())
             {
-                QueueNativeRemoval(shapes[expired].NativeHandle);
+                QueueNativeRemovals(shapes[expired].NativeHandles);
                 shapes.Remove(expired);
             }
 
@@ -264,51 +281,250 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
     private void ActivateOrUpdateNative(StoredPictoActShape stored)
     {
-        if (nativeVfx is null || stored.NativeCreationFailed ||
-            stored.Shape.Kind == PictoActShapeKind.Polygon)
+        if (nativeVfx is null || stored.NativeCreationFailed)
         {
             return;
         }
 
         try
         {
-            if (stored.NativeHandle != nint.Zero &&
-                !nativeVfx.IsActive(stored.NativeHandle))
+            // Polygon decomposition is deterministic for one shape revision but can be
+            // expensive for large BBY safe-zone paths, so only rebuild it after Change.
+            var nativeShapes = stored.NativeShapes ??= BuildNativeShapes(stored.Shape);
+            while (stored.NativeHandles.Count > nativeShapes.Count)
             {
-                // Static omens can be reclaimed by the client before PictoACT's own duration
-                // ends. Recreate the current shape instead of turning later Change commands
-                // into a depthless ImGui outline floating across actors.
-                stored.NativeHandle = nint.Zero;
-                stored.NativeDirty = false;
+                var lastIndex = stored.NativeHandles.Count - 1;
+                QueueNativeRemoval(stored.NativeHandles[lastIndex]);
+                stored.NativeHandles.RemoveAt(lastIndex);
             }
 
-            if (stored.NativeHandle == nint.Zero)
+            for (var index = 0; index < nativeShapes.Count; index++)
             {
-                stored.NativeHandle = nativeVfx.Create(stored.Shape);
-                stored.NativeDirty = false;
-            }
-            else if (stored.NativeDirty)
-            {
-                if (!nativeVfx.Update(stored.NativeHandle, stored.Shape))
+                if (index == stored.NativeHandles.Count)
+                {
+                    stored.NativeHandles.Add(nint.Zero);
+                }
+
+                var handle = stored.NativeHandles[index];
+                if (handle != nint.Zero && !nativeVfx.IsActive(handle))
+                {
+                    // The client can independently reclaim one member of a compound polygon.
+                    // Recreate only that member and keep the remaining native VFX stable.
+                    handle = nint.Zero;
+                    stored.NativeHandles[index] = nint.Zero;
+                }
+
+                if (handle == nint.Zero)
+                {
+                    stored.NativeHandles[index] = nativeVfx.Create(nativeShapes[index]);
+                    continue;
+                }
+
+                if (stored.NativeDirty && !nativeVfx.Update(handle, nativeShapes[index]))
                 {
                     // The remove hook can run between IsActive and Update. Clear() owns
                     // territory invalidation, so a still-stored shape is safe to recreate.
-                    stored.NativeHandle = nint.Zero;
-                    stored.NativeDirty = false;
-                    stored.NativeHandle = nativeVfx.Create(stored.Shape);
+                    stored.NativeHandles[index] = nativeVfx.Create(nativeShapes[index]);
                 }
-
-                stored.NativeDirty = false;
             }
+
+            stored.NativeDirty = false;
         }
         catch (Exception ex)
         {
-            QueueNativeRemoval(stored.NativeHandle);
-            stored.NativeHandle = nint.Zero;
+            QueueNativeRemovals(stored.NativeHandles);
+            stored.NativeHandles.Clear();
             stored.NativeCreationFailed = true;
             log?.Warning(ex, $"PictoACT native VFX '{stored.Shape.VfxPath}' failed.");
         }
     }
+
+    private void RefreshDynamicShapes()
+    {
+        if (objectTable is null)
+        {
+            return;
+        }
+
+        foreach (var stored in shapes.Values.Where(value => value.Shape.RequiresDynamicRefresh))
+        {
+            var refreshed = RefreshDynamicShape(
+                stored.Shape,
+                ResolveEntityPosition,
+                ResolveEntityHeading);
+            var renderStateChanged = !HasEquivalentRenderState(stored.Shape, refreshed);
+            stored.Shape = refreshed;
+            if (!renderStateChanged)
+            {
+                continue;
+            }
+
+            stored.NativeShapes = null;
+            stored.NativeDirty = stored.NativeHandles.Count > 0;
+        }
+    }
+
+    internal static IReadOnlyList<PictoActShape> BuildNativeShapes(PictoActShape shape)
+    {
+        if (shape.Kind != PictoActShapeKind.Polygon)
+        {
+            return [shape];
+        }
+
+        var polygon = shape.Polygon ??
+                      throw new InvalidDataException("PictoACT polygon has no points.");
+        var result = new List<PictoActShape>();
+        foreach (var (first, second, third) in TriangulateWorldPath(shape, polygon))
+        {
+            AppendIsoscelesTriangleVfx(result, shape, first, second, third);
+        }
+
+        return result.Count > 0
+            ? result
+            : throw new InvalidDataException("PictoACT polygon could not be triangulated.");
+    }
+
+    private static void AppendIsoscelesTriangleVfx(
+        List<PictoActShape> result,
+        PictoActShape template,
+        Vector3 first,
+        Vector3 second,
+        Vector3 third)
+    {
+        const float tolerance = 0.05f;
+        var oppositeSides = new[]
+        {
+            (Length: GroundDistance(second, third), Vertex: first),
+            (Length: GroundDistance(third, first), Vertex: second),
+            (Length: GroundDistance(first, second), Vertex: third),
+        }.OrderBy(pair => pair.Length).ToArray();
+        var (a, vertexA) = oppositeSides[0];
+        var (b, vertexB) = oppositeSides[1];
+        var (c, vertexC) = oppositeSides[2];
+
+        if (MathF.Abs(a - b) <= tolerance && c > tolerance)
+        {
+            AppendNativeIsosceles(result, template, vertexC, vertexA, vertexB);
+            return;
+        }
+
+        if (MathF.Abs(b - c) <= tolerance && a > tolerance)
+        {
+            AppendNativeIsosceles(result, template, vertexA, vertexB, vertexC);
+            return;
+        }
+
+        if (MathF.Abs(c - a) <= tolerance && b > tolerance)
+        {
+            AppendNativeIsosceles(result, template, vertexB, vertexC, vertexA);
+            return;
+        }
+
+        var difference = a * a + b * b - c * c;
+        var error = MathF.Sqrt(2) * tolerance * MathF.Max(a, b);
+        if (difference > error)
+        {
+            var circumcenter = Circumcenter(vertexA, vertexB, vertexC);
+            AppendNativeIsosceles(result, template, circumcenter, vertexA, vertexB);
+            AppendNativeIsosceles(result, template, circumcenter, vertexB, vertexC);
+            AppendNativeIsosceles(result, template, circumcenter, vertexC, vertexA);
+            return;
+        }
+
+        if (difference >= -error)
+        {
+            var midpoint = (vertexA + vertexB) / 2;
+            AppendNativeIsosceles(result, template, midpoint, vertexC, vertexA);
+            AppendNativeIsosceles(result, template, midpoint, vertexC, vertexB);
+            return;
+        }
+
+        var ab = GroundVector(vertexB, vertexA);
+        var bc = GroundVector(vertexB, vertexC);
+        var projection = Vector2.Dot(bc, ab) / ab.LengthSquared();
+        var foot = new Vector3(
+            vertexB.X + projection * ab.X,
+            (vertexA.Y + vertexB.Y + vertexC.Y) / 3,
+            vertexB.Z + projection * ab.Y);
+        var midpointB = (vertexC + vertexA) / 2;
+        var midpointA = (vertexC + vertexB) / 2;
+        AppendNativeIsosceles(result, template, midpointA, foot, vertexB);
+        AppendNativeIsosceles(result, template, midpointA, foot, vertexC);
+        AppendNativeIsosceles(result, template, midpointB, foot, vertexC);
+        AppendNativeIsosceles(result, template, midpointB, foot, vertexA);
+    }
+
+    private static void AppendNativeIsosceles(
+        List<PictoActShape> result,
+        PictoActShape template,
+        Vector3 apex,
+        Vector3 firstBaseVertex,
+        Vector3 secondBaseVertex)
+    {
+        var baseMidpoint = (firstBaseVertex + secondBaseVertex) / 2;
+        var halfBase = GroundDistance(firstBaseVertex, secondBaseVertex) / 2;
+        var height = GroundDistance(apex, baseMidpoint);
+        if (halfBase <= 0.00001f || height <= 0.00001f)
+        {
+            return;
+        }
+
+        // PictoACT's source implementation uses this right-isosceles omen. Its unit
+        // triangle is scaled by sqrt(2), so arbitrary polygons retain their exact area.
+        const string triangleVfxPath = "vfx/omen/eff/x6d3_b2_triangle90_p1.avfx";
+        var angle = MathF.Atan2(baseMidpoint.X - apex.X, baseMidpoint.Z - apex.Z);
+        result.Add(template with
+        {
+            VfxPath = triangleVfxPath,
+            Kind = PictoActShapeKind.NativeOnly,
+            Position = apex,
+            PrimaryScale = halfBase * MathF.Sqrt(2),
+            SecondaryScale = height * MathF.Sqrt(2),
+            Angle = angle,
+            Pitch = 0,
+            Yaw = 0,
+            TertiaryScale = 1,
+            SourcePosition = apex,
+            SourceTarget = null,
+            SourceAngle = angle,
+            TransformCenter = null,
+            TransformRotation = null,
+            KeepX = true,
+            KeepY = true,
+            SourcePolygon = null,
+            Polygon = null,
+        });
+    }
+
+    private static Vector3 Circumcenter(Vector3 first, Vector3 second, Vector3 third)
+    {
+        var denominator = 2 * (
+            first.X * (second.Z - third.Z) +
+            second.X * (third.Z - first.Z) +
+            third.X * (first.Z - second.Z));
+        if (MathF.Abs(denominator) <= 0.00001f)
+        {
+            return (first + second + third) / 3;
+        }
+
+        var firstSquared = first.X * first.X + first.Z * first.Z;
+        var secondSquared = second.X * second.X + second.Z * second.Z;
+        var thirdSquared = third.X * third.X + third.Z * third.Z;
+        return new Vector3(
+            (firstSquared * (second.Z - third.Z) +
+             secondSquared * (third.Z - first.Z) +
+             thirdSquared * (first.Z - second.Z)) / denominator,
+            (first.Y + second.Y + third.Y) / 3,
+            (firstSquared * (third.X - second.X) +
+             secondSquared * (first.X - third.X) +
+             thirdSquared * (second.X - first.X)) / denominator);
+    }
+
+    private static Vector2 GroundVector(Vector3 from, Vector3 to)
+        => new(to.X - from.X, to.Z - from.Z);
+
+    private static float GroundDistance(Vector3 first, Vector3 second)
+        => GroundVector(first, second).Length();
 
     internal static bool ShouldDrawScreenFallback(
         PictoActShapeKind kind,
@@ -321,8 +537,15 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         // A native-capable omen with no handle must not silently become a screen overlay:
         // ImGui has no access to the game's depth buffer and will draw the range over actors.
-        return kind == PictoActShapeKind.Polygon ||
-               !nativeBackendAvailable;
+        return !nativeBackendAvailable;
+    }
+
+    private void QueueNativeRemovals(IEnumerable<nint> handles)
+    {
+        foreach (var handle in handles)
+        {
+            QueueNativeRemoval(handle);
+        }
     }
 
     private void QueueNativeRemoval(nint handle)
@@ -826,9 +1049,11 @@ internal sealed partial class PictoActOverlayService : IDisposable
         => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
 
     private static bool IsInsideTriangle(Vector2 point, Vector2 a, Vector2 b, Vector2 c)
-        => Cross(a, b, point) > 0.00001f &&
-           Cross(b, c, point) > 0.00001f &&
-           Cross(c, a, point) > 0.00001f;
+        // A reflex vertex on an ear boundary must also block clipping; otherwise the
+        // produced triangles overlap and a concave safe zone gains extra filled area.
+        => Cross(a, b, point) >= -0.00001f &&
+           Cross(b, c, point) >= -0.00001f &&
+           Cross(c, a, point) >= -0.00001f;
 
     private static IReadOnlyList<Vector3> BuildCirclePath(PictoActShape shape)
     {
@@ -890,24 +1115,51 @@ internal sealed partial class PictoActOverlayService : IDisposable
         PictoActShape shape,
         PictoActShapePatch patch)
     {
+        var positionSpecified = patch.Position.HasValue;
         var sourcePosition = patch.Position ?? shape.SourcePosition;
+        var sourcePositionEntity = positionSpecified
+            ? patch.PositionEntity
+            : shape.SourcePositionEntity;
         var sourceTarget = patch.TargetSpecified
             ? patch.Target
             : patch.Angle.HasValue
                 ? null
                 : shape.SourceTarget;
+        var sourceTargetEntity = patch.TargetSpecified
+            ? patch.TargetEntity
+            : patch.Angle.HasValue
+                ? null
+                : shape.SourceTargetEntity;
         var sourceAngle = patch.Angle ??
-            (sourceTarget.HasValue && (patch.Position.HasValue || patch.TargetSpecified)
+            (sourceTarget.HasValue && (positionSpecified || patch.TargetSpecified)
                 ? DirectionTo(sourcePosition, sourceTarget.Value)
                 : shape.SourceAngle);
         var transformCenter = patch.TransformCenterSpecified
             ? patch.TransformCenter
             : shape.TransformCenter;
-        var transformRotation = patch.TransformRotationSpecified
-            ? patch.TransformRotationTarget is { } rotationTarget
-                ? DirectionTo(transformCenter ?? Vector3.Zero, rotationTarget)
-                : patch.TransformRotation
-            : shape.TransformRotation;
+        var transformCenterEntity = patch.TransformCenterSpecified
+            ? patch.TransformCenterEntity
+            : shape.TransformCenterEntity;
+        var transformRotationMode = patch.TransformRotationMode !=
+                                    PictoActTransformRotationMode.Unspecified
+            ? patch.TransformRotationMode
+            : shape.TransformRotationMode;
+        var transformRotationTarget = patch.TransformRotationSpecified
+            ? patch.TransformRotationTarget
+            : shape.TransformRotationTarget;
+        var transformRotationTargetEntity = patch.TransformRotationSpecified
+            ? patch.TransformRotationTargetEntity
+            : shape.TransformRotationTargetEntity;
+        var transformRotation = transformRotationMode switch
+        {
+            PictoActTransformRotationMode.Fixed => patch.TransformRotationSpecified
+                ? patch.TransformRotation
+                : shape.TransformRotation,
+            PictoActTransformRotationMode.Target when transformRotationTarget.HasValue =>
+                DirectionTo(transformCenter ?? Vector3.Zero, transformRotationTarget.Value),
+            PictoActTransformRotationMode.Default when transformCenterEntity is null => null,
+            _ => shape.TransformRotation ?? MathF.PI,
+        };
         var keepX = patch.KeepX ?? shape.KeepX;
         var keepY = patch.KeepY ?? shape.KeepY;
         var (position, angle) = ResolveTransform(
@@ -926,16 +1178,22 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 keepX,
                 keepY).Position)
             .ToArray();
-        var scale = patch.ScaleExpression is not null
+        var scaleExpression = patch.ScaleExpression ?? shape.ScaleExpression;
+        var scaleIsCylindrical = patch.ScaleExpression is not null
+            ? patch.ScaleIsCylindrical
+            : shape.ScaleIsCylindrical;
+        var scale = scaleExpression is not null
             ? ParseScale(
-                patch.ScaleExpression,
-                patch.ScaleIsCylindrical,
+                scaleExpression,
+                scaleIsCylindrical,
                 DistanceTo(sourcePosition, sourceTarget))
             : (Vector3?)null;
         return shape with
         {
             SourcePosition = sourcePosition,
+            SourcePositionEntity = sourcePositionEntity,
             SourceTarget = sourceTarget,
+            SourceTargetEntity = sourceTargetEntity,
             Position = position,
             PrimaryScale = MathF.Abs(scale?.X ?? shape.PrimaryScale),
             SecondaryScale = MathF.Abs(scale?.Y ?? shape.SecondaryScale),
@@ -947,14 +1205,140 @@ internal sealed partial class PictoActOverlayService : IDisposable
             Color = patch.Color ?? shape.Color,
             HasExplicitColor = patch.Color.HasValue || shape.HasExplicitColor,
             TransformCenter = transformCenter,
+            TransformCenterEntity = transformCenterEntity,
             TransformRotation = transformRotation,
+            TransformRotationMode = transformRotationMode,
+            TransformRotationTarget = transformRotationTarget,
+            TransformRotationTargetEntity = transformRotationTargetEntity,
             KeepX = keepX,
             KeepY = keepY,
+            ScaleExpression = scaleExpression,
+            ScaleIsCylindrical = scaleIsCylindrical,
             Polygon = polygon,
         };
     }
 
+    internal static PictoActShape RefreshDynamicShape(
+        PictoActShape shape,
+        Func<string, Vector3?> positionResolver,
+        Func<string, float?> headingResolver)
+    {
+        if (!shape.RequiresDynamicRefresh)
+        {
+            return shape;
+        }
+
+        var sourcePosition = shape.SourcePositionEntity is not null
+            ? ResolveDynamicValue(
+                shape.SourcePositionEntity,
+                shape.SourcePosition,
+                positionResolver)
+            : shape.SourcePosition;
+        var sourceTarget = shape.SourceTargetEntity is not null
+            ? ResolveDynamicValue(
+                shape.SourceTargetEntity,
+                shape.SourceTarget ?? Vector3.Zero,
+                positionResolver)
+            : shape.SourceTarget;
+        var transformCenter = shape.TransformCenterEntity is not null
+            ? ResolveDynamicValue(
+                shape.TransformCenterEntity,
+                shape.TransformCenter ?? Vector3.Zero,
+                positionResolver)
+            : shape.TransformCenter;
+        var transformRotationTarget = shape.TransformRotationTargetEntity is not null
+            ? ResolveDynamicValue(
+                shape.TransformRotationTargetEntity,
+                shape.TransformRotationTarget ?? Vector3.Zero,
+                positionResolver)
+            : shape.TransformRotationTarget;
+        var transformRotation = shape.TransformRotationMode switch
+        {
+            PictoActTransformRotationMode.Default when shape.TransformCenterEntity is not null =>
+                headingResolver(shape.TransformCenterEntity) ?? shape.TransformRotation ?? MathF.PI,
+            PictoActTransformRotationMode.Default => null,
+            PictoActTransformRotationMode.Target when transformRotationTarget.HasValue =>
+                DirectionTo(transformCenter ?? Vector3.Zero, transformRotationTarget.Value),
+            _ => shape.TransformRotation,
+        };
+        var sourceAngle = sourceTarget.HasValue
+            ? DirectionTo(sourcePosition, sourceTarget.Value)
+            : shape.SourceAngle;
+        var (position, angle) = ResolveTransform(
+            sourcePosition,
+            sourceAngle,
+            transformCenter,
+            transformRotation,
+            shape.KeepX,
+            shape.KeepY);
+        var scale = shape.ScaleExpression is not null
+            ? ParseScale(
+                shape.ScaleExpression,
+                shape.ScaleIsCylindrical,
+                DistanceTo(sourcePosition, sourceTarget))
+            : new Vector3(shape.PrimaryScale, shape.SecondaryScale, shape.TertiaryScale);
+        var polygon = shape.SourcePolygon?
+            .Select(point => ResolveTransform(
+                point,
+                MathF.PI,
+                transformCenter,
+                transformRotation,
+                shape.KeepX,
+                shape.KeepY).Position)
+            .ToArray();
+
+        return shape with
+        {
+            SourcePosition = sourcePosition,
+            SourceTarget = sourceTarget,
+            SourceAngle = sourceAngle,
+            TransformCenter = transformCenter,
+            TransformRotation = transformRotation,
+            TransformRotationTarget = transformRotationTarget,
+            Position = position,
+            Angle = angle,
+            PrimaryScale = scale.X,
+            SecondaryScale = scale.Y,
+            TertiaryScale = scale.Z,
+            Polygon = polygon,
+        };
+    }
+
+    private static Vector3 ResolveDynamicValue(
+        string entityReference,
+        Vector3 previousValue,
+        Func<string, Vector3?> resolver)
+        => resolver(entityReference) ?? previousValue;
+
+    private static bool HasEquivalentRenderState(PictoActShape first, PictoActShape second)
+        => first.Position == second.Position &&
+           first.PrimaryScale == second.PrimaryScale &&
+           first.SecondaryScale == second.SecondaryScale &&
+           first.TertiaryScale == second.TertiaryScale &&
+           first.Angle == second.Angle &&
+           first.Pitch == second.Pitch &&
+           first.Yaw == second.Yaw &&
+           PolygonEquals(first.Polygon, second.Polygon);
+
+    private static bool PolygonEquals(
+        IReadOnlyList<Vector3>? first,
+        IReadOnlyList<Vector3>? second)
+    {
+        if (ReferenceEquals(first, second))
+        {
+            return true;
+        }
+
+        return first is not null && second is not null && first.SequenceEqual(second);
+    }
+
     private Vector3? ResolveEntityPosition(string value)
+        => ResolveEntityState(value)?.Position;
+
+    private float? ResolveEntityHeading(string value)
+        => ResolveEntityState(value)?.Heading;
+
+    private (Vector3 Position, float Heading)? ResolveEntityState(string value)
     {
         if (objectTable is null)
         {
@@ -977,9 +1361,11 @@ internal sealed partial class PictoActOverlayService : IDisposable
             candidates.Add(hexId);
         }
 
-        return objectTable
-            .FirstOrDefault(gameObject => candidates.Contains(gameObject.EntityId))
-            ?.Position;
+        var gameObject = objectTable
+            .FirstOrDefault(candidate => candidates.Contains(candidate.EntityId));
+        return gameObject is null
+            ? null
+            : (gameObject.Position, gameObject.Rotation);
     }
 
     private static (Vector3 Position, float Angle) ResolveTransform(
@@ -1062,6 +1448,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
                     null)
                 {
                     ExecuteAt = ParseExecuteAt(values),
+                    RemovalScope = ParseRemovalScope(values),
                 });
                 continue;
             }
@@ -1189,7 +1576,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 color,
                 colorText is not null,
                 startsAt,
-                duration.HasValue ? startsAt.AddSeconds(duration.Value) : DateTimeOffset.MaxValue,
+                // Upstream Triangulate treats an omitted or zero duration as persistent,
+                // unlike ordinary Create where an explicit t: 0 removes immediately.
+                duration is > 0 ? startsAt.AddSeconds(duration.Value) : DateTimeOffset.MaxValue,
                 1,
                 sourcePoints[0],
                 null,
@@ -1199,7 +1588,16 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 transform.KeepX ?? true,
                 transform.KeepY ?? true,
                 sourcePoints,
-                transformed),
+                transformed)
+            {
+                TransformCenterEntity = transform.CenterEntity,
+                TransformRotationMode = transform.RotationMode ==
+                                        PictoActTransformRotationMode.Unspecified
+                    ? PictoActTransformRotationMode.Default
+                    : transform.RotationMode,
+                TransformRotationTarget = transform.RotationTarget,
+                TransformRotationTargetEntity = transform.RotationTargetEntity,
+            },
             null)
         {
             ExecuteAt = startsAt,
@@ -1212,14 +1610,16 @@ internal sealed partial class PictoActOverlayService : IDisposable
         Func<string, Vector3?>? entityResolver)
     {
         var (vfxPath, kind, fanRadians) = ParseVfx(values);
-        var sourcePosition = ParseVector3(
+        var sourcePositionArg = ParseCoordinateArg(
             values.GetValueOrDefault("Pos", "0, 0, 0"),
             "Pos",
             entityResolver);
-        var sourceTarget = Optional(values, "Target") is { } target
-            ? ParseVector3(target, "Target", entityResolver)
-            : (Vector3?)null;
-        if (sourceTarget.HasValue &&
+        var sourceTargetArg = Optional(values, "Target") is { } target
+            ? ParseCoordinateArg(target, "Target", entityResolver)
+            : null;
+        var sourcePosition = sourcePositionArg.Value;
+        var sourceTarget = sourceTargetArg?.Value;
+        if (sourceTargetArg is not null &&
             (Optional(values, "Angle") is not null || Optional(values, "Angle3D") is not null))
         {
             throw new InvalidDataException(
@@ -1249,10 +1649,21 @@ internal sealed partial class PictoActOverlayService : IDisposable
         }
 
         delay = Math.Max(0, delay);
-        var sourceAngles = ParseAngles(values, sourceTarget.HasValue
-            ? DirectionTo(sourcePosition, sourceTarget.Value)
+        var sourceAngles = ParseAngles(values, sourceTargetArg is not null
+            ? DirectionTo(sourcePosition, sourceTargetArg.Value)
             : MathF.PI);
         var transform = ParseTransform(values, entityResolver);
+        var transformRotationMode = transform.RotationMode ==
+                                    PictoActTransformRotationMode.Unspecified
+            ? PictoActTransformRotationMode.Default
+            : transform.RotationMode;
+        if (transformRotationMode == PictoActTransformRotationMode.Target &&
+            transform.Center is null)
+        {
+            throw new InvalidDataException(
+                "PictoACT θ as a coordinate or entity requires O/Center.");
+        }
+
         var (position, transformedAngle) = ResolveTransform(
             sourcePosition,
             sourceAngles.X,
@@ -1288,7 +1699,17 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 transform.KeepX ?? true,
                 transform.KeepY ?? true,
                 null,
-                null),
+                null)
+            {
+                SourcePositionEntity = sourcePositionArg.EntityReference,
+                SourceTargetEntity = sourceTargetArg?.EntityReference,
+                TransformCenterEntity = transform.CenterEntity,
+                TransformRotationMode = transformRotationMode,
+                TransformRotationTarget = transform.RotationTarget,
+                TransformRotationTargetEntity = transform.RotationTargetEntity,
+                ScaleExpression = scaleExpression ?? "1",
+                ScaleIsCylindrical = scaleIsCylindrical,
+            },
             null)
         {
             ExecuteAt = startsAt,
@@ -1395,6 +1816,17 @@ internal sealed partial class PictoActOverlayService : IDisposable
         return DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, delay));
     }
 
+    private static PictoActRemovalScope ParseRemovalScope(
+        IReadOnlyDictionary<string, string> values)
+        => values.GetValueOrDefault("Type", "All").Trim().ToLowerInvariant() switch
+        {
+            "" or "all" => PictoActRemovalScope.All,
+            "static" or "staticvfx" => PictoActRemovalScope.Static,
+            "actor" or "actorvfx" => PictoActRemovalScope.Actor,
+            var value => throw new InvalidDataException(
+                $"PictoACT Remove VFX type '{value}' is invalid."),
+        };
+
     private static PictoActShapePatch ParsePatch(
         IReadOnlyDictionary<string, string> values,
         Func<string, Vector3?>? entityResolver)
@@ -1405,21 +1837,22 @@ internal sealed partial class PictoActOverlayService : IDisposable
             ? ParseAngle3D(angle3D)
             : (Vector3?)null;
         var targetSpecified = values.ContainsKey("Target");
-        var target = Optional(values, "Target") is { } targetText &&
-                     !string.Equals(targetText, "clear", StringComparison.OrdinalIgnoreCase)
-            ? ParseVector3(targetText, "Target", entityResolver)
-            : (Vector3?)null;
+        var targetArg = Optional(values, "Target") is { } targetText &&
+                        !string.Equals(targetText, "clear", StringComparison.OrdinalIgnoreCase)
+            ? ParseCoordinateArg(targetText, "Target", entityResolver)
+            : null;
         if (targetSpecified && angles.HasValue)
         {
             throw new InvalidDataException(
                 "PictoACT Target and Angle/Angle3D cannot both be set.");
         }
 
+        var positionArg = Optional(values, "Pos") is { } position
+            ? ParseCoordinateArg(position, "Pos", entityResolver)
+            : null;
         return new PictoActShapePatch(
-            Optional(values, "Pos") is { } position
-                ? ParseVector3(position, "Pos", entityResolver)
-                : null,
-            target,
+            positionArg?.Value,
+            targetArg?.Value,
             targetSpecified,
             scaleExpression,
             scaleIsCylindrical,
@@ -1437,7 +1870,14 @@ internal sealed partial class PictoActOverlayService : IDisposable
             transform.RotationSpecified,
             transform.RotationTarget,
             transform.KeepX,
-            transform.KeepY);
+            transform.KeepY)
+        {
+            PositionEntity = positionArg?.EntityReference,
+            TargetEntity = targetArg?.EntityReference,
+            TransformCenterEntity = transform.CenterEntity,
+            TransformRotationMode = transform.RotationMode,
+            TransformRotationTargetEntity = transform.RotationTargetEntity,
+        };
     }
 
     private static PictoActTransform ParseTransform(
@@ -1446,10 +1886,11 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         var centerSpecified = TryGetAny(values, out var centerText, "O", "Center");
         var rotationSpecified = TryGetAny(values, out var rotationText, "θ", "Theta");
-        var center = centerSpecified &&
-                     !string.Equals(centerText, "clear", StringComparison.OrdinalIgnoreCase)
-            ? ParseVector3(centerText, "Center", entityResolver)
-            : (Vector3?)null;
+        var centerArg = centerSpecified &&
+                        !string.Equals(centerText, "clear", StringComparison.OrdinalIgnoreCase)
+            ? ParseCoordinateArg(centerText, "Center", entityResolver)
+            : null;
+        var center = centerArg?.Value;
         var directionFields = values
             .Select(pair => (Pair: pair, Match: DirectionField().Match(pair.Key)))
             .Where(candidate => candidate.Match.Success)
@@ -1467,13 +1908,19 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         float? rotation = null;
         Vector3? rotationTarget = null;
+        string? rotationTargetEntity = null;
+        var rotationMode = PictoActTransformRotationMode.Unspecified;
         if (rotationSpecified &&
             !string.Equals(rotationText.Trim(), "clear", StringComparison.OrdinalIgnoreCase))
         {
-            (rotation, rotationTarget) = ParseRotation(
+            (rotation, rotationTarget, rotationTargetEntity, rotationMode) = ParseRotation(
                 rotationText,
                 center ?? Vector3.Zero,
                 entityResolver);
+        }
+        else if (rotationSpecified)
+        {
+            rotationMode = PictoActTransformRotationMode.Default;
         }
         else if (directionFields.Length == 1)
         {
@@ -1498,6 +1945,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             directionIndex = ((directionIndex % divisions) + divisions) % divisions;
             rotation = directionIndex / divisions * MathF.Tau - MathF.PI;
             rotationSpecified = true;
+            rotationMode = PictoActTransformRotationMode.Fixed;
         }
 
         return new PictoActTransform(
@@ -1511,23 +1959,55 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 : null,
             TryGetAny(values, out var keepY, "+Y", "KeepY")
                 ? ParseBoolean(keepY, "KeepY")
-                : null);
+                : null)
+        {
+            CenterEntity = centerArg?.EntityReference,
+            RotationMode = rotationMode,
+            RotationTargetEntity = rotationTargetEntity,
+        };
     }
 
-    private static (float Rotation, Vector3? Target) ParseRotation(
+    private static (
+        float Rotation,
+        Vector3? Target,
+        string? TargetEntity,
+        PictoActTransformRotationMode Mode) ParseRotation(
         string value,
         Vector3 center,
         Func<string, Vector3?>? entityResolver)
     {
         var normalized = value.Trim();
-        if (!normalized.Contains(',') && entityResolver?.Invoke(normalized) is { } target)
+        if (TryParseEntityReference(normalized, out var entityReference))
         {
             // Legacy PictoACT overloads θ with an entity ID to mean "face this entity".
             // Resolve it before numeric parsing so all-digit ACT IDs remain compatible too.
-            return (DirectionTo(center, target), target);
+            var target = entityResolver?.Invoke(entityReference) ?? Vector3.Zero;
+            return (
+                DirectionTo(center, target),
+                target,
+                entityReference,
+                PictoActTransformRotationMode.Target);
         }
 
-        return (ParseSingle(value, "Theta"), null);
+        try
+        {
+            return (
+                ParseSingle(value, "Theta"),
+                null,
+                null,
+                PictoActTransformRotationMode.Fixed);
+        }
+        catch (InvalidDataException)
+        {
+            // Current PictoACT accepts a world coordinate here in addition to an angle
+            // expression. Angle parsing runs first because expressions can contain commas.
+            var target = ParseVector3(value, "Theta", entityResolver);
+            return (
+                DirectionTo(center, target),
+                target,
+                null,
+                PictoActTransformRotationMode.Target);
+        }
     }
 
     private static bool TryGetAny(
@@ -1653,10 +2133,16 @@ internal sealed partial class PictoActOverlayService : IDisposable
             var separator = line.IndexOf(':');
             if (separator <= 0)
             {
-                throw new InvalidDataException($"PictoACT line '{line}' has no key separator.");
+                // Upstream PictoACT treats free-form lines as annotations, so old trigger
+                // packs can keep their inline descriptions without invalidating a command.
+                continue;
             }
 
-            result[line[..separator].Trim()] = line[(separator + 1)..].Trim();
+            var key = line[..separator].Trim();
+            if (!result.TryAdd(key, line[(separator + 1)..].Trim()))
+            {
+                throw new InvalidDataException($"PictoACT key '{key}' is duplicated.");
+            }
         }
 
         return result;
@@ -1670,6 +2156,56 @@ internal sealed partial class PictoActOverlayService : IDisposable
     private static string Required(IReadOnlyDictionary<string, string> values, string name)
         => Optional(values, name)
            ?? throw new InvalidDataException($"PictoACT requires '{name}'.");
+
+    private static PictoActCoordinateArg ParseCoordinateArg(
+        string value,
+        string name,
+        Func<string, Vector3?>? entityResolver)
+    {
+        var normalized = value.Trim();
+        if (TryParseEntityReference(normalized, out var entityReference))
+        {
+            // Keep the ID as source state even when the actor is temporarily absent. The
+            // framework refresh can then acquire it later, matching upstream PictoACT.
+            return new PictoActCoordinateArg(
+                entityResolver?.Invoke(entityReference) ?? Vector3.Zero,
+                entityReference);
+        }
+
+        return new PictoActCoordinateArg(
+            ParseVector3(value, name, entityResolver),
+            null);
+    }
+
+    private static bool TryParseEntityReference(string value, out string entityReference)
+    {
+        entityReference = value.Trim();
+        var raw = entityReference.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? entityReference[2..]
+            : entityReference;
+        if (uint.TryParse(
+                raw,
+                NumberStyles.HexNumber,
+                CultureInfo.InvariantCulture,
+                out var hexadecimalId) &&
+            IsPictoActEntityId(hexadecimalId))
+        {
+            return true;
+        }
+
+        // Keep accepting decimal IDs used by older local resources even though current
+        // upstream exports normally format these actor IDs as hexadecimal text.
+        return uint.TryParse(
+                   raw,
+                   NumberStyles.Integer,
+                   CultureInfo.InvariantCulture,
+                   out var decimalId) &&
+               IsPictoActEntityId(decimalId);
+    }
+
+    private static bool IsPictoActEntityId(uint entityId)
+        => entityId is >= 0x10000000 and <= 0x10FFFFFF or
+           >= 0x40000000 and <= 0x40FFFFFF;
 
     private static Vector3 ParseVector3(
         string value,
@@ -2317,9 +2853,18 @@ internal sealed record PictoActOverlayCommand(
 {
     internal DateTimeOffset ExecuteAt { get; init; } = DateTimeOffset.UtcNow;
 
+    internal PictoActRemovalScope RemovalScope { get; init; } = PictoActRemovalScope.All;
+
     internal bool Remove => Action == PictoActOverlayAction.Remove;
 
     internal bool Change => Action == PictoActOverlayAction.Change;
+}
+
+internal enum PictoActRemovalScope
+{
+    Static,
+    Actor,
+    All,
 }
 
 internal enum PictoActOverlayAction
@@ -2345,7 +2890,18 @@ internal sealed record PictoActShapePatch(
     bool TransformRotationSpecified,
     Vector3? TransformRotationTarget,
     bool? KeepX,
-    bool? KeepY);
+    bool? KeepY)
+{
+    internal string? PositionEntity { get; init; }
+
+    internal string? TargetEntity { get; init; }
+
+    internal string? TransformCenterEntity { get; init; }
+
+    internal PictoActTransformRotationMode TransformRotationMode { get; init; }
+
+    internal string? TransformRotationTargetEntity { get; init; }
+}
 
 internal sealed record PictoActTransform(
     Vector3? Center,
@@ -2354,7 +2910,14 @@ internal sealed record PictoActTransform(
     bool RotationSpecified,
     Vector3? RotationTarget,
     bool? KeepX,
-    bool? KeepY);
+    bool? KeepY)
+{
+    internal string? CenterEntity { get; init; }
+
+    internal PictoActTransformRotationMode RotationMode { get; init; }
+
+    internal string? RotationTargetEntity { get; init; }
+}
 
 internal sealed record PictoActShape(
     string VfxPath,
@@ -2379,7 +2942,40 @@ internal sealed record PictoActShape(
     bool KeepX,
     bool KeepY,
     IReadOnlyList<Vector3>? SourcePolygon,
-    IReadOnlyList<Vector3>? Polygon);
+    IReadOnlyList<Vector3>? Polygon)
+{
+    internal string? SourcePositionEntity { get; init; }
+
+    internal string? SourceTargetEntity { get; init; }
+
+    internal string? TransformCenterEntity { get; init; }
+
+    internal PictoActTransformRotationMode TransformRotationMode { get; init; }
+
+    internal Vector3? TransformRotationTarget { get; init; }
+
+    internal string? TransformRotationTargetEntity { get; init; }
+
+    internal string? ScaleExpression { get; init; }
+
+    internal bool ScaleIsCylindrical { get; init; }
+
+    internal bool RequiresDynamicRefresh =>
+        SourcePositionEntity is not null ||
+        SourceTargetEntity is not null ||
+        TransformCenterEntity is not null ||
+        TransformRotationTargetEntity is not null;
+}
+
+internal sealed record PictoActCoordinateArg(Vector3 Value, string? EntityReference);
+
+internal enum PictoActTransformRotationMode
+{
+    Unspecified,
+    Default,
+    Fixed,
+    Target,
+}
 
 internal enum PictoActShapeKind
 {
@@ -2397,7 +2993,9 @@ internal sealed class StoredPictoActShape(string semanticTag, PictoActShape shap
 
     internal PictoActShape Shape { get; set; } = shape;
 
-    internal nint NativeHandle { get; set; }
+    internal List<nint> NativeHandles { get; } = [];
+
+    internal IReadOnlyList<PictoActShape>? NativeShapes { get; set; }
 
     internal bool NativeDirty { get; set; }
 

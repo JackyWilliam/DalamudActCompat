@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -39,6 +40,7 @@ using RainbowMage.OverlayPlugin.EventSources;
 using RainbowMage.OverlayPlugin.MemoryProcessors;
 using RainbowMage.OverlayPlugin.MemoryProcessors.InCombat;
 using RainbowMage.OverlayPlugin.MemoryProcessors.Party;
+using RainbowMage.OverlayPlugin.WebSocket;
 
 var testRoot = Path.Combine(Path.GetTempPath(), $"DalamudActCompat-{Guid.NewGuid():N}");
 Directory.CreateDirectory(testRoot);
@@ -72,6 +74,7 @@ try
     ValidateDalamudGameStateBridge();
     ValidateCactbotSpokenAlertDefaults();
     ValidateOverlayInitialStateEvents();
+    await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
     if (string.Equals(
             Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),
@@ -415,7 +418,7 @@ static void ValidatePictoActOverlayCommands()
         !PictoActOverlayService.ShouldDrawScreenFallback(
             PictoActShapeKind.Circle,
             nativeBackendAvailable: true) &&
-        PictoActOverlayService.ShouldDrawScreenFallback(
+        !PictoActOverlayService.ShouldDrawScreenFallback(
             PictoActShapeKind.Polygon,
             nativeBackendAvailable: true) &&
         !PictoActOverlayService.ShouldDrawScreenFallback(
@@ -485,6 +488,30 @@ static void ValidatePictoActOverlayCommands()
         commands[4] is { Tag: null, Regex: null, Remove: true, Shape: null },
         "Game-side PictoACT base-shape, Auto-tag, delay, or remove parsing failed.");
 
+    var typedRemovals = PictoActOverlayService.Parse(
+        "Action: Remove\nType: StaticVfx\nTag: STATIC\n---\n" +
+        "Action: Remove\nType: Actor\nTag: ACTOR");
+    Assert(
+        typedRemovals[0].RemovalScope == PictoActRemovalScope.Static &&
+        typedRemovals[1].RemovalScope == PictoActRemovalScope.Actor,
+        "PictoACT typed StaticVfx/ActorVfx removal routing was not preserved.");
+
+    var annotatedCommands = PictoActOverlayService.Parse(
+        "这行是上游允许的说明文字\nOmen: Circle\nPos: 1, 2, 3\nScale: 3");
+    Assert(
+        annotatedCommands.Count == 1,
+        "PictoACT free-form annotation lines were not ignored like upstream.");
+    try
+    {
+        _ = PictoActOverlayService.Parse(
+            "Omen: Circle\nomen: Donut\nPos: 1, 2, 3\nScale: 3");
+        throw new InvalidOperationException("PictoACT duplicate keys were unexpectedly accepted.");
+    }
+    catch (InvalidDataException)
+    {
+        // Duplicate fields are ambiguous and upstream rejects them case-insensitively.
+    }
+
     var overlay = new PictoActOverlayService(null!);
     overlay.Apply(
         "Omen: Circle\nt: 5\nPos: 1, 2, 3\nScale: 3\n---\n" +
@@ -499,6 +526,10 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         overlay.ShapeCount == 4,
         "PictoACT shapes sharing one selector tag did not coexist.");
+    overlay.Apply("Action: Remove\nType: ActorVfx\nRegex: .*" );
+    Assert(
+        overlay.ShapeCount == 4,
+        "PictoACT ActorVfx-only removal unexpectedly removed brokered static shapes.");
     overlay.Apply("Action: Remove\nRegex: ^Auto$");
     Assert(
         overlay.ShapeCount == 2,
@@ -662,6 +693,58 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(allDigitEntityTheta - MathF.Atan2(-4, 2)) < 0.0001f,
         "PictoACT θ/Theta did not preserve legacy entity-facing semantics.");
 
+    var dynamicFollow = PictoActOverlayService.Parse(
+        "Omen: Rect\nt: 5\nPos: 40000001\nTarget: 40000002\n" +
+        "Scale: 0.5, _d, 1",
+        raw => raw switch
+        {
+            "40000001" => new System.Numerics.Vector3(10, 0, 20),
+            "40000002" => new System.Numerics.Vector3(13, 0, 24),
+            _ => null,
+        }).Single().Shape!;
+    var refreshedDynamicFollow = PictoActOverlayService.RefreshDynamicShape(
+        dynamicFollow,
+        raw => raw switch
+        {
+            "40000001" => new System.Numerics.Vector3(20, 1, 30),
+            "40000002" => new System.Numerics.Vector3(26, 2, 38),
+            _ => null,
+        },
+        _ => null);
+    Assert(
+        dynamicFollow.RequiresDynamicRefresh &&
+        refreshedDynamicFollow.Position is { X: 20, Y: 1, Z: 30 } &&
+        MathF.Abs(refreshedDynamicFollow.Angle - MathF.Atan2(6, 8)) < 0.0001f &&
+        MathF.Abs(refreshedDynamicFollow.SecondaryScale - 10) < 0.0001f,
+        $"PictoACT moving Pos/Target or _d scale stopped following entity snapshots: " +
+        $"pos={refreshedDynamicFollow.Position}, angle={refreshedDynamicFollow.Angle:R}, " +
+        $"scaleY={refreshedDynamicFollow.SecondaryScale:R}.");
+
+    var dynamicCenter = PictoActOverlayService.Parse(
+        "Omen: Rect\nt: 5\nPos: 0, -3\nO: 10000001\nScale: 1, 6, 1",
+        raw => raw == "10000001"
+            ? new System.Numerics.Vector3(10, 0, 20)
+            : null).Single().Shape!;
+    var refreshedDynamicCenter = PictoActOverlayService.RefreshDynamicShape(
+        dynamicCenter,
+        raw => raw == "10000001"
+            ? new System.Numerics.Vector3(100, 0, 100)
+            : null,
+        raw => raw == "10000001" ? MathF.PI / 2 : null);
+    Assert(
+        refreshedDynamicCenter.Position is { X: var centerX, Z: var centerZ } &&
+        MathF.Abs(centerX - 103) < 0.0001f &&
+        MathF.Abs(centerZ - 100) < 0.0001f &&
+        MathF.Abs(refreshedDynamicCenter.Angle - MathF.PI / 2) < 0.0001f,
+        "PictoACT dynamic O did not inherit the entity's current heading.");
+
+    var coordinateTheta = PictoActOverlayService.Parse(
+        "Omen: Fan90\nt: 5\nO: 10, 20, 0\nTheta: 13, 24, 0\n" +
+        "Scale: 5").Single().Shape!;
+    Assert(
+        MathF.Abs(coordinateTheta.Angle - MathF.Atan2(3, 4)) < 0.0001f,
+        "PictoACT θ/Theta coordinate targeting was not accepted.");
+
     var entityThetaBase = PictoActOverlayService.Parse(
         "Omen: Rect\nTag: ENTITY_THETA_CHANGE\nt: 5\nO: 10, 20\nθ: pi\n" +
         "Pos: 0, 0\nScale: 1, 10, 1").Single().Shape!;
@@ -709,6 +792,47 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(polygon[0].X - 100) < 0.0001f &&
         MathF.Abs(polygon[0].Z - 88) < 0.0001f,
         "PictoACT △/Triangulate polygon parsing or trailing seed removal failed.");
+
+    var nativePolygonShapes = PictoActOverlayService.BuildNativeShapes(polygonCommand.Shape!);
+    Assert(
+        nativePolygonShapes is
+        [
+            {
+                Kind: PictoActShapeKind.NativeOnly,
+                VfxPath: "vfx/omen/eff/x6d3_b2_triangle90_p1.avfx",
+                Position.X: 100,
+                Position.Z: 88,
+                PrimaryScale: var polygonHalfBase,
+                SecondaryScale: var polygonHeight,
+                Color.Z: 6,
+            },
+        ] &&
+        MathF.Abs(polygonHalfBase - 3 * MathF.Sqrt(2)) < 0.0001f &&
+        MathF.Abs(polygonHeight - 8 * MathF.Sqrt(2)) < 0.0001f,
+        "PictoACT Polygon did not map to the original game-native triangle omen geometry.");
+
+    var concavePolygon = PictoActOverlayService.Parse(
+        "Action: Triangulate\nTag: CONCAVE\nt: 8\n" +
+        "Points: 0, 0; 4, 0; 4, 4; 2, 2; 0, 4\n" +
+        "Color: 0.2, 0.8, 1, 0.7").Single().Shape!;
+    var concaveNativeShapes = PictoActOverlayService.BuildNativeShapes(concavePolygon);
+    var nativeTriangleArea = concaveNativeShapes.Sum(shape =>
+        shape.PrimaryScale * shape.SecondaryScale / 2);
+    Assert(
+        concaveNativeShapes.Count >= 3 &&
+        concaveNativeShapes.All(shape =>
+            shape.Kind == PictoActShapeKind.NativeOnly &&
+            shape.VfxPath == "vfx/omen/eff/x6d3_b2_triangle90_p1.avfx" &&
+            shape.HasExplicitColor) &&
+        MathF.Abs(nativeTriangleArea - 12) < 0.001f,
+        $"PictoACT concave Polygon native decomposition changed its filled area " +
+        $"(parts={concaveNativeShapes.Count}, area={nativeTriangleArea:R}).");
+
+    var persistentPolygon = PictoActOverlayService.Parse(
+        "Action: Triangulate\nt: 0\nPoints: 0,0; 4,0; 0,4").Single().Shape!;
+    Assert(
+        persistentPolygon.ExpiresAt == DateTimeOffset.MaxValue,
+        "PictoACT Triangulate t: 0 did not preserve upstream persistent-duration semantics.");
 
     var clippedToViewport = PictoActOverlayService.ClipPolygonToRectangle(
         [
@@ -8433,6 +8557,90 @@ static void ValidateOverlayInitialStateEvents()
         "Initial ChangePrimaryPlayer event did not match the OverlayPlugin protocol.");
 }
 
+static async Task ValidateOverlayWebSocketFatalAcceptRecoveryAsync()
+{
+    using var container = new RainbowMage.OverlayPlugin.TinyIoCContainer();
+    var logger = new OverlayServerTestLogger();
+    var config = new OverlayServerTestConfig
+    {
+        WSServerIP = IPAddress.Loopback.ToString(),
+        WSServerPort = 0,
+        WSServerRunning = true,
+    };
+    container.Register<RainbowMage.OverlayPlugin.ILogger>(logger);
+    container.Register<RainbowMage.OverlayPlugin.IPluginConfig>(config);
+
+    var controller = new ServerController(container);
+    controller.Start();
+    Assert(controller.Running, "Overlay WebSocket recovery probe could not start its listener.");
+
+    var originalServer = GetOverlayServer(controller);
+    InvalidateOverlayListener(originalServer);
+
+    var timeout = Stopwatch.StartNew();
+    object? recoveredServer = null;
+    while (timeout.Elapsed < TimeSpan.FromSeconds(5))
+    {
+        recoveredServer = GetOverlayServer(controller, required: false);
+        if (controller.Running &&
+            recoveredServer is not null &&
+            !ReferenceEquals(recoveredServer, originalServer))
+        {
+            break;
+        }
+
+        await Task.Delay(25);
+    }
+
+    Assert(
+        controller.Running &&
+        recoveredServer is not null &&
+        !ReferenceEquals(recoveredServer, originalServer),
+        "A fatal accept error did not replace the invalid WebSocket listener.");
+    Assert(
+        !((NetCoreServer.TcpServer)originalServer).IsAccepting,
+        "The invalid WebSocket listener remained in the recursive accept state.");
+    Assert(
+        logger.Messages.Count(message =>
+            message.Contains("caught an error with code NotSocket", StringComparison.Ordinal)) == 1,
+        "The invalid WebSocket listener emitted more than one NotSocket error before its circuit breaker ran.");
+    Assert(
+        logger.Messages.Any(message =>
+            message.Contains("recovered with a new listener", StringComparison.Ordinal)),
+        "The WebSocket controller did not report successful listener recovery.");
+
+    controller.Stop();
+    await Task.Delay(500);
+    Assert(
+        !controller.Running && GetOverlayServer(controller, required: false) is null,
+        "An explicit WebSocket stop was undone by a pending recovery task.");
+}
+
+static object GetOverlayServer(ServerController controller, bool required = true)
+{
+    var server = typeof(ServerController).GetProperty(
+                     "Server",
+                     BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(controller);
+    if (server is null && required)
+    {
+        throw new InvalidOperationException("Overlay WebSocket controller has no active server.");
+    }
+
+    return server!;
+}
+
+static void InvalidateOverlayListener(object server)
+{
+    var acceptor = typeof(NetCoreServer.TcpServer).GetField(
+                       "_acceptorSocket",
+                       BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(server) as Socket
+                   ?? throw new InvalidOperationException("NetCoreServer acceptor socket was not found.");
+
+    // A native close preserves the managed Socket's live state and reproduces the stale listener from the crash log.
+    var result = NativeSocketProbe.Close(acceptor.Handle);
+    Assert(result == 0, $"The native WebSocket listener close failed with error {Marshal.GetLastWin32Error()}.");
+}
+
 static void ValidateSettingsSerializerMemberTypes()
 {
     var owner = new EnumSettingsOwner();
@@ -9383,6 +9591,65 @@ internal static class NativeInputProbe
         uint dy,
         uint data,
         UIntPtr extraInfo);
+}
+
+internal static class NativeSocketProbe
+{
+    [DllImport("Ws2_32.dll", EntryPoint = "closesocket", SetLastError = true)]
+    public static extern int Close(nint socket);
+}
+
+internal sealed class OverlayServerTestLogger : RainbowMage.OverlayPlugin.ILogger
+{
+    private readonly object syncRoot = new();
+    private readonly List<string> messages = [];
+
+    public IReadOnlyList<string> Messages
+    {
+        get
+        {
+            lock (syncRoot)
+                return messages.ToArray();
+        }
+    }
+
+    public void Log(RainbowMage.OverlayPlugin.LogLevel level, string message)
+    {
+        lock (syncRoot)
+            messages.Add(message);
+    }
+
+    public void Log(RainbowMage.OverlayPlugin.LogLevel level, string format, params object[] args)
+        => Log(level, string.Format(format, args));
+
+    public void RegisterListener(Action<RainbowMage.OverlayPlugin.LogEntry> listener)
+    {
+    }
+
+    public void ClearListener()
+    {
+    }
+}
+
+internal sealed class OverlayServerTestConfig : RainbowMage.OverlayPlugin.IPluginConfig
+{
+    public RainbowMage.OverlayPlugin.OverlayConfigList<RainbowMage.OverlayPlugin.IOverlayConfig> Overlays { get; set; } = null!;
+    public bool HideOverlaysWhenNotActive { get; set; }
+    public bool HideOverlayDuringCutscene { get; set; }
+    public string WSServerIP { get; set; } = IPAddress.Loopback.ToString();
+    public int WSServerPort { get; set; }
+    public bool WSServerSSL { get; set; }
+    public bool WSServerRunning { get; set; }
+    public Version Version { get; set; } = new(1, 0);
+    public Dictionary<string, JObject> EventSourceConfigs { get; set; } = [];
+
+    public void MarkDirty()
+    {
+    }
+
+    public void Save()
+    {
+    }
 }
 
 internal sealed class TestActLogger : IActLogger

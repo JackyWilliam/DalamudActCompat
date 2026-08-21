@@ -1110,6 +1110,17 @@ public static class LegacyAssemblyRewriter
         var module = Activator.CreateInstance(moduleType)
                      ?? throw new InvalidOperationException(
                          $"Could not create Triggernometry module {moduleTypeName}.");
+        var pictoActCallback = moduleType.GetMethod(
+                                   "CbPictoACT",
+                                   BindingFlags.Instance | BindingFlags.Public |
+                                   BindingFlags.NonPublic,
+                                   null,
+                                   [typeof(string)],
+                                   null)
+                               ?? throw new MissingMethodException(moduleTypeName, "CbPictoACT");
+        var callback = (Action<string>)pictoActCallback.CreateDelegate(
+            typeof(Action<string>),
+            module);
         var registerCallback = moduleType.BaseType?.GetMethod(
                                    "RegisterCallback",
                                    BindingFlags.Instance | BindingFlags.Public,
@@ -1121,7 +1132,9 @@ public static class LegacyAssemblyRewriter
                                    "RegisterCallback");
         registerCallback.Invoke(
             module,
-            ["PictoACT", new Action<string>(HostPluginBridge.SendPostNamazuPictoAct)]);
+            // Registration replaces callbacks with the same name. Reuse the rewritten
+            // callback so this final startup step cannot discard ActorVfx removal routing.
+            ["PictoACT", callback]);
         Console.WriteLine(
             "Triggernometry PictoACT callback registered through the game-side drawing broker.");
     }
@@ -1734,6 +1747,9 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.IsTriggernometryHighRiskScriptAllowed))!);
         var pictoAct = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuPictoAct))!);
+        var extractPictoActActorRemovals = module.ImportReference(
+            bridgeType.GetMethod(
+                nameof(HostPluginBridge.ExtractPictoActActorRemovalCommands))!);
         var setHeading = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuSetHeading))!);
         var patchExportXml = module.ImportReference(
@@ -1826,11 +1842,10 @@ public static class LegacyAssemblyRewriter
                 method.Name == "CbPictoACT" &&
                 method.Parameters.Count == 1 &&
                 method.Parameters[0].ParameterType.MetadataType == MetadataType.String);
-        ReplaceWithBridge(
+        WrapPictoActWithActorRemoval(
             pictoActCallback,
             pictoAct,
-            loadInstance: false,
-            loadParameters: true);
+            extractPictoActActorRemovals);
 
         var entitySetHeading = module.Types
             .SelectMany(EnumerateTypes)
@@ -2720,6 +2735,116 @@ public static class LegacyAssemblyRewriter
                 $"gate={nativeGateCount}, original={originalCallCount}, " +
                 $"normalizer={normalizerCallCount}, " +
                 $"fallback={fallbackCallCount}, attributes={wrapper.CustomAttributes.Count}.");
+        }
+    }
+
+    private static void WrapPictoActWithActorRemoval(
+        MethodDefinition original,
+        MethodReference staticVfxBridge,
+        MethodReference extractActorRemovals)
+    {
+        if (original.IsAbstract || original.HasGenericParameters || original.IsStatic ||
+            original.ReturnType.MetadataType != MetadataType.Void ||
+            original.Parameters.Count != 1 ||
+            original.Parameters[0].ParameterType.MetadataType != MetadataType.String)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported Triggernometry PictoACT callback shape: {original.FullName}.");
+        }
+
+        var type = original.DeclaringType;
+        var module = original.Module;
+        var originalName = original.Name;
+        var originalAttributes = original.Attributes;
+        var originalImplAttributes = original.ImplAttributes;
+        var originalSemanticsAttributes = original.SemanticsAttributes;
+        original.Name = $"{originalName}__DalamudActCompatActorRemoval";
+        original.Attributes =
+            (original.Attributes & ~Mono.Cecil.MethodAttributes.MemberAccessMask &
+             ~Mono.Cecil.MethodAttributes.Abstract & ~Mono.Cecil.MethodAttributes.Virtual &
+             ~Mono.Cecil.MethodAttributes.NewSlot) |
+            Mono.Cecil.MethodAttributes.Private;
+        original.SemanticsAttributes = Mono.Cecil.MethodSemanticsAttributes.None;
+
+        var wrapper = new MethodDefinition(
+            originalName,
+            originalAttributes,
+            module.ImportReference(original.ReturnType))
+        {
+            ImplAttributes = originalImplAttributes,
+            SemanticsAttributes = originalSemanticsAttributes,
+            CallingConvention = original.CallingConvention,
+        };
+        foreach (var parameter in original.Parameters)
+        {
+            wrapper.Parameters.Add(new ParameterDefinition(
+                parameter.Name,
+                parameter.Attributes,
+                module.ImportReference(parameter.ParameterType)));
+        }
+        foreach (var attribute in original.CustomAttributes.ToArray())
+        {
+            original.CustomAttributes.Remove(attribute);
+            wrapper.CustomAttributes.Add(attribute);
+        }
+
+        type.Methods.Add(wrapper);
+        foreach (var caller in module.Types
+                     .SelectMany(EnumerateTypes)
+                     .SelectMany(candidate => candidate.Methods)
+                     .Where(candidate => candidate.HasBody && candidate != wrapper))
+        {
+            foreach (var instruction in caller.Body.Instructions)
+            {
+                if (instruction.Operand is MethodReference called &&
+                    called.Module == module &&
+                    called.MetadataToken == original.MetadataToken)
+                {
+                    instruction.Operand = wrapper;
+                }
+            }
+        }
+
+        wrapper.Body = new Mono.Cecil.Cil.MethodBody(wrapper) { InitLocals = true };
+        var actorCommands = new VariableDefinition(module.TypeSystem.String);
+        wrapper.Body.Variables.Add(actorCommands);
+        var processor = wrapper.Body.GetILProcessor();
+        var returnInstruction = processor.Create(OpCodes.Ret);
+        var isNullOrWhiteSpace = module.ImportReference(
+            typeof(string).GetMethod(
+                nameof(string.IsNullOrWhiteSpace),
+                [typeof(string)])!);
+
+        // Every command reaches the game-side static VFX broker. Only actor/all removals are
+        // additionally sent through the original manager that owns ActorVfx handles.
+        processor.Append(processor.Create(OpCodes.Ldarg_1));
+        processor.Append(processor.Create(OpCodes.Call, staticVfxBridge));
+        processor.Append(processor.Create(OpCodes.Ldarg_1));
+        processor.Append(processor.Create(OpCodes.Call, extractActorRemovals));
+        processor.Append(processor.Create(OpCodes.Stloc, actorCommands));
+        processor.Append(processor.Create(OpCodes.Ldloc, actorCommands));
+        processor.Append(processor.Create(OpCodes.Call, isNullOrWhiteSpace));
+        processor.Append(processor.Create(OpCodes.Brtrue, returnInstruction));
+        processor.Append(processor.Create(OpCodes.Ldarg_0));
+        processor.Append(processor.Create(OpCodes.Ldloc, actorCommands));
+        processor.Append(processor.Create(OpCodes.Call, original));
+        processor.Append(returnInstruction);
+
+        var originalCalls = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called && called == original);
+        var bridgeCalls = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == staticVfxBridge.FullName);
+        var extractorCalls = wrapper.Body.Instructions.Count(instruction =>
+            instruction.Operand is MethodReference called &&
+            called.FullName == extractActorRemovals.FullName);
+        if (originalCalls != 1 || bridgeCalls != 1 || extractorCalls != 1 ||
+            original.CustomAttributes.Count != 0 || wrapper.CustomAttributes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Triggernometry PictoACT actor-removal wrapper validation failed: " +
+                $"original={originalCalls}, bridge={bridgeCalls}, extractor={extractorCalls}, " +
+                $"attributes={wrapper.CustomAttributes.Count}.");
         }
     }
 

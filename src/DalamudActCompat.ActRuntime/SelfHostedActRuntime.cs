@@ -187,7 +187,12 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatParser = new ChineseCombatChatContext(limitBreakActionNames);
         log.Information(
             $"Loaded {limitBreakActionNames.Count} localized Limit Break action names for combat attribution.");
-        NativePostNamazuBridge.Configure(framework, log, sigScanner, resolveActorId);
+        NativePostNamazuBridge.Configure(
+            framework,
+            log,
+            sigScanner,
+            resolveActorId,
+            () => frameworkInCombat);
         LegacyResourceCompatibility.Configure(log, notificationManager);
         CompatibilityPermissionBroker.Configure(
             permissionCheck,

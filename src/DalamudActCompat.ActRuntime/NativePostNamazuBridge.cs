@@ -22,6 +22,7 @@ public static class NativePostNamazuBridge
     private static IFramework? framework;
     private static IPluginLog? log;
     private static Func<string, uint?>? actorIdResolver;
+    private static Func<bool>? inCombat;
     private static PostNamazuEventSource? overlayEventSource;
     private static IReadOnlyList<CompatibilityStageResult> stages = [];
     private static PostNamazuWaymarkSnapshot[]? savedWaymarks;
@@ -41,11 +42,13 @@ public static class NativePostNamazuBridge
         IFramework frameworkService,
         IPluginLog pluginLog,
         ISigScanner _,
-        Func<string, uint?> resolveActorId)
+        Func<string, uint?> resolveActorId,
+        Func<bool> isInCombat)
     {
         framework = frameworkService;
         log = pluginLog;
         actorIdResolver = resolveActorId;
+        inCombat = isInCombat;
         savedWaymarks = null;
     }
 
@@ -472,6 +475,15 @@ public static class NativePostNamazuBridge
 
     private static unsafe void ApplyWaymarks(PostNamazuWaymarkAction request)
     {
+        if (IsPublicWaymarkOperation(request) && inCombat?.Invoke() == true)
+        {
+            // PostNamazu deliberately ignores public field-marker writes during combat.
+            // Preserve that safety contract even though the semantic bridge uses game APIs.
+            log?.Information(
+                "PostNamazu public waymark request was ignored because the player is in combat.");
+            return;
+        }
+
         var controller = MarkingController.Instance();
         if (controller is null)
         {
@@ -541,6 +553,14 @@ public static class NativePostNamazuBridge
             ApplyPublicWaymark(update.Index, update.Active, update.Position);
         }
     }
+
+    internal static bool IsPublicWaymarkOperation(PostNamazuWaymarkAction request)
+        => request.Operation == PostNamazuWaymarkOperation.Publicize ||
+           request is
+           {
+               Operation: PostNamazuWaymarkOperation.Apply,
+               LocalOnly: false,
+           };
 
     private static unsafe PostNamazuWaymarkSnapshot[] ReadCurrentWaymarks(
         MarkingController* controller)

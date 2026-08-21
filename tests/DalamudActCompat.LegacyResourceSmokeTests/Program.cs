@@ -434,6 +434,17 @@ static void AssertPostNamazuSemanticPayloads()
             "PostNamazu local/native waymark permission compatibility failed.");
     }
 
+    if (NativePostNamazuBridge.IsPublicWaymarkOperation(waymarks) ||
+        !NativePostNamazuBridge.IsPublicWaymarkOperation(
+            PostNamazuSemanticActions.ParseWaymarks("public")) ||
+        !NativePostNamazuBridge.IsPublicWaymarkOperation(
+            PostNamazuSemanticActions.ParseWaymarks(
+                "{\"LocalOnly\":false,\"A\":{\"X\":1,\"Y\":2,\"Z\":3,\"Active\":true}}")))
+    {
+        throw new InvalidOperationException(
+            "PostNamazu public waymark combat-guard classification is incorrect.");
+    }
+
     if (PostNamazuSemanticActions.ParseWaymarks("clear").Operation !=
         PostNamazuWaymarkOperation.ClearLocal ||
         PostNamazuSemanticActions.ParseWaymarks("public").Operation !=
@@ -569,6 +580,30 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
 
     var document = new XmlDocument();
     document.Load(fullPath);
+    var exportType = implementation.GetType(
+                         "Triggernometry.Core.TriggernometryExport",
+                         throwOnError: true)!
+                     ?? throw new TypeLoadException(
+                         "Triggernometry.Core.TriggernometryExport");
+    var unserialize = exportType.GetMethod(
+                          "Unserialize",
+                          BindingFlags.Static | BindingFlags.Public)
+                      ?? throw new MissingMethodException(exportType.FullName, "Unserialize");
+    var parsedExport = unserialize.Invoke(null, [File.ReadAllText(fullPath)])
+                       ?? throw new InvalidOperationException(
+                           "Triggernometry export deserialization returned null.");
+    var corrupted = (bool)(exportType.GetField(
+                               "Corrupted",
+                               BindingFlags.Instance | BindingFlags.Public)
+                           ?.GetValue(parsedExport) ?? true);
+    if (corrupted)
+    {
+        // XmlDocument accepts unknown action values, while Triggernometry's own serializer does
+        // not. Exercise the real importer so the delivered manual suite cannot fail on import.
+        throw new InvalidOperationException(
+            "Triggernometry's real importer rejected the export XML.");
+    }
+
     var markActions = document.SelectNodes(
                               "//Action[@ActionType='NamedCallback' and @NamedCallbackName='mark']")
                           ?.Cast<XmlElement>()

@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.22",
+    "AssemblyVersion":  "0.3.9.23",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.22/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.23/DalamudActCompat.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.22/DalamudActCompat.zip",
-    "LastUpdate":  1787294660942,
-    "Changelog":  "v0.3.9.22 修复 PictoACT 原生范围被客户端提前回收后降级为悬空线框，并阻止原生后端可用时圆形、矩形和扇形落入无深度屏幕回退。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.23/DalamudActCompat.zip",
+    "LastUpdate":  1787303630501,
+    "Changelog":  "v0.3.9.23 补齐 Polygon 原生贴地与深度遮挡、动态 PictoACT 和 Triggernometry/PostNamazu 兼容，并修复 WebSocket 监听错误递归导致的崩溃。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
