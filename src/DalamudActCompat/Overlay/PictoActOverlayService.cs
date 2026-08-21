@@ -333,60 +333,65 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         var worldPath = BuildWorldPath(shape);
         var projected = new Vector2?[worldPath.Count];
-        var allVisible = true;
+        var fillPath = new Vector2[worldPath.Count];
+        var fillProjectionValid = true;
+        var anyVisible = false;
         for (var index = 0; index < worldPath.Count; index++)
         {
-            if (!gameGui.WorldToScreen(worldPath[index], out var screen))
+            var inFront = gameGui.WorldToScreen(worldPath[index], out var screen, out var inView);
+            if (!inFront || !float.IsFinite(screen.X) || !float.IsFinite(screen.Y))
             {
-                allVisible = false;
+                fillProjectionValid = false;
                 continue;
             }
 
-            projected[index] = screen;
+            // The three-result projection distinguishes safe off-viewport coordinates from
+            // points behind the camera, which would otherwise mirror across the viewport.
+            fillPath[index] = screen;
+            if (inView)
+            {
+                projected[index] = screen;
+                anyVisible = true;
+            }
         }
 
         var displayColor = NormalizeDisplayColor(
             shape.HasExplicitColor ? shape.Color : DefaultColor);
-        if (allVisible)
+        var viewport = ImGui.GetMainViewport();
+        var viewportMaximum = viewport.Pos + viewport.Size;
+        var clippedFillPath = fillProjectionValid && anyVisible &&
+                              viewport.Size.X > 0 && viewport.Size.Y > 0
+            ? ClipPolygonToRectangle(fillPath, viewport.Pos, viewportMaximum)
+            : [];
+        if (clippedFillPath.Count >= 3)
         {
-            var points = projected.Select(point => point!.Value).ToArray();
             var fillColor = displayColor with
             {
                 W = Math.Clamp(displayColor.W * 0.24f, 0.05f, 0.34f),
             };
             var fill = ImGui.ColorConvertFloat4ToU32(fillColor);
-            if (shape.Kind == PictoActShapeKind.Polygon)
+            if (shape.Kind is PictoActShapeKind.Polygon or PictoActShapeKind.Fan)
             {
-                foreach (var (first, second, third) in TriangulatePolygon(points))
+                foreach (var (first, second, third) in TriangulatePolygon(clippedFillPath))
                 {
                     drawList.AddTriangleFilled(first, second, third, fill);
                 }
             }
-            else if (shape.Kind == PictoActShapeKind.Fan)
-            {
-                for (var index = 1; index + 1 < points.Length; index++)
-                {
-                    drawList.AddTriangleFilled(points[0], points[index], points[index + 1], fill);
-                }
-            }
             else
             {
-                var uniqueCount = points.Length > 1 && points[0] == points[^1]
-                    ? points.Length - 1
-                    : points.Length;
                 var center = Vector2.Zero;
-                for (var index = 0; index < uniqueCount; index++)
+                foreach (var point in clippedFillPath)
                 {
-                    center += points[index];
+                    center += point;
                 }
 
-                center /= Math.Max(1, uniqueCount);
-                for (var index = 0; index < uniqueCount; index++)
+                center /= clippedFillPath.Count;
+                for (var index = 0; index < clippedFillPath.Count; index++)
                 {
                     drawList.AddTriangleFilled(
                         center,
-                        points[index],
-                        points[(index + 1) % uniqueCount],
+                        clippedFillPath[index],
+                        clippedFillPath[(index + 1) % clippedFillPath.Count],
                         fill);
                 }
             }
@@ -413,6 +418,86 @@ internal sealed partial class PictoActOverlayService : IDisposable
             Math.Clamp(color.Y / maximum, 0, 1),
             Math.Clamp(color.Z / maximum, 0, 1),
             Math.Clamp(color.W, 0, 1));
+    }
+
+    internal static IReadOnlyList<Vector2> ClipPolygonToRectangle(
+        IReadOnlyList<Vector2> points,
+        Vector2 minimum,
+        Vector2 maximum)
+    {
+        var count = points.Count > 1 && points[0] == points[^1]
+            ? points.Count - 1
+            : points.Count;
+        if (count < 3 || maximum.X <= minimum.X || maximum.Y <= minimum.Y)
+        {
+            return [];
+        }
+
+        IReadOnlyList<Vector2> clipped = points.Take(count).ToArray();
+        clipped = ClipPolygonAgainstEdge(
+            clipped, vertical: true, boundary: minimum.X, keepGreater: true);
+        clipped = ClipPolygonAgainstEdge(
+            clipped, vertical: true, boundary: maximum.X, keepGreater: false);
+        clipped = ClipPolygonAgainstEdge(
+            clipped, vertical: false, boundary: minimum.Y, keepGreater: true);
+        return ClipPolygonAgainstEdge(
+            clipped, vertical: false, boundary: maximum.Y, keepGreater: false);
+    }
+
+    private static IReadOnlyList<Vector2> ClipPolygonAgainstEdge(
+        IReadOnlyList<Vector2> points,
+        bool vertical,
+        float boundary,
+        bool keepGreater)
+    {
+        if (points.Count == 0)
+        {
+            return [];
+        }
+
+        var result = new List<Vector2>(points.Count + 2);
+        var previous = points[^1];
+        var previousCoordinate = vertical ? previous.X : previous.Y;
+        var previousInside = keepGreater
+            ? previousCoordinate >= boundary
+            : previousCoordinate <= boundary;
+        foreach (var current in points)
+        {
+            var currentCoordinate = vertical ? current.X : current.Y;
+            var currentInside = keepGreater
+                ? currentCoordinate >= boundary
+                : currentCoordinate <= boundary;
+            if (currentInside != previousInside)
+            {
+                result.Add(vertical
+                    ? IntersectVertical(previous, current, boundary)
+                    : IntersectHorizontal(previous, current, boundary));
+            }
+
+            if (currentInside)
+            {
+                result.Add(current);
+            }
+
+            previous = current;
+            previousInside = currentInside;
+        }
+
+        return result;
+    }
+
+    private static Vector2 IntersectVertical(Vector2 from, Vector2 to, float x)
+    {
+        var delta = to.X - from.X;
+        var factor = Math.Abs(delta) < 0.00001f ? 0 : (x - from.X) / delta;
+        return new Vector2(x, from.Y + (to.Y - from.Y) * Math.Clamp(factor, 0, 1));
+    }
+
+    private static Vector2 IntersectHorizontal(Vector2 from, Vector2 to, float y)
+    {
+        var delta = to.Y - from.Y;
+        var factor = Math.Abs(delta) < 0.00001f ? 0 : (y - from.Y) / delta;
+        return new Vector2(from.X + (to.X - from.X) * Math.Clamp(factor, 0, 1), y);
     }
 
     private static IReadOnlyList<Vector3> BuildWorldPath(PictoActShape shape)

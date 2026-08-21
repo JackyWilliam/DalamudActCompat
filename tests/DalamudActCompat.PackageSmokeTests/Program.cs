@@ -407,6 +407,15 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         PictoActNativeVfxBackend.UsesExpectedFieldLayout,
         "PictoACT native VFX fields drifted from the current FFXIVClientStructs layout.");
+    var pluginSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(), "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    Assert(
+        Regex.IsMatch(
+            pluginSource,
+            @"RunOnFrameworkThread\s*\(\s*\(\)\s*=>\s*\{[^}]*" +
+            @"ThrowIfCancellationRequested\(\);[^}]*pictoActOverlay\.Apply\(payload\);\s*\}",
+            RegexOptions.Singleline),
+        "PictoACT Host commands are not cancellation-guarded on the framework thread.");
     var beforeParse = DateTimeOffset.UtcNow;
     var commands = PictoActOverlayService.Parse(
         "Omen: Circle\nTag: ACTCOMPAT_SMOKE\nt: 5\nPos: <1.25, 2.5, -3.75>\n" +
@@ -685,6 +694,33 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(polygon[0].X - 100) < 0.0001f &&
         MathF.Abs(polygon[0].Z - 88) < 0.0001f,
         "PictoACT △/Triangulate polygon parsing or trailing seed removal failed.");
+
+    var clippedToViewport = PictoActOverlayService.ClipPolygonToRectangle(
+        [
+            new System.Numerics.Vector2(-20, 20),
+            new System.Numerics.Vector2(50, 20),
+            new System.Numerics.Vector2(50, 80),
+            new System.Numerics.Vector2(-20, 80),
+            new System.Numerics.Vector2(-20, 20),
+        ],
+        System.Numerics.Vector2.Zero,
+        new System.Numerics.Vector2(100, 100));
+    Assert(
+        clippedToViewport.Count == 4 &&
+        clippedToViewport.All(point =>
+            point.X is >= 0 and <= 100 && point.Y is >= 0 and <= 100) &&
+        clippedToViewport.Any(point => MathF.Abs(point.X) < 0.0001f),
+        "PictoACT fallback fill did not clip an off-screen polygon to the viewport.");
+    Assert(
+        PictoActOverlayService.ClipPolygonToRectangle(
+            [
+                new System.Numerics.Vector2(-40, 20),
+                new System.Numerics.Vector2(-20, 20),
+                new System.Numerics.Vector2(-20, 40),
+            ],
+            System.Numerics.Vector2.Zero,
+            new System.Numerics.Vector2(100, 100)).Count == 0,
+        "PictoACT fallback clipping retained a polygon outside the viewport.");
 
     overlay.Apply("Action: Remove");
     overlay.Apply(

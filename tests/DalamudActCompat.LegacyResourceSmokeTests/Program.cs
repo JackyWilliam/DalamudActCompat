@@ -307,13 +307,21 @@ static void AssertActorCastExtraRotationCompatibility()
                       BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
                   ?? throw new MissingMethodException(packetType.FullName, "ConvertRotation");
 
-    var regional = Convert.ToDouble(convert.Invoke(null, [1.25f]));
-    var global = Convert.ToDouble(convert.Invoke(null, [(ushort)0]));
-    if (Math.Abs(regional - 1.25d) > 0.0001d ||
-        Math.Abs(global + Math.PI) > 0.0001d)
+    ushort[] encodedHeadings = [0x0000, 0x1234, 0x4000, 0x8000, 0xC000, 0xFFFF];
+    foreach (var encodedHeading in encodedHeadings)
     {
-        throw new InvalidOperationException(
-            "OverlayPlugin ActorCastExtra rotation conversion lost CN/KR/TW or global compatibility.");
+        // Regional Machina declares the raw four-byte field as Single even though its low
+        // 16 bits retain the same heading encoding used by the global UInt16 layout.
+        var regionalField = BitConverter.Int32BitsToSingle(encodedHeading);
+        var regional = Convert.ToDouble(convert.Invoke(null, [regionalField]));
+        var global = Convert.ToDouble(convert.Invoke(null, [encodedHeading]));
+        var expected = encodedHeading * 0.009587526d * 0.0099999998d - Math.PI;
+        if (Math.Abs(regional - expected) > 0.0001d ||
+            Math.Abs(global - expected) > 0.0001d)
+        {
+            throw new InvalidOperationException(
+                $"OverlayPlugin ActorCastExtra rotation conversion lost compatibility for 0x{encodedHeading:X4}.");
+        }
     }
 
     try
