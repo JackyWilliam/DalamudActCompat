@@ -264,7 +264,10 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface,
             log,
             dataManager,
-            () => playerState.CharacterName,
+            // ACT publishes encounters from worker threads, so resolve the local name from the
+            // immutable identity snapshot instead of reading IPlayerState in that callback.
+            () => Volatile.Read(ref playerIdentitySnapshot)
+                .FirstOrDefault(static identity => identity.IsLocalPlayer)?.Name ?? string.Empty,
             () => Volatile.Read(ref playerIdentitySnapshot),
             chatGui,
             framework,
@@ -3081,7 +3084,18 @@ public sealed class Plugin : IDalamudPlugin
                                 "PostNamazu native game-memory capability is denied.");
                         }
 
-                        pictoActOverlay.Apply(payload);
+                        // The Host broker runs in the background, while PictoACT parsing may
+                        // resolve game objects and native VFX creation always touches game state.
+                        await services.Framework
+                            .RunOnFrameworkThread(() =>
+                            {
+                                // A timed-out callback can remain queued for a later frame;
+                                // reject it before it can touch an overlay being disposed.
+                                timeout.Token.ThrowIfCancellationRequested();
+                                pictoActOverlay.Apply(payload);
+                            })
+                            .WaitAsync(timeout.Token)
+                            .ConfigureAwait(false);
                     }
                     else if (invocation.Request.Command == "postnamazu.preset")
                     {

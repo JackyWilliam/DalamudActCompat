@@ -27,6 +27,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly object syncRoot = new();
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
+    private readonly object frameworkGameStateLock = new();
     private readonly DutyEncounterAccumulator dutySession = new();
     private readonly DutyEncounterFolderAccumulator dutyFolder = new();
     private readonly DutyWipeTracker dutyWipeTracker = new();
@@ -35,6 +36,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
+    private FrameworkGameStateSnapshot frameworkGameState;
     private volatile bool wasBoundByDuty;
     private bool disposed;
 
@@ -68,13 +70,16 @@ public sealed class IinactAdapter : IParserEngine
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
         this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
-        actRuntime.EncounterChanged += OnEncounterChanged;
-        framework.Update += OnFrameworkUpdate;
-        wasBoundByDuty = isBoundByDuty();
+        frameworkGameState = CaptureFrameworkGameState();
+        wasBoundByDuty = frameworkGameState.BoundByDuty;
         openWorldCombatResetTracker = new OpenWorldCombatResetTracker(
             wasBoundByDuty,
-            isInCombat());
-        dutyWipeTracker.Reset(isDutyPartyWiped());
+            frameworkGameState.InCombat);
+        dutyWipeTracker.Reset(frameworkGameState.DutyPartyWiped);
+        // Subscribe only after the initial state exists so a concurrent ACT callback cannot
+        // observe the default snapshot during construction.
+        actRuntime.EncounterChanged += OnEncounterChanged;
+        framework.Update += OnFrameworkUpdate;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -228,6 +233,7 @@ public sealed class IinactAdapter : IParserEngine
     public void ResetCurrentEncounter()
     {
         var currentEncounterId = stateStore.GetSnapshot().Current?.Id;
+        var gameState = ReadFrameworkGameState();
         lock (dutySessionLock)
         {
             RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
@@ -239,7 +245,7 @@ public sealed class IinactAdapter : IParserEngine
             // Resetting only the UI lets the next ACT refresh republish the same totals.
             // Closing the underlying segment keeps the meter empty until a genuinely new pull.
             dutySession.Reset();
-            dutyWipeTracker.Reset(isDutyPartyWiped());
+            dutyWipeTracker.Reset(gameState.DutyPartyWiped);
         }
 
         stateStore.ResetCurrent();
@@ -280,9 +286,12 @@ public sealed class IinactAdapter : IParserEngine
 
     private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)
     {
+        // ACT may publish from its worker thread. Read one coherent primitive-only snapshot
+        // instead of touching Dalamud services or mixing values from different framework frames.
+        var gameState = ReadFrameworkGameState();
         var encounter = ActEncounterMapper.Map(snapshot) with
         {
-            TerritoryId = getTerritoryId(),
+            TerritoryId = gameState.TerritoryId,
         };
         // ACT can open and immediately close an encounter for a missed action.
         // Do not let that empty snapshot replace the meter or become a history file.
@@ -301,7 +310,7 @@ public sealed class IinactAdapter : IParserEngine
             }
         }
 
-        var boundByDuty = isBoundByDuty();
+        var boundByDuty = gameState.BoundByDuty;
         if (boundByDuty)
         {
             Encounter displayEncounter;
@@ -360,7 +369,7 @@ public sealed class IinactAdapter : IParserEngine
         }
 
         encounterService.QueueFinishedEncounter(encounter);
-        if (isInCombat())
+        if (gameState.InCombat)
         {
             stateStore.UpdateCurrent(encounter);
             return;
@@ -373,8 +382,14 @@ public sealed class IinactAdapter : IParserEngine
 
     private void OnFrameworkUpdate(IFramework _)
     {
-        var boundByDuty = isBoundByDuty();
-        var inCombat = isInCombat();
+        var gameState = CaptureFrameworkGameState();
+        lock (frameworkGameStateLock)
+        {
+            frameworkGameState = gameState;
+        }
+
+        var boundByDuty = gameState.BoundByDuty;
+        var inCombat = gameState.InCombat;
         var resetOpenWorldMeter = openWorldCombatResetTracker.Observe(boundByDuty, inCombat);
         if (boundByDuty)
         {
@@ -382,7 +397,7 @@ public sealed class IinactAdapter : IParserEngine
             if (dutyWipeTracker.Observe(
                     boundByDuty: true,
                     inCombat,
-                    isDutyPartyWiped()))
+                    gameState.DutyPartyWiped))
             {
                 // Only an observed all-party death creates the next pull. Ordinary combat
                 // flag drops keep accumulating exactly like the original meter behavior.
@@ -402,6 +417,24 @@ public sealed class IinactAdapter : IParserEngine
             // Runtime completion saves the encounter independently; the live meter should
             // clear on the game-state edge instead of waiting for ACT's completion callback.
             stateStore.ResetCurrent();
+        }
+    }
+
+    private FrameworkGameStateSnapshot CaptureFrameworkGameState()
+    {
+        var boundByDuty = isBoundByDuty();
+        return new FrameworkGameStateSnapshot(
+            getTerritoryId(),
+            boundByDuty,
+            isInCombat(),
+            boundByDuty && isDutyPartyWiped());
+    }
+
+    private FrameworkGameStateSnapshot ReadFrameworkGameState()
+    {
+        lock (frameworkGameStateLock)
+        {
+            return frameworkGameState;
         }
     }
 
@@ -488,4 +521,10 @@ public sealed class IinactAdapter : IParserEngine
 
         StatusChanged?.Invoke(this, next);
     }
+
+    private readonly record struct FrameworkGameStateSnapshot(
+        uint TerritoryId,
+        bool BoundByDuty,
+        bool InCombat,
+        bool DutyPartyWiped);
 }
