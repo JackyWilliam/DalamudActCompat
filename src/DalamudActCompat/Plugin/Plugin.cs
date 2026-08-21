@@ -264,7 +264,10 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface,
             log,
             dataManager,
-            () => playerState.CharacterName,
+            // ACT publishes encounters from worker threads, so resolve the local name from the
+            // immutable identity snapshot instead of reading IPlayerState in that callback.
+            () => Volatile.Read(ref playerIdentitySnapshot)
+                .FirstOrDefault(static identity => identity.IsLocalPlayer)?.Name ?? string.Empty,
             () => Volatile.Read(ref playerIdentitySnapshot),
             chatGui,
             framework,

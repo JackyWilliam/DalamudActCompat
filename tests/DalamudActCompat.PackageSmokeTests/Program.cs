@@ -65,6 +65,7 @@ try
     ValidateReflectionActLoggerOverloads();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
+    ValidateParserFrameworkStateOwnership();
     ValidateRaidDpsEstimator();
     ValidateFflogsParityReplay(testRoot);
     ValidateEncounterParticipantsSurvivePartyDeparture();
@@ -721,6 +722,47 @@ static void ValidatePictoActOverlayCommands()
             System.Numerics.Vector2.Zero,
             new System.Numerics.Vector2(100, 100)).Count == 0,
         "PictoACT fallback clipping retained a polygon outside the viewport.");
+
+    static (bool InFront, System.Numerics.Vector2 Screen) ProjectNearPlanePoint(
+        System.Numerics.Vector3 point)
+    {
+        if (point.Z <= 0.1f)
+        {
+            return (false, default);
+        }
+
+        return (
+            true,
+            new System.Numerics.Vector2(
+                50 + point.X / point.Z * 20,
+                50 - (point.Y + 1) / point.Z * 20));
+    }
+
+    var nearPlaneClipped = PictoActOverlayService.ProjectTriangleAcrossNearPlane(
+        new System.Numerics.Vector3(-2, 0, 2),
+        new System.Numerics.Vector3(2, 0, 2),
+        new System.Numerics.Vector3(0, 0, -1),
+        ProjectNearPlanePoint);
+    var nearPlaneViewportFill = PictoActOverlayService.ClipPolygonToRectangle(
+        nearPlaneClipped,
+        System.Numerics.Vector2.Zero,
+        new System.Numerics.Vector2(100, 100));
+    Assert(
+        nearPlaneClipped.Count == 4 &&
+        nearPlaneViewportFill.Count >= 3 &&
+        nearPlaneViewportFill.All(point =>
+            float.IsFinite(point.X) &&
+            float.IsFinite(point.Y) &&
+            point.X is >= 0 and <= 100 &&
+            point.Y is >= 0 and <= 100),
+        "PictoACT fallback fill discarded a triangle crossing the camera near plane.");
+    Assert(
+        PictoActOverlayService.ProjectTriangleAcrossNearPlane(
+            new System.Numerics.Vector3(-2, 0, -2),
+            new System.Numerics.Vector3(2, 0, -2),
+            new System.Numerics.Vector3(0, 0, -1),
+            ProjectNearPlanePoint).Count == 0,
+        "PictoACT fallback fill retained a triangle entirely behind the camera.");
 
     overlay.Apply("Action: Remove");
     overlay.Apply(
@@ -4948,6 +4990,60 @@ static void ValidateCombatEventScoping()
         runtimeSource.Contains("counter.DirectHits++;", StringComparison.Ordinal) &&
         runtimeSource.Contains("chatDirectHitTotals", StringComparison.Ordinal),
         "Combat scoping or direct-hit collection regressed in the self-hosted ACT runtime.");
+}
+
+static void ValidateParserFrameworkStateOwnership()
+{
+    var projectRoot = FindProjectRoot();
+    var adapterSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Parser",
+        "IinactAdapter.cs"));
+    var runtimeSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    var pluginSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Plugin",
+        "Plugin.cs"));
+    var encounterStart = adapterSource.IndexOf(
+        "private void OnEncounterChanged(",
+        StringComparison.Ordinal);
+    var frameworkStart = adapterSource.IndexOf(
+        "private void OnFrameworkUpdate(",
+        StringComparison.Ordinal);
+    var encounterSource = encounterStart >= 0 && frameworkStart > encounterStart
+        ? adapterSource[encounterStart..frameworkStart]
+        : string.Empty;
+    var overlayStart = runtimeSource.IndexOf(
+        "public void StartOverlay()",
+        StringComparison.Ordinal);
+    var overlayEnd = runtimeSource.IndexOf(
+        "public void StopOverlay()",
+        StringComparison.Ordinal);
+    var overlaySource = overlayStart >= 0 && overlayEnd > overlayStart
+        ? runtimeSource[overlayStart..overlayEnd]
+        : string.Empty;
+
+    Assert(
+        encounterSource.Contains("ReadFrameworkGameState()", StringComparison.Ordinal) &&
+        !encounterSource.Contains("getTerritoryId()", StringComparison.Ordinal) &&
+        !encounterSource.Contains("isBoundByDuty()", StringComparison.Ordinal) &&
+        !encounterSource.Contains("isInCombat()", StringComparison.Ordinal) &&
+        adapterSource.Contains("var gameState = CaptureFrameworkGameState();", StringComparison.Ordinal) &&
+        overlaySource.Contains("frameworkInCombat", StringComparison.Ordinal) &&
+        !overlaySource.Contains("condition[", StringComparison.Ordinal) &&
+        !pluginSource.Contains("() => playerState.CharacterName", StringComparison.Ordinal) &&
+        pluginSource.Contains(
+            "FirstOrDefault(static identity => identity.IsLocalPlayer)?.Name",
+            StringComparison.Ordinal),
+        "Parser startup or ACT encounter callbacks can still read game state outside Framework.Update.");
 }
 
 static void ValidateRaidDpsEstimator()

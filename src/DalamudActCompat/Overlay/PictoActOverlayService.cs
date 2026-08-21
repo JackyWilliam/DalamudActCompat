@@ -335,7 +335,6 @@ internal sealed partial class PictoActOverlayService : IDisposable
         var projected = new Vector2?[worldPath.Count];
         var fillPath = new Vector2[worldPath.Count];
         var fillProjectionValid = true;
-        var anyVisible = false;
         for (var index = 0; index < worldPath.Count; index++)
         {
             var inFront = gameGui.WorldToScreen(worldPath[index], out var screen, out var inView);
@@ -351,7 +350,6 @@ internal sealed partial class PictoActOverlayService : IDisposable
             if (inView)
             {
                 projected[index] = screen;
-                anyVisible = true;
             }
         }
 
@@ -359,40 +357,52 @@ internal sealed partial class PictoActOverlayService : IDisposable
             shape.HasExplicitColor ? shape.Color : DefaultColor);
         var viewport = ImGui.GetMainViewport();
         var viewportMaximum = viewport.Pos + viewport.Size;
-        var clippedFillPath = fillProjectionValid && anyVisible &&
-                              viewport.Size.X > 0 && viewport.Size.Y > 0
-            ? ClipPolygonToRectangle(fillPath, viewport.Pos, viewportMaximum)
-            : [];
-        if (clippedFillPath.Count >= 3)
+        if (viewport.Size.X > 0 && viewport.Size.Y > 0)
         {
             var fillColor = displayColor with
             {
                 W = Math.Clamp(displayColor.W * 0.24f, 0.05f, 0.34f),
             };
             var fill = ImGui.ColorConvertFloat4ToU32(fillColor);
-            if (shape.Kind is PictoActShapeKind.Polygon or PictoActShapeKind.Fan)
+            if (fillProjectionValid)
             {
-                foreach (var (first, second, third) in TriangulatePolygon(clippedFillPath))
+                var clippedFillPath = ClipPolygonToRectangle(
+                    fillPath,
+                    viewport.Pos,
+                    viewportMaximum);
+                if (shape.Kind is PictoActShapeKind.Polygon or PictoActShapeKind.Fan)
                 {
-                    drawList.AddTriangleFilled(first, second, third, fill);
+                    foreach (var (first, second, third) in TriangulatePolygon(clippedFillPath))
+                    {
+                        drawList.AddTriangleFilled(first, second, third, fill);
+                    }
+                }
+                else
+                {
+                    DrawRadialFill(drawList, clippedFillPath, fill);
                 }
             }
             else
             {
-                var center = Vector2.Zero;
-                foreach (var point in clippedFillPath)
+                // A single vertex behind the camera used to reject the whole fill. Clip each
+                // world-space triangle independently so concave user polygons cannot bridge
+                // separate visible regions while crossing the camera plane.
+                foreach (var (first, second, third) in TriangulateWorldPath(shape, worldPath))
                 {
-                    center += point;
-                }
-
-                center /= clippedFillPath.Count;
-                for (var index = 0; index < clippedFillPath.Count; index++)
-                {
-                    drawList.AddTriangleFilled(
-                        center,
-                        clippedFillPath[index],
-                        clippedFillPath[(index + 1) % clippedFillPath.Count],
-                        fill);
+                    var nearClipped = ProjectTriangleAcrossNearPlane(
+                        first,
+                        second,
+                        third,
+                        point =>
+                        {
+                            var inFront = gameGui.WorldToScreen(point, out var screen, out _);
+                            return (inFront, screen);
+                        });
+                    var viewportClipped = ClipPolygonToRectangle(
+                        nearClipped,
+                        viewport.Pos,
+                        viewportMaximum);
+                    DrawConvexFill(drawList, viewportClipped, fill);
                 }
             }
         }
@@ -409,6 +419,144 @@ internal sealed partial class PictoActOverlayService : IDisposable
             previous = point;
         }
     }
+
+    private static void DrawRadialFill(
+        ImDrawListPtr drawList,
+        IReadOnlyList<Vector2> points,
+        uint color)
+    {
+        if (points.Count < 3)
+        {
+            return;
+        }
+
+        var center = Vector2.Zero;
+        foreach (var point in points)
+        {
+            center += point;
+        }
+
+        center /= points.Count;
+        for (var index = 0; index < points.Count; index++)
+        {
+            drawList.AddTriangleFilled(
+                center,
+                points[index],
+                points[(index + 1) % points.Count],
+                color);
+        }
+    }
+
+    private static void DrawConvexFill(
+        ImDrawListPtr drawList,
+        IReadOnlyList<Vector2> points,
+        uint color)
+    {
+        for (var index = 1; index + 1 < points.Count; index++)
+        {
+            drawList.AddTriangleFilled(points[0], points[index], points[index + 1], color);
+        }
+    }
+
+    internal static IReadOnlyList<Vector2> ProjectTriangleAcrossNearPlane(
+        Vector3 first,
+        Vector3 second,
+        Vector3 third,
+        Func<Vector3, (bool InFront, Vector2 Screen)> project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        var vertices = new[]
+        {
+            Project(first, project),
+            Project(second, project),
+            Project(third, project),
+        };
+        var result = new List<Vector2>(4);
+        var previous = vertices[^1];
+        foreach (var current in vertices)
+        {
+            if (current.InFront != previous.InFront)
+            {
+                if (!TryProjectNearPlaneIntersection(previous, current, project, out var intersection))
+                {
+                    return [];
+                }
+
+                result.Add(intersection);
+            }
+
+            if (current.InFront)
+            {
+                if (!IsUsableProjection(current.Screen))
+                {
+                    return [];
+                }
+
+                result.Add(current.Screen);
+            }
+
+            previous = current;
+        }
+
+        return result;
+    }
+
+    private static ProjectedWorldVertex Project(
+        Vector3 world,
+        Func<Vector3, (bool InFront, Vector2 Screen)> project)
+    {
+        var (inFront, screen) = project(world);
+        return new ProjectedWorldVertex(world, inFront, screen);
+    }
+
+    private static bool TryProjectNearPlaneIntersection(
+        ProjectedWorldVertex first,
+        ProjectedWorldVertex second,
+        Func<Vector3, (bool InFront, Vector2 Screen)> project,
+        out Vector2 screen)
+    {
+        var front = first.InFront ? first : second;
+        var behind = first.InFront ? second : first;
+        if (!IsUsableProjection(front.Screen))
+        {
+            screen = default;
+            return false;
+        }
+
+        screen = front.Screen;
+        for (var iteration = 0; iteration < 20; iteration++)
+        {
+            var midpoint = Vector3.Lerp(front.World, behind.World, 0.5f);
+            var projected = Project(midpoint, project);
+            if (projected.InFront && IsUsableProjection(projected.Screen))
+            {
+                front = projected;
+                screen = projected.Screen;
+            }
+            else
+            {
+                behind = projected;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsUsableProjection(Vector2 screen)
+    {
+        const float projectionLimit = 1_000_000f;
+        // Near-plane projection approaches infinity. Keep the last finite point far outside
+        // any practical viewport so the following rectangle clip remains numerically stable.
+        return float.IsFinite(screen.X) &&
+               float.IsFinite(screen.Y) &&
+               Math.Abs(screen.X) <= projectionLimit &&
+               Math.Abs(screen.Y) <= projectionLimit;
+    }
+
+    private readonly record struct ProjectedWorldVertex(
+        Vector3 World,
+        bool InFront,
+        Vector2 Screen);
 
     private static Vector4 NormalizeDisplayColor(Vector4 color)
     {
@@ -521,6 +669,68 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
     private static IReadOnlyList<(Vector2 First, Vector2 Second, Vector2 Third)>
         TriangulatePolygon(IReadOnlyList<Vector2> closedPoints)
+        => TriangulatePolygonIndices(closedPoints)
+            .Select(indices => (
+                closedPoints[indices.First],
+                closedPoints[indices.Second],
+                closedPoints[indices.Third]))
+            .ToArray();
+
+    private static IReadOnlyList<(Vector3 First, Vector3 Second, Vector3 Third)>
+        TriangulateWorldPath(PictoActShape shape, IReadOnlyList<Vector3> closedPoints)
+    {
+        var count = closedPoints.Count > 1 && closedPoints[0] == closedPoints[^1]
+            ? closedPoints.Count - 1
+            : closedPoints.Count;
+        if (count < 3)
+        {
+            return [];
+        }
+
+        if (shape.Kind == PictoActShapeKind.Circle)
+        {
+            return Enumerable.Range(0, count)
+                .Select(index => (
+                    shape.Position,
+                    closedPoints[index],
+                    closedPoints[(index + 1) % count]))
+                .ToArray();
+        }
+
+        if (shape.Kind == PictoActShapeKind.Fan)
+        {
+            return Enumerable.Range(1, count - 2)
+                .Select(index => (
+                    closedPoints[0],
+                    closedPoints[index],
+                    closedPoints[index + 1]))
+                .ToArray();
+        }
+
+        if (shape.Kind is PictoActShapeKind.Rectangle or PictoActShapeKind.BidirectionalRectangle)
+        {
+            return Enumerable.Range(1, count - 2)
+                .Select(index => (
+                    closedPoints[0],
+                    closedPoints[index],
+                    closedPoints[index + 1]))
+                .ToArray();
+        }
+
+        var groundPoints = closedPoints
+            .Take(count)
+            .Select(static point => new Vector2(point.X, point.Z))
+            .ToArray();
+        return TriangulatePolygonIndices(groundPoints)
+            .Select(indices => (
+                closedPoints[indices.First],
+                closedPoints[indices.Second],
+                closedPoints[indices.Third]))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<(int First, int Second, int Third)>
+        TriangulatePolygonIndices(IReadOnlyList<Vector2> closedPoints)
     {
         var count = closedPoints.Count > 1 && closedPoints[0] == closedPoints[^1]
             ? closedPoints.Count - 1
@@ -544,7 +754,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             indices.Reverse();
         }
 
-        var triangles = new List<(Vector2, Vector2, Vector2)>(count - 2);
+        var triangles = new List<(int, int, int)>(count - 2);
         while (indices.Count > 3)
         {
             var clipped = false;
@@ -563,7 +773,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
                     continue;
                 }
 
-                triangles.Add((a, b, c));
+                triangles.Add((previous, current, next));
                 indices.RemoveAt(index);
                 clipped = true;
                 break;
@@ -579,10 +789,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         if (indices.Count == 3)
         {
-            triangles.Add((
-                closedPoints[indices[0]],
-                closedPoints[indices[1]],
-                closedPoints[indices[2]]));
+            triangles.Add((indices[0], indices[1], indices[2]));
         }
 
         return triangles;

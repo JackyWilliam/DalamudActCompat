@@ -121,6 +121,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool networkSentCaptureRequested;
     private bool networkSentSubscribed;
     private int parityDiagnosticFaulted;
+    // Parser and overlay startup run on a worker; only the framework callback may refresh this
+    // value from ICondition, so startup never touches the game's condition memory directly.
+    private volatile bool frameworkInCombat;
 
     public SelfHostedActRuntime(
         IDalamudPluginInterface pluginInterface,
@@ -151,6 +154,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
+        frameworkInCombat = condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
         this.gameInteropProvider = gameInteropProvider;
         this.notificationManager = notificationManager;
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
@@ -702,7 +706,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             container.Register<RainbowMage.OverlayPlugin.ILogger>(overlayLogger);
             gameStateProvider.Update(
                 playerIdentities(),
-                condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
+                frameworkInCombat);
             container.Register<RainbowMage.OverlayPlugin.MemoryProcessors.IDalamudGameStateProvider>(
                 gameStateProvider);
             container.Register(httpClient);
@@ -1835,6 +1839,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         var identities = playerIdentities();
         var inCombat = condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
+        frameworkInCombat = inCombat;
         gameStateProvider.Update(
             identities,
             inCombat);
