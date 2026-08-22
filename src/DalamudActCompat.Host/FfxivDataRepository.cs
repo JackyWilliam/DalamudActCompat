@@ -8,6 +8,7 @@ namespace DalamudActCompat.Host;
 
 internal sealed class FfxivDataRepository : IDataRepository
 {
+    private const uint InvalidEntityId = 0xE0000000;
     private readonly object syncRoot = new();
     private HostFfxivEntitySnapshot snapshot = new(0, 0, DateTimeOffset.MinValue, []);
     private Dictionary<uint, HostFfxivCombatant> baselineCombatants = [];
@@ -41,7 +42,7 @@ internal sealed class FfxivDataRepository : IDataRepository
     public void Apply(HostFfxivEntitySnapshot next)
     {
         ArgumentNullException.ThrowIfNull(next);
-        var nextById = next.Combatants.ToDictionary(combatant => combatant.Id);
+        var nextById = BuildCombatantMap(next.Combatants);
         lock (syncRoot)
         {
             if (next.Timestamp < lastEntityUpdateTimestamp)
@@ -49,7 +50,7 @@ internal sealed class FfxivDataRepository : IDataRepository
                 return;
             }
 
-            snapshot = next;
+            snapshot = next with { Combatants = nextById.Values.ToArray() };
             baselineCombatants = nextById;
             baselineTimestamp = next.Timestamp;
             lastEntityUpdateTimestamp = next.Timestamp;
@@ -81,7 +82,10 @@ internal sealed class FfxivDataRepository : IDataRepository
 
             foreach (var upsert in delta.Upserts)
             {
-                merged[upsert.Id] = upsert;
+                if (IsValidEntityId(upsert.Id))
+                {
+                    merged[upsert.Id] = upsert;
+                }
             }
 
             snapshot = new HostFfxivEntitySnapshot(
@@ -218,6 +222,26 @@ internal sealed class FfxivDataRepository : IDataRepository
             .OrderByDescending(combatant => combatant.Id == currentPlayerId)
             .Select(MapCombatant)
             .ToArray());
+
+    private static Dictionary<uint, HostFfxivCombatant> BuildCombatantMap(
+        IEnumerable<HostFfxivCombatant> sources)
+    {
+        var result = new Dictionary<uint, HostFfxivCombatant>();
+        foreach (var source in sources)
+        {
+            if (IsValidEntityId(source.Id))
+            {
+                // A malformed or transient duplicate snapshot must degrade to one actor value;
+                // crashing this process removes every extension assigned to the shared Host.
+                result[source.Id] = source;
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsValidEntityId(uint entityId)
+        => entityId is not 0 and not InvalidEntityId;
 
     private static Combatant MapCombatant(HostFfxivCombatant source)
         => new()

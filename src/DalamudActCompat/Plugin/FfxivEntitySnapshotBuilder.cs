@@ -7,6 +7,8 @@ namespace DalamudActCompat.Plugin;
 
 internal static class FfxivEntitySnapshotBuilder
 {
+    private const uint InvalidEntityId = 0xE0000000;
+
     public static HostFfxivEntitySnapshot Build(
         IObjectTable objectTable,
         IPartyList partyList,
@@ -15,17 +17,30 @@ internal static class FfxivEntitySnapshotBuilder
         DateTimeOffset timestamp)
     {
         var partyTypes = BuildPartyTypes(partyList);
-        var currentPlayerId = objectTable.LocalPlayer?.EntityId ?? playerState.EntityId;
-        var combatants = objectTable
-            .Where(gameObject => gameObject.EntityId != 0)
-            .Select(gameObject => MapCombatant(gameObject, partyTypes))
-            .Where(combatant => !string.IsNullOrWhiteSpace(combatant.Name))
-            .ToArray();
+        var currentPlayerId = NormalizeEntityId(
+            objectTable.LocalPlayer?.EntityId ?? playerState.EntityId);
+        var combatantsById = new Dictionary<uint, HostFfxivCombatant>();
+        foreach (var gameObject in objectTable)
+        {
+            if (!IsValidEntityId(gameObject.EntityId))
+            {
+                continue;
+            }
+
+            var combatant = MapCombatant(gameObject, partyTypes);
+            if (!string.IsNullOrWhiteSpace(combatant.Name))
+            {
+                // Dalamud can expose two object-table slots with the same Entity ID during an
+                // actor transition. The wire repository requires one current value per actor.
+                combatantsById[combatant.Id] = combatant;
+            }
+        }
+
         return new HostFfxivEntitySnapshot(
             clientState.TerritoryType,
             currentPlayerId,
             timestamp,
-            combatants);
+            combatantsById.Values.ToArray());
     }
 
     internal static HostFfxivEntityDelta BuildDelta(
@@ -41,16 +56,15 @@ internal static class FfxivEntitySnapshotBuilder
                 "Entity deltas cannot cross territory or local-player snapshot boundaries.");
         }
 
-        var baselineById = baseline.Combatants.ToDictionary(combatant => combatant.Id);
-        var currentById = current.Combatants.ToDictionary(combatant => combatant.Id);
-        var upserts = current.Combatants
+        var baselineById = BuildCombatantMap(baseline.Combatants);
+        var currentById = BuildCombatantMap(current.Combatants);
+        var upserts = currentById.Values
             .Where(combatant =>
                 !baselineById.TryGetValue(combatant.Id, out var previous) ||
                 !EquivalentForIncrementalUpdate(previous, combatant))
             .ToArray();
-        var removedIds = baseline.Combatants
-            .Where(combatant => !currentById.ContainsKey(combatant.Id))
-            .Select(combatant => combatant.Id)
+        var removedIds = baselineById.Keys
+            .Where(id => !currentById.ContainsKey(id))
             .ToArray();
         return new HostFfxivEntityDelta(
             current.TerritoryId,
@@ -67,7 +81,7 @@ internal static class FfxivEntitySnapshotBuilder
         var index = 0;
         foreach (var member in partyList)
         {
-            if (member.EntityId != 0)
+            if (IsValidEntityId(member.EntityId))
             {
                 result[member.EntityId] = index < 8 ? 1 : 2;
             }
@@ -188,4 +202,27 @@ internal static class FfxivEntitySnapshotBuilder
     }
 
     private static uint ToEntityId(ulong objectId) => unchecked((uint)objectId);
+
+    private static Dictionary<uint, HostFfxivCombatant> BuildCombatantMap(
+        IEnumerable<HostFfxivCombatant> combatants)
+    {
+        var result = new Dictionary<uint, HostFfxivCombatant>();
+        foreach (var combatant in combatants)
+        {
+            if (IsValidEntityId(combatant.Id))
+            {
+                // Protocol input is normalized defensively as focused tests and future senders
+                // must not be able to turn a transient duplicate actor into a frame-loop fault.
+                result[combatant.Id] = combatant;
+            }
+        }
+
+        return result;
+    }
+
+    private static uint NormalizeEntityId(uint entityId)
+        => IsValidEntityId(entityId) ? entityId : 0;
+
+    private static bool IsValidEntityId(uint entityId)
+        => entityId is not 0 and not InvalidEntityId;
 }

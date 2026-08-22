@@ -4202,8 +4202,28 @@ void ValidateFfxivEntityDeltaRepository()
         includeTarget: true,
         timestamp: baselineAt.AddMilliseconds(500));
     repository.Apply(fallback);
+    var latestTarget = target with { PosX = target.PosX + 10 };
+    var invalidPlaceholder = target with
+    {
+        Id = 0xE0000000,
+        Name = "Invalid Placeholder",
+    };
+    repository.Apply(fallback with
+    {
+        Timestamp = baselineAt.AddMilliseconds(510),
+        Combatants =
+        [
+            .. fallback.Combatants,
+            latestTarget,
+            invalidPlaceholder,
+            invalidPlaceholder,
+        ],
+    });
+    var normalizedCombatants = repository.GetCombatantList();
     Assert(
-        repository.GetCombatantList().Any(combatant => combatant.ID == target.Id) &&
+        normalizedCombatants.Count(combatant => combatant.ID == target.Id) == 1 &&
+        normalizedCombatants.Single(combatant => combatant.ID == target.Id).PosX == latestTarget.PosX &&
+        normalizedCombatants.All(combatant => combatant.ID != invalidPlaceholder.Id) &&
         !repository.ApplyDelta(new HostFfxivEntityDelta(
             baseline.TerritoryId,
             baseline.CurrentPlayerId,
@@ -4211,7 +4231,7 @@ void ValidateFfxivEntityDeltaRepository()
             baselineAt.AddMilliseconds(530),
             [],
             [])),
-        "The low-frequency full snapshot did not supersede a delta from an older baseline.");
+        "The full snapshot did not normalize duplicate/invalid actors or supersede an old delta.");
 }
 
 IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)

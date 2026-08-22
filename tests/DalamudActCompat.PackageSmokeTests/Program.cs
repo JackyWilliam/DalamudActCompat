@@ -5288,6 +5288,25 @@ static void ValidateFfxivEntityDeltaBuilder()
         changedDelta.RemovedIds.Count == 0,
         "Position changes or newly spawned entities were omitted from the incremental update.");
 
+    var latestDuplicate = moved with { PosX = 5 };
+    var invalidPlaceholder = moved with
+    {
+        Id = 0xE0000000,
+        Name = "Invalid Placeholder",
+    };
+    var normalizedDelta = FfxivEntitySnapshotBuilder.BuildDelta(
+        baseline,
+        new HostFfxivEntitySnapshot(
+            1,
+            player.Id,
+            baselineAt.AddMilliseconds(75),
+            [moved, latestDuplicate, invalidPlaceholder, invalidPlaceholder]));
+    Assert(
+        normalizedDelta.Upserts.Count == 1 &&
+        normalizedDelta.Upserts[0].Id == player.Id &&
+        normalizedDelta.Upserts[0].PosX == latestDuplicate.PosX,
+        "Duplicate or invalid object-table identities escaped incremental normalization.");
+
     var removedDelta = FfxivEntitySnapshotBuilder.BuildDelta(
         baseline,
         new HostFfxivEntitySnapshot(
