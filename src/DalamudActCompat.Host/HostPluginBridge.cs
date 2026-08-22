@@ -30,8 +30,11 @@ public static class HostPluginBridge
         new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
     private static readonly ConcurrentDictionary<string, long> DiagnosticRepeats =
         new(StringComparer.Ordinal);
-    private static readonly ConcurrentDictionary<string, PendingTtsAuthorization> PendingTts =
-        new(StringComparer.Ordinal);
+    private static Action<string>? ttsWriter;
+    private static readonly AuthorizedTtsQueue TriggernometryTtsQueue = new(
+        64,
+        () => Volatile.Read(ref ttsWriter),
+        exception => ReportException("act.foxtts", "Authorized Speak", exception));
     private static readonly ConcurrentDictionary<string, PendingOverlayCall> PendingOverlayCalls =
         new(StringComparer.Ordinal);
     private static readonly FfxivDataRepository FfxivRepositoryInstance = new();
@@ -50,12 +53,10 @@ public static class HostPluginBridge
         Timeout.InfiniteTimeSpan,
         Timeout.InfiniteTimeSpan);
     private static WeakReference<object>? triggerZoneListener;
-    private static Action<string>? ttsWriter;
     private static Func<string, string, bool>? silverDasherNotificationWriter;
     private static Func<string, bool>? matchaNotificationWriter;
     private static Action<string>? clipboardWriterForTests;
     private static long triggerEventDrops;
-    private static int pendingTtsCount;
     private static int pendingOverlayCallCount;
     private static bool postNamazuShutdownStarted;
     private static Task<bool>? postNamazuShutdownTask;
@@ -90,7 +91,7 @@ public static class HostPluginBridge
     internal static FfxivDataRepository FfxivRepository => FfxivRepositoryInstance;
 
     internal static string DescribeTtsBridgeState()
-        => $"sender={sender is not null},writer={Volatile.Read(ref ttsWriter) is not null},pending={Volatile.Read(ref pendingTtsCount)}";
+        => $"sender={sender is not null},writer={Volatile.Read(ref ttsWriter) is not null},pending={TriggernometryTtsQueue.Count}";
 
     internal static bool IsGameForeground()
         => GameForegroundDetector.IsGameForeground(FfxivRepositoryInstance.GetGameProcessId());
@@ -625,6 +626,9 @@ public static class HostPluginBridge
     internal static void ApplyFfxivEntitySnapshot(HostFfxivEntitySnapshot snapshot)
         => FfxivRepositoryInstance.Apply(snapshot);
 
+    internal static void ApplyFfxivEntityDelta(HostFfxivEntityDelta delta)
+        => FfxivRepositoryInstance.ApplyDelta(delta);
+
     internal static void ConfigureTtsWriter(Action<string>? writer)
         => Volatile.Write(ref ttsWriter, writer);
 
@@ -1113,29 +1117,8 @@ public static class HostPluginBridge
         }
 
         var now = DateTimeOffset.UtcNow;
-        foreach (var expired in PendingTts
-                     .Where(pair => pair.Value.Deadline <= now)
-                     .Select(pair => pair.Key))
-        {
-            if (PendingTts.TryRemove(expired, out _))
-            {
-                Interlocked.Decrement(ref pendingTtsCount);
-            }
-        }
-
-        if (Interlocked.Increment(ref pendingTtsCount) > 64)
-        {
-            Interlocked.Decrement(ref pendingTtsCount);
-            throw new InvalidOperationException("The bounded TTS authorization queue is full.");
-        }
-
-        var correlationId = Guid.NewGuid().ToString("N");
         var deadline = now.AddSeconds(2);
-        if (!PendingTts.TryAdd(correlationId, new PendingTtsAuthorization(text, deadline)))
-        {
-            Interlocked.Decrement(ref pendingTtsCount);
-            throw new InvalidOperationException("Could not reserve a TTS authorization request.");
-        }
+        var correlationId = TriggernometryTtsQueue.Reserve(text, now, deadline);
 
         if (sender?.Invoke(
                 HostMessageTypes.CommandRequest,
@@ -1147,10 +1130,7 @@ public static class HostPluginBridge
                 correlationId,
                 deadline) != true)
         {
-            if (PendingTts.TryRemove(correlationId, out _))
-            {
-                Interlocked.Decrement(ref pendingTtsCount);
-            }
+            TriggernometryTtsQueue.Cancel(correlationId);
             throw new InvalidOperationException("TTS broker queue rejected the request.");
         }
     }
@@ -1520,22 +1500,13 @@ public static class HostPluginBridge
             return;
         }
 
-        if (!PendingTts.TryRemove(correlationId, out var pending))
+        if (!TriggernometryTtsQueue.Complete(
+                correlationId,
+                result.Success,
+                DateTimeOffset.UtcNow))
         {
             return;
         }
-
-        Interlocked.Decrement(ref pendingTtsCount);
-
-        if (!result.Success || pending.Deadline <= DateTimeOffset.UtcNow)
-        {
-            return;
-        }
-
-        var writer = Volatile.Read(ref ttsWriter)
-                     ?? throw new InvalidOperationException(
-                         "The isolated ACT TTS provider was unloaded before authorization completed.");
-        writer(pending.Text);
     }
 
     public static void SubscribeTriggernometryZoneChanges(object plugin)
@@ -2056,10 +2027,6 @@ public static class HostPluginBridge
         string? Text,
         TaskCompletionSource<string>? Completion,
         IReadOnlyList<object?>? Lines);
-
-    private sealed record PendingTtsAuthorization(
-        string Text,
-        DateTimeOffset Deadline);
 
     private sealed record PendingOverlayCall(
         TaskCompletionSource<HostCommandResult> Completion,

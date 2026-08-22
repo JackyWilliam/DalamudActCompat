@@ -111,7 +111,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly List<Task> backgroundOperations = [];
     private bool backgroundOperationShutdownStarted;
     private DateTimeOffset nextHostEntitySnapshotAt;
+    private DateTimeOffset nextHostEntityDeltaAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
+    private HostFfxivEntitySnapshot? hostEntitySnapshotBaseline;
     private IReadOnlyList<ActPlayerIdentity> playerIdentitySnapshot = [];
     private ActPlayerPose? localPlayerPoseSnapshot;
     private HostPostNamazuHeading? pendingPostNamazuHeading;
@@ -2842,33 +2844,68 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
-        if (now < nextHostEntitySnapshotAt)
+        var fullSnapshotDue = hostEntitySnapshotBaseline is null || now >= nextHostEntitySnapshotAt;
+        if (!fullSnapshotDue && now < nextHostEntityDeltaAt)
         {
             return;
         }
 
-        nextHostEntitySnapshotAt = now.AddMilliseconds(500);
+        nextHostEntityDeltaAt = now.AddMilliseconds(30);
+        if (fullSnapshotDue)
+        {
+            nextHostEntitySnapshotAt = now.AddMilliseconds(500);
+        }
+
         try
         {
-            // Parser/overlay startup can run on a worker thread, while Dalamud's object table is
-            // framework-thread-only. Publish an immutable identity snapshot for those consumers.
-            var identities = BuildPlayerIdentities(
-                playerState,
-                partyList,
-                objectTable,
-                services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]);
-            Volatile.Write(ref playerIdentitySnapshot, identities);
             var snapshot = FfxivEntitySnapshotBuilder.Build(
                 objectTable,
                 partyList,
                 services.ClientState,
                 playerState,
                 now);
-            hostSupervisor.PublishFfxivEntities(snapshot);
-            genericHostSupervisor.PublishFfxivEntities(snapshot);
+
+            var baseline = hostEntitySnapshotBaseline;
+            if (baseline is null ||
+                baseline.TerritoryId != snapshot.TerritoryId ||
+                baseline.CurrentPlayerId != snapshot.CurrentPlayerId)
+            {
+                fullSnapshotDue = true;
+                nextHostEntitySnapshotAt = now.AddMilliseconds(500);
+            }
+
+            if (fullSnapshotDue)
+            {
+                // Parser/overlay startup can run on a worker thread, while Dalamud's object table
+                // is framework-thread-only. The full fallback also refreshes identity consumers.
+                var identities = BuildPlayerIdentities(
+                    playerState,
+                    partyList,
+                    objectTable,
+                    services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]);
+                Volatile.Write(ref playerIdentitySnapshot, identities);
+                hostEntitySnapshotBaseline = snapshot;
+                hostSupervisor.PublishFfxivEntities(snapshot);
+                genericHostSupervisor.PublishFfxivEntities(snapshot);
+                if (Volatile.Read(ref matchaEventsEnabled) == 1)
+                {
+                    matchaHostSupervisor.PublishFfxivEntities(snapshot);
+                }
+
+                return;
+            }
+
+            var delta = FfxivEntitySnapshotBuilder.BuildDelta(baseline!, snapshot);
+            if (delta.Upserts.Count == 0 && delta.RemovedIds.Count == 0)
+            {
+                return;
+            }
+
+            hostSupervisor.PublishFfxivEntityDelta(delta);
+            genericHostSupervisor.PublishFfxivEntityDelta(delta);
             if (Volatile.Read(ref matchaEventsEnabled) == 1)
             {
-                matchaHostSupervisor.PublishFfxivEntities(snapshot);
+                matchaHostSupervisor.PublishFfxivEntityDelta(delta);
             }
         }
         catch (Exception ex)

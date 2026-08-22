@@ -28,6 +28,39 @@ internal static class FfxivEntitySnapshotBuilder
             combatants);
     }
 
+    internal static HostFfxivEntityDelta BuildDelta(
+        HostFfxivEntitySnapshot baseline,
+        HostFfxivEntitySnapshot current)
+    {
+        ArgumentNullException.ThrowIfNull(baseline);
+        ArgumentNullException.ThrowIfNull(current);
+        if (baseline.TerritoryId != current.TerritoryId ||
+            baseline.CurrentPlayerId != current.CurrentPlayerId)
+        {
+            throw new InvalidOperationException(
+                "Entity deltas cannot cross territory or local-player snapshot boundaries.");
+        }
+
+        var baselineById = baseline.Combatants.ToDictionary(combatant => combatant.Id);
+        var currentById = current.Combatants.ToDictionary(combatant => combatant.Id);
+        var upserts = current.Combatants
+            .Where(combatant =>
+                !baselineById.TryGetValue(combatant.Id, out var previous) ||
+                !EquivalentForIncrementalUpdate(previous, combatant))
+            .ToArray();
+        var removedIds = baseline.Combatants
+            .Where(combatant => !currentById.ContainsKey(combatant.Id))
+            .Select(combatant => combatant.Id)
+            .ToArray();
+        return new HostFfxivEntityDelta(
+            current.TerritoryId,
+            current.CurrentPlayerId,
+            baseline.Timestamp,
+            current.Timestamp,
+            upserts,
+            removedIds);
+    }
+
     private static IReadOnlyDictionary<uint, int> BuildPartyTypes(IPartyList partyList)
     {
         var result = new Dictionary<uint, int>();
@@ -94,6 +127,64 @@ internal static class FfxivEntitySnapshotBuilder
             partyTypes.GetValueOrDefault(gameObject.EntityId),
             gameObject.Address.ToInt64(),
             statuses);
+    }
+
+    private static bool EquivalentForIncrementalUpdate(
+        HostFfxivCombatant left,
+        HostFfxivCombatant right)
+    {
+        if (left.Id != right.Id ||
+            left.OwnerId != right.OwnerId ||
+            left.Type != right.Type ||
+            left.Job != right.Job ||
+            left.Level != right.Level ||
+            left.Name != right.Name ||
+            left.CurrentHp != right.CurrentHp ||
+            left.MaxHp != right.MaxHp ||
+            left.CurrentMp != right.CurrentMp ||
+            left.MaxMp != right.MaxMp ||
+            left.CurrentCp != right.CurrentCp ||
+            left.MaxCp != right.MaxCp ||
+            left.CurrentGp != right.CurrentGp ||
+            left.MaxGp != right.MaxGp ||
+            left.IsCasting != right.IsCasting ||
+            left.CastId != right.CastId ||
+            left.CastTargetId != right.CastTargetId ||
+            left.MaxCastTime != right.MaxCastTime ||
+            left.PosX != right.PosX ||
+            left.PosY != right.PosY ||
+            left.PosZ != right.PosZ ||
+            left.Heading != right.Heading ||
+            left.CurrentWorldId != right.CurrentWorldId ||
+            left.WorldId != right.WorldId ||
+            left.WorldName != right.WorldName ||
+            left.BNpcNameId != right.BNpcNameId ||
+            left.BNpcId != right.BNpcId ||
+            left.TargetId != right.TargetId ||
+            left.EffectiveDistance != right.EffectiveDistance ||
+            left.PartyType != right.PartyType ||
+            left.Address != right.Address ||
+            left.Statuses.Count != right.Statuses.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Statuses.Count; index++)
+        {
+            var leftStatus = left.Statuses[index];
+            var rightStatus = right.Statuses[index];
+            // Cast progress and status remaining time tick continuously. The 500 ms full
+            // snapshot refreshes them; excluding only those clocks keeps frame-rate deltas
+            // bounded while additions, removals, positions, targets and effect changes stay live.
+            if (leftStatus.Id != rightStatus.Id ||
+                leftStatus.Param != rightStatus.Param ||
+                leftStatus.SourceId != rightStatus.SourceId)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static uint ToEntityId(ulong objectId) => unchecked((uint)objectId);

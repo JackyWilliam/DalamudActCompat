@@ -9,5 +9,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\DalamudActCompat.Protocol\DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="..\..\src\DalamudActCompat.Host\DalamudActCompat.Host.csproj" />
+    <Reference Include="FFXIV_ACT_Plugin.Common">
+      <HintPath>..\..\vendor\IINACT\external_dependencies\FFXIV_ACT_Plugin.Common.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 </Project>

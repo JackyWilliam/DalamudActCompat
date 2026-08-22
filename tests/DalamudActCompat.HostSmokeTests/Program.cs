@@ -50,6 +50,9 @@ if (!File.Exists(hostExecutable))
     throw new FileNotFoundException("ACT Host executable was not found.", hostExecutable);
 }
 
+await ValidateAuthorizedTtsCadenceAsync();
+ValidateFfxivEntityDeltaRepository();
+
 if (entityTimingProbe)
 {
     if (pluginRoot is null || configRoot is null)
@@ -2160,8 +2163,10 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
                 health.State == "plugins.ready",
                 $"Legacy plugin runtime did not become ready: {health.Detail}");
 
+            HostFfxivEntitySnapshot? latestFullSnapshot = null;
             async Task PublishSnapshotAsync(bool includeTarget)
             {
+                latestFullSnapshot = CreateTestFfxivSnapshot(includeTarget);
                 await HostFrameCodec.WriteAsync(
                     pipe.Writer,
                     HostEnvelope.Create(
@@ -2169,7 +2174,31 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
                         clientSequence++,
                         HostMessageTypes.FfxivEntities,
                         HostMessagePriority.State,
-                        CreateTestFfxivSnapshot(includeTarget)),
+                        latestFullSnapshot),
+                    CancellationToken.None);
+            }
+
+            async Task PublishTargetDeltaAsync()
+            {
+                var baseline = latestFullSnapshot
+                               ?? throw new InvalidOperationException(
+                                   "Entity timing delta has no full baseline.");
+                var current = CreateTestFfxivSnapshot(includeTarget: true);
+                var target = current.Combatants.Single(combatant => combatant.Id == 0x10005678);
+                await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(
+                        session,
+                        clientSequence++,
+                        HostMessageTypes.FfxivEntityDelta,
+                        HostMessagePriority.State,
+                        new HostFfxivEntityDelta(
+                            current.TerritoryId,
+                            current.CurrentPlayerId,
+                            baseline.Timestamp,
+                            current.Timestamp,
+                            [target],
+                            [])),
                     CancellationToken.None);
             }
 
@@ -2281,9 +2310,9 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
                 "Delayed actual-chain probe did not create its initial unpositioned drawing.");
             await CompleteCommandAsync(firstActualCommand);
             // Waiting here reproduces the entity-late race that previously ended the loop before
-            // the next game-side snapshot could expose the target.
+            // the next game-side update could expose the target.
             await Task.Delay(50);
-            await PublishSnapshotAsync(includeTarget: true);
+            await PublishTargetDeltaAsync();
             var delayedActual = await ReadScenarioAsync("ACTUAL");
 
             await PublishSnapshotAsync(includeTarget: false);
@@ -2299,7 +2328,7 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
                 "Delayed retry-chain probe did not create its initial unpositioned drawing.");
             await CompleteCommandAsync(firstRetryCommand);
             await Task.Delay(50);
-            await PublishSnapshotAsync(includeTarget: true);
+            await PublishTargetDeltaAsync();
             var delayedRetry = await ReadScenarioAsync("RETRY");
 
             Assert(
@@ -2307,7 +2336,7 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
                 $"An entity present before activation was not resolved: create={present.Creates}, change={present.Changes}.");
             Assert(
                 delayedRetry.Changes > 0,
-                "Triggernometry did not observe a later DACT entity snapshot from inside an active loop.");
+                "Triggernometry did not observe a later DACT entity delta from inside an active loop.");
             Assert(
                 delayedActual.Changes > 0,
                 "The targeted U6b P1 compatibility patch did not recover an entity-late loop.");
@@ -4091,6 +4120,100 @@ async Task ValidateSilverDasherLoadsOutOfProcessAsync(string sourceRoot)
     }
 }
 
+async Task ValidateAuthorizedTtsCadenceAsync()
+{
+    var elapsed = Stopwatch.StartNew();
+    var dispatches = new ConcurrentQueue<TimeSpan>();
+    var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    await using var queue = new AuthorizedTtsQueue(
+        8,
+        () => _ =>
+        {
+            dispatches.Enqueue(elapsed.Elapsed);
+            if (dispatches.Count == 3)
+            {
+                completed.TrySetResult();
+            }
+        },
+        exception => completed.TrySetException(exception));
+
+    var requests = new List<string>();
+    for (var index = 0; index < 3; index++)
+    {
+        var now = DateTimeOffset.UtcNow;
+        requests.Add(queue.Reserve($"cadence-{index}", now, now.AddSeconds(3)));
+        if (index < 2)
+        {
+            await Task.Delay(70);
+        }
+    }
+
+    var authorizedAt = DateTimeOffset.UtcNow;
+    foreach (var request in requests.AsEnumerable().Reverse())
+    {
+        Assert(
+            queue.Complete(request, allowed: true, authorizedAt),
+            "The TTS cadence probe could not complete a reserved authorization.");
+    }
+
+    await completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    var samples = dispatches.ToArray();
+    Assert(
+        samples.Length == 3 &&
+        samples[1] - samples[0] >= TimeSpan.FromMilliseconds(45) &&
+        samples[2] - samples[1] >= TimeSpan.FromMilliseconds(45),
+        "Bunched TTS authorizations compressed the original request cadence.");
+}
+
+void ValidateFfxivEntityDeltaRepository()
+{
+    var baselineAt = DateTimeOffset.UtcNow;
+    var baseline = CreateTestFfxivSnapshot(timestamp: baselineAt);
+    var repository = new FfxivDataRepository();
+    repository.Apply(baseline);
+
+    var target = CreateTestFfxivSnapshot(
+        includeTarget: true,
+        timestamp: baselineAt.AddMilliseconds(30)).Combatants.Single(combatant =>
+            combatant.Id == 0x10005678);
+    Assert(
+        repository.ApplyDelta(new HostFfxivEntityDelta(
+            baseline.TerritoryId,
+            baseline.CurrentPlayerId,
+            baseline.Timestamp,
+            baselineAt.AddMilliseconds(30),
+            [target],
+            [])) &&
+        repository.GetCombatantList().Any(combatant => combatant.ID == target.Id),
+        "A newly observed entity did not reach the Host through the incremental path.");
+
+    Assert(
+        repository.ApplyDelta(new HostFfxivEntityDelta(
+            baseline.TerritoryId,
+            baseline.CurrentPlayerId,
+            baseline.Timestamp,
+            baselineAt.AddMilliseconds(60),
+            [],
+            [])) &&
+        repository.GetCombatantList().All(combatant => combatant.ID != target.Id),
+        "A coalesced latest delta retained an entity that was absent from its full baseline overlay.");
+
+    var fallback = CreateTestFfxivSnapshot(
+        includeTarget: true,
+        timestamp: baselineAt.AddMilliseconds(500));
+    repository.Apply(fallback);
+    Assert(
+        repository.GetCombatantList().Any(combatant => combatant.ID == target.Id) &&
+        !repository.ApplyDelta(new HostFfxivEntityDelta(
+            baseline.TerritoryId,
+            baseline.CurrentPlayerId,
+            baseline.Timestamp,
+            baselineAt.AddMilliseconds(530),
+            [],
+            [])),
+        "The low-frequency full snapshot did not supersede a delta from an older baseline.");
+}
+
 IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)
 {
     yield return type;
@@ -4100,11 +4223,13 @@ IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)
     }
 }
 
-HostFfxivEntitySnapshot CreateTestFfxivSnapshot(bool includeTarget = false)
+HostFfxivEntitySnapshot CreateTestFfxivSnapshot(
+    bool includeTarget = false,
+    DateTimeOffset? timestamp = null)
     => new(
         TerritoryId: 1,
         CurrentPlayerId: 0x10001234,
-        Timestamp: DateTimeOffset.UtcNow,
+        Timestamp: timestamp ?? DateTimeOffset.UtcNow,
         Combatants: new[]
         {
             new HostFfxivCombatant(

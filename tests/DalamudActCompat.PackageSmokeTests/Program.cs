@@ -67,6 +67,7 @@ try
     ValidateBoundedNotActQueues();
     ValidateActCallbackCircuitBreaker();
     ValidateReflectionActLoggerOverloads();
+    ValidateFfxivEntityDeltaBuilder();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     ValidateParserFrameworkStateOwnership();
@@ -1114,6 +1115,39 @@ static void ValidateBoundedHostQueue()
             new { value = 2 })) &&
         queue.DataCount == 1,
         "State messages were not coalesced to the latest value.");
+
+    queue.Clear();
+    Assert(
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            1,
+            HostMessageTypes.FfxivEntities,
+            HostMessagePriority.State,
+            new { full = true })) &&
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            2,
+            HostMessageTypes.FfxivEntityDelta,
+            HostMessagePriority.State,
+            new { revision = 1 })) &&
+        queue.TryEnqueue(HostEnvelope.Create(
+            session,
+            3,
+            HostMessageTypes.FfxivEntityDelta,
+            HostMessagePriority.State,
+            new { revision = 2 })) &&
+        queue.DataCount == 2,
+        "Entity full/delta state did not keep one fallback and one coalesced latest delta.");
+    var entityMessages = new[]
+    {
+        queue.DequeueAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult(),
+        queue.DequeueAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult(),
+    };
+    Assert(
+        entityMessages.Any(envelope => envelope.Type == HostMessageTypes.FfxivEntities) &&
+        entityMessages.Single(envelope => envelope.Type == HostMessageTypes.FfxivEntityDelta)
+            .Payload.GetProperty("revision").GetInt32() == 2,
+        "Entity state coalescing did not retain the newest incremental overlay.");
 
     queue.Clear();
     for (var index = 0; index < HostProtocol.ControlQueueCapacity * 4; index++)
@@ -5175,6 +5209,95 @@ static async Task ValidateLiveBundledPluginUpdateCheckAsync(string testRoot)
     Assert(
         check.Updates.Count == 0,
         "The bundled DLL lock is stale compared with the live author sources.");
+}
+
+static void ValidateFfxivEntityDeltaBuilder()
+{
+    var baselineAt = DateTimeOffset.UtcNow;
+    var player = new HostFfxivCombatant(
+        Id: 0x10000001,
+        OwnerId: 0,
+        Type: 1,
+        Job: 19,
+        Level: 100,
+        Name: "Delta Player",
+        CurrentHp: 100_000,
+        MaxHp: 100_000,
+        CurrentMp: 10_000,
+        MaxMp: 10_000,
+        CurrentCp: 0,
+        MaxCp: 0,
+        CurrentGp: 0,
+        MaxGp: 0,
+        IsCasting: true,
+        CastId: 123,
+        CastTargetId: 0x40000001,
+        CastTime: 1,
+        MaxCastTime: 3,
+        PosX: 1,
+        PosY: 2,
+        PosZ: 3,
+        Heading: 0.5f,
+        CurrentWorldId: 21,
+        WorldId: 21,
+        WorldName: "Ravana",
+        BNpcNameId: 0,
+        BNpcId: 0,
+        TargetId: 0x40000001,
+        EffectiveDistance: 1,
+        PartyType: 1,
+        Address: 0x12345678,
+        Statuses: [new HostFfxivStatus(1191, 1, 20, 0x10000001)]);
+    var baseline = new HostFfxivEntitySnapshot(1, player.Id, baselineAt, [player]);
+
+    var tickingOnly = player with
+    {
+        CastTime = 1.03f,
+        Statuses = [new HostFfxivStatus(1191, 1, 19.97f, 0x10000001)],
+    };
+    var tickingDelta = FfxivEntitySnapshotBuilder.BuildDelta(
+        baseline,
+        new HostFfxivEntitySnapshot(
+            1,
+            player.Id,
+            baselineAt.AddMilliseconds(30),
+            [tickingOnly]));
+    Assert(
+        tickingDelta.Upserts.Count == 0 && tickingDelta.RemovedIds.Count == 0,
+        "Continuously ticking cast/effect clocks escaped into the high-frequency entity delta.");
+
+    var moved = player with { PosX = 4 };
+    var spawned = player with
+    {
+        Id = 0x40000002,
+        Type = 2,
+        Name = "Delta Boss",
+        Address = 0x23456789,
+    };
+    var changedDelta = FfxivEntitySnapshotBuilder.BuildDelta(
+        baseline,
+        new HostFfxivEntitySnapshot(
+            1,
+            player.Id,
+            baselineAt.AddMilliseconds(60),
+            [moved, spawned]));
+    Assert(
+        changedDelta.BaseTimestamp == baseline.Timestamp &&
+        changedDelta.Upserts.Select(combatant => combatant.Id).ToHashSet().SetEquals(
+            [player.Id, spawned.Id]) &&
+        changedDelta.RemovedIds.Count == 0,
+        "Position changes or newly spawned entities were omitted from the incremental update.");
+
+    var removedDelta = FfxivEntitySnapshotBuilder.BuildDelta(
+        baseline,
+        new HostFfxivEntitySnapshot(
+            1,
+            player.Id,
+            baselineAt.AddMilliseconds(90),
+            []));
+    Assert(
+        removedDelta.RemovedIds.SequenceEqual([player.Id]),
+        "Entity removal was omitted from the incremental update.");
 }
 
 static void ValidatePlayerIdentityResolution()

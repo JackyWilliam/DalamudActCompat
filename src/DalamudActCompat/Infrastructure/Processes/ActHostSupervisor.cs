@@ -314,6 +314,13 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             snapshot,
             deadline: DateTimeOffset.UtcNow.AddSeconds(2));
 
+    public bool PublishFfxivEntityDelta(HostFfxivEntityDelta delta)
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
+            HostMessageTypes.FfxivEntityDelta,
+            HostMessagePriority.State,
+            delta,
+            deadline: DateTimeOffset.UtcNow.AddSeconds(2));
+
     public bool OpenPluginUi(string pluginId)
         => state == HostSupervisorState.Running && ipc.TryEnqueue(
             HostMessageTypes.PluginOpen,
