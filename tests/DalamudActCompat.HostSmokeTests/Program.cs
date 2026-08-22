@@ -1038,6 +1038,10 @@ async Task ValidateExpiredMessageIsDroppedAsync()
         Assert(
             heartbeat.LastReceivedSequence == 2,
             "Host did not acknowledge receipt of the expired frame.");
+        Assert(
+            heartbeat.PrivateBytes > 0 &&
+            heartbeat.AvailablePhysicalMemoryBytes > 0,
+            "Host heartbeat did not publish private bytes and system memory headroom.");
         await HostFrameCodec.WriteAsync(
             pipe.Writer,
             HostEnvelope.Create(

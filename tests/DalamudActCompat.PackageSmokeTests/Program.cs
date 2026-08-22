@@ -57,6 +57,7 @@ try
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
+    ValidateHostMemoryProtectionPolicy();
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
@@ -1138,6 +1139,70 @@ static void ValidateBoundedHostQueue()
         queue.DataCount == 0 &&
         latestCombatState.Type == HostMessageTypes.CombatEnded,
         "Alternating combat transitions were not coalesced to their single latest state.");
+}
+
+static void ValidateHostMemoryProtectionPolicy()
+{
+    const long gib = 1024L * 1024L * 1024L;
+    var startedAt = DateTimeOffset.Parse("2026-08-22T12:00:00+08:00");
+    var policy = new HostMemoryProtectionPolicy();
+
+    HostResourceSample Sample(
+        DateTimeOffset timestamp,
+        long privateBytes,
+        long availableBytes = 8L * gib)
+        => new(timestamp, privateBytes, privateBytes, availableBytes, 20);
+
+    var ordinaryUsage = policy.Observe(Sample(startedAt, 16L * gib / 10), inCombat: false);
+    Assert(
+        ordinaryUsage.Snapshot.State == HostMemoryProtectionState.Normal &&
+        !ordinaryUsage.ShouldRecycle,
+        "A legitimate 1.6 GiB shared Host was treated as a memory leak.");
+
+    var initialBreach = policy.Observe(Sample(startedAt, 3L * gib), inCombat: false);
+    var briefBreach = policy.Observe(Sample(startedAt.AddSeconds(14), 3L * gib), inCombat: false);
+    Assert(
+        initialBreach.Snapshot.State == HostMemoryProtectionState.Monitoring &&
+        !initialBreach.ShouldRecycle &&
+        !briefBreach.ShouldRecycle,
+        "The 3 GiB threshold recycled the Host without the 15-second confirmation window.");
+
+    var combatBreach = policy.Observe(Sample(startedAt.AddSeconds(15), 3L * gib), inCombat: true);
+    var afterCombat = policy.Observe(Sample(startedAt.AddSeconds(16), 3L * gib), inCombat: false);
+    Assert(
+        combatBreach.Snapshot.State == HostMemoryProtectionState.DeferredForCombat &&
+        !combatBreach.ShouldRecycle &&
+        afterCombat.ShouldRecycle,
+        "Sustained ordinary pressure did not defer during combat and recover after combat.");
+
+    policy.ResetForNewSession();
+    var emergencyStart = policy.Observe(Sample(startedAt, 4L * gib), inCombat: true);
+    var emergencyEarly = policy.Observe(Sample(startedAt.AddSeconds(9), 4L * gib), inCombat: true);
+    var emergencyDue = policy.Observe(Sample(startedAt.AddSeconds(10), 4L * gib), inCombat: true);
+    Assert(
+        emergencyStart.Snapshot.State == HostMemoryProtectionState.EmergencyCountdown &&
+        !emergencyStart.ShouldRecycle &&
+        !emergencyEarly.ShouldRecycle &&
+        emergencyDue.ShouldRecycle,
+        "The 4 GiB emergency path did not preserve its cancellable 10-second countdown.");
+
+    policy.ResetForNewSession();
+    var lowMemoryStart = policy.Observe(
+        Sample(startedAt, 3L * gib, availableBytes: gib),
+        inCombat: true);
+    Assert(
+        lowMemoryStart.Snapshot.State == HostMemoryProtectionState.EmergencyCountdown &&
+        !lowMemoryStart.ShouldRecycle,
+        "Low system memory above the 3 GiB Host floor did not enter the emergency countdown.");
+
+    policy.IgnoreCurrentSession();
+    var ignored = policy.Observe(
+        Sample(startedAt.AddMinutes(1), 5L * gib, availableBytes: gib),
+        inCombat: false);
+    Assert(
+        ignored.Snapshot.State == HostMemoryProtectionState.Ignored &&
+        !ignored.ShouldRecycle,
+        "Ignoring automatic recovery for the current Host session was not respected.");
 }
 
 static void ValidateBoundedNotActQueues()
@@ -6831,6 +6896,11 @@ static void ValidateEncounterDurationTracker()
 
 static void ValidateDalamudGameStateBridge()
 {
+    var mapped = ActCoordinateMapper.FromDalamud(10, 20, 30);
+    Assert(
+        mapped == new ActPosition(10, 30, 20),
+        "Dalamud X/Y/Z was not converted to ACT X/Z/Y at the Radar boundary.");
+
     var provider = new CachedDalamudGameStateProvider();
     ActPlayerIdentity[] identities =
     [
@@ -6846,6 +6916,9 @@ static void ValidateDalamudGameStateBridge()
             CurrentMp = 10_000,
             MaxMp = 10_000,
             TerritoryId = 1234,
+            PositionX = 10,
+            PositionY = 30,
+            PositionZ = 20,
             Rotation = 1.25f,
         },
         new("Party Member", "Beta", "WHM", false, false)
@@ -6860,18 +6933,54 @@ static void ValidateDalamudGameStateBridge()
             CurrentMp = 9_000,
             MaxMp = 10_000,
             TerritoryId = 1234,
+            PositionX = 40,
+            PositionY = 60,
+            PositionZ = 50,
             Rotation = -0.75f,
         },
     ];
 
-    provider.Update(identities, true);
+    var livePose = ActPlayerPose.FromDalamud(0x10000001, 11, 21, 31, 1.5f);
+    provider.Update(identities, livePose, true);
     Assert(provider.Snapshot.GameExists, "Dalamud game state did not report the active game.");
     Assert(provider.Snapshot.InGameCombat, "Dalamud combat state was not preserved.");
     Assert(provider.Snapshot.Player?.JobId == 19, "Dalamud local player job was not preserved.");
     Assert(
-        Math.Abs((provider.Snapshot.Player?.Rotation ?? 0) - 1.25f) < 0.001f,
-        "Dalamud local player rotation was not preserved for Radar.");
+        provider.Snapshot.Player is
+        {
+            PositionX: 11,
+            PositionY: 31,
+            PositionZ: 21,
+            Rotation: 1.5f,
+        },
+        "Radar did not consume the frame-rate local player pose in ACT coordinates.");
+    Assert(
+        provider.Snapshot.Party[1] is
+        {
+            PositionX: 40,
+            PositionY: 60,
+            PositionZ: 50,
+            Rotation: -0.75f,
+        },
+        "The lightweight local pose unexpectedly rewrote another party member.");
+    Assert(
+        provider.Identities[0].PositionY == 30 && provider.Identities[0].PositionZ == 20,
+        "The frame-rate pose mutated the 500 ms identity snapshot.");
     Assert(provider.Snapshot.Party.Count == 2, "Dalamud party members were not preserved.");
+
+    provider.Update(
+        identities,
+        ActPlayerPose.FromDalamud(0x10000009, 99, 98, 97, 2.5f),
+        true);
+    Assert(
+        provider.Snapshot.Player is
+        {
+            PositionX: 10,
+            PositionY: 30,
+            PositionZ: 20,
+            Rotation: 1.25f,
+        },
+        "A stale pose from another entity was applied to the local player.");
 
     var overlayAssembly = typeof(IDalamudGameStateProvider).Assembly;
     var partyAdapterType = overlayAssembly.GetType(
@@ -8487,6 +8596,34 @@ static void ValidateCactbotSpokenAlertDefaults()
         "EnsureDefaultAlertOutput",
         BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("Cactbot alert-output migration helper was not found.");
+    var radarChangeMethod = typeof(CactbotEventSource).GetMethod(
+        "HaveRadarOptionsChanged",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("Cactbot Radar option-change helper was not found.");
+    var previousOptions = JObject.FromObject(new
+    {
+        radar = new { TTS = true, PopSound = true },
+        raidboss = new { DefaultAlertOutput = "ttsAndText" },
+    });
+    var radarDisabled = JObject.FromObject(new
+    {
+        radar = new { TTS = false, PopSound = true },
+        raidboss = new { DefaultAlertOutput = "ttsAndText" },
+    });
+    var raidbossOnly = JObject.FromObject(new
+    {
+        radar = new { TTS = true, PopSound = true },
+        raidboss = new { DefaultAlertOutput = "textOnly" },
+    });
+    Assert(
+        radarChangeMethod.Invoke(null, ["options", previousOptions, radarDisabled]) as bool? == true,
+        "Turning off Radar TTS did not request a targeted Radar reload.");
+    Assert(
+        radarChangeMethod.Invoke(null, ["options", previousOptions, raidbossOnly]) as bool? == false,
+        "A raidboss-only option edit incorrectly requested a Radar reload.");
+    Assert(
+        radarChangeMethod.Invoke(null, ["user", previousOptions, radarDisabled]) as bool? == false,
+        "A non-options cactbot save incorrectly requested a Radar reload.");
     var empty = new Dictionary<string, JToken>();
     Assert(
         method.Invoke(null, [empty]) as bool? == true,

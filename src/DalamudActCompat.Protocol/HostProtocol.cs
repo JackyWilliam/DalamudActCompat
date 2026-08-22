@@ -5,13 +5,12 @@ namespace DalamudActCompat.Protocol;
 
 public static class HostProtocol
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int ControlQueueCapacity = 256;
     public const int DataQueueCapacity = 8192;
     public const int SilverDasherQueueCapacity = 512;
     public const int MatchaNetworkQueueCapacity = 1024;
-    public const long MaximumHostWorkingSetBytes = 1536L * 1024 * 1024;
     public const int MaximumHostThreadCount = 256;
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan SuspectAfter = TimeSpan.FromSeconds(3);
@@ -105,6 +104,8 @@ public sealed record HostHeartbeat(
     int DataQueueLength,
     long DroppedDataMessages,
     long WorkingSetBytes,
+    long PrivateBytes,
+    long AvailablePhysicalMemoryBytes,
     int ThreadCount,
     IReadOnlyList<HostPluginHealth> Plugins,
     IReadOnlyList<HostPluginStage> Stages);

@@ -638,6 +638,8 @@ internal static class Program
                         0,
                         0,
                         process.WorkingSet64,
+                        process.PrivateMemorySize64,
+                        SystemMemoryInfo.GetAvailablePhysicalMemoryBytes(),
                         process.Threads.Count,
                         pluginHealth(),
                         pluginStages()));

@@ -1,5 +1,36 @@
 namespace DalamudActCompat.ActRuntime;
 
+public readonly record struct ActPosition(float X, float Y, float Z);
+
+public static class ActCoordinateMapper
+{
+    public static ActPosition FromDalamud(float x, float y, float z)
+    {
+        // ACT defines X/Y as the horizontal plane and Z as height, while Dalamud uses
+        // X/Z horizontally and Y vertically. Keep this swap at the game-state boundary.
+        return new ActPosition(x, z, y);
+    }
+}
+
+public sealed record ActPlayerPose(
+    uint EntityId,
+    float PositionX,
+    float PositionY,
+    float PositionZ,
+    float Rotation)
+{
+    public static ActPlayerPose FromDalamud(
+        uint entityId,
+        float x,
+        float y,
+        float z,
+        float rotation)
+    {
+        var position = ActCoordinateMapper.FromDalamud(x, y, z);
+        return new ActPlayerPose(entityId, position.X, position.Y, position.Z, rotation);
+    }
+}
+
 public sealed record ActPlayerIdentity(
     string Name,
     string World,

@@ -113,6 +113,7 @@ public sealed class Plugin : IDalamudPlugin
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
     private IReadOnlyList<ActPlayerIdentity> playerIdentitySnapshot = [];
+    private ActPlayerPose? localPlayerPoseSnapshot;
     private HostPostNamazuHeading? pendingPostNamazuHeading;
     private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
     private Task? cactbotShutdownTask;
@@ -217,7 +218,8 @@ public sealed class Plugin : IDalamudPlugin
             paths.ConfigDirectory,
             hostIpcClient,
             logger,
-            () => Volatile.Read(ref silverDasherEventsEnabled) == 1);
+            () => Volatile.Read(ref silverDasherEventsEnabled) == 1,
+            enableMemoryProtection: true);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
@@ -269,6 +271,7 @@ public sealed class Plugin : IDalamudPlugin
             () => Volatile.Read(ref playerIdentitySnapshot)
                 .FirstOrDefault(static identity => identity.IsLocalPlayer)?.Name ?? string.Empty,
             () => Volatile.Read(ref playerIdentitySnapshot),
+            () => Volatile.Read(ref localPlayerPoseSnapshot),
             chatGui,
             framework,
             condition,
@@ -430,10 +433,12 @@ public sealed class Plugin : IDalamudPlugin
             () => genericHostSupervisor.Snapshot,
             RestartHostFromUi,
             StopHostFromUi,
+            hostSupervisor.IgnoreMemoryProtectionForCurrentSession,
             RestartMatchaHostFromUi,
             StopMatchaHostFromUi,
             RestartGenericHostFromUi,
             StopGenericHostFromUi);
+        hostSupervisor.MemoryProtectionChanged += OnHostMemoryProtectionChanged;
         helpWindow = new HelpWindow(
             text,
             logoTexture,
@@ -579,6 +584,7 @@ public sealed class Plugin : IDalamudPlugin
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested -= OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested -= OnSilverDasherNotificationRequested;
+        hostSupervisor.MemoryProtectionChanged -= OnHostMemoryProtectionChanged;
         matchaHostSupervisor.MatchaNotificationRequested -= OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested -= OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested -= OnMatchaTtsRequested;
@@ -2803,6 +2809,34 @@ public sealed class Plugin : IDalamudPlugin
     {
         var now = DateTimeOffset.UtcNow;
         ApplyPendingPostNamazuHeading(now);
+        // The shared Host carries timing-sensitive legacy actions, so ordinary pressure waits
+        // for combat to end instead of interrupting Triggernometry or PostNamazu mid-pull.
+        hostSupervisor.SetMemoryProtectionCombatState(
+            services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
+        try
+        {
+            var localPlayer = objectTable.LocalPlayer;
+            Volatile.Write(
+                ref localPlayerPoseSnapshot,
+                localPlayer is null || localPlayer.EntityId == 0
+                    ? null
+                    : ActPlayerPose.FromDalamud(
+                        localPlayer.EntityId,
+                        localPlayer.Position.X,
+                        localPlayer.Position.Y,
+                        localPlayer.Position.Z,
+                        localPlayer.Rotation));
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref localPlayerPoseSnapshot, null);
+            if (now >= nextHostEntitySnapshotFailureLogAt)
+            {
+                nextHostEntitySnapshotFailureLogAt = now.AddSeconds(10);
+                logger.Error(ex, "Game-side local player pose snapshot failed.");
+            }
+        }
+
         if (now < nextHostEntitySnapshotAt)
         {
             return;
@@ -2839,6 +2873,59 @@ public sealed class Plugin : IDalamudPlugin
                 nextHostEntitySnapshotFailureLogAt = now.AddSeconds(10);
                 logger.Error(ex, "Game-side FFXIV entity snapshot failed.");
             }
+        }
+    }
+
+    private void OnHostMemoryProtectionChanged(
+        object? sender,
+        HostMemoryProtectionEventArgs args)
+    {
+        if (args.Snapshot.State is HostMemoryProtectionState.Normal or
+            HostMemoryProtectionState.Disabled)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = services.Framework.RunOnFrameworkThread(() =>
+            {
+                var snapshot = args.Snapshot;
+                if (snapshot.State != HostMemoryProtectionState.Ignored)
+                {
+                    statusWindow.IsOpen = true;
+                }
+
+                var content = snapshot.State switch
+                {
+                    HostMemoryProtectionState.Monitoring =>
+                        $"共享 ACT Host 私有内存已到 {snapshot.PrivateBytes / (1024d * 1024d * 1024d):0.00} GiB，正在确认是否持续增长；不会立即结束进程。",
+                    HostMemoryProtectionState.DeferredForCombat =>
+                        "共享 ACT Host 已持续超过 3 GiB。当前仍在战斗，自动回收会等到脱战。",
+                    HostMemoryProtectionState.EmergencyCountdown =>
+                        "共享 ACT Host 内存已进入紧急区间，10 秒后将尝试平滑重启；可在状态窗口选择本次忽略。",
+                    HostMemoryProtectionState.Recycling =>
+                        "正在平滑重启共享 ACT Host。Triggernometry、鲶鱼精邮差与 FoxTTS 会短暂停止，未执行的延时动作或发送队列可能丢失。",
+                    HostMemoryProtectionState.Ignored =>
+                        "本次 Host 会话已忽略自动内存回收；请留意系统剩余内存，手动重启 Host 后保护会恢复。",
+                    HostMemoryProtectionState.CircuitOpen =>
+                        "十分钟内已自动恢复两次，本次已停止共享 ACT Host 且不再自动重启。请查看状态与日志后手动启动。",
+                    _ => snapshot.Detail,
+                };
+                services.NotificationManager.AddNotification(new Notification
+                {
+                    Title = "共享 ACT Host 内存保护",
+                    Content = content,
+                    Type = snapshot.State == HostMemoryProtectionState.CircuitOpen
+                        ? NotificationType.Error
+                        : NotificationType.Warning,
+                });
+            });
+        }
+        catch (Exception exception)
+        {
+            // A UI notification failure must not interfere with the protection state machine.
+            logger.Error(exception, "Could not display the shared Host memory protection status.");
         }
     }
 
@@ -3169,6 +3256,10 @@ public sealed class Plugin : IDalamudPlugin
         var localGameObject = objectTable.LocalPlayer;
         if (playerState.IsLoaded && !string.IsNullOrWhiteSpace(playerState.CharacterName))
         {
+            var localPosition = ActCoordinateMapper.FromDalamud(
+                localGameObject?.Position.X ?? 0,
+                localGameObject?.Position.Y ?? 0,
+                localGameObject?.Position.Z ?? 0);
             var identity = new ActPlayerIdentity(
                 playerState.CharacterName,
                 playerState.HomeWorld.ValueNullable?.Name.ToString() ?? string.Empty,
@@ -3183,9 +3274,9 @@ public sealed class Plugin : IDalamudPlugin
                 Level = unchecked((byte)playerState.EffectiveLevel),
                 CurrentHp = localPlayerDead ? 0u : 1u,
                 MaxHp = 1,
-                PositionX = localGameObject?.Position.X ?? 0,
-                PositionY = localGameObject?.Position.Y ?? 0,
-                PositionZ = localGameObject?.Position.Z ?? 0,
+                PositionX = localPosition.X,
+                PositionY = localPosition.Y,
+                PositionZ = localPosition.Z,
                 Rotation = localGameObject?.Rotation ?? 0,
             };
             identities[identity.DisplayName] = identity;
@@ -3199,6 +3290,10 @@ public sealed class Plugin : IDalamudPlugin
                 continue;
             }
 
+            var position = ActCoordinateMapper.FromDalamud(
+                member.Position.X,
+                member.Position.Y,
+                member.Position.Z);
             var identity = new ActPlayerIdentity(
                 name,
                 member.World.ValueNullable?.Name.ToString() ?? string.Empty,
@@ -3217,9 +3312,9 @@ public sealed class Plugin : IDalamudPlugin
                 CurrentMp = member.CurrentMP,
                 MaxMp = member.MaxMP,
                 TerritoryId = unchecked((ushort)member.Territory.RowId),
-                PositionX = member.Position.X,
-                PositionY = member.Position.Y,
-                PositionZ = member.Position.Z,
+                PositionX = position.X,
+                PositionY = position.Y,
+                PositionZ = position.Z,
                 Rotation = rotations.GetValueOrDefault(member.EntityId),
             };
             identities[identity.DisplayName] = identity;
