@@ -1939,6 +1939,27 @@ static void ValidateMeterLayout()
         MeterWindow.ShouldEnableHorizontalScroll(360, 373),
         "The compact default Meter width no longer delays horizontal scrolling.");
     var defaultColumns = new MeterSettings();
+    var clickThroughSettings = new MeterSettings
+    {
+        IsLocked = true,
+        ClickThroughWhenLocked = true,
+    };
+    var clickThroughRows = MeterWindow.BuildRowsChildFlags(
+        clickThroughSettings,
+        useHorizontalScroll: false);
+    var clickThroughScrollableRows = MeterWindow.BuildRowsChildFlags(
+        clickThroughSettings,
+        useHorizontalScroll: true);
+    clickThroughSettings.IsLocked = false;
+    var unlockedRows = MeterWindow.BuildRowsChildFlags(
+        clickThroughSettings,
+        useHorizontalScroll: false);
+    Assert(
+        (clickThroughRows & MeterWindow.NoInputsFlagMask) != 0 &&
+        (clickThroughScrollableRows & MeterWindow.NoInputsFlagMask) != 0 &&
+        (clickThroughScrollableRows & MeterWindow.HorizontalScrollbarFlagMask) != 0 &&
+        (unlockedRows & MeterWindow.NoInputsFlagMask) == 0,
+        "The expanded Combat Meter child window does not follow the locked click-through setting.");
     Assert(
         defaultColumns.ShowFflogs &&
         defaultColumns.ShowDps &&
@@ -7233,6 +7254,7 @@ static void ValidateHtmlOverlayDefaults()
         new[]
         {
             "/actcompat on",
+            "/actcompat off",
             "/actcompat meter",
             "/actcompat history",
             "/actcompat logs",
@@ -7249,7 +7271,13 @@ static void ValidateHtmlOverlayDefaults()
         macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
         Regex.IsMatch(
             macroPluginSource,
-            "case \\\"on\\\":\\s+case \\\"\\\":\\s+settingsWindow\\.LocateAnimated\\(\\);") &&
+            "case \\\"off\\\":\\s+settingsWindow\\.HideAnimated\\(\\);") &&
+        Regex.IsMatch(
+            macroPluginSource,
+            "case \\\"on\\\":\\s+settingsWindow\\.LocateAnimated\\(\\);") &&
+        Regex.IsMatch(
+            macroPluginSource,
+            "case \\\"\\\":\\s+settingsWindow\\.ToggleAnimated\\(\\);") &&
         Regex.IsMatch(
             macroPluginSource,
             "case \\\"meter\\\":\\s+OpenMeter\\(\\);") &&
@@ -7281,6 +7309,7 @@ static void ValidateHtmlOverlayDefaults()
             StringComparison.Ordinal) &&
         !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
+        readmeSource.Contains("/actcompat off", StringComparison.Ordinal) &&
         readmeSource.Contains("## 用户使用指南", StringComparison.Ordinal) &&
         readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
         readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&

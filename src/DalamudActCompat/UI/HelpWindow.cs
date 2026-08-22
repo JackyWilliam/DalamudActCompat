@@ -394,8 +394,8 @@ public sealed class HelpWindow : Window
                 "“显示 ACT 快捷按钮”控制游戏画面上的入口：左键打开或关闭控制中心，右键打开或关闭战斗统计，按住中键拖动。",
                 "Show ACT quick button controls the in-game entry: left-click to open or close Control Center, right-click to open or close Combat Meter, and hold middle mouse to drag."));
             DrawBullet(text.Get(
-                "/actcompat 打开控制中心（/actcompat on 为兼容别名）；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
-                "/actcompat opens the control center (/actcompat on is a compatible alias); /actcompat status opens runtime status. Every command can be copied from the Commands page."));
+                "/actcompat 切换控制中心的打开与关闭，/actcompat on 始终打开，/actcompat off 始终关闭；/actcompat status 打开运行状态；所有命令都可在“宏指令”页一键复制。",
+                "/actcompat toggles the control center, /actcompat on always opens it, and /actcompat off always closes it; /actcompat status opens runtime status. Every command can be copied from the Commands page."));
         });
         DrawCard("help-start-data", text.Get("战斗日志与诊断日志不是同一种文件", "Combat logs and diagnostic logs are different"), 200, () =>
         {
@@ -517,10 +517,11 @@ public sealed class HelpWindow : Window
         DrawPageHeader(
             text.Get("宏指令", "Macro commands"),
             text.Get("点击“复制”即可放入剪贴板，再粘贴到游戏聊天框或宏中。", "Use Copy to place a command on the clipboard, then paste it into game chat or a macro."));
-        DrawCard("help-commands-common", text.Get("常用入口", "Common entry points"), 365, () =>
+        DrawCard("help-commands-common", text.Get("常用入口", "Common entry points"), 405, () =>
         {
-            DrawCommand("control-default", "/actcompat", text.Get("打开插件控制中心。", "Open the plugin control center."));
-            DrawCommand("on", "/actcompat on", text.Get("打开插件控制中心；保留旧宏兼容。", "Open the plugin control center; retained for old macro compatibility."));
+            DrawCommand("control-default", "/actcompat", text.Get("打开或关闭插件控制中心。", "Open or close the plugin control center."));
+            DrawCommand("on", "/actcompat on", text.Get("始终打开插件控制中心。", "Always open the plugin control center."));
+            DrawCommand("off", "/actcompat off", text.Get("关闭插件控制中心。", "Close the plugin control center."));
             DrawCommand("meter", "/actcompat meter", text.Get("打开战斗统计。", "Open Combat Meter."));
             DrawCommand("history", "/actcompat history", text.Get("打开近期战斗。", "Open recent encounters."));
             DrawCommand("logs", "/actcompat logs", text.Get("打开已保存的日志文件列表。", "Open the saved log-file list."));

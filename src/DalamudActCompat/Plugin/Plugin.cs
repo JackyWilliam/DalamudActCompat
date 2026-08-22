@@ -516,7 +516,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Control Center. Args: on, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open Control Center. Args: on, off, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
@@ -645,8 +645,13 @@ public sealed class Plugin : IDalamudPlugin
         switch (verb)
         {
             case "on":
-            case "":
                 settingsWindow.LocateAnimated();
+                break;
+            case "":
+                settingsWindow.ToggleAnimated();
+                break;
+            case "off":
+                settingsWindow.HideAnimated();
                 break;
             case "history":
                 encounterWindow.OpenRecent();

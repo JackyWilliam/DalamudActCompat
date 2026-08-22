@@ -145,7 +145,7 @@ public sealed class MeterWindow : Window
             Flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize;
         }
 
-        if (settings.IsLocked && settings.ClickThroughWhenLocked)
+        if (ShouldPassMouseInputThrough(settings))
         {
             Flags |= ImGuiWindowFlags.NoInputs;
         }
@@ -236,9 +236,7 @@ public sealed class MeterWindow : Window
                 "meter-rows",
                 new Vector2(-1, -1),
                 false,
-                useHorizontalScroll
-                    ? ImGuiWindowFlags.HorizontalScrollbar
-                    : ImGuiWindowFlags.None))
+                (ImGuiWindowFlags)BuildRowsChildFlags(settings, useHorizontalScroll)))
         {
             var layout = BuildColumnLayout(
                 ImGui.GetContentRegionAvail().X,
@@ -413,7 +411,32 @@ public sealed class MeterWindow : Window
     }
 
     private static bool CanInteractWithCompactToggle(MeterSettings settings)
-        => !settings.IsLocked || !settings.ClickThroughWhenLocked;
+        => !ShouldPassMouseInputThrough(settings);
+
+    internal static bool ShouldPassMouseInputThrough(MeterSettings settings)
+        => settings.IsLocked && settings.ClickThroughWhenLocked;
+
+    internal static int NoInputsFlagMask => (int)ImGuiWindowFlags.NoInputs;
+
+    internal static int HorizontalScrollbarFlagMask
+        => (int)ImGuiWindowFlags.HorizontalScrollbar;
+
+    internal static int BuildRowsChildFlags(
+        MeterSettings settings,
+        bool useHorizontalScroll)
+    {
+        var flags = useHorizontalScroll
+            ? HorizontalScrollbarFlagMask
+            : (int)ImGuiWindowFlags.None;
+        if (ShouldPassMouseInputThrough(settings))
+        {
+            // ImGui child windows own their own hover/input state. Applying NoInputs only
+            // to the parent can still make the expanded ranking capture clicks over the game.
+            flags |= NoInputsFlagMask;
+        }
+
+        return flags;
+    }
 
     private void HandleCompactModeToggle(
         MeterSettings settings,
