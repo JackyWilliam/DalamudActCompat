@@ -8,8 +8,12 @@ namespace DalamudActCompat.Host;
 
 internal sealed class FfxivDataRepository : IDataRepository
 {
+    private const uint InvalidEntityId = 0xE0000000;
     private readonly object syncRoot = new();
     private HostFfxivEntitySnapshot snapshot = new(0, 0, DateTimeOffset.MinValue, []);
+    private Dictionary<uint, HostFfxivCombatant> baselineCombatants = [];
+    private DateTimeOffset baselineTimestamp = DateTimeOffset.MinValue;
+    private DateTimeOffset lastEntityUpdateTimestamp = DateTimeOffset.MinValue;
     private ReadOnlyCollection<Combatant> combatants =
         Array.AsReadOnly(Array.Empty<Combatant>());
     private int gameProcessId;
@@ -38,14 +42,60 @@ internal sealed class FfxivDataRepository : IDataRepository
     public void Apply(HostFfxivEntitySnapshot next)
     {
         ArgumentNullException.ThrowIfNull(next);
-        var mapped = Array.AsReadOnly(next.Combatants
-            .OrderByDescending(combatant => combatant.Id == next.CurrentPlayerId)
-            .Select(MapCombatant)
-            .ToArray());
+        var nextById = BuildCombatantMap(next.Combatants);
         lock (syncRoot)
         {
-            snapshot = next;
-            combatants = mapped;
+            if (next.Timestamp < lastEntityUpdateTimestamp)
+            {
+                return;
+            }
+
+            snapshot = next with { Combatants = nextById.Values.ToArray() };
+            baselineCombatants = nextById;
+            baselineTimestamp = next.Timestamp;
+            lastEntityUpdateTimestamp = next.Timestamp;
+            combatants = MapCombatants(nextById.Values, next.CurrentPlayerId);
+        }
+    }
+
+    internal bool ApplyDelta(HostFfxivEntityDelta delta)
+    {
+        ArgumentNullException.ThrowIfNull(delta);
+        lock (syncRoot)
+        {
+            if (delta.BaseTimestamp != baselineTimestamp ||
+                delta.Timestamp < lastEntityUpdateTimestamp ||
+                delta.TerritoryId != snapshot.TerritoryId ||
+                delta.CurrentPlayerId != snapshot.CurrentPlayerId)
+            {
+                return false;
+            }
+
+            // Every delta is relative to the last full snapshot because state-priority IPC may
+            // coalesce intermediate frames. Rebuilding from that baseline makes the newest delta
+            // complete even when one or more earlier deltas never crossed the process boundary.
+            var merged = new Dictionary<uint, HostFfxivCombatant>(baselineCombatants);
+            foreach (var removedId in delta.RemovedIds)
+            {
+                merged.Remove(removedId);
+            }
+
+            foreach (var upsert in delta.Upserts)
+            {
+                if (IsValidEntityId(upsert.Id))
+                {
+                    merged[upsert.Id] = upsert;
+                }
+            }
+
+            snapshot = new HostFfxivEntitySnapshot(
+                delta.TerritoryId,
+                delta.CurrentPlayerId,
+                delta.Timestamp,
+                merged.Values.ToArray());
+            lastEntityUpdateTimestamp = delta.Timestamp;
+            combatants = MapCombatants(merged.Values, delta.CurrentPlayerId);
+            return true;
         }
     }
 
@@ -164,6 +214,34 @@ internal sealed class FfxivDataRepository : IDataRepository
     public string[] GetAntiVirusNames() => [];
 
     public byte GetGameRegion() => 2;
+
+    private static ReadOnlyCollection<Combatant> MapCombatants(
+        IEnumerable<HostFfxivCombatant> sources,
+        uint currentPlayerId)
+        => Array.AsReadOnly(sources
+            .OrderByDescending(combatant => combatant.Id == currentPlayerId)
+            .Select(MapCombatant)
+            .ToArray());
+
+    private static Dictionary<uint, HostFfxivCombatant> BuildCombatantMap(
+        IEnumerable<HostFfxivCombatant> sources)
+    {
+        var result = new Dictionary<uint, HostFfxivCombatant>();
+        foreach (var source in sources)
+        {
+            if (IsValidEntityId(source.Id))
+            {
+                // A malformed or transient duplicate snapshot must degrade to one actor value;
+                // crashing this process removes every extension assigned to the shared Host.
+                result[source.Id] = source;
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsValidEntityId(uint entityId)
+        => entityId is not 0 and not InvalidEntityId;
 
     private static Combatant MapCombatant(HostFfxivCombatant source)
         => new()

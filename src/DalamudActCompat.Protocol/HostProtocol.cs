@@ -5,7 +5,7 @@ namespace DalamudActCompat.Protocol;
 
 public static class HostProtocol
 {
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int ControlQueueCapacity = 256;
     public const int DataQueueCapacity = 8192;
@@ -38,6 +38,7 @@ public static class HostMessageTypes
     public const string CombatStarted = "event.combat.start";
     public const string CombatEnded = "event.combat.end";
     public const string FfxivEntities = "state.ffxiv.entities";
+    public const string FfxivEntityDelta = "state.ffxiv.entities.delta";
     public const string PostNamazuSetHeading = "postnamazu.state.heading";
     public const string Snapshot = "snapshot";
     public const string Shutdown = "shutdown";
@@ -180,6 +181,14 @@ public sealed record HostFfxivEntitySnapshot(
     uint CurrentPlayerId,
     DateTimeOffset Timestamp,
     IReadOnlyList<HostFfxivCombatant> Combatants);
+
+public sealed record HostFfxivEntityDelta(
+    uint TerritoryId,
+    uint CurrentPlayerId,
+    DateTimeOffset BaseTimestamp,
+    DateTimeOffset Timestamp,
+    IReadOnlyList<HostFfxivCombatant> Upserts,
+    IReadOnlyList<uint> RemovedIds);
 
 public sealed record HostPostNamazuHeading(
     long Address,

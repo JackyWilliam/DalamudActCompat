@@ -1117,7 +1117,7 @@ internal sealed class LegacyPluginHandle : IDisposable
                             $"ACT.FoxTTS did not initialize its speech provider: {status.Text}");
                     }
 
-                    ttsWriter = CreateFoxTtsWriter(instance, form);
+                    ttsWriter = CreateFoxTtsWriter(instance);
                     Console.WriteLine("ACT.FoxTTS speech bridge ready in the external Host.");
                 }
 
@@ -1178,7 +1178,7 @@ internal sealed class LegacyPluginHandle : IDisposable
             ttsWriter);
     }
 
-    private static Action<string> CreateFoxTtsWriter(object plugin, Control dispatcher)
+    private static Action<string> CreateFoxTtsWriter(object plugin)
     {
         var speak = plugin.GetType().GetMethod(
                         "Speak",
@@ -1189,28 +1189,24 @@ internal sealed class LegacyPluginHandle : IDisposable
                     ?? throw new MissingMethodException(plugin.GetType().FullName, "Speak");
         return message =>
         {
-            try
+            // FoxTTS' native ACT injector calls Speak on a thread-pool task. Matching that
+            // contract avoids serializing network/cache work on the plugin's WinForms thread,
+            // which can release several queued reminders back-to-back after one slow request.
+            _ = Task.Run(() =>
             {
-                dispatcher.BeginInvoke((Action)(() =>
+                try
                 {
-                    try
-                    {
-                        speak.Invoke(plugin, [message]);
-                    }
-                    catch (TargetInvocationException ex) when (ex.InnerException is not null)
-                    {
-                        HostPluginBridge.ReportException("act.foxtts", "Speak", ex.InnerException);
-                    }
-                    catch (Exception ex)
-                    {
-                        HostPluginBridge.ReportException("act.foxtts", "Speak", ex);
-                    }
-                }));
-            }
-            catch (Exception ex)
-            {
-                HostPluginBridge.ReportException("act.foxtts", "Queue Speak", ex);
-            }
+                    speak.Invoke(plugin, [message]);
+                }
+                catch (TargetInvocationException ex) when (ex.InnerException is not null)
+                {
+                    HostPluginBridge.ReportException("act.foxtts", "Speak", ex.InnerException);
+                }
+                catch (Exception ex)
+                {
+                    HostPluginBridge.ReportException("act.foxtts", "Speak", ex);
+                }
+            });
         };
     }
 

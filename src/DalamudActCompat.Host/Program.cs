@@ -485,6 +485,13 @@ internal static class Program
                                 "Game-side FFXIV entity snapshot is invalid.");
                         HostPluginBridge.ApplyFfxivEntitySnapshot(entitySnapshot);
                         break;
+                    case HostMessageTypes.FfxivEntityDelta:
+                        var entityDelta =
+                            envelope.Payload.Deserialize<HostFfxivEntityDelta>()
+                            ?? throw new InvalidDataException(
+                                "Game-side FFXIV entity delta is invalid.");
+                        HostPluginBridge.ApplyFfxivEntityDelta(entityDelta);
+                        break;
                     case HostMessageTypes.Snapshot:
                         // Phase-two bridge receives ordered events here. Plugin
                         // execution will move behind this boundary incrementally.
