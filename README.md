@@ -80,7 +80,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 | 命令 | 作用 |
 | --- | --- |
 | `/actcompat` | 打开或关闭控制中心 |
-| `/actcompat on` / `off` | 明确打开 / 关闭控制中心 |
+| `/actcompat on` / `/actcompat off` | 明确打开 / 关闭控制中心 |
 | `/actcompat meter` | 打开并定位战斗统计 |
 | `/actcompat history` | 打开近期战斗 |
 | `/actcompat logs` | 打开已保存的日志文件列表 |

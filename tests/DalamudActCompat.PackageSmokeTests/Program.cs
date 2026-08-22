@@ -7173,12 +7173,61 @@ static void ValidateHtmlOverlayDefaults()
     var readmeSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "README.md"));
+    var englishReadmeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "README_EN.md"));
+    var readmeImagePaths = new[]
+    {
+        "control-center-overview.png",
+        "combat-meter-settings.png",
+        "overlay-settings.png",
+        "extension-management.png",
+        "general-settings.png",
+        "encounter-history.png",
+        "runtime-status.png",
+    }.Select(name => Path.Combine(
+        FindProjectRoot(),
+        "docs",
+        "images",
+        "readme",
+        name));
     var helpIconPath = Path.Combine(
         FindProjectRoot(),
         "src",
         "DalamudActCompat",
         "Assets",
         "HelpIcon.png");
+    // README structure is part of the install/support contract, but its wording may evolve.
+    Assert(
+        !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
+        readmeSource.Contains("/actcompat off", StringComparison.Ordinal) &&
+        readmeSource.Contains("[English](README_EN.md)", StringComparison.Ordinal) &&
+        readmeSource.Contains("## 安装", StringComparison.Ordinal) &&
+        readmeSource.Contains("### 1. 添加自定义插件仓库", StringComparison.Ordinal) &&
+        readmeSource.Contains(
+            "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginmaster.json",
+            StringComparison.Ordinal) &&
+        readmeSource.Contains("## 界面预览", StringComparison.Ordinal) &&
+        readmeSource.Contains(
+            "docs/images/readme/control-center-overview.png",
+            StringComparison.Ordinal) &&
+        readmeImagePaths.All(File.Exists) &&
+        readmeSource.Contains("## 控制中心", StringComparison.Ordinal) &&
+        readmeSource.Contains("## 扩展、权限与重启", StringComparison.Ordinal) &&
+        readmeSource.Contains("### 战斗统计窗口不见了或一直为空", StringComparison.Ordinal) &&
+        readmeSource.Contains("副本内团灭重开后", StringComparison.Ordinal) &&
+        readmeSource.Contains("同一次进本放在一个文件夹", StringComparison.Ordinal) &&
+        readmeSource.Contains("每一把作为独立子记录保存", StringComparison.Ordinal) &&
+        readmeSource.Contains("**HPS**", StringComparison.Ordinal) &&
+        readmeSource.Contains("**FFLogs 区间估算**", StringComparison.Ordinal) &&
+        readmeSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
+        englishReadmeSource.Contains("[简体中文](README.md)", StringComparison.Ordinal) &&
+        englishReadmeSource.Contains("## Installation", StringComparison.Ordinal) &&
+        englishReadmeSource.Contains("## Interface preview", StringComparison.Ordinal) &&
+        englishReadmeSource.Contains("## Control Center", StringComparison.Ordinal) &&
+        englishReadmeSource.Contains("## Troubleshooting", StringComparison.Ordinal) &&
+        englishReadmeSource.Contains("## License", StringComparison.Ordinal),
+        "The bilingual README install, preview, usage, or support contract regressed.");
     Assert(
         createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
         usedCactbotIndex >= 0 && availableCactbotIndex > usedCactbotIndex &&
@@ -7308,22 +7357,6 @@ static void ValidateHtmlOverlayDefaults()
             "Cafe.Matcha configuration requires the WriteFiles capability.",
             StringComparison.Ordinal) &&
         !macroPluginSource.Contains("case \"settings\":", StringComparison.Ordinal) &&
-        !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
-        readmeSource.Contains("/actcompat off", StringComparison.Ordinal) &&
-        readmeSource.Contains("## 用户使用指南", StringComparison.Ordinal) &&
-        readmeSource.Contains("### 控制中心各页面", StringComparison.Ordinal) &&
-        readmeSource.Contains("### 启用扩展与开放权限", StringComparison.Ordinal) &&
-        readmeSource.Contains("#### 没有战斗统计、没有队员或统计窗不见了", StringComparison.Ordinal) &&
-        readmeSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
-        readmeSource.Contains("副本内则持续累计", StringComparison.Ordinal) &&
-        readmeSource.Contains("“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
-        readmeSource.Contains("每条子记录代表一次团灭前累计的完整战斗", StringComparison.Ordinal) &&
-        readmeSource.Contains("`HPS` 使用一把战斗从开怪到结束的完整经过时间", StringComparison.Ordinal) &&
-        readmeSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
-        readmeSource.Contains("不会让旧数值回弹", StringComparison.Ordinal) &&
-        readmeSource.Contains("设为 `0` 时底色完全透明", StringComparison.Ordinal) &&
-        readmeSource.Contains("可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%", StringComparison.Ordinal) &&
-        readmeSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
         helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),

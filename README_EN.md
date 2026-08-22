@@ -80,7 +80,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | Command | Action |
 | --- | --- |
 | `/actcompat` | Open or close the Control Center |
-| `/actcompat on` / `off` | Explicitly open / close the Control Center |
+| `/actcompat on` / `/actcompat off` | Explicitly open / close the Control Center |
 | `/actcompat meter` | Open and locate the Combat Meter |
 | `/actcompat history` | Open recent encounters |
 | `/actcompat logs` | Open the saved log-file list |
