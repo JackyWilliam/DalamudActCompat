@@ -62,7 +62,7 @@ be terminated without terminating FFXIV.
 
 ### 控制中心各页面
 
-输入 `/actcompat` 打开控制中心；`/actcompat on` 继续作为兼容别名。五个页面分别负责：
+输入 `/actcompat` 切换控制中心的打开与关闭；`/actcompat on` 始终打开，`/actcompat off` 始终关闭。五个页面分别负责：
 
 | 页面 | 主要用途 |
 | --- | --- |
@@ -217,6 +217,7 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 ```text
 /actcompat
 /actcompat on
+/actcompat off
 /actcompat meter
 /actcompat history
 /actcompat logs
@@ -231,8 +232,8 @@ Build the plugin, then add the output DLL path to Dalamud dev plugin locations f
 /actcompat factory-reset
 ```
 
-`/actcompat` opens the plugin control center, and `/actcompat on` remains a
-compatible alias. `/actcompat meter` opens Combat Meter. The in-game Help window contains the
+`/actcompat` toggles the plugin control center, `/actcompat on` always opens it,
+and `/actcompat off` always closes it. `/actcompat meter` opens Combat Meter. The in-game Help window contains the
 complete command reference with a clipboard-copy button for every entry.
 
 `/actcompat sample` loads a local fake encounter to validate the snapshot-to-Meter UI path. It is development data only and does not come from ACT, IINACT, or FFXIV_ACT_Plugin.

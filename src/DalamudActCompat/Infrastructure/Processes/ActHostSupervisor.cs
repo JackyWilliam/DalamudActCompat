@@ -11,6 +11,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private const int MaximumLogBatchItems = 128;
     private const int MaximumLogBatchCharacters = 64 * 1024;
     private const int MaximumPendingLogs = HostProtocol.DataQueueCapacity;
+    private const int MaximumAutomaticMemoryRecoveries = 2;
+    private static readonly TimeSpan MemoryRecoveryWindow = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan MemoryQuietWindow = TimeSpan.FromSeconds(2);
     private readonly CompatibilityHostAssets assets;
     private readonly CompatibilityHostProcess process;
     private readonly HostIpcClient ipc;
@@ -28,6 +31,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private readonly Task matchaNetworkWorker;
     private readonly Timer logFlushTimer;
     private readonly Queue<DateTimeOffset> restartHistory = new();
+    private readonly Queue<DateTimeOffset> memoryRecoveryHistory = new();
+    private readonly HostMemoryProtectionPolicy? memoryProtectionPolicy;
     private CancellationTokenSource lifetime = new();
     private string sessionId = string.Empty;
     private string pipeName = string.Empty;
@@ -36,7 +41,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private long droppedPendingLogs;
     private long droppedMatchaNetworkEvents;
     private int restartScheduled;
+    private int memoryRecoveryScheduled;
     private volatile bool manuallyStopped = true;
+    private volatile bool memoryProtectionInCombat;
     private volatile HostSupervisorState state = HostSupervisorState.Stopped;
     private bool combatState;
     private bool combatStateKnown;
@@ -49,7 +56,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         HostIpcClient ipc,
         PluginLogger logger,
         Func<bool>? silverDasherEventsEnabled = null,
-        Func<bool>? matchaEventsEnabled = null)
+        Func<bool>? matchaEventsEnabled = null,
+        bool enableMemoryProtection = false)
     {
         assets = new CompatibilityHostAssets(hostDirectory, logger);
         process = new CompatibilityHostProcess(logger);
@@ -57,6 +65,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         this.logger = logger;
         this.silverDasherEventsEnabled = silverDasherEventsEnabled ?? (static () => false);
         this.matchaEventsEnabled = matchaEventsEnabled ?? (static () => false);
+        memoryProtectionPolicy = enableMemoryProtection
+            ? new HostMemoryProtectionPolicy()
+            : null;
         // A versioned asset directory lets a new plugin build start even when an
         // older Host process still has the previous executable mapped by Windows.
         hostExecutable = Path.Combine(
@@ -71,6 +82,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         ipc.MatchaNotificationRequested += OnMatchaNotificationRequested;
         ipc.MatchaLogLineRequested += OnMatchaLogLineRequested;
         ipc.MatchaTtsRequested += OnMatchaTtsRequested;
+        ipc.ResourceSampleReceived += OnResourceSampleReceived;
         logFlushTimer = new Timer(
             _ => FlushLogs(),
             null,
@@ -117,6 +129,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             ipc.Diagnostics,
             ipc.PluginStages)
         {
+            HostPrivateBytes = ipc.HostPrivateBytes,
+            AvailablePhysicalMemoryBytes = ipc.AvailablePhysicalMemoryBytes,
+            MemoryProtection = memoryProtectionPolicy?.Snapshot
+                               ?? HostMemoryProtectionSnapshot.Disabled,
             MatchaNetworkQueueLength = matchaNetworkEvents.Reader.Count,
             DroppedMatchaNetworkMessages = Interlocked.Read(ref droppedMatchaNetworkEvents),
         };
@@ -133,6 +149,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     public event EventHandler<HostTtsRequest>? MatchaTtsRequested;
 
+    public event EventHandler<HostMemoryProtectionEventArgs>? MemoryProtectionChanged;
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -143,6 +161,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
                 lock (restartHistory)
                 {
                     restartHistory.Clear();
+                }
+                lock (memoryRecoveryHistory)
+                {
+                    memoryRecoveryHistory.Clear();
                 }
             }
 
@@ -269,15 +291,31 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             new HostCombatEvent(nextCombatState, DateTimeOffset.UtcNow));
     }
 
+    public void SetMemoryProtectionCombatState(bool inCombat)
+        => memoryProtectionInCombat = inCombat;
+
+    public void IgnoreMemoryProtectionForCurrentSession()
+    {
+        if (memoryProtectionPolicy is null)
+        {
+            return;
+        }
+
+        memoryProtectionPolicy.IgnoreCurrentSession();
+        PublishMemoryProtectionChanged();
+        logger.Warning(
+            "Automatic shared Host memory recovery is ignored for the current Host session.");
+    }
+
     public bool PublishFfxivEntities(HostFfxivEntitySnapshot snapshot)
-        => ipc.TryEnqueue(
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
             HostMessageTypes.FfxivEntities,
             HostMessagePriority.State,
             snapshot,
             deadline: DateTimeOffset.UtcNow.AddSeconds(2));
 
     public bool OpenPluginUi(string pluginId)
-        => ipc.TryEnqueue(
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
             HostMessageTypes.PluginOpen,
             HostMessagePriority.Control,
             new { pluginId },
@@ -287,7 +325,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         string pluginId,
         string action,
         IReadOnlyDictionary<string, string> arguments)
-        => ipc.TryEnqueue(
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
             HostMessageTypes.PluginInvoke,
             HostMessagePriority.Control,
             new HostPluginInvocation(pluginId, action, arguments),
@@ -295,6 +333,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     public bool RequestTts(string text, string source)
         => !string.IsNullOrWhiteSpace(text) &&
+           state == HostSupervisorState.Running &&
            ipc.TryEnqueue(
                HostMessageTypes.TtsRequest,
                HostMessagePriority.Control,
@@ -306,7 +345,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         bool success,
         string status,
         string? detail)
-        => ipc.TryEnqueue(
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
             HostMessageTypes.CommandResult,
             HostMessagePriority.Control,
             new HostCommandResult(success, status, detail),
@@ -349,6 +388,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         ipc.MatchaNotificationRequested -= OnMatchaNotificationRequested;
         ipc.MatchaLogLineRequested -= OnMatchaLogLineRequested;
         ipc.MatchaTtsRequested -= OnMatchaTtsRequested;
+        ipc.ResourceSampleReceived -= OnResourceSampleReceived;
         logFlushTimer.Dispose();
         await ipc.DisposeAsync().ConfigureAwait(false);
         await process.DisposeAsync().ConfigureAwait(false);
@@ -507,6 +547,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
 
         state = HostSupervisorState.Starting;
+        memoryProtectionPolicy?.ResetForNewSession();
         assets.EnsureExtracted();
         sessionId = Guid.NewGuid().ToString("N");
         pipeName = $"DalamudActCompat-{Environment.ProcessId}-{sessionId}";
@@ -532,6 +573,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
 
         state = HostSupervisorState.Running;
+        PublishMemoryProtectionChanged();
         RepublishCriticalState();
         logFlushTimer.Change(TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(20));
         logger.Information(
@@ -602,6 +644,166 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         _ = Task.Run(() => RestartAfterFaultAsync(exception), CancellationToken.None);
     }
 
+    private void OnResourceSampleReceived(object? sender, HostResourceSample sample)
+    {
+        var policy = memoryProtectionPolicy;
+        if (policy is null || manuallyStopped || state != HostSupervisorState.Running)
+        {
+            return;
+        }
+
+        var observation = policy.Observe(sample, memoryProtectionInCombat);
+        if (observation.StateChanged)
+        {
+            PublishMemoryProtectionChanged();
+        }
+
+        if (!observation.ShouldRecycle ||
+            Interlocked.Exchange(ref memoryRecoveryScheduled, 1) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(
+            () => RecoverFromMemoryPressureAsync(sample),
+            CancellationToken.None);
+    }
+
+    private async Task RecoverFromMemoryPressureAsync(HostResourceSample triggeringSample)
+    {
+        try
+        {
+            await lifecycleLock.WaitAsync(lifetime.Token).ConfigureAwait(false);
+            try
+            {
+                var policy = memoryProtectionPolicy;
+                if (policy is null || manuallyStopped ||
+                    policy.Snapshot.State == HostMemoryProtectionState.Ignored ||
+                    state != HostSupervisorState.Running)
+                {
+                    return;
+                }
+
+                var now = DateTimeOffset.UtcNow;
+                var openCircuit = false;
+                lock (memoryRecoveryHistory)
+                {
+                    while (memoryRecoveryHistory.TryPeek(out var oldest) &&
+                           now - oldest > MemoryRecoveryWindow)
+                    {
+                        memoryRecoveryHistory.Dequeue();
+                    }
+
+                    if (memoryRecoveryHistory.Count >= MaximumAutomaticMemoryRecoveries)
+                    {
+                        openCircuit = true;
+                    }
+                    else
+                    {
+                        memoryRecoveryHistory.Enqueue(now);
+                    }
+                }
+
+                policy.MarkRecycling(
+                    openCircuit
+                        ? "The shared Host exceeded its memory limit for a third time in ten minutes."
+                        : "The shared Host is draining work before an automatic memory recovery.");
+                PublishMemoryProtectionChanged();
+                state = HostSupervisorState.Stopping;
+                logFlushTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                await WaitForHostQuietAsync(lifetime.Token).ConfigureAwait(false);
+
+                // Host shutdown drains PostNamazu's own queues before disposal. The process
+                // boundary remains the final fallback if a legacy callback refuses to return.
+                await ipc.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                ClearPendingLogs();
+                ClearPendingSilverDasherNetwork();
+                ClearPendingMatchaNetwork();
+
+                if (openCircuit)
+                {
+                    manuallyStopped = true;
+                    state = HostSupervisorState.CircuitOpen;
+                    policy.MarkCircuitOpen(
+                        "Automatic recovery stopped after two restarts in ten minutes; manual review is required.");
+                    PublishMemoryProtectionChanged();
+                    logger.Error(
+                        new InvalidOperationException("Automatic shared Host memory recovery circuit opened."),
+                        "Shared ACT Host memory protection opened its circuit after two automatic " +
+                        "recoveries in ten minutes. The owned process was stopped and will not restart.");
+                    return;
+                }
+
+                state = HostSupervisorState.Stopped;
+                await StartUnlockedAsync(lifetime.Token).ConfigureAwait(false);
+                using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                using var linkedStartup = CancellationTokenSource.CreateLinkedTokenSource(
+                    lifetime.Token,
+                    startupTimeout.Token);
+                await WaitForPluginStartupAsync(linkedStartup.Token).ConfigureAwait(false);
+                logger.Warning(
+                    $"Shared ACT Host automatically recovered after private memory reached " +
+                    $"{triggeringSample.PrivateBytes / (1024d * 1024d * 1024d):0.00} GiB. " +
+                    "Triggernometry, PostNamazu, and FoxTTS are ready again.");
+            }
+            finally
+            {
+                lifecycleLock.Release();
+            }
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            state = HostSupervisorState.Faulted;
+            logger.Error(exception, "Shared ACT Host memory recovery failed.");
+            OnIpcFaulted(this, exception);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref memoryRecoveryScheduled, 0);
+        }
+    }
+
+    private async Task WaitForHostQuietAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + MemoryQuietWindow;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var callbacksIdle = ipc.PluginHealth.All(static plugin =>
+                string.IsNullOrWhiteSpace(plugin.ActiveCallback));
+            if (callbacksIdle &&
+                Volatile.Read(ref pendingLogCount) == 0 &&
+                ipc.ControlQueueLength == 0 &&
+                ipc.DataQueueLength == 0 &&
+                ipc.SilverDasherQueueLength == 0 &&
+                silverDasherNetworkEvents.Reader.Count == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+
+        logger.Warning(
+            "Shared ACT Host did not become fully idle within two seconds; requesting graceful shutdown.");
+    }
+
+    private void PublishMemoryProtectionChanged()
+    {
+        if (memoryProtectionPolicy is not { } policy)
+        {
+            return;
+        }
+
+        MemoryProtectionChanged?.Invoke(
+            this,
+            new HostMemoryProtectionEventArgs(policy.Snapshot));
+    }
+
     private void OnCommandRequested(object? sender, HostCommandInvocation command)
         => CommandRequested?.Invoke(this, command);
 
@@ -635,6 +837,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         try
         {
             var now = DateTimeOffset.UtcNow;
+            bool openCircuit;
+            int attempts;
             lock (restartHistory)
             {
                 while (restartHistory.TryPeek(out var oldest) &&
@@ -644,18 +848,44 @@ public sealed class ActHostSupervisor : IAsyncDisposable
                 }
 
                 restartHistory.Enqueue(now);
-                if (restartHistory.Count > 3)
+                attempts = restartHistory.Count;
+                openCircuit = attempts > 3;
+            }
+
+            // Cleanup precedes the restart budget decision. A faulted pipe must never leave
+            // the Supervisor-owned process running after the circuit opens.
+            await lifecycleLock.WaitAsync(lifetime.Token).ConfigureAwait(false);
+            try
+            {
+                await ipc.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                ClearPendingLogs();
+                ClearPendingSilverDasherNetwork();
+                ClearPendingMatchaNetwork();
+                if (openCircuit)
                 {
                     state = HostSupervisorState.CircuitOpen;
                     manuallyStopped = true;
-                    logger.Error(
-                        exception,
-                        "ACT Host failed more than three times in ten minutes; automatic restart is disabled.");
-                    return;
+                }
+                else
+                {
+                    state = HostSupervisorState.Stopped;
                 }
             }
+            finally
+            {
+                lifecycleLock.Release();
+            }
 
-            var attempts = restartHistory.Count;
+            if (openCircuit)
+            {
+                logger.Error(
+                    exception,
+                    "ACT Host failed more than three times in ten minutes; the owned process " +
+                    "was stopped and automatic restart is disabled.");
+                return;
+            }
+
             var delay = attempts switch
             {
                 1 => TimeSpan.FromSeconds(1),
@@ -678,8 +908,6 @@ public sealed class ActHostSupervisor : IAsyncDisposable
                     return;
                 }
 
-                await ipc.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
                 await StartUnlockedAsync(lifetime.Token).ConfigureAwait(false);
             }
             finally
@@ -730,6 +958,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     private void TryPublishState<T>(string type, T payload)
     {
+        if (state != HostSupervisorState.Running)
+        {
+            return;
+        }
+
         if (!ipc.TryEnqueue(
                 type,
                 HostMessagePriority.State,
@@ -788,6 +1021,13 @@ public sealed record HostSupervisorSnapshot(
     IReadOnlyList<HostDiagnostic> Diagnostics,
     IReadOnlyList<HostPluginStage> PluginStages)
 {
+    public long HostPrivateBytes { get; init; }
+
+    public long AvailablePhysicalMemoryBytes { get; init; }
+
+    public HostMemoryProtectionSnapshot MemoryProtection { get; init; }
+        = HostMemoryProtectionSnapshot.Disabled;
+
     public int MatchaNetworkQueueLength { get; init; }
 
     public long DroppedMatchaNetworkMessages { get; init; }

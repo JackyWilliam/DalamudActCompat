@@ -25,6 +25,7 @@ public sealed class StatusWindow : Window
     private readonly Func<HostSupervisorSnapshot> getGenericHostSnapshot;
     private readonly Action restartHost;
     private readonly Action stopHost;
+    private readonly Action ignoreHostMemoryProtection;
     private readonly Action restartMatchaHost;
     private readonly Action stopMatchaHost;
     private readonly Action restartGenericHost;
@@ -41,6 +42,7 @@ public sealed class StatusWindow : Window
         Func<HostSupervisorSnapshot> getGenericHostSnapshot,
         Action restartHost,
         Action stopHost,
+        Action ignoreHostMemoryProtection,
         Action restartMatchaHost,
         Action stopMatchaHost,
         Action restartGenericHost,
@@ -55,6 +57,7 @@ public sealed class StatusWindow : Window
         this.getGenericHostSnapshot = getGenericHostSnapshot;
         this.restartHost = restartHost;
         this.stopHost = stopHost;
+        this.ignoreHostMemoryProtection = ignoreHostMemoryProtection;
         this.restartMatchaHost = restartMatchaHost;
         this.stopMatchaHost = stopMatchaHost;
         this.restartGenericHost = restartGenericHost;
@@ -148,7 +151,7 @@ public sealed class StatusWindow : Window
             });
 
         var host = getHostSnapshot();
-        DrawCard("runtime-host-card", text.Get("共享 ACT Host", "Shared ACT Host"), 226, () =>
+        DrawCard("runtime-host-card", text.Get("共享 ACT Host", "Shared ACT Host"), 330, () =>
         {
             ImGui.TextColored(
                 host.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
@@ -165,8 +168,16 @@ public sealed class StatusWindow : Window
                 $"{host.HostAcknowledgedSequence}/{host.LastWrittenSequence}");
             ImGui.TextUnformatted(
                 $"{text.Get("资源", "Resources")}: " +
-                $"{host.HostWorkingSetBytes / (1024d * 1024d):0.0} MiB, " +
+                $"working set={FormatBytes(host.HostWorkingSetBytes)}, " +
+                $"private={FormatBytes(host.HostPrivateBytes)}, " +
                 $"{host.HostThreadCount} {text.Get("线程", "threads")}");
+            ImGui.TextUnformatted(
+                $"{text.Get("系统可用内存", "System available memory")}: " +
+                $"{FormatBytes(host.AvailablePhysicalMemoryBytes)}");
+            ImGui.TextWrapped(
+                $"{text.Get("内存保护", "Memory protection")}: " +
+                $"{LocalizeValue(host.MemoryProtection.State)} — " +
+                FormatMemoryProtectionDetail(host.MemoryProtection));
             ImGui.TextWrapped(
                 $"{text.Get("健康状态", "Health")}: {LocalizeValue(host.HealthState)} — {host.HealthDetail}");
             if (ImGui.Button(text.Get("重启共享 Host", "Restart shared Host")))
@@ -177,6 +188,18 @@ public sealed class StatusWindow : Window
             if (ImGui.Button(text.Get("停止共享 Host", "Stop shared Host")))
             {
                 stopHost();
+            }
+            if (host.MemoryProtection.State is HostMemoryProtectionState.Monitoring or
+                HostMemoryProtectionState.DeferredForCombat or
+                HostMemoryProtectionState.EmergencyCountdown)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button(text.Get(
+                        "本次忽略自动内存回收",
+                        "Ignore automatic recovery this session")))
+                {
+                    ignoreHostMemoryProtection();
+                }
             }
         });
 
@@ -437,11 +460,62 @@ public sealed class StatusWindow : Window
             "healthy" => "正常",
             "degraded" => "降级",
             "disabled" => "已禁用",
+            "normal" => "正常",
+            "monitoring" => "观察中",
+            "deferredforcombat" => "等待脱战",
+            "emergencycountdown" => "紧急倒计时",
+            "recycling" => "平滑重启中",
+            "ignored" => "本次已忽略",
             "ready" => "就绪",
             "initializing" => "初始化中",
             _ => raw,
         };
     }
+
+    private string FormatMemoryProtectionDetail(HostMemoryProtectionSnapshot snapshot)
+    {
+        var detail = snapshot.State switch
+        {
+            HostMemoryProtectionState.Normal => text.Get(
+                "共享 Host 私有内存低于自动保护阈值。",
+                snapshot.Detail),
+            HostMemoryProtectionState.Monitoring => text.Get(
+                "共享 Host 已达到 3 GiB，需持续 15 秒才会在脱战后自动恢复。",
+                snapshot.Detail),
+            HostMemoryProtectionState.DeferredForCombat => text.Get(
+                "已持续超过 3 GiB，正在等待脱战。",
+                snapshot.Detail),
+            HostMemoryProtectionState.EmergencyCountdown => text.Get(
+                "共享 Host 已达到 4 GiB，或系统可用内存不足 2 GiB。",
+                snapshot.Detail),
+            HostMemoryProtectionState.Recycling => text.Get(
+                "正在排空队列并平滑重启共享 Host。",
+                snapshot.Detail),
+            HostMemoryProtectionState.Ignored => text.Get(
+                "本次 Host 会话已忽略自动内存回收。",
+                snapshot.Detail),
+            HostMemoryProtectionState.CircuitOpen => text.Get(
+                "十分钟内已自动恢复两次，保护已停止 Host 并打开熔断。",
+                snapshot.Detail),
+            _ => snapshot.Detail,
+        };
+        if (snapshot.CountdownEndsAt is { } countdownEndsAt)
+        {
+            var seconds = Math.Max(0, Math.Ceiling((countdownEndsAt - DateTimeOffset.UtcNow).TotalSeconds));
+            return text.Get(
+                $"{detail} 剩余约 {seconds:0} 秒，可选择本次忽略。",
+                $"{detail} About {seconds:0} seconds remain; recovery can be ignored for this session.");
+        }
+
+        return detail;
+    }
+
+    private static string FormatBytes(long bytes)
+        => bytes <= 0
+            ? "-"
+            : bytes >= 1024L * 1024L * 1024L
+                ? $"{bytes / (1024d * 1024d * 1024d):0.00} GiB"
+                : $"{bytes / (1024d * 1024d):0.0} MiB";
 
     private static void PushTheme()
     {

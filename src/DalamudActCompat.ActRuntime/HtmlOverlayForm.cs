@@ -602,6 +602,41 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
     }
 
+    public bool Reload()
+    {
+        var targetForm = form;
+        if (disposing || targetForm is null || targetForm.IsDisposed)
+        {
+            return false;
+        }
+
+        try
+        {
+            targetForm.BeginInvoke(() =>
+            {
+                if (disposing || webView?.CoreWebView2 is not { } core || !navigationStarted)
+                {
+                    return;
+                }
+
+                try
+                {
+                    core.Reload();
+                    SetBrowserState(BrowserState.Navigating, "正在重新加载页面");
+                }
+                catch (Exception ex)
+                {
+                    log.Warning(ex, $"Could not reload {title} after its configuration changed.");
+                }
+            });
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     public void Show()
     {
         if (settings is not null)

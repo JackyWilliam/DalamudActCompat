@@ -34,6 +34,8 @@ public sealed class HostIpcClient : IAsyncDisposable
     private long lastHeartbeatTicks;
     private long lastHostProgressTicks;
     private long hostWorkingSetBytes;
+    private long hostPrivateBytes;
+    private long availablePhysicalMemoryBytes;
     private int hostThreadCount;
     private volatile string hostHealthState = "stopped";
     private volatile string hostHealthDetail = string.Empty;
@@ -68,6 +70,8 @@ public sealed class HostIpcClient : IAsyncDisposable
 
     public event EventHandler<HostTtsRequest>? MatchaTtsRequested;
 
+    public event EventHandler<HostResourceSample>? ResourceSampleReceived;
+
     public HostConnectionStatus Status => status;
 
     public int ControlQueueLength => outbound.ControlCount;
@@ -85,6 +89,11 @@ public sealed class HostIpcClient : IAsyncDisposable
     public long HostLastReceivedSequence => Volatile.Read(ref hostLastReceivedSequence);
 
     public long HostWorkingSetBytes => Volatile.Read(ref hostWorkingSetBytes);
+
+    public long HostPrivateBytes => Volatile.Read(ref hostPrivateBytes);
+
+    public long AvailablePhysicalMemoryBytes
+        => Volatile.Read(ref availablePhysicalMemoryBytes);
 
     public int HostThreadCount => Volatile.Read(ref hostThreadCount);
 
@@ -117,6 +126,8 @@ public sealed class HostIpcClient : IAsyncDisposable
             lastHeartbeatTicks = DateTimeOffset.UtcNow.UtcTicks;
             lastHostProgressTicks = lastHeartbeatTicks;
             hostWorkingSetBytes = 0;
+            hostPrivateBytes = 0;
+            availablePhysicalMemoryBytes = 0;
             hostThreadCount = 0;
             hostHealthState = "connecting";
             hostHealthDetail = string.Empty;
@@ -444,15 +455,21 @@ public sealed class HostIpcClient : IAsyncDisposable
                 }
 
                 Volatile.Write(ref hostWorkingSetBytes, heartbeat.WorkingSetBytes);
+                Volatile.Write(ref hostPrivateBytes, heartbeat.PrivateBytes);
+                Volatile.Write(
+                    ref availablePhysicalMemoryBytes,
+                    heartbeat.AvailablePhysicalMemoryBytes);
                 Volatile.Write(ref hostThreadCount, heartbeat.ThreadCount);
                 Volatile.Write(ref pluginHealth, heartbeat.Plugins ?? []);
                 Volatile.Write(ref pluginStages, heartbeat.Stages ?? []);
-                if (heartbeat.WorkingSetBytes > HostProtocol.MaximumHostWorkingSetBytes)
-                {
-                    throw new InvalidDataException(
-                        $"ACT Host working set {heartbeat.WorkingSetBytes} exceeds " +
-                        $"{HostProtocol.MaximumHostWorkingSetBytes} bytes.");
-                }
+                ResourceSampleReceived?.Invoke(
+                    this,
+                    new HostResourceSample(
+                        DateTimeOffset.UtcNow,
+                        heartbeat.WorkingSetBytes,
+                        heartbeat.PrivateBytes,
+                        heartbeat.AvailablePhysicalMemoryBytes,
+                        heartbeat.ThreadCount));
 
                 if (heartbeat.ThreadCount > HostProtocol.MaximumHostThreadCount)
                 {
@@ -598,6 +615,13 @@ public sealed class HostIpcClient : IAsyncDisposable
         Faulted?.Invoke(this, exception);
     }
 }
+
+public sealed record HostResourceSample(
+    DateTimeOffset Timestamp,
+    long WorkingSetBytes,
+    long PrivateBytes,
+    long AvailablePhysicalMemoryBytes,
+    int ThreadCount);
 
 public sealed record HostCommandInvocation(
     string CorrelationId,

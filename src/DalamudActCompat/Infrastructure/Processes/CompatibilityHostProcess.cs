@@ -5,6 +5,7 @@ namespace DalamudActCompat.Infrastructure.Processes;
 
 public sealed class CompatibilityHostProcess : IAsyncDisposable
 {
+    private static readonly TimeSpan GracefulExitWindow = TimeSpan.FromSeconds(3);
     private readonly PluginLogger logger;
     private Process? process;
 
@@ -60,13 +61,13 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
             try
             {
                 await current.WaitForExitAsync(cancellationToken)
-                    .WaitAsync(TimeSpan.FromSeconds(1), cancellationToken)
+                    .WaitAsync(GracefulExitWindow, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
                 logger.Warning(
-                    "Compatibility Host did not exit after the graceful shutdown window; terminating it.");
+                    "Compatibility Host did not exit after the three-second graceful shutdown window; terminating it.");
             }
             catch (OperationCanceledException)
             {

@@ -24,6 +24,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     public const string CactbotOverlayName = "Cactbot Raidboss";
     public const string CactbotAlertsOverlayName = "Cactbot Raidboss Alerts only";
     public const string CactbotTimelineOverlayName = "Cactbot Raidboss Timeline only";
+    public const string CactbotRadarOverlayName = "Cactbot Radar";
     public const string CactbotCombinedTemplateName =
         "Cactbot Raidboss (Combined Alerts & Timeline)";
     private static readonly IReadOnlySet<string> ManagedCactbotOverlayNames =
@@ -41,7 +42,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             "Cactbot Jobs",
             "Cactbot OopsyRaidsy",
             "Cactbot PullCounter",
-            "Cactbot Radar",
+            CactbotRadarOverlayName,
             "Cactbot Test",
         };
 
@@ -50,6 +51,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IDataManager dataManager;
     private readonly Func<string> playerName;
     private readonly Func<IReadOnlyList<ActPlayerIdentity>> playerIdentities;
+    private readonly Func<ActPlayerPose?> localPlayerPose;
     private readonly IChatGui chatGui;
     private readonly IFramework framework;
     private readonly ICondition condition;
@@ -65,6 +67,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
     private readonly object networkCaptureSync = new();
+    private readonly object radarReloadSync = new();
     private readonly Dictionary<string, DamageHitCounter> damageHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator;
@@ -91,6 +94,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private Func<string, bool>? externalTtsDispatcher;
     private Func<string, string, bool>? externalPostNamazuDispatcher;
     private PostNamazuEventSource? externalPostNamazuEventSource;
+    private RainbowMage.OverlayPlugin.EventSources.CactbotEventSource? cactbotEventSource;
+    private System.Threading.Timer? radarOptionsReloadTimer;
     private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
@@ -131,6 +136,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         IDataManager dataManager,
         Func<string> playerName,
         Func<IReadOnlyList<ActPlayerIdentity>> playerIdentities,
+        Func<ActPlayerPose?> localPlayerPose,
         IChatGui chatGui,
         IFramework framework,
         ICondition condition,
@@ -151,6 +157,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.dataManager = dataManager;
         this.playerName = playerName;
         this.playerIdentities = playerIdentities;
+        this.localPlayerPose = localPlayerPose;
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
@@ -711,6 +718,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             container.Register<RainbowMage.OverlayPlugin.ILogger>(overlayLogger);
             gameStateProvider.Update(
                 playerIdentities(),
+                localPlayerPose(),
                 frameworkInCombat);
             container.Register<RainbowMage.OverlayPlugin.MemoryProcessors.IDalamudGameStateProvider>(
                 gameStateProvider);
@@ -725,6 +733,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             container.Register(overlay);
             ActGlobals.oFormActMain.OverlayPluginContainer = container;
             overlay.InitPlugin(pluginInterface.ConfigDirectory.FullName);
+            RegisterCactbotRadarReload(container);
             RegisterExternalPostNamazuAdapter(container);
             var server = container.Resolve<RainbowMage.OverlayPlugin.WebSocket.ServerController>();
             if (!server.Running)
@@ -825,6 +834,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
         catch
         {
+            UnregisterCactbotRadarReload();
             var windowsShutdown = Task.CompletedTask;
             try
             {
@@ -1432,6 +1442,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public void StopOverlay()
     {
+        UnregisterCactbotRadarReload();
         externalPostNamazuEventSource?.SetAction(null);
         externalPostNamazuEventSource = null;
         var windowsShutdown = Task.CompletedTask;
@@ -1569,6 +1580,69 @@ public sealed class SelfHostedActRuntime : IDisposable
         });
         log.Information(
             "PostNamazu OverlayPlugin event source is bridged to the independent ACT Host.");
+    }
+
+    private void RegisterCactbotRadarReload(
+        RainbowMage.OverlayPlugin.TinyIoCContainer container)
+    {
+        UnregisterCactbotRadarReload();
+        var eventSource = container.Resolve<RainbowMage.OverlayPlugin.EventSources.CactbotEventSource>();
+        lock (radarReloadSync)
+        {
+            cactbotEventSource = eventSource;
+            eventSource.RadarOptionsChanged += OnCactbotRadarOptionsChanged;
+        }
+    }
+
+    private void UnregisterCactbotRadarReload()
+    {
+        lock (radarReloadSync)
+        {
+            if (cactbotEventSource is not null)
+            {
+                cactbotEventSource.RadarOptionsChanged -= OnCactbotRadarOptionsChanged;
+                cactbotEventSource = null;
+            }
+
+            radarOptionsReloadTimer?.Dispose();
+            radarOptionsReloadTimer = null;
+        }
+    }
+
+    private void OnCactbotRadarOptionsChanged(object? sender, EventArgs args)
+    {
+        lock (radarReloadSync)
+        {
+            if (cactbotEventSource is null)
+            {
+                return;
+            }
+
+            // The settings page can save several adjacent fields. A short debounce keeps
+            // one user action from repeatedly rebuilding Radar's startup-only TTS state.
+            radarOptionsReloadTimer ??= new System.Threading.Timer(
+                _ => ReloadOpenCactbotRadar(),
+                null,
+                Timeout.InfiniteTimeSpan,
+                Timeout.InfiniteTimeSpan);
+            radarOptionsReloadTimer.Change(
+                TimeSpan.FromMilliseconds(150),
+                Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void ReloadOpenCactbotRadar()
+    {
+        if (!htmlOverlays.TryGetValue(CactbotRadarOverlayName, out var radarWindow))
+        {
+            return;
+        }
+
+        if (radarWindow.Reload())
+        {
+            log.Information(
+                "Reloading the existing Cactbot Radar window after its options changed.");
+        }
     }
 
     private sealed record OverlayTemplateDocument(
@@ -1847,6 +1921,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         frameworkInCombat = inCombat;
         gameStateProvider.Update(
             identities,
+            localPlayerPose(),
             inCombat);
         TrackPlayerDeaths(identities);
 
