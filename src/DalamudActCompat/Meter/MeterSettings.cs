@@ -61,6 +61,12 @@ public sealed class MeterSettings
 
     public bool AutoHideOutOfCombat { get; set; }
 
+    public MeterPreset Preset { get; set; } = MeterPreset.CurrentDefault;
+
+    public string SelectedCustomStyleId { get; set; } = string.Empty;
+
+    public List<MeterCustomStyle> CustomStyles { get; set; } = [];
+
     public float BackgroundOpacity { get; set; } = 0.85f;
 
     public float FontScale { get; set; } = 1.0f;
@@ -93,6 +99,10 @@ public sealed class MeterSettings
 
     public bool ShowDamagePercent { get; set; } = true;
 
+    public bool ShowTotalDamage { get; set; } = true;
+
+    public bool ShowHighestDamage { get; set; } = true;
+
     public bool ShowDeaths { get; set; } = true;
 
     public bool ShowCriticalHitRate { get; set; } = true;
@@ -121,4 +131,42 @@ public sealed class MeterSettings
         LocalPlayerColor = DefaultLocalPlayerColor;
         return true;
     }
+
+    internal bool NormalizeCustomization()
+    {
+        var changed = false;
+        CustomStyles ??= [];
+        var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var style in CustomStyles)
+        {
+            changed |= style.Normalize();
+            if (!usedIds.Add(style.Id))
+            {
+                style.Id = Guid.NewGuid().ToString("N");
+                usedIds.Add(style.Id);
+                changed = true;
+            }
+        }
+
+        if (Preset == MeterPreset.Custom &&
+            !CustomStyles.Any(style => string.Equals(
+                style.Id,
+                SelectedCustomStyleId,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            Preset = MeterPreset.CurrentDefault;
+            SelectedCustomStyleId = string.Empty;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    public MeterCustomStyle? GetSelectedCustomStyle()
+        => Preset == MeterPreset.Custom
+            ? CustomStyles.FirstOrDefault(style => string.Equals(
+                style.Id,
+                SelectedCustomStyleId,
+                StringComparison.OrdinalIgnoreCase))
+            : null;
 }

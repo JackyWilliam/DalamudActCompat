@@ -255,6 +255,7 @@ internal sealed class DutyEncounterAccumulator
             FflogsRankingEncounter = activeSegment ?? latestSegment,
             TerritoryId = territoryId,
             IsTransitioning = (activeSegment ?? latestSegment)?.IsTransitioning == true,
+            PartyCapacity = partyCapacity,
             SegmentRecords = BuildSegmentRecords(activeSegment),
             // ACT treats merged fragments as the sum of their active encounter durations.
             // Transition downtime inside one pull must not lower DPS.
@@ -315,6 +316,9 @@ internal sealed class DutyEncounterAccumulator
         private int criticalHits;
         private int directHits;
         private int criticalDirectHits;
+        private string highestDamageAction = string.Empty;
+        private long highestDamage;
+        private int partyGroup;
         private double? fflogsPercentile;
         private string? fflogsEncounterName;
         private DateTimeOffset? fflogsDataUpdatedAt;
@@ -352,6 +356,16 @@ internal sealed class DutyEncounterAccumulator
             criticalHits += combatant.CriticalHits;
             directHits += combatant.DirectHits;
             criticalDirectHits += combatant.CriticalDirectHits;
+            // A duty total is a running maximum, not a sum across encounter segments.
+            if (combatant.HighestDamage > highestDamage)
+            {
+                highestDamage = combatant.HighestDamage;
+                highestDamageAction = combatant.HighestDamageAction;
+            }
+            if (combatant.PartyGroup > 0)
+            {
+                partyGroup = combatant.PartyGroup;
+            }
             if (combatant.FflogsPercentile is { } percentile &&
                 double.IsFinite(percentile) &&
                 percentile >= 0 &&
@@ -394,6 +408,9 @@ internal sealed class DutyEncounterAccumulator
                 criticalHits = criticalHits,
                 directHits = directHits,
                 criticalDirectHits = criticalDirectHits,
+                highestDamageAction = highestDamageAction,
+                highestDamage = highestDamage,
+                partyGroup = partyGroup,
                 fflogsPercentile = fflogsPercentile,
                 fflogsEncounterName = fflogsEncounterName,
                 fflogsDataUpdatedAt = fflogsDataUpdatedAt,
@@ -437,7 +454,10 @@ internal sealed class DutyEncounterAccumulator
                 fflogsDataUpdatedAt,
                 fflogsMetric,
                 fflogsDataStale,
-                directHits);
+                directHits,
+                highestDamageAction,
+                highestDamage,
+                partyGroup);
         }
 
         private static double ResolveDamageDuration(

@@ -23,13 +23,15 @@ public sealed class BundledActPluginManager
         string pluginAssemblyDirectory,
         string hostVersion,
         ActPluginPackageInstaller installer,
-        PluginConfiguration configuration)
+        PluginConfiguration configuration,
+        bool directoryIsBundleRoot = false)
     {
         this.installer = installer;
         this.configuration = configuration;
         this.hostVersion = hostVersion;
-        bundledPlugins = LoadAndValidate(
-            Path.Combine(pluginAssemblyDirectory, DirectoryName));
+        bundledPlugins = LoadAndValidate(directoryIsBundleRoot
+            ? pluginAssemblyDirectory
+            : Path.Combine(pluginAssemblyDirectory, DirectoryName));
     }
 
     public IReadOnlyList<BundledActPluginDescriptor> Plugins => bundledPlugins;

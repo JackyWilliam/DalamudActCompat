@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 9;
+    private const int CurrentVersion = 10;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -34,6 +34,10 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public string UiLanguage { get; set; } = "zh-CN";
 
     public bool ShowLauncherButton { get; set; } = true;
+
+    public bool HideHtmlOverlaysWhenGameUnfocused { get; set; } = true;
+
+    public bool SimplifiedModeEnabled { get; set; }
 
     public int LauncherButtonSize { get; set; } = 80;
 
@@ -90,6 +94,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Meter = new MeterSettings();
             changed = true;
         }
+        changed |= Meter.NormalizeCustomization();
         if (Version < 2)
         {
             changed |= Meter.MigrateLegacyLocalPlayerColor();
@@ -226,6 +231,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 9;
             changed = true;
         }
+        if (Version < 10)
+        {
+            // Existing users keep the classic meter while the new visibility policy starts
+            // enabled exactly like a fresh install; simplified mode remains opt-in.
+            HideHtmlOverlaysWhenGameUnfocused = true;
+            SimplifiedModeEnabled = false;
+            Version = 10;
+            changed = true;
+        }
 
         return changed;
     }
@@ -244,6 +258,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
         ShowLauncherButton = true;
+        HideHtmlOverlaysWhenGameUnfocused = true;
+        SimplifiedModeEnabled = false;
         LauncherButtonSize = 80;
         LauncherPositionX = 80;
         LauncherPositionY = 160;
@@ -281,6 +297,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
         ActPluginDirectory = snapshot.ActPluginDirectory;
         UiLanguage = snapshot.UiLanguage;
         ShowLauncherButton = snapshot.ShowLauncherButton;
+        HideHtmlOverlaysWhenGameUnfocused = snapshot.HideHtmlOverlaysWhenGameUnfocused;
+        SimplifiedModeEnabled = snapshot.SimplifiedModeEnabled;
         LauncherButtonSize = snapshot.LauncherButtonSize;
         LauncherPositionX = snapshot.LauncherPositionX;
         LauncherPositionY = snapshot.LauncherPositionY;

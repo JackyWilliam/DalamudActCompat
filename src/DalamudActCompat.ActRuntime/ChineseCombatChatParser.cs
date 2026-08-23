@@ -85,6 +85,7 @@ public sealed class ChineseCombatChatContext
     private static readonly TimeSpan ActorContextLifetime = TimeSpan.FromSeconds(2);
     private readonly IReadOnlySet<string> limitBreakActionNames;
     private string pendingActor = string.Empty;
+    private string pendingAction = string.Empty;
     private DateTimeOffset pendingActorObservedAt;
 
     public ChineseCombatChatContext(IReadOnlySet<string>? limitBreakActionNames = null)
@@ -105,6 +106,7 @@ public sealed class ChineseCombatChatContext
             out target,
             out damage,
             out _,
+            out _,
             out _);
 
     public bool TryParse(
@@ -113,6 +115,25 @@ public sealed class ChineseCombatChatContext
         out string actor,
         out string target,
         out long damage,
+        out bool isCritical,
+        out bool isDirectHit)
+        => TryParse(
+            message,
+            observedAt,
+            out actor,
+            out target,
+            out damage,
+            out _,
+            out isCritical,
+            out isDirectHit);
+
+    public bool TryParse(
+        string message,
+        DateTimeOffset observedAt,
+        out string actor,
+        out string target,
+        out long damage,
+        out string action,
         out bool isCritical,
         out bool isDirectHit)
     {
@@ -126,12 +147,16 @@ public sealed class ChineseCombatChatContext
                            limitBreakActionNames.Contains(announcedAction)
                 ? LimitBreakActorName
                 : announcedActor;
+            pendingAction = announcedAction;
             pendingActorObservedAt = observedAt;
         }
 
         var elapsed = observedAt - pendingActorObservedAt;
         var inheritedActor = elapsed >= TimeSpan.Zero && elapsed <= ActorContextLifetime
             ? pendingActor
+            : string.Empty;
+        action = elapsed >= TimeSpan.Zero && elapsed <= ActorContextLifetime
+            ? pendingAction
             : string.Empty;
         if (ChineseCombatChatParser.TryParse(
                 message,
@@ -147,6 +172,7 @@ public sealed class ChineseCombatChatContext
 
         isCritical = false;
         isDirectHit = false;
+        action = string.Empty;
 
         if (!hasActorAnnouncement)
         {
@@ -158,6 +184,7 @@ public sealed class ChineseCombatChatContext
     public void Clear()
     {
         pendingActor = string.Empty;
+        pendingAction = string.Empty;
         pendingActorObservedAt = default;
     }
 }

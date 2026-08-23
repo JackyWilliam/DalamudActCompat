@@ -25,13 +25,13 @@ Use the source repository for code and release artifacts:
 DalamudActCompat/
 ├── src/
 ├── repo/pluginmaster.json
-└── releases/download/v0.1.0/DalamudActCompat.zip
+└── releases/download/v0.3.10.0/DalamudActCompat-core.zip
 ```
 
 ## Release Steps
 
 1. Run `.github/workflows/release.yml` with a numeric tag such as `v0.3.9.5`.
-2. Confirm the Windows self-hosted runner published `DalamudActCompat.zip` to `https://github.com/JackyWilliam/DalamudActCompat/releases`.
+2. Confirm the Windows self-hosted runner published `DalamudActCompat-core.zip`, `resource-packs.json`, and exactly three resource-pack ZIPs to `https://github.com/JackyWilliam/DalamudActCompat/releases`.
 3. Wait for `DalamudActCompatRepo` to detect the latest stable Release and update its own `pluginmaster.json`.
 4. Confirm the raw URL returns the new version in a browser.
 5. Add the raw URL to Dalamud custom plugin repositories and test install/update.

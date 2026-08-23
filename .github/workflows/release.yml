@@ -76,12 +76,26 @@ jobs:
             -OutputDirectory artifacts/release `
             -ExpectedAssemblyVersion $assemblyVersion
 
-      - name: Create GitHub release
+      - name: Upload verified resource packs before core
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ inputs.tag }}
         run: |
-          gh release create $env:TAG_NAME artifacts/release/DalamudActCompat.zip `
+          $resourcePacks = @(
+            Get-ChildItem artifacts/release -File |
+              Where-Object { $_.Name -match '^(host-[0-9a-f]{64}|cactbot-.+|act-plugins-.+)\.zip$' } |
+              Sort-Object Name |
+              ForEach-Object FullName
+          )
+          if ($resourcePacks.Count -ne 3) {
+            throw "Expected exactly three verified resource packs, found $($resourcePacks.Count)."
+          }
+          gh release create $env:TAG_NAME @resourcePacks `
             --title $env:TAG_NAME `
-            --generate-notes
+            --generate-notes `
+            --draft
+          gh release upload $env:TAG_NAME `
+            artifacts/release/resource-packs.json `
+            artifacts/release/DalamudActCompat-core.zip
+          gh release edit $env:TAG_NAME --draft=false

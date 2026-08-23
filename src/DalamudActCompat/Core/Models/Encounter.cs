@@ -22,6 +22,10 @@ public sealed record Encounter(
 
     public bool IsTransitioning { get; init; }
 
+    // Combatant rows can arrive gradually after a pull starts. The live roster capacity
+    // keeps 4-player and 8/24-player presentation rules stable before everyone acts.
+    public int PartyCapacity { get; init; }
+
     // A folder represents one duty entry; its child records are independent pulls so a
     // wipe never leaks totals into the next attempt.
     public IReadOnlyList<Encounter> SegmentRecords { get; init; } = [];

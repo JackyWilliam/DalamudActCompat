@@ -17,6 +17,7 @@ using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
+using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
@@ -46,6 +47,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
+    private readonly ResourcePackManager resourcePackManager;
+    private readonly string packagedHostDirectory;
+    private readonly string bundledActPluginDirectory;
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
@@ -53,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
+    private readonly MeterStyleEditorWindow meterStyleEditorWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterWindow encounterWindow;
@@ -121,6 +126,9 @@ public sealed class Plugin : IDalamudPlugin
     private Task? cactbotShutdownTask;
     private bool cactbotShutdownStarted;
     private int cactbotCancellationDisposed;
+    private DateTimeOffset nextForegroundCheckAt;
+    private bool htmlOverlaySuppressionApplied;
+    private SimplifiedWindowSnapshot? simplifiedWindowSnapshot;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -175,6 +183,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration.Meter.SortMode);
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
+        paths.EnsureCreated();
         if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
         {
             configuration.LogDirectory = paths.CombatLogDirectory;
@@ -184,16 +193,37 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface.SavePluginConfig(configuration);
         }
 
+        var pluginAssemblyDirectory = pluginInterface.AssemblyLocation.Directory!.FullName;
+        resourcePackManager = new ResourcePackManager(
+            pluginAssemblyDirectory,
+            paths.ResourcePackCacheDirectory,
+            logger);
+        using (var resourceTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
+        {
+            bundledActPluginDirectory = resourcePackManager.ResolveDirectoryAsync(
+                    "act-plugins",
+                    BundledActPluginManager.DirectoryName,
+                    resourceTimeout.Token)
+                .GetAwaiter()
+                .GetResult();
+            packagedHostDirectory = resourcePackManager.ResolveDirectoryAsync(
+                    "host",
+                    "host",
+                    resourceTimeout.Token)
+                .GetAwaiter()
+                .GetResult();
+        }
+
         packageInstaller = new ActPluginPackageInstaller(paths);
         bundledPluginManager = new BundledActPluginManager(
-            pluginInterface.AssemblyLocation.Directory!.FullName,
+            bundledActPluginDirectory,
             typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown",
             packageInstaller,
-            configuration);
+            configuration,
+            directoryIsBundleRoot: true);
         bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
             paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
-        paths.EnsureCreated();
         var disabledUntrustedPlugin = false;
         foreach (var installed in packageInstaller.Discover(configuration.DisabledActPluginIds))
         {
@@ -221,7 +251,8 @@ public sealed class Plugin : IDalamudPlugin
             hostIpcClient,
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1,
-            enableMemoryProtection: true);
+            enableMemoryProtection: true,
+            packagedHostDirectory: packagedHostDirectory);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
@@ -235,7 +266,8 @@ public sealed class Plugin : IDalamudPlugin
             paths.ConfigDirectory,
             matchaIpcClient,
             logger,
-            matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1);
+            matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1,
+            packagedHostDirectory: packagedHostDirectory);
         matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
@@ -248,7 +280,8 @@ public sealed class Plugin : IDalamudPlugin
             paths.ActPluginDirectory,
             paths.ConfigDirectory,
             genericIpcClient,
-            logger);
+            logger,
+            packagedHostDirectory: packagedHostDirectory);
         genericHostSupervisor.MatchaTtsRequested += OnGenericTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
@@ -370,6 +403,10 @@ public sealed class Plugin : IDalamudPlugin
             zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
+        meterStyleEditorWindow = new MeterStyleEditorWindow(
+            configuration,
+            text,
+            SaveConfiguration);
         encounterWindow = new EncounterWindow(
             stateStore,
             paths,
@@ -461,8 +498,11 @@ public sealed class Plugin : IDalamudPlugin
             () => helpWindow.IsOpen = true,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
+            SetSimplifiedMode,
+            SetHideHtmlOverlaysWhenUnfocused,
             SetMeterVisible,
             OpenMeter,
+            meterStyleEditorWindow.Open,
             encounterWindow.OpenRecent,
             () => statusWindow.IsOpen,
             value => statusWindow.IsOpen = value,
@@ -504,6 +544,7 @@ public sealed class Plugin : IDalamudPlugin
             IsOpen = true,
         };
         windowSystem.AddWindow(meterWindow);
+        windowSystem.AddWindow(meterStyleEditorWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(helpWindow);
@@ -513,17 +554,23 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(launcherWindow);
         thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
 
+        if (configuration.SimplifiedModeEnabled)
+        {
+            ApplySimplifiedWindowVisibility();
+        }
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Control Center. Args: on, off, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open Control Center. Args: on, off, meter, simple [on|off], cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
-        StartBundledCactbotInitialization(pluginInterface.AssemblyLocation.Directory!.FullName);
+        StartBundledCactbotInitialization();
         independentHostStartupTask = Task.Run(
             () => StartIndependentHostAsync(independentHostStartupCancellation.Token),
             CancellationToken.None);
@@ -595,7 +642,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
-        pictoActOverlay.Draw();
+        if (!configuration.SimplifiedModeEnabled)
+        {
+            pictoActOverlay.Draw();
+        }
         // The full-screen shield prevents clicks leaking into the game while an HTML overlay
         // is being positioned, but it must not sit above the controls used to finish editing.
         var hasVisibleManagementWindow = settingsWindow.IsOpen ||
@@ -612,10 +662,16 @@ public sealed class Plugin : IDalamudPlugin
         fileDialogManager.Draw();
     }
 
-    private void OpenConfigUi() => settingsWindow.LocateAnimated();
+    private void OpenConfigUi()
+    {
+        if (!configuration.SimplifiedModeEnabled)
+        {
+            settingsWindow.LocateAnimated();
+        }
+    }
 
     private void OpenMainUi()
-        => settingsWindow.LocateAnimated();
+        => OpenConfigUi();
 
     private void OpenMeter()
     {
@@ -633,9 +689,110 @@ public sealed class Plugin : IDalamudPlugin
 
     private void SetMeterVisible(bool visible)
     {
+        if (configuration.SimplifiedModeEnabled)
+        {
+            visible = true;
+        }
         configuration.Meter.IsVisible = visible;
         meterWindow.IsOpen = visible;
         SaveConfiguration();
+    }
+
+    private void SetHideHtmlOverlaysWhenUnfocused(bool enabled)
+    {
+        configuration.HideHtmlOverlaysWhenGameUnfocused = enabled;
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+        SaveConfiguration();
+    }
+
+    private void SetSimplifiedMode(bool enabled)
+    {
+        if (configuration.SimplifiedModeEnabled == enabled)
+        {
+            return;
+        }
+
+        configuration.SimplifiedModeEnabled = enabled;
+        if (enabled)
+        {
+            ApplySimplifiedWindowVisibility();
+            pictoActOverlay.Clear();
+            Volatile.Write(ref silverDasherEventsEnabled, 0);
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            StartBackgroundOperation(StopAllManagedHostsForSimplifiedModeAsync);
+        }
+        else
+        {
+            RestoreWindowsAfterSimplifiedMode();
+            StartBackgroundOperation(() => StartIndependentHostAsync(CancellationToken.None));
+        }
+
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+        SaveConfiguration();
+    }
+
+    private void ApplySimplifiedWindowVisibility()
+    {
+        simplifiedWindowSnapshot ??= new SimplifiedWindowSnapshot(
+            settingsWindow.IsOpen,
+            advancedSettingsWindow.IsOpen,
+            statusWindow.IsOpen,
+            helpWindow.IsOpen,
+            launcherWindow.IsOpen,
+            thirdPartyPluginNoticeWindow.IsOpen,
+            encounterWindow.IsOpen,
+            meterStyleEditorWindow.IsOpen);
+        settingsWindow.IsOpen = false;
+        advancedSettingsWindow.IsOpen = false;
+        statusWindow.IsOpen = false;
+        helpWindow.IsOpen = false;
+        launcherWindow.IsOpen = false;
+        thirdPartyPluginNoticeWindow.IsOpen = false;
+        encounterWindow.IsOpen = false;
+        meterStyleEditorWindow.IsOpen = false;
+        configuration.Meter.IsVisible = true;
+        meterWindow.IsOpen = true;
+    }
+
+    private void RestoreWindowsAfterSimplifiedMode()
+    {
+        if (simplifiedWindowSnapshot is not { } snapshot)
+        {
+            launcherWindow.IsOpen = true;
+            return;
+        }
+
+        settingsWindow.IsOpen = snapshot.Settings;
+        advancedSettingsWindow.IsOpen = snapshot.AdvancedSettings;
+        statusWindow.IsOpen = snapshot.Status;
+        helpWindow.IsOpen = snapshot.Help;
+        launcherWindow.IsOpen = snapshot.Launcher;
+        thirdPartyPluginNoticeWindow.IsOpen = snapshot.ThirdPartyNotice;
+        encounterWindow.IsOpen = snapshot.EncounterHistory;
+        meterStyleEditorWindow.IsOpen = snapshot.MeterStyleEditor;
+        simplifiedWindowSnapshot = null;
+    }
+
+    private async Task StopAllManagedHostsForSimplifiedModeAsync()
+    {
+        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            logger.Information("Simplified mode stopped every DACT-managed ACT plugin host.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Simplified mode could not stop every managed ACT plugin host cleanly.");
+        }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
     }
 
     private void OnCommand(string command, string arguments)
@@ -644,13 +801,24 @@ public sealed class Plugin : IDalamudPlugin
         var separator = trimmedArguments.IndexOf(' ');
         var verb = (separator < 0 ? trimmedArguments : trimmedArguments[..separator]).ToLowerInvariant();
         var remainder = separator < 0 ? string.Empty : trimmedArguments[(separator + 1)..].Trim();
+        if (configuration.SimplifiedModeEnabled && verb is not ("simple" or "meter" or "clear"))
+        {
+            // Simplified mode is an operational boundary, not only a visual filter. Keeping
+            // non-meter commands inert prevents hidden tools from changing their desired state
+            // and unexpectedly reopening when the mode is disabled.
+            logger.Warning("Only meter, clear, and simple commands are available in simplified mode.");
+            return;
+        }
         switch (verb)
         {
             case "on":
-                settingsWindow.LocateAnimated();
+                OpenConfigUi();
                 break;
             case "":
-                settingsWindow.ToggleAnimated();
+                if (!configuration.SimplifiedModeEnabled)
+                {
+                    settingsWindow.ToggleAnimated();
+                }
                 break;
             case "off":
                 settingsWindow.HideAnimated();
@@ -677,6 +845,11 @@ public sealed class Plugin : IDalamudPlugin
                 OpenMeter();
                 break;
             case "host":
+                if (configuration.SimplifiedModeEnabled)
+                {
+                    logger.Warning("ACT plugin hosts stay stopped while simplified mode is enabled.");
+                    break;
+                }
                 StartBackgroundOperation(async () =>
                 {
                     try
@@ -719,6 +892,14 @@ public sealed class Plugin : IDalamudPlugin
             case "meter":
                 OpenMeter();
                 break;
+            case "simple":
+                SetSimplifiedMode(remainder.ToLowerInvariant() switch
+                {
+                    "on" => true,
+                    "off" => false,
+                    _ => !configuration.SimplifiedModeEnabled,
+                });
+                break;
             default:
                 // Unknown macros should show the authoritative command list instead of
                 // silently acting as `on`; this also makes the removed `settings` alias inert.
@@ -745,15 +926,13 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void StartBundledCactbotInitialization(string pluginAssemblyDirectory)
+    private void StartBundledCactbotInitialization()
     {
         _ = StartCactbotOperation(
-            cancellationToken => EnsureBundledCactbotAsync(pluginAssemblyDirectory, cancellationToken));
+            EnsureBundledCactbotAsync);
     }
 
-    private async Task EnsureBundledCactbotAsync(
-        string pluginAssemblyDirectory,
-        CancellationToken cancellationToken)
+    private async Task EnsureBundledCactbotAsync(CancellationToken cancellationToken)
     {
         TrySetCactbotOperationStatus(CactbotOperationState.Checking);
         var gateAcquired = false;
@@ -761,9 +940,15 @@ public sealed class Plugin : IDalamudPlugin
         {
             await cactbotFileOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             gateAcquired = true;
+            var bundledCactbotDirectory = await resourcePackManager.ResolveDirectoryAsync(
+                    "cactbot",
+                    BundledCactbotManager.DirectoryName,
+                    cancellationToken)
+                .ConfigureAwait(false);
             var bundledCactbotManager = new BundledCactbotManager(
-                pluginAssemblyDirectory,
-                cactbotInstaller);
+                bundledCactbotDirectory,
+                cactbotInstaller,
+                directoryIsBundleRoot: true);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(2));
             var installed = await bundledCactbotManager
@@ -2126,11 +2311,21 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StartIndependentHostAsync(CancellationToken cancellationToken)
     {
+        if (configuration.SimplifiedModeEnabled)
+        {
+            logger.Information("ACT plugin Host startup skipped because simplified mode is enabled.");
+            return;
+        }
+
         var lockAcquired = false;
         try
         {
             await hostTopologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             lockAcquired = true;
+            if (configuration.SimplifiedModeEnabled)
+            {
+                return;
+            }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
             await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
@@ -2679,6 +2874,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         finally
         {
+            resourcePackManager.Dispose();
             hostTopologyLock.Release();
         }
     }
@@ -2815,6 +3011,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdateForHost(IFramework _)
     {
         var now = DateTimeOffset.UtcNow;
+        UpdateHtmlOverlaySuppression(now);
         ApplyPendingPostNamazuHeading(now);
         // The shared Host carries timing-sensitive legacy actions, so ordinary pressure waits
         // for combat to end instead of interrupting Triggernometry or PostNamazu mid-pull.
@@ -3006,6 +3203,16 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)
     {
+        if (configuration.SimplifiedModeEnabled)
+        {
+            hostSupervisor.ReplyCommand(
+                invocation.CorrelationId,
+                false,
+                "disabled",
+                "ACT plugin commands are disabled in simplified mode.");
+            return;
+        }
+
         if (hostCommandQueue.Writer.TryWrite(invocation))
         {
             return;
@@ -3324,7 +3531,7 @@ public sealed class Plugin : IDalamudPlugin
             identities[identity.DisplayName] = identity;
         }
 
-        foreach (var member in EnumerateLocalPartyMembers(partyList))
+        foreach (var (member, partyGroup) in EnumeratePartyMembers(partyList))
         {
             var name = member.Name.TextValue;
             if (string.IsNullOrWhiteSpace(name))
@@ -3358,6 +3565,7 @@ public sealed class Plugin : IDalamudPlugin
                 PositionY = position.Y,
                 PositionZ = position.Z,
                 Rotation = rotations.GetValueOrDefault(member.EntityId),
+                PartyGroup = partyGroup,
             };
             identities[identity.DisplayName] = identity;
         }
@@ -3365,20 +3573,49 @@ public sealed class Plugin : IDalamudPlugin
         return identities.Values.ToArray();
     }
 
-    private static IEnumerable<Dalamud.Game.ClientState.Party.IPartyMember>
-        EnumerateLocalPartyMembers(IPartyList partyList)
+    private static IEnumerable<(Dalamud.Game.ClientState.Party.IPartyMember Member, int PartyGroup)>
+        EnumeratePartyMembers(IPartyList partyList)
     {
-        for (var index = 0; index < 8; index++)
+        var capacity = partyList.IsAlliance ? 24 : 8;
+        for (var index = 0; index < capacity; index++)
         {
-            // In alliance duties IPartyList's normal indexer switches to AllianceList.
-            // MainGroup remains the authoritative source for the local eight-player party.
-            var member = partyList.IsAlliance
-                ? partyList.CreatePartyMemberReference(partyList.GetPartyMemberAddress(index))
-                : partyList[index];
+            // Dalamud's alliance indexer is the only authoritative 24-player roster. Keeping
+            // its natural blocks of eight also gives the meter stable A/B/C grouping metadata.
+            var member = partyList[index];
             if (member is not null)
             {
-                yield return member;
+                yield return (member, partyList.IsAlliance ? (index / 8) + 1 : 0);
             }
         }
     }
+
+    private void UpdateHtmlOverlaySuppression(DateTimeOffset now, bool force = false)
+    {
+        if (!force && now < nextForegroundCheckAt)
+        {
+            return;
+        }
+
+        nextForegroundCheckAt = now.AddMilliseconds(100);
+        var focusSuppressed = configuration.HideHtmlOverlaysWhenGameUnfocused &&
+                              !GameForegroundDetector.IsCurrentProcessForeground();
+        var shouldSuppress = configuration.SimplifiedModeEnabled || focusSuppressed;
+        if (!force && shouldSuppress == htmlOverlaySuppressionApplied)
+        {
+            return;
+        }
+
+        htmlOverlaySuppressionApplied = shouldSuppress;
+        actRuntime.SetHtmlOverlaysSuppressed(shouldSuppress);
+    }
+
+    private sealed record SimplifiedWindowSnapshot(
+        bool Settings,
+        bool AdvancedSettings,
+        bool Status,
+        bool Help,
+        bool Launcher,
+        bool ThirdPartyNotice,
+        bool EncounterHistory,
+        bool MeterStyleEditor);
 }

@@ -70,8 +70,11 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openHelp;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
+    private readonly Action<bool> setSimplifiedMode;
+    private readonly Action<bool> setHideHtmlOverlaysWhenUnfocused;
     private readonly Action<bool> setMeterVisible;
     private readonly Action openMeter;
+    private readonly Action openMeterStyleEditor;
     private readonly Action openHistory;
     private readonly Func<bool> isStatusVisible;
     private readonly Action<bool> setStatusVisible;
@@ -147,8 +150,11 @@ public sealed class ControlCenterWindow : Window
         Action openHelp,
         Action saveConfiguration,
         Action applyPermissionChanges,
+        Action<bool> setSimplifiedMode,
+        Action<bool> setHideHtmlOverlaysWhenUnfocused,
         Action<bool> setMeterVisible,
         Action openMeter,
+        Action openMeterStyleEditor,
         Action openHistory,
         Func<bool> isStatusVisible,
         Action<bool> setStatusVisible,
@@ -193,8 +199,11 @@ public sealed class ControlCenterWindow : Window
         this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
+        this.setSimplifiedMode = setSimplifiedMode;
+        this.setHideHtmlOverlaysWhenUnfocused = setHideHtmlOverlaysWhenUnfocused;
         this.setMeterVisible = setMeterVisible;
         this.openMeter = openMeter;
+        this.openMeterStyleEditor = openMeterStyleEditor;
         this.openHistory = openHistory;
         this.isStatusVisible = isStatusVisible;
         this.setStatusVisible = setStatusVisible;
@@ -560,7 +569,7 @@ public sealed class ControlCenterWindow : Window
         var generalCardHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             ImGui.GetTextLineHeightWithSpacing() +
-            (ImGui.GetFrameHeightWithSpacing() * 3) +
+            (ImGui.GetFrameHeightWithSpacing() * 5) +
             ImGui.CalcTextSize(generalHint, false, cardContentWidth).Y +
             (ImGui.GetStyle().ItemSpacing.Y * 2);
         if (BrandedWindowChrome.BeginGoldCard(
@@ -577,6 +586,24 @@ public sealed class ControlCenterWindow : Window
                 text.Get("自动启动解析器", "Auto start parser"),
                 configuration.AutoStartParser,
                 value => configuration.AutoStartParser = value);
+            var simplifiedMode = configuration.SimplifiedModeEnabled;
+            if (ImGui.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
+            {
+                setSimplifiedMode(simplifiedMode);
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "只保留解析和战斗统计；网页悬浮窗、扩展插件及其他 DACT 窗口会暂时关闭。可用 /actcompat simple off 退出。",
+                    "Keeps only parsing and the combat meter. Web overlays, extensions, and other DACT windows are temporarily closed. Use /actcompat simple off to exit."));
+            }
+            var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
+            if (ImGui.Checkbox(
+                    text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
+                    ref hideWhenUnfocused))
+            {
+                setHideHtmlOverlaysWhenUnfocused(hideWhenUnfocused);
+            }
             changed |= Checkbox(
                 text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
                 configuration.ShowLauncherButton,
@@ -671,6 +698,57 @@ public sealed class ControlCenterWindow : Window
             openMeter();
         }
 
+        if (ImGui.BeginCombo(
+                text.Get("统计样式", "Meter style"),
+                MeterPresetLabel(configuration.Meter)))
+        {
+            foreach (var preset in new[]
+                     {
+                         MeterPreset.CurrentDefault,
+                         MeterPreset.HorizontalTransparent,
+                         MeterPreset.RoleSplit,
+                     })
+            {
+                if (ImGui.Selectable(
+                        MeterPresetLabel(preset),
+                        configuration.Meter.Preset == preset))
+                {
+                    configuration.Meter.Preset = preset;
+                    configuration.Meter.SelectedCustomStyleId = string.Empty;
+                    changed = true;
+                }
+            }
+            if (configuration.Meter.CustomStyles.Count > 0)
+            {
+                ImGui.Separator();
+                foreach (var style in configuration.Meter.CustomStyles)
+                {
+                    var selected = configuration.Meter.Preset == MeterPreset.Custom &&
+                                   string.Equals(
+                                       configuration.Meter.SelectedCustomStyleId,
+                                       style.Id,
+                                       StringComparison.OrdinalIgnoreCase);
+                    if (ImGui.Selectable(
+                            text.Get($"自定义：{style.Name}", $"Custom: {style.Name}"),
+                            selected))
+                    {
+                        configuration.Meter.Preset = MeterPreset.Custom;
+                        configuration.Meter.SelectedCustomStyleId = style.Id;
+                        changed = true;
+                    }
+                }
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("自定义横版…", "Customize horizontal…")))
+        {
+            openMeterStyleEditor();
+        }
+        ImGui.TextDisabled(text.Get(
+            "分榜预设：8/24 人时奶妈按 HPS、D/T 按伤害；4 人保持默认规则。",
+            "Role split: healers rank by HPS and D/T by damage in 8/24-player content; 4-player content keeps the default rules."));
+
         changed |= Checkbox(text.Get("锁定窗口", "Lock window"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
         ImGui.SameLine();
         changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
@@ -696,7 +774,7 @@ public sealed class ControlCenterWindow : Window
             "The FFLogs column appears only when online estimates are enabled and selected below; other columns can be combined freely.");
         var meterDisplayHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
-            (ImGui.GetFrameHeightWithSpacing() * 12) +
+            (ImGui.GetFrameHeightWithSpacing() * 14) +
             (ImGui.GetTextLineHeightWithSpacing() * 4) +
             (ImGui.GetStyle().ItemSpacing.Y * 3);
         if (ImGui.BeginChild(
@@ -765,6 +843,10 @@ public sealed class ControlCenterWindow : Window
             ImGui.SameLine();
             changed |= Checkbox(text.Get("直暴 %", "CDH %"), configuration.Meter.ShowCriticalDirectHitRate, value => configuration.Meter.ShowCriticalDirectHitRate = value);
             changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("总伤害", "Total damage"), configuration.Meter.ShowTotalDamage, value => configuration.Meter.ShowTotalDamage = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("最高技能", "Highest hit"), configuration.Meter.ShowHighestDamage, value => configuration.Meter.ShowHighestDamage = value);
             ImGui.SameLine();
             changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
             if (configuration.Meter.ShowJob)
@@ -2808,6 +2890,21 @@ public sealed class ControlCenterWindow : Window
         PlayerIdentityMode.Anonymous => text.Get("匿名编号", "Anonymous numbering"),
         _ => text.Get("显示原始 ID", "Show original names"),
     };
+
+    private string MeterPresetLabel(MeterSettings settings)
+        => settings.Preset == MeterPreset.Custom
+            ? settings.GetSelectedCustomStyle() is { } style
+                ? text.Get($"自定义：{style.Name}", $"Custom: {style.Name}")
+                : MeterPresetLabel(MeterPreset.CurrentDefault)
+            : MeterPresetLabel(settings.Preset);
+
+    private string MeterPresetLabel(MeterPreset preset)
+        => preset switch
+        {
+            MeterPreset.HorizontalTransparent => text.Get("横版透明", "Horizontal transparent"),
+            MeterPreset.RoleSplit => text.Get("奶妈与 D/T 分榜", "Healer / D-T split"),
+            _ => text.Get("默认预设", "Default preset"),
+        };
 
     private static void PushTheme()
     {

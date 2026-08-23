@@ -78,7 +78,10 @@ public sealed class MeterService
                 hitRates.CriticalHitPercent,
                 hitRates.DirectHitPercent,
                 hitRates.CriticalDirectHitPercent,
-                combatant.Deaths);
+                combatant.Deaths,
+                HighestDamageAction: combatant.HighestDamageAction,
+                HighestDamage: combatant.HighestDamage,
+                PartyGroup: combatant.PartyGroup);
         });
 
         var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
@@ -169,4 +172,7 @@ public sealed record CombatantRow(
     double? DirectHitPercent,
     double? CriticalDirectHitPercent,
     int Deaths,
-    int? Rank = null);
+    int? Rank = null,
+    string HighestDamageAction = "",
+    long HighestDamage = 0,
+    int PartyGroup = 0);

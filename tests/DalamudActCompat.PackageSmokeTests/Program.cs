@@ -27,6 +27,7 @@ using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Processes;
+using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
@@ -59,6 +60,7 @@ try
     ValidateBoundedHostQueue();
     ValidateHostMemoryProtectionPolicy();
     ValidateVersionedCompatibilityHostExtraction(testRoot);
+    await ValidateResourcePackLifecycleAsync(testRoot);
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
     await ValidatePostNamazuHeadingIpcAsync();
@@ -99,6 +101,7 @@ try
     ValidateDutyEncounterFolderAggregation();
     ValidateDutyEncounterPartySizes();
     ValidateDutyEncounterRosterReplacement();
+    ValidateHighestDamageAggregation();
     ValidateControlCenterPresentation();
     ValidateInstalledPluginVersionDisplay(testRoot);
     ValidateDiagnosticReport(testRoot);
@@ -375,7 +378,17 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     File.WriteAllText(legacyHost, "locked previous host build");
 
     var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
-    var assets = new CompatibilityHostAssets(hostRoot, new PluginLogger(log));
+    var packagedHost = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release",
+        "host");
+    var assets = new CompatibilityHostAssets(
+        hostRoot,
+        new PluginLogger(log),
+        packagedHost);
     Assert(
         !string.Equals(assets.TargetDirectory, hostRoot, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(
@@ -407,6 +420,308 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     {
         assets.EnsureExtracted();
     }
+}
+
+static async Task ValidateResourcePackLifecycleAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "resource-pack-lifecycle");
+    Directory.CreateDirectory(root);
+    var log = new PluginLogger(DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>());
+
+    var resumeFixture = CreateResourcePackFixture(root, "resume", "resume-content", "1");
+    var resumeCalls = 0;
+    var resumeHandler = new ScriptedHttpMessageHandler(request =>
+    {
+        resumeCalls++;
+        if (resumeCalls == 1)
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new InterruptingReadStream(
+                    resumeFixture.ArchiveBytes,
+                    resumeFixture.ArchiveBytes.Length / 2)),
+            };
+        }
+
+        var offset = request.Headers.Range?.Ranges.Single().From ?? 0;
+        Assert(offset > 0, "An interrupted resource pack was restarted instead of resumed.");
+        return ByteResponse(
+            resumeFixture.ArchiveBytes[(int)offset..],
+            HttpStatusCode.PartialContent);
+    });
+    var resumeEntry = resumeFixture.Entry with { Urls = ["https://packs.test/resume"] };
+    WriteResourceCatalog(resumeFixture.PluginDirectory, resumeEntry);
+    var resumeManager = new ResourcePackManager(
+        resumeFixture.PluginDirectory,
+        resumeFixture.CacheDirectory,
+        log,
+        new HttpClient(resumeHandler));
+    var resumed = await resumeManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(resumed, "payload.txt")) == "resume-content" &&
+        resumeCalls == 2,
+        "Interrupted resource pack download did not resume and install atomically.");
+    _ = await resumeManager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
+    Assert(resumeCalls == 2, "Resolving the same content hash downloaded the resource pack again.");
+
+    var offlineHandler = new ScriptedHttpMessageHandler(_ =>
+        throw new InvalidOperationException("A verified offline cache unexpectedly used the network."));
+    var offlineManager = new ResourcePackManager(
+        resumeFixture.PluginDirectory,
+        resumeFixture.CacheDirectory,
+        log,
+        new HttpClient(offlineHandler));
+    var offlineDirectory = await offlineManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        offlineDirectory == resumed && offlineHandler.Requests.Count == 0,
+        "A verified same-hash cache was not available while offline.");
+
+    File.WriteAllText(Path.Combine(resumed, "payload.txt"), "corrupted");
+    var repairHandler = new ScriptedHttpMessageHandler(_ => ByteResponse(resumeFixture.ArchiveBytes));
+    var repairManager = new ResourcePackManager(
+        resumeFixture.PluginDirectory,
+        resumeFixture.CacheDirectory,
+        log,
+        new HttpClient(repairHandler));
+    var repaired = await repairManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    var installedRoot = Directory.GetParent(repaired)!.FullName;
+    var idRoot = Directory.GetParent(installedRoot)!.FullName;
+    Assert(
+        File.ReadAllText(Path.Combine(repaired, "payload.txt")) == "resume-content" &&
+        repairHandler.Requests.Count == 1 &&
+        Directory.GetDirectories(
+            idRoot,
+            $"{Path.GetFileName(installedRoot)}.corrupt-*",
+            SearchOption.TopDirectoryOnly).Length == 1,
+        "A corrupted immutable cache was not quarantined and repaired from the verified archive.");
+
+    var fallbackFixture = CreateResourcePackFixture(root, "source-fallback", "fallback-content", "1");
+    var fallbackHandler = new ScriptedHttpMessageHandler(request =>
+        request.RequestUri!.Host == "primary.test"
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : ByteResponse(fallbackFixture.ArchiveBytes));
+    WriteResourceCatalog(
+        fallbackFixture.PluginDirectory,
+        fallbackFixture.Entry with
+        {
+            Urls = ["https://primary.test/pack", "https://secondary.test/pack"],
+        });
+    var fallbackManager = new ResourcePackManager(
+        fallbackFixture.PluginDirectory,
+        fallbackFixture.CacheDirectory,
+        log,
+        new HttpClient(fallbackHandler));
+    var fallbackDirectory = await fallbackManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(fallbackDirectory, "payload.txt")) == "fallback-content" &&
+        fallbackHandler.Requests.Any(uri => uri.Host == "primary.test") &&
+        fallbackHandler.Requests.Any(uri => uri.Host == "secondary.test"),
+        "Resource pack mirror fallback did not advance past a failed primary source.");
+
+    var badHashFixture = CreateResourcePackFixture(root, "bad-hash", "bad-hash-content", "1");
+    WriteResourceCatalog(
+        badHashFixture.PluginDirectory,
+        badHashFixture.Entry with
+        {
+            Sha256 = new string('0', 64),
+            Urls = ["https://packs.test/bad-hash"],
+        });
+    var badHashManager = new ResourcePackManager(
+        badHashFixture.PluginDirectory,
+        badHashFixture.CacheDirectory,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(badHashFixture.ArchiveBytes))));
+    await AssertThrowsAsync<InvalidDataException>(() => badHashManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None));
+
+    var completedPartialFixture = CreateResourcePackFixture(
+        root,
+        "completed-partial",
+        "completed-before-install",
+        "1");
+    WriteResourceCatalog(completedPartialFixture.PluginDirectory, completedPartialFixture.Entry);
+    var completedDownloadDirectory = Path.Combine(
+        completedPartialFixture.CacheDirectory,
+        ".downloads");
+    Directory.CreateDirectory(completedDownloadDirectory);
+    var completedPartialPath = Path.Combine(
+        completedDownloadDirectory,
+        $"test-pack-{completedPartialFixture.Entry.Sha256}.partial");
+    File.WriteAllBytes(completedPartialPath, completedPartialFixture.ArchiveBytes);
+    var completedPartialHandler = new ScriptedHttpMessageHandler(_ =>
+        throw new InvalidOperationException("A completed partial archive unexpectedly used the network."));
+    var completedPartialManager = new ResourcePackManager(
+        completedPartialFixture.PluginDirectory,
+        completedPartialFixture.CacheDirectory,
+        log,
+        new HttpClient(completedPartialHandler));
+    var completedPartialDirectory = await completedPartialManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(completedPartialDirectory, "payload.txt")) ==
+        "completed-before-install" &&
+        completedPartialHandler.Requests.Count == 0 &&
+        !File.Exists(completedPartialPath),
+        "A complete interrupted download was not verified and installed without an HTTP 416 retry.");
+
+    var migrationFixture = CreateResourcePackFixture(root, "migration", "legacy-content", "1");
+    var legacyDirectory = Path.Combine(migrationFixture.PluginDirectory, "legacy");
+    Directory.CreateDirectory(legacyDirectory);
+    File.WriteAllText(Path.Combine(legacyDirectory, "payload.txt"), "legacy-content");
+    WriteResourceCatalog(migrationFixture.PluginDirectory, migrationFixture.Entry);
+    var migrationHandler = new ScriptedHttpMessageHandler(_ =>
+        throw new InvalidOperationException("Legacy migration unexpectedly used the network."));
+    var migrationManager = new ResourcePackManager(
+        migrationFixture.PluginDirectory,
+        migrationFixture.CacheDirectory,
+        log,
+        new HttpClient(migrationHandler));
+    var migrated = await migrationManager.ResolveDirectoryAsync(
+        "test-pack",
+        "legacy",
+        CancellationToken.None);
+    Assert(
+        !string.Equals(migrated, legacyDirectory, StringComparison.OrdinalIgnoreCase) &&
+        File.ReadAllText(Path.Combine(migrated, "payload.txt")) == "legacy-content" &&
+        migrationHandler.Requests.Count == 0,
+        "An existing all-in-one resource directory was not migrated into the hash cache.");
+
+    var lockFixture = CreateResourcePackFixture(root, "lock", "locked-content", "1");
+    WriteResourceCatalog(
+        lockFixture.PluginDirectory,
+        lockFixture.Entry with { Urls = ["https://packs.test/lock"] });
+    var lockRoot = Path.Combine(lockFixture.CacheDirectory, "test-pack");
+    Directory.CreateDirectory(lockRoot);
+    var lockPath = Path.Combine(lockRoot, ".install.lock");
+    var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+    var lockManager = new ResourcePackManager(
+        lockFixture.PluginDirectory,
+        lockFixture.CacheDirectory,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(lockFixture.ArchiveBytes))));
+    var lockedResolution = lockManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    await Task.Delay(250);
+    Assert(!lockedResolution.IsCompleted, "Resource pack installation ignored its exclusive file lock.");
+    heldLock.Dispose();
+    var lockedDirectory = await lockedResolution;
+    Assert(
+        File.ReadAllText(Path.Combine(lockedDirectory, "payload.txt")) == "locked-content",
+        "Resource pack installation did not continue after its file lock was released.");
+
+    var rollbackV1 = CreateResourcePackFixture(root, "rollback", "stable-content", "1");
+    WriteResourceCatalog(
+        rollbackV1.PluginDirectory,
+        rollbackV1.Entry with { Urls = ["https://packs.test/v1"] });
+    var rollbackCache = rollbackV1.CacheDirectory;
+    var v1Manager = new ResourcePackManager(
+        rollbackV1.PluginDirectory,
+        rollbackCache,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(rollbackV1.ArchiveBytes))));
+    _ = await v1Manager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
+    var rollbackV2 = CreateResourcePackFixture(root, "rollback-v2-source", "new-content", "2");
+    WriteResourceCatalog(
+        rollbackV1.PluginDirectory,
+        rollbackV2.Entry with { Urls = ["https://packs.test/unavailable"] });
+    var rollbackManager = new ResourcePackManager(
+        rollbackV1.PluginDirectory,
+        rollbackCache,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))));
+    var rolledBack = await rollbackManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(rolledBack, "payload.txt")) == "stable-content",
+        "A failed resource update did not roll back to the previous verified cache.");
+}
+
+static ResourcePackFixture CreateResourcePackFixture(
+    string root,
+    string name,
+    string content,
+    string version)
+{
+    var fixtureRoot = Path.Combine(root, name);
+    var pluginDirectory = Path.Combine(fixtureRoot, "plugin");
+    var cacheDirectory = Path.Combine(fixtureRoot, "cache");
+    var sourceDirectory = Path.Combine(fixtureRoot, "source");
+    Directory.CreateDirectory(pluginDirectory);
+    Directory.CreateDirectory(cacheDirectory);
+    Directory.CreateDirectory(sourceDirectory);
+    File.WriteAllText(Path.Combine(sourceDirectory, "payload.txt"), content);
+    var archivePath = Path.Combine(fixtureRoot, "pack.zip");
+    using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+    {
+        archive.CreateEntryFromFile(
+            Path.Combine(sourceDirectory, "payload.txt"),
+            "payload/payload.txt",
+            CompressionLevel.NoCompression);
+    }
+    var archiveBytes = File.ReadAllBytes(archivePath);
+    var entry = new ResourcePackEntry(
+        "test-pack",
+        version,
+        "pack.zip",
+        archiveBytes.Length,
+        Convert.ToHexString(SHA256.HashData(archiveBytes)).ToLowerInvariant(),
+        "payload",
+        ResourcePackManager.ComputeDirectoryHash(sourceDirectory),
+        ["https://packs.test/pack"]);
+    return new ResourcePackFixture(pluginDirectory, cacheDirectory, archiveBytes, entry);
+}
+
+static void WriteResourceCatalog(string pluginDirectory, ResourcePackEntry entry)
+{
+    File.WriteAllText(
+        Path.Combine(pluginDirectory, ResourcePackManager.ManifestFileName),
+        JsonSerializer.Serialize(
+            new ResourcePackCatalog(1, entry.Version, [entry]),
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true,
+            }));
+}
+
+static HttpResponseMessage ByteResponse(
+    byte[] bytes,
+    HttpStatusCode status = HttpStatusCode.OK)
+    => new(status) { Content = new ByteArrayContent(bytes) };
+
+static async Task AssertThrowsAsync<TException>(Func<Task> action)
+    where TException : Exception
+{
+    try
+    {
+        await action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+    throw new InvalidOperationException($"Expected {typeof(TException).Name} was not thrown.");
 }
 
 static void ValidatePictoActOverlayCommands()
@@ -1003,7 +1318,7 @@ static void ValidatePluginRepositoryMetadata()
         .GetName()
         .Version!
         .ToString(4);
-    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat.zip";
+    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat-core.zip";
     Assert(
         entry.GetProperty("AssemblyVersion").GetString() == assemblyVersion &&
         entry.GetProperty("DownloadLinkInstall").GetString() is { } installUrl &&
@@ -1424,7 +1739,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 9 &&
+        legacyConfiguration.Version == 10 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1454,7 +1769,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 9 &&
+        parserMigration.Version == 10 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1468,17 +1783,51 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 9 &&
+        newConfiguration.Version == 10 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser &&
+        newConfiguration.HideHtmlOverlaysWhenGameUnfocused &&
+        !newConfiguration.SimplifiedModeEnabled &&
         !newConfiguration.EnableFflogsParityRecorder &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
         "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
+    Assert(
+        newConfiguration.Meter.Preset == MeterPreset.CurrentDefault &&
+        newConfiguration.Meter.ShowTotalDamage &&
+        newConfiguration.Meter.ShowHighestDamage &&
+        Enum.GetValues<MeterPreset>().Contains(MeterPreset.HorizontalTransparent) &&
+        Enum.GetValues<MeterPreset>().Contains(MeterPreset.RoleSplit),
+        "The compatible default or the two additional built-in Meter presets are missing.");
+    var customStyle = new MeterCustomStyle
+    {
+        Name = "Watch layout",
+        Slots =
+        [
+            new MeterSlotDefinition(
+                MeterSlotMetric.HighestDamage,
+                23,
+                5,
+                20,
+                9,
+                MeterSlotAlignment.Right),
+        ],
+    };
+    Assert(
+        customStyle.Normalize() &&
+        customStyle.Slots[0].ColumnSpan == 1 &&
+        customStyle.Slots[0].RowSpan == 1,
+        "The horizontal custom-style grid did not snap slot bounds into 24x6.");
+    var clonedStyle = customStyle.Clone("Watch layout copy");
+    Assert(
+        clonedStyle.Id != customStyle.Id &&
+        clonedStyle.Slots[0].Id != customStyle.Slots[0].Id &&
+        clonedStyle.Slots[0].Metric == MeterSlotMetric.HighestDamage,
+        "Duplicating a custom Meter style reused mutable slot identities or lost its data assignment.");
 
     var previousDebugConfiguration = new PluginConfiguration
     {
@@ -1488,7 +1837,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 9 &&
+        previousDebugConfiguration.Version == 10 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -1500,7 +1849,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 9 &&
+        previousV6Configuration.Version == 10 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -1538,7 +1887,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 9 &&
+        previousGenericPluginUser.Version == 10 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -1550,7 +1899,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 9 &&
+        previousEdpsUser.Version == 10 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -1566,7 +1915,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 9 &&
+        previousCustomMetricUser.Version == 10 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -1595,7 +1944,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 9 &&
+        previousTimelineUser.Version == 10 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -1684,7 +2033,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 9 &&
+        previousV5CactbotUser.Version == 10 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1981,10 +2330,10 @@ static void ValidateMeterLayout()
             "CombatEnded.png")),
         "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
-        MeterWindow.MinimumTableWidthWithFflogs == 373 &&
-        MeterWindow.MinimumTableWidthWithoutFflogs == 326 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(380, 373) &&
-        MeterWindow.ShouldEnableHorizontalScroll(360, 373),
+        MeterWindow.MinimumTableWidthWithFflogs == 593 &&
+        MeterWindow.MinimumTableWidthWithoutFflogs == 546 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(600, 593) &&
+        MeterWindow.ShouldEnableHorizontalScroll(580, 593),
         "The compact default Meter width no longer delays horizontal scrolling.");
     var defaultColumns = new MeterSettings();
     var clickThroughSettings = new MeterSettings
@@ -2016,6 +2365,8 @@ static void ValidateMeterLayout()
         !defaultColumns.ShowDirectHitRate &&
         defaultColumns.ShowCriticalDirectHitRate &&
         defaultColumns.ShowDamagePercent &&
+        defaultColumns.ShowTotalDamage &&
+        defaultColumns.ShowHighestDamage &&
         defaultColumns.ShowDeaths &&
         MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) ==
         MeterWindow.MinimumTableWidthWithFflogs &&
@@ -2039,9 +2390,9 @@ static void ValidateMeterLayout()
     defaultColumns.ShowHps = true;
     defaultColumns.ShowDirectHitRate = true;
     Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 472 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(500, 472) &&
-        MeterWindow.ShouldEnableHorizontalScroll(460, 472),
+        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 692 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(700, 692) &&
+        MeterWindow.ShouldEnableHorizontalScroll(680, 692),
         "Enabling every Meter column shows a horizontal scrollbar before name compression is exhausted.");
     defaultColumns.ShowFflogs = false;
     defaultColumns.ShowDps = false;
@@ -2050,6 +2401,8 @@ static void ValidateMeterLayout()
     defaultColumns.ShowDirectHitRate = false;
     defaultColumns.ShowCriticalDirectHitRate = false;
     defaultColumns.ShowDamagePercent = false;
+    defaultColumns.ShowTotalDamage = false;
+    defaultColumns.ShowHighestDamage = false;
     defaultColumns.ShowDeaths = false;
     Assert(
         MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) == 101,
@@ -2065,6 +2418,8 @@ static void ValidateMeterLayout()
         !restoredColumns.ShowDirectHitRate &&
         !restoredColumns.ShowCriticalDirectHitRate &&
         !restoredColumns.ShowDamagePercent &&
+        !restoredColumns.ShowTotalDamage &&
+        !restoredColumns.ShowHighestDamage &&
         !restoredColumns.ShowDeaths,
         "Customized Meter column visibility does not survive configuration persistence.");
     var opaqueBackground = new System.Numerics.Vector4(0.1f, 0.2f, 0.3f, 0.8f);
@@ -4878,7 +5233,7 @@ static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
 
 static void ValidateDutyEncounterRosterReplacement()
 {
-    foreach (var partySize in new[] { 4, 8 })
+    foreach (var partySize in new[] { 4, 8, 24 })
     {
         var start = new DateTimeOffset(2026, 8, 12, 12, 0, 0, TimeSpan.Zero);
         var original = CreatePartySegment(
@@ -4973,6 +5328,46 @@ static void ValidateDutyEncounterRosterReplacement()
             original.Combatants.Any(combatant => combatant.Id == $"player-{partySize}"),
             $"The {partySize}-player pull did not keep its current roster separate from earlier snapshots.");
     }
+}
+
+static void ValidateHighestDamageAggregation()
+{
+    var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+    Encounter Segment(int offset, string action, long amount)
+        => new(
+            Guid.NewGuid(),
+            start.AddSeconds(offset),
+            start.AddSeconds(offset + 10),
+            "Test duty",
+            "Test target",
+            [new Combatant(
+                "player",
+                "Player",
+                "SAM",
+                true,
+                1_000,
+                0,
+                0,
+                HighestDamageAction: action,
+                HighestDamage: amount,
+                PartyGroup: 2)],
+            [], [], [], [], []);
+
+    var accumulator = new DutyEncounterAccumulator();
+    var first = Segment(0, "First", 100);
+    var equal = Segment(20, "Equal should not replace", 100);
+    var higher = Segment(40, "Higher", 120);
+    _ = accumulator.Update(first, finished: true, first.EndTime!.Value);
+    _ = accumulator.Update(equal, finished: true, equal.EndTime!.Value);
+    _ = accumulator.Update(higher, finished: true, higher.EndTime!.Value);
+    var completed = accumulator.Complete(higher.EndTime.Value)
+                    ?? throw new InvalidOperationException("Highest-hit duty did not complete.");
+    var player = completed.Combatants.Single();
+    Assert(
+        player.HighestDamageAction == "Higher" &&
+        player.HighestDamage == 120 &&
+        player.PartyGroup == 2,
+        "Duty aggregation did not replace only on a strictly higher hit or preserve alliance metadata.");
 }
 
 static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
@@ -7449,7 +7844,11 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("联盟副本支持 24 人并按 A/B/C 三组显示", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("总伤害、最高技能伤害和死亡", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("出现更高伤害时更新，下一场战斗重新开始记录", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("奶妈与 D/T 分榜三种只读样式", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("24×6 网格中调整槽位位置", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
         helpWindowSource.Contains("设为 0 时背景完全透明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%", StringComparison.Ordinal) &&
@@ -7461,6 +7860,7 @@ static void ValidateHtmlOverlayDefaults()
             "/actcompat on",
             "/actcompat off",
             "/actcompat meter",
+            "/actcompat simple on|off",
             "/actcompat history",
             "/actcompat logs",
             "/actcompat status",
@@ -7477,12 +7877,18 @@ static void ValidateHtmlOverlayDefaults()
         Regex.IsMatch(
             macroPluginSource,
             "case \\\"off\\\":\\s+settingsWindow\\.HideAnimated\\(\\);") &&
-        Regex.IsMatch(
-            macroPluginSource,
-            "case \\\"on\\\":\\s+settingsWindow\\.LocateAnimated\\(\\);") &&
-        Regex.IsMatch(
-            macroPluginSource,
-            "case \\\"\\\":\\s+settingsWindow\\.ToggleAnimated\\(\\);") &&
+        macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("OpenConfigUi();", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("case \"simple\":", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("SetSimplifiedMode", StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "verb is not (\"simple\" or \"meter\" or \"clear\")",
+            StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "ACT plugin commands are disabled in simplified mode.",
+            StringComparison.Ordinal) &&
+        macroPluginSource.Contains("GameForegroundDetector.IsCurrentProcessForeground()", StringComparison.Ordinal) &&
+        launcherWindowSource.Contains("!configuration.SimplifiedModeEnabled", StringComparison.Ordinal) &&
         Regex.IsMatch(
             macroPluginSource,
             "case \\\"meter\\\":\\s+OpenMeter\\(\\);") &&
@@ -8079,6 +8485,9 @@ static void ValidateHtmlOverlayDefaults()
         htmlOverlayFormSource.Contains("RetryFailedWebViewAsync", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("pendingInitialization", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("ShutdownCompletion", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("private volatile bool desiredVisible;", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("public void SetTemporarilyHidden(bool hidden)", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("if (desiredVisible)", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("form.BeginInvoke(async () =>", StringComparison.Ordinal) &&
         !htmlOverlayFormSource.Contains("form.Invoke(() =>", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains(
@@ -8102,6 +8511,9 @@ static void ValidateHtmlOverlayDefaults()
         selfHostedRuntimeSource.Contains(
             "ReleaseWebViewSessionLockWhenSafe",
             StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains("SetHtmlOverlaysSuppressed", StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains("cactbotSettings?.SetTemporarilyHidden", StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains("window.SetTemporarilyHidden(suppressed)", StringComparison.Ordinal) &&
         Regex.Matches(
             selfHostedRuntimeSource,
             Regex.Escape("cactbotOverlay.Show();")).Count == 1,
@@ -9398,7 +9810,10 @@ static void ValidateActEncounterMapping()
                 "local", "You", "SAM", true, 120_000, 2_000, 0,
                 13_000, 12_000, 12_000,
                 DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4,
-                Rdps: 11_500, DirectHits: 16),
+                Rdps: 11_500, DirectHits: 16,
+                HighestDamageAction: "Midare Setsugekka",
+                HighestDamage: 99_999,
+                PartyGroup: 3),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
             new ActCombatantSnapshot(
                 "early",
@@ -9416,6 +9831,7 @@ static void ValidateActEncounterMapping()
     {
         CombatDuration = TimeSpan.FromSeconds(9),
         IsTransitioning = true,
+        PartyCapacity = 24,
     };
 
     var encounter = ActEncounterMapper.Map(snapshot);
@@ -9423,8 +9839,10 @@ static void ValidateActEncounterMapping()
     Assert(encounter.StartTime == start, "ACT encounter start time was not preserved.");
     Assert(encounter.IsActive, "Active ACT encounter was mapped as finished.");
     Assert(
-        encounter.IsTransitioning && encounter.CombatDuration == TimeSpan.FromSeconds(9),
-        "ACT transition state or effective combat duration was not mapped.");
+        encounter.IsTransitioning &&
+        encounter.CombatDuration == TimeSpan.FromSeconds(9) &&
+        encounter.PartyCapacity == 24,
+        "ACT transition state, effective combat duration, or party capacity was not mapped.");
     Assert(encounter.TotalDamage == 140_001, "ACT combatant damage totals were not mapped.");
     Assert(encounter.TotalHealing == 92_000, "ACT combatant healing totals were not mapped.");
     Assert(encounter.TotalDeaths == 1, "ACT combatant deaths were not mapped.");
@@ -9440,6 +9858,11 @@ static void ValidateActEncounterMapping()
         local.DamageHits == 40 && local.CriticalHits == 12 &&
         local.DirectHits == 16 && local.CriticalDirectHits == 4,
         "ACT critical, direct, and critical-direct hit counts were not mapped.");
+    Assert(
+        local.HighestDamageAction == "Midare Setsugekka" &&
+        local.HighestDamage == 99_999 &&
+        local.PartyGroup == 3,
+        "ACT highest-hit or 24-player alliance metadata was not mapped.");
     var legacyHistoryJson = System.Text.Json.Nodes.JsonNode
         .Parse(JsonSerializer.Serialize(encounter))!
         .AsObject();
@@ -10192,5 +10615,105 @@ internal sealed class BundledPluginUpdateHandler : HttpMessageHandler
         }
 
         return output.ToArray();
+    }
+}
+
+sealed record ResourcePackFixture(
+    string PluginDirectory,
+    string CacheDirectory,
+    byte[] ArchiveBytes,
+    ResourcePackEntry Entry);
+
+sealed class ScriptedHttpMessageHandler(
+    Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
+{
+    private readonly object syncRoot = new();
+    private readonly List<Uri> requests = [];
+
+    public IReadOnlyList<Uri> Requests
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return requests.ToArray();
+            }
+        }
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        lock (syncRoot)
+        {
+            requests.Add(request.RequestUri!);
+        }
+        return Task.FromResult(responseFactory(request));
+    }
+}
+
+sealed class InterruptingReadStream(byte[] bytes, int interruptAfter) : Stream
+{
+    private readonly MemoryStream inner = new(bytes, writable: false);
+    private bool interrupted;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => inner.Length;
+    public override long Position
+    {
+        get => inner.Position;
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        ThrowIfInterrupted();
+        var available = Math.Min(count, interruptAfter - (int)inner.Position);
+        return inner.Read(buffer, offset, Math.Max(0, available));
+    }
+
+    public override int Read(Span<byte> buffer)
+    {
+        ThrowIfInterrupted();
+        var available = Math.Min(buffer.Length, interruptAfter - (int)inner.Position);
+        return inner.Read(buffer[..Math.Max(0, available)]);
+    }
+
+    public override ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(Read(buffer.Span));
+    }
+
+    private void ThrowIfInterrupted()
+    {
+        if (inner.Position < interruptAfter || interrupted)
+        {
+            return;
+        }
+        interrupted = true;
+        throw new IOException("simulated interrupted download");
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            inner.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }

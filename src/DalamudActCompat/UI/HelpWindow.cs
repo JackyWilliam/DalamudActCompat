@@ -379,8 +379,8 @@ public sealed class HelpWindow : Window
         DrawCard("help-start-first-fight", text.Get("第一场战斗怎么确认成功", "Confirming your first encounter"), 246, () =>
         {
             DrawBullet(text.Get(
-                "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟其他小队、宠物和普通 NPC 不会作为独立玩家行显示。",
-                "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party; other alliance parties, pets, and ordinary NPCs are not separate player rows."));
+                "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟副本支持 24 人并按 A/B/C 三组显示；宠物和普通 NPC 不会作为独立玩家行显示。",
+                "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party. Alliance duties support 24 players grouped as A/B/C; pets and ordinary NPCs are not separate player rows."));
             DrawBullet(text.Get(
                 "右键 ACT 快捷按钮可打开或关闭战斗统计，输入 /actcompat meter 可打开并定位；战斗结束后用 /actcompat history 查看近期战斗。",
                 "Right-click the ACT quick button to open or close Combat Meter, or use /actcompat meter to open and locate it. After combat, use /actcompat history for recent encounters."));
@@ -428,7 +428,7 @@ public sealed class HelpWindow : Window
                 "背景透明度会统一作用于窗口、标题、表头、玩家行和进度条的底色；设为 0 时背景完全透明，但文字和图标仍会显示。它不会改变计算结果。",
                 "Background opacity applies consistently to the window, title, table header, player rows, and bar fills. At zero the background is fully transparent while text and icons remain visible. It does not change calculations."));
         });
-        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 492, () =>
+        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 560, () =>
         {
             DrawBullet(text.Get(
                 "先关闭“锁定窗口”，把统计窗拖到需要的位置，再重新锁定；需要让鼠标操作游戏时同时开启“锁定时鼠标穿透”。",
@@ -437,8 +437,11 @@ public sealed class HelpWindow : Window
                 "“排序 / 主要数据”只决定按 DPS 还是 HPS 排名；“DPS 口径”决定 DPS 列使用个人有效时长、整场时长、兼容字段或预估 rDPS。它们不会强制打开或关闭显示列。",
                 "Sort / primary metric controls only DPS or HPS ranking. DPS metric selects personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the DPS column. Neither setting forces a display column on or off."));
             DrawBullet(text.Get(
-                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%和死亡。新配置默认显示 FFLogs、DPS、暴击%、直暴%、伤害占比%和死亡；HPS 与直击%默认关闭，也可以自行打开。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
-                "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, and deaths. New configurations show FFLogs, DPS, CRIT %, CDH %, damage %, and deaths by default; HPS and DH % remain available but start disabled. FFLogs appears only when both online estimates and its display column are enabled."));
+                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高技能伤害和死亡。最高技能伤害记录本场单次命中的技能名与伤害，出现更高伤害时更新，下一场战斗重新开始记录。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
+                "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, total damage, highest single-hit action, and deaths. The highest hit updates only when a larger hit appears and resets for the next encounter. FFLogs appears only when both online estimates and its display column are enabled."));
+            DrawBullet(text.Get(
+                "“显示预设”提供现有默认、横版透明和奶妈与 D/T 分榜三种只读样式。8 人与 24 人使用分榜预设时，奶妈按 HPS 排名且伤害不参与 D/T 排行；4 人仍按现有方式统计。横版透明预设可复制为自定义样式，并在 24×6 网格中调整槽位位置、大小和数据内容。",
+                "Display presets include the existing default, Horizontal Transparent, and Healer vs D/T Split as read-only styles. In 8- and 24-player content the split preset ranks healers by HPS and excludes their damage from D/T ranking; 4-player content keeps the existing rules. Horizontal Transparent can be copied into a custom style whose slots, sizes, and metrics are editable on a 24x6 grid."));
             DrawBullet(text.Get(
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
@@ -523,6 +526,9 @@ public sealed class HelpWindow : Window
             DrawCommand("on", "/actcompat on", text.Get("始终打开插件控制中心。", "Always open the plugin control center."));
             DrawCommand("off", "/actcompat off", text.Get("关闭插件控制中心。", "Close the plugin control center."));
             DrawCommand("meter", "/actcompat meter", text.Get("打开战斗统计。", "Open Combat Meter."));
+            DrawCommand("simple", "/actcompat simple on|off", text.Get(
+                "开启或退出精简模式；即使其他界面已关闭，也可用 off 恢复。",
+                "Enable or exit simplified mode; off remains available when every other UI is closed."));
             DrawCommand("history", "/actcompat history", text.Get("打开近期战斗。", "Open recent encounters."));
             DrawCommand("logs", "/actcompat logs", text.Get("打开已保存的日志文件列表。", "Open the saved log-file list."));
             DrawCommand("status", "/actcompat status", text.Get("打开解析器与 Host 运行状态。", "Open parser and Host runtime status."));
@@ -757,8 +763,8 @@ public sealed class HelpWindow : Window
                 "确认概览和 /actcompat status 中的解析器为“运行中”，然后攻击木人或副本敌人并实际造成几次有效伤害。仅打开窗口、进本、选中目标或站在战斗区域不会产生统计。",
                 "Confirm that the parser is Running on Overview and in /actcompat status, then attack a striking dummy or duty enemy and deal several valid hits. Opening the window, entering a duty, targeting an enemy, or merely standing in combat does not create statistics."));
             DrawBullet(text.Get(
-                "“收起（只显示自己）”开启时只显示自己；取消后才显示当前小队。联盟其他小队、宠物和普通 NPC 不作为独立玩家行，离队与补位成员也按当前小队容量处理。",
-                "Collapsed (self only) shows only you; disable it to show the current party. Other alliance parties, pets, and ordinary NPCs are not separate player rows, and replacements are kept within the current party capacity."));
+                "“收起（只显示自己）”开启时只显示自己；取消后显示当前小队，联盟副本最多显示 24 人并按 A/B/C 分组。宠物和普通 NPC 不作为独立玩家行，离队与补位成员也按当前队伍容量处理。",
+                "Collapsed (self only) shows only you; disable it to show the current party. Alliance duties can show up to 24 players grouped as A/B/C. Pets and ordinary NPCs are not separate player rows, and replacements are kept within the current roster capacity."));
             DrawBullet(text.Get(
                 "解析器已运行且已造成伤害，但数次刷新后仍完全没有行：先重启解析器并重新打一个全新的木人或副本样本。不要用重置当前战斗或恢复出厂设置代替这一步。",
                 "If the parser is running and damage was dealt but no rows appear after several refreshes, restart the parser and create a new striking-dummy or duty sample. Do not substitute Reset current encounter or Factory reset for this check."));

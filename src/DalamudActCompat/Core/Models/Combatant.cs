@@ -20,4 +20,7 @@ public sealed record Combatant(
     DateTimeOffset? FflogsDataUpdatedAt = null,
     string? FflogsMetric = null,
     bool FflogsDataStale = false,
-    int DirectHits = 0);
+    int DirectHits = 0,
+    string HighestDamageAction = "",
+    long HighestDamage = 0,
+    int PartyGroup = 0);

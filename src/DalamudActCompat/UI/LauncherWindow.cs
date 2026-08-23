@@ -51,7 +51,8 @@ public sealed class LauncherWindow : Window
                 ImGuiWindowFlags.NoBringToFrontOnFocus;
     }
 
-    public override bool DrawConditions() => configuration.ShowLauncherButton;
+    public override bool DrawConditions()
+        => configuration.ShowLauncherButton && !configuration.SimplifiedModeEnabled;
 
     public override void PreDraw()
     {

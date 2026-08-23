@@ -13,8 +13,8 @@ public sealed class MeterWindow : Window
 {
     internal const float CombatantRowSpacing = 3;
     internal const string LimitBreakDisplayName = "LB (Limit Break)";
-    internal const float MinimumTableWidthWithFflogs = 373;
-    internal const float MinimumTableWidthWithoutFflogs = 326;
+    internal const float MinimumTableWidthWithFflogs = 593;
+    internal const float MinimumTableWidthWithoutFflogs = 546;
     internal const float MinimumExpandedWindowWidth = 380;
     internal const float MinimumExpandedWindowHeight = 170;
     internal const float DefaultExpandedWindowWidth = 500;
@@ -32,6 +32,8 @@ public sealed class MeterWindow : Window
     private const float RateColumnWidth = 50;
     private const float HitRateColumnWidth = 43;
     private const float DamagePercentColumnWidth = 46;
+    private const float TotalDamageColumnWidth = 76;
+    private const float HighestDamageColumnWidth = 138;
     private const float DeathsColumnWidth = 28;
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
@@ -130,13 +132,14 @@ public sealed class MeterWindow : Window
         }
 
         var settings = configuration.Meter;
+        var usesHorizontalCards = settings.Preset is MeterPreset.HorizontalTransparent or MeterPreset.Custom;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(
-                MinimumExpandedWindowWidth,
+                usesHorizontalCards ? 420 : MinimumExpandedWindowWidth,
                 settings.CompactMode || isHeightAnimationActive
                     ? CompactWindowMinimumHeight
-                    : MinimumExpandedWindowHeight),
+                    : usesHorizontalCards ? 90 : MinimumExpandedWindowHeight),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
         Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
@@ -150,7 +153,9 @@ public sealed class MeterWindow : Window
             Flags |= ImGuiWindowFlags.NoInputs;
         }
 
-        var backgroundOpacity = NormalizeBackgroundOpacity(settings.BackgroundOpacity);
+        var backgroundOpacity = usesHorizontalCards
+            ? NormalizeBackgroundOpacity(settings.GetSelectedCustomStyle()?.BackgroundOpacity ?? 0)
+            : NormalizeBackgroundOpacity(settings.BackgroundOpacity);
         ImGui.SetNextWindowBgAlpha(backgroundOpacity);
         ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.035f, 0.055f, 0.09f, 1));
         ImGui.PushStyleColor(
@@ -186,7 +191,8 @@ public sealed class MeterWindow : Window
     {
         var settings = configuration.Meter;
         var encounter = meterService.DisplayEncounter;
-        using var fontScale = new FontScaleScope(settings.FontScale);
+        var customScale = settings.GetSelectedCustomStyle()?.FontScale ?? 1;
+        using var fontScale = new FontScaleScope(settings.FontScale * customScale);
 
         AdvanceWindowHeightAnimation();
         SynchronizeCompactMode(settings);
@@ -212,6 +218,19 @@ public sealed class MeterWindow : Window
         }
 
         var rows = SelectVisibleRows(allRows, settings.CompactMode);
+        if (settings.Preset is MeterPreset.HorizontalTransparent or MeterPreset.Custom)
+        {
+            DrawHorizontalMeter(encounter, rows, settings);
+            return;
+        }
+        if (settings.Preset == MeterPreset.RoleSplit &&
+            (encounter.PartyCapacity > 4 ||
+             rows.Count(row => !MeterService.IsLimitBreak(row.Id, row.Name)) > 4))
+        {
+            DrawRoleSplitMeter(encounter, rows, settings);
+            return;
+        }
+
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
         var showFflogs = ShouldShowFflogsColumn(configuration.Fflogs.Enabled, settings);
         var columnWidths = MeasureColumnWidths(rows, settings, showFflogs);
@@ -729,6 +748,12 @@ public sealed class MeterWindow : Window
         MeterColumn? damagePercent = widths.DamagePercent is { } damagePercentWidth
             ? Take(damagePercentWidth)
             : null;
+        MeterColumn? totalDamage = widths.TotalDamage is { } totalDamageWidth
+            ? Take(totalDamageWidth)
+            : null;
+        MeterColumn? highestDamage = widths.HighestDamage is { } highestDamageWidth
+            ? Take(highestDamageWidth)
+            : null;
         MeterColumn? criticalDirectHit = widths.CriticalDirectHit is { } criticalDirectHitWidth
             ? Take(criticalDirectHitWidth)
             : null;
@@ -757,6 +782,8 @@ public sealed class MeterWindow : Window
             directHit,
             criticalDirectHit,
             damagePercent,
+            totalDamage,
+            highestDamage,
             deaths);
     }
 
@@ -811,6 +838,18 @@ public sealed class MeterWindow : Window
                     DamagePercentColumnWidth,
                     text.Get("占比", "DMG%"),
                     rows.Select(static row => $"{row.DamagePercent:N1}%"))
+                : null,
+            settings.ShowTotalDamage
+                ? StableWidth(
+                    TotalDamageColumnWidth,
+                    text.Get("总伤害", "Damage"),
+                    rows.Select(static row => FormatCompactNumber(row.TotalDamage)))
+                : null,
+            settings.ShowHighestDamage
+                ? StableWidth(
+                    HighestDamageColumnWidth,
+                    text.Get("最高技能", "Max hit"),
+                    rows.Select(static row => FormatHighestDamage(row)))
                 : null,
             settings.ShowDeaths
                 ? StableWidth(
@@ -882,6 +921,14 @@ public sealed class MeterWindow : Window
         if (layout.DamagePercent is { } damagePercent)
         {
             DrawColumnHeader(text.Get("占比", "DMG%"), damagePercent);
+        }
+        if (layout.TotalDamage is { } totalDamage)
+        {
+            DrawColumnHeader(text.Get("总伤害", "Damage"), totalDamage);
+        }
+        if (layout.HighestDamage is { } highestDamage)
+        {
+            DrawColumnHeader(text.Get("最高技能", "Max hit"), highestDamage);
         }
         if (layout.Deaths is { } deaths)
         {
@@ -1058,6 +1105,20 @@ public sealed class MeterWindow : Window
                 damagePercent,
                 new Vector4(0.72f, 0.78f, 0.84f, 1));
         }
+        if (layout.TotalDamage is { } totalDamage)
+        {
+            DrawColumn(
+                FormatCompactNumber(row.TotalDamage),
+                totalDamage,
+                new Vector4(0.86f, 0.78f, 0.58f, 1));
+        }
+        if (layout.HighestDamage is { } highestDamage)
+        {
+            DrawColumn(
+                FormatHighestDamage(row),
+                highestDamage,
+                new Vector4(0.94f, 0.68f, 0.48f, 1));
+        }
         if (layout.CriticalHit is { } criticalHit)
         {
             DrawColumn(
@@ -1110,6 +1171,322 @@ public sealed class MeterWindow : Window
                 $"Estimated DPS Parse: {estimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }
     }
+
+    private void DrawHorizontalMeter(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> rows,
+        MeterSettings settings)
+    {
+        var customStyle = settings.GetSelectedCustomStyle();
+        var cardOpacity = customStyle?.CardOpacity ?? 0.34f;
+        var cardSpacing = customStyle?.CardSpacing ?? 5;
+        var cardRounding = customStyle?.CardRounding ?? 3;
+        var slots = customStyle?.Slots ?? MeterCustomStyle.CreateHorizontalSlots();
+        var groups = BuildAllianceGroups(rows);
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        const float groupLabelWidth = 20;
+        var cardWidth = Math.Max(
+            96,
+            (availableWidth - groupLabelWidth - (cardSpacing * 7)) / 8);
+        var cardHeight = Math.Max(70, 72 * (customStyle?.FontScale ?? 1));
+        var contentWidth = groupLabelWidth + (cardWidth * 8) + (cardSpacing * 7);
+        var contentHeight = groups.Count * (cardHeight + cardSpacing);
+        var childFlags = contentWidth > availableWidth
+            ? ImGuiWindowFlags.HorizontalScrollbar
+            : ImGuiWindowFlags.None;
+        if (ShouldPassMouseInputThrough(settings))
+        {
+            childFlags |= ImGuiWindowFlags.NoInputs;
+        }
+
+        ImGui.SetNextWindowContentSize(new Vector2(contentWidth, contentHeight));
+        if (!ImGui.BeginChild("horizontal-meter", new Vector2(-1, -1), false, childFlags))
+        {
+            ImGui.EndChild();
+            return;
+        }
+
+        var origin = ImGui.GetCursorScreenPos();
+        var drawList = ImGui.GetWindowDrawList();
+        for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
+        {
+            var group = groups[groupIndex];
+            var y = origin.Y + (groupIndex * (cardHeight + cardSpacing));
+            drawList.AddText(
+                new Vector2(origin.X + 3, y + ((cardHeight - ImGui.GetTextLineHeight()) * 0.5f)),
+                ImGui.GetColorU32(new Vector4(Gold.X, Gold.Y, Gold.Z, 0.88f)),
+                group.Label);
+            for (var cardIndex = 0; cardIndex < group.Rows.Count; cardIndex++)
+            {
+                var start = new Vector2(
+                    origin.X + groupLabelWidth + (cardIndex * (cardWidth + cardSpacing)),
+                    y);
+                DrawHorizontalCard(
+                    drawList,
+                    encounter,
+                    group.Rows[cardIndex],
+                    settings,
+                    slots,
+                    start,
+                    new Vector2(cardWidth, cardHeight),
+                    cardOpacity,
+                    cardRounding,
+                    customStyle?.TextColor ?? Vector4.One);
+            }
+        }
+
+        ImGui.Dummy(new Vector2(contentWidth, contentHeight));
+        ImGui.EndChild();
+    }
+
+    private void DrawHorizontalCard(
+        ImDrawListPtr drawList,
+        Encounter encounter,
+        CombatantRow row,
+        MeterSettings settings,
+        IReadOnlyList<MeterSlotDefinition> slots,
+        Vector2 start,
+        Vector2 size,
+        float opacity,
+        float rounding,
+        Vector4 textColor)
+    {
+        var end = start + size;
+        var hovered = ImGui.IsMouseHoveringRect(start, end);
+        var jobColor = JobColor(row.Job);
+        var fill = new Vector4(
+            jobColor.X,
+            jobColor.Y,
+            jobColor.Z,
+            Math.Clamp(opacity + (hovered ? 0.10f : 0), 0, 0.82f));
+        drawList.AddRectFilled(start, end, ImGui.GetColorU32(fill), rounding);
+        if (row.IsLocalPlayer)
+        {
+            drawList.AddRect(start, end, ImGui.GetColorU32(settings.LocalPlayerColor), rounding);
+        }
+
+        var combatant = encounter.Combatants.FirstOrDefault(item =>
+            string.Equals(item.Id, row.Id, StringComparison.OrdinalIgnoreCase));
+        var displayName = combatant is null
+            ? row.Name
+            : PlayerIdentityFormatter.Format(combatant, encounter.Combatants, settings, text);
+        foreach (var slot in slots.Where(static slot => slot.Visible))
+        {
+            var slotStart = start + new Vector2(
+                size.X * slot.Column / 24f,
+                size.Y * slot.Row / 6f);
+            var slotSize = new Vector2(
+                size.X * slot.ColumnSpan / 24f,
+                size.Y * slot.RowSpan / 6f);
+            if (slot.Metric == MeterSlotMetric.Job)
+            {
+                DrawCardJobIcon(drawList, row, settings, slotStart, slotSize);
+                continue;
+            }
+
+            var value = ResolveSlotText(slot.Metric, row, displayName);
+            var rendered = TrimToWidth(value, Math.Max(4, slotSize.X - 3));
+            var textSize = ImGui.CalcTextSize(rendered);
+            var x = slot.Alignment switch
+            {
+                MeterSlotAlignment.Center => slotStart.X + ((slotSize.X - textSize.X) * 0.5f),
+                MeterSlotAlignment.Right => slotStart.X + slotSize.X - textSize.X - 2,
+                _ => slotStart.X + 2,
+            };
+            var y = slotStart.Y + Math.Max(0, (slotSize.Y - textSize.Y) * 0.5f);
+            var color = row.IsLocalPlayer && slot.Metric == MeterSlotMetric.PlayerName
+                ? Gold
+                : textColor;
+            drawList.AddText(new Vector2(x, y), ImGui.GetColorU32(color), rendered);
+        }
+
+        if (hovered && row.HighestDamage > 0)
+        {
+            ImGui.SetTooltip(text.Get(
+                $"最高单次：{row.HighestDamageAction} {row.HighestDamage:N0}",
+                $"Highest hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
+        }
+    }
+
+    private void DrawCardJobIcon(
+        ImDrawListPtr drawList,
+        CombatantRow row,
+        MeterSettings settings,
+        Vector2 start,
+        Vector2 size)
+    {
+        var texture = MeterService.IsLimitBreak(row.Id, row.Name)
+            ? jobIcons.GetLimitBreak()
+            : jobIcons.Get(settings.JobDisplayStyle, row.Job);
+        if (texture is null)
+        {
+            var job = JobDisplayFormatter.FormatText(row.Job, settings.JobDisplayStyle);
+            var jobSize = ImGui.CalcTextSize(job);
+            drawList.AddText(
+                start + ((size - jobSize) * 0.5f),
+                ImGui.GetColorU32(Vector4.One),
+                job);
+            return;
+        }
+
+        var iconSize = Math.Max(8, Math.Min(size.X, size.Y) - 3);
+        var iconStart = start + ((size - new Vector2(iconSize)) * 0.5f);
+        var wrap = texture.GetWrapOrEmpty();
+        drawList.AddImage(wrap.Handle, iconStart, iconStart + new Vector2(iconSize));
+    }
+
+    private void DrawRoleSplitMeter(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> rows,
+        MeterSettings settings)
+    {
+        var damageRows = ReRank(rows
+            .Where(static row => !JobRoleClassifier.IsHealer(row.Job))
+            .OrderByDescending(static row => row.Dps));
+        var healerRows = ReRank(rows
+            .Where(static row => JobRoleClassifier.IsHealer(row.Job))
+            .OrderByDescending(static row => row.Hps));
+        var rowHeight = Math.Max(31, ImGui.GetTextLineHeightWithSpacing() + 10);
+        if (!ImGui.BeginChild(
+                "role-split-meter",
+                new Vector2(-1, -1),
+                false,
+                ShouldPassMouseInputThrough(settings)
+                    ? ImGuiWindowFlags.NoInputs
+                    : ImGuiWindowFlags.None))
+        {
+            ImGui.EndChild();
+            return;
+        }
+
+        DrawRoleSectionHeader(text.Get("D/T 伤害榜", "D/T DAMAGE"));
+        foreach (var row in damageRows)
+        {
+            DrawRoleSplitRow(encounter, row, settings, rowHeight, useHealing: false);
+        }
+        ImGui.Dummy(new Vector2(1, 4));
+        DrawRoleSectionHeader(text.Get("治疗 HPS 榜", "HEALER HPS"));
+        foreach (var row in healerRows)
+        {
+            DrawRoleSplitRow(encounter, row, settings, rowHeight, useHealing: true);
+        }
+        ImGui.EndChild();
+    }
+
+    private void DrawRoleSectionHeader(string label)
+    {
+        ImGui.TextColored(Gold, label);
+        ImGui.Separator();
+    }
+
+    private void DrawRoleSplitRow(
+        Encounter encounter,
+        CombatantRow row,
+        MeterSettings settings,
+        float height,
+        bool useHealing)
+    {
+        var width = ImGui.GetContentRegionAvail().X;
+        var start = ImGui.GetCursorScreenPos();
+        var end = start + new Vector2(width, height);
+        ImGui.InvisibleButton($"role-row-{useHealing}-{row.Id}-{row.Name}", new Vector2(width, height));
+        var drawList = ImGui.GetWindowDrawList();
+        var jobColor = JobColor(row.Job);
+        drawList.AddRectFilled(
+            start,
+            end,
+            ImGui.GetColorU32(new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.22f)),
+            4);
+        var combatant = encounter.Combatants.FirstOrDefault(item =>
+            string.Equals(item.Id, row.Id, StringComparison.OrdinalIgnoreCase));
+        var name = combatant is null
+            ? row.Name
+            : PlayerIdentityFormatter.Format(combatant, encounter.Combatants, settings, text);
+        var group = row.PartyGroup is >= 1 and <= 3
+            ? $"[{(char)('A' + row.PartyGroup - 1)}] "
+            : string.Empty;
+        var left = $"{row.Rank,2}  {group}{name}";
+        var right = useHealing
+            ? $"HPS {row.Hps:N0}   {text.Get("总治疗", "Healing")} {FormatCompactNumber(row.TotalHealing)}"
+            : $"DPS {row.Dps:N0}   {text.Get("总伤害", "Damage")} {FormatCompactNumber(row.TotalDamage)}   {text.Get("最高", "Max")} {FormatHighestDamage(row)}";
+        var lineY = start.Y + ((height - ImGui.GetTextLineHeight()) * 0.5f);
+        drawList.AddText(new Vector2(start.X + 7, lineY), ImGui.GetColorU32(Vector4.One), left);
+        var rightSize = ImGui.CalcTextSize(right);
+        drawList.AddText(
+            new Vector2(Math.Max(start.X + 120, end.X - rightSize.X - 7), lineY),
+            ImGui.GetColorU32(useHealing ? new Vector4(0.48f, 0.88f, 0.62f, 1) : IceBlue),
+            right);
+    }
+
+    private static IReadOnlyList<CombatantRow> ReRank(IEnumerable<CombatantRow> rows)
+    {
+        var rank = 0;
+        return rows.Select(row => row with
+        {
+            Rank = MeterService.IsLimitBreak(row.Id, row.Name) ? null : ++rank,
+        }).ToArray();
+    }
+
+    private static IReadOnlyList<AllianceGroup> BuildAllianceGroups(IReadOnlyList<CombatantRow> rows)
+    {
+        if (rows.Any(static row => row.PartyGroup > 0))
+        {
+            return rows
+                .GroupBy(static row => Math.Clamp(row.PartyGroup, 1, 3))
+                .OrderBy(static group => group.Key)
+                .Select(group => new AllianceGroup(
+                    ((char)('A' + group.Key - 1)).ToString(),
+                    group.Take(8).ToArray()))
+                .ToArray();
+        }
+
+        return rows
+            .Select((row, index) => new { row, index })
+            .GroupBy(static item => item.index / 8)
+            .Select(group => new AllianceGroup(
+                ((char)('A' + group.Key)).ToString(),
+                group.Select(static item => item.row).ToArray()))
+            .ToArray();
+    }
+
+    private static string ResolveSlotText(
+        MeterSlotMetric metric,
+        CombatantRow row,
+        string displayName)
+        => metric switch
+        {
+            MeterSlotMetric.Rank => row.Rank?.ToString() ?? "LB",
+            MeterSlotMetric.PlayerName => displayName,
+            MeterSlotMetric.Dps => $"{row.Dps:N0}",
+            MeterSlotMetric.Hps => $"{row.Hps:N0}",
+            MeterSlotMetric.DamagePercent => $"{row.DamagePercent:N1}%",
+            MeterSlotMetric.TotalDamage => FormatCompactNumber(row.TotalDamage),
+            MeterSlotMetric.HighestDamageAction => row.HighestDamageAction,
+            MeterSlotMetric.HighestDamage => FormatCompactNumber(row.HighestDamage),
+            MeterSlotMetric.Deaths => row.Deaths.ToString(),
+            MeterSlotMetric.CriticalHitPercent => FormatHitRateValue(row.CriticalHitPercent),
+            MeterSlotMetric.DirectHitPercent => FormatHitRateValue(row.DirectHitPercent),
+            MeterSlotMetric.CriticalDirectHitPercent => FormatHitRateValue(row.CriticalDirectHitPercent),
+            _ => string.Empty,
+        };
+
+    internal static string FormatCompactNumber(long value)
+        => Math.Abs(value) switch
+        {
+            >= 1_000_000_000 => $"{value / 1_000_000_000d:0.##}b",
+            >= 1_000_000 => $"{value / 1_000_000d:0.##}m",
+            >= 1_000 => $"{value / 1_000d:0.#}k",
+            _ => value.ToString("N0"),
+        };
+
+    internal static string FormatHighestDamage(CombatantRow row)
+        => row.HighestDamage <= 0
+            ? "--"
+            : string.IsNullOrWhiteSpace(row.HighestDamageAction)
+                ? FormatCompactNumber(row.HighestDamage)
+                : $"{row.HighestDamageAction} {FormatCompactNumber(row.HighestDamage)}";
+
+    private sealed record AllianceGroup(string Label, IReadOnlyList<CombatantRow> Rows);
 
     internal static float NormalizeBackgroundOpacity(float opacity)
         => float.IsFinite(opacity)
@@ -1194,6 +1571,8 @@ public sealed class MeterWindow : Window
         Add(settings.ShowDirectHitRate, HitRateColumnWidth);
         Add(settings.ShowCriticalDirectHitRate, HitRateColumnWidth);
         Add(settings.ShowDamagePercent, DamagePercentColumnWidth);
+        Add(settings.ShowTotalDamage, TotalDamageColumnWidth);
+        Add(settings.ShowHighestDamage, HighestDamageColumnWidth);
         Add(settings.ShowDeaths, DeathsColumnWidth);
         return width + (columnCount * ColumnSpacing);
     }
@@ -1212,6 +1591,8 @@ public sealed class MeterWindow : Window
             widths.DirectHit,
             widths.CriticalDirectHit,
             widths.DamagePercent,
+            widths.TotalDamage,
+            widths.HighestDamage,
             widths.Deaths,
         }.Where(static width => width is not null)
             .Select(static width => width!.Value)
@@ -1253,6 +1634,8 @@ public sealed class MeterWindow : Window
         float? DirectHit,
         float? CriticalDirectHit,
         float? DamagePercent,
+        float? TotalDamage,
+        float? HighestDamage,
         float? Deaths);
 
     private sealed record MeterColumnLayout(
@@ -1264,6 +1647,8 @@ public sealed class MeterWindow : Window
         MeterColumn? DirectHit,
         MeterColumn? CriticalDirectHit,
         MeterColumn? DamagePercent,
+        MeterColumn? TotalDamage,
+        MeterColumn? HighestDamage,
         MeterColumn? Deaths);
 
     private static Vector4 JobColor(string job)

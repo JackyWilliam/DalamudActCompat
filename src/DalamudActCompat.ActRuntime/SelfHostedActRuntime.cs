@@ -81,6 +81,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IINACT.Network.ZoneDownHookManager? zoneDownHookManager;
     private RainbowMage.OverlayPlugin.PluginMain? overlay;
     private HtmlOverlayForm? cactbotOverlay;
+    private volatile bool htmlOverlaysSuppressed;
     private HtmlOverlayForm? cactbotSettings;
     private readonly ConcurrentDictionary<string, HtmlOverlayForm> htmlOverlays =
         new(StringComparer.OrdinalIgnoreCase);
@@ -110,6 +111,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, int> chatCriticalHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> chatDirectHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> chatCriticalDirectHitTotals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> chatHighestDamageActions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> chatHighestDamageTotals = new(StringComparer.OrdinalIgnoreCase);
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
@@ -224,6 +227,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         => cactbotOverlay?.IsVisibleEditing == true ||
            htmlOverlays.Values.Any(static window => window.IsVisibleEditing);
 
+    public void SetHtmlOverlaysSuppressed(bool suppressed)
+    {
+        htmlOverlaysSuppressed = suppressed;
+        cactbotOverlay?.SetTemporarilyHidden(suppressed);
+        cactbotSettings?.SetTemporarilyHidden(suppressed);
+        foreach (var window in htmlOverlays.Values)
+        {
+            window.SetTemporarilyHidden(suppressed);
+        }
+    }
+
     public bool ShowCactbotOverlay()
         => ShowHtmlOverlay(CactbotOverlayName);
 
@@ -292,6 +306,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                 return false;
             }
 
+            cactbotOverlay.SetTemporarilyHidden(htmlOverlaysSuppressed);
             cactbotOverlay.Show();
             CloseConflictingRaidbossWindows(name);
             return true;
@@ -392,6 +407,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             window.Navigate(pageUri);
         }
+        window.SetTemporarilyHidden(htmlOverlaysSuppressed);
         window.Show();
         if (customOverlay &&
             (created || settings.ConnectionState is OverlayConnectionState.None or
@@ -1850,6 +1866,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     out var actor,
                     out var target,
                     out var damage,
+                    out var action,
                     out var isCritical,
                     out var isDirectHit))
             {
@@ -1892,6 +1909,12 @@ public sealed class SelfHostedActRuntime : IDisposable
             chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
             chatDamageTotals[actor] = chatDamageTotals.GetValueOrDefault(actor) + damage;
             chatDamageHitTotals[actor] = chatDamageHitTotals.GetValueOrDefault(actor) + 1;
+            // Equal hits intentionally keep the first action so the meter does not churn.
+            if (damage > chatHighestDamageTotals.GetValueOrDefault(actor))
+            {
+                chatHighestDamageTotals[actor] = damage;
+                chatHighestDamageActions[actor] = action;
+            }
             if (isCritical)
             {
                 chatCriticalHitTotals[actor] = chatCriticalHitTotals.GetValueOrDefault(actor) + 1;
@@ -2049,7 +2072,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                     chatDamageHitTotals.GetValueOrDefault(pair.Key),
                     chatCriticalHitTotals.GetValueOrDefault(pair.Key),
                     chatCriticalDirectHitTotals.GetValueOrDefault(pair.Key),
-                    DirectHits: chatDirectHitTotals.GetValueOrDefault(pair.Key));
+                    DirectHits: chatDirectHitTotals.GetValueOrDefault(pair.Key),
+                    HighestDamageAction: chatHighestDamageActions.GetValueOrDefault(pair.Key) ?? string.Empty,
+                    HighestDamage: chatHighestDamageTotals.GetValueOrDefault(pair.Key),
+                    PartyGroup: isLimitBreak ? 0 : identity!.PartyGroup);
             })
             .Where(static combatant => combatant is not null)
             .Select(static combatant => combatant!)
@@ -2333,6 +2359,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         .Select(item =>
                         {
                             var hitCounts = GetDamageHitCounts(item.Combatant);
+                            var highestDamage = GetHighestDamageHit(item.Combatant);
                             var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
                             var actorName = item.Identity?.Name ?? item.Combatant.Name;
                             var effectiveDamage = 0L;
@@ -2387,7 +2414,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                                         totalDamage,
                                         effectiveEncounterSeconds)
                                     : 0,
-                                hitCounts.DirectHits);
+                                hitCounts.DirectHits,
+                                highestDamage.Action,
+                                highestDamage.Amount,
+                                item.Identity?.PartyGroup ?? 0);
                         })
                         .ToArray();
 
@@ -2702,7 +2732,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             IReadOnlyList<ActPlayerIdentity> cachedIdentities,
             int partyCapacity)
     {
-        var partyIdentities = ResolveLocalPartyIdentities(
+        var partyIdentities = ResolvePartyIdentities(
             liveIdentities,
             cachedIdentities,
             partyCapacity);
@@ -2730,12 +2760,12 @@ public sealed class SelfHostedActRuntime : IDisposable
             .ToArray();
     }
 
-    private static IReadOnlyList<ActPlayerIdentity> ResolveLocalPartyIdentities(
+    private static IReadOnlyList<ActPlayerIdentity> ResolvePartyIdentities(
         IReadOnlyList<ActPlayerIdentity> liveIdentities,
         IReadOnlyList<ActPlayerIdentity> cachedIdentities,
         int partyCapacity)
     {
-        var boundedCapacity = Math.Clamp(partyCapacity, 0, 8);
+        var boundedCapacity = Math.Clamp(partyCapacity, 0, 24);
         if (boundedCapacity == 0)
         {
             return [];
@@ -2809,6 +2839,19 @@ public sealed class SelfHostedActRuntime : IDisposable
             counter.DirectHits,
             counter.CriticalDirectHits);
     }
+
+    private static HighestDamageHit GetHighestDamageHit(CombatantData combatant)
+    {
+        var allDamage = combatant.AllOut.Values.MaxBy(static attack => attack.Hits);
+        var swing = allDamage?.Items
+            .Where(static item => (long)item.Damage > 0)
+            .MaxBy(static item => (long)item.Damage);
+        return swing is null
+            ? new HighestDamageHit(string.Empty, 0)
+            : new HighestDamageHit(swing.AttackType ?? string.Empty, (long)swing.Damage);
+    }
+
+    private readonly record struct HighestDamageHit(string Action, long Amount);
 
     private sealed class DamageHitCounter(AttackType source)
     {
@@ -2915,6 +2958,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatCriticalHitTotals.Clear();
         chatDirectHitTotals.Clear();
         chatCriticalDirectHitTotals.Clear();
+        chatHighestDamageActions.Clear();
+        chatHighestDamageTotals.Clear();
         chatParser.Clear();
         chatEnemy = string.Empty;
         chatZone = string.Empty;

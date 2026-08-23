@@ -27,6 +27,7 @@ public sealed class PluginPaths
         BundledPluginUpdateCacheDirectory = Path.Combine(
             ConfigDirectory,
             "bundled-plugin-updates");
+        ResourcePackCacheDirectory = Path.Combine(ConfigDirectory, "resource-packs");
     }
 
     public string ConfigDirectory { get; }
@@ -53,6 +54,8 @@ public sealed class PluginPaths
 
     public string BundledPluginUpdateCacheDirectory { get; }
 
+    public string ResourcePackCacheDirectory { get; }
+
     public void SetActPluginDirectory(string directory)
         => ActPluginDirectory = Path.GetFullPath(directory);
 
@@ -68,5 +71,6 @@ public sealed class PluginPaths
         Directory.CreateDirectory(PluginStagingDirectory);
         Directory.CreateDirectory(PluginBackupDirectory);
         Directory.CreateDirectory(BundledPluginUpdateCacheDirectory);
+        Directory.CreateDirectory(ResourcePackCacheDirectory);
     }
 }

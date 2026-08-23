@@ -34,4 +34,7 @@ public sealed record ActCombatantSnapshot(
     int CriticalHits = 0,
     int CriticalDirectHits = 0,
     double Rdps = 0,
-    int DirectHits = 0);
+    int DirectHits = 0,
+    string HighestDamageAction = "",
+    long HighestDamage = 0,
+    int PartyGroup = 0);

@@ -28,7 +28,7 @@ if (-not (Test-Path $PluginMasterPath)) {
     throw "PluginMaster file not found: $PluginMasterPath"
 }
 
-$downloadUrl = "$SourceRepository/releases/download/v$Version/DalamudActCompat.zip"
+$downloadUrl = "$SourceRepository/releases/download/v$Version/DalamudActCompat-core.zip"
 $entries = Get-Content $PluginMasterPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $entry = @($entries)[0]
 
