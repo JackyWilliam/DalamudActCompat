@@ -1508,6 +1508,20 @@ static void ValidateMeterRows()
         !previousV6Configuration.ApplyMigrations() &&
         !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "A post-migration manual SilverDasher enable choice was overwritten.");
+    var manuallyEnabledSilverDasher = new PluginConfiguration();
+    manuallyEnabledSilverDasher.DisabledActPluginIds.Remove("silverdasher");
+    var coldStartedSilverDasher = Newtonsoft.Json.JsonConvert.DeserializeObject<
+                                      PluginConfiguration>(
+                                      Newtonsoft.Json.JsonConvert.SerializeObject(
+                                          manuallyEnabledSilverDasher))
+                                  ?? throw new InvalidOperationException(
+                                      "The SilverDasher configuration could not be restored.");
+    // This round-trip models Dalamud's next-game cold start, where Json.NET must
+    // replace the non-empty default set with the user's saved empty array.
+    Assert(
+        !coldStartedSilverDasher.ApplyMigrations() &&
+        !coldStartedSilverDasher.DisabledActPluginIds.Contains("silverdasher"),
+        "A serialized manual SilverDasher enable choice was lost during cold start.");
 
     var previousGenericPluginUser = new PluginConfiguration
     {

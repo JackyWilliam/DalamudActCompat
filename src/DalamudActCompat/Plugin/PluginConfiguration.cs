@@ -55,6 +55,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
 
+    // Json.NET otherwise reuses this default set, so a saved [] cannot preserve
+    // the user's explicit choice to enable SilverDasher across a cold start.
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public HashSet<string> DisabledActPluginIds { get; set; } =
         CreateDefaultDisabledActPluginIds();
 
