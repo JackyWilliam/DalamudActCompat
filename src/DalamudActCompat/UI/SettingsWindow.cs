@@ -372,11 +372,6 @@ public sealed class SettingsWindow : Window
         }
 
         changed |= Checkbox(text.Get("显示战斗统计", "Combat Meter visible"), configuration.Meter.IsVisible, value => configuration.Meter.IsVisible = value);
-        changed |= Checkbox(text.Get("锁定窗口", "Window locked"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
-        changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
-        changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
-        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0, 1.0f, value => configuration.Meter.BackgroundOpacity = value);
-        changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
         if (ImGui.SliderInt(text.Get("DPS 刷新间隔（毫秒）", "DPS refresh interval (ms)"), ref refreshInterval, 250, 2000))
         {
@@ -397,51 +392,9 @@ public sealed class SettingsWindow : Window
             ImGui.EndCombo();
         }
         changed |= DrawPlayerIdentityControls();
-        ImGui.TextUnformatted(text.Get("战斗统计显示列", "Combat Meter columns"));
-        changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
-        changed |= Checkbox(
-            text.Get("收起（只显示自己）", "Collapsed (self only)"),
-            configuration.Meter.CompactMode,
-            value => configuration.Meter.CompactMode = value);
-        changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
-        changed |= Checkbox("FFLogs", configuration.Meter.ShowFflogs, value => configuration.Meter.ShowFflogs = value);
-        changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
-        changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-        changed |= Checkbox(text.Get("暴击 %", "CRIT %"), configuration.Meter.ShowCriticalHitRate, value => configuration.Meter.ShowCriticalHitRate = value);
-        changed |= Checkbox(text.Get("直击 %", "DH %"), configuration.Meter.ShowDirectHitRate, value => configuration.Meter.ShowDirectHitRate = value);
-        changed |= Checkbox(text.Get("直暴 %", "CDH %"), configuration.Meter.ShowCriticalDirectHitRate, value => configuration.Meter.ShowCriticalDirectHitRate = value);
-        changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
-        changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
-        if (configuration.Meter.ShowJob)
-        {
-            var jobStyle = configuration.Meter.JobDisplayStyle;
-            ImGui.SetNextItemWidth(190);
-            if (ImGui.BeginCombo(
-                    text.Get("职业显示方式", "Job display"),
-                    JobDisplayFormatter.Label(jobStyle, text)))
-            {
-                foreach (var style in Enum.GetValues<JobDisplayStyle>())
-                {
-                    if (ImGui.Selectable(
-                            JobDisplayFormatter.Label(style, text),
-                            style == jobStyle))
-                    {
-                        configuration.Meter.JobDisplayStyle = style;
-                        changed = true;
-                    }
-                }
-                ImGui.EndCombo();
-            }
-        }
         ImGui.TextDisabled(text.Get(
-            "排序与显示列彼此独立；FFLogs 还需要开启在线预估。",
-            "Sorting and visible columns are independent; FFLogs also requires online estimates to be enabled."));
-        var localPlayerColor = configuration.Meter.LocalPlayerColor;
-        if (ImGui.ColorEdit4(text.Get("本地玩家颜色", "Local player color"), ref localPlayerColor))
-        {
-            configuration.Meter.LocalPlayerColor = localPlayerColor;
-            changed = true;
-        }
+            "榜单模板、窗口样式和显示槽位请在控制中心的“战斗统计 → 自定义”中调整。",
+            "Choose templates, window styles, and visible slots in Control Center → Combat Meter → Customize."));
 
         ImGui.Separator();
         ImGui.TextUnformatted($"{text.Get("配置", "Config")}: {paths.ConfigDirectory}");

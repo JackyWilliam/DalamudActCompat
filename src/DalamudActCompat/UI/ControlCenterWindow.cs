@@ -712,223 +712,79 @@ public sealed class ControlCenterWindow : Window
             openMeter();
         }
 
-        ImGui.TextColored(IceBlue, text.Get("独立悬浮窗", "Independent meter windows"));
-        changed |= Checkbox(
-            text.Get("经典榜", "Classic"),
-            configuration.Meter.ClassicWindow.IsEnabled,
-            value => configuration.Meter.ClassicWindow.IsEnabled = value);
+        ImGui.TextColored(IceBlue, text.Get("榜单模板", "Meter template"));
+        var activeKind = configuration.Meter.ActiveWindowKind;
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.BeginCombo("##meter-template", MeterKindLabel(activeKind)))
+        {
+            foreach (var kind in Enum.GetValues<MeterWindowKind>())
+            {
+                if (ImGui.Selectable(MeterKindLabel(kind), kind == activeKind))
+                {
+                    configuration.Meter.ActivateWindow(kind);
+                    changed = true;
+                }
+            }
+            ImGui.EndCombo();
+        }
         ImGui.SameLine();
-        changed |= Checkbox(
-            text.Get("透明横版", "Transparent horizontal"),
-            configuration.Meter.HorizontalWindow.IsEnabled,
-            value => configuration.Meter.HorizontalWindow.IsEnabled = value);
-        ImGui.SameLine();
-        changed |= Checkbox(
-            text.Get("职能分栏", "Role split"),
-            configuration.Meter.RoleSplitWindow.IsEnabled,
-            value => configuration.Meter.RoleSplitWindow.IsEnabled = value);
-        if (ImGui.Button(text.Get("编辑三个窗口的槽位与样式…", "Edit slots and styles…")))
+        if (ImGui.Button(text.Get("自定义", "Customize")))
         {
             openMeterStyleEditor();
         }
         ImGui.TextDisabled(text.Get(
-            "三个窗口可以同时开启，位置、大小、锁定和槽位配置彼此独立。",
-            "All three windows can be open together with independent position, size, lock, and slots."));
+            "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
+            "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots."));
 
-        ImGui.TextColored(Gold, text.Get("经典榜快捷设置", "Classic meter shortcuts"));
-        changed |= Checkbox(text.Get("锁定窗口", "Lock window"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
-        ImGui.SameLine();
-        changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
-        changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide out of combat"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
-        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0, 1, value => configuration.Meter.BackgroundOpacity = value);
-        changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+        if (ImGui.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
+        {
+            resetEncounterConfirmationExpiresAt =
+                Environment.TickCount64 + ResetConfirmationMilliseconds;
+            ImGui.OpenPopup(ResetEncounterPopupId);
+        }
+        ImGui.PopStyleColor(3);
+        DrawResetEncounterConfirmation();
 
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
-        if (ImGui.SliderInt(text.Get("刷新间隔（毫秒）", "Refresh interval (ms)"), ref refreshInterval, 250, 2000))
+        if (ImGui.SliderInt(
+                text.Get("刷新间隔（毫秒）", "Refresh interval (ms)"),
+                ref refreshInterval,
+                250,
+                2000))
         {
             configuration.Meter.RefreshIntervalMs = refreshInterval;
             changed = true;
         }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        var meterDisplayDescription = text.Get(
-            "每名玩家固定一行；排序方式与实际显示列可以分别选择。",
-            "Each player uses one row; sorting and visible columns can be selected independently.");
-        var meterDisplayHint = text.Get(
-            "FFLogs 列仅在在线预估已开启且下方勾选时显示；其他列可自由组合。",
-            "The FFLogs column appears only when online estimates are enabled and selected below; other columns can be combined freely.");
-        var meterDisplayHeight =
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            (ImGui.GetFrameHeightWithSpacing() * 14) +
-            (ImGui.GetTextLineHeightWithSpacing() * 4) +
-            (ImGui.GetStyle().ItemSpacing.Y * 3);
-        if (ImGui.BeginChild(
-                "meter-display-controls",
-                new Vector2(-1, meterDisplayHeight),
-                true,
-                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+        var dpsMetric = configuration.Meter.DpsMetric;
+        ImGui.SetNextItemWidth(300);
+        if (ImGui.BeginCombo(
+                text.Get("DPS 计算口径", "DPS metric"),
+                DpsMetricLabel(dpsMetric)))
         {
-            ImGui.TextColored(IceBlue, text.Get("战斗统计显示", "Combat Meter display"));
-            ImGui.TextDisabled(meterDisplayDescription);
-
-            var sortMode = MeterSortModeOptions.Normalize(configuration.Meter.SortMode);
-            if (ImGui.BeginCombo(
-                    text.Get("排序 / 主要数据", "Sort / primary metric"),
-                    sortMode == MeterSortMode.Hps ? "HPS" : "DPS"))
+            foreach (var metric in Enum.GetValues<DpsMetric>())
             {
-                foreach (var mode in MeterSortModeOptions.Supported)
+                if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
                 {
-                    if (ImGui.Selectable(
-                            mode == MeterSortMode.Hps ? "HPS" : "DPS",
-                            mode == sortMode))
-                    {
-                        configuration.Meter.SortMode = mode;
-                        changed = true;
-                    }
-                }
-                ImGui.EndCombo();
-            }
-
-            ImGui.TextDisabled(text.Get(
-                "DPS 与 rDPS 是两个独立槽位，可以同时显示。",
-                "DPS and rDPS are independent slots and can be shown together."));
-            var estimateMetric = configuration.Meter.DpsMetric;
-            if (ImGui.BeginCombo(
-                    text.Get("FFLogs 预估口径", "FFLogs estimate metric"),
-                    DpsMetricLabel(estimateMetric)))
-            {
-                foreach (var metric in Enum.GetValues<DpsMetric>())
-                {
-                    if (ImGui.Selectable(DpsMetricLabel(metric), metric == estimateMetric))
-                    {
-                        configuration.Meter.DpsMetric = metric;
-                        changed = true;
-                    }
-                }
-                ImGui.EndCombo();
-            }
-
-            changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
-            changed |= Checkbox(
-                text.Get("收起（只显示自己）", "Collapsed (self only)"),
-                configuration.Meter.CompactMode,
-                value => configuration.Meter.CompactMode = value);
-            ImGui.TextUnformatted(text.Get("显示列", "Visible columns"));
-            changed |= Checkbox("FFLogs", configuration.Meter.ShowFflogs, value => configuration.Meter.ShowFflogs = value);
-            ImGui.SameLine();
-            changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
-            ImGui.SameLine();
-            changed |= Checkbox("rDPS", configuration.Meter.ShowRdps, value => configuration.Meter.ShowRdps = value);
-            ImGui.SameLine();
-            changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-            changed |= Checkbox(text.Get("暴击 %", "CRIT %"), configuration.Meter.ShowCriticalHitRate, value => configuration.Meter.ShowCriticalHitRate = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("直击 %", "DH %"), configuration.Meter.ShowDirectHitRate, value => configuration.Meter.ShowDirectHitRate = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("直暴 %", "CDH %"), configuration.Meter.ShowCriticalDirectHitRate, value => configuration.Meter.ShowCriticalDirectHitRate = value);
-            changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("总伤害", "Total damage"), configuration.Meter.ShowTotalDamage, value => configuration.Meter.ShowTotalDamage = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("总治疗", "Total healing"), configuration.Meter.ShowTotalHealing, value => configuration.Meter.ShowTotalHealing = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("最高技能", "Highest hit"), configuration.Meter.ShowHighestDamage, value => configuration.Meter.ShowHighestDamage = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
-            if (configuration.Meter.ShowJob)
-            {
-                var jobStyle = configuration.Meter.JobDisplayStyle;
-                ImGui.SetNextItemWidth(190);
-                if (ImGui.BeginCombo(
-                        text.Get("职业显示方式", "Job display"),
-                        JobDisplayFormatter.Label(jobStyle, text)))
-                {
-                    foreach (var style in Enum.GetValues<JobDisplayStyle>())
-                    {
-                        if (ImGui.Selectable(
-                                JobDisplayFormatter.Label(style, text),
-                                style == jobStyle))
-                        {
-                            configuration.Meter.JobDisplayStyle = style;
-                            changed = true;
-                        }
-                    }
-                    ImGui.EndCombo();
+                    configuration.Meter.DpsMetric = metric;
+                    changed = true;
                 }
             }
-
-            var localPlayerColor = configuration.Meter.LocalPlayerColor;
-            if (ImGui.ColorEdit4(text.Get("自己的高亮颜色", "Your highlight color"), ref localPlayerColor))
-            {
-                configuration.Meter.LocalPlayerColor = localPlayerColor;
-                changed = true;
-            }
-
-            ImGui.TextDisabled(meterDisplayHint);
-
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
-            if (ImGui.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
-            {
-                resetEncounterConfirmationExpiresAt =
-                    Environment.TickCount64 + ResetConfirmationMilliseconds;
-                ImGui.OpenPopup(ResetEncounterPopupId);
-            }
-            ImGui.PopStyleColor(3);
+            ImGui.EndCombo();
         }
-        ImGui.EndChild();
-        DrawResetEncounterConfirmation();
-
         changed |= DrawPlayerIdentityControls();
         changed |= DrawFflogsSettings();
-
-        if (changed)
-        {
-            SynchronizeClassicProfileFromQuickSettings();
-        }
         return changed;
     }
 
-    private void SynchronizeClassicProfileFromQuickSettings()
+    private string MeterKindLabel(MeterWindowKind kind) => kind switch
     {
-        var meter = configuration.Meter;
-        var profile = meter.ClassicWindow;
-        profile.IsLocked = meter.IsLocked;
-        profile.ClickThroughWhenLocked = meter.ClickThroughWhenLocked;
-        profile.AutoHideOutOfCombat = meter.AutoHideOutOfCombat;
-        profile.ShowHeader = meter.ShowHeader;
-        profile.FontScale = meter.FontScale;
-        profile.SortMode = MeterSortModeOptions.Normalize(meter.SortMode);
-
-        // Quick settings modify the classic renderer's columns. Mirroring only matching
-        // slots keeps extra user-added complications and their ordering intact.
-        foreach (var slot in profile.Slots)
-        {
-            slot.Visible = slot.Metric switch
-            {
-                MeterSlotMetric.Rank => meter.ShowRank,
-                MeterSlotMetric.Job => meter.ShowJob,
-                MeterSlotMetric.PlayerName => meter.ShowPlayerName,
-                MeterSlotMetric.Dps => meter.ShowDps,
-                MeterSlotMetric.Rdps => meter.ShowRdps,
-                MeterSlotMetric.Hps => meter.ShowHps,
-                MeterSlotMetric.DamagePercent => meter.ShowDamagePercent,
-                MeterSlotMetric.TotalDamage => meter.ShowTotalDamage,
-                MeterSlotMetric.TotalHealing => meter.ShowTotalHealing,
-                MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage => meter.ShowHighestDamage,
-                MeterSlotMetric.Deaths => meter.ShowDeaths,
-                MeterSlotMetric.CriticalHitPercent => meter.ShowCriticalHitRate,
-                MeterSlotMetric.DirectHitPercent => meter.ShowDirectHitRate,
-                MeterSlotMetric.CriticalDirectHitPercent => meter.ShowCriticalDirectHitRate,
-                _ => slot.Visible,
-            };
-        }
-    }
+        MeterWindowKind.Horizontal => text.Get("透明横版", "Transparent horizontal"),
+        MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
+        _ => text.Get("经典榜", "Classic"),
+    };
 
     private void DrawResetEncounterConfirmation()
     {

@@ -418,7 +418,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 12 &&
+        configuration.Version == 13 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -1813,7 +1813,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 12 &&
+        legacyConfiguration.Version == 13 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1843,7 +1843,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 12 &&
+        parserMigration.Version == 13 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1857,7 +1857,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 12 &&
+        newConfiguration.Version == 13 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -1892,13 +1892,44 @@ static void ValidateMeterRows()
     };
     Assert(
         previousHorizontalUser.ApplyMigrations() &&
-        previousHorizontalUser.Version == 12 &&
+        previousHorizontalUser.Version == 13 &&
         !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
         previousHorizontalUser.Meter.HorizontalWindow.AutoHideOutOfCombat &&
         !previousHorizontalUser.Meter.RoleSplitWindow.IsEnabled,
         "The selected legacy preset was not migrated to its independent window.");
+    var previousCompositeIdentityUser = new PluginConfiguration
+    {
+        Version = 12,
+    };
+    previousCompositeIdentityUser.Meter.ClassicWindow.ItemWidth = 210;
+    previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled = true;
+    previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled = true;
+    previousCompositeIdentityUser.Meter.ClassicWindow.Slots =
+    [
+        new MeterSlotDefinition(MeterSlotMetric.Job, 0, 0, 4, 2, MeterSlotAlignment.Left),
+        new MeterSlotDefinition(MeterSlotMetric.PlayerName, 0, 0, 4, 2, MeterSlotAlignment.Left)
+        {
+            Visible = false,
+        },
+        new MeterSlotDefinition(MeterSlotMetric.Dps, 0, 0, 4, 2, MeterSlotAlignment.Left),
+    ];
+    Assert(
+        previousCompositeIdentityUser.ApplyMigrations() &&
+        previousCompositeIdentityUser.Version == 13 &&
+        previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
+        !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
+        !previousCompositeIdentityUser.Meter.RoleSplitWindow.IsEnabled &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.ItemWidth == 150 &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.Count(static slot =>
+            slot.Metric == MeterSlotMetric.PlayerIdentity) == 1 &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.All(static slot =>
+            slot.Metric is not MeterSlotMetric.Job and not MeterSlotMetric.PlayerName) &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.Any(static slot =>
+            slot.Metric == MeterSlotMetric.Fflogs),
+        "The v13 migration did not merge job/name, compact classic tiles, or enforce one active meter.");
     var customStyle = new MeterCustomStyle
     {
         Name = "Watch layout",
@@ -1933,7 +1964,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 12 &&
+        previousDebugConfiguration.Version == 13 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -1945,7 +1976,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 12 &&
+        previousV6Configuration.Version == 13 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -1983,7 +2014,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 12 &&
+        previousGenericPluginUser.Version == 13 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -1995,7 +2026,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 12 &&
+        previousEdpsUser.Version == 13 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -2011,7 +2042,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 12 &&
+        previousCustomMetricUser.Version == 13 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2040,7 +2071,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 12 &&
+        previousTimelineUser.Version == 13 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2129,7 +2160,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 12 &&
+        previousV5CactbotUser.Version == 13 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -2428,11 +2459,9 @@ static void ValidateMeterLayout()
             "CombatEnded.png")),
         "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
-        MeterWindow.MinimumTableWidthWithFflogs == 563 &&
-        MeterWindow.MinimumTableWidthWithoutFflogs == 516 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(570, 563) &&
-        MeterWindow.ShouldEnableHorizontalScroll(550, 563),
-        "The compact default Meter width no longer delays horizontal scrolling.");
+        new MeterSettings().ClassicWindow.ItemWidth == 150 &&
+        !new MeterSettings().ClassicAllianceView,
+        "The classic Meter no longer starts with compact party tiles.");
     var defaultColumns = new MeterSettings();
     var clickThroughSettings = new MeterSettings
     {
@@ -2455,22 +2484,21 @@ static void ValidateMeterLayout()
         (clickThroughScrollableRows & MeterWindow.HorizontalScrollbarFlagMask) != 0 &&
         (unlockedRows & MeterWindow.NoInputsFlagMask) == 0,
         "The expanded Combat Meter child window does not follow the locked click-through setting.");
+    var defaultClassicSlots = defaultColumns.ClassicWindow.Slots;
     Assert(
-        defaultColumns.ShowFflogs &&
-        defaultColumns.ShowDps &&
-        !defaultColumns.ShowHps &&
-        defaultColumns.ShowCriticalHitRate &&
-        !defaultColumns.ShowDirectHitRate &&
-        defaultColumns.ShowCriticalDirectHitRate &&
-        defaultColumns.ShowDamagePercent &&
-        defaultColumns.ShowTotalDamage &&
-        defaultColumns.ShowHighestDamage &&
-        defaultColumns.ShowDeaths &&
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) ==
-        MeterWindow.MinimumTableWidthWithFflogs &&
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) ==
-        MeterWindow.MinimumTableWidthWithoutFflogs,
-        "The requested FFLogs/DPS/CRIT/CDH/damage/deaths default column set is not preserved.");
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.PlayerIdentity) &&
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.Dps) &&
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.TotalDamage) &&
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.HighestDamageAction) &&
+        defaultClassicSlots.Any(static slot =>
+            !slot.Visible && slot.Metric == MeterSlotMetric.Fflogs) &&
+        defaultClassicSlots.All(static slot =>
+            slot.Metric is not MeterSlotMetric.Job and not MeterSlotMetric.PlayerName),
+        "The classic tile defaults lost composite identity, team totals, max hit, or the optional FFLogs slot.");
     var existingColumnChoices = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
         "{\"ShowHps\":true,\"ShowDirectHitRate\":true}")!;
     Assert(
@@ -2487,11 +2515,6 @@ static void ValidateMeterLayout()
     defaultColumns.ShowFflogs = true;
     defaultColumns.ShowHps = true;
     defaultColumns.ShowDirectHitRate = true;
-    Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 662 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(670, 662) &&
-        MeterWindow.ShouldEnableHorizontalScroll(650, 662),
-        "Enabling every Meter column shows a horizontal scrollbar before name compression is exhausted.");
     defaultColumns.ShowFflogs = false;
     defaultColumns.ShowDps = false;
     defaultColumns.ShowHps = false;
@@ -2502,9 +2525,6 @@ static void ValidateMeterLayout()
     defaultColumns.ShowTotalDamage = false;
     defaultColumns.ShowHighestDamage = false;
     defaultColumns.ShowDeaths = false;
-    Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) == 101,
-        "Hidden Meter columns still reserve horizontal layout width.");
     var restoredColumns = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
         Newtonsoft.Json.JsonConvert.SerializeObject(defaultColumns));
     Assert(
@@ -2681,12 +2701,24 @@ static void ValidateMeterLayout()
 static void ValidateIndependentMeterWindows()
 {
     var projectRoot = FindProjectRoot();
+    var classicSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterWindow.cs"));
     var horizontalSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
         "DalamudActCompat",
         "Meter",
         "HorizontalMeterWindow.cs"));
+    var roleSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "RoleSplitMeterWindow.cs"));
     var editorSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -2699,6 +2731,12 @@ static void ValidateIndependentMeterWindows()
         "DalamudActCompat",
         "UI",
         "SimplifiedHomeWindow.cs"));
+    var controlCenterSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "ControlCenterWindow.cs"));
 
     Assert(
         typeof(HorizontalMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
@@ -2709,17 +2747,49 @@ static void ValidateIndependentMeterWindows()
         horizontalSource.Contains("ImGuiCol.ChildBg, Vector4.Zero", StringComparison.Ordinal) &&
         !horizontalSource.Contains("AddRectFilled", StringComparison.Ordinal) &&
         horizontalSource.Contains("scrollOffset", StringComparison.Ordinal) &&
-        horizontalSource.Contains("MeterSlotPresentation.SortAndRank", StringComparison.Ordinal),
-        "The horizontal Meter is not an independent transparent, sortable slider window.");
+        horizontalSource.Contains("viewport.Size.Y / 3", StringComparison.Ordinal) &&
+        horizontalSource.Contains("Flags |= ImGuiWindowFlags.NoResize", StringComparison.Ordinal) &&
+        horizontalSource.Contains("MeterSlotPresentation.SelectParty", StringComparison.Ordinal) &&
+        horizontalSource.Contains("horizontal-party-", StringComparison.Ordinal),
+        "The horizontal Meter is not a transparent eight-player slider with an alliance party selector.");
+    Assert(
+        classicSource.Contains("DrawClassicTiles", StringComparison.Ordinal) &&
+        classicSource.Contains("players.Take(24)", StringComparison.Ordinal) &&
+        classicSource.Contains("ClassicAllianceView", StringComparison.Ordinal) &&
+        classicSource.Contains("DrawRankingModeIcon", StringComparison.Ordinal) &&
+        classicSource.Contains("FirstOrDefault(static row => row.IsLocalPlayer)", StringComparison.Ordinal) &&
+        classicSource.Contains("MinimumSize = new Vector2(120, 90)", StringComparison.Ordinal),
+        "The classic Meter lost responsive player tiles, 8/24 mode, self-only retention, or its icon controls.");
+    Assert(
+        roleSource.Contains("DalamudActCompatRoleSplitDamageMeter", StringComparison.Ordinal) &&
+        roleSource.Contains("DalamudActCompatRoleSplitHealerMeter", StringComparison.Ordinal) &&
+        roleSource.Contains("RoleSplitDamageCompact", StringComparison.Ordinal) &&
+        roleSource.Contains("RoleSplitHealerCompact", StringComparison.Ordinal) &&
+        roleSource.Contains("ResolveMetrics", StringComparison.Ordinal),
+        "Role split is not implemented as two independently collapsible D/T and healer windows.");
     Assert(
         editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
         editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
+        editorSource.Contains("真实页面预览", StringComparison.Ordinal) &&
+        editorSource.Contains("DrawClassicPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("DrawHorizontalPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("DrawRoleSplitPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("preview-slot-", StringComparison.Ordinal) &&
+        editorSource.Contains("configuration.Fflogs.Enabled", StringComparison.Ordinal) &&
         editorSource.Contains("Move up", StringComparison.Ordinal) &&
         editorSource.Contains("Move down", StringComparison.Ordinal) &&
         !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
         !editorSource.Contains("24×6", StringComparison.Ordinal) &&
         !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
-        "The shared Meter editor regained coordinate drag/drop or lost dynamic slots.");
+        "The shared Meter editor lost clickable live previews, FFLogs gating, or dynamic slots.");
+    Assert(
+        controlCenterSource.Contains("BeginCombo(\"##meter-template\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("DrawMeterKindRadio", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("SynchronizeClassicProfileFromQuickSettings", StringComparison.Ordinal),
+        "Combat Meter settings did not consolidate template selection into a dropdown with external ID and FFLogs controls.");
     Assert(
         simplifiedSource.Contains("显示战斗统计悬浮窗", StringComparison.Ordinal) &&
         simplifiedSource.Contains("退出精简模式", StringComparison.Ordinal) &&
@@ -2730,8 +2800,7 @@ static void ValidateIndependentMeterWindows()
         "Simplified mode lost its dedicated controls or independent close action.");
 
     var settings = new MeterSettings();
-    settings.HorizontalWindow.IsEnabled = true;
-    settings.RoleSplitWindow.IsEnabled = true;
+    settings.ActivateWindow(MeterWindowKind.Horizontal);
     settings.HorizontalWindow.Slots.Add(new MeterSlotDefinition(
         MeterSlotMetric.TotalHealing,
         0,
@@ -2743,13 +2812,45 @@ static void ValidateIndependentMeterWindows()
         Newtonsoft.Json.JsonConvert.SerializeObject(settings));
     Assert(
         restored is not null &&
-        restored.ClassicWindow.IsEnabled &&
+        !restored.ClassicWindow.IsEnabled &&
         restored.HorizontalWindow.IsEnabled &&
-        restored.RoleSplitWindow.IsEnabled &&
+        !restored.RoleSplitWindow.IsEnabled &&
+        restored.ActiveWindowKind == MeterWindowKind.Horizontal &&
         restored.HorizontalWindow.Slots.Count == settings.HorizontalWindow.Slots.Count &&
         restored.HorizontalWindow.Slots.Any(static slot =>
             slot.Metric == MeterSlotMetric.TotalHealing),
-        "Independent window visibility or dynamic slots did not survive configuration persistence.");
+        "Single-template visibility or dynamic slots did not survive configuration persistence.");
+    settings.ActivateWindow(MeterWindowKind.RoleSplit);
+    Assert(
+        !settings.ClassicWindow.IsEnabled &&
+        !settings.HorizontalWindow.IsEnabled &&
+        settings.RoleSplitWindow.IsEnabled &&
+        settings.ActiveWindowKind == MeterWindowKind.RoleSplit,
+        "Selecting role split did not disable both other meter templates.");
+
+    var rankingProfile = new MeterWindowProfile
+    {
+        Slots =
+        [
+            new MeterSlotDefinition(MeterSlotMetric.Rdps, 0, 0, 4, 2, MeterSlotAlignment.Left),
+            new MeterSlotDefinition(MeterSlotMetric.Dps, 0, 0, 4, 2, MeterSlotAlignment.Left),
+            new MeterSlotDefinition(MeterSlotMetric.Hps, 0, 0, 4, 2, MeterSlotAlignment.Left)
+            {
+                Visible = false,
+            },
+        ],
+    };
+    Assert(
+        MeterSlotPresentation.ReplacePrimaryMetric(rankingProfile, MeterSortMode.Hps) &&
+        rankingProfile.Slots[0].Metric == MeterSlotMetric.Hps &&
+        rankingProfile.Slots[1].Metric == MeterSlotMetric.Dps &&
+        rankingProfile.Slots.Count(static slot => slot.Metric == MeterSlotMetric.Hps) == 1 &&
+        MeterSlotPresentation.ReplacePrimaryMetric(rankingProfile, MeterSortMode.Dps) &&
+        rankingProfile.Slots[0].Metric == MeterSlotMetric.Dps &&
+        rankingProfile.Slots.Count(static slot => slot.Metric == MeterSlotMetric.Dps) == 1 &&
+        rankingProfile.Slots.All(static slot =>
+            !slot.Visible || slot.Metric != MeterSlotMetric.Hps),
+        "DPS/HPS switching did not replace the earliest visible damage-rate slot without duplicates.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -7909,6 +8010,12 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "Meter",
         "MeterWindow.cs"));
+    var meterEditorSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterStyleEditorWindow.cs"));
     var launcherWindowSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -8233,20 +8340,18 @@ static void ValidateHtmlOverlayDefaults()
         !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
         !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal) &&
         !meterWindowSource.Contains("DrawControls(", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("meter-column-header", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("#  玩家", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("layout.DirectHit", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("MeasureColumnWidths", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("DrawClassicTiles", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("MeterSlotMetric.PlayerIdentity", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("DrawTeamSummary", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("FormatHighestDamage", StringComparison.Ordinal) &&
         meterWindowSource.Contains("const string ellipsis = \"...\"", StringComparison.Ordinal) &&
         meterWindowSource.Contains("ApplyBackgroundOpacity", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("configuration.Meter.ShowFflogs", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("configuration.Meter.ShowDirectHitRate", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("configuration.Meter.ShowFflogs", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("configuration.Meter.ShowDirectHitRate", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("configuration.Meter.BackgroundOpacity, 0, 1", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("configuration.Meter.BackgroundOpacity, 0, 1.0f", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("jobIcons.GetLimitBreak()", StringComparison.Ordinal),
-        "The Meter overlay controls, customizable columns, transparent background, or Limit Break icon regressed.");
+        meterEditorSource.Contains("configuration.Meter.BackgroundOpacity", StringComparison.Ordinal) &&
+        meterEditorSource.Contains("configuration.Meter.LocalPlayerColor", StringComparison.Ordinal) &&
+        meterEditorSource.Contains("MeterSlotDefaults.EditableMetrics", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal),
+        "The Meter tiles, external identity/FFLogs settings, team summary, or editor-owned style controls regressed.");
 
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");

@@ -17,6 +17,7 @@ public sealed class MeterStyleEditorWindow : Window
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
     private readonly PluginConfiguration configuration;
     private readonly ISharedImmediateTexture logoTexture;
+    private readonly JobIconTextureSet jobIcons;
     private readonly UiText text;
     private readonly Action saveConfiguration;
     private MeterWindowKind selectedKind;
@@ -25,12 +26,14 @@ public sealed class MeterStyleEditorWindow : Window
     public MeterStyleEditorWindow(
         PluginConfiguration configuration,
         ISharedImmediateTexture logoTexture,
+        JobIconTextureSet jobIcons,
         UiText text,
         Action saveConfiguration)
         : base("战斗统计布局编辑器###DalamudActCompatMeterStyleEditor")
     {
         this.configuration = configuration;
         this.logoTexture = logoTexture;
+        this.jobIcons = jobIcons;
         this.text = text;
         this.saveConfiguration = saveConfiguration;
         Size = new Vector2(1040, 690);
@@ -44,8 +47,17 @@ public sealed class MeterStyleEditorWindow : Window
 
     public void Open()
     {
+        SetEditingProfile(null);
+        selectedKind = configuration.Meter.ActiveWindowKind;
+        SetEditingProfile(selectedKind);
         EnsureSelectedSlot(CurrentProfile);
         IsOpen = true;
+    }
+
+    public override void OnClose()
+    {
+        SetEditingProfile(null);
+        saveConfiguration();
     }
 
     public override void PreDraw()
@@ -86,6 +98,7 @@ public sealed class MeterStyleEditorWindow : Window
                 $"v{version}",
                 "meter-style-editor"))
         {
+            SetEditingProfile(null);
             IsOpen = false;
             return;
         }
@@ -100,7 +113,9 @@ public sealed class MeterStyleEditorWindow : Window
             (int)selectedKind);
         if (selectedIndex != (int)selectedKind)
         {
+            SetEditingProfile(null);
             selectedKind = (MeterWindowKind)selectedIndex;
+            SetEditingProfile(selectedKind);
             selectedSlotId = null;
             EnsureSelectedSlot(CurrentProfile);
         }
@@ -150,13 +165,6 @@ public sealed class MeterStyleEditorWindow : Window
     private bool DrawWindowControls(MeterWindowProfile profile)
     {
         var changed = false;
-        var enabled = profile.IsEnabled;
-        if (ImGui.Checkbox(text.Get("启用这个独立窗口", "Enable this independent window"), ref enabled))
-        {
-            profile.IsEnabled = enabled;
-            changed = true;
-        }
-        ImGui.SameLine();
         var locked = profile.IsLocked;
         if (ImGui.Checkbox(text.Get("锁定", "Lock"), ref locked))
         {
@@ -179,6 +187,16 @@ public sealed class MeterStyleEditorWindow : Window
             profile.AutoHideOutOfCombat = autoHide;
             changed = true;
         }
+        if (selectedKind == MeterWindowKind.Classic)
+        {
+            var compact = configuration.Meter.CompactMode;
+            ImGui.SameLine();
+            if (ImGui.Checkbox(text.Get("只显示自己", "Show self only"), ref compact))
+            {
+                configuration.Meter.CompactMode = compact;
+                changed = true;
+            }
+        }
         return changed;
     }
 
@@ -194,17 +212,26 @@ public sealed class MeterStyleEditorWindow : Window
         {
             var slot = profile.Slots[index];
             var visible = slot.Visible;
+            var canEnable = CanUseMetric(slot.Metric);
+            ImGui.BeginDisabled(!canEnable);
             if (ImGui.Checkbox($"##slot-visible-{slot.Id}", ref visible))
             {
                 slot.Visible = visible;
                 changed = true;
             }
+            ImGui.EndDisabled();
             ImGui.SameLine();
             if (ImGui.Selectable(
                     $"{index + 1:00}  {MeterSlotPresentation.Label(slot.Metric, text)}##slot-{slot.Id}",
                     string.Equals(selectedSlotId, slot.Id, StringComparison.OrdinalIgnoreCase)))
             {
                 selectedSlotId = slot.Id;
+            }
+            if (!canEnable && slot.Metric == MeterSlotMetric.Fflogs && ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "请先在设置页启用 FFLogs 在线估算。",
+                    "Enable FFLogs online estimates in Settings first."));
             }
         }
 
@@ -233,60 +260,383 @@ public sealed class MeterStyleEditorWindow : Window
 
     private bool DrawPreview(MeterWindowProfile profile)
     {
-        var changed = false;
-        ImGui.TextColored(Gold, text.Get("自动布局预览", "Automatic layout preview"));
+        ImGui.TextColored(Gold, text.Get("真实页面预览", "Live page preview"));
         ImGui.TextDisabled(KindDescription(selectedKind));
         ImGui.Separator();
-        var slots = profile.Slots.Where(static slot => slot.Visible).ToArray();
+        var slots = profile.Slots.Where(slot => slot.Visible && CanUseMetric(slot.Metric)).ToArray();
         if (slots.Length == 0)
         {
             ImGui.TextDisabled(text.Get("当前没有启用的槽位。", "No enabled slots."));
             return false;
         }
 
-        var available = ImGui.GetContentRegionAvail();
-        var columns = selectedKind == MeterWindowKind.Horizontal ? 2 : 3;
-        var spacing = new Vector2(8);
-        var cellWidth = Math.Max(62, (available.X - ((columns - 1) * spacing.X)) / columns);
-        var cellHeight = selectedKind == MeterWindowKind.Classic ? 56 : 72;
         var origin = ImGui.GetCursorScreenPos();
-        var drawList = ImGui.GetWindowDrawList();
-        for (var index = 0; index < slots.Length; index++)
+        var width = Math.Max(220, ImGui.GetContentRegionAvail().X);
+        var usedHeight = selectedKind switch
         {
-            var slot = slots[index];
-            var column = index % columns;
-            var row = index / columns;
-            var start = origin + new Vector2(column * (cellWidth + spacing.X), row * (cellHeight + spacing.Y));
-            ImGui.SetCursorScreenPos(start);
-            ImGui.InvisibleButton($"slot-preview-{slot.Id}", new Vector2(cellWidth, cellHeight));
-            if (ImGui.IsItemClicked())
+            MeterWindowKind.Horizontal => DrawHorizontalPreview(slots, origin, width),
+            MeterWindowKind.RoleSplit => DrawRoleSplitPreview(slots, origin, width),
+            _ => DrawClassicPreview(slots, origin, width),
+        };
+
+        ImGui.SetCursorScreenPos(origin + new Vector2(0, usedHeight + 8));
+        return false;
+    }
+
+    private float DrawClassicPreview(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        Vector2 origin,
+        float width)
+    {
+        const float gap = 7;
+        const float headerHeight = 36;
+        var playerSlots = slots.Where(static slot =>
+            slot.Metric is not MeterSlotMetric.TotalDamage and not MeterSlotMetric.TotalHealing).ToArray();
+        var metricCount = playerSlots.Count(static slot =>
+            slot.Metric is not MeterSlotMetric.Rank and not MeterSlotMetric.PlayerIdentity);
+        var tileHeight = Math.Max(70, 38 + (metricCount * 21));
+        var tileWidth = Math.Max(104, (width - gap) / 2);
+        var panelHeight = headerHeight + (tileHeight * 2) + gap +
+                          (slots.Any(IsTeamSummarySlot) ? 34 : 0) + 10;
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(origin, origin + new Vector2(width, panelHeight), ImGui.GetColorU32(Navy), 6);
+        drawList.AddRect(origin, origin + new Vector2(width, panelHeight), ImGui.GetColorU32(new Vector4(Gold.X, Gold.Y, Gold.Z, 0.38f)), 6);
+        drawList.AddText(origin + new Vector2(9, 9), ImGui.GetColorU32(Vector4.One), text.Get("DPS 榜 · 本队 8 人", "DPS · Party 8"));
+        DrawPreviewHeaderIcons(origin + new Vector2(width - 54, 7), drawList);
+
+        var first = origin + new Vector2(0, headerHeight);
+        DrawClassicPreviewTile(playerSlots, first, new Vector2(tileWidth, tileHeight), "01", "自己", "PLD", true);
+        DrawClassicPreviewTile(playerSlots, first + new Vector2(tileWidth + gap, 0), new Vector2(tileWidth, tileHeight), "02", "队友 A", "WAR", false);
+        DrawClassicPreviewTile(playerSlots, first + new Vector2(0, tileHeight + gap), new Vector2(tileWidth, tileHeight), "03", "队友 B", "WHM", false);
+
+        if (slots.Any(IsTeamSummarySlot))
+        {
+            DrawPreviewSummary(
+                slots.Where(IsTeamSummarySlot).ToArray(),
+                origin + new Vector2(6, panelHeight - 38),
+                new Vector2(width - 12, 30),
+                "classic-summary");
+        }
+        return panelHeight;
+    }
+
+    private void DrawClassicPreviewTile(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        Vector2 start,
+        Vector2 size,
+        string rank,
+        string playerName,
+        string job,
+        bool selectable)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(start, start + size, ImGui.GetColorU32(NavyRaised), 5);
+        drawList.AddRectFilled(start, start + new Vector2(size.X * 0.76f, size.Y), ImGui.GetColorU32(new Vector4(0.30f, 0.55f, 0.80f, 0.13f)), 5);
+        var y = start.Y + 5;
+        var rankSlot = slots.FirstOrDefault(static slot => slot.Metric == MeterSlotMetric.Rank);
+        var identitySlot = slots.FirstOrDefault(static slot => slot.Metric == MeterSlotMetric.PlayerIdentity);
+        var cursorX = start.X + 5;
+        if (rankSlot is not null)
+        {
+            var rankSize = new Vector2(25, 26);
+            if (selectable)
             {
-                selectedSlotId = slot.Id;
+                DrawPreviewSlot(rankSlot, new Vector2(cursorX, y), rankSize, "classic-rank", rank, false);
             }
-            var selected = string.Equals(selectedSlotId, slot.Id, StringComparison.OrdinalIgnoreCase);
-            drawList.AddRectFilled(
-                start,
-                start + new Vector2(cellWidth, cellHeight),
-                ImGui.GetColorU32(selected ? new Vector4(0.14f, 0.34f, 0.46f, 0.72f) : Navy),
-                Math.Min(18, cellHeight * 0.28f));
-            drawList.AddRect(
-                start,
-                start + new Vector2(cellWidth, cellHeight),
-                ImGui.GetColorU32(selected ? IceBlue : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.55f)),
-                Math.Min(18, cellHeight * 0.28f));
-            var label = MeterSlotPresentation.Label(slot.Metric, text);
-            var rendered = MeterSlotPresentation.TrimToWidth(label, cellWidth - 14);
-            var labelSize = ImGui.CalcTextSize(rendered);
-            drawList.AddText(
-                start + ((new Vector2(cellWidth, cellHeight) - labelSize) * 0.5f),
-                ImGui.GetColorU32(selected ? IceBlue : Vector4.One),
-                rendered);
+            else
+            {
+                drawList.AddText(new Vector2(cursorX + 7, y + 5), ImGui.GetColorU32(IceBlue), rank);
+            }
+            cursorX += rankSize.X + 3;
+        }
+        if (identitySlot is not null)
+        {
+            var identitySize = new Vector2(Math.Max(36, start.X + size.X - cursorX - 5), 26);
+            if (selectable)
+            {
+                DrawPreviewSlot(identitySlot, new Vector2(cursorX, y), identitySize, "classic-identity", playerName, true, job);
+            }
+            else
+            {
+                DrawPreviewIdentity(new Vector2(cursorX + 3, y + 3), identitySize.X - 6, playerName, job, drawList);
+            }
         }
 
-        var rows = (slots.Length + columns - 1) / columns;
-        ImGui.SetCursorScreenPos(origin + new Vector2(0, rows * (cellHeight + spacing.Y)));
-        return changed;
+        y += 31;
+        foreach (var slot in slots.Where(static slot =>
+                     slot.Metric is not MeterSlotMetric.Rank and not MeterSlotMetric.PlayerIdentity))
+        {
+            if (selectable)
+            {
+                DrawPreviewSlot(slot, new Vector2(start.X + 5, y), new Vector2(size.X - 10, 18), $"classic-{slot.Id}", SampleValue(slot.Metric), false);
+            }
+            else
+            {
+                DrawPreviewMetricText(slot.Metric, new Vector2(start.X + 8, y + 2), size.X - 16, SampleValue(slot.Metric), drawList);
+            }
+            y += 21;
+        }
     }
+
+    private float DrawHorizontalPreview(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        Vector2 origin,
+        float width)
+    {
+        const float gap = 8;
+        const float headerHeight = 38;
+        var playerSlots = slots.Where(static slot =>
+            slot.Metric is not MeterSlotMetric.TotalDamage and not MeterSlotMetric.TotalHealing).ToArray();
+        var metricCount = playerSlots.Count(static slot =>
+            slot.Metric is not MeterSlotMetric.Rank and not MeterSlotMetric.PlayerIdentity);
+        var moduleHeight = Math.Max(78, 38 + (metricCount * 20));
+        var moduleWidth = Math.Max(92, (width - (gap * 2)) / 3);
+        var totalHeight = headerHeight + moduleHeight + (slots.Any(IsTeamSummarySlot) ? 34 : 0);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddText(origin + new Vector2(2, 7), ImGui.GetColorU32(IceBlue), "DPS榜    A   B   C");
+        drawList.AddText(origin + new Vector2(width - 47, 7), ImGui.GetColorU32(new Vector4(0.72f, 0.75f, 0.80f, 1)), "8 MAX");
+        drawList.AddLine(origin + new Vector2(0, 30), origin + new Vector2(width, 30), ImGui.GetColorU32(new Vector4(IceBlue.X, IceBlue.Y, IceBlue.Z, 0.42f)));
+
+        var modulesStart = origin + new Vector2(0, headerHeight);
+        DrawHorizontalPreviewModule(playerSlots, modulesStart, new Vector2(moduleWidth, moduleHeight), "PLD", "自己", true);
+        DrawHorizontalPreviewModule(playerSlots, modulesStart + new Vector2(moduleWidth + gap, 0), new Vector2(moduleWidth, moduleHeight), "SAM", "队友 A", false);
+        DrawHorizontalPreviewModule(playerSlots, modulesStart + new Vector2((moduleWidth + gap) * 2, 0), new Vector2(moduleWidth, moduleHeight), "WHM", "队友 B", false);
+
+        if (slots.Any(IsTeamSummarySlot))
+        {
+            DrawPreviewSummary(
+                slots.Where(IsTeamSummarySlot).ToArray(),
+                origin + new Vector2(0, totalHeight - 30),
+                new Vector2(width, 28),
+                "horizontal-summary");
+        }
+        return totalHeight;
+    }
+
+    private void DrawHorizontalPreviewModule(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        Vector2 start,
+        Vector2 size,
+        string job,
+        string playerName,
+        bool selectable)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        // Horizontal runtime has no card background; only the progress accent remains visible.
+        drawList.AddLine(start + new Vector2(0, size.Y - 2), start + new Vector2(size.X * 0.82f, size.Y - 2), ImGui.GetColorU32(new Vector4(IceBlue.X, IceBlue.Y, IceBlue.Z, 0.60f)), 3);
+        var y = start.Y + 3;
+        foreach (var slot in slots)
+        {
+            var height = slot.Metric == MeterSlotMetric.PlayerIdentity ? 28 : 18;
+            if (selectable)
+            {
+                DrawPreviewSlot(slot, new Vector2(start.X, y), new Vector2(size.X, height), $"horizontal-{slot.Id}", slot.Metric == MeterSlotMetric.PlayerIdentity ? playerName : SampleValue(slot.Metric), slot.Metric == MeterSlotMetric.PlayerIdentity, job);
+            }
+            else if (slot.Metric == MeterSlotMetric.PlayerIdentity)
+            {
+                DrawPreviewIdentity(new Vector2(start.X + 2, y + 2), size.X - 4, playerName, job, drawList);
+            }
+            else
+            {
+                DrawPreviewMetricText(slot.Metric, new Vector2(start.X + 3, y + 1), size.X - 6, SampleValue(slot.Metric), drawList);
+            }
+            y += height + 2;
+        }
+    }
+
+    private float DrawRoleSplitPreview(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        Vector2 origin,
+        float width)
+    {
+        const float gap = 8;
+        var panelWidth = Math.Max(104, (width - gap) / 2);
+        var metrics = slots.Where(static slot =>
+            slot.Metric is not MeterSlotMetric.TotalDamage and not MeterSlotMetric.TotalHealing).ToArray();
+        var panelHeight = Math.Max(145, 49 + (metrics.Length * 20) + 32);
+        DrawRolePreviewPanel(metrics, slots, origin, new Vector2(panelWidth, panelHeight), false, "role-damage");
+        DrawRolePreviewPanel(metrics, slots, origin + new Vector2(panelWidth + gap, 0), new Vector2(panelWidth, panelHeight), true, "role-healer");
+        return panelHeight;
+    }
+
+    private void DrawRolePreviewPanel(
+        IReadOnlyList<MeterSlotDefinition> playerSlots,
+        IReadOnlyList<MeterSlotDefinition> allSlots,
+        Vector2 start,
+        Vector2 size,
+        bool healer,
+        string instanceId)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(start, start + size, ImGui.GetColorU32(Navy), 6);
+        drawList.AddRect(start, start + size, ImGui.GetColorU32(healer ? new Vector4(0.32f, 0.78f, 0.48f, 0.72f) : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.62f)), 6);
+        var title = healer ? "H  HPS榜" : "D/T  DPS榜";
+        drawList.AddText(start + new Vector2(8, 8), ImGui.GetColorU32(healer ? new Vector4(0.42f, 0.91f, 0.60f, 1) : Gold), title);
+        drawList.AddText(start + new Vector2(size.X - 19, 8), ImGui.GetColorU32(Vector4.One), "⌃");
+        drawList.AddLine(start + new Vector2(5, 34), start + new Vector2(size.X - 5, 34), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.20f)));
+        var y = start.Y + 40;
+        foreach (var previewSlot in ResolveRolePreviewSlots(playerSlots, healer))
+        {
+            var slot = previewSlot.Slot;
+            var metric = previewSlot.Metric;
+            var height = metric == MeterSlotMetric.PlayerIdentity ? 27 : 18;
+            DrawPreviewSlot(slot, new Vector2(start.X + 5, y), new Vector2(size.X - 10, height), $"{instanceId}-{slot.Id}", metric == MeterSlotMetric.PlayerIdentity ? (healer ? "治疗 A" : "自己") : SampleValue(metric), metric == MeterSlotMetric.PlayerIdentity, healer ? "WHM" : "PLD", metric);
+            y += height + 2;
+        }
+
+        var summaryMetric = healer ? MeterSlotMetric.TotalHealing : MeterSlotMetric.TotalDamage;
+        var summary = allSlots.FirstOrDefault(slot => slot.Metric == summaryMetric);
+        if (summary is not null)
+        {
+            DrawPreviewSummary([summary], start + new Vector2(5, size.Y - 29), new Vector2(size.X - 10, 24), instanceId + "-summary");
+        }
+    }
+
+    private void DrawPreviewSlot(
+        MeterSlotDefinition slot,
+        Vector2 start,
+        Vector2 size,
+        string instanceId,
+        string value,
+        bool identity,
+        string job = "PLD",
+        MeterSlotMetric? displayMetric = null)
+    {
+        ImGui.SetCursorScreenPos(start);
+        ImGui.InvisibleButton($"preview-slot-{instanceId}", size);
+        if (ImGui.IsItemClicked())
+        {
+            selectedSlotId = slot.Id;
+        }
+        var selected = string.Equals(selectedSlotId, slot.Id, StringComparison.OrdinalIgnoreCase);
+        var drawList = ImGui.GetWindowDrawList();
+        if (selected || ImGui.IsItemHovered())
+        {
+            drawList.AddRectFilled(start, start + size, ImGui.GetColorU32(new Vector4(Gold.X, Gold.Y, Gold.Z, selected ? 0.16f : 0.08f)), 3);
+        }
+        drawList.AddRect(start, start + size, ImGui.GetColorU32(new Vector4(Gold.X, Gold.Y, Gold.Z, selected ? 1 : 0.70f)), 3);
+        if (selected)
+        {
+            drawList.AddRect(start + new Vector2(1), start + size - new Vector2(1), ImGui.GetColorU32(Gold), 2);
+        }
+
+        if (identity)
+        {
+            DrawPreviewIdentity(start + new Vector2(4, 2), size.X - 8, value, job, drawList);
+            return;
+        }
+        DrawPreviewMetricText(displayMetric ?? slot.Metric, start + new Vector2(4, 2), size.X - 8, value, drawList);
+    }
+
+    private void DrawPreviewIdentity(
+        Vector2 start,
+        float width,
+        string playerName,
+        string job,
+        ImDrawListPtr drawList)
+    {
+        const float iconSize = 20;
+        var texture = jobIcons.Get(configuration.Meter.JobDisplayStyle, job);
+        if (texture is not null)
+        {
+            drawList.AddImage(texture.GetWrapOrEmpty().Handle, start, start + new Vector2(iconSize));
+        }
+        else
+        {
+            drawList.AddText(start + new Vector2(1, 2), ImGui.GetColorU32(IceBlue), JobDisplayFormatter.FormatText(job, configuration.Meter.JobDisplayStyle));
+        }
+        var rendered = MeterSlotPresentation.TrimToWidth(playerName, Math.Max(12, width - iconSize - 5));
+        drawList.AddText(start + new Vector2(iconSize + 5, 2), ImGui.GetColorU32(Vector4.One), rendered);
+    }
+
+    private void DrawPreviewMetricText(
+        MeterSlotMetric metric,
+        Vector2 start,
+        float width,
+        string value,
+        ImDrawListPtr drawList)
+    {
+        var label = MeterSlotPresentation.TrimToWidth(MeterSlotPresentation.Label(metric, text), Math.Max(16, width * 0.48f));
+        drawList.AddText(start, ImGui.GetColorU32(new Vector4(0.70f, 0.74f, 0.80f, 1)), label);
+        var rendered = MeterSlotPresentation.TrimToWidth(value, Math.Max(16, width * 0.48f));
+        var valueSize = ImGui.CalcTextSize(rendered);
+        var color = metric == MeterSlotMetric.Hps
+            ? new Vector4(0.42f, 0.91f, 0.60f, 1)
+            : metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps
+                ? IceBlue
+                : Vector4.One;
+        drawList.AddText(new Vector2(start.X + width - valueSize.X, start.Y), ImGui.GetColorU32(color), rendered);
+    }
+
+    private void DrawPreviewSummary(
+        IReadOnlyList<MeterSlotDefinition> summaries,
+        Vector2 start,
+        Vector2 size,
+        string instanceId)
+    {
+        if (summaries.Count == 0)
+        {
+            return;
+        }
+        var cellWidth = size.X / summaries.Count;
+        for (var index = 0; index < summaries.Count; index++)
+        {
+            var slot = summaries[index];
+            DrawPreviewSlot(slot, start + new Vector2(index * cellWidth, 0), new Vector2(cellWidth, size.Y), $"{instanceId}-{slot.Id}", SampleValue(slot.Metric), false);
+        }
+    }
+
+    private static bool IsTeamSummarySlot(MeterSlotDefinition slot)
+        => slot.Metric is MeterSlotMetric.TotalDamage or MeterSlotMetric.TotalHealing;
+
+    private static IReadOnlyList<PreviewMetric> ResolveRolePreviewSlots(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        bool healer)
+    {
+        if (!healer)
+        {
+            return slots.Where(static slot => slot.Metric != MeterSlotMetric.Hps)
+                .Select(static slot => new PreviewMetric(slot, slot.Metric))
+                .ToArray();
+        }
+
+        var leadingDamage = slots.FirstOrDefault(static slot =>
+            slot.Metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps);
+        return slots.Where(slot => leadingDamage is null || slot.Metric != MeterSlotMetric.Hps)
+            .Select(slot => new PreviewMetric(
+                slot,
+                ReferenceEquals(slot, leadingDamage) ? MeterSlotMetric.Hps : slot.Metric))
+            .ToArray();
+    }
+
+    private static string SampleValue(MeterSlotMetric metric) => metric switch
+    {
+        MeterSlotMetric.Rank => "1",
+        MeterSlotMetric.Fflogs => "92",
+        MeterSlotMetric.Dps => "12,846",
+        MeterSlotMetric.Rdps => "13,102",
+        MeterSlotMetric.Hps => "8,640",
+        MeterSlotMetric.DamagePercent => "24.8%",
+        MeterSlotMetric.TotalDamage => "8.42M",
+        MeterSlotMetric.TotalHealing => "3.16M",
+        MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage => "爆发击 128K",
+        MeterSlotMetric.Deaths => "0",
+        MeterSlotMetric.CriticalHitPercent => "31.2%",
+        MeterSlotMetric.DirectHitPercent => "22.6%",
+        MeterSlotMetric.CriticalDirectHitPercent => "11.8%",
+        _ => "--",
+    };
+
+    private static void DrawPreviewHeaderIcons(Vector2 start, ImDrawListPtr drawList)
+    {
+        var color = ImGui.GetColorU32(new Vector4(0.80f, 0.83f, 0.88f, 1));
+        drawList.AddTriangleFilled(start + new Vector2(3, 11), start + new Vector2(9, 4), start + new Vector2(8, 11), color);
+        drawList.AddTriangleFilled(start + new Vector2(9, 11), start + new Vector2(15, 4), start + new Vector2(14, 11), color);
+        drawList.AddLine(start + new Vector2(27, 6), start + new Vector2(32, 11), color, 2);
+        drawList.AddLine(start + new Vector2(32, 11), start + new Vector2(37, 6), color, 2);
+    }
+
+    private sealed record PreviewMetric(MeterSlotDefinition Slot, MeterSlotMetric Metric);
 
     private bool DrawSlotProperties(MeterWindowProfile profile)
     {
@@ -306,15 +656,39 @@ public sealed class MeterStyleEditorWindow : Window
             profile.FontScale = fontScale;
             changed = true;
         }
-        if (selectedKind == MeterWindowKind.Horizontal)
+        if (selectedKind is MeterWindowKind.Classic or MeterWindowKind.Horizontal)
         {
             var itemWidth = profile.ItemWidth;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.SliderFloat(text.Get("模块宽度", "Module width"), ref itemWidth, 140, 420, "%.0f"))
+            var widthLabel = selectedKind == MeterWindowKind.Classic
+                ? text.Get("玩家方块宽度", "Player tile width")
+                : text.Get("模块宽度", "Module width");
+            if (ImGui.SliderFloat(widthLabel, ref itemWidth, 140, 420, "%.0f"))
             {
                 profile.ItemWidth = itemWidth;
                 changed = true;
             }
+        }
+        if (selectedKind == MeterWindowKind.Classic)
+        {
+            var backgroundOpacity = configuration.Meter.BackgroundOpacity;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.SliderFloat(
+                    text.Get("背景透明度", "Background opacity"),
+                    ref backgroundOpacity,
+                    0,
+                    1,
+                    "%.2f"))
+            {
+                configuration.Meter.BackgroundOpacity = backgroundOpacity;
+                changed = true;
+            }
+        }
+        var localPlayerColor = configuration.Meter.LocalPlayerColor;
+        if (ImGui.ColorEdit4(text.Get("自己的强调色", "Local player accent"), ref localPlayerColor))
+        {
+            configuration.Meter.LocalPlayerColor = localPlayerColor;
+            changed = true;
         }
         ImGui.Separator();
 
@@ -331,7 +705,7 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.SetNextItemWidth(-1);
         if (ImGui.BeginCombo("##slot-metric", preview))
         {
-            foreach (var metric in Enum.GetValues<MeterSlotMetric>())
+            foreach (var metric in MeterSlotDefaults.EditableMetrics.Where(CanUseMetric))
             {
                 if (ImGui.Selectable(
                         $"{MeterSlotPresentation.Label(metric, text)}##metric-{metric}",
@@ -343,11 +717,41 @@ public sealed class MeterStyleEditorWindow : Window
             }
             ImGui.EndCombo();
         }
+        if (slot.Metric == MeterSlotMetric.PlayerIdentity)
+        {
+            var jobStyle = configuration.Meter.JobDisplayStyle;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.BeginCombo(
+                    text.Get("职业显示方式", "Job display"),
+                    JobDisplayFormatter.Label(jobStyle, text)))
+            {
+                foreach (var style in Enum.GetValues<JobDisplayStyle>())
+                {
+                    if (ImGui.Selectable(
+                            JobDisplayFormatter.Label(style, text),
+                            style == jobStyle))
+                    {
+                        configuration.Meter.JobDisplayStyle = style;
+                        changed = true;
+                    }
+                }
+                ImGui.EndCombo();
+            }
+        }
         var visible = slot.Visible;
+        var canUseSelectedSlot = CanUseMetric(slot.Metric);
+        ImGui.BeginDisabled(!canUseSelectedSlot);
         if (ImGui.Checkbox(text.Get("使用这个槽位", "Use this slot"), ref visible))
         {
             slot.Visible = visible;
             changed = true;
+        }
+        ImGui.EndDisabled();
+        if (!canUseSelectedSlot && slot.Metric == MeterSlotMetric.Fflogs)
+        {
+            ImGui.TextWrapped(text.Get(
+                "先在设置页启用 FFLogs 在线估算，才能打开这个列。原有配置会保留。",
+                "Enable FFLogs online estimates in Settings before showing this column. Its saved configuration is preserved."));
         }
         ImGui.Dummy(new Vector2(1, 8));
         var index = profile.Slots.IndexOf(slot);
@@ -378,7 +782,7 @@ public sealed class MeterStyleEditorWindow : Window
 
         ImGui.Dummy(new Vector2(1, 8));
         ImGui.TextDisabled(text.Get(
-            "最高伤害技能会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
+            "最高伤害会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
             "Max-hit skills are truncated; hover the meter for full details."));
         return changed;
     }
@@ -392,11 +796,15 @@ public sealed class MeterStyleEditorWindow : Window
         meter.AutoHideOutOfCombat = profile.AutoHideOutOfCombat;
         meter.ShowHeader = profile.ShowHeader;
         meter.FontScale = profile.FontScale;
-        meter.SortMode = profile.SortMode;
+        if (meter.ActiveWindowKind == MeterWindowKind.Classic)
+        {
+            meter.SortMode = profile.SortMode;
+        }
         bool Has(MeterSlotMetric metric) => profile.Slots.Any(slot => slot.Visible && slot.Metric == metric);
         meter.ShowRank = Has(MeterSlotMetric.Rank);
-        meter.ShowJob = Has(MeterSlotMetric.Job);
-        meter.ShowPlayerName = Has(MeterSlotMetric.PlayerName);
+        var showPlayerIdentity = Has(MeterSlotMetric.PlayerIdentity);
+        meter.ShowJob = showPlayerIdentity;
+        meter.ShowPlayerName = showPlayerIdentity;
         meter.ShowDps = Has(MeterSlotMetric.Dps);
         meter.ShowRdps = Has(MeterSlotMetric.Rdps);
         meter.ShowHps = Has(MeterSlotMetric.Hps);
@@ -408,6 +816,7 @@ public sealed class MeterStyleEditorWindow : Window
         meter.ShowCriticalHitRate = Has(MeterSlotMetric.CriticalHitPercent);
         meter.ShowDirectHitRate = Has(MeterSlotMetric.DirectHitPercent);
         meter.ShowCriticalDirectHitRate = Has(MeterSlotMetric.CriticalDirectHitPercent);
+        meter.ShowFflogs = Has(MeterSlotMetric.Fflogs);
     }
 
     private void EnsureSelectedSlot(MeterWindowProfile profile)
@@ -422,8 +831,19 @@ public sealed class MeterStyleEditorWindow : Window
     }
 
     private MeterSlotMetric FirstUnusedMetric(MeterWindowProfile profile)
-        => Enum.GetValues<MeterSlotMetric>()
+        => MeterSlotDefaults.EditableMetrics.Where(CanUseMetric)
             .FirstOrDefault(metric => profile.Slots.All(slot => slot.Metric != metric));
+
+    private bool CanUseMetric(MeterSlotMetric metric)
+        => metric != MeterSlotMetric.Fflogs ||
+           (selectedKind == MeterWindowKind.Classic && configuration.Fflogs.Enabled);
+
+    private void SetEditingProfile(MeterWindowKind? kind)
+    {
+        configuration.Meter.ClassicWindow.IsEditing = kind == MeterWindowKind.Classic;
+        configuration.Meter.HorizontalWindow.IsEditing = kind == MeterWindowKind.Horizontal;
+        configuration.Meter.RoleSplitWindow.IsEditing = kind == MeterWindowKind.RoleSplit;
+    }
 
     private static IReadOnlyList<MeterSlotDefinition> DefaultSlots(MeterWindowKind kind)
         => kind switch
@@ -448,10 +868,11 @@ public sealed class MeterStyleEditorWindow : Window
                 "横向滑动；DPS/HPS 从高到低排列；运行时完全透明。",
                 "Horizontal carousel; DPS/HPS descending; fully transparent at runtime."),
             MeterWindowKind.RoleSplit => text.Get(
-                "D/T 与治疗分区展示，保持普通列表结构。",
-                "Separate D/T and healer sections with a regular list structure."),
+                "D/T 与治疗是两个独立窗口，黄色框内均可点击调整。",
+                "D/T and healer are separate windows; click any yellow-framed item to adjust it."),
             _ => text.Get(
-                "经典纵向榜单；槽位会映射为可见列。",
-                "Classic vertical ranking; slots map to visible columns."),
+                "玩家方块从左到右排列；总伤害与总治疗固定在队伍汇总区。",
+                "Player tiles flow left to right; team damage and healing stay in the summary area."),
         };
+
 }

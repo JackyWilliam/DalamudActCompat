@@ -7,6 +7,12 @@ using System.Numerics;
 
 namespace DalamudActCompat.Meter;
 
+public enum RoleSplitGroup
+{
+    DamageTank,
+    Healer,
+}
+
 public sealed class RoleSplitMeterWindow : Window
 {
     private static readonly Vector4 Navy = new(0.035f, 0.055f, 0.09f, 1);
@@ -20,6 +26,7 @@ public sealed class RoleSplitMeterWindow : Window
     private readonly UiText text;
     private readonly JobIconTextureSet jobIcons;
     private readonly Action saveConfiguration;
+    private readonly RoleSplitGroup group;
     private bool locateOnNextDraw;
     private long locatePreviewExpiresAt;
 
@@ -28,17 +35,21 @@ public sealed class RoleSplitMeterWindow : Window
         PluginConfiguration configuration,
         UiText text,
         JobIconTextureSet jobIcons,
-        Action saveConfiguration)
-        : base("职能分栏战斗统计###DalamudActCompatRoleSplitMeter")
+        Action saveConfiguration,
+        RoleSplitGroup group)
+        : base(group == RoleSplitGroup.Healer
+            ? "治疗 HPS 榜###DalamudActCompatRoleSplitHealerMeter"
+            : "D / T 伤害榜###DalamudActCompatRoleSplitDamageMeter")
     {
         this.meterService = meterService;
         this.configuration = configuration;
         this.text = text;
         this.jobIcons = jobIcons;
         this.saveConfiguration = saveConfiguration;
+        this.group = group;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
-        Size = new Vector2(560, 520);
+        Size = new Vector2(500, 360);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
@@ -49,11 +60,33 @@ public sealed class RoleSplitMeterWindow : Window
 
     private MeterWindowProfile Profile => configuration.Meter.RoleSplitWindow;
 
+    private bool Compact
+    {
+        get => group == RoleSplitGroup.Healer
+            ? configuration.Meter.RoleSplitHealerCompact
+            : configuration.Meter.RoleSplitDamageCompact;
+        set
+        {
+            if (group == RoleSplitGroup.Healer)
+            {
+                configuration.Meter.RoleSplitHealerCompact = value;
+            }
+            else
+            {
+                configuration.Meter.RoleSplitDamageCompact = value;
+            }
+        }
+    }
+
     public override bool DrawConditions()
     {
         WindowName = text.Get(
-            "职能分栏战斗统计###DalamudActCompatRoleSplitMeter",
-            "Role Split Combat Meter###DalamudActCompatRoleSplitMeter");
+            group == RoleSplitGroup.Healer
+                ? "治疗 HPS 榜###DalamudActCompatRoleSplitHealerMeter"
+                : "D / T 伤害榜###DalamudActCompatRoleSplitDamageMeter",
+            group == RoleSplitGroup.Healer
+                ? "Healer HPS###DalamudActCompatRoleSplitHealerMeter"
+                : "D / T Damage###DalamudActCompatRoleSplitDamageMeter");
         if (!configuration.Meter.IsVisible || !Profile.IsEnabled)
         {
             return false;
@@ -77,7 +110,8 @@ public sealed class RoleSplitMeterWindow : Window
         {
             var viewport = ImGui.GetMainViewport();
             ImGui.SetNextWindowPos(
-                viewport.Pos + (viewport.Size * 0.58f),
+                viewport.Pos + (viewport.Size *
+                    (group == RoleSplitGroup.Healer ? 0.68f : 0.42f)),
                 ImGuiCond.Always,
                 new Vector2(0.5f));
             locateOnNextDraw = false;
@@ -120,15 +154,38 @@ public sealed class RoleSplitMeterWindow : Window
         }
 
         var rows = meterService.GetRows(encounter);
-        var damageRows = MeterSlotPresentation.SortAndRank(
-            rows.Where(static row => !JobRoleClassifier.IsHealer(row.Job)),
-            MeterSortMode.Dps);
-        var healerRows = MeterSlotPresentation.SortAndRank(
-            rows.Where(static row => JobRoleClassifier.IsHealer(row.Job)),
-            MeterSortMode.Hps);
-        DrawSection(text.Get("D / T 伤害榜", "D / T DAMAGE"), damageRows, encounter, useHealing: false);
-        ImGui.Dummy(new Vector2(1, 5));
-        DrawSection(text.Get("治疗 HPS 榜", "HEALER HPS"), healerRows, encounter, useHealing: true);
+        var useHealing = group == RoleSplitGroup.Healer;
+        var groupRows = MeterSlotPresentation.SortAndRank(
+            rows.Where(row => JobRoleClassifier.IsHealer(row.Job) == useHealing),
+            useHealing ? MeterSortMode.Hps : MeterSortMode.Dps);
+        if (Compact && groupRows.Count > 1)
+        {
+            var retained = groupRows.FirstOrDefault(static row => row.IsLocalPlayer) ?? groupRows[0];
+            groupRows = [retained];
+        }
+        DrawSection(groupRows, encounter, useHealing);
+        ImGui.Dummy(new Vector2(1, 4));
+        MeterSlotPresentation.DrawTeamSummary(
+            useHealing ? "role-split-healer" : "role-split-damage",
+            encounter,
+            Profile.Slots.Where(slot => slot.Metric ==
+                (useHealing ? MeterSlotMetric.TotalHealing : MeterSlotMetric.TotalDamage)),
+            text,
+            IceBlue,
+            Gold);
+        if (Compact)
+        {
+            var summaryMetric = useHealing
+                ? MeterSlotMetric.TotalHealing
+                : MeterSlotMetric.TotalDamage;
+            var compactHeight = 58 + CalculateRowHeight() +
+                                (Profile.Slots.Any(slot => slot.Visible && slot.Metric == summaryMetric)
+                                    ? MeterSlotPresentation.TeamSummaryHeight
+                                    : 0);
+            ImGui.SetWindowSize(
+                new Vector2(ImGui.GetWindowSize().X, compactHeight),
+                ImGuiCond.Always);
+        }
     }
 
     private void DrawHeader(Encounter? encounter)
@@ -140,10 +197,27 @@ public sealed class RoleSplitMeterWindow : Window
 
         var start = ImGui.GetCursorScreenPos();
         var size = new Vector2(ImGui.GetContentRegionAvail().X, 34);
+        const float toggleSize = 24;
+        var toggleStart = start + new Vector2(size.X - toggleSize - 5, 5);
+        var toggleEnd = toggleStart + new Vector2(toggleSize);
+        var toggleHovered = ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
+        var title = group == RoleSplitGroup.Healer
+            ? text.Get("治疗 HPS 榜", "Healer HPS")
+            : text.Get("D / T 伤害榜", "D / T Damage");
+        var titleSize = ImGui.CalcTextSize(title);
+        var titleStart = start + new Vector2(6, 4);
+        var titleEnd = start + new Vector2(titleSize.X + 18, 30);
+        var titleHovered = ImGui.IsMouseHoveringRect(titleStart, titleEnd);
         ImGui.InvisibleButton("role-split-drag", size);
-        if (!Profile.IsLocked && ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        if (!toggleHovered && !titleHovered && !Profile.IsLocked && ImGui.IsItemActive() &&
+            ImGui.IsMouseDragging(ImGuiMouseButton.Left))
         {
             ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
+        }
+        if ((toggleHovered || titleHovered) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            Compact = !Compact;
+            saveConfiguration();
         }
 
         var state = encounter is null
@@ -153,23 +227,47 @@ public sealed class RoleSplitMeterWindow : Window
                 : text.Get("已结束 · 保留上一场", "Ended · retained");
         var drawList = ImGui.GetWindowDrawList();
         drawList.AddRectFilled(start, start + size, ImGui.GetColorU32(NavyRaised), 6);
-        drawList.AddText(start + new Vector2(9, 7), ImGui.GetColorU32(Gold),
-            text.Get("职能分栏", "Role split"));
+        drawList.AddRectFilled(
+            titleStart,
+            titleEnd,
+            ImGui.GetColorU32(titleHovered ? NavyHover : Navy),
+            5);
+        drawList.AddRect(
+            titleStart,
+            titleEnd,
+            ImGui.GetColorU32(group == RoleSplitGroup.Healer ? HealingGreen : Gold),
+            5);
+        drawList.AddText(start + new Vector2(12, 7), ImGui.GetColorU32(Gold), title);
         var stateSize = ImGui.CalcTextSize(state);
         drawList.AddText(
-            start + new Vector2(size.X - stateSize.X - 9, 7),
+            start + new Vector2(size.X - stateSize.X - toggleSize - 15, 7),
             ImGui.GetColorU32(IceBlue),
             state);
+        drawList.AddRectFilled(
+            toggleStart,
+            toggleEnd,
+            ImGui.GetColorU32(toggleHovered ? NavyHover : Navy),
+            4);
+        drawList.AddRect(
+            toggleStart,
+            toggleEnd,
+            ImGui.GetColorU32(group == RoleSplitGroup.Healer ? HealingGreen : Gold),
+            4);
+        DrawChevron(drawList, toggleStart, toggleEnd, Compact);
+        if (toggleHovered || titleHovered)
+        {
+            ImGui.SetTooltip(text.Get(
+                Compact ? "展开榜单" : "收起榜单",
+                Compact ? "Expand ranking" : "Collapse ranking"));
+        }
         ImGui.Dummy(new Vector2(1, 3));
     }
 
     private void DrawSection(
-        string title,
         IReadOnlyList<CombatantRow> rows,
         Encounter encounter,
         bool useHealing)
     {
-        ImGui.TextColored(useHealing ? HealingGreen : Gold, title);
         ImGui.Separator();
         if (rows.Count == 0)
         {
@@ -186,13 +284,9 @@ public sealed class RoleSplitMeterWindow : Window
     private void DrawRow(CombatantRow row, Encounter encounter, bool useHealing)
     {
         var slots = Profile.Slots.Where(static slot => slot.Visible).ToArray();
-        var metrics = slots.Where(static slot =>
-            slot.Metric is not MeterSlotMetric.Job and
-            not MeterSlotMetric.PlayerName and
-            not MeterSlotMetric.Rank).ToArray();
+        var metrics = ResolveMetrics(slots, useHealing);
         const int columns = 3;
-        var metricRows = Math.Max(1, (metrics.Length + columns - 1) / columns);
-        var rowHeight = 31 + (metricRows * 20);
+        var rowHeight = CalculateRowHeight(metrics.Count);
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton($"role-row-{useHealing}-{row.Id}-{row.Name}", new Vector2(width, rowHeight));
@@ -212,12 +306,9 @@ public sealed class RoleSplitMeterWindow : Window
             drawList.AddText(new Vector2(cursorX, start.Y + 6), ImGui.GetColorU32(IceBlue), rank);
             cursorX += ImGui.CalcTextSize(rank).X + 7;
         }
-        if (slots.Any(static slot => slot.Metric == MeterSlotMetric.Job))
+        if (slots.Any(static slot => slot.Metric == MeterSlotMetric.PlayerIdentity))
         {
             cursorX += DrawJob(row, new Vector2(cursorX, start.Y + 4), 22) + 6;
-        }
-        if (slots.Any(static slot => slot.Metric == MeterSlotMetric.PlayerName))
-        {
             drawList.AddText(
                 new Vector2(cursorX, start.Y + 6),
                 ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
@@ -225,18 +316,18 @@ public sealed class RoleSplitMeterWindow : Window
         }
 
         var cellWidth = width / columns;
-        for (var index = 0; index < metrics.Length; index++)
+        for (var index = 0; index < metrics.Count; index++)
         {
             var column = index % columns;
             var metricRow = index / columns;
             var metricStart = start + new Vector2(8 + (column * cellWidth), 32 + (metricRow * 20));
-            var label = MeterSlotPresentation.Label(metrics[index].Metric, text);
-            var value = MeterSlotPresentation.Value(metrics[index].Metric, row, displayName);
+            var metric = metrics[index].Metric;
+            var label = MeterSlotPresentation.Label(metric, text);
+            var value = MeterSlotPresentation.Value(metric, row, displayName);
             var combined = $"{label}  {value}";
-            var color = metrics[index].Metric == MeterSlotMetric.Hps || useHealing &&
-                        metrics[index].Metric == MeterSlotMetric.TotalHealing
+            var color = metric == MeterSlotMetric.Hps
                 ? HealingGreen
-                : metrics[index].Metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps
+                : metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps
                     ? IceBlue
                     : new Vector4(0.82f, 0.84f, 0.87f, 1);
             drawList.AddText(
@@ -271,4 +362,80 @@ public sealed class RoleSplitMeterWindow : Window
         ImGui.GetWindowDrawList().AddText(start + new Vector2(0, 3), ImGui.GetColorU32(IceBlue), job);
         return ImGui.CalcTextSize(job).X;
     }
+
+    private float CalculateRowHeight()
+    {
+        var metricCount = ResolveMetrics(
+            Profile.Slots.Where(static slot => slot.Visible).ToArray(),
+            group == RoleSplitGroup.Healer).Count;
+        return CalculateRowHeight(metricCount);
+    }
+
+    private static IReadOnlyList<RoleMetric> ResolveMetrics(
+        IReadOnlyList<MeterSlotDefinition> slots,
+        bool useHealing)
+    {
+        var candidates = slots.Where(static slot =>
+                slot.Metric is not MeterSlotMetric.Job and
+                not MeterSlotMetric.PlayerName and
+                not MeterSlotMetric.PlayerIdentity and
+                not MeterSlotMetric.TotalDamage and
+                not MeterSlotMetric.TotalHealing and
+                not MeterSlotMetric.Fflogs and
+                not MeterSlotMetric.Rank)
+            .ToArray();
+        if (!useHealing)
+        {
+            return candidates.Where(static slot => slot.Metric != MeterSlotMetric.Hps)
+                .Select(static slot => new RoleMetric(slot, slot.Metric))
+                .ToArray();
+        }
+
+        var leadingDamage = candidates.FirstOrDefault(static slot =>
+            slot.Metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps);
+        var resolved = new List<RoleMetric>();
+        foreach (var slot in candidates)
+        {
+            if (ReferenceEquals(slot, leadingDamage))
+            {
+                // The healing window replaces only the earliest damage rate. A second
+                // DPS/rDPS slot remains available exactly where the user placed it.
+                resolved.Add(new RoleMetric(slot, MeterSlotMetric.Hps));
+            }
+            else if (leadingDamage is not null && slot.Metric == MeterSlotMetric.Hps)
+            {
+                // The replaced rate already supplies HPS; suppress the original slot
+                // so a default layout cannot render the same HPS value twice.
+                continue;
+            }
+            else
+            {
+                resolved.Add(new RoleMetric(slot, slot.Metric));
+            }
+        }
+        return resolved;
+    }
+
+    private static float CalculateRowHeight(int metricCount)
+    {
+        const int columns = 3;
+        var metricRows = Math.Max(1, (metricCount + columns - 1) / columns);
+        return 31 + (metricRows * 20);
+    }
+
+    private static void DrawChevron(
+        ImDrawListPtr drawList,
+        Vector2 start,
+        Vector2 end,
+        bool compact)
+    {
+        var center = (start + end) * 0.5f;
+        var edgeY = center.Y + (compact ? -2.5f : 2.5f);
+        var pointY = center.Y + (compact ? 2.5f : -2.5f);
+        var color = ImGui.GetColorU32(Vector4.One);
+        drawList.AddLine(new Vector2(center.X - 4.5f, edgeY), new Vector2(center.X, pointY), color, 2);
+        drawList.AddLine(new Vector2(center.X, pointY), new Vector2(center.X + 4.5f, edgeY), color, 2);
+    }
+
+    private sealed record RoleMetric(MeterSlotDefinition Slot, MeterSlotMetric Metric);
 }

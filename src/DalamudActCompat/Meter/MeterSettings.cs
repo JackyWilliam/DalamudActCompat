@@ -58,6 +58,7 @@ public sealed class MeterSettings
     public MeterWindowProfile ClassicWindow { get; set; } = new()
     {
         IsEnabled = true,
+        ItemWidth = 150,
         Slots = MeterSlotDefaults.CreateClassic(),
     };
 
@@ -102,6 +103,14 @@ public sealed class MeterSettings
     public bool ShowHeader { get; set; } = true;
 
     public bool CompactMode { get; set; }
+
+    public bool ClassicAllianceView { get; set; }
+
+    public int HorizontalPartyGroup { get; set; }
+
+    public bool RoleSplitDamageCompact { get; set; }
+
+    public bool RoleSplitHealerCompact { get; set; }
 
     public float ExpandedWindowWidth { get; set; } = 500;
 
@@ -164,6 +173,7 @@ public sealed class MeterSettings
         ClassicWindow ??= new MeterWindowProfile
         {
             IsEnabled = true,
+            ItemWidth = 150,
             Slots = MeterSlotDefaults.CreateClassic(),
         };
         HorizontalWindow ??= new MeterWindowProfile
@@ -179,6 +189,7 @@ public sealed class MeterSettings
         changed |= ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
         changed |= HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
         changed |= RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        changed |= NormalizeActiveWindow();
         CustomStyles ??= [];
         var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var style in CustomStyles)
@@ -190,6 +201,26 @@ public sealed class MeterSettings
                 usedIds.Add(style.Id);
                 changed = true;
             }
+        }
+        if (ClassicWindow.Slots.All(static slot => slot.Metric != MeterSlotMetric.Fflogs))
+        {
+            ClassicWindow.Slots.Add(new MeterSlotDefinition(
+                MeterSlotMetric.Fflogs,
+                0,
+                0,
+                4,
+                2,
+                MeterSlotAlignment.Left)
+            {
+                Visible = ShowFflogs,
+            });
+            changed = true;
+        }
+        var normalizedPartyGroup = Math.Clamp(HorizontalPartyGroup, 0, 3);
+        if (HorizontalPartyGroup != normalizedPartyGroup)
+        {
+            HorizontalPartyGroup = normalizedPartyGroup;
+            changed = true;
         }
 
         if (Preset == MeterPreset.Custom &&
@@ -203,6 +234,63 @@ public sealed class MeterSettings
             changed = true;
         }
 
+        return changed;
+    }
+
+    public MeterWindowKind ActiveWindowKind
+        => HorizontalWindow.IsEnabled
+            ? MeterWindowKind.Horizontal
+            : RoleSplitWindow.IsEnabled
+                ? MeterWindowKind.RoleSplit
+                : MeterWindowKind.Classic;
+
+    public MeterWindowProfile ActiveWindowProfile
+        => ActiveWindowKind switch
+        {
+            MeterWindowKind.Horizontal => HorizontalWindow,
+            MeterWindowKind.RoleSplit => RoleSplitWindow,
+            _ => ClassicWindow,
+        };
+
+    public void ActivateWindow(MeterWindowKind kind)
+    {
+        ClassicWindow.IsEnabled = kind == MeterWindowKind.Classic;
+        HorizontalWindow.IsEnabled = kind == MeterWindowKind.Horizontal;
+        RoleSplitWindow.IsEnabled = kind == MeterWindowKind.RoleSplit;
+        // The legacy meter service reads this shared value. Synchronizing it only when
+        // a template becomes active preserves each template's independent ranking mode.
+        SortMode = kind switch
+        {
+            MeterWindowKind.Horizontal => HorizontalWindow.SortMode,
+            MeterWindowKind.RoleSplit => RoleSplitWindow.SortMode,
+            _ => ClassicWindow.SortMode,
+        };
+    }
+
+    internal bool MigratePlayerIdentitySlots()
+    {
+        var changed = MergePlayerIdentity(ClassicWindow.Slots);
+        if (Math.Abs(ClassicWindow.ItemWidth - 210) < 0.001f)
+        {
+            // v12 never exposed classic item width; adopt the compact tile default.
+            ClassicWindow.ItemWidth = 150;
+            changed = true;
+        }
+        changed |= MergePlayerIdentity(HorizontalWindow.Slots);
+        changed |= MergePlayerIdentity(RoleSplitWindow.Slots);
+        foreach (var style in CustomStyles)
+        {
+            changed |= MergePlayerIdentity(style.Slots);
+        }
+        var identityVisible = ClassicWindow.Slots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.PlayerIdentity);
+        if (ShowJob != identityVisible || ShowPlayerName != identityVisible)
+        {
+            ShowJob = identityVisible;
+            ShowPlayerName = identityVisible;
+            changed = true;
+        }
+        changed |= NormalizeActiveWindow();
         return changed;
     }
 
@@ -264,4 +352,47 @@ public sealed class MeterSettings
                 SelectedCustomStyleId,
                 StringComparison.OrdinalIgnoreCase))
             : null;
+
+    private bool NormalizeActiveWindow()
+    {
+        var enabledCount = Convert.ToInt32(ClassicWindow.IsEnabled) +
+                           Convert.ToInt32(HorizontalWindow.IsEnabled) +
+                           Convert.ToInt32(RoleSplitWindow.IsEnabled);
+        if (enabledCount == 1)
+        {
+            return false;
+        }
+
+        var selected = ClassicWindow.IsEnabled
+            ? MeterWindowKind.Classic
+            : HorizontalWindow.IsEnabled
+                ? MeterWindowKind.Horizontal
+                : RoleSplitWindow.IsEnabled
+                    ? MeterWindowKind.RoleSplit
+                    : MeterWindowKind.Classic;
+        ActivateWindow(selected);
+        return true;
+    }
+
+    private static bool MergePlayerIdentity(List<MeterSlotDefinition> slots)
+    {
+        var identitySlots = slots.Where(static slot =>
+            slot.Metric is MeterSlotMetric.PlayerIdentity or
+                MeterSlotMetric.Job or
+                MeterSlotMetric.PlayerName).ToArray();
+        if (identitySlots.Length == 0)
+        {
+            return false;
+        }
+
+        var target = identitySlots[0];
+        var changed = target.Metric != MeterSlotMetric.PlayerIdentity || identitySlots.Length > 1;
+        target.Metric = MeterSlotMetric.PlayerIdentity;
+        target.Visible = identitySlots.Any(static slot => slot.Visible);
+        foreach (var duplicate in identitySlots.Skip(1))
+        {
+            slots.Remove(duplicate);
+        }
+        return changed;
+    }
 }

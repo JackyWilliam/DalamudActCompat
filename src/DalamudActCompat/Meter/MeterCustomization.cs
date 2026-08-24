@@ -35,6 +35,9 @@ public enum MeterSlotMetric
     CriticalHitPercent,
     DirectHitPercent,
     CriticalDirectHitPercent,
+    // Appended so numeric values in v12 JSON keep their original meaning.
+    PlayerIdentity,
+    Fflogs,
 }
 
 public enum MeterWindowKind
@@ -61,6 +64,9 @@ public sealed class MeterWindowProfile
     public float ItemWidth { get; set; } = 210;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
+
+    [JsonIgnore]
+    public bool IsEditing { get; set; }
 
     // Replacing instead of merging is required so an intentionally empty layout stays empty.
     [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
@@ -106,22 +112,41 @@ public sealed class MeterWindowProfile
 
 public static class MeterSlotDefaults
 {
+    public static IReadOnlyList<MeterSlotMetric> EditableMetrics { get; } =
+    [
+        MeterSlotMetric.Rank,
+        MeterSlotMetric.PlayerIdentity,
+        MeterSlotMetric.Fflogs,
+        MeterSlotMetric.Dps,
+        MeterSlotMetric.Rdps,
+        MeterSlotMetric.Hps,
+        MeterSlotMetric.DamagePercent,
+        MeterSlotMetric.TotalDamage,
+        MeterSlotMetric.TotalHealing,
+        MeterSlotMetric.HighestDamageAction,
+        MeterSlotMetric.HighestDamage,
+        MeterSlotMetric.Deaths,
+        MeterSlotMetric.CriticalHitPercent,
+        MeterSlotMetric.DirectHitPercent,
+        MeterSlotMetric.CriticalDirectHitPercent,
+    ];
+
     public static List<MeterSlotDefinition> CreateClassic()
         =>
         [
-            Create(MeterSlotMetric.Rank),
-            Create(MeterSlotMetric.Job),
-            Create(MeterSlotMetric.PlayerName),
+            Create(MeterSlotMetric.Rank, visible: false),
+            Create(MeterSlotMetric.PlayerIdentity),
+            Create(MeterSlotMetric.Fflogs, visible: false),
             Create(MeterSlotMetric.Dps),
-            Create(MeterSlotMetric.Rdps, visible: false),
+            Create(MeterSlotMetric.Rdps),
             Create(MeterSlotMetric.Hps, visible: false),
-            Create(MeterSlotMetric.DamagePercent),
+            Create(MeterSlotMetric.DamagePercent, visible: false),
             Create(MeterSlotMetric.TotalDamage),
             Create(MeterSlotMetric.HighestDamageAction),
-            Create(MeterSlotMetric.Deaths),
-            Create(MeterSlotMetric.CriticalHitPercent),
+            Create(MeterSlotMetric.Deaths, visible: false),
+            Create(MeterSlotMetric.CriticalHitPercent, visible: false),
             Create(MeterSlotMetric.DirectHitPercent, visible: false),
-            Create(MeterSlotMetric.CriticalDirectHitPercent),
+            Create(MeterSlotMetric.CriticalDirectHitPercent, visible: false),
             Create(MeterSlotMetric.TotalHealing, visible: false),
             Create(MeterSlotMetric.HighestDamage, visible: false),
         ];
@@ -129,21 +154,20 @@ public static class MeterSlotDefaults
     public static List<MeterSlotDefinition> CreateHorizontal()
         =>
         [
-            Create(MeterSlotMetric.Job),
-            Create(MeterSlotMetric.PlayerName),
+            Create(MeterSlotMetric.PlayerIdentity),
             Create(MeterSlotMetric.Dps),
             Create(MeterSlotMetric.Rdps),
             Create(MeterSlotMetric.Hps, visible: false),
             Create(MeterSlotMetric.DamagePercent),
             Create(MeterSlotMetric.TotalDamage),
+            Create(MeterSlotMetric.TotalHealing, visible: false),
             Create(MeterSlotMetric.HighestDamageAction),
         ];
 
     public static List<MeterSlotDefinition> CreateRoleSplit()
         =>
         [
-            Create(MeterSlotMetric.Job),
-            Create(MeterSlotMetric.PlayerName),
+            Create(MeterSlotMetric.PlayerIdentity),
             Create(MeterSlotMetric.Dps),
             Create(MeterSlotMetric.Rdps),
             Create(MeterSlotMetric.Hps),
@@ -246,8 +270,7 @@ public sealed class MeterCustomStyle
         =>
         [
             new(MeterSlotMetric.Rank, 0, 0, 2, 2, MeterSlotAlignment.Left),
-            new(MeterSlotMetric.Job, 2, 0, 3, 4, MeterSlotAlignment.Center),
-            new(MeterSlotMetric.PlayerName, 5, 0, 10, 2, MeterSlotAlignment.Left),
+            new(MeterSlotMetric.PlayerIdentity, 2, 0, 13, 4, MeterSlotAlignment.Left),
             new(MeterSlotMetric.Dps, 15, 0, 9, 2, MeterSlotAlignment.Right),
             new(MeterSlotMetric.DamagePercent, 5, 2, 5, 2, MeterSlotAlignment.Left),
             new(MeterSlotMetric.TotalDamage, 10, 2, 7, 2, MeterSlotAlignment.Right),

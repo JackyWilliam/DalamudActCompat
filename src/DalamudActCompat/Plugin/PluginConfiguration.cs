@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 12;
+    private const int CurrentVersion = 13;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -255,6 +255,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
             changed |= Meter.MigrateIndependentWindows();
             changed |= Meter.NormalizeCustomization();
             Version = 12;
+            changed = true;
+        }
+        if (Version < 13)
+        {
+            // Job and name describe one player identity. Keeping them independently
+            // configurable created incomplete rows and duplicated editor slots.
+            changed |= Meter.MigratePlayerIdentitySlots();
+            changed |= Meter.NormalizeCustomization();
+            Version = 13;
             changed = true;
         }
 

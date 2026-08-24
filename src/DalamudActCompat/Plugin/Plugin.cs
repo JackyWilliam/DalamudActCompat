@@ -59,7 +59,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
     private readonly HorizontalMeterWindow horizontalMeterWindow;
-    private readonly RoleSplitMeterWindow roleSplitMeterWindow;
+    private readonly RoleSplitMeterWindow roleSplitDamageWindow;
+    private readonly RoleSplitMeterWindow roleSplitHealerWindow;
     private readonly MeterStyleEditorWindow meterStyleEditorWindow;
     private readonly SimplifiedHomeWindow simplifiedHomeWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
@@ -424,18 +425,30 @@ public sealed class Plugin : IDalamudPlugin
         {
             IsOpen = configuration.Meter.IsVisible,
         };
-        roleSplitMeterWindow = new RoleSplitMeterWindow(
+        roleSplitDamageWindow = new RoleSplitMeterWindow(
             meterService,
             configuration,
             text,
             jobIcons,
-            SaveConfiguration)
+            SaveConfiguration,
+            RoleSplitGroup.DamageTank)
+        {
+            IsOpen = configuration.Meter.IsVisible,
+        };
+        roleSplitHealerWindow = new RoleSplitMeterWindow(
+            meterService,
+            configuration,
+            text,
+            jobIcons,
+            SaveConfiguration,
+            RoleSplitGroup.Healer)
         {
             IsOpen = configuration.Meter.IsVisible,
         };
         meterStyleEditorWindow = new MeterStyleEditorWindow(
             configuration,
             logoTexture,
+            jobIcons,
             text,
             SaveConfiguration);
         encounterWindow = new EncounterWindow(
@@ -586,7 +599,8 @@ public sealed class Plugin : IDalamudPlugin
             () => SetSimplifiedMode(false));
         windowSystem.AddWindow(meterWindow);
         windowSystem.AddWindow(horizontalMeterWindow);
-        windowSystem.AddWindow(roleSplitMeterWindow);
+        windowSystem.AddWindow(roleSplitDamageWindow);
+        windowSystem.AddWindow(roleSplitHealerWindow);
         windowSystem.AddWindow(meterStyleEditorWindow);
         windowSystem.AddWindow(simplifiedHomeWindow);
         windowSystem.AddWindow(encounterWindow);
@@ -724,23 +738,18 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenMeter()
     {
-        if (!configuration.Meter.ClassicWindow.IsEnabled &&
-            !configuration.Meter.HorizontalWindow.IsEnabled &&
-            !configuration.Meter.RoleSplitWindow.IsEnabled)
+        switch (configuration.Meter.ActiveWindowKind)
         {
-            configuration.Meter.ClassicWindow.IsEnabled = true;
-        }
-        if (configuration.Meter.ClassicWindow.IsEnabled)
-        {
-            meterWindow.LocateOnNextDraw();
-        }
-        if (configuration.Meter.HorizontalWindow.IsEnabled)
-        {
-            horizontalMeterWindow.LocateOnNextDraw();
-        }
-        if (configuration.Meter.RoleSplitWindow.IsEnabled)
-        {
-            roleSplitMeterWindow.LocateOnNextDraw();
+            case MeterWindowKind.Horizontal:
+                horizontalMeterWindow.LocateOnNextDraw();
+                break;
+            case MeterWindowKind.RoleSplit:
+                roleSplitDamageWindow.LocateOnNextDraw();
+                roleSplitHealerWindow.LocateOnNextDraw();
+                break;
+            default:
+                meterWindow.LocateOnNextDraw();
+                break;
         }
         SetMeterVisible(true);
     }
@@ -758,7 +767,8 @@ public sealed class Plugin : IDalamudPlugin
         configuration.Meter.IsVisible = visible;
         meterWindow.IsOpen = visible;
         horizontalMeterWindow.IsOpen = visible;
-        roleSplitMeterWindow.IsOpen = visible;
+        roleSplitDamageWindow.IsOpen = visible;
+        roleSplitHealerWindow.IsOpen = visible;
         SaveConfiguration();
     }
 
@@ -818,7 +828,8 @@ public sealed class Plugin : IDalamudPlugin
         simplifiedHomeWindow.IsOpen = true;
         meterWindow.IsOpen = configuration.Meter.IsVisible;
         horizontalMeterWindow.IsOpen = configuration.Meter.IsVisible;
-        roleSplitMeterWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitDamageWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitHealerWindow.IsOpen = configuration.Meter.IsVisible;
     }
 
     private void RestoreWindowsAfterSimplifiedMode()

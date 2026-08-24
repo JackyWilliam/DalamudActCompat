@@ -36,7 +36,7 @@ public sealed class HorizontalMeterWindow : Window
         this.saveConfiguration = saveConfiguration;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
-        Size = new Vector2(760, 180);
+        Size = new Vector2(1280, 360);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
@@ -71,20 +71,32 @@ public sealed class HorizontalMeterWindow : Window
 
     public override void PreDraw()
     {
+        var viewport = ImGui.GetMainViewport();
         if (locateOnNextDraw)
         {
-            var viewport = ImGui.GetMainViewport();
             ImGui.SetNextWindowPos(
                 viewport.Pos + (viewport.Size * 0.42f),
                 ImGuiCond.Always,
                 new Vector2(0.5f));
             locateOnNextDraw = false;
         }
+        else
+        {
+            ImGui.SetNextWindowPos(viewport.Pos, ImGuiCond.FirstUseEver);
+            ImGui.SetNextWindowSize(
+                new Vector2(viewport.Size.X, Math.Max(120, viewport.Size.Y / 3)),
+                ImGuiCond.FirstUseEver);
+        }
 
         Flags = ImGuiWindowFlags.NoTitleBar |
                 ImGuiWindowFlags.NoCollapse |
                 ImGuiWindowFlags.NoScrollbar |
                 ImGuiWindowFlags.NoScrollWithMouse;
+        if (!Profile.IsEditing)
+        {
+            // Runtime layout has no resize grip; resizing is an explicit editor action.
+            Flags |= ImGuiWindowFlags.NoResize;
+        }
         if (Profile.IsLocked)
         {
             Flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize;
@@ -115,18 +127,20 @@ public sealed class HorizontalMeterWindow : Window
     public override void Draw()
     {
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
-        DrawHeader();
-
         var encounter = meterService.DisplayEncounter;
         if (encounter is null)
         {
+            DrawHeader(null, []);
             ImGui.TextColored(Muted, text.Get("等待战斗数据…", "Waiting for encounter data…"));
             return;
         }
 
-        var rows = MeterSlotPresentation.SortAndRank(
+        var allRows = MeterSlotPresentation.SortAndRank(
             meterService.GetRows(encounter),
-            configuration.Meter.SortMode);
+            Profile.SortMode);
+        var partyGroup = ResolvePartyGroup(encounter, allRows);
+        DrawHeader(encounter, allRows);
+        var rows = MeterSlotPresentation.SelectParty(allRows, partyGroup);
         if (rows.Count == 0)
         {
             ImGui.TextColored(Muted, text.Get("等待玩家数据…", "Waiting for player data…"));
@@ -134,16 +148,28 @@ public sealed class HorizontalMeterWindow : Window
         }
 
         DrawSlidingPlayers(encounter, rows);
+        MeterSlotPresentation.DrawTeamSummary(
+            "horizontal",
+            encounter,
+            Profile.Slots,
+            text,
+            Muted,
+            Gold);
     }
 
-    private void DrawHeader()
+    private void DrawHeader(Encounter? encounter, IReadOnlyList<CombatantRow> rows)
     {
         var start = ImGui.GetCursorScreenPos();
         var lineHeight = Math.Max(20, ImGui.GetTextLineHeight() + 4);
         var dpsWidth = DrawModeButton("DPS 榜", MeterSortMode.Dps, start, lineHeight);
         var hpsStart = start + new Vector2(dpsWidth + 10, 0);
         var hpsWidth = DrawModeButton("HPS 榜", MeterSortMode.Hps, hpsStart, lineHeight);
-        var dragStart = hpsStart + new Vector2(hpsWidth + 14, 0);
+        var controlsEnd = hpsStart.X + hpsWidth + 14;
+        if (encounter is not null && MeterSlotPresentation.IsAlliance(encounter, rows))
+        {
+            controlsEnd = DrawPartyButtons(rows, controlsEnd, start.Y, lineHeight) + 12;
+        }
+        var dragStart = new Vector2(controlsEnd, start.Y);
         var dragWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - (dragStart.X - start.X));
         ImGui.SetCursorScreenPos(dragStart);
         ImGui.InvisibleButton("horizontal-meter-drag", new Vector2(dragWidth, lineHeight));
@@ -159,12 +185,77 @@ public sealed class HorizontalMeterWindow : Window
         ImGui.SetCursorScreenPos(start + new Vector2(0, lineHeight + 3));
     }
 
+    private float DrawPartyButtons(
+        IReadOnlyList<CombatantRow> rows,
+        float startX,
+        float startY,
+        float height)
+    {
+        var x = startX;
+        for (var group = 1; group <= 3; group++)
+        {
+            var label = ((char)('A' + group - 1)).ToString();
+            var width = ImGui.CalcTextSize(label).X + 14;
+            ImGui.SetCursorScreenPos(new Vector2(x, startY));
+            ImGui.InvisibleButton($"horizontal-party-{group}", new Vector2(width, height));
+            var selected = configuration.Meter.HorizontalPartyGroup == group;
+            var hovered = ImGui.IsItemHovered();
+            var drawList = ImGui.GetWindowDrawList();
+            drawList.AddRect(
+                new Vector2(x, startY),
+                new Vector2(x + width, startY + height),
+                ImGui.GetColorU32(selected ? Gold : hovered ? IceBlue : Muted),
+                4);
+            var textSize = ImGui.CalcTextSize(label);
+            drawList.AddText(
+                new Vector2(x + ((width - textSize.X) * 0.5f), startY + 1),
+                ImGui.GetColorU32(selected ? Gold : hovered ? IceBlue : Muted),
+                label);
+            if (ImGui.IsItemClicked() && rows.Any(row => row.PartyGroup == group))
+            {
+                configuration.Meter.HorizontalPartyGroup = group;
+                scrollOffset = 0;
+                saveConfiguration();
+            }
+            x += width + 5;
+        }
+        return x;
+    }
+
+    private int ResolvePartyGroup(Encounter encounter, IReadOnlyList<CombatantRow> rows)
+    {
+        if (!MeterSlotPresentation.IsAlliance(encounter, rows))
+        {
+            return 0;
+        }
+
+        var availableGroups = rows.Select(static row => row.PartyGroup)
+            .Where(static group => group is > 0 and <= 3)
+            .Distinct()
+            .ToArray();
+        var selected = configuration.Meter.HorizontalPartyGroup;
+        if (!availableGroups.Contains(selected))
+        {
+            selected = MeterSlotPresentation.ResolveLocalPartyGroup(rows);
+            if (!availableGroups.Contains(selected))
+            {
+                selected = availableGroups.FirstOrDefault();
+            }
+            if (configuration.Meter.HorizontalPartyGroup != selected)
+            {
+                configuration.Meter.HorizontalPartyGroup = selected;
+                saveConfiguration();
+            }
+        }
+        return selected;
+    }
+
     private float DrawModeButton(string label, MeterSortMode mode, Vector2 start, float height)
     {
         var width = ImGui.CalcTextSize(label).X + 4;
         ImGui.SetCursorScreenPos(start);
         ImGui.InvisibleButton($"horizontal-mode-{mode}", new Vector2(width, height));
-        var selected = MeterSortModeOptions.Normalize(configuration.Meter.SortMode) == mode;
+        var selected = MeterSortModeOptions.Normalize(Profile.SortMode) == mode;
         var hovered = ImGui.IsItemHovered();
         ImGui.GetWindowDrawList().AddText(
             start + new Vector2(2, 1),
@@ -173,36 +264,12 @@ public sealed class HorizontalMeterWindow : Window
         if (ImGui.IsItemClicked())
         {
             Profile.SortMode = mode;
-            configuration.Meter.ClassicWindow.SortMode = mode;
             configuration.Meter.SortMode = mode;
-            EnsurePrimarySlot(mode);
+            MeterSlotPresentation.ReplacePrimaryMetric(Profile, mode);
             saveConfiguration();
         }
 
         return width;
-    }
-
-    private void EnsurePrimarySlot(MeterSortMode mode)
-    {
-        var metric = mode == MeterSortMode.Hps
-            ? MeterSlotMetric.Hps
-            : MeterSlotMetric.Dps;
-        var slot = Profile.Slots.FirstOrDefault(candidate => candidate.Metric == metric);
-        if (slot is not null)
-        {
-            slot.Visible = true;
-            return;
-        }
-
-        // Changing ranking must also expose its primary value without removing any
-        // complications the user already configured.
-        Profile.Slots.Add(new MeterSlotDefinition(
-            metric,
-            0,
-            0,
-            4,
-            2,
-            MeterSlotAlignment.Left));
     }
 
     private void DrawSlidingPlayers(Encounter encounter, IReadOnlyList<CombatantRow> rows)
@@ -211,11 +278,20 @@ public sealed class HorizontalMeterWindow : Window
         var metrics = slots.Where(static slot =>
             slot.Metric is not MeterSlotMetric.Job and
             not MeterSlotMetric.PlayerName and
+            not MeterSlotMetric.PlayerIdentity and
+            not MeterSlotMetric.TotalDamage and
+            not MeterSlotMetric.TotalHealing and
+            not MeterSlotMetric.Fflogs and
             not MeterSlotMetric.Rank).ToArray();
         var metricRows = Math.Max(1, (metrics.Length + 1) / 2);
         var cardHeight = 28 + (metricRows * 22);
         var available = ImGui.GetContentRegionAvail();
-        var bodySize = new Vector2(Math.Max(1, available.X), Math.Max(cardHeight, available.Y));
+        var summaryReserve = MeterSlotPresentation.HasTeamSummary(slots)
+            ? MeterSlotPresentation.TeamSummaryHeight + 4
+            : 0;
+        var bodySize = new Vector2(
+            Math.Max(1, available.X),
+            Math.Max(cardHeight, available.Y - summaryReserve));
         var bodyStart = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton("horizontal-player-slider", bodySize);
 
@@ -263,8 +339,7 @@ public sealed class HorizontalMeterWindow : Window
     {
         var drawList = ImGui.GetWindowDrawList();
         var displayName = MeterSlotPresentation.DisplayName(row, encounter, configuration.Meter, text);
-        var hasJob = slots.Any(static slot => slot.Metric == MeterSlotMetric.Job);
-        var hasName = slots.Any(static slot => slot.Metric == MeterSlotMetric.PlayerName);
+        var hasIdentity = slots.Any(static slot => slot.Metric == MeterSlotMetric.PlayerIdentity);
         var hasRank = slots.Any(static slot => slot.Metric == MeterSlotMetric.Rank);
         var cursorX = start.X;
         if (hasRank)
@@ -273,12 +348,9 @@ public sealed class HorizontalMeterWindow : Window
             drawList.AddText(start + new Vector2(0, 3), ImGui.GetColorU32(Muted), rank);
             cursorX += ImGui.CalcTextSize(rank).X + 5;
         }
-        if (hasJob)
+        if (hasIdentity)
         {
             cursorX += DrawJob(row, new Vector2(cursorX, start.Y), 22) + 5;
-        }
-        if (hasName)
-        {
             drawList.AddText(
                 new Vector2(cursorX, start.Y + 3),
                 ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
