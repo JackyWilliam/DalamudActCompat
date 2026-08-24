@@ -55,6 +55,24 @@ public sealed class MeterSettings
 
     public bool IsVisible { get; set; } = true;
 
+    public MeterWindowProfile ClassicWindow { get; set; } = new()
+    {
+        IsEnabled = true,
+        Slots = MeterSlotDefaults.CreateClassic(),
+    };
+
+    public MeterWindowProfile HorizontalWindow { get; set; } = new()
+    {
+        Slots = MeterSlotDefaults.CreateHorizontal(),
+        ItemWidth = 220,
+    };
+
+    public MeterWindowProfile RoleSplitWindow { get; set; } = new()
+    {
+        Slots = MeterSlotDefaults.CreateRoleSplit(),
+        ItemWidth = 250,
+    };
+
     public bool IsLocked { get; set; }
 
     public bool ClickThroughWhenLocked { get; set; }
@@ -91,15 +109,23 @@ public sealed class MeterSettings
 
     public bool ShowJob { get; set; } = true;
 
+    public bool ShowRank { get; set; } = true;
+
+    public bool ShowPlayerName { get; set; } = true;
+
     public JobDisplayStyle JobDisplayStyle { get; set; } = JobDisplayStyle.Abbreviation;
 
     public bool ShowFflogs { get; set; } = true;
 
     public bool ShowDps { get; set; } = true;
 
+    public bool ShowRdps { get; set; }
+
     public bool ShowDamagePercent { get; set; } = true;
 
     public bool ShowTotalDamage { get; set; } = true;
+
+    public bool ShowTotalHealing { get; set; }
 
     public bool ShowHighestDamage { get; set; } = true;
 
@@ -135,6 +161,24 @@ public sealed class MeterSettings
     internal bool NormalizeCustomization()
     {
         var changed = false;
+        ClassicWindow ??= new MeterWindowProfile
+        {
+            IsEnabled = true,
+            Slots = MeterSlotDefaults.CreateClassic(),
+        };
+        HorizontalWindow ??= new MeterWindowProfile
+        {
+            Slots = MeterSlotDefaults.CreateHorizontal(),
+            ItemWidth = 220,
+        };
+        RoleSplitWindow ??= new MeterWindowProfile
+        {
+            Slots = MeterSlotDefaults.CreateRoleSplit(),
+            ItemWidth = 250,
+        };
+        changed |= ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
+        changed |= HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
+        changed |= RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
         CustomStyles ??= [];
         var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var style in CustomStyles)
@@ -160,6 +204,57 @@ public sealed class MeterSettings
         }
 
         return changed;
+    }
+
+    internal bool MigrateIndependentWindows()
+    {
+        ClassicWindow.IsEnabled = Preset == MeterPreset.CurrentDefault;
+        HorizontalWindow.IsEnabled = Preset is MeterPreset.HorizontalTransparent or MeterPreset.Custom;
+        RoleSplitWindow.IsEnabled = Preset == MeterPreset.RoleSplit;
+
+        if (Preset == MeterPreset.Custom && GetSelectedCustomStyle() is { } customStyle)
+        {
+            // Preserve the user's chosen metrics, but intentionally discard coordinates:
+            // the new editor auto-arranges stable slots and cannot create overlaps.
+            HorizontalWindow.Slots = customStyle.Slots
+                .Select(static slot => slot.Clone())
+                .ToList();
+        }
+
+        MigrateProfile(ClassicWindow);
+        MigrateProfile(HorizontalWindow);
+        MigrateProfile(RoleSplitWindow);
+        if (ShowDps && DpsMetric == DpsMetric.Rdps)
+        {
+            // The former single DPS column displayed the configured rate. Preserve
+            // that visible value while allowing DPS and rDPS to coexist from now on.
+            ShowDps = false;
+            ShowRdps = true;
+            foreach (var slot in ClassicWindow.Slots)
+            {
+                if (slot.Metric == MeterSlotMetric.Dps)
+                {
+                    slot.Visible = false;
+                }
+                else if (slot.Metric == MeterSlotMetric.Rdps)
+                {
+                    slot.Visible = true;
+                }
+            }
+        }
+        return true;
+
+        void MigrateProfile(MeterWindowProfile profile)
+        {
+            // The old single window owned these settings. Copying them to every new
+            // window avoids an unexpected unlock or auto-hide change after migration.
+            profile.IsLocked = IsLocked;
+            profile.ClickThroughWhenLocked = ClickThroughWhenLocked;
+            profile.AutoHideOutOfCombat = AutoHideOutOfCombat;
+            profile.ShowHeader = ShowHeader;
+            profile.FontScale = FontScale;
+            profile.SortMode = MeterSortModeOptions.Normalize(SortMode);
+        }
     }
 
     public MeterCustomStyle? GetSelectedCustomStyle()

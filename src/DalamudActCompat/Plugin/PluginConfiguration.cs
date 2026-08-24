@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 11;
+    private const int CurrentVersion = 12;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -248,6 +248,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
             // the CN behavior that older builds happened to expose.
             GameRegionMode = GameRegionMode.Auto;
             Version = 11;
+            changed = true;
+        }
+        if (Version < 12)
+        {
+            changed |= Meter.MigrateIndependentWindows();
+            changed |= Meter.NormalizeCustomization();
+            Version = 12;
             changed = true;
         }
 

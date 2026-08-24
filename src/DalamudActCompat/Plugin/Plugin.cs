@@ -58,7 +58,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
+    private readonly HorizontalMeterWindow horizontalMeterWindow;
+    private readonly RoleSplitMeterWindow roleSplitMeterWindow;
     private readonly MeterStyleEditorWindow meterStyleEditorWindow;
+    private readonly SimplifiedHomeWindow simplifiedHomeWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterWindow encounterWindow;
@@ -412,8 +415,27 @@ public sealed class Plugin : IDalamudPlugin
             zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
+        horizontalMeterWindow = new HorizontalMeterWindow(
+            meterService,
+            configuration,
+            text,
+            jobIcons,
+            SaveConfiguration)
+        {
+            IsOpen = configuration.Meter.IsVisible,
+        };
+        roleSplitMeterWindow = new RoleSplitMeterWindow(
+            meterService,
+            configuration,
+            text,
+            jobIcons,
+            SaveConfiguration)
+        {
+            IsOpen = configuration.Meter.IsVisible,
+        };
         meterStyleEditorWindow = new MeterStyleEditorWindow(
             configuration,
+            logoTexture,
             text,
             SaveConfiguration);
         encounterWindow = new EncounterWindow(
@@ -556,8 +578,17 @@ public sealed class Plugin : IDalamudPlugin
         {
             IsOpen = true,
         };
+        simplifiedHomeWindow = new SimplifiedHomeWindow(
+            configuration,
+            logoTexture,
+            text,
+            SetMeterVisible,
+            () => SetSimplifiedMode(false));
         windowSystem.AddWindow(meterWindow);
+        windowSystem.AddWindow(horizontalMeterWindow);
+        windowSystem.AddWindow(roleSplitMeterWindow);
         windowSystem.AddWindow(meterStyleEditorWindow);
+        windowSystem.AddWindow(simplifiedHomeWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(helpWindow);
@@ -667,7 +698,9 @@ public sealed class Plugin : IDalamudPlugin
                                          helpWindow.IsOpen ||
                                          launcherWindow.IsOpen ||
                                          thirdPartyPluginNoticeWindow.IsOpen ||
-                                         encounterWindow.IsOpen;
+                                         encounterWindow.IsOpen ||
+                                         simplifiedHomeWindow.IsOpen ||
+                                         meterStyleEditorWindow.IsOpen;
         OverlayEditShield.Draw(
             actRuntime.HasVisibleEditingOverlay,
             hasVisibleManagementWindow);
@@ -677,10 +710,13 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenConfigUi()
     {
-        if (!configuration.SimplifiedModeEnabled)
+        if (configuration.SimplifiedModeEnabled)
         {
-            settingsWindow.LocateAnimated();
+            simplifiedHomeWindow.LocateOnNextDraw();
+            return;
         }
+
+        settingsWindow.LocateAnimated();
     }
 
     private void OpenMainUi()
@@ -688,7 +724,24 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenMeter()
     {
-        meterWindow.LocateOnNextDraw();
+        if (!configuration.Meter.ClassicWindow.IsEnabled &&
+            !configuration.Meter.HorizontalWindow.IsEnabled &&
+            !configuration.Meter.RoleSplitWindow.IsEnabled)
+        {
+            configuration.Meter.ClassicWindow.IsEnabled = true;
+        }
+        if (configuration.Meter.ClassicWindow.IsEnabled)
+        {
+            meterWindow.LocateOnNextDraw();
+        }
+        if (configuration.Meter.HorizontalWindow.IsEnabled)
+        {
+            horizontalMeterWindow.LocateOnNextDraw();
+        }
+        if (configuration.Meter.RoleSplitWindow.IsEnabled)
+        {
+            roleSplitMeterWindow.LocateOnNextDraw();
+        }
         SetMeterVisible(true);
     }
 
@@ -702,12 +755,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void SetMeterVisible(bool visible)
     {
-        if (configuration.SimplifiedModeEnabled)
-        {
-            visible = true;
-        }
         configuration.Meter.IsVisible = visible;
         meterWindow.IsOpen = visible;
+        horizontalMeterWindow.IsOpen = visible;
+        roleSplitMeterWindow.IsOpen = visible;
         SaveConfiguration();
     }
 
@@ -764,12 +815,15 @@ public sealed class Plugin : IDalamudPlugin
         thirdPartyPluginNoticeWindow.IsOpen = false;
         encounterWindow.IsOpen = false;
         meterStyleEditorWindow.IsOpen = false;
-        configuration.Meter.IsVisible = true;
-        meterWindow.IsOpen = true;
+        simplifiedHomeWindow.IsOpen = true;
+        meterWindow.IsOpen = configuration.Meter.IsVisible;
+        horizontalMeterWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitMeterWindow.IsOpen = configuration.Meter.IsVisible;
     }
 
     private void RestoreWindowsAfterSimplifiedMode()
     {
+        simplifiedHomeWindow.IsOpen = false;
         if (simplifiedWindowSnapshot is not { } snapshot)
         {
             launcherWindow.IsOpen = true;
@@ -814,7 +868,8 @@ public sealed class Plugin : IDalamudPlugin
         var separator = trimmedArguments.IndexOf(' ');
         var verb = (separator < 0 ? trimmedArguments : trimmedArguments[..separator]).ToLowerInvariant();
         var remainder = separator < 0 ? string.Empty : trimmedArguments[(separator + 1)..].Trim();
-        if (configuration.SimplifiedModeEnabled && verb is not ("simple" or "meter" or "clear"))
+        if (configuration.SimplifiedModeEnabled &&
+            verb is not ("" or "on" or "simple" or "meter" or "clear"))
         {
             // Simplified mode is an operational boundary, not only a visual filter. Keeping
             // non-meter commands inert prevents hidden tools from changing their desired state
@@ -828,7 +883,11 @@ public sealed class Plugin : IDalamudPlugin
                 OpenConfigUi();
                 break;
             case "":
-                if (!configuration.SimplifiedModeEnabled)
+                if (configuration.SimplifiedModeEnabled)
+                {
+                    simplifiedHomeWindow.LocateOnNextDraw();
+                }
+                else
                 {
                     settingsWindow.ToggleAnimated();
                 }

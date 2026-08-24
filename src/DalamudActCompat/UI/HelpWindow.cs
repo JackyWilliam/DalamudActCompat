@@ -437,16 +437,16 @@ public sealed class HelpWindow : Window
                 "“排序 / 主要数据”只决定按 DPS 还是 HPS 排名；“DPS 口径”决定 DPS 列使用个人有效时长、整场时长、兼容字段或预估 rDPS。它们不会强制打开或关闭显示列。",
                 "Sort / primary metric controls only DPS or HPS ranking. DPS metric selects personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the DPS column. Neither setting forces a display column on or off."));
             DrawBullet(text.Get(
-                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高技能伤害和死亡。最高技能伤害记录本场单次命中的技能名与伤害，出现更高伤害时更新，下一场战斗重新开始记录。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
+                "在“显示列”中可分别开关 FFLogs、DPS、rDPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高技能伤害和死亡。最高技能使用紧凑宽度显示，悬停可查看完整技能名与数值；下一场有效战斗会重新记录。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
                 "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, total damage, highest single-hit action, and deaths. The highest hit updates only when a larger hit appears and resets for the next encounter. FFLogs appears only when both online estimates and its display column are enabled."));
             DrawBullet(text.Get(
-                "“显示预设”提供现有默认、横版透明和奶妈与 D/T 分榜三种只读样式。8 人与 24 人使用分榜预设时，奶妈按 HPS 排名且伤害不参与 D/T 排行；4 人仍按现有方式统计。横版透明预设可复制为自定义样式，并在 24×6 网格中调整槽位位置、大小和数据内容。",
+                "经典榜、透明横版和职能分栏是三个独立窗口，可以同时开启并分别保存位置、大小、锁定和槽位。三个编辑器都使用自动排布槽位：可新增、隐藏、删除和调整顺序，不需要拖入坐标，也不会互相重叠。透明横版没有窗口或玩家卡片背景，可横向滑动，并根据 DPS/HPS 模式从高到低排列；职能分栏保持 D/T 与治疗两段普通列表。",
                 "Display presets include the existing default, Horizontal Transparent, and Healer vs D/T Split as read-only styles. In 8- and 24-player content the split preset ranks healers by HPS and excludes their damage from D/T ranking; 4-player content keeps the existing rules. Horizontal Transparent can be copied into a custom style whose slots, sizes, and metrics are editable on a 24x6 grid."));
             DrawBullet(text.Get(
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
-                "副本外在本队停止产生相关战斗数据 5 秒后清空实时统计，下一场战斗从 0 开始；队友先开怪时不会因本地角色仍处于脱战状态而反复清空。副本内则持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
+                "战斗结束后悬浮窗会保留上一把结果，方便继续查看；下一场出现有效战斗数据后会用新数据从 0 重新计算。普通脱战、阶段切换、击杀前置目标和 ACT 自动分段不会提前清零。副本内只有确认全队团灭后的重新开怪才开始新一把；手动重置会立即清空，并阻止旧总数在后续刷新中弹回。",
                 "Outside duties, the live meter clears after the party produces no relevant combat data for five seconds, so a party member pulling first no longer causes repeated resets while the local player is still out of combat. Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
             DrawBullet(text.Get(
                 "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",

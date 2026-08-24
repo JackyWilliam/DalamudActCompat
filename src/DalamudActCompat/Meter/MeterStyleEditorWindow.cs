@@ -1,325 +1,341 @@
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using System.Numerics;
+using System.Reflection;
 
 namespace DalamudActCompat.Meter;
 
 public sealed class MeterStyleEditorWindow : Window
 {
-    private enum DragMode
-    {
-        None,
-        Move,
-        Resize,
-    }
-
-    private static readonly Vector4 CanvasBackground = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 GridColor = new(0.30f, 0.36f, 0.43f, 0.35f);
-    private static readonly Vector4 Accent = new(0.42f, 0.78f, 0.96f, 1);
+    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
+    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
+    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
+    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
+    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
     private readonly PluginConfiguration configuration;
+    private readonly ISharedImmediateTexture logoTexture;
     private readonly UiText text;
     private readonly Action saveConfiguration;
+    private MeterWindowKind selectedKind;
     private string? selectedSlotId;
-    private DragMode dragMode;
-    private Vector2 dragOffsetCells;
-    private bool dragChanged;
 
     public MeterStyleEditorWindow(
         PluginConfiguration configuration,
+        ISharedImmediateTexture logoTexture,
         UiText text,
         Action saveConfiguration)
-        : base("统计样式编辑器###DalamudActCompatMeterStyleEditor")
+        : base("战斗统计布局编辑器###DalamudActCompatMeterStyleEditor")
     {
         this.configuration = configuration;
+        this.logoTexture = logoTexture;
         this.text = text;
         this.saveConfiguration = saveConfiguration;
-        Size = new Vector2(980, 660);
+        Size = new Vector2(1040, 690);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(820, 560),
+            MinimumSize = new Vector2(880, 590),
             MaximumSize = new Vector2(float.MaxValue),
         };
     }
 
     public void Open()
     {
-        EnsureSelectedStyle();
+        EnsureSelectedSlot(CurrentProfile);
         IsOpen = true;
+    }
+
+    public override void PreDraw()
+    {
+        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f));
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.055f, 0.075f, 0.10f, 1));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.14f, 0.34f, 0.46f, 0.30f));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 6);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 7));
+    }
+
+    public override void PostDraw()
+    {
+        ImGui.PopStyleVar(4);
+        ImGui.PopStyleColor(9);
     }
 
     public override void Draw()
     {
         WindowName = text.Get(
-            "统计样式编辑器###DalamudActCompatMeterStyleEditor",
-            "Meter Style Editor###DalamudActCompatMeterStyleEditor");
-        var style = EnsureSelectedStyle();
-        var changed = false;
-
-        if (ImGui.BeginChild("style-list", new Vector2(220, -1), true))
+            "战斗统计布局编辑器###DalamudActCompatMeterStyleEditor",
+            "Combat Meter Layout Editor###DalamudActCompatMeterStyleEditor");
+        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "--";
+        if (BrandedWindowChrome.Draw(
+                logoTexture,
+                text.Get("布局编辑器", "Layout editor"),
+                KindLabel(selectedKind),
+                IceBlue,
+                $"v{version}",
+                "meter-style-editor"))
         {
-            ImGui.TextColored(Accent, text.Get("自定义样式", "Custom styles"));
-            foreach (var candidate in configuration.Meter.CustomStyles.ToArray())
-            {
-                if (ImGui.Selectable(
-                        $"{candidate.Name}##{candidate.Id}",
-                        string.Equals(candidate.Id, style.Id, StringComparison.OrdinalIgnoreCase)))
-                {
-                    configuration.Meter.Preset = MeterPreset.Custom;
-                    configuration.Meter.SelectedCustomStyleId = candidate.Id;
-                    selectedSlotId = null;
-                    style = candidate;
-                    changed = true;
-                }
-            }
+            IsOpen = false;
+            return;
+        }
 
-            ImGui.Spacing();
-            if (ImGui.Button(text.Get("新建横版样式", "New horizontal style"), new Vector2(-1, 0)))
-            {
-                style = CreateStyle(text.Get("自定义横版", "Custom horizontal"));
-                changed = true;
-            }
-            if (ImGui.Button(text.Get("复制当前样式", "Duplicate style"), new Vector2(-1, 0)))
-            {
-                var clone = style.Clone(style.Name + text.Get(" 副本", " copy"));
-                configuration.Meter.CustomStyles.Add(clone);
-                SelectStyle(clone);
-                style = clone;
-                changed = true;
-            }
-            ImGui.BeginDisabled(configuration.Meter.CustomStyles.Count <= 1);
-            if (ImGui.Button(text.Get("删除当前样式", "Delete style"), new Vector2(-1, 0)))
-            {
-                configuration.Meter.CustomStyles.Remove(style);
-                style = configuration.Meter.CustomStyles[0];
-                SelectStyle(style);
-                selectedSlotId = null;
-                changed = true;
-            }
-            ImGui.EndDisabled();
+        var selectedIndex = BrandedWindowChrome.DrawNavigationRail(
+            "meter-editor-kind",
+            [
+                text.Get("经典榜", "Classic"),
+                text.Get("透明横版", "Transparent horizontal"),
+                text.Get("职能分栏", "Role split"),
+            ],
+            (int)selectedKind);
+        if (selectedIndex != (int)selectedKind)
+        {
+            selectedKind = (MeterWindowKind)selectedIndex;
+            selectedSlotId = null;
+            EnsureSelectedSlot(CurrentProfile);
+        }
+        ImGui.Dummy(new Vector2(1, 6));
+
+        var changed = DrawWindowControls(CurrentProfile);
+        ImGui.Dummy(new Vector2(1, 5));
+        var available = ImGui.GetContentRegionAvail();
+        const float leftWidth = 255;
+        const float rightWidth = 270;
+        if (ImGui.BeginChild("meter-editor-slots", new Vector2(leftWidth, available.Y), true))
+        {
+            changed |= DrawSlotList(CurrentProfile);
         }
         ImGui.EndChild();
         ImGui.SameLine();
-
-        if (ImGui.BeginChild("style-editor", new Vector2(-1, -1), false))
+        if (ImGui.BeginChild(
+                "meter-editor-preview",
+                new Vector2(Math.Max(250, available.X - leftWidth - rightWidth - 16), available.Y),
+                true))
         {
-            var name = style.Name;
-            ImGui.SetNextItemWidth(260);
-            if (ImGui.InputText(text.Get("样式名称", "Style name"), ref name, 64))
-            {
-                style.Name = string.IsNullOrWhiteSpace(name) ? style.Name : name;
-                changed = true;
-            }
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get(
-                "内置预设只读；此处编辑的是横版副本",
-                "Built-in presets are read-only; this edits a horizontal copy."));
-
-            var cardOpacity = style.CardOpacity;
-            if (SliderFloat(text.Get("卡片透明度", "Card opacity"), ref cardOpacity, 0, 1))
-            {
-                style.CardOpacity = cardOpacity;
-                changed = true;
-            }
-            var backgroundOpacity = style.BackgroundOpacity;
-            if (SliderFloat(text.Get("窗口背景", "Window background"), ref backgroundOpacity, 0, 1))
-            {
-                style.BackgroundOpacity = backgroundOpacity;
-                changed = true;
-            }
-            ImGui.SameLine();
-            var cardSpacing = style.CardSpacing;
-            if (SliderFloat(text.Get("卡片间距", "Card spacing"), ref cardSpacing, 0, 24))
-            {
-                style.CardSpacing = cardSpacing;
-                changed = true;
-            }
-            var cardRounding = style.CardRounding;
-            if (SliderFloat(text.Get("圆角", "Rounding"), ref cardRounding, 0, 18))
-            {
-                style.CardRounding = cardRounding;
-                changed = true;
-            }
-            ImGui.SameLine();
-            var styleScale = style.FontScale;
-            if (SliderFloat(text.Get("样式缩放", "Style scale"), ref styleScale, 0.65f, 2))
-            {
-                style.FontScale = styleScale;
-                changed = true;
-            }
-            var textColor = style.TextColor;
-            if (ImGui.ColorEdit4(text.Get("文字颜色", "Text color"), ref textColor))
-            {
-                style.TextColor = textColor;
-                changed = true;
-            }
-
-            ImGui.TextDisabled(text.Get(
-                "拖动槽位改变位置，拖动右下角手柄改变大小；全部自动吸附到 24×6 网格。",
-                "Drag a slot to move it; drag its bottom-right handle to resize. Everything snaps to a 24×6 grid."));
-            changed |= DrawCanvas(style);
-            changed |= DrawSelectedSlotControls(style);
+            changed |= DrawPreview(CurrentProfile);
+        }
+        ImGui.EndChild();
+        ImGui.SameLine();
+        if (ImGui.BeginChild("meter-editor-properties", new Vector2(rightWidth, available.Y), true))
+        {
+            changed |= DrawSlotProperties(CurrentProfile);
         }
         ImGui.EndChild();
 
         if (changed)
         {
-            style.Normalize();
+            CurrentProfile.Normalize(DefaultSlots(selectedKind));
+            SynchronizeClassicSettings();
             saveConfiguration();
         }
     }
 
-    private bool DrawCanvas(MeterCustomStyle style)
+    private MeterWindowProfile CurrentProfile => selectedKind switch
     {
-        var available = ImGui.GetContentRegionAvail();
-        var canvasSize = new Vector2(Math.Max(560, available.X), Math.Clamp(available.Y * 0.52f, 230, 330));
-        var origin = ImGui.GetCursorScreenPos();
-        ImGui.InvisibleButton("slot-canvas", canvasSize);
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(origin, origin + canvasSize, ImGui.GetColorU32(CanvasBackground), 4);
-        var cell = new Vector2(canvasSize.X / 24f, canvasSize.Y / 6f);
-        for (var column = 1; column < 24; column++)
-        {
-            var x = origin.X + (column * cell.X);
-            drawList.AddLine(new Vector2(x, origin.Y), new Vector2(x, origin.Y + canvasSize.Y), ImGui.GetColorU32(GridColor));
-        }
-        for (var row = 1; row < 6; row++)
-        {
-            var y = origin.Y + (row * cell.Y);
-            drawList.AddLine(new Vector2(origin.X, y), new Vector2(origin.X + canvasSize.X, y), ImGui.GetColorU32(GridColor));
-        }
+        MeterWindowKind.Horizontal => configuration.Meter.HorizontalWindow,
+        MeterWindowKind.RoleSplit => configuration.Meter.RoleSplitWindow,
+        _ => configuration.Meter.ClassicWindow,
+    };
 
-        var visibleSlots = style.Slots.Where(static slot => slot.Visible).ToArray();
-        var mouse = ImGui.GetMousePos();
-        if (dragMode == DragMode.None && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
-        {
-            var hit = visibleSlots.Reverse().FirstOrDefault(slot => IsInside(mouse, SlotRect(slot, origin, cell)));
-            if (hit is not null)
-            {
-                selectedSlotId = hit.Id;
-                var rect = SlotRect(hit, origin, cell);
-                var handle = new Vector2(rect.Max.X - 12, rect.Max.Y - 12);
-                dragMode = mouse.X >= handle.X && mouse.Y >= handle.Y
-                    ? DragMode.Resize
-                    : DragMode.Move;
-                dragOffsetCells = new Vector2(
-                    (mouse.X - rect.Min.X) / cell.X,
-                    (mouse.Y - rect.Min.Y) / cell.Y);
-            }
-        }
-
-        foreach (var slot in visibleSlots)
-        {
-            var rect = SlotRect(slot, origin, cell);
-            var selected = string.Equals(slot.Id, selectedSlotId, StringComparison.OrdinalIgnoreCase);
-            drawList.AddRectFilled(
-                rect.Min + new Vector2(2),
-                rect.Max - new Vector2(2),
-                ImGui.GetColorU32(selected
-                    ? new Vector4(Accent.X, Accent.Y, Accent.Z, 0.48f)
-                    : new Vector4(0.18f, 0.30f, 0.42f, 0.72f)),
-                4);
-            drawList.AddRect(
-                rect.Min + new Vector2(2),
-                rect.Max - new Vector2(2),
-                ImGui.GetColorU32(selected ? Accent : new Vector4(0.65f, 0.72f, 0.80f, 0.65f)),
-                4);
-            var label = MetricLabel(slot.Metric);
-            drawList.AddText(rect.Min + new Vector2(6, 5), ImGui.GetColorU32(Vector4.One), label);
-            if (selected)
-            {
-                drawList.AddTriangleFilled(
-                    rect.Max - new Vector2(12, 2),
-                    rect.Max - new Vector2(2, 12),
-                    rect.Max - new Vector2(2),
-                    ImGui.GetColorU32(Accent));
-            }
-        }
-
-        var selectedSlot = style.Slots.FirstOrDefault(slot =>
-            string.Equals(slot.Id, selectedSlotId, StringComparison.OrdinalIgnoreCase));
-        if (dragMode != DragMode.None && selectedSlot is not null && ImGui.IsMouseDown(ImGuiMouseButton.Left))
-        {
-            if (dragMode == DragMode.Move)
-            {
-                selectedSlot.Column = Math.Clamp(
-                    (int)MathF.Round(((mouse.X - origin.X) / cell.X) - dragOffsetCells.X),
-                    0,
-                    24 - selectedSlot.ColumnSpan);
-                selectedSlot.Row = Math.Clamp(
-                    (int)MathF.Round(((mouse.Y - origin.Y) / cell.Y) - dragOffsetCells.Y),
-                    0,
-                    6 - selectedSlot.RowSpan);
-            }
-            else
-            {
-                selectedSlot.ColumnSpan = Math.Clamp(
-                    (int)MathF.Round((mouse.X - origin.X) / cell.X) - selectedSlot.Column,
-                    1,
-                    24 - selectedSlot.Column);
-                selectedSlot.RowSpan = Math.Clamp(
-                    (int)MathF.Round((mouse.Y - origin.Y) / cell.Y) - selectedSlot.Row,
-                    1,
-                    6 - selectedSlot.Row);
-            }
-            dragChanged = true;
-        }
-        if (dragMode != DragMode.None && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
-        {
-            dragMode = DragMode.None;
-            var changed = dragChanged;
-            dragChanged = false;
-            return changed;
-        }
-
-        return false;
-    }
-
-    private bool DrawSelectedSlotControls(MeterCustomStyle style)
+    private bool DrawWindowControls(MeterWindowProfile profile)
     {
         var changed = false;
-        ImGui.Spacing();
-        if (ImGui.Button(text.Get("添加数据槽", "Add data slot")))
+        var enabled = profile.IsEnabled;
+        if (ImGui.Checkbox(text.Get("启用这个独立窗口", "Enable this independent window"), ref enabled))
         {
-            var used = style.Slots.Select(static slot => slot.Metric).ToHashSet();
-            var metric = Enum.GetValues<MeterSlotMetric>().FirstOrDefault(candidate => !used.Contains(candidate));
-            var addedSlot = new MeterSlotDefinition(metric, 0, 0, 6, 2, MeterSlotAlignment.Left);
-            style.Slots.Add(addedSlot);
-            selectedSlotId = addedSlot.Id;
+            profile.IsEnabled = enabled;
             changed = true;
         }
+        ImGui.SameLine();
+        var locked = profile.IsLocked;
+        if (ImGui.Checkbox(text.Get("锁定", "Lock"), ref locked))
+        {
+            profile.IsLocked = locked;
+            changed = true;
+        }
+        ImGui.SameLine();
+        var clickThrough = profile.ClickThroughWhenLocked;
+        ImGui.BeginDisabled(!profile.IsLocked);
+        if (ImGui.Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), ref clickThrough))
+        {
+            profile.ClickThroughWhenLocked = clickThrough;
+            changed = true;
+        }
+        ImGui.EndDisabled();
+        ImGui.SameLine();
+        var autoHide = profile.AutoHideOutOfCombat;
+        if (ImGui.Checkbox(text.Get("脱战隐藏", "Hide out of combat"), ref autoHide))
+        {
+            profile.AutoHideOutOfCombat = autoHide;
+            changed = true;
+        }
+        return changed;
+    }
 
-        var slot = style.Slots.FirstOrDefault(candidate =>
+    private bool DrawSlotList(MeterWindowProfile profile)
+    {
+        var changed = false;
+        ImGui.TextColored(Gold, text.Get("槽位", "Complication slots"));
+        ImGui.TextDisabled(text.Get(
+            "点击槽位后选择内容；系统自动排布，不会重叠。",
+            "Select a slot and choose its content. Layout never overlaps."));
+        ImGui.Separator();
+        for (var index = 0; index < profile.Slots.Count; index++)
+        {
+            var slot = profile.Slots[index];
+            var visible = slot.Visible;
+            if (ImGui.Checkbox($"##slot-visible-{slot.Id}", ref visible))
+            {
+                slot.Visible = visible;
+                changed = true;
+            }
+            ImGui.SameLine();
+            if (ImGui.Selectable(
+                    $"{index + 1:00}  {MeterSlotPresentation.Label(slot.Metric, text)}##slot-{slot.Id}",
+                    string.Equals(selectedSlotId, slot.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                selectedSlotId = slot.Id;
+            }
+        }
+
+        ImGui.Dummy(new Vector2(1, 4));
+        if (ImGui.Button(text.Get("＋ 添加槽位", "+ Add slot"), new Vector2(-1, 0)))
+        {
+            var slot = new MeterSlotDefinition(
+                FirstUnusedMetric(profile),
+                0,
+                0,
+                4,
+                2,
+                MeterSlotAlignment.Left);
+            profile.Slots.Add(slot);
+            selectedSlotId = slot.Id;
+            changed = true;
+        }
+        if (ImGui.Button(text.Get("恢复此模板默认槽位", "Restore template slots"), new Vector2(-1, 0)))
+        {
+            profile.Slots = DefaultSlots(selectedKind).Select(static slot => slot.Clone()).ToList();
+            selectedSlotId = profile.Slots.FirstOrDefault()?.Id;
+            changed = true;
+        }
+        return changed;
+    }
+
+    private bool DrawPreview(MeterWindowProfile profile)
+    {
+        var changed = false;
+        ImGui.TextColored(Gold, text.Get("自动布局预览", "Automatic layout preview"));
+        ImGui.TextDisabled(KindDescription(selectedKind));
+        ImGui.Separator();
+        var slots = profile.Slots.Where(static slot => slot.Visible).ToArray();
+        if (slots.Length == 0)
+        {
+            ImGui.TextDisabled(text.Get("当前没有启用的槽位。", "No enabled slots."));
+            return false;
+        }
+
+        var available = ImGui.GetContentRegionAvail();
+        var columns = selectedKind == MeterWindowKind.Horizontal ? 2 : 3;
+        var spacing = new Vector2(8);
+        var cellWidth = Math.Max(62, (available.X - ((columns - 1) * spacing.X)) / columns);
+        var cellHeight = selectedKind == MeterWindowKind.Classic ? 56 : 72;
+        var origin = ImGui.GetCursorScreenPos();
+        var drawList = ImGui.GetWindowDrawList();
+        for (var index = 0; index < slots.Length; index++)
+        {
+            var slot = slots[index];
+            var column = index % columns;
+            var row = index / columns;
+            var start = origin + new Vector2(column * (cellWidth + spacing.X), row * (cellHeight + spacing.Y));
+            ImGui.SetCursorScreenPos(start);
+            ImGui.InvisibleButton($"slot-preview-{slot.Id}", new Vector2(cellWidth, cellHeight));
+            if (ImGui.IsItemClicked())
+            {
+                selectedSlotId = slot.Id;
+            }
+            var selected = string.Equals(selectedSlotId, slot.Id, StringComparison.OrdinalIgnoreCase);
+            drawList.AddRectFilled(
+                start,
+                start + new Vector2(cellWidth, cellHeight),
+                ImGui.GetColorU32(selected ? new Vector4(0.14f, 0.34f, 0.46f, 0.72f) : Navy),
+                Math.Min(18, cellHeight * 0.28f));
+            drawList.AddRect(
+                start,
+                start + new Vector2(cellWidth, cellHeight),
+                ImGui.GetColorU32(selected ? IceBlue : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.55f)),
+                Math.Min(18, cellHeight * 0.28f));
+            var label = MeterSlotPresentation.Label(slot.Metric, text);
+            var rendered = MeterSlotPresentation.TrimToWidth(label, cellWidth - 14);
+            var labelSize = ImGui.CalcTextSize(rendered);
+            drawList.AddText(
+                start + ((new Vector2(cellWidth, cellHeight) - labelSize) * 0.5f),
+                ImGui.GetColorU32(selected ? IceBlue : Vector4.One),
+                rendered);
+        }
+
+        var rows = (slots.Length + columns - 1) / columns;
+        ImGui.SetCursorScreenPos(origin + new Vector2(0, rows * (cellHeight + spacing.Y)));
+        return changed;
+    }
+
+    private bool DrawSlotProperties(MeterWindowProfile profile)
+    {
+        var changed = false;
+        ImGui.TextColored(Gold, text.Get("窗口与槽位", "Window and slot"));
+        var showHeader = profile.ShowHeader;
+        if (selectedKind != MeterWindowKind.Horizontal &&
+            ImGui.Checkbox(text.Get("显示标题区", "Show header"), ref showHeader))
+        {
+            profile.ShowHeader = showHeader;
+            changed = true;
+        }
+        var fontScale = profile.FontScale;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.SliderFloat(text.Get("字号", "Text scale"), ref fontScale, 0.65f, 2, "%.2f"))
+        {
+            profile.FontScale = fontScale;
+            changed = true;
+        }
+        if (selectedKind == MeterWindowKind.Horizontal)
+        {
+            var itemWidth = profile.ItemWidth;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.SliderFloat(text.Get("模块宽度", "Module width"), ref itemWidth, 140, 420, "%.0f"))
+            {
+                profile.ItemWidth = itemWidth;
+                changed = true;
+            }
+        }
+        ImGui.Separator();
+
+        var slot = profile.Slots.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, selectedSlotId, StringComparison.OrdinalIgnoreCase));
         if (slot is null)
         {
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get("选择一个槽位后可编辑数据和尺寸", "Select a slot to edit its data and size"));
+            ImGui.TextDisabled(text.Get("请先选择一个槽位。", "Select a slot first."));
             return changed;
         }
 
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("删除槽位", "Delete slot")))
-        {
-            style.Slots.Remove(slot);
-            selectedSlotId = null;
-            return true;
-        }
-        var visible = slot.Visible;
-        ImGui.SameLine();
-        if (ImGui.Checkbox(text.Get("显示", "Visible"), ref visible))
-        {
-            slot.Visible = visible;
-            changed = true;
-        }
-
-        if (ImGui.BeginCombo(text.Get("数据", "Data"), MetricLabel(slot.Metric)))
+        ImGui.TextColored(IceBlue, text.Get("槽位内容", "Slot content"));
+        var preview = MeterSlotPresentation.Label(slot.Metric, text);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.BeginCombo("##slot-metric", preview))
         {
             foreach (var metric in Enum.GetValues<MeterSlotMetric>())
             {
-                if (ImGui.Selectable(MetricLabel(metric), metric == slot.Metric))
+                if (ImGui.Selectable(
+                        $"{MeterSlotPresentation.Label(metric, text)}##metric-{metric}",
+                        metric == slot.Metric))
                 {
                     slot.Metric = metric;
                     changed = true;
@@ -327,115 +343,115 @@ public sealed class MeterStyleEditorWindow : Window
             }
             ImGui.EndCombo();
         }
-        var alignment = slot.Alignment;
-        if (ImGui.BeginCombo(text.Get("对齐", "Alignment"), alignment.ToString()))
+        var visible = slot.Visible;
+        if (ImGui.Checkbox(text.Get("使用这个槽位", "Use this slot"), ref visible))
         {
-            foreach (var candidate in Enum.GetValues<MeterSlotAlignment>())
-            {
-                if (ImGui.Selectable(candidate.ToString(), candidate == alignment))
-                {
-                    slot.Alignment = candidate;
-                    changed = true;
-                }
-            }
-            ImGui.EndCombo();
-        }
-        var column = slot.Column;
-        if (SliderInt(text.Get("横向位置", "Column"), ref column, 0, 23))
-        {
-            slot.Column = column;
+            slot.Visible = visible;
             changed = true;
         }
-        var row = slot.Row;
-        if (SliderInt(text.Get("纵向位置", "Row"), ref row, 0, 5))
+        ImGui.Dummy(new Vector2(1, 8));
+        var index = profile.Slots.IndexOf(slot);
+        ImGui.BeginDisabled(index <= 0);
+        if (ImGui.Button(text.Get("↑ 前移", "↑ Move up"), new Vector2(-1, 0)))
         {
-            slot.Row = row;
+            (profile.Slots[index - 1], profile.Slots[index]) =
+                (profile.Slots[index], profile.Slots[index - 1]);
             changed = true;
         }
-        var columnSpan = slot.ColumnSpan;
-        if (SliderInt(text.Get("宽度", "Width"), ref columnSpan, 1, 24 - slot.Column))
+        ImGui.EndDisabled();
+        ImGui.BeginDisabled(index < 0 || index >= profile.Slots.Count - 1);
+        if (ImGui.Button(text.Get("↓ 后移", "↓ Move down"), new Vector2(-1, 0)))
         {
-            slot.ColumnSpan = columnSpan;
+            (profile.Slots[index + 1], profile.Slots[index]) =
+                (profile.Slots[index], profile.Slots[index + 1]);
             changed = true;
         }
-        var rowSpan = slot.RowSpan;
-        if (SliderInt(text.Get("高度", "Height"), ref rowSpan, 1, 6 - slot.Row))
+        ImGui.EndDisabled();
+        if (ImGui.Button(text.Get("删除槽位", "Delete slot"), new Vector2(-1, 0)))
         {
-            slot.RowSpan = rowSpan;
+            profile.Slots.Remove(slot);
+            selectedSlotId = profile.Slots.Count == 0
+                ? null
+                : profile.Slots[Math.Min(index, profile.Slots.Count - 1)].Id;
             changed = true;
         }
+
+        ImGui.Dummy(new Vector2(1, 8));
+        ImGui.TextDisabled(text.Get(
+            "最高伤害技能会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
+            "Max-hit skills are truncated; hover the meter for full details."));
         return changed;
     }
 
-    private MeterCustomStyle EnsureSelectedStyle()
+    private void SynchronizeClassicSettings()
     {
-        var selected = configuration.Meter.GetSelectedCustomStyle();
-        if (selected is not null)
+        var meter = configuration.Meter;
+        var profile = meter.ClassicWindow;
+        meter.IsLocked = profile.IsLocked;
+        meter.ClickThroughWhenLocked = profile.ClickThroughWhenLocked;
+        meter.AutoHideOutOfCombat = profile.AutoHideOutOfCombat;
+        meter.ShowHeader = profile.ShowHeader;
+        meter.FontScale = profile.FontScale;
+        meter.SortMode = profile.SortMode;
+        bool Has(MeterSlotMetric metric) => profile.Slots.Any(slot => slot.Visible && slot.Metric == metric);
+        meter.ShowRank = Has(MeterSlotMetric.Rank);
+        meter.ShowJob = Has(MeterSlotMetric.Job);
+        meter.ShowPlayerName = Has(MeterSlotMetric.PlayerName);
+        meter.ShowDps = Has(MeterSlotMetric.Dps);
+        meter.ShowRdps = Has(MeterSlotMetric.Rdps);
+        meter.ShowHps = Has(MeterSlotMetric.Hps);
+        meter.ShowDamagePercent = Has(MeterSlotMetric.DamagePercent);
+        meter.ShowTotalDamage = Has(MeterSlotMetric.TotalDamage);
+        meter.ShowTotalHealing = Has(MeterSlotMetric.TotalHealing);
+        meter.ShowHighestDamage = Has(MeterSlotMetric.HighestDamageAction) || Has(MeterSlotMetric.HighestDamage);
+        meter.ShowDeaths = Has(MeterSlotMetric.Deaths);
+        meter.ShowCriticalHitRate = Has(MeterSlotMetric.CriticalHitPercent);
+        meter.ShowDirectHitRate = Has(MeterSlotMetric.DirectHitPercent);
+        meter.ShowCriticalDirectHitRate = Has(MeterSlotMetric.CriticalDirectHitPercent);
+    }
+
+    private void EnsureSelectedSlot(MeterWindowProfile profile)
+    {
+        if (!profile.Slots.Any(slot => string.Equals(
+                slot.Id,
+                selectedSlotId,
+                StringComparison.OrdinalIgnoreCase)))
         {
-            return selected;
+            selectedSlotId = profile.Slots.FirstOrDefault()?.Id;
         }
-
-        return CreateStyle(text.Get("自定义横版", "Custom horizontal"));
     }
 
-    private MeterCustomStyle CreateStyle(string name)
-    {
-        var style = new MeterCustomStyle { Name = name };
-        style.Normalize();
-        configuration.Meter.CustomStyles.Add(style);
-        SelectStyle(style);
-        saveConfiguration();
-        return style;
-    }
+    private MeterSlotMetric FirstUnusedMetric(MeterWindowProfile profile)
+        => Enum.GetValues<MeterSlotMetric>()
+            .FirstOrDefault(metric => profile.Slots.All(slot => slot.Metric != metric));
 
-    private void SelectStyle(MeterCustomStyle style)
-    {
-        configuration.Meter.Preset = MeterPreset.Custom;
-        configuration.Meter.SelectedCustomStyleId = style.Id;
-    }
-
-    private static (Vector2 Min, Vector2 Max) SlotRect(
-        MeterSlotDefinition slot,
-        Vector2 origin,
-        Vector2 cell)
-        => (
-            origin + new Vector2(slot.Column * cell.X, slot.Row * cell.Y),
-            origin + new Vector2(
-                (slot.Column + slot.ColumnSpan) * cell.X,
-                (slot.Row + slot.RowSpan) * cell.Y));
-
-    private static bool IsInside(Vector2 point, (Vector2 Min, Vector2 Max) rect)
-        => point.X >= rect.Min.X && point.X <= rect.Max.X &&
-           point.Y >= rect.Min.Y && point.Y <= rect.Max.Y;
-
-    private static bool SliderFloat(string label, ref float value, float minimum, float maximum)
-    {
-        ImGui.SetNextItemWidth(170);
-        return ImGui.SliderFloat(label, ref value, minimum, maximum, "%.2f");
-    }
-
-    private static bool SliderInt(string label, ref int value, int minimum, int maximum)
-    {
-        ImGui.SetNextItemWidth(170);
-        return ImGui.SliderInt(label, ref value, minimum, maximum);
-    }
-
-    private string MetricLabel(MeterSlotMetric metric)
-        => metric switch
+    private static IReadOnlyList<MeterSlotDefinition> DefaultSlots(MeterWindowKind kind)
+        => kind switch
         {
-            MeterSlotMetric.Rank => text.Get("排名", "Rank"),
-            MeterSlotMetric.Job => text.Get("职业图标", "Job icon"),
-            MeterSlotMetric.PlayerName => text.Get("玩家名", "Player name"),
-            MeterSlotMetric.Dps => "DPS",
-            MeterSlotMetric.Hps => "HPS",
-            MeterSlotMetric.DamagePercent => text.Get("伤害占比", "Damage %"),
-            MeterSlotMetric.TotalDamage => text.Get("总伤害", "Total damage"),
-            MeterSlotMetric.HighestDamageAction => text.Get("最高技能名", "Highest action"),
-            MeterSlotMetric.HighestDamage => text.Get("最高伤害", "Highest hit"),
-            MeterSlotMetric.Deaths => text.Get("死亡", "Deaths"),
-            MeterSlotMetric.CriticalHitPercent => text.Get("暴击率", "CRIT %"),
-            MeterSlotMetric.DirectHitPercent => text.Get("直击率", "DH %"),
-            MeterSlotMetric.CriticalDirectHitPercent => text.Get("直暴率", "CDH %"),
-            _ => metric.ToString(),
+            MeterWindowKind.Horizontal => MeterSlotDefaults.CreateHorizontal(),
+            MeterWindowKind.RoleSplit => MeterSlotDefaults.CreateRoleSplit(),
+            _ => MeterSlotDefaults.CreateClassic(),
+        };
+
+    private string KindLabel(MeterWindowKind kind)
+        => kind switch
+        {
+            MeterWindowKind.Horizontal => text.Get("透明横版", "Transparent horizontal"),
+            MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
+            _ => text.Get("经典榜", "Classic"),
+        };
+
+    private string KindDescription(MeterWindowKind kind)
+        => kind switch
+        {
+            MeterWindowKind.Horizontal => text.Get(
+                "横向滑动；DPS/HPS 从高到低排列；运行时完全透明。",
+                "Horizontal carousel; DPS/HPS descending; fully transparent at runtime."),
+            MeterWindowKind.RoleSplit => text.Get(
+                "D/T 与治疗分区展示，保持普通列表结构。",
+                "Separate D/T and healer sections with a regular list structure."),
+            _ => text.Get(
+                "经典纵向榜单；槽位会映射为可见列。",
+                "Classic vertical ranking; slots map to visible columns."),
         };
 }

@@ -15,7 +15,7 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 | 功能 | 实际用途 |
 | --- | --- |
 | 游戏内战斗统计 | 查看 4/8/24 人 DPS、rDPS、HPS、总伤害、最高技能伤害、命中率、死亡和本地 FFLogs 区间估算 |
-| 统计样式 | 使用现有默认、横版透明、奶妈与 D/T 分榜预设，或在 24×6 网格中自定义横版槽位 |
+| 统计样式 | 独立开启经典榜、完全透明横版和职能分栏；三个窗口都可用自动排布槽位自定义 |
 | 战斗历史 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志 |
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
@@ -71,7 +71,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 | 页面 | 这里能做什么 |
 | --- | --- |
 | 概览 | 查看解析器状态；开关解析、自动启动、失焦隐藏网页悬浮窗和精简模式；打开统计、历史、运行状态与日志目录 |
-| 战斗统计 | 显示、定位、锁定或穿透统计窗；设置预设、自定义横版、排序、统计口径、列、透明度和 FFLogs 估算 |
+| 战斗统计 | 分别开关、定位和编辑三个独立统计窗；设置 DPS/HPS 排序、动态槽位、透明度和 FFLogs 估算 |
 | 悬浮窗 | 安装 Cactbot；管理文字提醒、时间轴和自定义 HTML 悬浮窗 |
 | 扩展 | 启停扩展；打开扩展配置；检查来源与更新；导入 DLL/ZIP；分配权限 |
 | 设置 | 自动检测或手动选择国服/国际服；重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |
@@ -85,7 +85,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 | `/actcompat` | 打开或关闭控制中心 |
 | `/actcompat on` / `/actcompat off` | 明确打开 / 关闭控制中心 |
 | `/actcompat meter` | 打开并定位战斗统计 |
-| `/actcompat simple on` / `/actcompat simple off` | 进入 / 退出只保留解析和战斗统计的精简模式 |
+| `/actcompat simple on` / `/actcompat simple off` | 进入 / 退出精简模式；精简主页只保留统计窗开关与退出入口 |
 | `/actcompat history` | 打开近期战斗 |
 | `/actcompat logs` | 打开已保存的日志文件列表 |
 | `/actcompat status` | 查看解析器与各 Host 的运行状态 |
@@ -105,7 +105,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 - **FFLogs 区间估算**：把本场数据代入本地缓存曲线，只用于即时参考，不是上传后的正式排名。
 - **`--`**：当前还没有足够的有效数据，不表示数值为零。
 
-副本内团灭重开后，实时统计从零开始；历史页仍把同一次进本放在一个文件夹里，每一把作为独立子记录保存。转阶段产生的 ACT 片段只在内部合并，不会被误拆成多把。
+战斗结束后，实时统计会保留上一把结果；下一场出现有效数据后才从零替换。副本内团灭重开后也遵循这一规则；历史页仍把同一次进本放在一个文件夹里，每一把作为独立子记录保存。转阶段产生的 ACT 片段只在内部合并，不会被误拆成多把。
 
 “重置当前战斗”只结束并清空当前显示，不会删除已经保存的历史和原始 Network 日志。玩家 ID 遮盖也只影响界面显示，不会改写日志内容。
 

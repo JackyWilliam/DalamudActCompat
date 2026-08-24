@@ -1,4 +1,5 @@
 using System.Numerics;
+using Newtonsoft.Json;
 
 namespace DalamudActCompat.Meter;
 
@@ -23,15 +24,140 @@ public enum MeterSlotMetric
     Job,
     PlayerName,
     Dps,
+    Rdps,
     Hps,
     DamagePercent,
     TotalDamage,
+    TotalHealing,
     HighestDamageAction,
     HighestDamage,
     Deaths,
     CriticalHitPercent,
     DirectHitPercent,
     CriticalDirectHitPercent,
+}
+
+public enum MeterWindowKind
+{
+    Classic,
+    Horizontal,
+    RoleSplit,
+}
+
+public sealed class MeterWindowProfile
+{
+    public bool IsEnabled { get; set; }
+
+    public bool IsLocked { get; set; }
+
+    public bool ClickThroughWhenLocked { get; set; }
+
+    public bool AutoHideOutOfCombat { get; set; }
+
+    public bool ShowHeader { get; set; } = true;
+
+    public float FontScale { get; set; } = 1;
+
+    public float ItemWidth { get; set; } = 210;
+
+    public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
+
+    // Replacing instead of merging is required so an intentionally empty layout stays empty.
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<MeterSlotDefinition> Slots { get; set; } = [];
+
+    internal bool Normalize(IReadOnlyList<MeterSlotDefinition> defaults)
+    {
+        var changed = false;
+        var normalizedFontScale = ClampFinite(FontScale, 0.65f, 2, 1);
+        var normalizedItemWidth = ClampFinite(ItemWidth, 140, 420, 210);
+        if (FontScale != normalizedFontScale || ItemWidth != normalizedItemWidth)
+        {
+            FontScale = normalizedFontScale;
+            ItemWidth = normalizedItemWidth;
+            changed = true;
+        }
+        var normalizedSortMode = MeterSortModeOptions.Normalize(SortMode);
+        if (SortMode != normalizedSortMode)
+        {
+            SortMode = normalizedSortMode;
+            changed = true;
+        }
+
+        Slots ??= [];
+        if (Slots.Count == 0)
+        {
+            Slots = defaults.Select(static slot => slot.Clone()).ToList();
+            changed = true;
+        }
+
+        var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in Slots)
+        {
+            changed |= slot.Normalize(usedIds);
+        }
+
+        return changed;
+    }
+
+    private static float ClampFinite(float value, float minimum, float maximum, float fallback)
+        => float.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
+}
+
+public static class MeterSlotDefaults
+{
+    public static List<MeterSlotDefinition> CreateClassic()
+        =>
+        [
+            Create(MeterSlotMetric.Rank),
+            Create(MeterSlotMetric.Job),
+            Create(MeterSlotMetric.PlayerName),
+            Create(MeterSlotMetric.Dps),
+            Create(MeterSlotMetric.Rdps, visible: false),
+            Create(MeterSlotMetric.Hps, visible: false),
+            Create(MeterSlotMetric.DamagePercent),
+            Create(MeterSlotMetric.TotalDamage),
+            Create(MeterSlotMetric.HighestDamageAction),
+            Create(MeterSlotMetric.Deaths),
+            Create(MeterSlotMetric.CriticalHitPercent),
+            Create(MeterSlotMetric.DirectHitPercent, visible: false),
+            Create(MeterSlotMetric.CriticalDirectHitPercent),
+            Create(MeterSlotMetric.TotalHealing, visible: false),
+            Create(MeterSlotMetric.HighestDamage, visible: false),
+        ];
+
+    public static List<MeterSlotDefinition> CreateHorizontal()
+        =>
+        [
+            Create(MeterSlotMetric.Job),
+            Create(MeterSlotMetric.PlayerName),
+            Create(MeterSlotMetric.Dps),
+            Create(MeterSlotMetric.Rdps),
+            Create(MeterSlotMetric.Hps, visible: false),
+            Create(MeterSlotMetric.DamagePercent),
+            Create(MeterSlotMetric.TotalDamage),
+            Create(MeterSlotMetric.HighestDamageAction),
+        ];
+
+    public static List<MeterSlotDefinition> CreateRoleSplit()
+        =>
+        [
+            Create(MeterSlotMetric.Job),
+            Create(MeterSlotMetric.PlayerName),
+            Create(MeterSlotMetric.Dps),
+            Create(MeterSlotMetric.Rdps),
+            Create(MeterSlotMetric.Hps),
+            Create(MeterSlotMetric.DamagePercent),
+            Create(MeterSlotMetric.TotalDamage),
+            Create(MeterSlotMetric.TotalHealing),
+            Create(MeterSlotMetric.HighestDamageAction, visible: false),
+        ];
+
+    private static MeterSlotDefinition Create(MeterSlotMetric metric, bool visible = true)
+        => new(metric, 0, 0, 4, 2, MeterSlotAlignment.Left)
+        {
+            Visible = visible,
+        };
 }
 
 public enum MeterSlotAlignment

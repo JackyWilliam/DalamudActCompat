@@ -95,6 +95,7 @@ try
     ValidateChinese755hOpcodes();
     ValidateMeterRows();
     ValidateMeterLayout();
+    ValidateIndependentMeterWindows();
     ValidatePictoActOverlayCommands();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
@@ -417,7 +418,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 11 &&
+        configuration.Version == 12 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -1812,7 +1813,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 11 &&
+        legacyConfiguration.Version == 12 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1842,7 +1843,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 11 &&
+        parserMigration.Version == 12 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1856,7 +1857,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 11 &&
+        newConfiguration.Version == 12 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -1870,12 +1871,34 @@ static void ValidateMeterRows()
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
         "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
     Assert(
-        newConfiguration.Meter.Preset == MeterPreset.CurrentDefault &&
+        newConfiguration.Meter.ClassicWindow.IsEnabled &&
+        !newConfiguration.Meter.HorizontalWindow.IsEnabled &&
+        !newConfiguration.Meter.RoleSplitWindow.IsEnabled &&
+        newConfiguration.Meter.ClassicWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.HorizontalWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitWindow.Slots.Count >= 8 &&
         newConfiguration.Meter.ShowTotalDamage &&
-        newConfiguration.Meter.ShowHighestDamage &&
-        Enum.GetValues<MeterPreset>().Contains(MeterPreset.HorizontalTransparent) &&
-        Enum.GetValues<MeterPreset>().Contains(MeterPreset.RoleSplit),
-        "The compatible default or the two additional built-in Meter presets are missing.");
+        newConfiguration.Meter.ShowHighestDamage,
+        "The classic default or independently configurable Meter windows are missing.");
+    var previousHorizontalUser = new PluginConfiguration
+    {
+        Version = 11,
+        Meter = new MeterSettings
+        {
+            Preset = MeterPreset.HorizontalTransparent,
+            IsLocked = true,
+            AutoHideOutOfCombat = true,
+        },
+    };
+    Assert(
+        previousHorizontalUser.ApplyMigrations() &&
+        previousHorizontalUser.Version == 12 &&
+        !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
+        previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
+        previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
+        previousHorizontalUser.Meter.HorizontalWindow.AutoHideOutOfCombat &&
+        !previousHorizontalUser.Meter.RoleSplitWindow.IsEnabled,
+        "The selected legacy preset was not migrated to its independent window.");
     var customStyle = new MeterCustomStyle
     {
         Name = "Watch layout",
@@ -1910,7 +1933,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 11 &&
+        previousDebugConfiguration.Version == 12 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -1922,7 +1945,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 11 &&
+        previousV6Configuration.Version == 12 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -1960,7 +1983,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 11 &&
+        previousGenericPluginUser.Version == 12 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -1972,7 +1995,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 11 &&
+        previousEdpsUser.Version == 12 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -1988,7 +2011,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 11 &&
+        previousCustomMetricUser.Version == 12 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2017,7 +2040,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 11 &&
+        previousTimelineUser.Version == 12 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2106,7 +2129,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 11 &&
+        previousV5CactbotUser.Version == 12 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -2254,9 +2277,11 @@ static void ValidateMeterRows()
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
     Assert(
-        rows[0].Name == "Healer@Beta" && rows[0].Dps == 11_000 &&
-        rows[1].Name == "Tank@Alpha" && rows[1].Dps == 9_500,
-        "The Meter did not display and sort by the calculated rDPS field.");
+        rows[0].Name == "Tank@Alpha" &&
+        rows[0].PersonalDps == 11_000 && rows[0].Rdps == 9_500 &&
+        rows[1].Name == "Healer@Beta" &&
+        rows[1].PersonalDps == 2_500 && rows[1].Rdps == 11_000,
+        "The DPS ranking did not remain personal-DPS ordered or independent rDPS values were lost.");
 
     settings.SortMode = MeterSortMode.Hps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
@@ -2403,10 +2428,10 @@ static void ValidateMeterLayout()
             "CombatEnded.png")),
         "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
-        MeterWindow.MinimumTableWidthWithFflogs == 593 &&
-        MeterWindow.MinimumTableWidthWithoutFflogs == 546 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(600, 593) &&
-        MeterWindow.ShouldEnableHorizontalScroll(580, 593),
+        MeterWindow.MinimumTableWidthWithFflogs == 563 &&
+        MeterWindow.MinimumTableWidthWithoutFflogs == 516 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(570, 563) &&
+        MeterWindow.ShouldEnableHorizontalScroll(550, 563),
         "The compact default Meter width no longer delays horizontal scrolling.");
     var defaultColumns = new MeterSettings();
     var clickThroughSettings = new MeterSettings
@@ -2463,9 +2488,9 @@ static void ValidateMeterLayout()
     defaultColumns.ShowHps = true;
     defaultColumns.ShowDirectHitRate = true;
     Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 692 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(700, 692) &&
-        MeterWindow.ShouldEnableHorizontalScroll(680, 692),
+        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 662 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(670, 662) &&
+        MeterWindow.ShouldEnableHorizontalScroll(650, 662),
         "Enabling every Meter column shows a horizontal scrollbar before name compression is exhausted.");
     defaultColumns.ShowFflogs = false;
     defaultColumns.ShowDps = false;
@@ -2486,12 +2511,14 @@ static void ValidateMeterLayout()
         restoredColumns is not null &&
         !restoredColumns.ShowFflogs &&
         !restoredColumns.ShowDps &&
+        !restoredColumns.ShowRdps &&
         !restoredColumns.ShowHps &&
         !restoredColumns.ShowCriticalHitRate &&
         !restoredColumns.ShowDirectHitRate &&
         !restoredColumns.ShowCriticalDirectHitRate &&
         !restoredColumns.ShowDamagePercent &&
         !restoredColumns.ShowTotalDamage &&
+        !restoredColumns.ShowTotalHealing &&
         !restoredColumns.ShowHighestDamage &&
         !restoredColumns.ShowDeaths,
         "Customized Meter column visibility does not survive configuration persistence.");
@@ -2649,6 +2676,78 @@ static void ValidateMeterLayout()
             [1327u, "AAC Heavyweight M4 (Savage)", territoryNames, zoneNames]),
             "轻量级重型斗技场（零式）"),
         "A known Territory ID did not take priority over ACT's English zone name.");
+}
+
+static void ValidateIndependentMeterWindows()
+{
+    var projectRoot = FindProjectRoot();
+    var horizontalSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "HorizontalMeterWindow.cs"));
+    var editorSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterStyleEditorWindow.cs"));
+    var simplifiedSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "SimplifiedHomeWindow.cs"));
+
+    Assert(
+        typeof(HorizontalMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        typeof(RoleSplitMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        typeof(MeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        horizontalSource.Contains("ImGui.SetNextWindowBgAlpha(0)", StringComparison.Ordinal) &&
+        horizontalSource.Contains("ImGuiCol.WindowBg, Vector4.Zero", StringComparison.Ordinal) &&
+        horizontalSource.Contains("ImGuiCol.ChildBg, Vector4.Zero", StringComparison.Ordinal) &&
+        !horizontalSource.Contains("AddRectFilled", StringComparison.Ordinal) &&
+        horizontalSource.Contains("scrollOffset", StringComparison.Ordinal) &&
+        horizontalSource.Contains("MeterSlotPresentation.SortAndRank", StringComparison.Ordinal),
+        "The horizontal Meter is not an independent transparent, sortable slider window.");
+    Assert(
+        editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
+        editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
+        editorSource.Contains("Move up", StringComparison.Ordinal) &&
+        editorSource.Contains("Move down", StringComparison.Ordinal) &&
+        !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
+        !editorSource.Contains("24×6", StringComparison.Ordinal) &&
+        !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
+        "The shared Meter editor regained coordinate drag/drop or lost dynamic slots.");
+    Assert(
+        simplifiedSource.Contains("显示战斗统计悬浮窗", StringComparison.Ordinal) &&
+        simplifiedSource.Contains("退出精简模式", StringComparison.Ordinal) &&
+        !simplifiedSource.Contains("EnableParsing", StringComparison.Ordinal) &&
+        !simplifiedSource.Contains("HTML", StringComparison.Ordinal),
+        "Simplified mode no longer exposes the dedicated two-action home page.");
+
+    var settings = new MeterSettings();
+    settings.HorizontalWindow.IsEnabled = true;
+    settings.RoleSplitWindow.IsEnabled = true;
+    settings.HorizontalWindow.Slots.Add(new MeterSlotDefinition(
+        MeterSlotMetric.TotalHealing,
+        0,
+        0,
+        4,
+        2,
+        MeterSlotAlignment.Left));
+    var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(settings));
+    Assert(
+        restored is not null &&
+        restored.ClassicWindow.IsEnabled &&
+        restored.HorizontalWindow.IsEnabled &&
+        restored.RoleSplitWindow.IsEnabled &&
+        restored.HorizontalWindow.Slots.Count == settings.HorizontalWindow.Slots.Count &&
+        restored.HorizontalWindow.Slots.Any(static slot =>
+            slot.Metric == MeterSlotMetric.TotalHealing),
+        "Independent window visibility or dynamic slots did not survive configuration persistence.");
 }
 
 static void ValidateFflogsEstimateCurve()
@@ -3339,24 +3438,47 @@ static void ValidateDutyEncounterFolderAggregation()
 
 static void ValidateDutyWipeTracking()
 {
-    var openWorldTracker = new OpenWorldCombatResetTracker(
-        boundByDuty: false,
-        inCombat: false);
+    var now = DateTimeOffset.UtcNow;
+    var finishedPull = new Encounter(
+        Guid.NewGuid(),
+        now.AddMinutes(-1),
+        now,
+        "Test zone",
+        "Test target",
+        [new Combatant("local", "Player", "PLD", true, 1000, 0, 0)],
+        [],
+        [],
+        [],
+        [],
+        []);
+    var stateStore = new EncounterStateStore();
+    stateStore.UpdateCurrent(finishedPull);
     Assert(
-        !openWorldTracker.Observe(boundByDuty: false, inCombat: true) &&
-        openWorldTracker.Observe(boundByDuty: false, inCombat: false) &&
-        !openWorldTracker.Observe(boundByDuty: false, inCombat: false),
-        "An open-world combat exit did not reset exactly once.");
-
-    var dutyBoundaryTracker = new OpenWorldCombatResetTracker(
-        boundByDuty: true,
-        inCombat: true);
+        stateStore.GetDisplayEncounter()?.Id == finishedPull.Id &&
+        stateStore.GetDisplayEncounter()?.IsActive == false,
+        "A completed pull was not retained for post-combat review.");
+    var nextPull = finishedPull with
+    {
+        Id = Guid.NewGuid(),
+        StartTime = now.AddSeconds(5),
+        EndTime = null,
+        Combatants =
+        [
+            finishedPull.Combatants[0] with
+            {
+                TotalDamage = 25,
+            },
+        ],
+    };
+    stateStore.UpdateCurrent(nextPull);
     Assert(
-        !dutyBoundaryTracker.Observe(boundByDuty: true, inCombat: false) &&
-        !dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: false) &&
-        !dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: true) &&
-        dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: false),
-        "A duty transition reset the open-world meter or blocked the next real outdoor reset.");
+        stateStore.GetDisplayEncounter() is { IsActive: true } currentPull &&
+        currentPull.Id == nextPull.Id && currentPull.TotalDamage == 25,
+        "Meaningful data from the next pull did not replace the retained result from zero.");
+    stateStore.ResetCurrent();
+    Assert(
+        stateStore.GetDisplayEncounter() is null,
+        "A manual reset allowed retained totals to bounce back into the meter.");
 
     var tracker = new DutyWipeTracker();
     Assert(
@@ -7955,18 +8077,18 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("战斗结束后悬浮窗会保留上一把结果", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("手动重置会立即清空", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
         helpWindowSource.Contains("联盟副本支持 24 人并按 A/B/C 三组显示", StringComparison.Ordinal) &&
         helpWindowSource.Contains("总伤害、最高技能伤害和死亡", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("出现更高伤害时更新，下一场战斗重新开始记录", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("奶妈与 D/T 分榜三种只读样式", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("24×6 网格中调整槽位位置", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("最高技能使用紧凑宽度显示", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("是三个独立窗口", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("自动排布槽位", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
         helpWindowSource.Contains("设为 0 时背景完全透明", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("可分别开关 FFLogs、DPS、rDPS、HPS", StringComparison.Ordinal) &&
         helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
         helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
         helpWindowSource.Contains("实际 FileVersion", StringComparison.Ordinal) &&
@@ -7997,10 +8119,10 @@ static void ValidateHtmlOverlayDefaults()
         macroPluginSource.Contains("case \"simple\":", StringComparison.Ordinal) &&
         macroPluginSource.Contains("SetSimplifiedMode", StringComparison.Ordinal) &&
         macroPluginSource.Contains(
-            "verb is not (\"simple\" or \"meter\" or \"clear\")",
+            "verb is not (\"\" or \"on\" or \"simple\" or \"meter\" or \"clear\")",
             StringComparison.Ordinal) &&
         macroPluginSource.Contains(
-            "ACT plugin commands are disabled in simplified mode.",
+            "Only meter, clear, and simple commands are available in simplified mode.",
             StringComparison.Ordinal) &&
         macroPluginSource.Contains("GameForegroundDetector.IsCurrentProcessForeground()", StringComparison.Ordinal) &&
         launcherWindowSource.Contains("!configuration.SimplifiedModeEnabled", StringComparison.Ordinal) &&
@@ -8045,6 +8167,8 @@ static void ValidateHtmlOverlayDefaults()
             "RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds)",
             StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutyWipeTracker.Observe", StringComparison.Ordinal) &&
+        !parserAdapterSource.Contains("OpenWorldCombatResetTracker", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("stateStore.UpdateCurrent(encounter);", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("isDutyPartyWiped()", StringComparison.Ordinal) &&
         !parserAdapterSource.Contains("finished && !inCombat", StringComparison.Ordinal) &&
         macroPluginSource.Contains("ConditionFlag.Unconscious", StringComparison.Ordinal) &&

@@ -712,57 +712,30 @@ public sealed class ControlCenterWindow : Window
             openMeter();
         }
 
-        if (ImGui.BeginCombo(
-                text.Get("统计样式", "Meter style"),
-                MeterPresetLabel(configuration.Meter)))
-        {
-            foreach (var preset in new[]
-                     {
-                         MeterPreset.CurrentDefault,
-                         MeterPreset.HorizontalTransparent,
-                         MeterPreset.RoleSplit,
-                     })
-            {
-                if (ImGui.Selectable(
-                        MeterPresetLabel(preset),
-                        configuration.Meter.Preset == preset))
-                {
-                    configuration.Meter.Preset = preset;
-                    configuration.Meter.SelectedCustomStyleId = string.Empty;
-                    changed = true;
-                }
-            }
-            if (configuration.Meter.CustomStyles.Count > 0)
-            {
-                ImGui.Separator();
-                foreach (var style in configuration.Meter.CustomStyles)
-                {
-                    var selected = configuration.Meter.Preset == MeterPreset.Custom &&
-                                   string.Equals(
-                                       configuration.Meter.SelectedCustomStyleId,
-                                       style.Id,
-                                       StringComparison.OrdinalIgnoreCase);
-                    if (ImGui.Selectable(
-                            text.Get($"自定义：{style.Name}", $"Custom: {style.Name}"),
-                            selected))
-                    {
-                        configuration.Meter.Preset = MeterPreset.Custom;
-                        configuration.Meter.SelectedCustomStyleId = style.Id;
-                        changed = true;
-                    }
-                }
-            }
-            ImGui.EndCombo();
-        }
+        ImGui.TextColored(IceBlue, text.Get("独立悬浮窗", "Independent meter windows"));
+        changed |= Checkbox(
+            text.Get("经典榜", "Classic"),
+            configuration.Meter.ClassicWindow.IsEnabled,
+            value => configuration.Meter.ClassicWindow.IsEnabled = value);
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("自定义横版…", "Customize horizontal…")))
+        changed |= Checkbox(
+            text.Get("透明横版", "Transparent horizontal"),
+            configuration.Meter.HorizontalWindow.IsEnabled,
+            value => configuration.Meter.HorizontalWindow.IsEnabled = value);
+        ImGui.SameLine();
+        changed |= Checkbox(
+            text.Get("职能分栏", "Role split"),
+            configuration.Meter.RoleSplitWindow.IsEnabled,
+            value => configuration.Meter.RoleSplitWindow.IsEnabled = value);
+        if (ImGui.Button(text.Get("编辑三个窗口的槽位与样式…", "Edit slots and styles…")))
         {
             openMeterStyleEditor();
         }
         ImGui.TextDisabled(text.Get(
-            "分榜预设：8/24 人时奶妈按 HPS、D/T 按伤害；4 人保持默认规则。",
-            "Role split: healers rank by HPS and D/T by damage in 8/24-player content; 4-player content keeps the default rules."));
+            "三个窗口可以同时开启，位置、大小、锁定和槽位配置彼此独立。",
+            "All three windows can be open together with independent position, size, lock, and slots."));
 
+        ImGui.TextColored(Gold, text.Get("经典榜快捷设置", "Classic meter shortcuts"));
         changed |= Checkbox(text.Get("锁定窗口", "Lock window"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
         ImGui.SameLine();
         changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
@@ -818,24 +791,23 @@ public sealed class ControlCenterWindow : Window
                 ImGui.EndCombo();
             }
 
-            var dpsMetric = configuration.Meter.DpsMetric;
-            if (ImGui.BeginCombo(text.Get("DPS 口径", "DPS metric"), DpsMetricLabel(dpsMetric)))
+            ImGui.TextDisabled(text.Get(
+                "DPS 与 rDPS 是两个独立槽位，可以同时显示。",
+                "DPS and rDPS are independent slots and can be shown together."));
+            var estimateMetric = configuration.Meter.DpsMetric;
+            if (ImGui.BeginCombo(
+                    text.Get("FFLogs 预估口径", "FFLogs estimate metric"),
+                    DpsMetricLabel(estimateMetric)))
             {
                 foreach (var metric in Enum.GetValues<DpsMetric>())
                 {
-                    if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
+                    if (ImGui.Selectable(DpsMetricLabel(metric), metric == estimateMetric))
                     {
                         configuration.Meter.DpsMetric = metric;
                         changed = true;
                     }
                 }
                 ImGui.EndCombo();
-            }
-            if (configuration.Meter.DpsMetric == DpsMetric.Rdps)
-            {
-                ImGui.TextDisabled(text.Get(
-                    "rDPS（预估）：基于本地战斗事件与团队增益归因实时估算的团队贡献伤害。结果仅供参考，可能因游戏版本、战斗事件状态及统计口径产生少量差异。",
-                    "rDPS (estimated): real-time raid-contribution damage estimated from local combat events and party buffs. Results are informational and may vary slightly with game versions, event state, and statistical conventions."));
             }
 
             changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
@@ -850,6 +822,8 @@ public sealed class ControlCenterWindow : Window
             ImGui.SameLine();
             changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
             ImGui.SameLine();
+            changed |= Checkbox("rDPS", configuration.Meter.ShowRdps, value => configuration.Meter.ShowRdps = value);
+            ImGui.SameLine();
             changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
             changed |= Checkbox(text.Get("暴击 %", "CRIT %"), configuration.Meter.ShowCriticalHitRate, value => configuration.Meter.ShowCriticalHitRate = value);
             ImGui.SameLine();
@@ -859,6 +833,8 @@ public sealed class ControlCenterWindow : Window
             changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
             ImGui.SameLine();
             changed |= Checkbox(text.Get("总伤害", "Total damage"), configuration.Meter.ShowTotalDamage, value => configuration.Meter.ShowTotalDamage = value);
+            ImGui.SameLine();
+            changed |= Checkbox(text.Get("总治疗", "Total healing"), configuration.Meter.ShowTotalHealing, value => configuration.Meter.ShowTotalHealing = value);
             ImGui.SameLine();
             changed |= Checkbox(text.Get("最高技能", "Highest hit"), configuration.Meter.ShowHighestDamage, value => configuration.Meter.ShowHighestDamage = value);
             ImGui.SameLine();
@@ -911,7 +887,47 @@ public sealed class ControlCenterWindow : Window
         changed |= DrawPlayerIdentityControls();
         changed |= DrawFflogsSettings();
 
+        if (changed)
+        {
+            SynchronizeClassicProfileFromQuickSettings();
+        }
         return changed;
+    }
+
+    private void SynchronizeClassicProfileFromQuickSettings()
+    {
+        var meter = configuration.Meter;
+        var profile = meter.ClassicWindow;
+        profile.IsLocked = meter.IsLocked;
+        profile.ClickThroughWhenLocked = meter.ClickThroughWhenLocked;
+        profile.AutoHideOutOfCombat = meter.AutoHideOutOfCombat;
+        profile.ShowHeader = meter.ShowHeader;
+        profile.FontScale = meter.FontScale;
+        profile.SortMode = MeterSortModeOptions.Normalize(meter.SortMode);
+
+        // Quick settings modify the classic renderer's columns. Mirroring only matching
+        // slots keeps extra user-added complications and their ordering intact.
+        foreach (var slot in profile.Slots)
+        {
+            slot.Visible = slot.Metric switch
+            {
+                MeterSlotMetric.Rank => meter.ShowRank,
+                MeterSlotMetric.Job => meter.ShowJob,
+                MeterSlotMetric.PlayerName => meter.ShowPlayerName,
+                MeterSlotMetric.Dps => meter.ShowDps,
+                MeterSlotMetric.Rdps => meter.ShowRdps,
+                MeterSlotMetric.Hps => meter.ShowHps,
+                MeterSlotMetric.DamagePercent => meter.ShowDamagePercent,
+                MeterSlotMetric.TotalDamage => meter.ShowTotalDamage,
+                MeterSlotMetric.TotalHealing => meter.ShowTotalHealing,
+                MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage => meter.ShowHighestDamage,
+                MeterSlotMetric.Deaths => meter.ShowDeaths,
+                MeterSlotMetric.CriticalHitPercent => meter.ShowCriticalHitRate,
+                MeterSlotMetric.DirectHitPercent => meter.ShowDirectHitRate,
+                MeterSlotMetric.CriticalDirectHitPercent => meter.ShowCriticalDirectHitRate,
+                _ => slot.Visible,
+            };
+        }
     }
 
     private void DrawResetEncounterConfirmation()
@@ -2905,21 +2921,6 @@ public sealed class ControlCenterWindow : Window
         PlayerIdentityMode.Anonymous => text.Get("匿名编号", "Anonymous numbering"),
         _ => text.Get("显示原始 ID", "Show original names"),
     };
-
-    private string MeterPresetLabel(MeterSettings settings)
-        => settings.Preset == MeterPreset.Custom
-            ? settings.GetSelectedCustomStyle() is { } style
-                ? text.Get($"自定义：{style.Name}", $"Custom: {style.Name}")
-                : MeterPresetLabel(MeterPreset.CurrentDefault)
-            : MeterPresetLabel(settings.Preset);
-
-    private string MeterPresetLabel(MeterPreset preset)
-        => preset switch
-        {
-            MeterPreset.HorizontalTransparent => text.Get("横版透明", "Horizontal transparent"),
-            MeterPreset.RoleSplit => text.Get("奶妈与 D/T 分榜", "Healer / D-T split"),
-            _ => text.Get("默认预设", "Default preset"),
-        };
 
     private static void PushTheme()
     {

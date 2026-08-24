@@ -15,7 +15,7 @@ The project is currently released and validated primarily on **Windows with XIVL
 | Feature | What it is for |
 | --- | --- |
 | In-game combat meter | View 4/8/24-player DPS, rDPS, HPS, total damage, highest-hit actions, hit rates, deaths, and a local FFLogs percentile estimate |
-| Meter styles | Use the existing default, Horizontal Transparent, or Healer / D-T Split preset, or customize horizontal slots on a 24x6 grid |
+| Meter styles | Independently open Classic, fully transparent Horizontal, and Role Split windows; customize all three with automatically arranged slots |
 | Encounter history | Store runs and individual pulls, then inspect party data and raw logs |
 | Cactbot / HTML overlays | Install Cactbot resources and create, resize, lock, or click through in-game overlays |
 | Common ACT extensions | Use Triggernometry, PostNamazu, ACT.FoxTTS, SilverDasher, and Cafe.Matcha |
@@ -71,7 +71,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | Page | What you can do there |
 | --- | --- |
 | Overview | Inspect parser state; toggle parsing, autostart, unfocused web-overlay hiding, and Simplified mode; open the meter, history, runtime status, and log directory |
-| Combat Meter | Show, locate, lock, or click through the meter; configure presets, custom horizontal layouts, sorting, metrics, columns, opacity, and FFLogs estimates |
+| Combat Meter | Independently show, locate, and edit three meter windows; configure DPS/HPS ranking, dynamic slots, opacity, and FFLogs estimates |
 | Overlays | Install Cactbot and manage alerts, timelines, and custom HTML overlays |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
 | Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
@@ -85,7 +85,7 @@ Game region defaults to automatic detection: the Simplified Chinese client uses 
 | `/actcompat` | Open or close the Control Center |
 | `/actcompat on` / `/actcompat off` | Explicitly open / close the Control Center |
 | `/actcompat meter` | Open and locate the Combat Meter |
-| `/actcompat simple on` / `/actcompat simple off` | Enter / leave Simplified mode, which keeps only parsing and the Combat Meter |
+| `/actcompat simple on` / `/actcompat simple off` | Enter / leave Simplified mode; its home page only toggles the meter or exits the mode |
 | `/actcompat history` | Open recent encounters |
 | `/actcompat logs` | Open the saved log-file list |
 | `/actcompat status` | Inspect the parser and Host runtime state |
@@ -105,7 +105,7 @@ Diagnostic and development commands also include `/actcompat host`, `stop`, `sam
 - **FFLogs percentile estimate** applies the current encounter data to cached curves for immediate reference. It is not an uploaded parse ranking.
 - **`--`** means that no valid value is available yet; it does not mean zero.
 
-After a party wipe inside a duty, the live meter starts the next pull from zero. Encounter History keeps the whole duty visit in one folder and stores each pull as a separate child record. ACT segments created during phase transitions are merged internally instead of appearing as separate pulls.
+After combat ends, the live meter retains the previous result until meaningful data from the next pull replaces it from zero. Duty wipes follow the same rule. Encounter History keeps the whole duty visit in one folder and stores each pull as a separate child record. ACT segments created during phase transitions are merged internally instead of appearing as separate pulls.
 
 Reset current encounter ends and clears only the current display. It does not delete saved history or raw Network logs. Player-ID masking also changes only the UI and does not rewrite log contents.
 
