@@ -85,6 +85,7 @@ public sealed class SimplifiedHomeWindow : Window
 
     public override void Draw()
     {
+        DrawCloseButton();
         DrawCenteredLogo();
         DrawCenteredText(VersionLabel, new Vector4(0.66f, 0.70f, 0.75f, 1));
         ImGui.Dummy(new Vector2(1, 18));
@@ -107,6 +108,27 @@ public sealed class SimplifiedHomeWindow : Window
             exitRequested)
         {
             exitSimplifiedMode();
+        }
+    }
+
+    private void DrawCloseButton()
+    {
+        const float buttonSize = 24;
+        var startX = ImGui.GetCursorPosX();
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        ImGui.SetCursorPosX(startX + Math.Max(0, availableWidth - buttonSize));
+        ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.16f, 0.22f, 0.30f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.22f, 0.29f, 0.38f, 1));
+        if (ImGui.Button("×##close-simplified-home", new Vector2(buttonSize)))
+        {
+            // Closing the menu must not disable simplified mode; `/actcompat` reopens it.
+            IsOpen = false;
+        }
+        ImGui.PopStyleColor(3);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(text.Get("关闭精简主页", "Close simplified home"));
         }
     }
 

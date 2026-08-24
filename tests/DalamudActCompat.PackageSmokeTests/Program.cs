@@ -2723,9 +2723,11 @@ static void ValidateIndependentMeterWindows()
     Assert(
         simplifiedSource.Contains("显示战斗统计悬浮窗", StringComparison.Ordinal) &&
         simplifiedSource.Contains("退出精简模式", StringComparison.Ordinal) &&
+        simplifiedSource.Contains("关闭精简主页", StringComparison.Ordinal) &&
+        simplifiedSource.Contains("IsOpen = false", StringComparison.Ordinal) &&
         !simplifiedSource.Contains("EnableParsing", StringComparison.Ordinal) &&
         !simplifiedSource.Contains("HTML", StringComparison.Ordinal),
-        "Simplified mode no longer exposes the dedicated two-action home page.");
+        "Simplified mode lost its dedicated controls or independent close action.");
 
     var settings = new MeterSettings();
     settings.HorizontalWindow.IsEnabled = true;
