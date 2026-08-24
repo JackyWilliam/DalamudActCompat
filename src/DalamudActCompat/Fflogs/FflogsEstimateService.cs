@@ -41,7 +41,7 @@ public sealed record FflogsEstimate(
 
 public sealed record FflogsReferenceSnapshot(
     string Region,
-    int Partition,
+    int? Partition,
     string Metric,
     DateTimeOffset? LatestDataUpdatedAt,
     int CurveCount);
@@ -63,6 +63,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     ];
 
     private readonly Func<FflogsSettings> getSettings;
+    private readonly Func<bool> useChineseRankings;
     private readonly string cachePath;
     private readonly PluginLogger logger;
     private readonly HttpClient httpClient = new()
@@ -97,11 +98,13 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     public FflogsEstimateService(
         Func<FflogsSettings> getSettings,
         string cachePath,
-        PluginLogger logger)
+        PluginLogger logger,
+        Func<bool>? useChineseRankings = null)
     {
         this.getSettings = getSettings;
         this.cachePath = cachePath;
         this.logger = logger;
+        this.useChineseRankings = useChineseRankings ?? (static () => true);
         LoadCache();
         CanUseApi(GetSettingsSnapshot());
     }
@@ -123,14 +126,18 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             lock (cacheLock)
             {
+                var scope = GetRankingScope();
+                var matchingCurves = curves.Values
+                    .Where(curve => CurveMatchesScope(curve, scope))
+                    .ToArray();
                 return new FflogsReferenceSnapshot(
-                    CurrentFflogsEncounterTable.RankingRegion,
-                    CurrentFflogsEncounterTable.RankingPartition,
+                    scope.DisplayRegion,
+                    scope.Partition,
                     CurrentFflogsEncounterTable.RankingMetric.ToUpperInvariant(),
-                    curves.Count == 0
+                    matchingCurves.Length == 0
                         ? null
-                        : curves.Values.Max(static curve => curve.FetchedAt),
-                    curves.Count);
+                        : matchingCurves.Max(static curve => curve.FetchedAt),
+                    matchingCurves.Length);
             }
         }
     }
@@ -340,7 +347,11 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         var specName = ToFflogsSpecName(combatant.Job);
-        var key = CurveKey(activeEncounter.EncounterId, activeEncounter.Difficulty, specName);
+        var key = CurveKey(
+            GetRankingScope(),
+            activeEncounter.EncounterId,
+            activeEncounter.Difficulty,
+            specName);
         FflogsCurveCacheEntry? curve;
         lock (cacheLock)
         {
@@ -398,11 +409,13 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
         if (activeEncounter is not null)
         {
+            var scope = GetRankingScope();
             lock (cacheLock)
             {
                 foreach (var specName in specNames)
                 {
                     curves.Remove(CurveKey(
+                        scope,
                         activeEncounter.EncounterId,
                         activeEncounter.Difficulty,
                         specName));
@@ -638,7 +651,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
         var encounterId = activeEncounter.EncounterId;
         var difficulty = activeEncounter.Difficulty;
-        var loadKey = $"{encounterId}|{difficulty}|{specName}";
+        var scope = GetRankingScope();
+        var loadKey = CurveKey(scope, encounterId, difficulty, specName);
         if (!loading.TryAdd(loadKey, 0))
         {
             return;
@@ -651,17 +665,19 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             {
                 await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
                 var curve = await BuildCurveAsync(
+                    scope,
                     encounterId,
                     difficulty,
                     specName,
                     cancellationToken).ConfigureAwait(false);
                 lock (cacheLock)
                 {
-                    curves[CurveKey(encounterId, difficulty, specName)] = curve;
+                    curves[CurveKey(scope, encounterId, difficulty, specName)] = curve;
                 }
                 await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
                 var currentEncounter = ActiveEncounter;
-                if (currentEncounter?.EncounterId == encounterId &&
+                if (scope == GetRankingScope() &&
+                    currentEncounter?.EncounterId == encounterId &&
                     currentEncounter.Difficulty == difficulty)
                 {
                     SetStatus(
@@ -680,7 +696,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             {
                 logger.Error(ex, "FFLogs public-ranking estimate refresh failed.");
                 var currentEncounter = ActiveEncounter;
-                if (currentEncounter?.EncounterId == encounterId &&
+                if (scope == GetRankingScope() &&
+                    currentEncounter?.EncounterId == encounterId &&
                     currentEncounter.Difficulty == difficulty)
                 {
                     SetStatus(FflogsEstimateState.Error, ex.Message);
@@ -825,6 +842,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     }
 
     private async Task<FflogsCurveCacheEntry> BuildCurveAsync(
+        FflogsRankingScope scope,
         int encounterId,
         int difficulty,
         string specName,
@@ -854,6 +872,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             }
 
             var fetched = await FetchRankingPageAsync(
+                scope,
                 encounterId,
                 difficulty,
                 specName,
@@ -937,13 +956,14 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             DateTimeOffset.UtcNow,
             points,
             difficulty,
-            CurrentFflogsEncounterTable.RankingRegion,
-            CurrentFflogsEncounterTable.RankingPartition,
+            scope.CacheRegion,
+            scope.Partition,
             CurrentFflogsEncounterTable.RankingMetric,
             CurrentCurveFormatVersion);
     }
 
     private async Task<FflogsRankingPage> FetchRankingPageAsync(
+        FflogsRankingScope scope,
         int encounterId,
         int difficulty,
         string specName,
@@ -956,8 +976,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
               $difficulty: Int!,
               $specName: String!,
               $page: Int!,
-              $serverRegion: String!,
-              $partition: Int!,
+              $serverRegion: String,
+              $partition: Int,
               $metric: CharacterRankingMetricType!) {
               worldData {
                 encounter(id: $encounterId) {
@@ -981,8 +1001,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 difficulty,
                 specName,
                 page,
-                serverRegion = CurrentFflogsEncounterTable.RankingRegion,
-                partition = CurrentFflogsEncounterTable.RankingPartition,
+                serverRegion = scope.ServerRegion,
+                partition = scope.Partition,
                 metric = CurrentFflogsEncounterTable.RankingMetric,
             },
             cancellationToken).ConfigureAwait(false);
@@ -1118,17 +1138,16 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             {
                 if (CurrentFflogsEncounterTable.IsSupportedRanking(curve.EncounterId, curve.Difficulty) &&
                     curve.FormatVersion == CurrentCurveFormatVersion &&
-                    string.Equals(
+                    CurrentFflogsEncounterTable.TryGetRankingScope(
                         curve.Region,
-                        CurrentFflogsEncounterTable.RankingRegion,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    curve.Partition == CurrentFflogsEncounterTable.RankingPartition &&
+                        curve.Partition,
+                        out var scope) &&
                     string.Equals(
                         curve.Metric,
                         CurrentFflogsEncounterTable.RankingMetric,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    curves[CurveKey(curve.EncounterId, curve.Difficulty, curve.SpecName)] = curve;
+                    curves[CurveKey(scope, curve.EncounterId, curve.Difficulty, curve.SpecName)] = curve;
                 }
             }
         }
@@ -1260,11 +1279,24 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private static bool IsExpired(DateTimeOffset fetchedAt, int hours)
         => fetchedAt == default || fetchedAt.AddHours(Math.Clamp(hours, 1, 168)) <= DateTimeOffset.UtcNow;
 
-    private static string CurveKey(int encounterId, int difficulty, string specName)
+    private FflogsRankingScope GetRankingScope()
+        => CurrentFflogsEncounterTable.GetRankingScope(useChineseRankings());
+
+    private static bool CurveMatchesScope(
+        FflogsCurveCacheEntry curve,
+        FflogsRankingScope scope)
+        => string.Equals(curve.Region, scope.CacheRegion, StringComparison.OrdinalIgnoreCase) &&
+           curve.Partition == scope.Partition;
+
+    private static string CurveKey(
+        FflogsRankingScope scope,
+        int encounterId,
+        int difficulty,
+        string specName)
         // The key repeats the persisted validation fields so an in-memory cache can
-        // never cross a partition or metric boundary after a product update.
-        => $"{CurrentFflogsEncounterTable.RankingRegion}:" +
-           $"{CurrentFflogsEncounterTable.RankingPartition}:" +
+        // never cross a region, partition, or metric boundary after a mode switch.
+        => $"{scope.CacheRegion}:" +
+           $"{scope.Partition?.ToString() ?? "latest"}:" +
            $"{CurrentFflogsEncounterTable.RankingMetric}:" +
            $"{encounterId}:{difficulty}:{specName}";
 
@@ -1369,7 +1401,7 @@ public sealed record FflogsCurveCacheEntry(
     IReadOnlyList<FflogsCurvePoint> Points,
     int Difficulty = 0,
     string Region = "",
-    int Partition = 0,
+    int? Partition = 0,
     string Metric = "",
     int FormatVersion = 0);
 

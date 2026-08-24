@@ -49,6 +49,7 @@ Directory.CreateDirectory(testRoot);
 try
 {
     ValidateSettingsSerializerMemberTypes();
+    ValidateGameRegionSelection();
     ValidateActPluginDataCompatibility();
     ValidateActCustomTriggerCompatibility();
     ValidateSynchronousActInvocation();
@@ -368,6 +369,78 @@ finally
     {
         Directory.Delete(testRoot, true);
     }
+}
+
+static void ValidateGameRegionSelection()
+{
+    var automaticChinese = GameRegionResolver.Resolve(
+        GameRegionMode.Auto,
+        "ChineseSimplified");
+    var automaticGlobal = GameRegionResolver.Resolve(GameRegionMode.Auto, "Japanese");
+    var manualGlobal = GameRegionResolver.Resolve(
+        GameRegionMode.Global,
+        "ChineseSimplified");
+    var manualChinese = GameRegionResolver.Resolve(GameRegionMode.Chinese, "English");
+    Assert(
+        automaticChinese is
+        {
+            DetectedRegion: HostGameRegion.Chinese,
+            EffectiveRegion: HostGameRegion.Chinese,
+            ClientLanguage: HostClientLanguage.Chinese,
+            IsManualOverride: false,
+        } &&
+        automaticGlobal is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Global,
+            ClientLanguage: HostClientLanguage.Japanese,
+        } &&
+        manualGlobal is
+        {
+            DetectedRegion: HostGameRegion.Chinese,
+            EffectiveRegion: HostGameRegion.Global,
+            ClientLanguage: HostClientLanguage.Chinese,
+            IsManualOverride: true,
+        } &&
+        manualChinese is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Chinese,
+            ClientLanguage: HostClientLanguage.English,
+        },
+        "Automatic or manual CN/Global region selection was not resolved independently from client language.");
+
+    var configuration = new PluginConfiguration
+    {
+        Version = 10,
+        GameRegionMode = GameRegionMode.Chinese,
+    };
+    Assert(
+        configuration.ApplyMigrations() &&
+        configuration.Version == 11 &&
+        configuration.GameRegionMode == GameRegionMode.Auto,
+        "Existing configurations were not migrated to automatic region detection.");
+
+    configuration.GameRegionMode = GameRegionMode.Global;
+    var snapshot = configuration.CreateSnapshot();
+    configuration.GameRegionMode = GameRegionMode.Chinese;
+    configuration.RestoreFrom(snapshot);
+    Assert(
+        configuration.GameRegionMode == GameRegionMode.Global,
+        "A manual game-region override did not survive configuration snapshot restore.");
+
+    IINACT.FfxivActPluginWrapper.ConfigureRegion(
+        Dalamud.Game.ClientLanguage.English,
+        chineseRegionOverride: true);
+    Assert(
+        OpcodeManager.Instance.GameRegion == GameRegion.Chinese,
+        "The parser ignored a manual Chinese-region override on a Global-language client.");
+    IINACT.FfxivActPluginWrapper.ConfigureRegion(
+        Dalamud.Game.ClientLanguage.English,
+        chineseRegionOverride: false);
+    Assert(
+        OpcodeManager.Instance.GameRegion == GameRegion.Global,
+        "The parser ignored a manual Global-region override.");
 }
 
 static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
@@ -1739,7 +1812,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 10 &&
+        legacyConfiguration.Version == 11 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1769,7 +1842,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 10 &&
+        parserMigration.Version == 11 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1783,7 +1856,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 10 &&
+        newConfiguration.Version == 11 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -1837,7 +1910,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 10 &&
+        previousDebugConfiguration.Version == 11 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -1849,7 +1922,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 10 &&
+        previousV6Configuration.Version == 11 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -1887,7 +1960,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 10 &&
+        previousGenericPluginUser.Version == 11 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -1899,7 +1972,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 10 &&
+        previousEdpsUser.Version == 11 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -1915,7 +1988,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 10 &&
+        previousCustomMetricUser.Version == 11 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -1944,7 +2017,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 10 &&
+        previousTimelineUser.Version == 11 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2033,7 +2106,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 10 &&
+        previousV5CactbotUser.Version == 11 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -2668,10 +2741,14 @@ static void ValidateFflogsEstimateCurve()
         fflogsSource.Contains(
             "metric = CurrentFflogsEncounterTable.RankingMetric",
             StringComparison.Ordinal) &&
+        fflogsSource.Contains("$serverRegion: String", StringComparison.Ordinal) &&
+        fflogsSource.Contains("$partition: Int", StringComparison.Ordinal) &&
         fflogsSource.Contains("serverRegion: $serverRegion", StringComparison.Ordinal) &&
         fflogsSource.Contains("partition: $partition", StringComparison.Ordinal) &&
+        fflogsSource.Contains("serverRegion = scope.ServerRegion", StringComparison.Ordinal) &&
+        fflogsSource.Contains("partition = scope.Partition", StringComparison.Ordinal) &&
         fflogsSource.Contains("var encounterDps = combatant.Dps", StringComparison.Ordinal),
-        "FFLogs curves are no longer sourced from the CN DPS ranking population or the lookup stopped using actual DPS.");
+        "FFLogs curves stopped following the selected game region or the lookup stopped using actual DPS.");
 
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
@@ -2817,6 +2894,22 @@ static void ValidateFflogsCurrentEncounterTable()
                            BindingFlags.Static | BindingFlags.NonPublic)
                        ?? throw new InvalidOperationException(
                            "The FFLogs phase observer was not found.");
+    var getRankingScope = tableType.GetMethod(
+                              "GetRankingScope",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "The FFLogs ranking scope resolver was not found.");
+
+    var chineseScope = getRankingScope.Invoke(null, [true])
+                       ?? throw new InvalidOperationException("The Chinese FFLogs ranking scope was null.");
+    var globalScope = getRankingScope.Invoke(null, [false])
+                      ?? throw new InvalidOperationException("The global FFLogs ranking scope was null.");
+    Assert(
+        ReadProperty<string>(chineseScope, "ServerRegion") == "CN" &&
+        ReadProperty<int?>(chineseScope, "Partition") == 9 &&
+        ReadProperty<string?>(globalScope, "ServerRegion") is null &&
+        ReadProperty<int?>(globalScope, "Partition") is null,
+        "FFLogs ranking scopes no longer pin CN to partition 9 or use the latest global population.");
 
     object?[] normalM4Arguments = [1326u, 1, null];
     Assert(
@@ -2845,6 +2938,9 @@ static void ValidateFflogsCurrentEncounterTable()
     static int ReadEncounterValue(object? encounter, string propertyName)
         => (int)(encounter?.GetType().GetProperty(propertyName)?.GetValue(encounter)
                  ?? throw new InvalidOperationException($"Resolved FFLogs encounter has no {propertyName}."));
+
+    static T ReadProperty<T>(object value, string propertyName)
+        => (T)value.GetType().GetProperty(propertyName)!.GetValue(value)!;
 }
 
 static void ValidateEncounterParticipantsSurvivePartyDeparture()
@@ -4860,6 +4956,25 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
     finally
     {
         await service.DisposeAsync();
+    }
+
+    var globalService = new FflogsEstimateService(
+        () => new FflogsSettings(),
+        cachePath,
+        new PluginLogger(log),
+        useChineseRankings: () => false);
+    try
+    {
+        var globalReference = globalService.ReferenceSnapshot;
+        Assert(
+            globalReference.Region == "Global" &&
+            globalReference.Partition is null &&
+            globalReference.CurveCount == 0,
+            "A Global client reused the cached CN partition or exposed a fixed partition number.");
+    }
+    finally
+    {
+        await globalService.DisposeAsync();
     }
 }
 

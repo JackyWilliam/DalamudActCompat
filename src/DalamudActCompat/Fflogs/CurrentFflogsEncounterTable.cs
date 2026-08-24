@@ -9,6 +9,12 @@ internal sealed record CurrentFflogsEncounter(
     string EncounterName,
     int Difficulty);
 
+internal sealed record FflogsRankingScope(
+    string DisplayRegion,
+    string CacheRegion,
+    string? ServerRegion,
+    int? Partition);
+
 internal static class CurrentFflogsEncounterTable
 {
     // FFLogs zone 73 is the currently supported AAC Heavyweight ranking tier.
@@ -16,12 +22,19 @@ internal static class CurrentFflogsEncounterTable
     // reviewable data change and prevents stale cached encounters from opening.
     internal const int ZoneId = 73;
     internal const string ZoneName = "AAC Heavyweight";
-    // CN is one partition behind the global default for the current tier. Keep
-    // these values beside the explicit duty table so a tier rollover updates
-    // the ranking population and encounter mapping together.
-    internal const string RankingRegion = "CN";
-    internal const int RankingPartition = 9;
     internal const string RankingMetric = "dps";
+    private static readonly FflogsRankingScope ChineseRankingScope = new(
+        "CN",
+        "CN",
+        "CN",
+        9);
+    // FFLogs treats both filters as optional. Leaving them unset follows its current
+    // worldwide partition without guessing a patch number that can change independently.
+    private static readonly FflogsRankingScope GlobalRankingScope = new(
+        "Global",
+        "GLOBAL-LATEST",
+        null,
+        null);
 
     private static readonly IReadOnlyDictionary<uint, DutyEntry> Duties =
         new Dictionary<uint, DutyEntry>
@@ -73,6 +86,31 @@ internal static class CurrentFflogsEncounterTable
 
     internal static bool IsSupportedRanking(int encounterId, int difficulty)
         => Rankings.Contains((encounterId, difficulty));
+
+    internal static FflogsRankingScope GetRankingScope(bool chineseRegion)
+        => chineseRegion ? ChineseRankingScope : GlobalRankingScope;
+
+    internal static bool TryGetRankingScope(
+        string region,
+        int? partition,
+        out FflogsRankingScope scope)
+    {
+        if (string.Equals(region, ChineseRankingScope.CacheRegion, StringComparison.OrdinalIgnoreCase) &&
+            partition == ChineseRankingScope.Partition)
+        {
+            scope = ChineseRankingScope;
+            return true;
+        }
+        if (string.Equals(region, GlobalRankingScope.CacheRegion, StringComparison.OrdinalIgnoreCase) &&
+            partition == GlobalRankingScope.Partition)
+        {
+            scope = GlobalRankingScope;
+            return true;
+        }
+
+        scope = null!;
+        return false;
+    }
 
     internal static bool TryResolve(uint territoryId, int phase, out CurrentFflogsEncounter encounter)
     {

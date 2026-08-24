@@ -43,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
         => boundByDuty && localPlayerUnconscious && !anyPartyMemberAlive;
 
     private readonly PluginServices services;
+    private readonly string clientLanguageName;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
@@ -162,6 +163,9 @@ public sealed class Plugin : IDalamudPlugin
             condition,
             gameInteropProvider,
             notificationManager);
+        // Client language is fixed for this plugin lifetime. Capturing the primitive name
+        // keeps parser/FFLogs worker callbacks from reading a Dalamud service off-thread.
+        clientLanguageName = dataManager.Language.ToString();
         pictoActOverlay = new PictoActOverlayService(
             gameGui,
             sigScanner,
@@ -243,7 +247,8 @@ public sealed class Plugin : IDalamudPlugin
         var hostIpcClient = new HostIpcClient(
             stateStore,
             logger,
-            BuildHostPermissionSnapshot);
+            BuildHostPermissionSnapshot,
+            GetHostGameContext);
         hostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
@@ -259,7 +264,8 @@ public sealed class Plugin : IDalamudPlugin
         var matchaIpcClient = new HostIpcClient(
             stateStore,
             logger,
-            BuildMatchaHostPermissionSnapshot);
+            BuildMatchaHostPermissionSnapshot,
+            GetHostGameContext);
         matchaHostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
@@ -274,7 +280,8 @@ public sealed class Plugin : IDalamudPlugin
         var genericIpcClient = new HostIpcClient(
             stateStore,
             logger,
-            BuildGenericHostPermissionSnapshot);
+            BuildGenericHostPermissionSnapshot,
+            GetHostGameContext);
         genericHostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
@@ -293,7 +300,8 @@ public sealed class Plugin : IDalamudPlugin
         fflogsEstimateService = new FflogsEstimateService(
             () => configuration.Fflogs,
             paths.FflogsCacheFile,
-            logger);
+            logger,
+            () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese);
         fflogsEstimateService.NotifyTerritoryChanged(
             clientState.TerritoryType,
             zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
@@ -301,6 +309,7 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface,
             log,
             dataManager,
+            () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese,
             // ACT publishes encounters from worker threads, so resolve the local name from the
             // immutable identity snapshot instead of reading IPlayerState in that callback.
             () => Volatile.Read(ref playerIdentitySnapshot)
@@ -446,6 +455,8 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
+            ResolveGameRegionSelection,
+            SetGameRegionMode,
             StartFactoryReset,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
@@ -498,6 +509,8 @@ public sealed class Plugin : IDalamudPlugin
             () => helpWindow.IsOpen = true,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
+            ResolveGameRegionSelection,
+            SetGameRegionMode,
             SetSimplifiedMode,
             SetHideHtmlOverlaysWhenUnfocused,
             SetMeterVisible,
@@ -3588,6 +3601,104 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
     }
+
+    private GameRegionSelection ResolveGameRegionSelection()
+        => GameRegionResolver.Resolve(
+            configuration.GameRegionMode,
+            clientLanguageName);
+
+    private HostGameContext GetHostGameContext()
+        => ResolveGameRegionSelection().ToHostContext();
+
+    private void SetGameRegionMode(GameRegionMode mode)
+    {
+        if (configuration.GameRegionMode == mode)
+        {
+            return;
+        }
+
+        configuration.GameRegionMode = mode;
+        SaveConfiguration();
+        var selection = ResolveGameRegionSelection();
+        logger.Information(
+            $"Game region mode changed: mode={selection.Mode}, detected={selection.DetectedRegion}, " +
+            $"effective={selection.EffectiveRegion}, language={selection.ClientLanguage}.");
+        StartBackgroundOperation(() => ApplyGameRegionChangeAsync(selection));
+    }
+
+    private async Task ApplyGameRegionChangeAsync(GameRegionSelection requestedSelection)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var parserWasActive = parserEngine.Status.State is
+            ParserState.Running or
+            ParserState.Initializing or
+            ParserState.Faulted;
+        if (parserWasActive)
+        {
+            await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
+        }
+
+        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            var sharedWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var matchaWasRunning = matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var genericWasRunning = genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+
+            // Host startup consumes region context during its handshake, so each active process
+            // must reconnect; changing the in-memory repository under loaded ACT plugins is unsafe.
+            if (genericWasRunning)
+            {
+                await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            if (matchaWasRunning)
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            if (sharedWasRunning)
+            {
+                await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+            }
+            if (matchaWasRunning && sharedWasRunning)
+            {
+                await StartMatchaAfterSharedHostAsync(timeout.Token, throwOnFailure: true)
+                    .ConfigureAwait(false);
+            }
+            if (genericWasRunning)
+            {
+                await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
+
+        var appliedSelection = ResolveGameRegionSelection();
+        await services.Framework.RunOnFrameworkThread(() =>
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = text.Get("游戏区域已切换", "Game region changed"),
+                Content = text.Get(
+                    $"已切换为 {FormatGameRegion(appliedSelection.EffectiveRegion)}；解析器和正在运行的扩展 Host 已刷新。",
+                    $"Switched to {FormatGameRegion(appliedSelection.EffectiveRegion)}; the parser and active extension Hosts were refreshed."),
+            })).ConfigureAwait(false);
+
+        if (requestedSelection.Mode != configuration.GameRegionMode)
+        {
+            logger.Information(
+                "A newer game-region selection superseded this refresh; the latest selection will own the final restart.");
+        }
+    }
+
+    private string FormatGameRegion(HostGameRegion region)
+        => region == HostGameRegion.Chinese
+            ? text.Get("国服", "China")
+            : text.Get("国际服", "Global");
 
     private void UpdateHtmlOverlaySuppression(DateTimeOffset now, bool force = false)
     {

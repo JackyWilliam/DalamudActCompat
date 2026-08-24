@@ -20,6 +20,8 @@ public sealed class SettingsWindow : Window
     private readonly PluginLogger logger;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
+    private readonly Func<GameRegionSelection> getGameRegionSelection;
+    private readonly Action<GameRegionMode> setGameRegionMode;
     private readonly Func<Task<string>> factoryReset;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action selectPluginPackage;
@@ -50,6 +52,8 @@ public sealed class SettingsWindow : Window
         PluginLogger logger,
         Action saveConfiguration,
         Action applyPermissionChanges,
+        Func<GameRegionSelection> getGameRegionSelection,
+        Action<GameRegionMode> setGameRegionMode,
         Func<Task<string>> factoryReset,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action selectPluginPackage,
@@ -75,6 +79,8 @@ public sealed class SettingsWindow : Window
         this.logger = logger;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
+        this.getGameRegionSelection = getGameRegionSelection;
+        this.setGameRegionMode = setGameRegionMode;
         this.factoryReset = factoryReset;
         this.discoverPlugins = discoverPlugins;
         this.selectPluginPackage = selectPluginPackage;
@@ -115,6 +121,7 @@ public sealed class SettingsWindow : Window
             ImGui.EndCombo();
         }
         WindowName = text.Get("ACT 兼容设置###DalamudActCompatSettings", "ACT Compat Settings###DalamudActCompatSettings");
+        GameRegionSelector.Draw(text, getGameRegionSelection(), setGameRegionMode);
         changed |= Checkbox(text.Get("启用解析", "Enable parsing"), configuration.EnableParsing, value => configuration.EnableParsing = value);
         changed |= Checkbox(text.Get("自动启动解析器", "Auto start parser"), configuration.AutoStartParser, value => configuration.AutoStartParser = value);
         changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);

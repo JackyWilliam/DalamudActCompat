@@ -52,6 +52,7 @@ if (!File.Exists(hostExecutable))
 
 await ValidateAuthorizedTtsCadenceAsync();
 ValidateFfxivEntityDeltaRepository();
+ValidateFfxivRegionContext();
 
 if (entityTimingProbe)
 {
@@ -150,6 +151,26 @@ if (pluginRoot is not null)
         "closed-loop tests passed.";
 }
 Console.WriteLine(completion);
+
+void ValidateFfxivRegionContext()
+{
+    var repository = new FfxivDataRepository();
+    repository.SetGameContext(new HostGameContext(
+        HostGameRegion.Global,
+        HostClientLanguage.Japanese));
+    Assert(
+        repository.GetGameRegion() == (byte)HostGameRegion.Global &&
+        repository.GetSelectedLanguageID() == FFXIV_ACT_Plugin.Common.Language.Japanese,
+        "The independent ACT Host did not expose the selected Global region and client language.");
+
+    repository.SetGameContext(new HostGameContext(
+        HostGameRegion.Chinese,
+        HostClientLanguage.Chinese));
+    Assert(
+        repository.GetGameRegion() == (byte)HostGameRegion.Chinese &&
+        repository.GetSelectedLanguageID() == FFXIV_ACT_Plugin.Common.Language.Chinese,
+        "The independent ACT Host did not switch back to the Chinese region and language.");
+}
 
 void ValidateForegroundNotificationRouting()
 {

@@ -102,6 +102,15 @@ public static class HostPluginBridge
         Console.WriteLine($"game process registered for ACT compatibility: pid={processId}");
     }
 
+    internal static void ConfigureGameContext(HostGameContext gameContext)
+    {
+        ArgumentNullException.ThrowIfNull(gameContext);
+        FfxivRepositoryInstance.SetGameContext(gameContext);
+        Console.WriteLine(
+            $"game context registered for ACT compatibility: " +
+            $"region={gameContext.Region}, language={gameContext.Language}");
+    }
+
     internal static void ConfigureSilverDasherRoot(string root)
     {
         var fullRoot = Path.GetFullPath(root);

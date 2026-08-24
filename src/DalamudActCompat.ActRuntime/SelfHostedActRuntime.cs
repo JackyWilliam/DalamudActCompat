@@ -49,6 +49,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
     private readonly IDataManager dataManager;
+    private readonly Func<bool> useChineseRegion;
     private readonly Func<string> playerName;
     private readonly Func<IReadOnlyList<ActPlayerIdentity>> playerIdentities;
     private readonly Func<ActPlayerPose?> localPlayerPose;
@@ -137,6 +138,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         IDalamudPluginInterface pluginInterface,
         IPluginLog log,
         IDataManager dataManager,
+        Func<bool> useChineseRegion,
         Func<string> playerName,
         Func<IReadOnlyList<ActPlayerIdentity>> playerIdentities,
         Func<ActPlayerPose?> localPlayerPose,
@@ -158,6 +160,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.pluginInterface = pluginInterface;
         this.log = log;
         this.dataManager = dataManager;
+        this.useChineseRegion = useChineseRegion;
         this.playerName = playerName;
         this.playerIdentities = playerIdentities;
         this.localPlayerPose = localPlayerPose;
@@ -660,13 +663,18 @@ public sealed class SelfHostedActRuntime : IDisposable
         configuration.PlayerCharacterName = playerName();
         try
         {
-            IINACT.FfxivActPluginWrapper.ConfigureRegion(dataManager.Language);
+            var chineseRegion = useChineseRegion();
+            log.Information(
+                $"Starting ACT parser with region={(chineseRegion ? "Chinese" : "Global")}, " +
+                $"language={dataManager.Language}.");
+            IINACT.FfxivActPluginWrapper.ConfigureRegion(dataManager.Language, chineseRegion);
             parser = new IINACT.FfxivActPluginWrapper(
                 configuration,
                 dataManager.Language,
                 chatGui,
                 framework,
-                condition);
+                condition,
+                chineseRegion);
             // Keep the native hook disabled until every parser dependency has loaded.
             // A failed or stalled wrapper construction must not leave a half-started hook.
             zoneDownHookManager = new IINACT.Network.ZoneDownHookManager(

@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 10;
+    private const int CurrentVersion = 11;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -32,6 +32,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public string ActPluginDirectory { get; set; } = string.Empty;
 
     public string UiLanguage { get; set; } = "zh-CN";
+
+    public GameRegionMode GameRegionMode { get; set; } = GameRegionMode.Auto;
 
     public bool ShowLauncherButton { get; set; } = true;
 
@@ -240,6 +242,14 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 10;
             changed = true;
         }
+        if (Version < 11)
+        {
+            // Existing installations inherit detection instead of being silently pinned to
+            // the CN behavior that older builds happened to expose.
+            GameRegionMode = GameRegionMode.Auto;
+            Version = 11;
+            changed = true;
+        }
 
         return changed;
     }
@@ -257,6 +267,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
+        GameRegionMode = GameRegionMode.Auto;
         ShowLauncherButton = true;
         HideHtmlOverlaysWhenGameUnfocused = true;
         SimplifiedModeEnabled = false;
@@ -296,6 +307,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LogDirectory = snapshot.LogDirectory;
         ActPluginDirectory = snapshot.ActPluginDirectory;
         UiLanguage = snapshot.UiLanguage;
+        GameRegionMode = snapshot.GameRegionMode;
         ShowLauncherButton = snapshot.ShowLauncherButton;
         HideHtmlOverlaysWhenGameUnfocused = snapshot.HideHtmlOverlaysWhenGameUnfocused;
         SimplifiedModeEnabled = snapshot.SimplifiedModeEnabled;

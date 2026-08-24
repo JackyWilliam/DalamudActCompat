@@ -74,7 +74,9 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | Combat Meter | Show, locate, lock, or click through the meter; configure presets, custom horizontal layouts, sorting, metrics, columns, opacity, and FFLogs estimates |
 | Overlays | Install Cactbot and manage alerts, timelines, and custom HTML overlays |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
-| Settings | Restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
+| Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
+
+Game region defaults to automatic detection: the Simplified Chinese client uses the China packet family, while official international client languages use Global. You can override it manually; changing it refreshes the running parser and extension Hosts without changing the client-language action names or log parsing. The FFLogs estimate follows the same setting, using the CN partition for China and the latest worldwide partition for Global.
 
 ## Common commands
 

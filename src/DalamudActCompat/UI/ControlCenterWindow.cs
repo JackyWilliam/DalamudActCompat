@@ -70,6 +70,8 @@ public sealed class ControlCenterWindow : Window
     private readonly Action openHelp;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
+    private readonly Func<GameRegionSelection> getGameRegionSelection;
+    private readonly Action<GameRegionMode> setGameRegionMode;
     private readonly Action<bool> setSimplifiedMode;
     private readonly Action<bool> setHideHtmlOverlaysWhenUnfocused;
     private readonly Action<bool> setMeterVisible;
@@ -150,6 +152,8 @@ public sealed class ControlCenterWindow : Window
         Action openHelp,
         Action saveConfiguration,
         Action applyPermissionChanges,
+        Func<GameRegionSelection> getGameRegionSelection,
+        Action<GameRegionMode> setGameRegionMode,
         Action<bool> setSimplifiedMode,
         Action<bool> setHideHtmlOverlaysWhenUnfocused,
         Action<bool> setMeterVisible,
@@ -199,6 +203,8 @@ public sealed class ControlCenterWindow : Window
         this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
+        this.getGameRegionSelection = getGameRegionSelection;
+        this.setGameRegionMode = setGameRegionMode;
         this.setSimplifiedMode = setSimplifiedMode;
         this.setHideHtmlOverlaysWhenUnfocused = setHideHtmlOverlaysWhenUnfocused;
         this.setMeterVisible = setMeterVisible;
@@ -566,10 +572,14 @@ public sealed class ControlCenterWindow : Window
         var generalHint = text.Get(
             "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
             "Quick button: left settings, right Combat Meter, hold middle mouse to move.");
+        var regionHint = text.Get(
+            "当前：国际服（手动） · 自动检测：国服 · 语言：简体中文",
+            "Current: Global (manual) · Detected: China · Language: Simplified Chinese");
         var generalCardHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             ImGui.GetTextLineHeightWithSpacing() +
-            (ImGui.GetFrameHeightWithSpacing() * 5) +
+            (ImGui.GetFrameHeightWithSpacing() * 6) +
+            ImGui.CalcTextSize(regionHint, false, cardContentWidth).Y +
             ImGui.CalcTextSize(generalHint, false, cardContentWidth).Y +
             (ImGui.GetStyle().ItemSpacing.Y * 2);
         if (BrandedWindowChrome.BeginGoldCard(
@@ -586,6 +596,10 @@ public sealed class ControlCenterWindow : Window
                 text.Get("自动启动解析器", "Auto start parser"),
                 configuration.AutoStartParser,
                 value => configuration.AutoStartParser = value);
+            GameRegionSelector.Draw(
+                text,
+                getGameRegionSelection(),
+                setGameRegionMode);
             var simplifiedMode = configuration.SimplifiedModeEnabled;
             if (ImGui.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
             {
@@ -2187,7 +2201,7 @@ public sealed class ControlCenterWindow : Window
         var reference = fflogsEstimateService.ReferenceSnapshot;
         DrawSection("FFLogs Reference");
         DrawRow("Region", reference.Region);
-        DrawRow("Partition", reference.Partition.ToString());
+        DrawRow("Partition", reference.Partition?.ToString() ?? "Latest");
         DrawRow("Parse Metric", reference.Metric);
         DrawRow(
             "Percentile Data",
@@ -2676,9 +2690,10 @@ public sealed class ControlCenterWindow : Window
         var referenceDate = reference.LatestDataUpdatedAt is { } updatedAt
             ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd")
             : "--";
+        var partitionLabel = reference.Partition?.ToString() ?? text.Get("最新", "Latest");
         ImGui.TextDisabled(text.Get(
-            $"区域 {reference.Region} · 分区 {reference.Partition} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
-            $"Region {reference.Region} · Partition {reference.Partition} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
+            $"区域 {reference.Region} · 分区 {partitionLabel} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
+            $"Region {reference.Region} · Partition {partitionLabel} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
 
         var changed = false;
         if (ImGui.BeginTable(
@@ -2817,8 +2832,8 @@ public sealed class ControlCenterWindow : Window
                     "The current territory is outside the latest raid tier; historical rankings will not be loaded."));
             }
             ImGui.TextDisabled(text.Get(
-                "榜单换季时只需更新内置副本表，不依赖国服客户端返回英文 Boss 名。",
-                "Tier rollovers only require updating the built-in duty table; English boss names are not required from the CN client."));
+                "榜单区域跟随上方游戏区域设置；国服使用 CN 分区，国际服使用 FFLogs 最新全球分区。",
+                "The ranking population follows the game-region setting above: CN partition for China, latest global partition for Global."));
             ImGui.EndTable();
         }
 
