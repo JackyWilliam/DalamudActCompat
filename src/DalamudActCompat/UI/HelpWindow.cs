@@ -425,10 +425,10 @@ public sealed class HelpWindow : Window
                 "“脱战自动隐藏”只改变显示状态，不会停止解析或删除战斗数据。",
                 "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
             DrawBullet(text.Get(
-                "经典榜和职能分栏分别保存背景透明度，并统一作用于窗口、标题、表头、玩家行和进度条底色；横版模板始终没有背景，因此不提供该滑块。",
+                "经典榜和职能分栏分别保存背景透明度，并统一作用于窗口、标题、表头、玩家行和进度条底色；横版始终没有背景，因此不提供该滑块。",
                 "Classic and role-split save opacity independently and apply it to the window, header, table rows, and bar fills. Horizontal always has no background, so it has no opacity slider."));
         });
-        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 560, () =>
+        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 640, () =>
         {
             DrawBullet(text.Get(
                 "先关闭“锁定窗口”，把统计窗拖到需要的位置，再重新锁定；需要让鼠标操作游戏时同时开启“锁定时鼠标穿透”。",
@@ -440,11 +440,11 @@ public sealed class HelpWindow : Window
                 "在槽位列表中可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高伤害和死亡。最高伤害使用紧凑宽度显示，悬停可查看完整技能名与数值；FFLogs 只有同时开启在线预估和对应槽位时才出现。",
                 "Slots independently control FFLogs, DPS, EncDPS, ExtDPS, rDPS, HPS, CRIT %, DH %, CDH %, damage %, total damage, highest single-hit action, and deaths. FFLogs appears only when both online estimates and its slot are enabled."));
             DrawBullet(text.Get(
-                "经典榜、横版模板和职能分栏三个模板互斥启用，并分别保存位置、大小、锁定和槽位。8 人经典榜与职能分栏使用同一套带表头的经典表格；24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。横版模板没有背景，可横向滑动并按当前榜单排序。编辑器的页面预览直接复用真实悬浮窗渲染，并支持点选、拖动排序以及保存或取消修改。",
-                "Classic, Horizontal, and Role split are mutually exclusive and keep independent window settings. The 8-player classic and role-split views share the same table and headers; 24-player classic mode is fixed to job/name plus the current DPS/HPS value. Horizontal stays background-free and scrollable. Page preview reuses the runtime renderer and supports selection, drag ordering, Save, and Cancel."));
+                "经典榜、横版和职能分栏三个模板互斥启用，并分别保存位置、大小、锁定和槽位。8 人经典榜与职能分栏使用同一套带表头的经典表格；24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。横版没有背景，可横向滑动并按当前榜单排序。编辑器的页面预览直接复用真实悬浮窗渲染，并支持点选、拖动排序以及保存或取消修改。点击编辑器的取消或右上角关闭时，可选择保存并退出、不保存并退出或继续编辑。",
+                "Classic, Horizontal, and Role split are mutually exclusive and keep independent window settings. The 8-player classic and role-split views share the same table and headers; 24-player classic mode is fixed to job/name plus the current DPS/HPS value. Horizontal stays background-free and scrollable. Page preview reuses the runtime renderer and supports selection and drag ordering. Cancel or the top-right close button asks whether to save and exit, exit without saving, or keep editing."));
             DrawBullet(text.Get(
-                "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
-                "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
+                "经典榜收起后只保留自己并隐藏全队汇总；职能分栏会分别收起到自己所在行（找不到自己时保留首行）。空数据时也可收起，收起不会停止统计。职业 / ID 会先缩到两字省略显示，只有继续缩小窗口才出现横向滚动；悬停可查看完整名称。玩家 ID 遮盖只影响界面，不会改写战斗日志。",
+                "Collapsed Classic keeps only your row and hides the team summary. Each role-split window collapses independently to your row, or its first row when you are absent. Empty windows can also collapse, without stopping collection. Job / ID shrinks to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Player-ID masking affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
                 "战斗结束后悬浮窗会保留上一把结果，方便继续查看；下一场出现有效战斗数据后会用新数据从 0 重新计算。普通脱战、阶段切换、击杀前置目标和 ACT 自动分段不会提前清零。副本内只有确认全队团灭后的重新开怪才开始新一把；手动重置会立即清空，并阻止旧总数在后续刷新中弹回。",
                 "Outside duties, the live meter clears after the party produces no relevant combat data for five seconds, so a party member pulling first no longer causes repeated resets while the local player is still out of combat. Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));

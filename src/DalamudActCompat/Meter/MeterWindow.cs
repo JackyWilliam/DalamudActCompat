@@ -231,7 +231,7 @@ public sealed class MeterWindow : Window
         {
             DrawClassicTable(encounter, rows, settings, "classic-meter-rows");
         }
-        if (!settings.ClassicAllianceView)
+        if (ShouldDrawTeamSummary(settings))
         {
             MeterSlotPresentation.DrawTeamSummary(
                 "classic",
@@ -368,7 +368,7 @@ public sealed class MeterWindow : Window
                 "classic-editor-preview-rows",
                 previewInteraction);
         }
-        if (!settings.ClassicAllianceView)
+        if (ShouldDrawTeamSummary(settings))
         {
             MeterSlotPresentation.DrawTeamSummary(
                 "classic-editor-preview",
@@ -715,11 +715,6 @@ public sealed class MeterWindow : Window
             ImGui.GetStyle().ItemSpacing.Y +
             bodyHeight +
             2);
-        if (!settings.ClassicAllianceView &&
-            MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots))
-        {
-            targetHeight += MeterSlotPresentation.TeamSummaryHeight + 4;
-        }
         BeginWindowHeightAnimation(targetHeight);
     }
 
@@ -924,14 +919,22 @@ public sealed class MeterWindow : Window
         var showFflogs = ShouldShowFflogsColumn(configuration.Fflogs.Enabled, settings);
         var columnWidths = MeasureColumnWidths(rows, settings, showFflogs);
         var availableTableWidth = ImGui.GetContentRegionAvail().X;
-        var requiredTableWidth = CalculateRequiredTableWidth(columnWidths, settings.FontScale);
-        var useHorizontalScroll = ShouldEnableHorizontalScroll(availableTableWidth, requiredTableWidth);
-        var summaryReserve = MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots)
+        var minimumIdentityWidth = MeasureMinimumIdentityColumnWidth(settings);
+        var minimumColumnWidths = columnWidths with
+        {
+            Identity = columnWidths.Identity is null ? null : minimumIdentityWidth,
+        };
+        var minimumTableWidth = CalculateRequiredTableWidth(minimumColumnWidths, settings.FontScale);
+        var useHorizontalScroll = ShouldEnableHorizontalScroll(availableTableWidth, minimumTableWidth);
+        var summaryReserve = ShouldDrawTeamSummary(settings) &&
+                             MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots)
             ? MeterSlotPresentation.TeamSummaryHeight + 4
             : 0;
         if (useHorizontalScroll)
         {
-            ImGui.SetNextWindowContentSize(new Vector2(requiredTableWidth, 0));
+            // Long player IDs may be truncated, so scrolling begins only after the
+            // identity column has reached its readable two-character minimum.
+            ImGui.SetNextWindowContentSize(new Vector2(minimumTableWidth, 0));
         }
 
         var childHeight = Math.Max(
@@ -946,7 +949,8 @@ public sealed class MeterWindow : Window
             var layout = BuildColumnLayout(
                 ImGui.GetContentRegionAvail().X,
                 columnWidths,
-                settings);
+                settings,
+                minimumIdentityWidth);
             DrawTableHeader(layout, settings, previewInteraction);
             var maximumScore = Math.Max(1, rows.Max(row => Score(row, sortMode)));
             foreach (var row in rows)
@@ -1079,13 +1083,19 @@ public sealed class MeterWindow : Window
     private MeterColumnLayout BuildColumnLayout(
         float availableWidth,
         MeterColumnWidths widths,
-        MeterSettings settings)
+        MeterSettings settings,
+        float minimumIdentityWidth)
     {
         var scale = Math.Clamp(settings.FontScale, 0.75f, 1.8f);
         var right = Math.Max(0, availableWidth - (TableRightPadding * scale));
-        var identityExtraWidth = widths.Identity is null
+        var preferredTableWidth = CalculateRequiredTableWidth(widths, settings.FontScale);
+        var resolvedIdentityWidth = widths.Identity is not { } identityWidth
             ? 0
-            : Math.Max(0, availableWidth - CalculateRequiredTableWidth(widths, settings.FontScale));
+            : ResolveIdentityColumnWidth(
+                availableWidth,
+                preferredTableWidth,
+                identityWidth,
+                minimumIdentityWidth);
         MeterColumn Take(float width, MeterSlotDefinition? slot = null)
         {
             right -= width;
@@ -1122,8 +1132,8 @@ public sealed class MeterWindow : Window
                 case MeterSlotMetric.Rank when rank is null && widths.Rank is { } value:
                     rank = Take(value, slot);
                     break;
-                case MeterSlotMetric.PlayerIdentity when identity is null && widths.Identity is { } value:
-                    identity = Take(value + identityExtraWidth, slot);
+                case MeterSlotMetric.PlayerIdentity when identity is null && widths.Identity is not null:
+                    identity = Take(resolvedIdentityWidth, slot);
                     break;
                 case MeterSlotMetric.Fflogs when fflogs is null && widths.Fflogs is { } value:
                     fflogs = Take(value, slot);
@@ -1174,8 +1184,8 @@ public sealed class MeterWindow : Window
         // A legacy quick setting may expose a column before its slot exists. Keep it
         // visible on the left until the editor next synchronizes the profile.
         rank ??= widths.Rank is { } rankWidth ? Take(rankWidth) : null;
-        identity ??= widths.Identity is { } identityWidth
-            ? Take(identityWidth + identityExtraWidth)
+        identity ??= widths.Identity is not null
+            ? Take(resolvedIdentityWidth)
             : null;
         fflogs ??= widths.Fflogs is { } fflogsWidth ? Take(fflogsWidth) : null;
         dps ??= widths.Dps is { } dpsWidth ? Take(dpsWidth) : null;
@@ -1294,10 +1304,12 @@ public sealed class MeterWindow : Window
             null,
             null,
             settings.ShowHighestDamage
+                // Full action names remain available through the row tooltip; reserving
+                // them here would force a permanent horizontal scrollbar.
                 ? StableWidth(
                     HighestDamageColumnWidth,
                     text.Get("最高伤害", "Max hit"),
-                    rows.Select(static row => FormatHighestDamage(row)))
+                    [])
                 : null,
             settings.ShowDeaths
                 ? StableWidth(
@@ -1305,6 +1317,33 @@ public sealed class MeterWindow : Window
                     text.Get("死亡", "KO"),
                     rows.Select(static row => row.Deaths.ToString()))
                 : null);
+    }
+
+    private float MeasureMinimumIdentityColumnWidth(MeterSettings settings)
+    {
+        var width = 6f;
+        if (settings.ShowJob)
+        {
+            if (JobDisplayFormatter.UsesIcon(settings.JobDisplayStyle))
+            {
+                width += CalculateJobIconSize(
+                    CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()),
+                    ImGui.GetTextLineHeight()) + 7;
+            }
+            else
+            {
+                var jobSample = settings.JobDisplayStyle == JobDisplayStyle.ChineseAbbreviation
+                    ? "白魔"
+                    : "WHM";
+                width += Math.Max(35, ImGui.CalcTextSize(jobSample).X + 10) + 8;
+            }
+        }
+
+        if (settings.ShowPlayerName)
+        {
+            width += ImGui.CalcTextSize(text.Get("杰克...", "Ja...")).X;
+        }
+        return width;
     }
 
     private void DrawTableHeader(
@@ -1335,14 +1374,15 @@ public sealed class MeterWindow : Window
         var lineY = start.Y + (headerHeight - ImGui.GetTextLineHeight()) * 0.5f;
         void DrawColumnHeader(string label, MeterColumn column, bool alignLeft = false)
         {
-            var size = ImGui.CalcTextSize(label);
+            var fittedLabel = TrimToWidth(label, Math.Max(1, column.Width - 6));
+            var size = ImGui.CalcTextSize(fittedLabel);
             var columnStart = new Vector2(start.X + column.Offset, start.Y);
             var columnEnd = new Vector2(columnStart.X + column.Width, end.Y);
             previewInteraction?.Observe(column.Slot, columnStart, columnEnd, drawList);
             var columnX = alignLeft
                 ? columnStart.X + 3
                 : columnStart.X + Math.Max(0, column.Width - size.X);
-            drawList.AddText(new Vector2(columnX, lineY), color, label);
+            drawList.AddText(new Vector2(columnX, lineY), color, fittedLabel);
         }
 
         if (layout.Rank is { } rank)
@@ -1587,10 +1627,18 @@ public sealed class MeterWindow : Window
                 var availableNameWidth = Math.Max(
                     12,
                     start.X + identity.Offset + identity.Width - identityTextX - 3);
+                var fittedName = TrimToWidth(displayName, availableNameWidth);
                 drawList.AddText(
                     new Vector2(identityTextX, lineY),
                     ImGui.GetColorU32(row.IsLocalPlayer || isLimitBreak ? Gold : Vector4.One),
-                    TrimToWidth(displayName, availableNameWidth));
+                    fittedName);
+                if (!string.Equals(fittedName, displayName, StringComparison.Ordinal) &&
+                    ImGui.IsMouseHoveringRect(
+                        new Vector2(start.X + identity.Offset, start.Y),
+                        new Vector2(start.X + identity.Offset + identity.Width, end.Y)))
+                {
+                    ImGui.SetTooltip(displayName);
+                }
             }
             previewInteraction?.Observe(
                 identity.Slot,
@@ -1842,6 +1890,19 @@ public sealed class MeterWindow : Window
 
     internal static bool ShouldShowFflogsColumn(bool integrationEnabled, MeterSettings settings)
         => integrationEnabled && settings.ShowFflogs;
+
+    internal static bool ShouldDrawTeamSummary(MeterSettings settings)
+        => !settings.ClassicAllianceView && !settings.CompactMode;
+
+    internal static float ResolveIdentityColumnWidth(
+        float availableTableWidth,
+        float preferredTableWidth,
+        float preferredIdentityWidth,
+        float minimumIdentityWidth)
+        => Math.Max(
+               minimumIdentityWidth,
+               preferredIdentityWidth - Math.Max(0, preferredTableWidth - availableTableWidth)) +
+           Math.Max(0, availableTableWidth - preferredTableWidth);
 
     internal static bool ShouldEnableHorizontalScroll(float availableWidth, float requiredWidth)
         => requiredWidth > availableWidth + 1;

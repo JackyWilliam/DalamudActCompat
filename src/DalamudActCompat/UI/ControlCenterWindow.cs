@@ -765,7 +765,7 @@ public sealed class ControlCenterWindow : Window
 
     private string MeterKindLabel(MeterWindowKind kind) => kind switch
     {
-        MeterWindowKind.Horizontal => text.Get("横版模板", "Horizontal"),
+        MeterWindowKind.Horizontal => text.Get("横版", "Horizontal"),
         MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
         _ => text.Get("经典榜", "Classic"),
     };

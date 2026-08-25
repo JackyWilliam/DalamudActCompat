@@ -2506,6 +2506,27 @@ static void ValidateMeterLayout()
         (clickThroughScrollableRows & MeterWindow.HorizontalScrollbarFlagMask) != 0 &&
         (unlockedRows & MeterWindow.NoInputsFlagMask) == 0,
         "The expanded Combat Meter child window does not follow the locked click-through setting.");
+    var summaryVisibilitySettings = new MeterSettings();
+    Assert(
+        MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        "The expanded classic Meter unexpectedly hid its team summary.");
+    summaryVisibilitySettings.CompactMode = true;
+    Assert(
+        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        "The collapsed classic Meter still rendered its team summary.");
+    summaryVisibilitySettings.CompactMode = false;
+    summaryVisibilitySettings.ClassicAllianceView = true;
+    Assert(
+        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        "The fixed 24-player classic layout unexpectedly rendered the editable team summary.");
+    Assert(
+        MeterWindow.ResolveIdentityColumnWidth(600, 600, 240, 90) == 240 &&
+        MeterWindow.ResolveIdentityColumnWidth(500, 600, 240, 90) == 140 &&
+        MeterWindow.ResolveIdentityColumnWidth(450, 600, 240, 90) == 90 &&
+        MeterWindow.ResolveIdentityColumnWidth(700, 600, 240, 90) == 340 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(450, 450) &&
+        MeterWindow.ShouldEnableHorizontalScroll(448, 450),
+        "The identity column did not shrink to its minimum before enabling horizontal scrolling.");
     var defaultClassicSlots = defaultColumns.ClassicWindow.Slots;
     Assert(
         defaultClassicSlots.Any(static slot =>
@@ -2828,8 +2849,12 @@ static void ValidateIndependentMeterWindows()
         !classicSource.Contains("最高技能", StringComparison.Ordinal) &&
         classicSource.Contains("DrawRankingModeIcon", StringComparison.Ordinal) &&
         classicSource.Contains("FirstOrDefault(static row => row.IsLocalPlayer)", StringComparison.Ordinal) &&
+        classicSource.Contains("minimumIdentityWidth", StringComparison.Ordinal) &&
+        classicSource.Contains("杰克...", StringComparison.Ordinal) &&
+        classicSource.Contains("SetTooltip(displayName)", StringComparison.Ordinal) &&
+        classicSource.Contains("ShouldDrawTeamSummary(settings)", StringComparison.Ordinal) &&
         classicSource.Contains("MinimumSize = new Vector2(120, 90)", StringComparison.Ordinal),
-        "The classic Meter lost its 8-player table, fixed 24-player rows, size dropdown, or self-only retention.");
+        "The classic Meter lost its table modes, compact summary rule, or compressible identity column.");
     Assert(
         roleSource.Contains("DalamudActCompatRoleSplitDamageMeter", StringComparison.Ordinal) &&
         roleSource.Contains("DalamudActCompatRoleSplitHealerMeter", StringComparison.Ordinal) &&
@@ -2838,8 +2863,11 @@ static void ValidateIndependentMeterWindows()
         roleSource.Contains("Profile.BackgroundOpacity", StringComparison.Ordinal) &&
         roleSource.Contains("RoleSplitDamageCompact", StringComparison.Ordinal) &&
         roleSource.Contains("DrawChevron", StringComparison.Ordinal) &&
+        roleSource.Contains("ApplyCompactWindowHeight(hasEncounter: false", StringComparison.Ordinal) &&
+        roleSource.Contains("AdvanceWindowHeightAnimation", StringComparison.Ordinal) &&
+        roleSource.Contains("MeterWindow.EaseOutCubic", StringComparison.Ordinal) &&
         !roleSource.Contains("titleHovered", StringComparison.Ordinal),
-        "Role split does not reuse the classic table/header or lacks the single top-right collapse control.");
+        "Role split lost its classic table, single collapse control, empty-state collapse, or height animation.");
     Assert(
         editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
         editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
@@ -2856,6 +2884,10 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("Move down", StringComparison.Ordinal) &&
         editorSource.Contains("保存", StringComparison.Ordinal) &&
         editorSource.Contains("取消", StringComparison.Ordinal) &&
+        editorSource.Contains("真的要退出吗？", StringComparison.Ordinal) &&
+        editorSource.Contains("保存并退出", StringComparison.Ordinal) &&
+        editorSource.Contains("不保存并退出", StringComparison.Ordinal) &&
+        editorSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
         editorSource.Contains("editingSnapshot", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
@@ -8292,7 +8324,9 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("三个模板互斥启用", StringComparison.Ordinal) &&
         helpWindowSource.Contains("页面预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("横版模板始终没有背景", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("横版始终没有背景", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("保存并退出、不保存并退出或继续编辑", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("职业 / ID 会先缩到两字", StringComparison.Ordinal) &&
         helpWindowSource.Contains("可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS", StringComparison.Ordinal) &&
         helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
         helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&

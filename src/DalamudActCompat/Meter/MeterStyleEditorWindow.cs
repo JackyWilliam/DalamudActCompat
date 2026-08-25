@@ -32,6 +32,7 @@ public sealed class MeterStyleEditorWindow : Window
     private MeterPreviewInteraction? previewInteraction;
     private string? editingSnapshot;
     private bool closeActionHandled;
+    private bool exitConfirmationRequested;
 
     public MeterStyleEditorWindow(
         PluginConfiguration configuration,
@@ -61,6 +62,8 @@ public sealed class MeterStyleEditorWindow : Window
             MinimumSize = new Vector2(880, 590),
             MaximumSize = new Vector2(float.MaxValue),
         };
+        ShowCloseButton = false;
+        RespectCloseHotkey = false;
     }
 
     public void Open()
@@ -69,6 +72,7 @@ public sealed class MeterStyleEditorWindow : Window
         // while Cancel must restore the exact state that existed when the window opened.
         editingSnapshot = JsonConvert.SerializeObject(configuration.Meter);
         closeActionHandled = false;
+        exitConfirmationRequested = false;
         SetEditingProfile(null);
         selectedKind = configuration.Meter.ActiveWindowKind;
         SetEditingProfile(selectedKind);
@@ -125,15 +129,14 @@ public sealed class MeterStyleEditorWindow : Window
                 $"v{version}",
                 "meter-style-editor"))
         {
-            CancelAndClose();
-            return;
+            RequestExitConfirmation();
         }
 
         var selectedIndex = BrandedWindowChrome.DrawNavigationRail(
             "meter-editor-kind",
             [
                 text.Get("经典榜", "Classic"),
-                text.Get("横版模板", "Horizontal"),
+                text.Get("横版", "Horizontal"),
                 text.Get("职能分栏", "Role split"),
             ],
             (int)selectedKind);
@@ -176,6 +179,10 @@ public sealed class MeterStyleEditorWindow : Window
         }
         ImGui.EndChild();
         if (DrawEditorActions())
+        {
+            return;
+        }
+        if (DrawExitConfirmation())
         {
             return;
         }
@@ -410,10 +417,63 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.SameLine(0, spacing);
         if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, 0)))
         {
-            CancelAndClose();
-            return true;
+            RequestExitConfirmation();
         }
         return false;
+    }
+
+    private void RequestExitConfirmation()
+        => exitConfirmationRequested = true;
+
+    private bool DrawExitConfirmation()
+    {
+        var popupTitle = text.Get(
+            "退出编辑器###DalamudActCompatMeterEditorExit",
+            "Exit editor###DalamudActCompatMeterEditorExit");
+        if (exitConfirmationRequested)
+        {
+            // Both exit affordances share one modal so neither can discard a live preview
+            // without making the save decision explicit.
+            ImGui.OpenPopup(popupTitle);
+            exitConfirmationRequested = false;
+        }
+
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowPos(
+            viewport.Pos + (viewport.Size * 0.5f),
+            ImGuiCond.Appearing,
+            new Vector2(0.5f));
+        if (!ImGui.BeginPopupModal(
+                popupTitle,
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings))
+        {
+            return false;
+        }
+
+        ImGui.TextUnformatted(text.Get("真的要退出吗？", "Do you really want to exit?"));
+        ImGui.Dummy(new Vector2(1, 8));
+        const float buttonWidth = 130;
+        var closed = false;
+        if (ImGui.Button(text.Get("保存并退出", "Save and exit"), new Vector2(buttonWidth, 0)))
+        {
+            ImGui.CloseCurrentPopup();
+            SaveAndClose();
+            closed = true;
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("不保存并退出", "Exit without saving"), new Vector2(buttonWidth, 0)))
+        {
+            ImGui.CloseCurrentPopup();
+            CancelAndClose();
+            closed = true;
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, 0)))
+        {
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
+        return closed;
     }
 
     private void SaveAndClose()
@@ -590,7 +650,7 @@ public sealed class MeterStyleEditorWindow : Window
             if (DrawLabeledSlider(
                     "profile-background-opacity",
                     text.Get("背景透明度", "Background opacity"),
-                    text.Get("0 为完全透明，1 为完全不透明；经典榜与职能分栏分别保存。横版模板始终无背景。", "0 is fully transparent and 1 is opaque. Classic and Role split save separate values; Horizontal never draws a background."),
+                    text.Get("0 为完全透明，1 为完全不透明；经典榜与职能分栏分别保存。横版始终无背景。", "0 is fully transparent and 1 is opaque. Classic and Role split save separate values; Horizontal never draws a background."),
                     ref backgroundOpacity,
                     0,
                     1,
@@ -711,8 +771,8 @@ public sealed class MeterStyleEditorWindow : Window
                 "最高伤害会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
                 "Max-hit values are truncated; hover the meter for full details.")
             : text.Get(
-                "职业 / ID 和其他普通槽位都按列表顺序显示；全队总伤害与总治疗固定在底部汇总区。",
-                "Job / ID and other regular slots follow list order. Team damage and healing remain in the bottom summary."));
+                "职业 / ID 和其他普通槽位都按列表顺序显示；姓名列会先压缩到两字省略，继续缩小窗口才出现横向滚动，悬停可看完整名称。全队总伤害与总治疗固定在底部汇总区，经典榜收起时隐藏。",
+                "Job / ID and other regular slots follow list order. Names shrink to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Team damage and healing stay in the bottom summary and hide when Classic is collapsed."));
         return changed;
     }
 
@@ -803,7 +863,7 @@ public sealed class MeterStyleEditorWindow : Window
     private string KindLabel(MeterWindowKind kind)
         => kind switch
         {
-            MeterWindowKind.Horizontal => text.Get("横版模板", "Horizontal"),
+            MeterWindowKind.Horizontal => text.Get("横版", "Horizontal"),
             MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
             _ => text.Get("经典榜", "Classic"),
         };

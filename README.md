@@ -15,7 +15,7 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 | 功能 | 实际用途 |
 | --- | --- |
 | 游戏内战斗统计 | 查看 4/8/24 人 DPS、rDPS、HPS、总伤害、最高伤害、命中率、死亡和本地 FFLogs 区间估算 |
-| 统计样式 | 经典榜、横版模板和职能分栏三选一；8 人经典表格可自定义，24 人使用固定的职业/名字 + DPS/HPS 紧凑条 |
+| 统计样式 | 经典榜、横版和职能分栏三选一；8 人经典表格可自定义，24 人使用固定的职业/名字 + DPS/HPS 紧凑条 |
 | 战斗历史 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志 |
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |

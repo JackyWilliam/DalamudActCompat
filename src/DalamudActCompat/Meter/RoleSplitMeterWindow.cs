@@ -15,6 +15,8 @@ public enum RoleSplitGroup
 
 public sealed class RoleSplitMeterWindow : Window
 {
+    private const float CompactWindowMinimumHeight = 60;
+    private const float WindowResizeAnimationDurationSeconds = 0.18f;
     private static readonly Vector4 Navy = new(0.035f, 0.055f, 0.09f, 1);
     private static readonly Vector4 NavyRaised = new(0.075f, 0.10f, 0.15f, 0.94f);
     private static readonly Vector4 NavyHover = new(0.11f, 0.16f, 0.23f, 0.96f);
@@ -30,6 +32,10 @@ public sealed class RoleSplitMeterWindow : Window
     private bool locateOnNextDraw;
     private long locatePreviewExpiresAt;
     private float expandedHeight = 360;
+    private bool isHeightAnimationActive;
+    private float heightAnimationElapsedSeconds;
+    private float heightAnimationStart;
+    private float heightAnimationTarget;
 
     public RoleSplitMeterWindow(
         MeterService meterService,
@@ -109,7 +115,9 @@ public sealed class RoleSplitMeterWindow : Window
     {
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(380, Compact ? 105 : 190),
+            MinimumSize = new Vector2(
+                380,
+                Compact || isHeightAnimationActive ? CompactWindowMinimumHeight : 190),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
         if (locateOnNextDraw)
@@ -158,11 +166,16 @@ public sealed class RoleSplitMeterWindow : Window
     public override void Draw()
     {
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
+        AdvanceWindowHeightAnimation();
         var encounter = meterService.DisplayEncounter;
         DrawHeader(encounter);
         if (encounter is null)
         {
             ImGui.TextColored(IceBlue, text.Get("等待战斗数据…", "Waiting for encounter data…"));
+            // Empty windows still honor the saved compact state; otherwise the header
+            // button changes its arrow while the early return leaves the window expanded.
+            ApplyCompactWindowHeight(hasEncounter: false, useHealing: false);
+            CaptureExpandedHeight();
             return;
         }
 
@@ -186,27 +199,8 @@ public sealed class RoleSplitMeterWindow : Window
             text,
             IceBlue,
             Gold);
-        if (Compact)
-        {
-            var summaryMetric = useHealing
-                ? MeterSlotMetric.TotalHealing
-                : MeterSlotMetric.TotalDamage;
-            var summaryHeight = Profile.Slots.Any(slot =>
-                slot.Visible && slot.Metric == summaryMetric)
-                    ? MeterSlotPresentation.TeamSummaryHeight + 4
-                    : 0;
-            var compactHeight = 42 +
-                                (Profile.ShowHeader ? 37 : 0) +
-                                MeterWindow.CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) +
-                                summaryHeight;
-            ImGui.SetWindowSize(
-                new Vector2(ImGui.GetWindowSize().X, compactHeight),
-                ImGuiCond.Always);
-        }
-        else
-        {
-            expandedHeight = Math.Max(190, ImGui.GetWindowSize().Y);
-        }
+        ApplyCompactWindowHeight(hasEncounter: true, useHealing: useHealing);
+        CaptureExpandedHeight();
     }
 
     internal void DrawEditorPreview(
@@ -269,9 +263,7 @@ public sealed class RoleSplitMeterWindow : Window
             Compact = !Compact;
             if (!Compact)
             {
-                ImGui.SetWindowSize(
-                    new Vector2(ImGui.GetWindowSize().X, expandedHeight),
-                    ImGuiCond.Always);
+                BeginWindowHeightAnimation(expandedHeight);
             }
             saveConfiguration();
         }
@@ -320,6 +312,101 @@ public sealed class RoleSplitMeterWindow : Window
                 Compact ? "Expand ranking" : "Collapse ranking"));
         }
         ImGui.Dummy(new Vector2(1, 3));
+    }
+
+    private void ApplyCompactWindowHeight(bool hasEncounter, bool useHealing)
+    {
+        if (!Compact)
+        {
+            return;
+        }
+
+        float targetHeight;
+        if (!hasEncounter)
+        {
+            targetHeight = MathF.Ceiling(
+                (ImGui.GetStyle().WindowPadding.Y * 2) +
+                (Profile.ShowHeader ? 37 : 0) +
+                ImGui.GetTextLineHeightWithSpacing() +
+                ImGui.GetStyle().ItemSpacing.Y +
+                2);
+        }
+        else
+        {
+            var summaryMetric = useHealing
+                ? MeterSlotMetric.TotalHealing
+                : MeterSlotMetric.TotalDamage;
+            var summaryHeight = Profile.Slots.Any(slot =>
+                slot.Visible && slot.Metric == summaryMetric)
+                    ? MeterSlotPresentation.TeamSummaryHeight + 4
+                    : 0;
+            targetHeight = 42 +
+                           (Profile.ShowHeader ? 37 : 0) +
+                           MeterWindow.CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) +
+                           summaryHeight;
+        }
+        BeginWindowHeightAnimation(Math.Max(CompactWindowMinimumHeight, targetHeight));
+    }
+
+    private void CaptureExpandedHeight()
+    {
+        if (!Compact && !isHeightAnimationActive)
+        {
+            expandedHeight = Math.Max(190, ImGui.GetWindowSize().Y);
+        }
+    }
+
+    private void BeginWindowHeightAnimation(float targetHeight)
+    {
+        if (!float.IsFinite(targetHeight) || targetHeight <= 0 ||
+            (isHeightAnimationActive && Math.Abs(heightAnimationTarget - targetHeight) <= 0.5f))
+        {
+            return;
+        }
+
+        var currentHeight = ImGui.GetWindowSize().Y;
+        if (!float.IsFinite(currentHeight) || Math.Abs(currentHeight - targetHeight) <= 0.5f)
+        {
+            isHeightAnimationActive = false;
+            return;
+        }
+
+        heightAnimationStart = currentHeight;
+        heightAnimationTarget = targetHeight;
+        heightAnimationElapsedSeconds = 0;
+        isHeightAnimationActive = true;
+    }
+
+    private void AdvanceWindowHeightAnimation()
+    {
+        if (!isHeightAnimationActive)
+        {
+            return;
+        }
+
+        var deltaTime = ImGui.GetIO().DeltaTime;
+        if (!float.IsFinite(deltaTime) || deltaTime <= 0)
+        {
+            deltaTime = 1f / 60f;
+        }
+
+        heightAnimationElapsedSeconds += Math.Min(deltaTime, 0.05f);
+        var progress = Math.Clamp(
+            heightAnimationElapsedSeconds / WindowResizeAnimationDurationSeconds,
+            0,
+            1);
+        var height = float.Lerp(
+            heightAnimationStart,
+            heightAnimationTarget,
+            MeterWindow.EaseOutCubic(progress));
+        if (progress >= 1)
+        {
+            height = heightAnimationTarget;
+            isHeightAnimationActive = false;
+        }
+
+        var currentSize = ImGui.GetWindowSize();
+        ImGui.SetWindowSize(new Vector2(currentSize.X, height), ImGuiCond.Always);
     }
 
     private void DrawSection(
