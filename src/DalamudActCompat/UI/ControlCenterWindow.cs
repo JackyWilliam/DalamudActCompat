@@ -66,7 +66,6 @@ public sealed class ControlCenterWindow : Window
     private readonly CombatQualitySnapshot? combatQualitySnapshot;
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
-    private readonly ISharedImmediateTexture helpTexture;
     private readonly Action openHelp;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
@@ -148,7 +147,6 @@ public sealed class ControlCenterWindow : Window
         CombatQualitySnapshot? combatQualitySnapshot,
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
-        ISharedImmediateTexture helpTexture,
         Action openHelp,
         Action saveConfiguration,
         Action applyPermissionChanges,
@@ -199,7 +197,6 @@ public sealed class ControlCenterWindow : Window
         this.combatQualitySnapshot = combatQualitySnapshot;
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
-        this.helpTexture = helpTexture;
         this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
@@ -442,7 +439,9 @@ public sealed class ControlCenterWindow : Window
                 stateLabel,
                 stateColor,
                 VersionLabel,
-                "control-center"))
+                "control-center",
+                helpAction: openHelp,
+                helpTooltip: text.Get("帮助", "Help")))
         {
             HideAnimated();
         }
@@ -626,50 +625,7 @@ public sealed class ControlCenterWindow : Window
         }
         BrandedWindowChrome.EndGoldCard();
 
-        ImGui.Spacing();
-        DrawHelpEntry();
         return changed;
-    }
-
-    private void DrawHelpEntry()
-    {
-        var label = text.Get("需要更多帮助吗？", "Need more help?");
-        var labelSize = ImGui.CalcTextSize(label);
-        var wrap = helpTexture.GetWrapOrEmpty();
-        var hasIcon = wrap.Handle.Handle != 0 && wrap.Width > 0 && wrap.Height > 0;
-        var iconHeight = ImGui.GetTextLineHeight();
-        var iconWidth = hasIcon
-            ? iconHeight * wrap.Width / wrap.Height
-            : 0;
-        var iconSpacing = hasIcon ? 8 : 0;
-        var entrySize = new Vector2(
-            iconWidth + iconSpacing + labelSize.X,
-            Math.Max(iconHeight, labelSize.Y));
-        if (ImGui.InvisibleButton(
-                "overview-help-entry",
-                entrySize))
-        {
-            openHelp();
-        }
-
-        var itemMin = ImGui.GetItemRectMin();
-        var hovered = ImGui.IsItemHovered();
-        var drawList = ImGui.GetWindowDrawList();
-        if (hasIcon)
-        {
-            var iconTop = itemMin.Y + ((entrySize.Y - iconHeight) * 0.5f);
-            drawList.AddImage(
-                wrap.Handle,
-                new Vector2(itemMin.X, iconTop),
-                new Vector2(itemMin.X + iconWidth, iconTop + iconHeight));
-        }
-
-        drawList.AddText(
-            new Vector2(
-                itemMin.X + iconWidth + iconSpacing,
-                itemMin.Y + ((entrySize.Y - labelSize.Y) * 0.5f)),
-            ImGui.GetColorU32(hovered ? IceBlue : new Vector4(0.82f, 0.86f, 0.92f, 1)),
-            label);
     }
 
     private void OpenCombatLogDirectoryForUpload()

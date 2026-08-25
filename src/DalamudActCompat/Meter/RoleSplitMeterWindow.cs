@@ -433,33 +433,13 @@ public sealed class RoleSplitMeterWindow : Window
     {
         var source = configuration.Meter;
         var visibleSlots = Profile.Slots.Where(static slot => slot.Visible).ToArray();
-        // Both role windows use the classic column contract. The healer view only
-        // substitutes its first damage-rate column with HPS and preserves later columns.
-        var leadingDamage = visibleSlots.FirstOrDefault(static slot =>
-            slot.Metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps or
-                MeterSlotMetric.EncDps or MeterSlotMetric.ExtDps);
         var slots = new List<MeterSlotDefinition>();
         foreach (var slot in visibleSlots)
         {
-            var metric = slot.Metric;
-            if (useHealing && ReferenceEquals(slot, leadingDamage))
-            {
-                metric = MeterSlotMetric.Hps;
-            }
-            else if (useHealing && leadingDamage is not null && metric == MeterSlotMetric.Hps)
-            {
-                continue;
-            }
-            else if (!useHealing && metric == MeterSlotMetric.Hps)
-            {
-                continue;
-            }
-
             var clone = slot.Clone();
-            // Role previews clone columns to substitute HPS, but retaining the source ID
-            // is required for editor selection and drag ordering to target the real slot.
+            // Role split only separates players and sorting. Preserving the exact slot
+            // contract keeps healer DPS and HPS independently visible like the classic table.
             clone.Id = slot.Id;
-            clone.Metric = metric;
             slots.Add(clone);
         }
 

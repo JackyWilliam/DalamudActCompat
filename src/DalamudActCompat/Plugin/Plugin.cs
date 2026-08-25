@@ -382,8 +382,6 @@ public sealed class Plugin : IDalamudPlugin
             "Assets");
         var logoTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-logo.jpg"));
-        var helpTexture = textureProvider.GetFromFile(
-            Path.Combine(assetDirectory, "HelpIcon.png"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
         var jobIcons = new JobIconTextureSet(
@@ -543,7 +541,6 @@ public sealed class Plugin : IDalamudPlugin
             combatQualitySnapshot,
             () => stateStore.GetSnapshot().Current,
             logoTexture,
-            helpTexture,
             () => helpWindow.IsOpen = true,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),

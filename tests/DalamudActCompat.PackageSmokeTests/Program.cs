@@ -2917,8 +2917,11 @@ static void ValidateIndependentMeterWindows()
         roleSource.Contains("ApplyCompactWindowHeight(hasEncounter: false", StringComparison.Ordinal) &&
         roleSource.Contains("AdvanceWindowHeightAnimation", StringComparison.Ordinal) &&
         roleSource.Contains("MeterWindow.EaseOutCubic", StringComparison.Ordinal) &&
+        roleSource.Contains("ShowDps = Has(MeterSlotMetric.Dps)", StringComparison.Ordinal) &&
+        roleSource.Contains("ShowHps = Has(MeterSlotMetric.Hps)", StringComparison.Ordinal) &&
+        !roleSource.Contains("leadingDamage", StringComparison.Ordinal) &&
         !roleSource.Contains("titleHovered", StringComparison.Ordinal),
-        "Role split lost its classic table, single collapse control, empty-state collapse, or height animation.");
+        "Role split lost its shared DPS/HPS columns, collapse control, empty-state collapse, or height animation.");
     Assert(
         editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
         editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
@@ -2940,12 +2943,35 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("不保存并退出", StringComparison.Ordinal) &&
         editorSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
         editorSource.Contains("editingSnapshot", StringComparison.Ordinal) &&
+        editorSource.Contains("hasUnsavedChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("if (!hasUnsavedChanges && !HasUnsavedConfigurationChanges())", StringComparison.Ordinal) &&
+        editorSource.Contains("HasUnsavedConfigurationChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("SerializeForChangeDetection", StringComparison.Ordinal) &&
+        editorSource.Contains("CloseWithoutChanges", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
         !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
         !editorSource.Contains("24×6", StringComparison.Ordinal) &&
         !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
         "The shared Meter editor lost runtime-identical previews, mutual activation, opacity, FFLogs gating, or dynamic slots.");
+    var serializeForChangeDetection = typeof(MeterStyleEditorWindow).GetMethod(
+                                          "SerializeForChangeDetection",
+                                          BindingFlags.Static | BindingFlags.NonPublic)
+                                      ?? throw new InvalidOperationException(
+                                          "Meter editor change-detection serializer was not found.");
+    var cleanEditorSettings = new MeterSettings();
+    var transientEditorSettings = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
+                                      Newtonsoft.Json.JsonConvert.SerializeObject(cleanEditorSettings))
+                                  ?? throw new InvalidOperationException(
+                                      "Meter editor test settings could not be cloned.");
+    transientEditorSettings.HorizontalWindow.IsEditing = true;
+    var cleanFingerprint = (string)serializeForChangeDetection.Invoke(null, [cleanEditorSettings])!;
+    var transientFingerprint = (string)serializeForChangeDetection.Invoke(null, [transientEditorSettings])!;
+    transientEditorSettings.HorizontalWindow.FontScale += 0.1f;
+    var changedFingerprint = (string)serializeForChangeDetection.Invoke(null, [transientEditorSettings])!;
+    Assert(
+        cleanFingerprint == transientFingerprint && cleanFingerprint != changedFingerprint,
+        "Meter editor dirty-state detection prompts for tab browsing or misses a real style change.");
     Assert(
         controlCenterSource.Contains("BeginCombo(\"##meter-template\"", StringComparison.Ordinal) &&
         controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
@@ -8225,6 +8251,12 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "HelpWindow.cs"));
+    var brandedChromeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "BrandedWindowChrome.cs"));
     var macroPluginSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -8267,12 +8299,6 @@ static void ValidateHtmlOverlayDefaults()
         "images",
         "readme",
         name));
-    var helpIconPath = Path.Combine(
-        FindProjectRoot(),
-        "src",
-        "DalamudActCompat",
-        "Assets",
-        "HelpIcon.png");
     // README structure is part of the install/support contract, but its wording may evolve.
     Assert(
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
@@ -8331,21 +8357,13 @@ static void ValidateHtmlOverlayDefaults()
         settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
         "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
-    var helpEntryStart = controlCenterSource.IndexOf(
-        "private void DrawHelpEntry()",
-        StringComparison.Ordinal);
-    var helpEntryEnd = controlCenterSource.IndexOf(
-        "private void OpenCombatLogDirectoryForUpload()",
-        StringComparison.Ordinal);
-    var helpEntrySource = helpEntryStart >= 0 && helpEntryEnd > helpEntryStart
-        ? controlCenterSource[helpEntryStart..helpEntryEnd]
-        : string.Empty;
     Assert(
-        File.Exists(helpIconPath) && new FileInfo(helpIconPath).Length > 0 &&
-        controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("openHelp();", StringComparison.Ordinal) &&
-        helpEntrySource.Contains("iconHeight * wrap.Width / wrap.Height", StringComparison.Ordinal) &&
-        !helpEntrySource.Contains("AddRect", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("helpAction: openHelp", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("helpTooltip: text.Get(\"帮助\", \"Help\")", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("DrawHelpEntry", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("?##help-{id}", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("helpAction();", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
@@ -8376,7 +8394,8 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("页面预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
         helpWindowSource.Contains("横版始终没有背景", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("保存并退出、不保存并退出或继续编辑", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("只有存在未保存修改时", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("没有修改会直接关闭", StringComparison.Ordinal) &&
         helpWindowSource.Contains("职业 / ID 会先缩到两字", StringComparison.Ordinal) &&
         helpWindowSource.Contains("可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS", StringComparison.Ordinal) &&
         helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
