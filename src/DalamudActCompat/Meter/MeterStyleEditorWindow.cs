@@ -28,6 +28,7 @@ public sealed class MeterStyleEditorWindow : Window
     private readonly UiText text;
     private readonly Action saveConfiguration;
     private MeterWindowKind selectedKind;
+    private RoleSplitGroup selectedRoleSplitGroup;
     private string? selectedSlotId;
     private MeterPreviewInteraction? previewInteraction;
     private string? editingSnapshot;
@@ -77,8 +78,9 @@ public sealed class MeterStyleEditorWindow : Window
         hasUnsavedChanges = false;
         SetEditingProfile(null);
         selectedKind = configuration.Meter.ActiveWindowKind;
+        selectedRoleSplitGroup = RoleSplitGroup.DamageTank;
         SetEditingProfile(selectedKind);
-        EnsureSelectedSlot(CurrentProfile);
+        EnsureSelectedSlot(CurrentSlots);
         ResetPreviewInteraction();
         IsOpen = true;
     }
@@ -149,10 +151,16 @@ public sealed class MeterStyleEditorWindow : Window
             selectedKind = (MeterWindowKind)selectedIndex;
             SetEditingProfile(selectedKind);
             selectedSlotId = null;
-            EnsureSelectedSlot(CurrentProfile);
+            EnsureSelectedSlot(CurrentSlots);
             ResetPreviewInteraction();
         }
         ImGui.Dummy(new Vector2(1, 6));
+
+        if (selectedKind == MeterWindowKind.RoleSplit)
+        {
+            DrawRoleSplitSlotSelector();
+            ImGui.Dummy(new Vector2(1, 6));
+        }
 
         var changed = DrawWindowControls(CurrentProfile);
         ImGui.Dummy(new Vector2(1, 5));
@@ -163,7 +171,7 @@ public sealed class MeterStyleEditorWindow : Window
         var workspaceHeight = Math.Max(200, available.Y - footerHeight);
         if (ImGui.BeginChild("meter-editor-slots", new Vector2(leftWidth, workspaceHeight), true))
         {
-            changed |= DrawSlotList(CurrentProfile);
+            changed |= DrawSlotList(CurrentSlots);
         }
         ImGui.EndChild();
         ImGui.SameLine();
@@ -178,7 +186,7 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.SameLine();
         if (ImGui.BeginChild("meter-editor-properties", new Vector2(rightWidth, workspaceHeight), true))
         {
-            changed |= DrawSlotProperties(CurrentProfile);
+            changed |= DrawSlotProperties(CurrentProfile, CurrentSlots);
         }
         ImGui.EndChild();
         if (DrawEditorActions())
@@ -192,7 +200,7 @@ public sealed class MeterStyleEditorWindow : Window
 
         if (changed)
         {
-            CurrentProfile.Normalize(DefaultSlots(selectedKind));
+            NormalizeCurrentSlots();
             SynchronizeClassicSettings();
             hasUnsavedChanges = true;
         }
@@ -204,6 +212,35 @@ public sealed class MeterStyleEditorWindow : Window
         MeterWindowKind.RoleSplit => configuration.Meter.RoleSplitWindow,
         _ => configuration.Meter.ClassicWindow,
     };
+
+    private List<MeterSlotDefinition> CurrentSlots => selectedKind switch
+    {
+        MeterWindowKind.RoleSplit when selectedRoleSplitGroup == RoleSplitGroup.Healer =>
+            configuration.Meter.RoleSplitHealerSlots,
+        MeterWindowKind.RoleSplit => configuration.Meter.RoleSplitDamageSlots,
+        _ => CurrentProfile.Slots,
+    };
+
+    private void DrawRoleSplitSlotSelector()
+    {
+        var selectedIndex = BrandedWindowChrome.DrawNavigationRail(
+            "meter-editor-role-group",
+            [
+                text.Get("D / T 榜槽位", "D / T columns"),
+                text.Get("H 榜槽位", "H columns"),
+            ],
+            (int)selectedRoleSplitGroup,
+            32);
+        if (selectedIndex == (int)selectedRoleSplitGroup)
+        {
+            return;
+        }
+
+        selectedRoleSplitGroup = (RoleSplitGroup)selectedIndex;
+        selectedSlotId = null;
+        EnsureSelectedSlot(CurrentSlots);
+        ResetPreviewInteraction();
+    }
 
     private bool DrawWindowControls(MeterWindowProfile profile)
     {
@@ -260,7 +297,7 @@ public sealed class MeterStyleEditorWindow : Window
         return changed;
     }
 
-    private bool DrawSlotList(MeterWindowProfile profile)
+    private bool DrawSlotList(List<MeterSlotDefinition> slots)
     {
         var changed = false;
         ImGui.TextColored(Gold, text.Get("槽位", "Complication slots"));
@@ -275,9 +312,9 @@ public sealed class MeterStyleEditorWindow : Window
             "可在列表或页面预览中选择槽位；前移、后移和预览拖动都会改变实际显示顺序。",
             "Select slots here or in Page preview. Move buttons and preview dragging change the displayed order."));
         ImGui.Separator();
-        for (var index = 0; index < profile.Slots.Count; index++)
+        for (var index = 0; index < slots.Count; index++)
         {
-            var slot = profile.Slots[index];
+            var slot = slots[index];
             var visible = slot.Visible;
             var canEnable = CanUseMetric(slot.Metric);
             ImGui.BeginDisabled(!canEnable);
@@ -306,20 +343,20 @@ public sealed class MeterStyleEditorWindow : Window
         if (ImGui.Button(text.Get("＋ 添加槽位", "+ Add slot"), new Vector2(-1, 0)))
         {
             var slot = new MeterSlotDefinition(
-                FirstUnusedMetric(profile),
+                FirstUnusedMetric(slots),
                 0,
                 0,
                 4,
                 2,
                 MeterSlotAlignment.Left);
-            profile.Slots.Add(slot);
+            slots.Add(slot);
             selectedSlotId = slot.Id;
             changed = true;
         }
         if (ImGui.Button(text.Get("恢复此模板默认槽位", "Restore template slots"), new Vector2(-1, 0)))
         {
-            profile.Slots = DefaultSlots(selectedKind).Select(static slot => slot.Clone()).ToList();
-            selectedSlotId = profile.Slots.FirstOrDefault()?.Id;
+            ReplaceCurrentSlots(DefaultSlots(selectedKind).Select(static slot => slot.Clone()).ToList());
+            selectedSlotId = CurrentSlots.FirstOrDefault()?.Id;
             changed = true;
         }
         return changed;
@@ -335,7 +372,7 @@ public sealed class MeterStyleEditorWindow : Window
             "Click a header or value to select its slot; drag it onto another item to swap their order."));
         ImGui.Dummy(new Vector2(1, 4));
         var availableHeight = Math.Max(220, ImGui.GetContentRegionAvail().Y);
-        var interaction = previewInteraction ??= CreatePreviewInteraction(profile);
+        var interaction = previewInteraction ??= CreatePreviewInteraction(CurrentSlots);
         switch (selectedKind)
         {
             case MeterWindowKind.Horizontal:
@@ -359,7 +396,7 @@ public sealed class MeterStyleEditorWindow : Window
                     () => roleSplitDamageWindow.DrawEditorPreview(
                         previewEncounter,
                         previewRows,
-                        interaction));
+                        selectedRoleSplitGroup == RoleSplitGroup.DamageTank ? interaction : null));
                 ImGui.Dummy(new Vector2(1, 8));
                 DrawRuntimePreviewFrame(
                     "role-healer-runtime-preview",
@@ -369,7 +406,7 @@ public sealed class MeterStyleEditorWindow : Window
                     () => roleSplitHealerWindow.DrawEditorPreview(
                         previewEncounter,
                         previewRows,
-                        interaction));
+                        selectedRoleSplitGroup == RoleSplitGroup.Healer ? interaction : null));
                 break;
             default:
                 DrawRuntimePreviewFrame(
@@ -521,6 +558,12 @@ public sealed class MeterStyleEditorWindow : Window
         configuration.Meter.ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
         configuration.Meter.HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
         configuration.Meter.RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        MeterWindowProfile.NormalizeSlots(
+            configuration.Meter.RoleSplitDamageSlots,
+            MeterSlotDefaults.CreateRoleSplit());
+        MeterWindowProfile.NormalizeSlots(
+            configuration.Meter.RoleSplitHealerSlots,
+            MeterSlotDefaults.CreateRoleSplit());
         SynchronizeClassicSettings();
         SetEditingProfile(null);
         saveConfiguration();
@@ -564,14 +607,14 @@ public sealed class MeterStyleEditorWindow : Window
         editingSnapshot = null;
     }
 
-    private MeterPreviewInteraction CreatePreviewInteraction(MeterWindowProfile profile)
+    private MeterPreviewInteraction CreatePreviewInteraction(List<MeterSlotDefinition> slots)
         => new(
-            profile,
+            slots,
             () => selectedSlotId,
             slotId => selectedSlotId = slotId);
 
     private void ResetPreviewInteraction()
-        => previewInteraction = CreatePreviewInteraction(CurrentProfile);
+        => previewInteraction = CreatePreviewInteraction(CurrentSlots);
 
     private static Encounter CreatePreviewEncounter()
     {
@@ -652,7 +695,9 @@ public sealed class MeterStyleEditorWindow : Window
                 ExtDps: combatant.ExtDps)).ToArray();
     }
 
-    private bool DrawSlotProperties(MeterWindowProfile profile)
+    private bool DrawSlotProperties(
+        MeterWindowProfile profile,
+        List<MeterSlotDefinition> slots)
     {
         var changed = false;
         ImGui.TextColored(Gold, text.Get("窗口与槽位", "Window and slot"));
@@ -728,7 +773,7 @@ public sealed class MeterStyleEditorWindow : Window
             return changed;
         }
 
-        var slot = profile.Slots.FirstOrDefault(candidate =>
+        var slot = slots.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, selectedSlotId, StringComparison.OrdinalIgnoreCase));
         if (slot is null)
         {
@@ -790,29 +835,29 @@ public sealed class MeterStyleEditorWindow : Window
                 "Enable FFLogs online estimates in Settings before showing this column. Its saved configuration is preserved."));
         }
         ImGui.Dummy(new Vector2(1, 8));
-        var index = profile.Slots.IndexOf(slot);
+        var index = slots.IndexOf(slot);
         ImGui.BeginDisabled(index <= 0);
         if (ImGui.Button(text.Get("↑ 前移", "↑ Move up"), new Vector2(-1, 0)))
         {
-            (profile.Slots[index - 1], profile.Slots[index]) =
-                (profile.Slots[index], profile.Slots[index - 1]);
+            (slots[index - 1], slots[index]) =
+                (slots[index], slots[index - 1]);
             changed = true;
         }
         ImGui.EndDisabled();
-        ImGui.BeginDisabled(index < 0 || index >= profile.Slots.Count - 1);
+        ImGui.BeginDisabled(index < 0 || index >= slots.Count - 1);
         if (ImGui.Button(text.Get("↓ 后移", "↓ Move down"), new Vector2(-1, 0)))
         {
-            (profile.Slots[index + 1], profile.Slots[index]) =
-                (profile.Slots[index], profile.Slots[index + 1]);
+            (slots[index + 1], slots[index]) =
+                (slots[index], slots[index + 1]);
             changed = true;
         }
         ImGui.EndDisabled();
         if (ImGui.Button(text.Get("删除槽位", "Delete slot"), new Vector2(-1, 0)))
         {
-            profile.Slots.Remove(slot);
-            selectedSlotId = profile.Slots.Count == 0
+            slots.Remove(slot);
+            selectedSlotId = slots.Count == 0
                 ? null
-                : profile.Slots[Math.Min(index, profile.Slots.Count - 1)].Id;
+                : slots[Math.Min(index, slots.Count - 1)].Id;
             changed = true;
         }
 
@@ -877,20 +922,49 @@ public sealed class MeterStyleEditorWindow : Window
         meter.ShowFflogs = Has(MeterSlotMetric.Fflogs);
     }
 
-    private void EnsureSelectedSlot(MeterWindowProfile profile)
+    private void EnsureSelectedSlot(List<MeterSlotDefinition> slots)
     {
-        if (!profile.Slots.Any(slot => string.Equals(
+        if (!slots.Any(slot => string.Equals(
                 slot.Id,
                 selectedSlotId,
                 StringComparison.OrdinalIgnoreCase)))
         {
-            selectedSlotId = profile.Slots.FirstOrDefault()?.Id;
+            selectedSlotId = slots.FirstOrDefault()?.Id;
         }
     }
 
-    private MeterSlotMetric FirstUnusedMetric(MeterWindowProfile profile)
+    private MeterSlotMetric FirstUnusedMetric(List<MeterSlotDefinition> slots)
         => MeterSlotDefaults.EditableMetrics.Where(CanUseMetric)
-            .FirstOrDefault(metric => profile.Slots.All(slot => slot.Metric != metric));
+            .FirstOrDefault(metric => slots.All(slot => slot.Metric != metric));
+
+    private void ReplaceCurrentSlots(List<MeterSlotDefinition> slots)
+    {
+        if (selectedKind != MeterWindowKind.RoleSplit)
+        {
+            CurrentProfile.Slots = slots;
+        }
+        else if (selectedRoleSplitGroup == RoleSplitGroup.Healer)
+        {
+            configuration.Meter.RoleSplitHealerSlots = slots;
+        }
+        else
+        {
+            configuration.Meter.RoleSplitDamageSlots = slots;
+        }
+
+        ResetPreviewInteraction();
+    }
+
+    private void NormalizeCurrentSlots()
+    {
+        if (selectedKind == MeterWindowKind.RoleSplit)
+        {
+            MeterWindowProfile.NormalizeSlots(CurrentSlots, MeterSlotDefaults.CreateRoleSplit());
+            return;
+        }
+
+        CurrentProfile.Normalize(DefaultSlots(selectedKind));
+    }
 
     private bool CanUseMetric(MeterSlotMetric metric)
         => metric != MeterSlotMetric.Fflogs ||

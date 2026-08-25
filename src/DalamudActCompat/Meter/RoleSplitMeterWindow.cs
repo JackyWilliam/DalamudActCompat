@@ -67,6 +67,10 @@ public sealed class RoleSplitMeterWindow : Window
 
     private MeterWindowProfile Profile => configuration.Meter.RoleSplitWindow;
 
+    private List<MeterSlotDefinition> Slots => group == RoleSplitGroup.Healer
+        ? configuration.Meter.RoleSplitHealerSlots
+        : configuration.Meter.RoleSplitDamageSlots;
+
     private bool Compact
     {
         get => group == RoleSplitGroup.Healer
@@ -194,7 +198,7 @@ public sealed class RoleSplitMeterWindow : Window
         MeterSlotPresentation.DrawTeamSummary(
             useHealing ? "role-split-healer" : "role-split-damage",
             encounter,
-            Profile.Slots.Where(slot => slot.Metric ==
+            Slots.Where(slot => slot.Metric ==
                 (useHealing ? MeterSlotMetric.TotalHealing : MeterSlotMetric.TotalDamage)),
             text,
             IceBlue,
@@ -206,7 +210,7 @@ public sealed class RoleSplitMeterWindow : Window
     internal void DrawEditorPreview(
         Encounter encounter,
         IReadOnlyList<CombatantRow> rows,
-        MeterPreviewInteraction previewInteraction)
+        MeterPreviewInteraction? previewInteraction)
     {
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
         DrawHeader(encounter, embeddedPreview: true);
@@ -224,7 +228,7 @@ public sealed class RoleSplitMeterWindow : Window
         MeterSlotPresentation.DrawTeamSummary(
             useHealing ? "role-editor-healer" : "role-editor-damage",
             encounter,
-            Profile.Slots.Where(slot => slot.Metric ==
+            Slots.Where(slot => slot.Metric ==
                 (useHealing ? MeterSlotMetric.TotalHealing : MeterSlotMetric.TotalDamage)),
             text,
             IceBlue,
@@ -336,7 +340,7 @@ public sealed class RoleSplitMeterWindow : Window
             var summaryMetric = useHealing
                 ? MeterSlotMetric.TotalHealing
                 : MeterSlotMetric.TotalDamage;
-            var summaryHeight = Profile.Slots.Any(slot =>
+            var summaryHeight = Slots.Any(slot =>
                 slot.Visible && slot.Metric == summaryMetric)
                     ? MeterSlotPresentation.TeamSummaryHeight + 4
                     : 0;
@@ -432,13 +436,13 @@ public sealed class RoleSplitMeterWindow : Window
     private MeterSettings CreateTableSettings(bool useHealing)
     {
         var source = configuration.Meter;
-        var visibleSlots = Profile.Slots.Where(static slot => slot.Visible).ToArray();
+        var visibleSlots = Slots.Where(static slot => slot.Visible).ToArray();
         var slots = new List<MeterSlotDefinition>();
         foreach (var slot in visibleSlots)
         {
             var clone = slot.Clone();
-            // Role split only separates players and sorting. Preserving the exact slot
-            // contract keeps healer DPS and HPS independently visible like the classic table.
+            // Each pane owns its columns. Cloning only isolates the classic renderer's
+            // temporary settings while preserving the user's DPS/HPS choices verbatim.
             clone.Id = slot.Id;
             slots.Add(clone);
         }

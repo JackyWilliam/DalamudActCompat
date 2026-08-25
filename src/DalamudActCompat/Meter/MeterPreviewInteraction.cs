@@ -7,18 +7,18 @@ internal sealed class MeterPreviewInteraction
 {
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
-    private readonly MeterWindowProfile profile;
+    private readonly List<MeterSlotDefinition> slots;
     private readonly Func<string?> getSelectedSlotId;
     private readonly Action<string> selectSlot;
     private string? draggedSlotId;
     private bool changed;
 
     public MeterPreviewInteraction(
-        MeterWindowProfile profile,
+        List<MeterSlotDefinition> slots,
         Func<string?> getSelectedSlotId,
         Action<string> selectSlot)
     {
-        this.profile = profile;
+        this.slots = slots;
         this.getSelectedSlotId = getSelectedSlotId;
         this.selectSlot = selectSlot;
     }
@@ -84,11 +84,11 @@ internal sealed class MeterPreviewInteraction
 
     private void SwapSlots(string sourceId, string targetId)
     {
-        var sourceIndex = profile.Slots.FindIndex(slot => string.Equals(
+        var sourceIndex = slots.FindIndex(slot => string.Equals(
             slot.Id,
             sourceId,
             StringComparison.OrdinalIgnoreCase));
-        var targetIndex = profile.Slots.FindIndex(slot => string.Equals(
+        var targetIndex = slots.FindIndex(slot => string.Equals(
             slot.Id,
             targetId,
             StringComparison.OrdinalIgnoreCase));
@@ -99,8 +99,8 @@ internal sealed class MeterPreviewInteraction
 
         // Swapping keeps every slot definition intact while making preview drag behavior
         // match the editor's existing order-based layout model.
-        (profile.Slots[sourceIndex], profile.Slots[targetIndex]) =
-            (profile.Slots[targetIndex], profile.Slots[sourceIndex]);
+        (slots[sourceIndex], slots[targetIndex]) =
+            (slots[targetIndex], slots[sourceIndex]);
         changed = true;
     }
 }

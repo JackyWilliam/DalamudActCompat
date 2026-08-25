@@ -114,6 +114,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, int> chatCriticalDirectHitTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> chatHighestDamageActions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> chatHighestDamageTotals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<RecentNetworkDamage> recentNetworkDamage = [];
     private Guid chatEncounterId;
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
@@ -123,6 +124,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool chatEncounterDirty;
     private bool chatEncounterPublished;
     private readonly ChineseCombatChatContext chatParser;
+    private readonly IReadOnlySet<string> limitBreakActionNames;
     private string chatEnemy = string.Empty;
     private string chatZone = string.Empty;
     private bool activeEncounterPublished;
@@ -197,6 +199,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             limitBreakActionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             log.Warning(ex, "Localized Limit Break action names could not be loaded.");
         }
+        this.limitBreakActionNames = limitBreakActionNames;
         chatParser = new ChineseCombatChatContext(limitBreakActionNames);
         log.Information(
             $"Loaded {limitBreakActionNames.Count} localized Limit Break action names for combat attribution.");
@@ -1857,86 +1860,94 @@ public sealed class SelfHostedActRuntime : IDisposable
             logInfo.originalLogLine);
         ObserveCommittedDamageEvents(gameStateProvider.Identities);
 
-        var fields = logInfo.originalLogLine.Split('|');
-        if (fields.Length < 5 || fields[0] != "00")
-        {
-            return;
-        }
-
+        var now = new DateTimeOffset(logInfo.detectedTime);
+        var zone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
+        var identities = gameStateProvider.Identities;
         ActEncounterSnapshot? completedEncounter = null;
-        lock (encounterSync)
+        if (NetworkDamageFallbackParser.TryParse(
+                logInfo.originalLogLine,
+                out var networkDamage) &&
+            !limitBreakActionNames.Contains(networkDamage.ActionName) &&
+            ResolveNetworkDamageActor(identities, networkDamage) is { } networkActor)
         {
-            var message = fields[4];
-            var now = new DateTimeOffset(logInfo.detectedTime);
-            if (!chatParser.TryParse(
-                    message,
+            lock (encounterSync)
+            {
+                completedEncounter = RecordFallbackDamageUnsafe(
                     now,
-                    out var actor,
-                    out var target,
-                    out var damage,
-                    out var action,
-                    out var isCritical,
-                    out var isDirectHit))
+                    networkActor.DisplayName,
+                    networkDamage.TargetName,
+                    networkDamage.Damage,
+                    networkDamage.ActionName,
+                    networkDamage.IsCritical,
+                    networkDamage.IsDirectHit,
+                    zone);
+                recentNetworkDamage.Add(new RecentNetworkDamage(
+                    now,
+                    networkActor.DisplayName,
+                    networkDamage.TargetName,
+                    networkDamage.Damage));
+                PruneRecentNetworkDamageUnsafe(now);
+            }
+        }
+        else
+        {
+            var fields = logInfo.originalLogLine.Split('|');
+            if (fields.Length < 5 || fields[0] != "00")
             {
                 return;
             }
 
-            // Keep split combat lines together for at most two seconds, but only let the
-            // local player or party members create and extend this plugin's encounter.
-            var identities = gameStateProvider.Identities;
-            var isLimitBreak = string.Equals(
-                actor,
-                ChineseCombatChatContext.LimitBreakActorName,
-                StringComparison.OrdinalIgnoreCase);
-            if (!isLimitBreak && ActPlayerIdentityResolver.Resolve(identities, actor) is null)
+            lock (encounterSync)
             {
-                return;
-            }
-
-            if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
-            {
-                if (chatEncounterPublished && !activeEncounterPublished)
+                if (!chatParser.TryParse(
+                        fields[4],
+                        now,
+                        out var actor,
+                        out var target,
+                        out var damage,
+                        out var action,
+                        out var isCritical,
+                        out var isDirectHit))
                 {
-                    completedEncounter = CreateChatEncounterSnapshot(
-                        finished: true,
-                        gameStateProvider.Identities);
+                    return;
                 }
 
-                ResetChatEncounterUnsafe();
-                if (activeEncounter is null)
+                // Localized chat remains a compatibility fallback for missing network lines.
+                // The structured path above is region-neutral and wins one-for-one on duplicates.
+                var isLimitBreak = string.Equals(
+                    actor,
+                    ChineseCombatChatContext.LimitBreakActorName,
+                    StringComparison.OrdinalIgnoreCase);
+                var identity = isLimitBreak
+                    ? null
+                    : ActPlayerIdentityResolver.Resolve(identities, actor);
+                if (!isLimitBreak && identity is null)
                 {
-                    lastKnownDead.Clear();
-                    observedDeaths.Clear();
+                    return;
                 }
-                chatEncounterId = Guid.NewGuid();
-                chatEncounterStart = now;
-            }
 
-            chatLastDamage = now;
-            chatEnemy = target;
-            chatZone = logInfo.detectedZone ?? ActGlobals.oFormActMain.CurrentZone ?? string.Empty;
-            chatDamageTotals[actor] = chatDamageTotals.GetValueOrDefault(actor) + damage;
-            chatDamageHitTotals[actor] = chatDamageHitTotals.GetValueOrDefault(actor) + 1;
-            // Equal hits intentionally keep the first action so the meter does not churn.
-            if (damage > chatHighestDamageTotals.GetValueOrDefault(actor))
-            {
-                chatHighestDamageTotals[actor] = damage;
-                chatHighestDamageActions[actor] = action;
+                var canonicalActor = isLimitBreak
+                    ? ChineseCombatChatContext.LimitBreakActorName
+                    : identity!.DisplayName;
+                if (!isLimitBreak && ConsumeMatchingNetworkDamageUnsafe(
+                        now,
+                        canonicalActor,
+                        target,
+                        damage))
+                {
+                    return;
+                }
+
+                completedEncounter = RecordFallbackDamageUnsafe(
+                    now,
+                    canonicalActor,
+                    target,
+                    damage,
+                    action,
+                    isCritical,
+                    isDirectHit,
+                    zone);
             }
-            if (isCritical)
-            {
-                chatCriticalHitTotals[actor] = chatCriticalHitTotals.GetValueOrDefault(actor) + 1;
-            }
-            if (isDirectHit)
-            {
-                chatDirectHitTotals[actor] = chatDirectHitTotals.GetValueOrDefault(actor) + 1;
-            }
-            if (isCritical && isDirectHit)
-            {
-                chatCriticalDirectHitTotals[actor] =
-                    chatCriticalDirectHitTotals.GetValueOrDefault(actor) + 1;
-            }
-            chatEncounterDirty = true;
         }
 
         if (completedEncounter is not null)
@@ -1944,6 +1955,95 @@ public sealed class SelfHostedActRuntime : IDisposable
             EncounterChanged?.Invoke(completedEncounter, true);
         }
     }
+
+    private static ActPlayerIdentity? ResolveNetworkDamageActor(
+        IReadOnlyList<ActPlayerIdentity> identities,
+        NetworkDamageFallbackEvent damageEvent)
+        => identities.FirstOrDefault(identity =>
+               identity.EntityId != 0 && identity.EntityId == damageEvent.SourceId) ??
+           ActPlayerIdentityResolver.Resolve(identities, damageEvent.SourceName);
+
+    private ActEncounterSnapshot? RecordFallbackDamageUnsafe(
+        DateTimeOffset now,
+        string actor,
+        string target,
+        long damage,
+        string action,
+        bool isCritical,
+        bool isDirectHit,
+        string zone)
+    {
+        ActEncounterSnapshot? completedEncounter = null;
+        if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
+        {
+            if (chatEncounterPublished && activeEncounter is null)
+            {
+                completedEncounter = CreateChatEncounterSnapshot(
+                    finished: true,
+                    gameStateProvider.Identities);
+            }
+
+            ResetChatEncounterUnsafe();
+            if (activeEncounter is null)
+            {
+                lastKnownDead.Clear();
+                observedDeaths.Clear();
+            }
+            chatEncounterId = Guid.NewGuid();
+            chatEncounterStart = now;
+        }
+
+        chatLastDamage = now;
+        chatEnemy = target;
+        chatZone = zone;
+        chatDamageTotals[actor] = chatDamageTotals.GetValueOrDefault(actor) + damage;
+        chatDamageHitTotals[actor] = chatDamageHitTotals.GetValueOrDefault(actor) + 1;
+        // Equal hits intentionally keep the first action so the meter does not churn.
+        if (damage > chatHighestDamageTotals.GetValueOrDefault(actor))
+        {
+            chatHighestDamageTotals[actor] = damage;
+            chatHighestDamageActions[actor] = action;
+        }
+        if (isCritical)
+        {
+            chatCriticalHitTotals[actor] = chatCriticalHitTotals.GetValueOrDefault(actor) + 1;
+        }
+        if (isDirectHit)
+        {
+            chatDirectHitTotals[actor] = chatDirectHitTotals.GetValueOrDefault(actor) + 1;
+        }
+        if (isCritical && isDirectHit)
+        {
+            chatCriticalDirectHitTotals[actor] =
+                chatCriticalDirectHitTotals.GetValueOrDefault(actor) + 1;
+        }
+        chatEncounterDirty = true;
+        return completedEncounter;
+    }
+
+    private bool ConsumeMatchingNetworkDamageUnsafe(
+        DateTimeOffset now,
+        string actor,
+        string target,
+        long damage)
+    {
+        PruneRecentNetworkDamageUnsafe(now);
+        var index = recentNetworkDamage.FindIndex(item =>
+            string.Equals(item.Actor, actor, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.Target, target, StringComparison.OrdinalIgnoreCase) &&
+            item.Damage == damage);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        recentNetworkDamage.RemoveAt(index);
+        return true;
+    }
+
+    private void PruneRecentNetworkDamageUnsafe(DateTimeOffset now)
+        => recentNetworkDamage.RemoveAll(item =>
+            now - item.ObservedAt > TimeSpan.FromSeconds(3));
 
     private void OnFrameworkUpdate(IFramework _)
     {
@@ -1965,14 +2065,22 @@ public sealed class SelfHostedActRuntime : IDisposable
             var now = DateTimeOffset.Now;
             if (chatEncounterId != Guid.Empty && chatLastDamage != default)
             {
-                if (!activeEncounterPublished &&
-                    chatEncounterDirty &&
+                if (chatEncounterDirty &&
                     now - chatEncounterStart >= TimeSpan.FromMilliseconds(250))
                 {
-                    activeChatEncounter = CreateChatEncounterSnapshot(
-                        finished: false,
-                        identities);
-                    chatEncounterPublished |= activeChatEncounter is not null;
+                    if (activeEncounter is null)
+                    {
+                        activeChatEncounter = CreateChatEncounterSnapshot(
+                            finished: false,
+                            identities);
+                        chatEncounterPublished |= activeChatEncounter is not null;
+                    }
+                    else
+                    {
+                        // Rebuild ACT's current snapshot so fallback damage can be merged
+                        // without replacing healing already published for the same player.
+                        transitionEncounterToPublish = activeEncounter;
+                    }
                     chatEncounterDirty = false;
                 }
 
@@ -2459,6 +2567,16 @@ public sealed class SelfHostedActRuntime : IDisposable
                             encounter.Items.Values.Select(item => item.Name));
                     }
 
+                    fallbackSnapshot = CreateChatEncounterSnapshot(
+                        finished,
+                        identities);
+                    snapshot = MergeFallbackDamage(snapshot, fallbackSnapshot);
+                    if (snapshot is not null)
+                    {
+                        activeEncounterPublished |= snapshot.Combatants.Any(static combatant =>
+                            combatant.TotalDamage > 0 || combatant.TotalHealing > 0);
+                    }
+
                     if (finished)
                     {
                         if (parityDiagnosticsEnabled() && Volatile.Read(ref parityDiagnosticFaulted) == 0)
@@ -2490,12 +2608,6 @@ public sealed class SelfHostedActRuntime : IDisposable
                         encounterDurationTracker.FinishEncounter();
                         effectiveDamageEncounter = null;
                         activeEncounter = null;
-                        if (snapshot is null || SnapshotTotalDamage(snapshot) <= 0)
-                        {
-                            fallbackSnapshot = CreateChatEncounterSnapshot(
-                                finished: true,
-                                identities);
-                        }
 
                         activeEncounterId = Guid.Empty;
                         activeEncounterPartyCapacity = 0;
@@ -2550,16 +2662,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                 log.Warning(
                     "ACT encounter has no combatants matching the current player or party. " +
                     $"Raw names: {unmatchedNames}. " +
-                    "The Chinese combat-chat fallback will be used for this encounter.");
+                    "The network/chat damage fallback will be used for this encounter.");
             }
 
-            if (ShouldPreferChatFallback(snapshot, fallbackSnapshot))
-            {
-                log.Warning(
-                    "ACT completion snapshot contained no damage; preserved the valid Chinese combat-chat snapshot.");
-                EncounterChanged?.Invoke(fallbackSnapshot!, true);
-            }
-            else if (snapshot is not null)
+            if (snapshot is not null)
             {
                 EncounterChanged?.Invoke(snapshot, finished);
             }
@@ -2570,15 +2676,64 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
     }
 
-    private static long SnapshotTotalDamage(ActEncounterSnapshot snapshot)
-        => snapshot.Combatants.Sum(static combatant => Math.Max(0, combatant.TotalDamage));
-
-    internal static bool ShouldPreferChatFallback(
+    internal static ActEncounterSnapshot? MergeFallbackDamage(
         ActEncounterSnapshot? primary,
         ActEncounterSnapshot? fallback)
-        => fallback is not null &&
-           SnapshotTotalDamage(fallback) > 0 &&
-           (primary is null || SnapshotTotalDamage(primary) <= 0);
+    {
+        if (primary is null)
+        {
+            return fallback;
+        }
+        if (fallback is null)
+        {
+            return primary;
+        }
+
+        var merged = primary.Combatants.ToList();
+        foreach (var fallbackCombatant in fallback.Combatants.Where(static combatant =>
+                     combatant.TotalDamage > 0))
+        {
+            var index = merged.FindIndex(primaryCombatant =>
+                string.Equals(
+                    primaryCombatant.Id,
+                    fallbackCombatant.Id,
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    primaryCombatant.Name,
+                    fallbackCombatant.Name,
+                    StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+            {
+                merged.Add(fallbackCombatant);
+                continue;
+            }
+
+            if (merged[index].TotalDamage > 0)
+            {
+                // ACT remains authoritative whenever it produced damage. Adding both
+                // sources would double-count every normal action line.
+                continue;
+            }
+
+            var primaryCombatant = merged[index];
+            merged[index] = primaryCombatant with
+            {
+                TotalDamage = fallbackCombatant.TotalDamage,
+                Dps = fallbackCombatant.Dps,
+                EncDps = fallbackCombatant.EncDps,
+                ExtDps = fallbackCombatant.ExtDps,
+                DamageHits = fallbackCombatant.DamageHits,
+                CriticalHits = fallbackCombatant.CriticalHits,
+                CriticalDirectHits = fallbackCombatant.CriticalDirectHits,
+                Rdps = fallbackCombatant.Rdps,
+                DirectHits = fallbackCombatant.DirectHits,
+                HighestDamageAction = fallbackCombatant.HighestDamageAction,
+                HighestDamage = fallbackCombatant.HighestDamage,
+            };
+        }
+
+        return primary with { Combatants = merged };
+    }
 
     private void ObserveParityRawLine(string rawLine)
     {
@@ -2968,10 +3123,17 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatCriticalDirectHitTotals.Clear();
         chatHighestDamageActions.Clear();
         chatHighestDamageTotals.Clear();
+        recentNetworkDamage.Clear();
         chatParser.Clear();
         chatEnemy = string.Empty;
         chatZone = string.Empty;
     }
+
+    private readonly record struct RecentNetworkDamage(
+        DateTimeOffset ObservedAt,
+        string Actor,
+        string Target,
+        long Damage);
 
     private void SetUpstreamLogger()
     {

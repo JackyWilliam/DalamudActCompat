@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 14;
+    private const int CurrentVersion = 15;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -272,6 +272,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
             changed |= Meter.MigrateMeterFeedbackLayout();
             changed |= Meter.NormalizeCustomization();
             Version = 14;
+            changed = true;
+        }
+        if (Version < 15)
+        {
+            changed |= Meter.MigrateIndependentRoleSplitSlots();
+            changed |= Meter.NormalizeCustomization();
+            Version = 15;
             changed = true;
         }
 

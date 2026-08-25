@@ -28,6 +28,7 @@ internal static class BrandedWindowChrome
     {
         const float height = 40;
         const float closeWidth = 34;
+        const float helpCloseGap = 3;
         const float horizontalPadding = 8;
         const float logoSize = 28;
         var start = ImGui.GetCursorPos();
@@ -70,7 +71,9 @@ internal static class BrandedWindowChrome
             centerLabel);
 
         var helpWidth = helpAction is null ? 0 : closeWidth;
-        var trailingWidth = (showCloseButton ? closeWidth : 0) + helpWidth;
+        var trailingWidth = (showCloseButton ? closeWidth : 0) +
+                            helpWidth +
+                            (showCloseButton && helpAction is not null ? helpCloseGap : 0);
         var versionSize = ImGui.CalcTextSize(versionLabel);
         drawList.AddText(
             new Vector2(
@@ -91,7 +94,7 @@ internal static class BrandedWindowChrome
         if (helpAction is not null)
         {
             ImGui.SetCursorPos(new Vector2(
-                start.X + availableWidth - (showCloseButton ? closeWidth : 0) - helpWidth,
+                start.X + availableWidth - (showCloseButton ? closeWidth + helpCloseGap : 0) - helpWidth,
                 start.Y));
             ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
             ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.34f, 0.46f, 0.82f));

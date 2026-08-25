@@ -418,7 +418,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 14 &&
+        configuration.Version == 15 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -1864,7 +1864,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 14 &&
+        legacyConfiguration.Version == 15 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1894,7 +1894,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 14 &&
+        parserMigration.Version == 15 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1908,7 +1908,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 14 &&
+        newConfiguration.Version == 15 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -1928,6 +1928,8 @@ static void ValidateMeterRows()
         newConfiguration.Meter.ClassicWindow.Slots.Count >= 8 &&
         newConfiguration.Meter.HorizontalWindow.Slots.Count >= 8 &&
         newConfiguration.Meter.RoleSplitWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitDamageSlots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitHealerSlots.Count >= 8 &&
         newConfiguration.Meter.ShowTotalDamage &&
         newConfiguration.Meter.ShowHighestDamage,
         "The classic default or independently configurable Meter windows are missing.");
@@ -1943,7 +1945,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousHorizontalUser.ApplyMigrations() &&
-        previousHorizontalUser.Version == 14 &&
+        previousHorizontalUser.Version == 15 &&
         !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
@@ -1968,7 +1970,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousCompositeIdentityUser.ApplyMigrations() &&
-        previousCompositeIdentityUser.Version == 14 &&
+        previousCompositeIdentityUser.Version == 15 &&
         previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
         previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
         !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
@@ -1997,12 +1999,58 @@ static void ValidateMeterRows()
     };
     Assert(
         previousOpacityUser.ApplyMigrations() &&
-        previousOpacityUser.Version == 14 &&
+        previousOpacityUser.Version == 15 &&
         Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         previousOpacityUser.Meter.RoleSplitDamageCompact &&
         previousOpacityUser.Meter.RoleSplitHealerCompact,
         "The v14 migration did not preserve opacity or the independent role-collapse states.");
+    var previousSharedRoleUser = new PluginConfiguration
+    {
+        Version = 14,
+    };
+    previousSharedRoleUser.Meter.RoleSplitWindow.Slots =
+    [
+        new MeterSlotDefinition(
+            MeterSlotMetric.Hps,
+            0,
+            0,
+            4,
+            2,
+            MeterSlotAlignment.Right)
+        {
+            Visible = false,
+        },
+        new MeterSlotDefinition(
+            MeterSlotMetric.Dps,
+            0,
+            0,
+            4,
+            2,
+            MeterSlotAlignment.Right),
+    ];
+    Assert(
+        previousSharedRoleUser.ApplyMigrations() &&
+        previousSharedRoleUser.Version == 15 &&
+        previousSharedRoleUser.Meter.RoleSplitDamageSlots.Select(static slot =>
+            (slot.Metric, slot.Visible)).SequenceEqual(
+                previousSharedRoleUser.Meter.RoleSplitHealerSlots.Select(static slot =>
+                    (slot.Metric, slot.Visible))) &&
+        previousSharedRoleUser.Meter.RoleSplitDamageSlots.Zip(
+            previousSharedRoleUser.Meter.RoleSplitHealerSlots).All(static pair =>
+                pair.First.Id != pair.Second.Id),
+        "The v15 migration did not clone the former shared role columns into independent D/T and H lists.");
+    previousSharedRoleUser.Meter.RoleSplitHealerSlots[0].Visible = true;
+    Assert(
+        !previousSharedRoleUser.Meter.RoleSplitDamageSlots[0].Visible,
+        "Editing an H column still mutates the D/T column configuration.");
+    var healerDpsSlot = previousSharedRoleUser.Meter.RoleSplitHealerSlots.Single(static slot =>
+        slot.Metric == MeterSlotMetric.Dps);
+    healerDpsSlot.Visible = false;
+    previousSharedRoleUser.Meter.NormalizeCustomization();
+    Assert(
+        !healerDpsSlot.Visible,
+        "Normalizing the H column list forced DPS back on after the user disabled it.");
     var customStyle = new MeterCustomStyle
     {
         Name = "Watch layout",
@@ -2037,7 +2085,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 14 &&
+        previousDebugConfiguration.Version == 15 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -2049,7 +2097,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 14 &&
+        previousV6Configuration.Version == 15 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -2087,7 +2135,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 14 &&
+        previousGenericPluginUser.Version == 15 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -2099,7 +2147,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 14 &&
+        previousEdpsUser.Version == 15 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -2115,7 +2163,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 14 &&
+        previousCustomMetricUser.Version == 15 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2144,7 +2192,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 14 &&
+        previousTimelineUser.Version == 15 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2233,7 +2281,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 14 &&
+        previousV5CactbotUser.Version == 15 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -2917,11 +2965,13 @@ static void ValidateIndependentMeterWindows()
         roleSource.Contains("ApplyCompactWindowHeight(hasEncounter: false", StringComparison.Ordinal) &&
         roleSource.Contains("AdvanceWindowHeightAnimation", StringComparison.Ordinal) &&
         roleSource.Contains("MeterWindow.EaseOutCubic", StringComparison.Ordinal) &&
+        roleSource.Contains("configuration.Meter.RoleSplitDamageSlots", StringComparison.Ordinal) &&
+        roleSource.Contains("configuration.Meter.RoleSplitHealerSlots", StringComparison.Ordinal) &&
         roleSource.Contains("ShowDps = Has(MeterSlotMetric.Dps)", StringComparison.Ordinal) &&
         roleSource.Contains("ShowHps = Has(MeterSlotMetric.Hps)", StringComparison.Ordinal) &&
         !roleSource.Contains("leadingDamage", StringComparison.Ordinal) &&
         !roleSource.Contains("titleHovered", StringComparison.Ordinal),
-        "Role split lost its shared DPS/HPS columns, collapse control, empty-state collapse, or height animation.");
+        "Role split lost its independent D/T/H columns, collapse control, empty-state collapse, or height animation.");
     Assert(
         editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
         editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
@@ -2930,6 +2980,9 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("meterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
         editorSource.Contains("horizontalMeterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
         editorSource.Contains("roleSplitDamageWindow.DrawEditorPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("meter-editor-role-group", StringComparison.Ordinal) &&
+        editorSource.Contains("RoleSplitHealerSlots", StringComparison.Ordinal) &&
+        editorSource.Contains("RoleSplitDamageSlots", StringComparison.Ordinal) &&
         editorSource.Contains("ActivateWindow(selectedKind)", StringComparison.Ordinal) &&
         editorSource.Contains("24 人本使用固定紧凑条", StringComparison.Ordinal) &&
         editorSource.Contains("profile.BackgroundOpacity", StringComparison.Ordinal) &&
@@ -8364,6 +8417,8 @@ static void ValidateHtmlOverlayDefaults()
         !controlCenterSource.Contains("DrawHelpEntry", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("?##help-{id}", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("helpAction();", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("const float helpCloseGap = 3;", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("closeWidth + helpCloseGap", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
@@ -10465,6 +10520,14 @@ static void ValidateChineseCombatChatParsing()
         announcedActor == "附近玩家",
         "Chinese split combat chat did not update its announced actor before the damage line.");
     Assert(
+        ChineseCombatChatParser.TryExtractActionAnnouncement(
+            "埃斯蒂尼安丿咏唱了“注药III”。",
+            out var castingActor,
+            out var castingAction) &&
+        castingActor == "埃斯蒂尼安丿" &&
+        castingAction == "注药III",
+        "Chinese cast announcements were not accepted as split combat context.");
+    Assert(
         ChineseCombatChatParser.TryParse(
             "埃斯蒂尼安丿发动攻击 \uE06F 木人受到了3714点伤害。",
             string.Empty,
@@ -10569,25 +10632,94 @@ static void ValidateChineseCombatChatParsing()
         limitBreakDamage == 936686,
         "Chinese Limit Break damage was attributed to the player instead of the synthetic LB combatant.");
 
+    Assert(
+        NetworkDamageFallbackParser.TryParse(
+            "21|2026-08-24T22:11:10.0000000+08:00|10028D6F|埃斯蒂尼安丿|5EF8|注药III|400018C8|木人|752003|9F630000",
+            out var chineseNetworkDamage) &&
+        chineseNetworkDamage.SourceId == 0x10028D6F &&
+        chineseNetworkDamage.SourceName == "埃斯蒂尼安丿" &&
+        chineseNetworkDamage.TargetName == "木人" &&
+        chineseNetworkDamage.ActionName == "注药III" &&
+        chineseNetworkDamage.Damage == 40803 &&
+        chineseNetworkDamage.IsCritical &&
+        !chineseNetworkDamage.IsDirectHit,
+        "The real Sage Dosis III network line did not produce region-neutral fallback damage.");
+    Assert(
+        NetworkDamageFallbackParser.TryParse(
+            "21|2026-08-24T14:11:10.0000000Z|10028D6F|Example Player|5EF8|Dosis III|400018C8|Striking Dummy|752003|9F630000",
+            out var globalNetworkDamage) &&
+        globalNetworkDamage.Damage == chineseNetworkDamage.Damage &&
+        globalNetworkDamage.ActionName == "Dosis III",
+        "The structured damage fallback still depends on Chinese combat text.");
+    Assert(
+        NetworkDamageFallbackParser.TryParse(
+            "24|2026-08-24T14:11:13.0000000Z|400018C8|Striking Dummy|DoT|0|00000ABC|0|0|0|0|0|0|0|0|0|0|10028D6F|Example Player|checksum",
+            out var periodicNetworkDamage) &&
+        periodicNetworkDamage.SourceId == 0x10028D6F &&
+        periodicNetworkDamage.TargetName == "Striking Dummy" &&
+        periodicNetworkDamage.Damage == 0xABC &&
+        periodicNetworkDamage.ActionName == "DoT",
+        "Region-neutral fallback damage dropped periodic damage after the opening cast.");
+
     var snapshotTime = DateTimeOffset.UtcNow;
-    var emptyActSnapshot = new ActEncounterSnapshot(
+    var healingActSnapshot = new ActEncounterSnapshot(
         Guid.NewGuid(),
         snapshotTime,
         snapshotTime,
         "Middle La Noscea",
         "木人",
-        [new ActCombatantSnapshot("player", "Player", "PLD", true, 0, 0, 0)]);
+        [new ActCombatantSnapshot("player", "Player", "SGE", true, 0, 16703, 0)]);
     var chatFallbackSnapshot = new ActEncounterSnapshot(
-        emptyActSnapshot.Id,
+        healingActSnapshot.Id,
         snapshotTime,
         snapshotTime,
         "Middle La Noscea",
         "木人",
-        [new ActCombatantSnapshot("player", "Player", "PLD", true, 936686, 0, 0)]);
+        [new ActCombatantSnapshot(
+            "player",
+            "Player",
+            "SGE",
+            true,
+            40803,
+            0,
+            0,
+            Dps: 40803,
+            DamageHits: 1,
+            CriticalHits: 1,
+            HighestDamageAction: "Dosis III",
+            HighestDamage: 40803)]);
+    var mergedFallbackSnapshot = SelfHostedActRuntime.MergeFallbackDamage(
+        healingActSnapshot,
+        chatFallbackSnapshot);
     Assert(
-        SelfHostedActRuntime.ShouldPreferChatFallback(emptyActSnapshot, chatFallbackSnapshot) &&
-        !SelfHostedActRuntime.ShouldPreferChatFallback(chatFallbackSnapshot, emptyActSnapshot),
-        "A zero-damage ACT completion snapshot can still overwrite a valid chat fallback snapshot.");
+        mergedFallbackSnapshot?.Combatants.Single() is
+        {
+            TotalDamage: 40803,
+            TotalHealing: 16703,
+            DamageHits: 1,
+            CriticalHits: 1,
+            HighestDamageAction: "Dosis III",
+        },
+        "Fallback damage replaced the healer's ACT healing instead of merging the missing fields.");
+    var authoritativeActSnapshot = healingActSnapshot with
+    {
+        Combatants =
+        [
+            healingActSnapshot.Combatants[0] with
+            {
+                TotalDamage = 12345,
+                Dps = 12345,
+            },
+        ],
+    };
+    Assert(
+        SelfHostedActRuntime.MergeFallbackDamage(
+            authoritativeActSnapshot,
+            chatFallbackSnapshot)?.Combatants.Single().TotalDamage == 12345 &&
+        ReferenceEquals(
+            SelfHostedActRuntime.MergeFallbackDamage(null, chatFallbackSnapshot),
+            chatFallbackSnapshot),
+        "Fallback damage double-counted an authoritative ACT total or failed to cover an empty ACT snapshot.");
 }
 
 static void ValidateDiagnosticReport(string testRoot)

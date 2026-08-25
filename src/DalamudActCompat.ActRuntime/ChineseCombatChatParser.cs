@@ -5,7 +5,7 @@ namespace DalamudActCompat.ActRuntime;
 public static class ChineseCombatChatParser
 {
     private static readonly Regex ActionAnnouncementRegex = new(
-        @"(?<actor>.+?)发动(?:攻击|了)(?:“(?<action>[^”]+)”)?",
+        @"(?<actor>.+?)(?:发动(?:攻击|了)|咏唱了)(?:“(?<action>[^”]+)”)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DamageRegex = new(
         @"(?<target>\S+?)受到了(?<damage>\d+)(?:\([^)]+\))?点伤害",

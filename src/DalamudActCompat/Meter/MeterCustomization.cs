@@ -99,14 +99,24 @@ public sealed class MeterWindowProfile
         }
 
         Slots ??= [];
-        if (Slots.Count == 0)
+        changed |= NormalizeSlots(Slots, defaults);
+
+        return changed;
+    }
+
+    internal static bool NormalizeSlots(
+        List<MeterSlotDefinition> slots,
+        IReadOnlyList<MeterSlotDefinition> defaults)
+    {
+        var changed = false;
+        if (slots.Count == 0)
         {
-            Slots = defaults.Select(static slot => slot.Clone()).ToList();
+            slots.AddRange(defaults.Select(static slot => slot.Clone()));
             changed = true;
         }
 
         var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var slot in Slots)
+        foreach (var slot in slots)
         {
             changed |= slot.Normalize(usedIds);
         }

@@ -1,6 +1,7 @@
 namespace DalamudActCompat.Meter;
 
 using System.Numerics;
+using Newtonsoft.Json;
 
 public enum MeterSortMode
 {
@@ -75,6 +76,16 @@ public sealed class MeterSettings
         Slots = MeterSlotDefaults.CreateRoleSplit(),
         ItemWidth = 250,
     };
+
+    // D/T and H share one physical-window style, but their columns must remain independent.
+    // Keeping the lists outside RoleSplitWindow preserves the existing window settings JSON.
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<MeterSlotDefinition> RoleSplitDamageSlots { get; set; } =
+        MeterSlotDefaults.CreateRoleSplit();
+
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<MeterSlotDefinition> RoleSplitHealerSlots { get; set; } =
+        MeterSlotDefaults.CreateRoleSplit();
 
     public bool IsLocked { get; set; }
 
@@ -197,6 +208,14 @@ public sealed class MeterSettings
         changed |= ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
         changed |= HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
         changed |= RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        RoleSplitDamageSlots ??= [];
+        RoleSplitHealerSlots ??= [];
+        changed |= MeterWindowProfile.NormalizeSlots(
+            RoleSplitDamageSlots,
+            MeterSlotDefaults.CreateRoleSplit());
+        changed |= MeterWindowProfile.NormalizeSlots(
+            RoleSplitHealerSlots,
+            MeterSlotDefaults.CreateRoleSplit());
         changed |= NormalizeActiveWindow();
         CustomStyles ??= [];
         var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -332,6 +351,19 @@ public sealed class MeterSettings
                 }
             }
         }
+    }
+
+    internal bool MigrateIndependentRoleSplitSlots()
+    {
+        // v14 stored one mutable list for both panes. Clone twice so upgrades preserve
+        // every user-selected metric and order without leaving shared object identities.
+        RoleSplitDamageSlots = RoleSplitWindow.Slots
+            .Select(static slot => slot.Clone())
+            .ToList();
+        RoleSplitHealerSlots = RoleSplitWindow.Slots
+            .Select(static slot => slot.Clone())
+            .ToList();
+        return true;
     }
 
     internal bool MigrateIndependentWindows()
