@@ -15,7 +15,7 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 | 功能 | 实际用途 |
 | --- | --- |
 | 游戏内战斗统计 | 查看 4/8/24 人 DPS、rDPS、HPS、总伤害、最高技能伤害、命中率、死亡和本地 FFLogs 区间估算 |
-| 统计样式 | 独立开启经典榜、完全透明横版和职能分栏；三个窗口都可用自动排布槽位自定义 |
+| 统计样式 | 经典榜、完全透明横版和职能分栏三选一；8 人经典表格可自定义，24 人使用固定的职业/名字 + DPS/HPS 紧凑条 |
 | 战斗历史 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志 |
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
@@ -71,7 +71,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 | 页面 | 这里能做什么 |
 | --- | --- |
 | 概览 | 查看解析器状态；开关解析、自动启动、失焦隐藏网页悬浮窗和精简模式；打开统计、历史、运行状态与日志目录 |
-| 战斗统计 | 分别开关、定位和编辑三个独立统计窗；设置 DPS/HPS 排序、动态槽位、透明度和 FFLogs 估算 |
+| 战斗统计 | 在三个互斥模板间切换；设置 8/24 人模式、DPS/HPS 排序、独立统计槽位、透明度和 FFLogs 估算 |
 | 悬浮窗 | 安装 Cactbot；管理文字提醒、时间轴和自定义 HTML 悬浮窗 |
 | 扩展 | 启停扩展；打开扩展配置；检查来源与更新；导入 DLL/ZIP；分配权限 |
 | 设置 | 自动检测或手动选择国服/国际服；重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |

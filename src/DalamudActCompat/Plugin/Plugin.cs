@@ -429,8 +429,7 @@ public sealed class Plugin : IDalamudPlugin
             meterService,
             configuration,
             text,
-            jobIcons,
-            SaveConfiguration,
+            meterWindow,
             RoleSplitGroup.DamageTank)
         {
             IsOpen = configuration.Meter.IsVisible,
@@ -439,8 +438,7 @@ public sealed class Plugin : IDalamudPlugin
             meterService,
             configuration,
             text,
-            jobIcons,
-            SaveConfiguration,
+            meterWindow,
             RoleSplitGroup.Healer)
         {
             IsOpen = configuration.Meter.IsVisible,
@@ -448,7 +446,10 @@ public sealed class Plugin : IDalamudPlugin
         meterStyleEditorWindow = new MeterStyleEditorWindow(
             configuration,
             logoTexture,
-            jobIcons,
+            meterWindow,
+            horizontalMeterWindow,
+            roleSplitDamageWindow,
+            roleSplitHealerWindow,
             text,
             SaveConfiguration);
         encounterWindow = new EncounterWindow(

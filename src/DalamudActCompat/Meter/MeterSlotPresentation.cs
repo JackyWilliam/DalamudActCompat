@@ -19,6 +19,8 @@ internal static class MeterSlotPresentation
             MeterSlotMetric.Fflogs => "FFLogs",
             MeterSlotMetric.Dps => "DPS",
             MeterSlotMetric.Rdps => "rDPS",
+            MeterSlotMetric.EncDps => "EncDPS",
+            MeterSlotMetric.ExtDps => "ExtDPS",
             MeterSlotMetric.Hps => "HPS",
             MeterSlotMetric.DamagePercent => text.Get("伤害占比", "Damage %"),
             MeterSlotMetric.TotalDamage => text.Get("全队总伤害", "Team damage"),
@@ -45,6 +47,8 @@ internal static class MeterSlotPresentation
             MeterSlotMetric.Fflogs => "--",
             MeterSlotMetric.Dps => $"{row.PersonalDps:N0}",
             MeterSlotMetric.Rdps => $"{row.Rdps:N0}",
+            MeterSlotMetric.EncDps => $"{row.EncDps:N0}",
+            MeterSlotMetric.ExtDps => $"{row.ExtDps:N0}",
             MeterSlotMetric.Hps => $"{row.Hps:N0}",
             MeterSlotMetric.DamagePercent => $"{row.DamagePercent:N1}%",
             MeterSlotMetric.TotalDamage => MeterWindow.FormatCompactNumber(row.TotalDamage),
@@ -99,7 +103,8 @@ internal static class MeterSlotPresentation
         var source = profile.Slots.FirstOrDefault(slot =>
             slot.Visible &&
             (mode == MeterSortMode.Hps
-                ? slot.Metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps
+                ? slot.Metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps or
+                    MeterSlotMetric.EncDps or MeterSlotMetric.ExtDps
                 : slot.Metric == MeterSlotMetric.Hps));
         var existingTarget = profile.Slots.FirstOrDefault(slot =>
             slot.Metric == targetMetric && !ReferenceEquals(slot, source));

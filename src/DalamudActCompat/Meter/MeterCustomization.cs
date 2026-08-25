@@ -35,9 +35,11 @@ public enum MeterSlotMetric
     CriticalHitPercent,
     DirectHitPercent,
     CriticalDirectHitPercent,
-    // Appended so numeric values in v12 JSON keep their original meaning.
+    // Keep new values append-only so numeric metrics in older JSON retain their meaning.
     PlayerIdentity,
     Fflogs,
+    EncDps,
+    ExtDps,
 }
 
 public enum MeterWindowKind
@@ -61,6 +63,8 @@ public sealed class MeterWindowProfile
 
     public float FontScale { get; set; } = 1;
 
+    public float BackgroundOpacity { get; set; } = 0.85f;
+
     public float ItemWidth { get; set; } = 210;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
@@ -76,10 +80,14 @@ public sealed class MeterWindowProfile
     {
         var changed = false;
         var normalizedFontScale = ClampFinite(FontScale, 0.65f, 2, 1);
+        var normalizedBackgroundOpacity = ClampFinite(BackgroundOpacity, 0, 1, 0.85f);
         var normalizedItemWidth = ClampFinite(ItemWidth, 140, 420, 210);
-        if (FontScale != normalizedFontScale || ItemWidth != normalizedItemWidth)
+        if (FontScale != normalizedFontScale ||
+            BackgroundOpacity != normalizedBackgroundOpacity ||
+            ItemWidth != normalizedItemWidth)
         {
             FontScale = normalizedFontScale;
+            BackgroundOpacity = normalizedBackgroundOpacity;
             ItemWidth = normalizedItemWidth;
             changed = true;
         }
@@ -119,6 +127,8 @@ public static class MeterSlotDefaults
         MeterSlotMetric.Fflogs,
         MeterSlotMetric.Dps,
         MeterSlotMetric.Rdps,
+        MeterSlotMetric.EncDps,
+        MeterSlotMetric.ExtDps,
         MeterSlotMetric.Hps,
         MeterSlotMetric.DamagePercent,
         MeterSlotMetric.TotalDamage,
@@ -139,6 +149,8 @@ public static class MeterSlotDefaults
             Create(MeterSlotMetric.Fflogs, visible: false),
             Create(MeterSlotMetric.Dps),
             Create(MeterSlotMetric.Rdps),
+            Create(MeterSlotMetric.EncDps, visible: false),
+            Create(MeterSlotMetric.ExtDps, visible: false),
             Create(MeterSlotMetric.Hps, visible: false),
             Create(MeterSlotMetric.DamagePercent, visible: false),
             Create(MeterSlotMetric.TotalDamage),
@@ -157,6 +169,8 @@ public static class MeterSlotDefaults
             Create(MeterSlotMetric.PlayerIdentity),
             Create(MeterSlotMetric.Dps),
             Create(MeterSlotMetric.Rdps),
+            Create(MeterSlotMetric.EncDps, visible: false),
+            Create(MeterSlotMetric.ExtDps, visible: false),
             Create(MeterSlotMetric.Hps, visible: false),
             Create(MeterSlotMetric.DamagePercent),
             Create(MeterSlotMetric.TotalDamage),
@@ -170,6 +184,8 @@ public static class MeterSlotDefaults
             Create(MeterSlotMetric.PlayerIdentity),
             Create(MeterSlotMetric.Dps),
             Create(MeterSlotMetric.Rdps),
+            Create(MeterSlotMetric.EncDps, visible: false),
+            Create(MeterSlotMetric.ExtDps, visible: false),
             Create(MeterSlotMetric.Hps),
             Create(MeterSlotMetric.DamagePercent),
             Create(MeterSlotMetric.TotalDamage),

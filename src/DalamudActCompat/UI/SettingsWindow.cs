@@ -378,19 +378,6 @@ public sealed class SettingsWindow : Window
             configuration.Meter.RefreshIntervalMs = refreshInterval;
             changed = true;
         }
-        var dpsMetric = configuration.Meter.DpsMetric;
-        if (ImGui.BeginCombo(text.Get("DPS 计算口径", "DPS metric"), DpsMetricLabel(dpsMetric)))
-        {
-            foreach (var metric in Enum.GetValues<DpsMetric>())
-            {
-                if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
-                {
-                    configuration.Meter.DpsMetric = metric;
-                    changed = true;
-                }
-            }
-            ImGui.EndCombo();
-        }
         changed |= DrawPlayerIdentityControls();
         ImGui.TextDisabled(text.Get(
             "榜单模板、窗口样式和显示槽位请在控制中心的“战斗统计 → 自定义”中调整。",
@@ -870,15 +857,6 @@ public sealed class SettingsWindow : Window
         ParserState.VersionIncompatible => text.Get("版本不兼容", "Version incompatible"),
         ParserState.Faulted => text.Get("故障", "Faulted"),
         _ => state.ToString(),
-    };
-
-    private string DpsMetricLabel(DpsMetric metric) => metric switch
-    {
-        DpsMetric.Rdps => text.Get("rDPS（团队贡献估算）", "rDPS (estimated raid contribution)"),
-        DpsMetric.Dps => text.Get("DPS（个人有效动作时长）", "DPS (personal active duration)"),
-        DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
-        DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),
-        _ => metric.ToString(),
     };
 
     private bool DrawPlayerIdentityControls()

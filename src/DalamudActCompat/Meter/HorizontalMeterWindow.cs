@@ -157,7 +157,10 @@ public sealed class HorizontalMeterWindow : Window
             Gold);
     }
 
-    private void DrawHeader(Encounter? encounter, IReadOnlyList<CombatantRow> rows)
+    private void DrawHeader(
+        Encounter? encounter,
+        IReadOnlyList<CombatantRow> rows,
+        bool embeddedPreview = false)
     {
         var start = ImGui.GetCursorScreenPos();
         var lineHeight = Math.Max(20, ImGui.GetTextLineHeight() + 4);
@@ -173,7 +176,8 @@ public sealed class HorizontalMeterWindow : Window
         var dragWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - (dragStart.X - start.X));
         ImGui.SetCursorScreenPos(dragStart);
         ImGui.InvisibleButton("horizontal-meter-drag", new Vector2(dragWidth, lineHeight));
-        if (!Profile.IsLocked && ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        if (!embeddedPreview && !Profile.IsLocked && ImGui.IsItemActive() &&
+            ImGui.IsMouseDragging(ImGuiMouseButton.Left))
         {
             ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
         }
@@ -183,6 +187,26 @@ public sealed class HorizontalMeterWindow : Window
             ImGui.GetColorU32(new Vector4(Muted.X, Muted.Y, Muted.Z, 0.62f)),
             Profile.IsLocked ? text.Get("已锁定", "Locked") : text.Get("拖动窗口", "Drag window"));
         ImGui.SetCursorScreenPos(start + new Vector2(0, lineHeight + 3));
+    }
+
+    internal void DrawEditorPreview(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> rows)
+    {
+        using var fontScale = new MeterFontScaleScope(Profile.FontScale);
+        var ranked = MeterSlotPresentation.SortAndRank(rows, Profile.SortMode);
+        var partyGroup = ResolvePartyGroup(encounter, ranked);
+        DrawHeader(encounter, ranked, embeddedPreview: true);
+        DrawSlidingPlayers(
+            encounter,
+            MeterSlotPresentation.SelectParty(ranked, partyGroup));
+        MeterSlotPresentation.DrawTeamSummary(
+            "horizontal-editor-preview",
+            encounter,
+            Profile.Slots,
+            text,
+            Muted,
+            Gold);
     }
 
     private float DrawPartyButtons(
@@ -408,7 +432,8 @@ public sealed class HorizontalMeterWindow : Window
     private static Vector4 PrimaryColor(MeterSlotMetric metric, bool isLocalPlayer)
         => isLocalPlayer
             ? Gold
-            : metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps or MeterSlotMetric.Hps
+            : metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps or
+                MeterSlotMetric.EncDps or MeterSlotMetric.ExtDps or MeterSlotMetric.Hps
                 ? IceBlue
                 : Vector4.One;
 }

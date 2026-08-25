@@ -83,7 +83,9 @@ public sealed class MeterService
                 HighestDamage: combatant.HighestDamage,
                 PartyGroup: combatant.PartyGroup,
                 PersonalDps: ResolvePersonalDps(combatant, damageDuration),
-                Rdps: ResolveRdps(combatant, damageDuration));
+                Rdps: ResolveRdps(combatant, damageDuration),
+                EncDps: ResolveEncounterDps(combatant, healingDuration),
+                ExtDps: ResolveExternalDps(combatant, healingDuration));
         });
 
         var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
@@ -139,6 +141,16 @@ public sealed class MeterService
             ? combatant.Rdps
             : ResolvePersonalDps(combatant, encounterDuration);
 
+    private static double ResolveEncounterDps(Combatant combatant, double encounterDuration)
+        => combatant.EncDps > 0
+            ? combatant.EncDps
+            : combatant.TotalDamage / encounterDuration;
+
+    private static double ResolveExternalDps(Combatant combatant, double encounterDuration)
+        => combatant.ExtDps > 0
+            ? combatant.ExtDps
+            : ResolveEncounterDps(combatant, encounterDuration);
+
     internal static double? CalculateHitRate(int matchingHits, int damageHits)
         => damageHits > 0
             ? Math.Clamp(matchingHits, 0, damageHits) * 100.0 / damageHits
@@ -189,4 +201,6 @@ public sealed record CombatantRow(
     long HighestDamage = 0,
     int PartyGroup = 0,
     double PersonalDps = 0,
-    double Rdps = 0);
+    double Rdps = 0,
+    double EncDps = 0,
+    double ExtDps = 0);

@@ -71,7 +71,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | Page | What you can do there |
 | --- | --- |
 | Overview | Inspect parser state; toggle parsing, autostart, unfocused web-overlay hiding, and Simplified mode; open the meter, history, runtime status, and log directory |
-| Combat Meter | Independently show, locate, and edit three meter windows; configure DPS/HPS ranking, dynamic slots, opacity, and FFLogs estimates |
+| Combat Meter | Select one of three mutually exclusive templates; customize the 8-player classic table, use fixed job/name + DPS/HPS rows for 24 players, and configure opacity or FFLogs where supported |
 | Overlays | Install Cactbot and manage alerts, timelines, and custom HTML overlays |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
 | Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |

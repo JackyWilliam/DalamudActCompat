@@ -758,22 +758,6 @@ public sealed class ControlCenterWindow : Window
             configuration.Meter.RefreshIntervalMs = refreshInterval;
             changed = true;
         }
-        var dpsMetric = configuration.Meter.DpsMetric;
-        ImGui.SetNextItemWidth(300);
-        if (ImGui.BeginCombo(
-                text.Get("DPS 计算口径", "DPS metric"),
-                DpsMetricLabel(dpsMetric)))
-        {
-            foreach (var metric in Enum.GetValues<DpsMetric>())
-            {
-                if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
-                {
-                    configuration.Meter.DpsMetric = metric;
-                    changed = true;
-                }
-            }
-            ImGui.EndCombo();
-        }
         changed |= DrawPlayerIdentityControls();
         changed |= DrawFflogsSettings();
         return changed;
@@ -2505,15 +2489,6 @@ public sealed class ControlCenterWindow : Window
         ParserState.VersionIncompatible => text.Get("版本不兼容", "Version incompatible"),
         ParserState.Faulted => text.Get("故障", "Faulted"),
         _ => state.ToString(),
-    };
-
-    private string DpsMetricLabel(DpsMetric metric) => metric switch
-    {
-        DpsMetric.Rdps => text.Get("rDPS（团队贡献估算）", "rDPS (estimated raid contribution)"),
-        DpsMetric.Dps => text.Get("DPS（个人有效动作时长）", "DPS (personal active duration)"),
-        DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
-        DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),
-        _ => metric.ToString(),
     };
 
     private bool DrawPlayerIdentityControls()

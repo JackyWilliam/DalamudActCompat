@@ -58,6 +58,7 @@ public sealed class MeterSettings
     public MeterWindowProfile ClassicWindow { get; set; } = new()
     {
         IsEnabled = true,
+        BackgroundOpacity = 0.85f,
         ItemWidth = 150,
         Slots = MeterSlotDefaults.CreateClassic(),
     };
@@ -70,6 +71,7 @@ public sealed class MeterSettings
 
     public MeterWindowProfile RoleSplitWindow { get; set; } = new()
     {
+        BackgroundOpacity = 0.85f,
         Slots = MeterSlotDefaults.CreateRoleSplit(),
         ItemWidth = 250,
     };
@@ -130,6 +132,10 @@ public sealed class MeterSettings
 
     public bool ShowRdps { get; set; }
 
+    public bool ShowEncDps { get; set; }
+
+    public bool ShowExtDps { get; set; }
+
     public bool ShowDamagePercent { get; set; } = true;
 
     public bool ShowTotalDamage { get; set; } = true;
@@ -173,6 +179,7 @@ public sealed class MeterSettings
         ClassicWindow ??= new MeterWindowProfile
         {
             IsEnabled = true,
+            BackgroundOpacity = 0.85f,
             ItemWidth = 150,
             Slots = MeterSlotDefaults.CreateClassic(),
         };
@@ -183,6 +190,7 @@ public sealed class MeterSettings
         };
         RoleSplitWindow ??= new MeterWindowProfile
         {
+            BackgroundOpacity = 0.85f,
             Slots = MeterSlotDefaults.CreateRoleSplit(),
             ItemWidth = 250,
         };
@@ -292,6 +300,40 @@ public sealed class MeterSettings
         }
         changed |= NormalizeActiveWindow();
         return changed;
+    }
+
+    internal bool MigrateMeterFeedbackLayout()
+    {
+        // v13 exposed one legacy opacity only on the classic editor. Copying it to
+        // both opaque templates preserves the exact look while making their controls independent.
+        ClassicWindow.BackgroundOpacity = BackgroundOpacity;
+        RoleSplitWindow.BackgroundOpacity = BackgroundOpacity;
+        RoleSplitDamageCompact = false;
+        RoleSplitHealerCompact = false;
+        EnsureIndependentRateSlots(ClassicWindow);
+        EnsureIndependentRateSlots(HorizontalWindow);
+        EnsureIndependentRateSlots(RoleSplitWindow);
+        return true;
+
+        static void EnsureIndependentRateSlots(MeterWindowProfile profile)
+        {
+            foreach (var metric in new[] { MeterSlotMetric.EncDps, MeterSlotMetric.ExtDps })
+            {
+                if (profile.Slots.All(slot => slot.Metric != metric))
+                {
+                    profile.Slots.Add(new MeterSlotDefinition(
+                        metric,
+                        0,
+                        0,
+                        4,
+                        2,
+                        MeterSlotAlignment.Right)
+                    {
+                        Visible = false,
+                    });
+                }
+            }
+        }
     }
 
     internal bool MigrateIndependentWindows()

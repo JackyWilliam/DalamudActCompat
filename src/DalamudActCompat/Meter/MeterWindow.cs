@@ -153,7 +153,7 @@ public sealed class MeterWindow : Window
             Flags |= ImGuiWindowFlags.NoInputs;
         }
 
-        var backgroundOpacity = NormalizeBackgroundOpacity(settings.BackgroundOpacity);
+        var backgroundOpacity = NormalizeBackgroundOpacity(settings.ClassicWindow.BackgroundOpacity);
         ImGui.SetNextWindowBgAlpha(backgroundOpacity);
         ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.035f, 0.055f, 0.09f, 1));
         ImGui.PushStyleColor(
@@ -214,22 +214,32 @@ public sealed class MeterWindow : Window
             DrawCompactDragHandle(settings);
         }
 
-        var rows = SelectClassicRows(encounter, allRows, settings);
-        ApplyCompactWindowHeight(settings, useHorizontalScroll: false);
+        var rows = SelectClassicRows(allRows, settings);
+        ApplyCompactWindowHeight(settings);
         if (rows.Count == 0)
         {
             ImGui.TextDisabled(text.Get("等待玩家数据…", "Waiting for player data…"));
             return;
         }
 
-        DrawClassicTiles(encounter, rows, settings);
-        MeterSlotPresentation.DrawTeamSummary(
-            "classic",
-            encounter,
-            settings.ClassicWindow.Slots,
-            text,
-            new Vector4(0.70f, 0.74f, 0.80f, 1),
-            Gold);
+        if (settings.ClassicAllianceView)
+        {
+            DrawAllianceCompactTiles(encounter, rows, settings);
+        }
+        else
+        {
+            DrawClassicTable(encounter, rows, settings, "classic-meter-rows");
+        }
+        if (!settings.ClassicAllianceView)
+        {
+            MeterSlotPresentation.DrawTeamSummary(
+                "classic",
+                encounter,
+                settings.ClassicWindow.Slots,
+                text,
+                new Vector4(0.70f, 0.74f, 0.80f, 1),
+                Gold);
+        }
     }
 
     private void DrawEmptyState(MeterSettings settings)
@@ -251,7 +261,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + new Vector2(width, EmptyStateHeight),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.BackgroundOpacity)),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.ClassicWindow.BackgroundOpacity)),
             6);
         var textWidth = Math.Max(20, toggleStart.X - start.X - 16);
         drawList.AddText(
@@ -269,42 +279,47 @@ public sealed class MeterWindow : Window
         DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered);
     }
 
-    private void DrawEncounterHeader(Encounter encounter, MeterSettings settings)
+    private void DrawEncounterHeader(
+        Encounter encounter,
+        MeterSettings settings,
+        bool embeddedPreview = false)
     {
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         var toggleStart = new Vector2(start.X + width - CompactToggleSize - 6, start.Y + 9);
         var toggleEnd = toggleStart + new Vector2(CompactToggleSize, CompactToggleSize);
-        var rankingStart = toggleStart - new Vector2(CompactToggleSize + 5, 0);
-        var rankingEnd = rankingStart + new Vector2(CompactToggleSize);
-        var audienceStart = rankingStart - new Vector2(CompactToggleSize + 5, 0);
-        var audienceEnd = audienceStart + new Vector2(CompactToggleSize);
+        var rankingButtonWidth = Math.Max(54, ImGui.CalcTextSize("HPS 榜").X + 14);
+        var audienceButtonWidth = Math.Max(58, ImGui.CalcTextSize(text.Get("24 人本", "24-player")).X + 18);
+        var audienceEnd = new Vector2(toggleStart.X - 5, toggleEnd.Y);
+        var audienceStart = new Vector2(audienceEnd.X - audienceButtonWidth, toggleStart.Y);
+        var rankingEnd = new Vector2(audienceStart.X - 5, toggleEnd.Y);
+        var rankingStart = new Vector2(rankingEnd.X - rankingButtonWidth, toggleStart.Y);
         var toggleHovered = CanInteractWithCompactToggle(settings) &&
                             ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
         var rankingHovered = CanInteractWithCompactToggle(settings) &&
                              ImGui.IsMouseHoveringRect(rankingStart, rankingEnd);
-        var rows = meterService.GetRows(encounter);
-        var showAudienceToggle = MeterSlotPresentation.IsAlliance(encounter, rows);
-        var audienceHovered = showAudienceToggle && CanInteractWithCompactToggle(settings) &&
+        var audienceHovered = CanInteractWithCompactToggle(settings) &&
                               ImGui.IsMouseHoveringRect(audienceStart, audienceEnd);
         ImGui.InvisibleButton("meter-header-drag", new Vector2(width, EncounterHeaderHeight));
-        HandleHeaderDrag(
-            settings,
-            allowStart: !toggleHovered && !rankingHovered && !audienceHovered);
-        HandleCompactModeToggle(settings, toggleHovered);
+        if (!embeddedPreview)
+        {
+            HandleHeaderDrag(
+                settings,
+                allowStart: !toggleHovered && !rankingHovered && !audienceHovered);
+            HandleCompactModeToggle(settings, toggleHovered);
+        }
         HandleRankingModeToggle(settings, rankingHovered);
-        HandleAudienceModeToggle(settings, audienceHovered);
 
         var drawList = ImGui.GetWindowDrawList();
         drawList.AddRectFilled(
             start,
             start + new Vector2(width, EncounterHeaderHeight),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.BackgroundOpacity)),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.ClassicWindow.BackgroundOpacity)),
             6);
         DrawEncounterStateIcon(drawList, encounter, start + new Vector2(9, 5));
         var titleRight = Math.Max(
             start.X + 36,
-            (showAudienceToggle ? audienceStart.X : rankingStart.X) - 6);
+            audienceStart.X - 6);
         drawList.AddText(
             start + new Vector2(36, 6),
             ImGui.GetColorU32(Gold),
@@ -321,9 +336,34 @@ public sealed class MeterWindow : Window
             TrimToWidth(subtitle, titleRight - start.X - 36));
         DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered);
         DrawRankingModeIcon(drawList, settings, rankingStart, rankingEnd, rankingHovered);
-        if (showAudienceToggle)
+        DrawAudienceModeDropdown(drawList, settings, audienceStart, audienceEnd, audienceHovered);
+    }
+
+    internal void DrawEditorPreview(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> allRows)
+    {
+        var settings = configuration.Meter;
+        using var fontScale = new FontScaleScope(settings.ClassicWindow.FontScale);
+        DrawEncounterHeader(encounter, settings, embeddedPreview: true);
+        var rows = SelectClassicRows(allRows, settings);
+        if (settings.ClassicAllianceView)
         {
-            DrawAudienceModeIcon(drawList, settings, audienceStart, audienceEnd, audienceHovered);
+            DrawAllianceCompactTiles(encounter, rows, settings);
+        }
+        else
+        {
+            DrawClassicTable(encounter, rows, settings, "classic-editor-preview-rows");
+        }
+        if (!settings.ClassicAllianceView)
+        {
+            MeterSlotPresentation.DrawTeamSummary(
+                "classic-editor-preview",
+                encounter,
+                settings.ClassicWindow.Slots,
+                text,
+                new Vector4(0.70f, 0.74f, 0.80f, 1),
+                Gold);
         }
     }
 
@@ -344,17 +384,6 @@ public sealed class MeterWindow : Window
         saveConfiguration();
     }
 
-    private void HandleAudienceModeToggle(MeterSettings settings, bool hovered)
-    {
-        if (!hovered || !ImGui.IsMouseClicked(ImGuiMouseButton.Left))
-        {
-            return;
-        }
-
-        settings.ClassicAllianceView = !settings.ClassicAllianceView;
-        saveConfiguration();
-    }
-
     private void DrawRankingModeIcon(
         ImDrawListPtr drawList,
         MeterSettings settings,
@@ -364,35 +393,13 @@ public sealed class MeterWindow : Window
     {
         var hps = MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps;
         DrawHeaderIconFrame(drawList, settings, start, end, hovered, hps ? HealingGreen : IceBlue);
-        var center = (start + end) * 0.5f;
         var color = ImGui.GetColorU32(hovered ? Vector4.One : hps ? HealingGreen : IceBlue);
-        if (hps)
-        {
-            drawList.AddRectFilled(
-                center - new Vector2(2, 7),
-                center + new Vector2(2, 7),
-                color,
-                1);
-            drawList.AddRectFilled(
-                center - new Vector2(7, 2),
-                center + new Vector2(7, 2),
-                color,
-                1);
-        }
-        else
-        {
-            // A compact bolt remains recognizable without depending on icon fonts.
-            drawList.AddTriangleFilled(
-                center + new Vector2(-5, -7),
-                center + new Vector2(3, -2),
-                center + new Vector2(-1, 1),
-                color);
-            drawList.AddTriangleFilled(
-                center + new Vector2(1, -1),
-                center + new Vector2(5, 7),
-                center + new Vector2(-4, 2),
-                color);
-        }
+        var label = hps ? text.Get("HPS 榜", "HPS") : text.Get("DPS 榜", "DPS");
+        var labelSize = ImGui.CalcTextSize(label);
+        drawList.AddText(
+            start + ((end - start - labelSize) * 0.5f),
+            color,
+            label);
         if (hovered)
         {
             ImGui.SetTooltip(text.Get(
@@ -401,7 +408,7 @@ public sealed class MeterWindow : Window
         }
     }
 
-    private void DrawAudienceModeIcon(
+    private void DrawAudienceModeDropdown(
         ImDrawListPtr drawList,
         MeterSettings settings,
         Vector2 start,
@@ -409,17 +416,36 @@ public sealed class MeterWindow : Window
         bool hovered)
     {
         DrawHeaderIconFrame(drawList, settings, start, end, hovered, Gold);
-        var label = settings.ClassicAllianceView ? "24" : "8";
+        var label = settings.ClassicAllianceView
+            ? text.Get("24 人本", "24-player")
+            : text.Get("8 人本", "8-player");
         var size = ImGui.CalcTextSize(label);
         drawList.AddText(
-            ((start + end - size) * 0.5f),
+            start + ((end - start - size) * 0.5f),
             ImGui.GetColorU32(hovered ? Vector4.One : Gold),
             label);
+        if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            ImGui.OpenPopup("classic-party-size-popup");
+        }
         if (hovered)
         {
-            ImGui.SetTooltip(text.Get(
-                settings.ClassicAllianceView ? "切换到自己队伍" : "切换到 24 人联盟",
-                settings.ClassicAllianceView ? "Show your party" : "Show all 24 players"));
+            ImGui.SetTooltip(text.Get("切换 8 人本 / 24 人本", "Switch 8-player / 24-player mode"));
+        }
+
+        if (ImGui.BeginPopup("classic-party-size-popup"))
+        {
+            if (ImGui.Selectable(text.Get("8 人本", "8-player duty"), !settings.ClassicAllianceView))
+            {
+                settings.ClassicAllianceView = false;
+                saveConfiguration();
+            }
+            if (ImGui.Selectable(text.Get("24 人本", "24-player duty"), settings.ClassicAllianceView))
+            {
+                settings.ClassicAllianceView = true;
+                saveConfiguration();
+            }
+            ImGui.EndPopup();
         }
     }
 
@@ -435,7 +461,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.BackgroundOpacity)),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.ClassicWindow.BackgroundOpacity)),
             4);
         drawList.AddRect(start, end, ImGui.GetColorU32(accent), 4);
     }
@@ -446,6 +472,8 @@ public sealed class MeterWindow : Window
             slot.Visible && slot.Metric == metric);
         settings.ShowDps = Has(MeterSlotMetric.Dps);
         settings.ShowRdps = Has(MeterSlotMetric.Rdps);
+        settings.ShowEncDps = Has(MeterSlotMetric.EncDps);
+        settings.ShowExtDps = Has(MeterSlotMetric.ExtDps);
         settings.ShowHps = Has(MeterSlotMetric.Hps);
     }
 
@@ -644,27 +672,24 @@ public sealed class MeterWindow : Window
         BeginWindowHeightAnimation(targetSize.Y);
     }
 
-    private void ApplyCompactWindowHeight(MeterSettings settings, bool useHorizontalScroll)
+    private void ApplyCompactWindowHeight(MeterSettings settings)
     {
         if (!settings.CompactMode)
         {
             return;
         }
 
-        var visibleMetrics = settings.ClassicWindow.Slots.Count(static slot =>
-            slot.Visible &&
-            slot.Metric is not MeterSlotMetric.PlayerIdentity and
-                not MeterSlotMetric.Rank and
-                not MeterSlotMetric.TotalDamage and
-                not MeterSlotMetric.TotalHealing);
-        var tileHeight = Math.Max(68, 35 + (Math.Max(1, visibleMetrics) * 18));
+        var bodyHeight = settings.ClassicAllianceView
+            ? 34
+            : CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) + 26;
         var targetHeight = MathF.Ceiling(
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             (settings.ShowHeader ? EncounterHeaderHeight : CompactDragHandleHeight) +
             ImGui.GetStyle().ItemSpacing.Y +
-            tileHeight +
+            bodyHeight +
             2);
-        if (MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots))
+        if (!settings.ClassicAllianceView &&
+            MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots))
         {
             targetHeight += MeterSlotPresentation.TeamSummaryHeight + 4;
         }
@@ -767,7 +792,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.BackgroundOpacity)),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.ClassicWindow.BackgroundOpacity)),
             4);
         drawList.AddRect(
             start,
@@ -838,7 +863,6 @@ public sealed class MeterWindow : Window
     }
 
     private static IReadOnlyList<CombatantRow> SelectClassicRows(
-        Encounter encounter,
         IReadOnlyList<CombatantRow> rows,
         MeterSettings settings)
     {
@@ -852,7 +876,7 @@ public sealed class MeterWindow : Window
             return localPlayer is null ? [] : [localPlayer];
         }
 
-        if (MeterSlotPresentation.IsAlliance(encounter, players) && settings.ClassicAllianceView)
+        if (settings.ClassicAllianceView)
         {
             return players.Take(24).ToArray();
         }
@@ -862,27 +886,70 @@ public sealed class MeterWindow : Window
             MeterSlotPresentation.ResolveLocalPartyGroup(players));
     }
 
-    private void DrawClassicTiles(
+    internal void DrawClassicTable(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> rows,
+        MeterSettings settings,
+        string childId)
+    {
+        var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
+        var showFflogs = ShouldShowFflogsColumn(configuration.Fflogs.Enabled, settings);
+        var columnWidths = MeasureColumnWidths(rows, settings, showFflogs);
+        var availableTableWidth = ImGui.GetContentRegionAvail().X;
+        var requiredTableWidth = CalculateRequiredTableWidth(columnWidths, settings.FontScale);
+        var useHorizontalScroll = ShouldEnableHorizontalScroll(availableTableWidth, requiredTableWidth);
+        var summaryReserve = MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots)
+            ? MeterSlotPresentation.TeamSummaryHeight + 4
+            : 0;
+        if (useHorizontalScroll)
+        {
+            ImGui.SetNextWindowContentSize(new Vector2(requiredTableWidth, 0));
+        }
+
+        var childHeight = Math.Max(
+            CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) + 26,
+            ImGui.GetContentRegionAvail().Y - summaryReserve);
+        if (ImGui.BeginChild(
+                childId,
+                new Vector2(-1, childHeight),
+                false,
+                (ImGuiWindowFlags)BuildRowsChildFlags(settings, useHorizontalScroll)))
+        {
+            var layout = BuildColumnLayout(
+                ImGui.GetContentRegionAvail().X,
+                columnWidths,
+                settings);
+            DrawTableHeader(layout, settings);
+            var maximumScore = Math.Max(1, rows.Max(row => Score(row, sortMode)));
+            foreach (var row in rows)
+            {
+                DrawCombatantRow(
+                    row,
+                    maximumScore,
+                    encounter,
+                    settings,
+                    layout,
+                    showFflogs && !MeterService.IsLimitBreak(row.Id, row.Name)
+                        ? fflogsEstimateService.GetEstimate(encounter, row.Id, row.Name)
+                        : null);
+            }
+        }
+        ImGui.EndChild();
+    }
+
+    private void DrawAllianceCompactTiles(
         Encounter encounter,
         IReadOnlyList<CombatantRow> rows,
         MeterSettings settings)
     {
-        var playerSlots = settings.ClassicWindow.Slots.Where(slot =>
-                slot.Visible &&
-                slot.Metric is not MeterSlotMetric.TotalDamage and
-                    not MeterSlotMetric.TotalHealing &&
-                (slot.Metric != MeterSlotMetric.Fflogs || configuration.Fflogs.Enabled))
-            .ToArray();
-        var metrics = playerSlots.Where(static slot =>
-                slot.Metric is not MeterSlotMetric.PlayerIdentity and
-                    not MeterSlotMetric.Rank)
-            .ToArray();
+        // Alliance mode intentionally ignores editable slots: 24 players must remain
+        // readable in one ungrouped view, so every row keeps the same two fixed fields.
         var availableWidth = Math.Max(1, ImGui.GetContentRegionAvail().X);
-        const float spacing = 6;
-        var desiredWidth = Math.Clamp(settings.ClassicWindow.ItemWidth, 110, 240);
+        const float spacing = 4;
+        const float desiredWidth = 180;
         var columns = Math.Max(1, (int)MathF.Floor((availableWidth + spacing) / (desiredWidth + spacing)));
         var tileWidth = Math.Max(42, (availableWidth - ((columns - 1) * spacing)) / columns);
-        var tileHeight = Math.Max(68, 35 + (Math.Max(1, metrics.Length) * 18));
+        const float tileHeight = 34;
         var origin = ImGui.GetCursorScreenPos();
         var maximumScore = Math.Max(1, rows.Max(row => Score(row, settings.SortMode)));
         for (var index = 0; index < rows.Count; index++)
@@ -896,11 +963,9 @@ public sealed class MeterWindow : Window
             ImGui.InvisibleButton(
                 $"classic-tile-{rows[index].Id}-{rows[index].Name}",
                 new Vector2(tileWidth, tileHeight));
-            DrawClassicTile(
+            DrawAllianceCompactTile(
                 encounter,
                 rows[index],
-                playerSlots,
-                metrics,
                 start,
                 new Vector2(tileWidth, tileHeight),
                 maximumScore,
@@ -911,11 +976,9 @@ public sealed class MeterWindow : Window
         ImGui.SetCursorScreenPos(origin + new Vector2(0, usedRows * (tileHeight + spacing)));
     }
 
-    private void DrawClassicTile(
+    private void DrawAllianceCompactTile(
         Encounter encounter,
         CombatantRow row,
-        IReadOnlyList<MeterSlotDefinition> slots,
-        IReadOnlyList<MeterSlotDefinition> metrics,
         Vector2 start,
         Vector2 size,
         double maximumScore,
@@ -928,7 +991,7 @@ public sealed class MeterWindow : Window
             start + size,
             ImGui.GetColorU32(ApplyBackgroundOpacity(
                 hovered ? NavyHover : NavyRaised,
-                settings.BackgroundOpacity)),
+                settings.ClassicWindow.BackgroundOpacity)),
             6);
         var ratio = (float)Math.Clamp(Score(row, settings.SortMode) / maximumScore, 0, 1);
         var jobColor = JobColor(row.Job);
@@ -937,80 +1000,27 @@ public sealed class MeterWindow : Window
             start + new Vector2(size.X * ratio, size.Y),
             ImGui.GetColorU32(ApplyBackgroundOpacity(
                 new Vector4(jobColor.X, jobColor.Y, jobColor.Z, row.IsLocalPlayer ? 0.32f : 0.17f),
-                settings.BackgroundOpacity)),
+                settings.ClassicWindow.BackgroundOpacity)),
             6);
 
         var displayName = MeterSlotPresentation.DisplayName(row, encounter, settings, text);
         var cursorX = start.X + 7;
-        if (slots.Any(static slot => slot.Metric == MeterSlotMetric.Rank))
-        {
-            var rank = row.Rank?.ToString() ?? "--";
-            drawList.AddText(
-                new Vector2(cursorX, start.Y + 7),
-                ImGui.GetColorU32(new Vector4(0.70f, 0.74f, 0.80f, 1)),
-                rank);
-            cursorX += ImGui.CalcTextSize(rank).X + 5;
-        }
-        if (slots.Any(static slot => slot.Metric == MeterSlotMetric.PlayerIdentity))
-        {
-            cursorX += DrawTileJob(row, new Vector2(cursorX, start.Y + 5), 21, settings) + 5;
-            drawList.AddText(
-                new Vector2(cursorX, start.Y + 7),
-                ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
-                TrimToWidth(displayName, Math.Max(12, start.X + size.X - cursorX - 6)));
-        }
-
-        var highestDamageHovered = false;
-        for (var index = 0; index < metrics.Count; index++)
-        {
-            var metric = metrics[index].Metric;
-            var y = start.Y + 34 + (index * 18);
-            var label = MeterSlotPresentation.Label(metric, text);
-            string value;
-            Vector4 valueColor;
-            if (metric == MeterSlotMetric.Fflogs)
-            {
-                var estimate = fflogsEstimateService.GetEstimate(encounter, row.Id, row.Name);
-                value = estimate?.Score.ToString() ?? "--";
-                valueColor = estimate?.Color ?? new Vector4(0.70f, 0.74f, 0.80f, 1);
-            }
-            else if (metric is MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage)
-            {
-                value = FormatHighestDamage(row);
-                valueColor = new Vector4(0.94f, 0.68f, 0.48f, 1);
-                highestDamageHovered |= ImGui.IsMouseHoveringRect(
-                    new Vector2(start.X, y - 2),
-                    new Vector2(start.X + size.X, y + 16));
-            }
-            else
-            {
-                value = MeterSlotPresentation.Value(metric, row, displayName);
-                valueColor = metric == MeterSlotMetric.Hps
+        cursorX += DrawTileJob(row, new Vector2(cursorX, start.Y + 6), 21, settings) + 5;
+        var value = MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps
+            ? $"{row.Hps:N0}"
+            : $"{row.PersonalDps:N0}";
+        var valueWidth = ImGui.CalcTextSize(value).X;
+        drawList.AddText(
+            new Vector2(cursorX, start.Y + 8),
+            ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+            TrimToWidth(displayName, Math.Max(12, start.X + size.X - cursorX - valueWidth - 16)));
+        drawList.AddText(
+            new Vector2(start.X + size.X - valueWidth - 7, start.Y + 8),
+            ImGui.GetColorU32(
+                MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps
                     ? HealingGreen
-                    : metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps
-                        ? PrimaryRateColor(row.IsLocalPlayer)
-                        : new Vector4(0.84f, 0.86f, 0.89f, 1);
-            }
-
-            drawList.AddText(
-                new Vector2(start.X + 7, y),
-                ImGui.GetColorU32(new Vector4(0.68f, 0.72f, 0.77f, 1)),
-                TrimToWidth(label, size.X * 0.43f));
-            var valueWidth = Math.Max(12, size.X * 0.54f);
-            var renderedValue = TrimToWidth(value, valueWidth);
-            var valueSize = ImGui.CalcTextSize(renderedValue);
-            drawList.AddText(
-                new Vector2(start.X + size.X - valueSize.X - 7, y),
-                ImGui.GetColorU32(valueColor),
-                renderedValue);
-        }
-
-        if (highestDamageHovered && row.HighestDamage > 0)
-        {
-            ImGui.SetTooltip(text.Get(
-                $"最高伤害：{row.HighestDamageAction} {row.HighestDamage:N0}",
-                $"Max hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
-        }
+                    : PrimaryRateColor(row.IsLocalPlayer)),
+            value);
     }
 
     private float DrawTileJob(
@@ -1063,6 +1073,8 @@ public sealed class MeterWindow : Window
         MeterColumn? hps = null;
         MeterColumn? dps = null;
         MeterColumn? rdps = null;
+        MeterColumn? encDps = null;
+        MeterColumn? extDps = null;
 
         // Slots are stored left-to-right. Building from the right preserves that order
         // while retaining the compact fixed-column renderer and its stable widths.
@@ -1077,6 +1089,12 @@ public sealed class MeterWindow : Window
                     break;
                 case MeterSlotMetric.Rdps when rdps is null && widths.Rdps is { } value:
                     rdps = Take(value);
+                    break;
+                case MeterSlotMetric.EncDps when encDps is null && widths.EncDps is { } value:
+                    encDps = Take(value);
+                    break;
+                case MeterSlotMetric.ExtDps when extDps is null && widths.ExtDps is { } value:
+                    extDps = Take(value);
                     break;
                 case MeterSlotMetric.Hps when hps is null && widths.Hps is { } value:
                     hps = Take(value);
@@ -1113,6 +1131,8 @@ public sealed class MeterWindow : Window
         // visible on the left until the editor next synchronizes the profile.
         dps ??= widths.Dps is { } dpsWidth ? Take(dpsWidth) : null;
         rdps ??= widths.Rdps is { } rdpsWidth ? Take(rdpsWidth) : null;
+        encDps ??= widths.EncDps is { } encDpsWidth ? Take(encDpsWidth) : null;
+        extDps ??= widths.ExtDps is { } extDpsWidth ? Take(extDpsWidth) : null;
         hps ??= widths.Hps is { } hpsWidth ? Take(hpsWidth) : null;
         criticalHit ??= widths.CriticalHit is { } criticalHitWidth ? Take(criticalHitWidth) : null;
         directHit ??= widths.DirectHit is { } directHitWidth ? Take(directHitWidth) : null;
@@ -1131,6 +1151,8 @@ public sealed class MeterWindow : Window
             fflogs,
             dps,
             rdps,
+            encDps,
+            extDps,
             hps,
             criticalHit,
             directHit,
@@ -1172,6 +1194,18 @@ public sealed class MeterWindow : Window
                     RateColumnWidth,
                     "rDPS",
                     rows.Select(static row => $"{row.Rdps:N0}"))
+                : null,
+            settings.ShowEncDps
+                ? StableWidth(
+                    RateColumnWidth,
+                    "EncDPS",
+                    rows.Select(static row => $"{row.EncDps:N0}"))
+                : null,
+            settings.ShowExtDps
+                ? StableWidth(
+                    RateColumnWidth,
+                    "ExtDPS",
+                    rows.Select(static row => $"{row.ExtDps:N0}"))
                 : null,
             settings.ShowHps
                 ? StableWidth(RateColumnWidth, "HPS", rows.Select(static row => $"{row.Hps:N0}"))
@@ -1230,7 +1264,7 @@ public sealed class MeterWindow : Window
             end,
             ImGui.GetColorU32(ApplyBackgroundOpacity(
                 new Vector4(NavyRaised.X, NavyRaised.Y, NavyRaised.Z, 0.78f),
-                settings.BackgroundOpacity)),
+                settings.ClassicWindow.BackgroundOpacity)),
             4);
         drawList.AddLine(
             new Vector2(start.X, end.Y),
@@ -1268,6 +1302,14 @@ public sealed class MeterWindow : Window
         if (layout.Rdps is { } rdps)
         {
             DrawColumnHeader("rDPS", rdps);
+        }
+        if (layout.EncDps is { } encDps)
+        {
+            DrawColumnHeader("EncDPS", encDps);
+        }
+        if (layout.ExtDps is { } extDps)
+        {
+            DrawColumnHeader("ExtDPS", extDps);
         }
         if (layout.Hps is { } hps)
         {
@@ -1350,7 +1392,7 @@ public sealed class MeterWindow : Window
             end,
             ImGui.GetColorU32(ApplyBackgroundOpacity(
                 hovered ? NavyHover : NavyRaised,
-                settings.BackgroundOpacity)),
+                settings.ClassicWindow.BackgroundOpacity)),
             5);
 
         var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
@@ -1367,7 +1409,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             new Vector2(start.X + width * ratio, end.Y),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(barColor, settings.BackgroundOpacity)),
+            ImGui.GetColorU32(ApplyBackgroundOpacity(barColor, settings.ClassicWindow.BackgroundOpacity)),
             5);
         if (row.IsLocalPlayer)
         {
@@ -1440,7 +1482,7 @@ public sealed class MeterWindow : Window
                 new Vector2(currentX, textY - 1) + badgeSize,
                 ImGui.GetColorU32(ApplyBackgroundOpacity(
                     new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f),
-                    settings.BackgroundOpacity)),
+                    settings.ClassicWindow.BackgroundOpacity)),
                 4);
             drawList.AddText(
                 new Vector2(currentX + (badgeSize.X - jobSize.X) * 0.5f, textY + 1),
@@ -1543,6 +1585,14 @@ public sealed class MeterWindow : Window
         if (layout.Rdps is { } rdps)
         {
             DrawColumn($"{row.Rdps:N0}", rdps, PrimaryRateColor(row.IsLocalPlayer));
+        }
+        if (layout.EncDps is { } encDps)
+        {
+            DrawColumn($"{row.EncDps:N0}", encDps, PrimaryRateColor(row.IsLocalPlayer));
+        }
+        if (layout.ExtDps is { } extDps)
+        {
+            DrawColumn($"{row.ExtDps:N0}", extDps, PrimaryRateColor(row.IsLocalPlayer));
         }
         if (layout.Fflogs is { } fflogsColumn)
         {
@@ -1666,6 +1716,8 @@ public sealed class MeterWindow : Window
         Add(showFflogs, FflogsColumnWidth);
         Add(settings.ShowDps, RateColumnWidth);
         Add(settings.ShowRdps, RateColumnWidth);
+        Add(settings.ShowEncDps, RateColumnWidth);
+        Add(settings.ShowExtDps, RateColumnWidth);
         Add(settings.ShowHps, RateColumnWidth);
         Add(settings.ShowCriticalHitRate, HitRateColumnWidth);
         Add(settings.ShowDirectHitRate, HitRateColumnWidth);
@@ -1686,6 +1738,8 @@ public sealed class MeterWindow : Window
             widths.Fflogs,
             widths.Dps,
             widths.Rdps,
+            widths.EncDps,
+            widths.ExtDps,
             widths.Hps,
             widths.CriticalHit,
             widths.DirectHit,
@@ -1731,6 +1785,8 @@ public sealed class MeterWindow : Window
         float? Fflogs,
         float? Dps,
         float? Rdps,
+        float? EncDps,
+        float? ExtDps,
         float? Hps,
         float? CriticalHit,
         float? DirectHit,
@@ -1746,6 +1802,8 @@ public sealed class MeterWindow : Window
         MeterColumn? Fflogs,
         MeterColumn? Dps,
         MeterColumn? Rdps,
+        MeterColumn? EncDps,
+        MeterColumn? ExtDps,
         MeterColumn? Hps,
         MeterColumn? CriticalHit,
         MeterColumn? DirectHit,
