@@ -4,6 +4,7 @@ using Dalamud.Interface.Windowing;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
+using Newtonsoft.Json;
 using System.Numerics;
 using System.Reflection;
 
@@ -28,6 +29,9 @@ public sealed class MeterStyleEditorWindow : Window
     private readonly Action saveConfiguration;
     private MeterWindowKind selectedKind;
     private string? selectedSlotId;
+    private MeterPreviewInteraction? previewInteraction;
+    private string? editingSnapshot;
+    private bool closeActionHandled;
 
     public MeterStyleEditorWindow(
         PluginConfiguration configuration,
@@ -61,17 +65,26 @@ public sealed class MeterStyleEditorWindow : Window
 
     public void Open()
     {
+        // The editor is a transaction: live previews use the working configuration,
+        // while Cancel must restore the exact state that existed when the window opened.
+        editingSnapshot = JsonConvert.SerializeObject(configuration.Meter);
+        closeActionHandled = false;
         SetEditingProfile(null);
         selectedKind = configuration.Meter.ActiveWindowKind;
         SetEditingProfile(selectedKind);
         EnsureSelectedSlot(CurrentProfile);
+        ResetPreviewInteraction();
         IsOpen = true;
     }
 
     public override void OnClose()
     {
+        if (!closeActionHandled)
+        {
+            RestoreEditingSnapshot();
+            saveConfiguration();
+        }
         SetEditingProfile(null);
-        saveConfiguration();
     }
 
     public override void PreDraw()
@@ -112,8 +125,7 @@ public sealed class MeterStyleEditorWindow : Window
                 $"v{version}",
                 "meter-style-editor"))
         {
-            SetEditingProfile(null);
-            IsOpen = false;
+            CancelAndClose();
             return;
         }
 
@@ -121,7 +133,7 @@ public sealed class MeterStyleEditorWindow : Window
             "meter-editor-kind",
             [
                 text.Get("经典榜", "Classic"),
-                text.Get("透明横版", "Transparent horizontal"),
+                text.Get("横版模板", "Horizontal"),
                 text.Get("职能分栏", "Role split"),
             ],
             (int)selectedKind);
@@ -132,6 +144,7 @@ public sealed class MeterStyleEditorWindow : Window
             SetEditingProfile(selectedKind);
             selectedSlotId = null;
             EnsureSelectedSlot(CurrentProfile);
+            ResetPreviewInteraction();
         }
         ImGui.Dummy(new Vector2(1, 6));
 
@@ -140,7 +153,9 @@ public sealed class MeterStyleEditorWindow : Window
         var available = ImGui.GetContentRegionAvail();
         const float leftWidth = 255;
         const float rightWidth = 270;
-        if (ImGui.BeginChild("meter-editor-slots", new Vector2(leftWidth, available.Y), true))
+        const float footerHeight = 38;
+        var workspaceHeight = Math.Max(200, available.Y - footerHeight);
+        if (ImGui.BeginChild("meter-editor-slots", new Vector2(leftWidth, workspaceHeight), true))
         {
             changed |= DrawSlotList(CurrentProfile);
         }
@@ -148,24 +163,27 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.SameLine();
         if (ImGui.BeginChild(
                 "meter-editor-preview",
-                new Vector2(Math.Max(250, available.X - leftWidth - rightWidth - 16), available.Y),
+                new Vector2(Math.Max(250, available.X - leftWidth - rightWidth - 16), workspaceHeight),
                 true))
         {
             changed |= DrawPreview(CurrentProfile);
         }
         ImGui.EndChild();
         ImGui.SameLine();
-        if (ImGui.BeginChild("meter-editor-properties", new Vector2(rightWidth, available.Y), true))
+        if (ImGui.BeginChild("meter-editor-properties", new Vector2(rightWidth, workspaceHeight), true))
         {
             changed |= DrawSlotProperties(CurrentProfile);
         }
         ImGui.EndChild();
+        if (DrawEditorActions())
+        {
+            return;
+        }
 
         if (changed)
         {
             CurrentProfile.Normalize(DefaultSlots(selectedKind));
             SynchronizeClassicSettings();
-            saveConfiguration();
         }
     }
 
@@ -242,9 +260,9 @@ public sealed class MeterStyleEditorWindow : Window
                 "The 24-player compact row is fixed to job/name and the current DPS/HPS value. Switch to 8-player mode to edit classic table columns."));
             return false;
         }
-        ImGui.TextDisabled(text.Get(
-            "点击槽位后选择内容；系统自动排布，不会重叠。",
-            "Select a slot and choose its content. Layout never overlaps."));
+        ImGui.TextWrapped(text.Get(
+            "可在列表或页面预览中选择槽位；前移、后移和预览拖动都会改变实际显示顺序。",
+            "Select slots here or in Page preview. Move buttons and preview dragging change the displayed order."));
         ImGui.Separator();
         for (var index = 0; index < profile.Slots.Count; index++)
         {
@@ -298,14 +316,15 @@ public sealed class MeterStyleEditorWindow : Window
 
     private bool DrawPreview(MeterWindowProfile profile)
     {
-        ImGui.TextColored(Gold, text.Get("真实页面预览", "Live page preview"));
+        ImGui.TextColored(Gold, text.Get("页面预览", "Page preview"));
         ImGui.TextDisabled(KindDescription(selectedKind));
         ImGui.Separator();
-        ImGui.TextDisabled(text.Get(
-            "此处直接调用悬浮窗的运行渲染；左侧列表用于选择槽位。",
-            "This area calls the runtime overlay renderer directly; use the list on the left to select a slot."));
+        ImGui.TextWrapped(text.Get(
+            "点击预览中的表头或内容可选择槽位；按住后拖到另一项可交换顺序。",
+            "Click a header or value to select its slot; drag it onto another item to swap their order."));
         ImGui.Dummy(new Vector2(1, 4));
         var availableHeight = Math.Max(220, ImGui.GetContentRegionAvail().Y);
+        var interaction = previewInteraction ??= CreatePreviewInteraction(profile);
         switch (selectedKind)
         {
             case MeterWindowKind.Horizontal:
@@ -314,7 +333,10 @@ public sealed class MeterStyleEditorWindow : Window
                     availableHeight,
                     Vector4.Zero,
                     Vector4.Zero,
-                    () => horizontalMeterWindow.DrawEditorPreview(previewEncounter, previewRows));
+                    () => horizontalMeterWindow.DrawEditorPreview(
+                        previewEncounter,
+                        previewRows,
+                        interaction));
                 break;
             case MeterWindowKind.RoleSplit:
                 var roleHeight = Math.Max(210, (availableHeight - 8) * 0.5f);
@@ -323,14 +345,20 @@ public sealed class MeterStyleEditorWindow : Window
                     roleHeight,
                     MeterWindow.ApplyBackgroundOpacity(Navy, profile.BackgroundOpacity),
                     MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
-                    () => roleSplitDamageWindow.DrawEditorPreview(previewEncounter, previewRows));
+                    () => roleSplitDamageWindow.DrawEditorPreview(
+                        previewEncounter,
+                        previewRows,
+                        interaction));
                 ImGui.Dummy(new Vector2(1, 8));
                 DrawRuntimePreviewFrame(
                     "role-healer-runtime-preview",
                     roleHeight,
                     MeterWindow.ApplyBackgroundOpacity(Navy, profile.BackgroundOpacity),
                     MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
-                    () => roleSplitHealerWindow.DrawEditorPreview(previewEncounter, previewRows));
+                    () => roleSplitHealerWindow.DrawEditorPreview(
+                        previewEncounter,
+                        previewRows,
+                        interaction));
                 break;
             default:
                 DrawRuntimePreviewFrame(
@@ -338,10 +366,14 @@ public sealed class MeterStyleEditorWindow : Window
                     availableHeight,
                     MeterWindow.ApplyBackgroundOpacity(Navy, profile.BackgroundOpacity),
                     MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
-                    () => meterWindow.DrawEditorPreview(previewEncounter, previewRows));
+                    () => meterWindow.DrawEditorPreview(
+                        previewEncounter,
+                        previewRows,
+                        interaction));
                 break;
         }
-        return false;
+        interaction.EndFrame();
+        return interaction.ConsumeChanged();
     }
 
     private static void DrawRuntimePreviewFrame(
@@ -360,6 +392,75 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.EndChild();
         ImGui.PopStyleColor(2);
     }
+
+    private bool DrawEditorActions()
+    {
+        ImGui.Dummy(new Vector2(1, 6));
+        const float buttonWidth = 110;
+        const float spacing = 8;
+        var startX = ImGui.GetCursorPosX();
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        ImGui.SetCursorPosX(startX + Math.Max(0, availableWidth - (buttonWidth * 2) - spacing));
+        if (ImGui.Button(text.Get("保存", "Save"), new Vector2(buttonWidth, 0)))
+        {
+            SaveAndClose();
+            return true;
+        }
+
+        ImGui.SameLine(0, spacing);
+        if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, 0)))
+        {
+            CancelAndClose();
+            return true;
+        }
+        return false;
+    }
+
+    private void SaveAndClose()
+    {
+        configuration.Meter.ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
+        configuration.Meter.HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
+        configuration.Meter.RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        SynchronizeClassicSettings();
+        SetEditingProfile(null);
+        saveConfiguration();
+        editingSnapshot = null;
+        closeActionHandled = true;
+        IsOpen = false;
+    }
+
+    private void CancelAndClose()
+    {
+        RestoreEditingSnapshot();
+        SetEditingProfile(null);
+        saveConfiguration();
+        closeActionHandled = true;
+        IsOpen = false;
+    }
+
+    private void RestoreEditingSnapshot()
+    {
+        if (string.IsNullOrWhiteSpace(editingSnapshot))
+        {
+            return;
+        }
+
+        var restored = JsonConvert.DeserializeObject<MeterSettings>(editingSnapshot);
+        if (restored is not null)
+        {
+            configuration.Meter = restored;
+        }
+        editingSnapshot = null;
+    }
+
+    private MeterPreviewInteraction CreatePreviewInteraction(MeterWindowProfile profile)
+        => new(
+            profile,
+            () => selectedSlotId,
+            slotId => selectedSlotId = slotId);
+
+    private void ResetPreviewInteraction()
+        => previewInteraction = CreatePreviewInteraction(CurrentProfile);
 
     private static Encounter CreatePreviewEncounter()
     {
@@ -444,6 +545,9 @@ public sealed class MeterStyleEditorWindow : Window
     {
         var changed = false;
         ImGui.TextColored(Gold, text.Get("窗口与槽位", "Window and slot"));
+        ImGui.TextWrapped(text.Get(
+            "页面预览中的黄色框是当前槽位；点击可切换，拖到另一项可交换位置。修改完成后请使用底部的保存或取消。",
+            "The gold frame in Page preview marks the current slot. Click to select or drag onto another item to swap positions. Use Save or Cancel when finished."));
         var showHeader = profile.ShowHeader;
         if (selectedKind != MeterWindowKind.Horizontal &&
             ImGui.Checkbox(text.Get("显示标题区", "Show header"), ref showHeader))
@@ -455,7 +559,7 @@ public sealed class MeterStyleEditorWindow : Window
         if (DrawLabeledSlider(
                 "profile-font-scale",
                 text.Get("字号", "Text scale"),
-                text.Get("只调整当前模板的文字与行高。", "Adjusts text and row height for this template only."),
+                text.Get("只调整当前模板；表头、内容和行高会一起缩放。", "Scales this template's headers, values, and row height together."),
                 ref fontScale,
                 0.65f,
                 2,
@@ -486,7 +590,7 @@ public sealed class MeterStyleEditorWindow : Window
             if (DrawLabeledSlider(
                     "profile-background-opacity",
                     text.Get("背景透明度", "Background opacity"),
-                    text.Get("0 为完全透明，1 为完全不透明；透明横版始终无背景。", "0 is fully transparent and 1 is opaque; the horizontal template never draws a background."),
+                    text.Get("0 为完全透明，1 为完全不透明；经典榜与职能分栏分别保存。横版模板始终无背景。", "0 is fully transparent and 1 is opaque. Classic and Role split save separate values; Horizontal never draws a background."),
                     ref backgroundOpacity,
                     0,
                     1,
@@ -602,9 +706,13 @@ public sealed class MeterStyleEditorWindow : Window
         }
 
         ImGui.Dummy(new Vector2(1, 8));
-        ImGui.TextDisabled(text.Get(
-            "最高伤害会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
-            "Max-hit skills are truncated; hover the meter for full details."));
+        ImGui.TextWrapped(slot.Metric is MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage
+            ? text.Get(
+                "最高伤害会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
+                "Max-hit values are truncated; hover the meter for full details.")
+            : text.Get(
+                "职业 / ID 和其他普通槽位都按列表顺序显示；全队总伤害与总治疗固定在底部汇总区。",
+                "Job / ID and other regular slots follow list order. Team damage and healing remain in the bottom summary."));
         return changed;
     }
 
@@ -618,7 +726,7 @@ public sealed class MeterStyleEditorWindow : Window
         string format)
     {
         ImGui.TextUnformatted(label);
-        ImGui.TextDisabled(hint);
+        ImGui.TextWrapped(hint);
         ImGui.SetNextItemWidth(-1);
         return ImGui.SliderFloat($"##{id}", ref value, minimum, maximum, format);
     }
@@ -695,7 +803,7 @@ public sealed class MeterStyleEditorWindow : Window
     private string KindLabel(MeterWindowKind kind)
         => kind switch
         {
-            MeterWindowKind.Horizontal => text.Get("透明横版", "Transparent horizontal"),
+            MeterWindowKind.Horizontal => text.Get("横版模板", "Horizontal"),
             MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
             _ => text.Get("经典榜", "Classic"),
         };
@@ -704,14 +812,14 @@ public sealed class MeterStyleEditorWindow : Window
         => kind switch
         {
             MeterWindowKind.Horizontal => text.Get(
-                "横向滑动；DPS/HPS 从高到低排列；运行时完全透明。",
-                "Horizontal carousel; DPS/HPS descending; fully transparent at runtime."),
+                "横向滑动；内容按槽位顺序排布；运行时完全透明。",
+                "Horizontal carousel; content follows slot order; fully transparent at runtime."),
             MeterWindowKind.RoleSplit => text.Get(
-                "D/T 与治疗是两个独立窗口，黄色框内均可点击调整。",
-                "D/T and healer are separate windows; click any yellow-framed item to adjust it."),
+                "D/T 与治疗复用经典表格；左侧名称为文字，右上角按钮负责收起。",
+                "D/T and healer reuse the classic table; the title is plain text and the top-right button collapses it."),
             _ => text.Get(
-                "玩家方块从左到右排列；总伤害与总治疗固定在队伍汇总区。",
-                "Player tiles flow left to right; team damage and healing stay in the summary area."),
+                "8 人本按槽位顺序显示表格列；24 人本使用固定紧凑条。",
+                "The 8-player table follows slot order; the 24-player compact row is fixed."),
         };
 
 }

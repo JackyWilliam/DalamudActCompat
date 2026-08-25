@@ -15,7 +15,7 @@ The project is currently released and validated primarily on **Windows with XIVL
 | Feature | What it is for |
 | --- | --- |
 | In-game combat meter | View 4/8/24-player DPS, rDPS, HPS, total damage, highest-hit actions, hit rates, deaths, and a local FFLogs percentile estimate |
-| Meter styles | Independently open Classic, fully transparent Horizontal, and Role Split windows; customize all three with automatically arranged slots |
+| Meter styles | Choose one of Classic, Horizontal, or Role Split; customize ordered slots in Page preview while Horizontal remains background-free |
 | Encounter history | Store runs and individual pulls, then inspect party data and raw logs |
 | Cactbot / HTML overlays | Install Cactbot resources and create, resize, lock, or click through in-game overlays |
 | Common ACT extensions | Use Triggernometry, PostNamazu, ACT.FoxTTS, SilverDasher, and Cafe.Matcha |
@@ -72,7 +72,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | --- | --- |
 | Overview | Inspect parser state; toggle parsing, autostart, unfocused web-overlay hiding, and Simplified mode; open the meter, history, runtime status, and log directory |
 | Combat Meter | Select one of three mutually exclusive templates; customize the 8-player classic table, use fixed job/name + DPS/HPS rows for 24 players, and configure opacity or FFLogs where supported |
-| Overlays | Install Cactbot and manage alerts, timelines, and custom HTML overlays |
+| Overlays | Install Cactbot, manage alerts, timelines, and custom HTML overlays, and hide web overlays when the game is unfocused |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
 | Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
 

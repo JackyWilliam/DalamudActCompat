@@ -425,8 +425,8 @@ public sealed class HelpWindow : Window
                 "“脱战自动隐藏”只改变显示状态，不会停止解析或删除战斗数据。",
                 "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
             DrawBullet(text.Get(
-                "经典榜和职能分栏分别保存背景透明度，并统一作用于窗口、标题、表头、玩家行和进度条底色；透明横版始终没有背景，因此不提供该滑块。",
-                "Classic and role-split save opacity independently and apply it to the window, header, table rows, and bar fills. Transparent-horizontal always has no background, so it has no opacity slider."));
+                "经典榜和职能分栏分别保存背景透明度，并统一作用于窗口、标题、表头、玩家行和进度条底色；横版模板始终没有背景，因此不提供该滑块。",
+                "Classic and role-split save opacity independently and apply it to the window, header, table rows, and bar fills. Horizontal always has no background, so it has no opacity slider."));
         });
         DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 560, () =>
         {
@@ -437,11 +437,11 @@ public sealed class HelpWindow : Window
                 "DPS/HPS 榜按钮只决定排名方向和主要数据；DPS、EncDPS、ExtDPS、rDPS 与 HPS 都是独立槽位，可分别显示或隐藏，不再使用全局 DPS 计算口径。",
                 "The DPS/HPS ranking button only controls ranking and the primary value. DPS, EncDPS, ExtDPS, rDPS, and HPS are independent slots that can be shown or hidden separately; there is no global DPS-metric selector."));
             DrawBullet(text.Get(
-                "在槽位列表中可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高技能伤害和死亡。最高技能使用紧凑宽度显示，悬停可查看完整技能名与数值；FFLogs 只有同时开启在线预估和对应槽位时才出现。",
+                "在槽位列表中可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高伤害和死亡。最高伤害使用紧凑宽度显示，悬停可查看完整技能名与数值；FFLogs 只有同时开启在线预估和对应槽位时才出现。",
                 "Slots independently control FFLogs, DPS, EncDPS, ExtDPS, rDPS, HPS, CRIT %, DH %, CDH %, damage %, total damage, highest single-hit action, and deaths. FFLogs appears only when both online estimates and its slot are enabled."));
             DrawBullet(text.Get(
-                "经典榜、透明横版和职能分栏三个模板互斥启用，并分别保存位置、大小、锁定和槽位。8 人经典榜与职能分栏使用同一套带表头的经典表格；24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。透明横版没有背景，可横向滑动并按当前榜单排序。编辑器预览直接复用真实悬浮窗渲染。",
-                "Classic, transparent-horizontal, and role-split templates are mutually exclusive and keep independent window settings. The 8-player classic and role-split views share the same table and headers; 24-player classic mode is fixed to job/name plus the current DPS/HPS value. The horizontal template stays background-free and scrollable. Editor previews reuse the runtime renderer."));
+                "经典榜、横版模板和职能分栏三个模板互斥启用，并分别保存位置、大小、锁定和槽位。8 人经典榜与职能分栏使用同一套带表头的经典表格；24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。横版模板没有背景，可横向滑动并按当前榜单排序。编辑器的页面预览直接复用真实悬浮窗渲染，并支持点选、拖动排序以及保存或取消修改。",
+                "Classic, Horizontal, and Role split are mutually exclusive and keep independent window settings. The 8-player classic and role-split views share the same table and headers; 24-player classic mode is fixed to job/name plus the current DPS/HPS value. Horizontal stays background-free and scrollable. Page preview reuses the runtime renderer and supports selection, drag ordering, Save, and Cancel."));
             DrawBullet(text.Get(
                 "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
                 "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));

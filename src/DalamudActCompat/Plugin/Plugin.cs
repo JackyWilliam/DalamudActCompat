@@ -430,6 +430,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration,
             text,
             meterWindow,
+            SaveConfiguration,
             RoleSplitGroup.DamageTank)
         {
             IsOpen = configuration.Meter.IsVisible,
@@ -439,6 +440,7 @@ public sealed class Plugin : IDalamudPlugin
             configuration,
             text,
             meterWindow,
+            SaveConfiguration,
             RoleSplitGroup.Healer)
         {
             IsOpen = configuration.Meter.IsVisible,

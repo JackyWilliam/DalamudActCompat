@@ -190,7 +190,8 @@ internal static class MeterSlotPresentation
         IEnumerable<MeterSlotDefinition> slots,
         UiText text,
         Vector4 labelColor,
-        Vector4 valueColor)
+        Vector4 valueColor,
+        MeterPreviewInteraction? previewInteraction = null)
     {
         var summaries = slots.Where(static slot =>
                 slot.Visible &&
@@ -226,6 +227,11 @@ internal static class MeterSlotPresentation
                 new Vector2(cellStart.X + cellWidth - valueSize.X - 6, cellStart.Y),
                 ImGui.GetColorU32(valueColor),
                 value);
+            previewInteraction?.Observe(
+                summaries[index],
+                new Vector2(cellStart.X, start.Y),
+                new Vector2(cellStart.X + cellWidth, start.Y + TeamSummaryHeight),
+                drawList);
         }
     }
 

@@ -308,8 +308,6 @@ public sealed class MeterSettings
         // both opaque templates preserves the exact look while making their controls independent.
         ClassicWindow.BackgroundOpacity = BackgroundOpacity;
         RoleSplitWindow.BackgroundOpacity = BackgroundOpacity;
-        RoleSplitDamageCompact = false;
-        RoleSplitHealerCompact = false;
         EnsureIndependentRateSlots(ClassicWindow);
         EnsureIndependentRateSlots(HorizontalWindow);
         EnsureIndependentRateSlots(RoleSplitWindow);

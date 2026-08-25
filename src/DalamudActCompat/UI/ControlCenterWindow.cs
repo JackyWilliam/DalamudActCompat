@@ -765,7 +765,7 @@ public sealed class ControlCenterWindow : Window
 
     private string MeterKindLabel(MeterWindowKind kind) => kind switch
     {
-        MeterWindowKind.Horizontal => text.Get("透明横版", "Transparent horizontal"),
+        MeterWindowKind.Horizontal => text.Get("横版模板", "Horizontal"),
         MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
         _ => text.Get("经典榜", "Classic"),
     };
@@ -835,6 +835,19 @@ public sealed class ControlCenterWindow : Window
                 "Cactbot uses installed local pages and is managed here; other web overlays can still be created separately."));
 
         var changed = false;
+        var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
+        if (ImGui.Checkbox(
+                text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
+                ref hideWhenUnfocused))
+        {
+            setHideHtmlOverlaysWhenUnfocused(hideWhenUnfocused);
+        }
+        ImGui.TextDisabled(text.Get(
+            "仅临时隐藏网页悬浮窗，不改变各悬浮窗保存的开启状态。",
+            "Temporarily hides web overlays without changing their saved open state."));
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
         configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
             StringComparer.OrdinalIgnoreCase);
         var allTemplates = getOverlayTemplates();

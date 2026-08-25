@@ -101,11 +101,9 @@ public sealed class SimplifiedHomeWindow : Window
         }
 
         ImGui.Dummy(new Vector2(1, 8));
-        var exitRequested = false;
-        if (ImGui.Checkbox(
+        if (ImGui.Button(
                 text.Get("退出精简模式", "Exit simplified mode"),
-                ref exitRequested) &&
-            exitRequested)
+                new Vector2(-1, 0)))
         {
             exitSimplifiedMode();
         }

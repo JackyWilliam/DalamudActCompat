@@ -1949,9 +1949,9 @@ static void ValidateMeterRows()
         previousOpacityUser.Version == 14 &&
         Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
-        !previousOpacityUser.Meter.RoleSplitDamageCompact &&
-        !previousOpacityUser.Meter.RoleSplitHealerCompact,
-        "The v14 migration did not preserve opacity for both opaque templates or retire role collapse state.");
+        previousOpacityUser.Meter.RoleSplitDamageCompact &&
+        previousOpacityUser.Meter.RoleSplitHealerCompact,
+        "The v14 migration did not preserve opacity or the independent role-collapse states.");
     var customStyle = new MeterCustomStyle
     {
         Name = "Watch layout",
@@ -2775,6 +2775,12 @@ static void ValidateIndependentMeterWindows()
         "DalamudActCompat",
         "Meter",
         "MeterStyleEditorWindow.cs"));
+    var previewInteractionSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterPreviewInteraction.cs"));
     var simplifiedSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -2816,6 +2822,10 @@ static void ValidateIndependentMeterWindows()
         classicSource.Contains("classic-party-size-popup", StringComparison.Ordinal) &&
         classicSource.Contains("layout.EncDps", StringComparison.Ordinal) &&
         classicSource.Contains("layout.ExtDps", StringComparison.Ordinal) &&
+        classicSource.Contains("layout.Identity", StringComparison.Ordinal) &&
+        classicSource.Contains("case MeterSlotMetric.PlayerIdentity", StringComparison.Ordinal) &&
+        !classicSource.Contains("NameRight", StringComparison.Ordinal) &&
+        !classicSource.Contains("最高技能", StringComparison.Ordinal) &&
         classicSource.Contains("DrawRankingModeIcon", StringComparison.Ordinal) &&
         classicSource.Contains("FirstOrDefault(static row => row.IsLocalPlayer)", StringComparison.Ordinal) &&
         classicSource.Contains("MinimumSize = new Vector2(120, 90)", StringComparison.Ordinal),
@@ -2826,13 +2836,15 @@ static void ValidateIndependentMeterWindows()
         roleSource.Contains("classicRenderer.DrawClassicTable", StringComparison.Ordinal) &&
         roleSource.Contains("CreateTableSettings", StringComparison.Ordinal) &&
         roleSource.Contains("Profile.BackgroundOpacity", StringComparison.Ordinal) &&
-        !roleSource.Contains("RoleSplitDamageCompact", StringComparison.Ordinal) &&
-        !roleSource.Contains("DrawChevron", StringComparison.Ordinal),
-        "Role split does not reuse the classic table/header or still exposes duplicate collapse controls.");
+        roleSource.Contains("RoleSplitDamageCompact", StringComparison.Ordinal) &&
+        roleSource.Contains("DrawChevron", StringComparison.Ordinal) &&
+        !roleSource.Contains("titleHovered", StringComparison.Ordinal),
+        "Role split does not reuse the classic table/header or lacks the single top-right collapse control.");
     Assert(
         editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
         editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
-        editorSource.Contains("真实页面预览", StringComparison.Ordinal) &&
+        editorSource.Contains("页面预览", StringComparison.Ordinal) &&
+        !editorSource.Contains("真实页面预览", StringComparison.Ordinal) &&
         editorSource.Contains("meterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
         editorSource.Contains("horizontalMeterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
         editorSource.Contains("roleSplitDamageWindow.DrawEditorPreview", StringComparison.Ordinal) &&
@@ -2842,6 +2854,11 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("configuration.Fflogs.Enabled", StringComparison.Ordinal) &&
         editorSource.Contains("Move up", StringComparison.Ordinal) &&
         editorSource.Contains("Move down", StringComparison.Ordinal) &&
+        editorSource.Contains("保存", StringComparison.Ordinal) &&
+        editorSource.Contains("取消", StringComparison.Ordinal) &&
+        editorSource.Contains("editingSnapshot", StringComparison.Ordinal) &&
+        previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
+        previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
         !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
         !editorSource.Contains("24×6", StringComparison.Ordinal) &&
         !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
@@ -2851,6 +2868,7 @@ static void ValidateIndependentMeterWindows()
         controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal) &&
+        Regex.Matches(controlCenterSource, "游戏失去焦点时隐藏网页悬浮窗").Count >= 2 &&
         !controlCenterSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
         !settingsSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("DrawMeterKindRadio", StringComparison.Ordinal) &&
@@ -2861,6 +2879,9 @@ static void ValidateIndependentMeterWindows()
         simplifiedSource.Contains("退出精简模式", StringComparison.Ordinal) &&
         simplifiedSource.Contains("关闭精简主页", StringComparison.Ordinal) &&
         simplifiedSource.Contains("IsOpen = false", StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            simplifiedSource,
+            "ImGui\\.Button\\(\\s*text\\.Get\\(\"退出精简模式\"") &&
         !simplifiedSource.Contains("EnableParsing", StringComparison.Ordinal) &&
         !simplifiedSource.Contains("HTML", StringComparison.Ordinal),
         "Simplified mode lost its dedicated controls or independent close action.");
@@ -8266,12 +8287,12 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
         helpWindowSource.Contains("24 人本把所有玩家放在同一紧凑列表", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("总伤害、最高技能伤害和死亡", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("最高技能使用紧凑宽度显示", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("总伤害、最高伤害和死亡", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("最高伤害使用紧凑宽度显示", StringComparison.Ordinal) &&
         helpWindowSource.Contains("三个模板互斥启用", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("编辑器预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("页面预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("透明横版始终没有背景", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("横版模板始终没有背景", StringComparison.Ordinal) &&
         helpWindowSource.Contains("可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS", StringComparison.Ordinal) &&
         helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
         helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&

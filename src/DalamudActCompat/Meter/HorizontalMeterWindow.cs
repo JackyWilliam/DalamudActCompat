@@ -164,13 +164,28 @@ public sealed class HorizontalMeterWindow : Window
     {
         var start = ImGui.GetCursorScreenPos();
         var lineHeight = Math.Max(20, ImGui.GetTextLineHeight() + 4);
-        var dpsWidth = DrawModeButton("DPS 榜", MeterSortMode.Dps, start, lineHeight);
+        var dpsWidth = DrawModeButton(
+            "DPS 榜",
+            MeterSortMode.Dps,
+            start,
+            lineHeight,
+            persistChanges: !embeddedPreview);
         var hpsStart = start + new Vector2(dpsWidth + 10, 0);
-        var hpsWidth = DrawModeButton("HPS 榜", MeterSortMode.Hps, hpsStart, lineHeight);
+        var hpsWidth = DrawModeButton(
+            "HPS 榜",
+            MeterSortMode.Hps,
+            hpsStart,
+            lineHeight,
+            persistChanges: !embeddedPreview);
         var controlsEnd = hpsStart.X + hpsWidth + 14;
         if (encounter is not null && MeterSlotPresentation.IsAlliance(encounter, rows))
         {
-            controlsEnd = DrawPartyButtons(rows, controlsEnd, start.Y, lineHeight) + 12;
+            controlsEnd = DrawPartyButtons(
+                rows,
+                controlsEnd,
+                start.Y,
+                lineHeight,
+                persistChanges: !embeddedPreview) + 12;
         }
         var dragStart = new Vector2(controlsEnd, start.Y);
         var dragWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - (dragStart.X - start.X));
@@ -191,29 +206,33 @@ public sealed class HorizontalMeterWindow : Window
 
     internal void DrawEditorPreview(
         Encounter encounter,
-        IReadOnlyList<CombatantRow> rows)
+        IReadOnlyList<CombatantRow> rows,
+        MeterPreviewInteraction previewInteraction)
     {
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
         var ranked = MeterSlotPresentation.SortAndRank(rows, Profile.SortMode);
-        var partyGroup = ResolvePartyGroup(encounter, ranked);
+        var partyGroup = ResolvePartyGroup(encounter, ranked, persistChanges: false);
         DrawHeader(encounter, ranked, embeddedPreview: true);
         DrawSlidingPlayers(
             encounter,
-            MeterSlotPresentation.SelectParty(ranked, partyGroup));
+            MeterSlotPresentation.SelectParty(ranked, partyGroup),
+            previewInteraction);
         MeterSlotPresentation.DrawTeamSummary(
             "horizontal-editor-preview",
             encounter,
             Profile.Slots,
             text,
             Muted,
-            Gold);
+            Gold,
+            previewInteraction);
     }
 
     private float DrawPartyButtons(
         IReadOnlyList<CombatantRow> rows,
         float startX,
         float startY,
-        float height)
+        float height,
+        bool persistChanges = true)
     {
         var x = startX;
         for (var group = 1; group <= 3; group++)
@@ -239,14 +258,20 @@ public sealed class HorizontalMeterWindow : Window
             {
                 configuration.Meter.HorizontalPartyGroup = group;
                 scrollOffset = 0;
-                saveConfiguration();
+                if (persistChanges)
+                {
+                    saveConfiguration();
+                }
             }
             x += width + 5;
         }
         return x;
     }
 
-    private int ResolvePartyGroup(Encounter encounter, IReadOnlyList<CombatantRow> rows)
+    private int ResolvePartyGroup(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> rows,
+        bool persistChanges = true)
     {
         if (!MeterSlotPresentation.IsAlliance(encounter, rows))
         {
@@ -268,13 +293,21 @@ public sealed class HorizontalMeterWindow : Window
             if (configuration.Meter.HorizontalPartyGroup != selected)
             {
                 configuration.Meter.HorizontalPartyGroup = selected;
-                saveConfiguration();
+                if (persistChanges)
+                {
+                    saveConfiguration();
+                }
             }
         }
         return selected;
     }
 
-    private float DrawModeButton(string label, MeterSortMode mode, Vector2 start, float height)
+    private float DrawModeButton(
+        string label,
+        MeterSortMode mode,
+        Vector2 start,
+        float height,
+        bool persistChanges = true)
     {
         var width = ImGui.CalcTextSize(label).X + 4;
         ImGui.SetCursorScreenPos(start);
@@ -290,25 +323,27 @@ public sealed class HorizontalMeterWindow : Window
             Profile.SortMode = mode;
             configuration.Meter.SortMode = mode;
             MeterSlotPresentation.ReplacePrimaryMetric(Profile, mode);
-            saveConfiguration();
+            if (persistChanges)
+            {
+                saveConfiguration();
+            }
         }
 
         return width;
     }
 
-    private void DrawSlidingPlayers(Encounter encounter, IReadOnlyList<CombatantRow> rows)
+    private void DrawSlidingPlayers(
+        Encounter encounter,
+        IReadOnlyList<CombatantRow> rows,
+        MeterPreviewInteraction? previewInteraction = null)
     {
         var slots = Profile.Slots.Where(static slot => slot.Visible).ToArray();
-        var metrics = slots.Where(static slot =>
-            slot.Metric is not MeterSlotMetric.Job and
-            not MeterSlotMetric.PlayerName and
-            not MeterSlotMetric.PlayerIdentity and
-            not MeterSlotMetric.TotalDamage and
-            not MeterSlotMetric.TotalHealing and
-            not MeterSlotMetric.Fflogs and
-            not MeterSlotMetric.Rank).ToArray();
-        var metricRows = Math.Max(1, (metrics.Length + 1) / 2);
-        var cardHeight = 28 + (metricRows * 22);
+        var placements = BuildSlotPlacements(slots);
+        const float slotRowHeight = 26;
+        var slotRows = placements.Select(static placement => placement.Row)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+        var cardHeight = Math.Max(28, slotRows * slotRowHeight);
         var available = ImGui.GetContentRegionAvail();
         var summaryReserve = MeterSlotPresentation.HasTeamSummary(slots)
             ? MeterSlotPresentation.TeamSummaryHeight + 4
@@ -327,7 +362,8 @@ public sealed class HorizontalMeterWindow : Window
         {
             scrollOffset -= ImGui.GetIO().MouseWheel * 64;
         }
-        if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        if (previewInteraction is null && ImGui.IsItemActive() &&
+            ImGui.IsMouseDragging(ImGuiMouseButton.Left))
         {
             // Content follows the pointer, matching a watch complication carousel.
             scrollOffset -= ImGui.GetIO().MouseDelta.X;
@@ -347,7 +383,14 @@ public sealed class HorizontalMeterWindow : Window
                 continue;
             }
 
-            DrawPlayer(encounter, rows[index], slots, metrics, cardStart, itemWidth, cardHeight);
+            DrawPlayer(
+                encounter,
+                rows[index],
+                placements,
+                cardStart,
+                itemWidth,
+                cardHeight,
+                previewInteraction);
         }
         drawList.PopClipRect();
     }
@@ -355,47 +398,66 @@ public sealed class HorizontalMeterWindow : Window
     private void DrawPlayer(
         Encounter encounter,
         CombatantRow row,
-        IReadOnlyList<MeterSlotDefinition> slots,
-        IReadOnlyList<MeterSlotDefinition> metrics,
+        IReadOnlyList<HorizontalSlotPlacement> placements,
         Vector2 start,
         float width,
-        float height)
+        float height,
+        MeterPreviewInteraction? previewInteraction)
     {
         var drawList = ImGui.GetWindowDrawList();
         var displayName = MeterSlotPresentation.DisplayName(row, encounter, configuration.Meter, text);
-        var hasIdentity = slots.Any(static slot => slot.Metric == MeterSlotMetric.PlayerIdentity);
-        var hasRank = slots.Any(static slot => slot.Metric == MeterSlotMetric.Rank);
-        var cursorX = start.X;
-        if (hasRank)
+        const float slotRowHeight = 26;
+        foreach (var placement in placements)
         {
-            var rank = row.Rank?.ToString() ?? "--";
-            drawList.AddText(start + new Vector2(0, 3), ImGui.GetColorU32(Muted), rank);
-            cursorX += ImGui.CalcTextSize(rank).X + 5;
-        }
-        if (hasIdentity)
-        {
-            cursorX += DrawJob(row, new Vector2(cursorX, start.Y), 22) + 5;
-            drawList.AddText(
-                new Vector2(cursorX, start.Y + 3),
-                ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
-                MeterSlotPresentation.TrimToWidth(displayName, Math.Max(16, start.X + width - cursorX - 4)));
-        }
-
-        for (var index = 0; index < metrics.Count; index++)
-        {
-            var column = index % 2;
-            var metricRow = index / 2;
             var cellWidth = width * 0.5f;
-            var metricStart = start + new Vector2(column * cellWidth, 29 + (metricRow * 22));
-            var label = MeterSlotPresentation.Label(metrics[index].Metric, text);
-            var value = MeterSlotPresentation.Value(metrics[index].Metric, row, displayName);
-            var labelWidth = Math.Min(cellWidth * 0.47f, ImGui.CalcTextSize(label).X + 6);
-            drawList.AddText(metricStart, ImGui.GetColorU32(Muted),
-                MeterSlotPresentation.TrimToWidth(label, labelWidth));
-            drawList.AddText(
-                metricStart + new Vector2(labelWidth, 0),
-                ImGui.GetColorU32(PrimaryColor(metrics[index].Metric, row.IsLocalPlayer)),
-                MeterSlotPresentation.TrimToWidth(value, Math.Max(10, cellWidth - labelWidth - 5)));
+            var slotWidth = cellWidth * placement.ColumnSpan;
+            var slotStart = start + new Vector2(
+                placement.Column * cellWidth,
+                placement.Row * slotRowHeight);
+            var slotEnd = slotStart + new Vector2(slotWidth, slotRowHeight - 2);
+            switch (placement.Slot.Metric)
+            {
+                case MeterSlotMetric.PlayerIdentity:
+                    var cursorX = slotStart.X + DrawJob(row, slotStart, 22) + 5;
+                    drawList.AddText(
+                        new Vector2(cursorX, slotStart.Y + 3),
+                        ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+                        MeterSlotPresentation.TrimToWidth(
+                            displayName,
+                            Math.Max(16, slotEnd.X - cursorX - 4)));
+                    break;
+                case MeterSlotMetric.Job:
+                    DrawJob(row, slotStart, 22);
+                    break;
+                case MeterSlotMetric.PlayerName:
+                    drawList.AddText(
+                        slotStart + new Vector2(0, 3),
+                        ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+                        MeterSlotPresentation.TrimToWidth(displayName, Math.Max(16, slotWidth - 4)));
+                    break;
+                default:
+                    var label = MeterSlotPresentation.Label(placement.Slot.Metric, text);
+                    var value = MeterSlotPresentation.Value(placement.Slot.Metric, row, displayName);
+                    var labelWidth = Math.Min(slotWidth * 0.47f, ImGui.CalcTextSize(label).X + 6);
+                    drawList.AddText(
+                        slotStart + new Vector2(0, 3),
+                        ImGui.GetColorU32(Muted),
+                        MeterSlotPresentation.TrimToWidth(label, labelWidth));
+                    drawList.AddText(
+                        slotStart + new Vector2(labelWidth, 3),
+                        ImGui.GetColorU32(PrimaryColor(placement.Slot.Metric, row.IsLocalPlayer)),
+                        MeterSlotPresentation.TrimToWidth(
+                            value,
+                            Math.Max(10, slotWidth - labelWidth - 5)));
+                    break;
+            }
+
+            previewInteraction?.Observe(
+                placement.Slot,
+                slotStart,
+                slotEnd,
+                drawList,
+                highlightSelection: row.IsLocalPlayer);
         }
 
         drawList.AddLine(
@@ -408,6 +470,36 @@ public sealed class HorizontalMeterWindow : Window
                 $"最高单次：{row.HighestDamageAction} {row.HighestDamage:N0}",
                 $"Highest hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
         }
+    }
+
+    private static IReadOnlyList<HorizontalSlotPlacement> BuildSlotPlacements(
+        IReadOnlyList<MeterSlotDefinition> slots)
+    {
+        var placements = new List<HorizontalSlotPlacement>();
+        var row = 0;
+        var column = 0;
+        foreach (var slot in slots.Where(static slot =>
+                     slot.Metric is not MeterSlotMetric.TotalDamage and
+                     not MeterSlotMetric.TotalHealing and
+                     not MeterSlotMetric.Fflogs))
+        {
+            var fullWidth = slot.Metric is MeterSlotMetric.PlayerIdentity or
+                MeterSlotMetric.Job or MeterSlotMetric.PlayerName;
+            if (fullWidth && column != 0)
+            {
+                row++;
+                column = 0;
+            }
+
+            placements.Add(new HorizontalSlotPlacement(slot, row, column, fullWidth ? 2 : 1));
+            if (fullWidth || ++column >= 2)
+            {
+                row++;
+                column = 0;
+            }
+        }
+
+        return placements;
     }
 
     private float DrawJob(CombatantRow row, Vector2 start, float size)
@@ -436,4 +528,10 @@ public sealed class HorizontalMeterWindow : Window
                 MeterSlotMetric.EncDps or MeterSlotMetric.ExtDps or MeterSlotMetric.Hps
                 ? IceBlue
                 : Vector4.One;
+
+    private sealed record HorizontalSlotPlacement(
+        MeterSlotDefinition Slot,
+        int Row,
+        int Column,
+        int ColumnSpan);
 }
