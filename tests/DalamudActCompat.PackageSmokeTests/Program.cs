@@ -1170,6 +1170,57 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(MathF.Abs(northAngle) - MathF.PI) < 0.0001f,
         "PictoACT Dir north or single-value Scale defaults drifted from the original protocol.");
 
+    var expectedP3Positions = new (float X, float Z)[][]
+    {
+        [
+            (111.36f, 89.95f),
+            (100.926310f, 84.860844f),
+            (89.95f, 88.64f),
+            (84.860844f, 99.073690f),
+            (88.64f, 110.05f),
+            (99.073690f, 115.139156f),
+            (110.05f, 111.36f),
+            (115.139156f, 100.926310f),
+        ],
+        [
+            (111.36f, 110.05f),
+            (115.139156f, 99.073690f),
+            (110.05f, 88.64f),
+            (99.073690f, 84.860844f),
+            (88.64f, 89.95f),
+            (84.860844f, 100.926310f),
+            (89.95f, 111.36f),
+            (100.926310f, 115.139156f),
+        ],
+    };
+    for (var keepYIndex = 0; keepYIndex < expectedP3Positions.Length; keepYIndex++)
+    {
+        var keepY = keepYIndex == 0;
+        for (var direction = 0; direction < 8; direction++)
+        {
+            // This is the raw U6b P3 expression path: Triggernometry forwards the
+            // function text to PictoACT instead of expanding it before the callback.
+            var p3Guide = PictoActOverlayService.Parse(
+                $"Omen: m0532om_don01x\nt: 9.7\nO: 100, 100\n" +
+                $"θ: DirToRad({direction}, 8)\n+Y: {keepY}\n" +
+                "Pos: 11.36, -10.05, 0.1\nScale: 1, 1, 20").Single().Shape!;
+            var expected = expectedP3Positions[keepYIndex][direction];
+            Assert(
+                MathF.Abs(p3Guide.Position.X - expected.X) < 0.0001f &&
+                MathF.Abs(p3Guide.Position.Z - expected.Z) < 0.0001f,
+                $"PictoACT U6b P3 DirToRad transform drifted for direction {direction}, " +
+                $"keepY={keepY}: actual={p3Guide.Position}, expected=({expected.X}, {expected.Z}).");
+        }
+    }
+
+    var negativeDirectionDivision = PictoActOverlayService.Parse(
+        "Omen: Circle\nt: 5\nO: 100, 100\nθ: dir2rad(0, -8)\n" +
+        "Pos: 11.36, -10.05, 0.1\nScale: 1").Single().Shape!;
+    Assert(
+        negativeDirectionDivision.TransformRotation is { } negativeRotation &&
+        MathF.Abs(negativeRotation - (-MathF.PI * 7 / 8)) < 0.0001f,
+        "PictoACT dir2rad negative divisions lost Triggernometry's half-step semantics.");
+
     var polygonCommand = PictoActOverlayService.Parse(
         "Action: △\nTag: POLYGON\nt: 8\nO: 100, 100\nθ: pi\n" +
         "Points: 0, -12; 3, -20; -3, -20; 0.001, -12; 0, -16\n" +

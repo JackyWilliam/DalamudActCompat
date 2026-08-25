@@ -2716,7 +2716,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 ("ceil", 1) or ("ceiling", 1) => Math.Ceiling(arguments[0]),
                 ("round", 1) => Math.Round(arguments[0]),
                 ("round", 2) => Math.Round(arguments[0], checked((int)arguments[1])),
-                ("dir2rad", 2) or ("dirtorad", 2) => arguments[0] * Math.Tau / arguments[1],
+                ("dir2rad", 2) or ("dirtorad", 2) => DirectionToRadians(
+                    arguments[0],
+                    arguments[1]),
                 ("deg2rad", 1) or ("degtorad", 1) => arguments[0] * Math.PI / 180,
                 ("rad2deg", 1) or ("radtodeg", 1) => arguments[0] * 180 / Math.PI,
                 ("d", 4) => Math.Sqrt(
@@ -2735,6 +2737,19 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         private static double PositiveModulo(double value, double divisor)
             => ((value % divisor) + divisor) % divisor;
+
+        private static double DirectionToRadians(double direction, double divisions)
+        {
+            if (divisions < 0)
+            {
+                // Triggernometry uses a negative division count for the half-step
+                // between normal directions, so the sign cannot be treated as arithmetic only.
+                divisions = -divisions;
+                direction += 0.5;
+            }
+
+            return -Math.PI + Math.Tau * PositiveModulo(direction / divisions, 1);
+        }
 
         private double ParseNumber()
         {
@@ -2781,7 +2796,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
         {
             var start = position;
             while (position < text.Length &&
-                   (char.IsLetter(text[position]) || text[position] == '_'))
+                   (char.IsLetterOrDigit(text[position]) || text[position] == '_'))
             {
                 position++;
             }
