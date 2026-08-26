@@ -14,7 +14,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly PluginLogger logger;
     private readonly EncounterStateStore stateStore;
     private readonly EncounterService encounterService;
-    private readonly string logDirectory;
+    private readonly Func<string> getLogDirectory;
     private readonly IFramework framework;
     private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
@@ -44,7 +44,7 @@ public sealed class IinactAdapter : IParserEngine
         PluginLogger logger,
         EncounterStateStore stateStore,
         EncounterService encounterService,
-        string logDirectory,
+        Func<string> getLogDirectory,
         IFramework framework,
         Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
@@ -59,7 +59,7 @@ public sealed class IinactAdapter : IParserEngine
         this.logger = logger;
         this.stateStore = stateStore;
         this.encounterService = encounterService;
-        this.logDirectory = logDirectory;
+        this.getLogDirectory = getLogDirectory;
         this.framework = framework;
         this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
@@ -121,7 +121,9 @@ public sealed class IinactAdapter : IParserEngine
             }
 
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            actRuntime.StartParser(logDirectory);
+            // Resolve on every start so a settings change can take effect through the existing
+            // restart path without rebuilding the parser adapter and all of its subscriptions.
+            actRuntime.StartParser(getLogDirectory());
 
             var runtimePlugins = customPlugins();
             LoadCustomPlugins(runtimePlugins.Where(MustLoadBeforeOverlay));

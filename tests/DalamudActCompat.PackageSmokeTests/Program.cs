@@ -107,6 +107,7 @@ try
     ValidateControlCenterPresentation();
     ValidateInstalledPluginVersionDisplay(testRoot);
     ValidateDiagnosticReport(testRoot);
+    ValidateCombatLogDirectoryConfiguration(testRoot);
     ValidateFflogsEstimateCurve();
     await ValidateFflogsPersistenceAsync(testRoot);
     ValidateFflogsCurrentEncounterTable();
@@ -4207,6 +4208,9 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawCombatLogDirectorySettings();", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("text.Get(\"当前路径\", \"Current path\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("text.Get(\"更改目录...\", \"Change directory...\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
@@ -10942,6 +10946,62 @@ static void Assert(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static void ValidateCombatLogDirectoryConfiguration(string testRoot)
+{
+    var pluginType = typeof(ControlCenterWindow).Assembly.GetType(
+        "DalamudActCompat.Plugin.Plugin",
+        throwOnError: true)!;
+    var prepareDirectory = pluginType.GetMethod(
+        "TryPrepareCombatLogDirectory",
+        BindingFlags.NonPublic | BindingFlags.Static)!;
+    var requestedDirectory = Path.Combine(testRoot, "custom-fflogs-upload-logs");
+    object?[] validArguments = [requestedDirectory, null, null];
+    var valid = (bool)prepareDirectory.Invoke(null, validArguments)!;
+    var normalizedDirectory = (string)validArguments[1]!;
+    Assert(
+        valid &&
+        normalizedDirectory == Path.GetFullPath(requestedDirectory) &&
+        Directory.Exists(normalizedDirectory) &&
+        !Directory.EnumerateFiles(normalizedDirectory, ".dact-write-probe-*.tmp").Any(),
+        "A writable custom FFLogs upload directory was rejected or its permission probe was left behind.");
+
+    object?[] invalidArguments = [" ", null, null];
+    Assert(
+        !(bool)prepareDirectory.Invoke(null, invalidArguments)! &&
+        !string.IsNullOrWhiteSpace((string)invalidArguments[2]!),
+        "An empty FFLogs upload directory was accepted without a validation error.");
+
+    var fileInsteadOfDirectory = Path.Combine(testRoot, "fflogs-directory-collision");
+    File.WriteAllText(fileInsteadOfDirectory, "occupied");
+    object?[] unwritableArguments = [fileInsteadOfDirectory, null, null];
+    Assert(
+        !(bool)prepareDirectory.Invoke(null, unwritableArguments)! &&
+        !string.IsNullOrWhiteSpace((string)unwritableArguments[2]!),
+        "A file collision was accepted as a writable FFLogs upload directory.");
+
+    var restoredConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(new PluginConfiguration
+        {
+            LogDirectory = normalizedDirectory,
+        }));
+    var constructorParameters = typeof(ControlCenterWindow).GetConstructors().Single().GetParameters();
+    Assert(
+        restoredConfiguration?.LogDirectory == normalizedDirectory &&
+        constructorParameters.Any(parameter =>
+            parameter.Name == "getCombatLogDirectory" &&
+            parameter.ParameterType == typeof(Func<string>)) &&
+        constructorParameters.Any(parameter =>
+            parameter.Name == "selectCombatLogDirectory" &&
+            parameter.ParameterType == typeof(Action<Action<bool, string>>)) &&
+        constructorParameters.Any(parameter =>
+            parameter.Name == "resetCombatLogDirectory" &&
+            parameter.ParameterType == typeof(Action<Action<bool, string>>)) &&
+        typeof(IinactAdapter).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "getLogDirectory" &&
+            parameter.ParameterType == typeof(Func<string>)),
+        "The custom upload directory is not persisted, exposed on Settings, or resolved again when the parser restarts.");
 }
 
 public sealed class GenericActPluginFixture : IActPluginV1

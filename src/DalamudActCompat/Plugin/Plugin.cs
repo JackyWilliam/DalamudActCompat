@@ -186,17 +186,31 @@ public sealed class Plugin : IDalamudPlugin
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious],
             partyList.Any(member => member.CurrentHP > 0));
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
-        var configurationMigrated = configuration.ApplyMigrations();
+        var configurationChanged = configuration.ApplyMigrations();
         configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
             configuration.Meter.SortMode);
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         paths.EnsureCreated();
-        if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
+        var configuredLogDirectory = string.IsNullOrWhiteSpace(configuration.LogDirectory)
+            ? paths.CombatLogDirectory
+            : configuration.LogDirectory;
+        try
         {
-            configuration.LogDirectory = paths.CombatLogDirectory;
+            configuredLogDirectory = NormalizeCombatLogDirectory(configuredLogDirectory);
         }
-        if (configurationMigrated)
+        catch (Exception ex) when (IsCombatLogDirectoryException(ex))
+        {
+            logger.Warning(
+                $"Configured FFLogs upload log directory is invalid; using the default directory. {ex.Message}");
+            configuredLogDirectory = paths.CombatLogDirectory;
+        }
+        if (!string.Equals(configuration.LogDirectory, configuredLogDirectory, StringComparison.Ordinal))
+        {
+            configuration.LogDirectory = configuredLogDirectory;
+            configurationChanged = true;
+        }
+        if (configurationChanged)
         {
             pluginInterface.SavePluginConfig(configuration);
         }
@@ -362,7 +376,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             stateStore,
             encounterService,
-            paths.CombatLogDirectory,
+            ResolveCombatLogDirectory,
             framework,
             () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
@@ -566,6 +580,9 @@ public sealed class Plugin : IDalamudPlugin
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
             OpenCombatLogDirectory,
+            ResolveCombatLogDirectory,
+            SelectCombatLogDirectory,
+            ResetCombatLogDirectory,
             BuildDiagnosticReport,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
@@ -998,14 +1015,19 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void SaveConfiguration()
+        => _ = TrySaveConfiguration();
+
+    private bool TrySaveConfiguration()
     {
         try
         {
             services.PluginInterface.SavePluginConfig(configuration);
+            return true;
         }
         catch (Exception ex)
         {
             logger.Error(ex, "Failed to save plugin configuration.");
+            return false;
         }
     }
 
@@ -2170,13 +2192,166 @@ public sealed class Plugin : IDalamudPlugin
 
     private string OpenCombatLogDirectory()
     {
-        Directory.CreateDirectory(paths.CombatLogDirectory);
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.CombatLogDirectory)
+        var directory = ResolveCombatLogDirectory();
+        Directory.CreateDirectory(directory);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory)
         {
             UseShellExecute = true,
         });
-        return paths.CombatLogDirectory;
+        return directory;
     }
+
+    private string ResolveCombatLogDirectory()
+        => string.IsNullOrWhiteSpace(configuration.LogDirectory)
+            ? paths.CombatLogDirectory
+            : configuration.LogDirectory;
+
+    private void SelectCombatLogDirectory(Action<bool, string> reportResult)
+    {
+        fileDialogManager.OpenFolderDialog(
+            text.Get("选择 FFLogs 上传日志目录", "Choose FFLogs upload log directory"),
+            (success, directory) =>
+            {
+                if (success && !string.IsNullOrWhiteSpace(directory))
+                {
+                    ApplyCombatLogDirectory(directory, reportResult);
+                }
+            });
+    }
+
+    private void ResetCombatLogDirectory(Action<bool, string> reportResult)
+        => ApplyCombatLogDirectory(paths.CombatLogDirectory, reportResult);
+
+    private void ApplyCombatLogDirectory(string requestedDirectory, Action<bool, string> reportResult)
+    {
+        if (!TryPrepareCombatLogDirectory(requestedDirectory, out var normalizedDirectory, out var error))
+        {
+            reportResult(
+                false,
+                $"{text.Get("目录不可用：", "Directory unavailable: ")}{error}");
+            return;
+        }
+
+        var previousDirectory = ResolveCombatLogDirectory();
+        var pathChanged = !string.Equals(
+            previousDirectory,
+            normalizedDirectory,
+            StringComparison.OrdinalIgnoreCase);
+        var parserWasFaulted = parserEngine.Status.State == ParserState.Faulted;
+        if (!pathChanged && !parserWasFaulted)
+        {
+            reportResult(true, text.Get("当前已经使用这个目录。", "This directory is already in use."));
+            return;
+        }
+
+        if (pathChanged)
+        {
+            configuration.LogDirectory = normalizedDirectory;
+            if (!TrySaveConfiguration())
+            {
+                configuration.LogDirectory = previousDirectory;
+                reportResult(
+                    false,
+                    text.Get("保存目录失败，仍使用原目录。", "Could not save the directory; the previous directory is still in use."));
+                return;
+            }
+
+            // Existing logs belong to the user and may still be needed for an upload, so a
+            // directory switch changes only future writes and never migrates or removes files.
+            logger.Information(
+                $"FFLogs upload log directory changed from '{previousDirectory}' to '{normalizedDirectory}'. " +
+                "Existing log files were left in place.");
+        }
+
+        var parserWasActive = parserEngine.Status.State is
+            ParserState.Running or
+            ParserState.Initializing or
+            ParserState.Faulted;
+        if (!parserWasActive)
+        {
+            reportResult(
+                true,
+                text.Get(
+                    "目录已保存，将在下次启动解析器时生效。",
+                    "Directory saved; it will take effect the next time the parser starts."));
+            return;
+        }
+
+        reportResult(
+            true,
+            text.Get("目录已保存，正在重启解析器。", "Directory saved; restarting the parser."));
+        StartBackgroundOperation(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
+                var status = parserEngine.Status;
+                reportResult(
+                    status.State == ParserState.Running,
+                    status.State == ParserState.Running
+                        ? text.Get("目录已更改，解析器已重启。", "Directory changed and the parser restarted.")
+                        : text.Get(
+                            "目录已保存，但解析器没有恢复；请查看上方状态。",
+                            "Directory saved, but the parser did not recover; check the status above."));
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Parser restart after changing the FFLogs upload log directory failed.");
+                reportResult(
+                    false,
+                    text.Get(
+                        "目录已保存，但解析器重启失败。",
+                        "Directory saved, but the parser restart failed."));
+            }
+        });
+    }
+
+    private static bool TryPrepareCombatLogDirectory(
+        string directory,
+        out string normalizedDirectory,
+        out string error)
+    {
+        normalizedDirectory = string.Empty;
+        error = string.Empty;
+        try
+        {
+            normalizedDirectory = NormalizeCombatLogDirectory(directory);
+            Directory.CreateDirectory(normalizedDirectory);
+            var probePath = Path.Combine(
+                normalizedDirectory,
+                $".dact-write-probe-{Guid.NewGuid():N}.tmp");
+            // Creating a delete-on-close probe verifies the exact permission needed by ACT
+            // without risking an existing user file or leaving test data in the log folder.
+            using var probe = new FileStream(
+                probePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1,
+                FileOptions.DeleteOnClose);
+            probe.WriteByte(0);
+            return true;
+        }
+        catch (Exception ex) when (IsCombatLogDirectoryException(ex))
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static string NormalizeCombatLogDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory.Trim()));
+    }
+
+    private static bool IsCombatLogDirectoryException(Exception exception)
+        => exception is ArgumentException or
+            NotSupportedException or
+            IOException or
+            UnauthorizedAccessException or
+            System.Security.SecurityException;
 
     private string BuildDiagnosticReport()
     {

@@ -41,6 +41,8 @@ public sealed class ControlCenterWindow : Window
         Url,
     }
 
+    private sealed record CombatLogDirectoryFeedback(string Message, bool IsError);
+
     private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
@@ -91,6 +93,9 @@ public sealed class ControlCenterWindow : Window
     private readonly Action checkBundledPluginUpdates;
     private readonly Action openLogDirectory;
     private readonly Func<string> openCombatLogDirectory;
+    private readonly Func<string> getCombatLogDirectory;
+    private readonly Action<Action<bool, string>> selectCombatLogDirectory;
+    private readonly Action<Action<bool, string>> resetCombatLogDirectory;
     private readonly Func<string> buildDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
@@ -123,6 +128,9 @@ public sealed class ControlCenterWindow : Window
     private bool diagnosticCopyFeedbackIsError;
     private string? combatLogFolderFeedback;
     private bool combatLogFolderFeedbackIsError;
+    // Parser restart finishes off the draw thread, so replace one immutable snapshot to keep
+    // the result text and its success/error color from being observed out of sync.
+    private CombatLogDirectoryFeedback? combatLogDirectoryChangeFeedback;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
@@ -172,6 +180,9 @@ public sealed class ControlCenterWindow : Window
         Action checkBundledPluginUpdates,
         Action openLogDirectory,
         Func<string> openCombatLogDirectory,
+        Func<string> getCombatLogDirectory,
+        Action<Action<bool, string>> selectCombatLogDirectory,
+        Action<Action<bool, string>> resetCombatLogDirectory,
         Func<string> buildDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
@@ -222,6 +233,9 @@ public sealed class ControlCenterWindow : Window
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
         this.openLogDirectory = openLogDirectory;
         this.openCombatLogDirectory = openCombatLogDirectory;
+        this.getCombatLogDirectory = getCombatLogDirectory;
+        this.selectCombatLogDirectory = selectCombatLogDirectory;
+        this.resetCombatLogDirectory = resetCombatLogDirectory;
         this.buildDiagnosticReport = buildDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
@@ -2085,6 +2099,8 @@ public sealed class ControlCenterWindow : Window
             openBundledPluginNotice();
         }
 
+        DrawCombatLogDirectorySettings();
+
         if (ImGui.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
         {
             CopyDiagnosticReport();
@@ -2205,6 +2221,49 @@ public sealed class ControlCenterWindow : Window
         }
         return changed;
     }
+
+    private void DrawCombatLogDirectorySettings()
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("FFLogs 上传日志", "FFLogs upload logs"));
+        ImGui.TextDisabled(text.Get("当前路径", "Current path"));
+        ImGui.TextWrapped(getCombatLogDirectory());
+
+        if (ImGui.Button(text.Get("更改目录...", "Change directory...")))
+        {
+            selectCombatLogDirectory(ReportCombatLogDirectoryChange);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(text.Get(
+                "只更改之后写入的原始 Network 日志；旧日志不会移动或删除。解析器正在运行时会自动重启，战斗中切换可能截断当前战斗。",
+                "Changes only future raw Network log writes; existing logs are not moved or deleted. A running parser restarts automatically, which may split the current encounter."));
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("恢复默认", "Restore default")))
+        {
+            resetCombatLogDirectory(ReportCombatLogDirectoryChange);
+        }
+
+        var feedback = Volatile.Read(ref combatLogDirectoryChangeFeedback);
+        if (feedback is not null)
+        {
+            ImGui.TextColored(
+                feedback.IsError
+                    ? new Vector4(0.95f, 0.45f, 0.40f, 1)
+                    : IceBlue,
+                feedback.Message);
+        }
+
+        ImGui.Spacing();
+    }
+
+    private void ReportCombatLogDirectoryChange(bool success, string message)
+        => Volatile.Write(
+            ref combatLogDirectoryChangeFeedback,
+            new CombatLogDirectoryFeedback(message, !success));
 
     private void CopyDiagnosticReport()
     {
