@@ -27,6 +27,7 @@ public sealed class MeterWindow : Window
     private const float WindowResizeAnimationDurationSeconds = 0.18f;
     private const float TableRightPadding = 9;
     private const float ColumnSpacing = 3;
+    private const float ColumnHeaderHorizontalPadding = 6;
     private const float FflogsColumnWidth = 44;
     private const float RateColumnWidth = 50;
     private const float HitRateColumnWidth = 43;
@@ -325,7 +326,9 @@ public sealed class MeterWindow : Window
             start + new Vector2(36, 6),
             ImGui.GetColorU32(Gold),
             TrimToWidth(LocalizeEncounterTitle(encounter), titleRight - start.X - 36));
-        var subtitle = $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  {FormatDuration(encounter.EffectiveDuration)}";
+        var subtitle =
+            $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  " +
+            FormatDuration(ResolveHeaderDuration(encounter));
         if (!UsesStatusAsEncounterTitle(encounter))
         {
             subtitle += "  ·  " +
@@ -1227,13 +1230,13 @@ public sealed class MeterWindow : Window
     {
         var scale = Math.Clamp(settings.FontScale, 0.75f, 1.8f);
         float StableWidth(float nominalWidth, string header, IEnumerable<string> values)
-            => Math.Max(
-                nominalWidth * scale,
-                Math.Max(
-                    ImGui.CalcTextSize(header).X,
-                    values.Select(value => ImGui.CalcTextSize(value).X)
-                        .DefaultIfEmpty(0)
-                        .Max()));
+            => ResolveStableColumnWidth(
+                nominalWidth,
+                scale,
+                ImGui.CalcTextSize(header).X,
+                values.Select(value => ImGui.CalcTextSize(value).X)
+                    .DefaultIfEmpty(0)
+                    .Max());
 
         return new MeterColumnWidths(
             settings.ShowRank
@@ -1893,6 +1896,24 @@ public sealed class MeterWindow : Window
 
     internal static bool ShouldDrawTeamSummary(MeterSettings settings)
         => !settings.ClassicAllianceView && !settings.CompactMode;
+
+    internal static TimeSpan ResolveHeaderDuration(Encounter encounter)
+    {
+        // CombatDuration is the downtime-adjusted damage denominator. The header is a
+        // fight clock, so it must keep the wall-clock duration used by HPS and history.
+        return encounter.Duration;
+    }
+
+    internal static float ResolveStableColumnWidth(
+        float nominalWidth,
+        float fontScale,
+        float headerTextWidth,
+        float maximumValueTextWidth)
+        => Math.Max(
+            nominalWidth * Math.Clamp(fontScale, 0.75f, 1.8f),
+            Math.Max(
+                headerTextWidth + ColumnHeaderHorizontalPadding,
+                maximumValueTextWidth));
 
     internal static float ResolveIdentityColumnWidth(
         float availableTableWidth,

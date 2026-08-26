@@ -2076,6 +2076,21 @@ static void ValidateMeterRows()
         clonedStyle.Slots[0].Id != customStyle.Slots[0].Id &&
         clonedStyle.Slots[0].Metric == MeterSlotMetric.HighestDamage,
         "Duplicating a custom Meter style reused mutable slot identities or lost its data assignment.");
+    var restoredCustomStyle = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterCustomStyle>(
+                                  Newtonsoft.Json.JsonConvert.SerializeObject(customStyle))
+                              ?? throw new InvalidOperationException(
+                                  "The custom Meter style could not be restored.");
+    var reloadedCustomStyle = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterCustomStyle>(
+                                  Newtonsoft.Json.JsonConvert.SerializeObject(restoredCustomStyle))
+                              ?? throw new InvalidOperationException(
+                                  "The custom Meter style could not be reloaded.");
+    // A cold start must replace constructor defaults; merging here grows the slot list
+    // on every load and also makes an untouched editor appear modified.
+    Assert(
+        restoredCustomStyle.Slots.Count == 1 &&
+        reloadedCustomStyle.Slots.Count == 1 &&
+        reloadedCustomStyle.Slots[0].Metric == MeterSlotMetric.HighestDamage,
+        "Custom Meter style slots were appended to defaults during repeated JSON loads.");
 
     var previousDebugConfiguration = new PluginConfiguration
     {
@@ -2584,6 +2599,29 @@ static void ValidateMeterLayout()
         !new MeterSettings().ClassicAllianceView,
         "The classic Meter no longer starts in editable 8-player mode.");
     var defaultColumns = new MeterSettings();
+    var headerStart = new DateTimeOffset(2026, 8, 25, 20, 0, 0, TimeSpan.FromHours(8));
+    var headerEncounter = new Encounter(
+        Guid.NewGuid(),
+        headerStart,
+        headerStart.AddMinutes(2),
+        "Training Dummy",
+        "Training Dummy",
+        [],
+        [],
+        [],
+        [],
+        [],
+        [])
+    {
+        CombatDuration = TimeSpan.FromSeconds(1),
+    };
+    Assert(
+        MeterWindow.ResolveHeaderDuration(headerEncounter) == TimeSpan.FromMinutes(2),
+        "The Combat Meter header reused the one-second damage denominator " +
+        "instead of the fight duration.");
+    Assert(
+        Math.Abs(MeterWindow.ResolveStableColumnWidth(28, 1, 28, 8) - 34) < 0.0001f,
+        "A Meter column did not reserve its six-pixel header padding before truncating the label.");
     var clickThroughSettings = new MeterSettings
     {
         IsLocked = true,
@@ -2996,8 +3034,8 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("不保存并退出", StringComparison.Ordinal) &&
         editorSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
         editorSource.Contains("editingSnapshot", StringComparison.Ordinal) &&
-        editorSource.Contains("hasUnsavedChanges", StringComparison.Ordinal) &&
-        editorSource.Contains("if (!hasUnsavedChanges && !HasUnsavedConfigurationChanges())", StringComparison.Ordinal) &&
+        !editorSource.Contains("hasUnsavedChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("if (!HasUnsavedConfigurationChanges())", StringComparison.Ordinal) &&
         editorSource.Contains("HasUnsavedConfigurationChanges", StringComparison.Ordinal) &&
         editorSource.Contains("SerializeForChangeDetection", StringComparison.Ordinal) &&
         editorSource.Contains("CloseWithoutChanges", StringComparison.Ordinal) &&
@@ -3012,7 +3050,25 @@ static void ValidateIndependentMeterWindows()
                                           BindingFlags.Static | BindingFlags.NonPublic)
                                       ?? throw new InvalidOperationException(
                                           "Meter editor change-detection serializer was not found.");
-    var cleanEditorSettings = new MeterSettings();
+    var cleanEditorSettings = new MeterSettings
+    {
+        CustomStyles =
+        [
+            new MeterCustomStyle
+            {
+                Slots =
+                [
+                    new MeterSlotDefinition(
+                        MeterSlotMetric.HighestDamage,
+                        0,
+                        0,
+                        1,
+                        1,
+                        MeterSlotAlignment.Right),
+                ],
+            },
+        ],
+    };
     var transientEditorSettings = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
                                       Newtonsoft.Json.JsonConvert.SerializeObject(cleanEditorSettings))
                                   ?? throw new InvalidOperationException(
@@ -3023,7 +3079,9 @@ static void ValidateIndependentMeterWindows()
     transientEditorSettings.HorizontalWindow.FontScale += 0.1f;
     var changedFingerprint = (string)serializeForChangeDetection.Invoke(null, [transientEditorSettings])!;
     Assert(
-        cleanFingerprint == transientFingerprint && cleanFingerprint != changedFingerprint,
+        transientEditorSettings.CustomStyles.Single().Slots.Count == 1 &&
+        cleanFingerprint == transientFingerprint &&
+        cleanFingerprint != changedFingerprint,
         "Meter editor dirty-state detection prompts for tab browsing or misses a real style change.");
     Assert(
         controlCenterSource.Contains("BeginCombo(\"##meter-template\"", StringComparison.Ordinal) &&
@@ -8417,8 +8475,13 @@ static void ValidateHtmlOverlayDefaults()
         !controlCenterSource.Contains("DrawHelpEntry", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("?##help-{id}", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("helpAction();", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("const float actionButtonSize = 28;", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("actionButtonOffsetY", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains(
+            "new Vector2(actionButtonSize, actionButtonSize)",
+            StringComparison.Ordinal) &&
         brandedChromeSource.Contains("const float helpCloseGap = 3;", StringComparison.Ordinal) &&
-        brandedChromeSource.Contains("closeWidth + helpCloseGap", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("actionButtonSize + helpCloseGap", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&

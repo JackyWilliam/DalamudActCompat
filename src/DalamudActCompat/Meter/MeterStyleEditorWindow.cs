@@ -34,7 +34,6 @@ public sealed class MeterStyleEditorWindow : Window
     private string? editingSnapshot;
     private bool closeActionHandled;
     private bool exitConfirmationRequested;
-    private bool hasUnsavedChanges;
 
     public MeterStyleEditorWindow(
         PluginConfiguration configuration,
@@ -75,7 +74,6 @@ public sealed class MeterStyleEditorWindow : Window
         editingSnapshot = JsonConvert.SerializeObject(configuration.Meter);
         closeActionHandled = false;
         exitConfirmationRequested = false;
-        hasUnsavedChanges = false;
         SetEditingProfile(null);
         selectedKind = configuration.Meter.ActiveWindowKind;
         selectedRoleSplitGroup = RoleSplitGroup.DamageTank;
@@ -93,7 +91,6 @@ public sealed class MeterStyleEditorWindow : Window
             saveConfiguration();
         }
         SetEditingProfile(null);
-        hasUnsavedChanges = false;
     }
 
     public override void PreDraw()
@@ -202,7 +199,6 @@ public sealed class MeterStyleEditorWindow : Window
         {
             NormalizeCurrentSlots();
             SynchronizeClassicSettings();
-            hasUnsavedChanges = true;
         }
     }
 
@@ -465,7 +461,7 @@ public sealed class MeterStyleEditorWindow : Window
 
     private void RequestExitConfirmation()
     {
-        if (!hasUnsavedChanges && !HasUnsavedConfigurationChanges())
+        if (!HasUnsavedConfigurationChanges())
         {
             // Template selection and editor-preview flags are transient. A clean editor
             // can close immediately because there is no user configuration to discard.
@@ -478,29 +474,21 @@ public sealed class MeterStyleEditorWindow : Window
 
     private bool HasUnsavedConfigurationChanges()
     {
-        if (string.IsNullOrWhiteSpace(editingSnapshot) ||
-            JsonConvert.DeserializeObject<MeterSettings>(editingSnapshot) is not { } baseline)
+        if (string.IsNullOrWhiteSpace(editingSnapshot))
         {
             return false;
         }
 
         return !string.Equals(
-            SerializeForChangeDetection(baseline),
+            editingSnapshot,
             SerializeForChangeDetection(configuration.Meter),
             StringComparison.Ordinal);
     }
 
     private static string SerializeForChangeDetection(MeterSettings settings)
-    {
-        var clone = JsonConvert.DeserializeObject<MeterSettings>(JsonConvert.SerializeObject(settings))
-                    ?? throw new InvalidDataException("Meter settings could not be cloned.");
-        // The active editor profile changes while browsing tabs, but these flags are
-        // runtime-only and must not turn a clean close into a destructive-action prompt.
-        clone.ClassicWindow.IsEditing = false;
-        clone.HorizontalWindow.IsEditing = false;
-        clone.RoleSplitWindow.IsEditing = false;
-        return JsonConvert.SerializeObject(clone);
-    }
+        // IsEditing is excluded from JSON, so comparing serialized values ignores tab
+        // browsing without rehydrating default-filled collections into the snapshot.
+        => JsonConvert.SerializeObject(settings);
 
     private bool DrawExitConfirmation()
     {
@@ -568,7 +556,6 @@ public sealed class MeterStyleEditorWindow : Window
         SetEditingProfile(null);
         saveConfiguration();
         editingSnapshot = null;
-        hasUnsavedChanges = false;
         closeActionHandled = true;
         IsOpen = false;
     }
@@ -578,7 +565,6 @@ public sealed class MeterStyleEditorWindow : Window
         RestoreEditingSnapshot();
         SetEditingProfile(null);
         saveConfiguration();
-        hasUnsavedChanges = false;
         closeActionHandled = true;
         IsOpen = false;
     }
@@ -587,7 +573,6 @@ public sealed class MeterStyleEditorWindow : Window
     {
         SetEditingProfile(null);
         editingSnapshot = null;
-        hasUnsavedChanges = false;
         closeActionHandled = true;
         IsOpen = false;
     }

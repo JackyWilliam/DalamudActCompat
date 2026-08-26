@@ -27,7 +27,7 @@ internal static class BrandedWindowChrome
         string? helpTooltip = null)
     {
         const float height = 40;
-        const float closeWidth = 34;
+        const float actionButtonSize = 28;
         const float helpCloseGap = 3;
         const float horizontalPadding = 8;
         const float logoSize = 28;
@@ -70,8 +70,8 @@ internal static class BrandedWindowChrome
             ImGui.GetColorU32(centerColor),
             centerLabel);
 
-        var helpWidth = helpAction is null ? 0 : closeWidth;
-        var trailingWidth = (showCloseButton ? closeWidth : 0) +
+        var helpWidth = helpAction is null ? 0 : actionButtonSize;
+        var trailingWidth = (showCloseButton ? actionButtonSize : 0) +
                             helpWidth +
                             (showCloseButton && helpAction is not null ? helpCloseGap : 0);
         var versionSize = ImGui.CalcTextSize(versionLabel);
@@ -91,15 +91,18 @@ internal static class BrandedWindowChrome
         }
 
         var closeRequested = false;
+        var actionButtonOffsetY = (height - actionButtonSize) * 0.5f;
         if (helpAction is not null)
         {
             ImGui.SetCursorPos(new Vector2(
-                start.X + availableWidth - (showCloseButton ? closeWidth + helpCloseGap : 0) - helpWidth,
-                start.Y));
+                start.X + availableWidth -
+                (showCloseButton ? actionButtonSize + helpCloseGap : 0) -
+                helpWidth,
+                start.Y + actionButtonOffsetY));
             ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
             ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.34f, 0.46f, 0.82f));
             ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.45f, 0.60f, 1));
-            if (ImGui.Button($"?##help-{id}", new Vector2(closeWidth, height)))
+            if (ImGui.Button($"?##help-{id}", new Vector2(actionButtonSize, actionButtonSize)))
             {
                 helpAction();
             }
@@ -111,11 +114,15 @@ internal static class BrandedWindowChrome
         }
         if (showCloseButton)
         {
-            ImGui.SetCursorPos(new Vector2(start.X + availableWidth - closeWidth, start.Y));
+            ImGui.SetCursorPos(new Vector2(
+                start.X + availableWidth - actionButtonSize,
+                start.Y + actionButtonOffsetY));
             ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
             ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
             ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
-            closeRequested = ImGui.Button($"×##close-{id}", new Vector2(closeWidth, height));
+            closeRequested = ImGui.Button(
+                $"×##close-{id}",
+                new Vector2(actionButtonSize, actionButtonSize));
             ImGui.PopStyleColor(3);
         }
         ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));

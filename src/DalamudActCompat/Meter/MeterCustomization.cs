@@ -237,6 +237,8 @@ public sealed class MeterCustomStyle
 
     public Vector4 TextColor { get; set; } = Vector4.One;
 
+    // Json.NET otherwise appends saved slots to these constructor defaults on every load.
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public List<MeterSlotDefinition> Slots { get; set; } = CreateHorizontalSlots();
 
     public MeterCustomStyle Clone(string name)
