@@ -3040,12 +3040,16 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("HasUnsavedConfigurationChanges", StringComparison.Ordinal) &&
         editorSource.Contains("SerializeForChangeDetection", StringComparison.Ordinal) &&
         editorSource.Contains("CloseWithoutChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("ImGuiWindowFlags.NoScrollbar", StringComparison.Ordinal) &&
+        editorSource.Contains("ImGui.GetFrameHeightWithSpacing()", StringComparison.Ordinal) &&
+        editorSource.Contains("DrawInlineHelp", StringComparison.Ordinal) &&
+        editorSource.Contains("moveButtonWidth", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
         !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
         !editorSource.Contains("24×6", StringComparison.Ordinal) &&
         !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
-        "The shared Meter editor lost runtime-identical previews, mutual activation, opacity, FFLogs gating, or dynamic slots.");
+        "The shared Meter editor lost runtime-identical previews, compact non-scrolling chrome, mutual activation, opacity, FFLogs gating, or dynamic slots.");
     var serializeForChangeDetection = typeof(MeterStyleEditorWindow).GetMethod(
                                           "SerializeForChangeDetection",
                                           BindingFlags.Static | BindingFlags.NonPublic)

@@ -95,7 +95,12 @@ public sealed class MeterStyleEditorWindow : Window
 
     public override void PreDraw()
     {
-        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
+        // Only the three workspace panels may scroll. The outer editor uses the
+        // remaining height explicitly, so an outer scrollbar is always visual noise.
+        Flags = ImGuiWindowFlags.NoTitleBar |
+                ImGuiWindowFlags.NoCollapse |
+                ImGuiWindowFlags.NoScrollbar |
+                ImGuiWindowFlags.NoScrollWithMouse;
         ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
         ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f));
@@ -164,7 +169,11 @@ public sealed class MeterStyleEditorWindow : Window
         var available = ImGui.GetContentRegionAvail();
         const float leftWidth = 255;
         const float rightWidth = 270;
-        const float footerHeight = 38;
+        // Account for the themed frame and both inter-item gaps instead of using a
+        // scale-independent constant that can overflow by a few pixels at high DPI.
+        var footerHeight = ImGui.GetFrameHeightWithSpacing() +
+                           ImGui.GetStyle().ItemSpacing.Y +
+                           6;
         var workspaceHeight = Math.Max(200, available.Y - footerHeight);
         if (ImGui.BeginChild("meter-editor-slots", new Vector2(leftWidth, workspaceHeight), true))
         {
@@ -686,7 +695,7 @@ public sealed class MeterStyleEditorWindow : Window
     {
         var changed = false;
         ImGui.TextColored(Gold, text.Get("窗口与槽位", "Window and slot"));
-        ImGui.TextWrapped(text.Get(
+        DrawInlineHelp(text.Get(
             "页面预览中的黄色框是当前槽位；点击可切换，拖到另一项可交换位置。修改完成后请使用底部的保存或取消。",
             "The gold frame in Page preview marks the current slot. Click to select or drag onto another item to swap positions. Use Save or Cancel when finished."));
         var showHeader = profile.ShowHeader;
@@ -821,16 +830,21 @@ public sealed class MeterStyleEditorWindow : Window
         }
         ImGui.Dummy(new Vector2(1, 8));
         var index = slots.IndexOf(slot);
+        var moveButtonSpacing = ImGui.GetStyle().ItemSpacing.X;
+        var moveButtonWidth = Math.Max(
+            80,
+            (ImGui.GetContentRegionAvail().X - moveButtonSpacing) * 0.5f);
         ImGui.BeginDisabled(index <= 0);
-        if (ImGui.Button(text.Get("↑ 前移", "↑ Move up"), new Vector2(-1, 0)))
+        if (ImGui.Button(text.Get("↑ 前移", "↑ Move up"), new Vector2(moveButtonWidth, 0)))
         {
             (slots[index - 1], slots[index]) =
                 (slots[index], slots[index - 1]);
             changed = true;
         }
         ImGui.EndDisabled();
+        ImGui.SameLine(0, moveButtonSpacing);
         ImGui.BeginDisabled(index < 0 || index >= slots.Count - 1);
-        if (ImGui.Button(text.Get("↓ 后移", "↓ Move down"), new Vector2(-1, 0)))
+        if (ImGui.Button(text.Get("↓ 后移", "↓ Move down"), new Vector2(moveButtonWidth, 0)))
         {
             (slots[index + 1], slots[index]) =
                 (slots[index], slots[index + 1]);
@@ -847,7 +861,8 @@ public sealed class MeterStyleEditorWindow : Window
         }
 
         ImGui.Dummy(new Vector2(1, 8));
-        ImGui.TextWrapped(slot.Metric is MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage
+        ImGui.TextDisabled(text.Get("显示规则", "Display rules"));
+        DrawInlineHelp(slot.Metric is MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage
             ? text.Get(
                 "最高伤害会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
                 "Max-hit values are truncated; hover the meter for full details.")
@@ -867,9 +882,27 @@ public sealed class MeterStyleEditorWindow : Window
         string format)
     {
         ImGui.TextUnformatted(label);
-        ImGui.TextWrapped(hint);
+        DrawInlineHelp(hint);
         ImGui.SetNextItemWidth(-1);
         return ImGui.SliderFloat($"##{id}", ref value, minimum, maximum, format);
+    }
+
+    private static void DrawInlineHelp(string hint)
+    {
+        // Long localized explanations stay available without permanently consuming
+        // the narrow properties column and forcing a scrollbar at the normal size.
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (!ImGui.IsItemHovered())
+        {
+            return;
+        }
+
+        ImGui.BeginTooltip();
+        ImGui.PushTextWrapPos(ImGui.GetFontSize() * 28);
+        ImGui.TextUnformatted(hint);
+        ImGui.PopTextWrapPos();
+        ImGui.EndTooltip();
     }
 
     private void SynchronizeClassicSettings()
