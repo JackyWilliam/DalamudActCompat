@@ -35,19 +35,13 @@ internal static class GameRegionSelector
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip(text.Get(
-                "自动模式按当前 Dalamud 客户端识别；手动切换会立即刷新解析器和正在运行的扩展 Host。",
-                "Auto uses the current Dalamud client. A manual change immediately refreshes the parser and active extension Hosts."));
+                "自动模式按当前 Dalamud 所在的 XIVLauncherCN / XIVLauncher 目录识别，不使用客户端语言；手动切换会立即刷新解析器和正在运行的扩展 Host。",
+                "Auto uses the XIVLauncherCN / XIVLauncher directory that owns the current Dalamud installation, not the client language. A manual change immediately refreshes the parser and active extension Hosts."));
         }
 
         // Region chooses packet/opcode tables, while language continues to follow the client
         // so a manual override never changes localized action names or log parsing.
-        ImGui.TextDisabled(selection.IsManualOverride
-            ? text.Get(
-                $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 自动检测：{FormatRegion(text, selection.DetectedRegion)} · 语言：{FormatLanguage(text, selection.ClientLanguage)}",
-                $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Detected: {FormatRegion(text, selection.DetectedRegion)} · Language: {FormatLanguage(text, selection.ClientLanguage)}")
-            : text.Get(
-                $"已自动检测：{FormatRegion(text, selection.EffectiveRegion)} · 语言：{FormatLanguage(text, selection.ClientLanguage)}",
-                $"Detected: {FormatRegion(text, selection.EffectiveRegion)} · Language: {FormatLanguage(text, selection.ClientLanguage)}"));
+        ImGui.TextDisabled(FormatDetectionStatus(text, selection));
     }
 
     private static HostGameRegion ResolvePreviewRegion(
@@ -88,4 +82,27 @@ internal static class GameRegionSelector
             HostClientLanguage.Korean => text.Get("韩语", "Korean"),
             _ => text.Get("英语", "English"),
         };
+
+    private static string FormatDetectionStatus(UiText text, GameRegionSelection selection)
+    {
+        var language = FormatLanguage(text, selection.ClientLanguage);
+        if (!selection.HasDetectedLauncher)
+        {
+            return selection.IsManualOverride
+                ? text.Get(
+                    $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 未识别启动器目录 · 语言：{language}",
+                    $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Launcher directory not recognized · Language: {language}")
+                : text.Get(
+                    $"未识别启动器目录，暂按国际服处理 · 可手动选择 · 语言：{language}",
+                    $"Launcher directory not recognized; using Global · Manual selection is available · Language: {language}");
+        }
+
+        return selection.IsManualOverride
+            ? text.Get(
+                $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 自动检测：{FormatRegion(text, selection.DetectedRegion)}（{selection.DetectedLauncherName}） · 语言：{language}",
+                $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Detected: {FormatRegion(text, selection.DetectedRegion)} ({selection.DetectedLauncherName}) · Language: {language}")
+            : text.Get(
+                $"已自动检测：{FormatRegion(text, selection.EffectiveRegion)}（{selection.DetectedLauncherName}） · 语言：{language}",
+                $"Detected: {FormatRegion(text, selection.EffectiveRegion)} ({selection.DetectedLauncherName}) · Language: {language}");
+    }
 }

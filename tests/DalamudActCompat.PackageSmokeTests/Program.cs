@@ -375,27 +375,59 @@ finally
 
 static void ValidateGameRegionSelection()
 {
+    var launcherRoot = Path.Combine(Path.GetTempPath(), "dact-region-tests");
+    var chineseConfigDirectory = Path.Combine(
+        launcherRoot,
+        "XIVLauncherCN",
+        "pluginConfigs",
+        "DalamudActCompat");
+    var globalConfigDirectory = Path.Combine(
+        launcherRoot,
+        "XIVLauncher",
+        "pluginConfigs",
+        "DalamudActCompat");
     var automaticChinese = GameRegionResolver.Resolve(
         GameRegionMode.Auto,
-        "ChineseSimplified");
-    var automaticGlobal = GameRegionResolver.Resolve(GameRegionMode.Auto, "Japanese");
+        "English",
+        chineseConfigDirectory);
+    var automaticGlobalWithChineseLanguagePack = GameRegionResolver.Resolve(
+        GameRegionMode.Auto,
+        "ChineseSimplified",
+        globalConfigDirectory);
+    var unknownLauncher = GameRegionResolver.Resolve(
+        GameRegionMode.Auto,
+        "ChineseSimplified",
+        Path.Combine(launcherRoot, "PortableDalamud", "pluginConfigs", "DalamudActCompat"));
     var manualGlobal = GameRegionResolver.Resolve(
         GameRegionMode.Global,
-        "ChineseSimplified");
-    var manualChinese = GameRegionResolver.Resolve(GameRegionMode.Chinese, "English");
+        "ChineseSimplified",
+        chineseConfigDirectory);
+    var manualChinese = GameRegionResolver.Resolve(
+        GameRegionMode.Chinese,
+        "English",
+        globalConfigDirectory);
     Assert(
         automaticChinese is
         {
             DetectedRegion: HostGameRegion.Chinese,
             EffectiveRegion: HostGameRegion.Chinese,
-            ClientLanguage: HostClientLanguage.Chinese,
+            ClientLanguage: HostClientLanguage.English,
+            DetectedLauncherName: "XIVLauncherCN",
             IsManualOverride: false,
         } &&
-        automaticGlobal is
+        automaticGlobalWithChineseLanguagePack is
         {
             DetectedRegion: HostGameRegion.Global,
             EffectiveRegion: HostGameRegion.Global,
-            ClientLanguage: HostClientLanguage.Japanese,
+            ClientLanguage: HostClientLanguage.Chinese,
+            DetectedLauncherName: "XIVLauncher",
+        } &&
+        unknownLauncher is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Global,
+            ClientLanguage: HostClientLanguage.Chinese,
+            DetectedLauncherName: null,
         } &&
         manualGlobal is
         {
@@ -410,7 +442,7 @@ static void ValidateGameRegionSelection()
             EffectiveRegion: HostGameRegion.Chinese,
             ClientLanguage: HostClientLanguage.English,
         },
-        "Automatic or manual CN/Global region selection was not resolved independently from client language.");
+        "Launcher-based or manual CN/Global selection was not resolved independently from client language.");
 
     var configuration = new PluginConfiguration
     {

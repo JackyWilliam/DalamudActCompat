@@ -586,8 +586,8 @@ public sealed class ControlCenterWindow : Window
             "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
             "Quick button: left settings, right Combat Meter, hold middle mouse to move.");
         var regionHint = text.Get(
-            "当前：国际服（手动） · 自动检测：国服 · 语言：简体中文",
-            "Current: Global (manual) · Detected: China · Language: Simplified Chinese");
+            "未识别启动器目录，暂按国际服处理 · 可手动选择 · 语言：简体中文",
+            "Launcher directory not recognized; using Global · Manual selection is available · Language: Simplified Chinese");
         var generalCardHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             ImGui.GetTextLineHeightWithSpacing() +

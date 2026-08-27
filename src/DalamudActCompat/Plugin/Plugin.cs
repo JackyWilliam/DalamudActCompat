@@ -3850,7 +3850,8 @@ public sealed class Plugin : IDalamudPlugin
     private GameRegionSelection ResolveGameRegionSelection()
         => GameRegionResolver.Resolve(
             configuration.GameRegionMode,
-            clientLanguageName);
+            clientLanguageName,
+            paths.ConfigDirectory);
 
     private HostGameContext GetHostGameContext()
         => ResolveGameRegionSelection().ToHostContext();
@@ -3867,7 +3868,8 @@ public sealed class Plugin : IDalamudPlugin
         var selection = ResolveGameRegionSelection();
         logger.Information(
             $"Game region mode changed: mode={selection.Mode}, detected={selection.DetectedRegion}, " +
-            $"effective={selection.EffectiveRegion}, language={selection.ClientLanguage}.");
+            $"effective={selection.EffectiveRegion}, launcher={selection.DetectedLauncherName ?? "unknown"}, " +
+            $"language={selection.ClientLanguage}.");
         StartBackgroundOperation(() => ApplyGameRegionChangeAsync(selection));
     }
 

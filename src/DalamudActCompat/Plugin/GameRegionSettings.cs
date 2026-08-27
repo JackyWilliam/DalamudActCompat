@@ -14,21 +14,34 @@ public sealed record GameRegionSelection(
     HostGameRegion DetectedRegion,
     HostGameRegion EffectiveRegion,
     HostClientLanguage ClientLanguage,
-    string ClientLanguageName)
+    string ClientLanguageName,
+    string? DetectedLauncherName)
 {
     public bool IsManualOverride => Mode != GameRegionMode.Auto;
+
+    public bool HasDetectedLauncher => !string.IsNullOrWhiteSpace(DetectedLauncherName);
 
     public HostGameContext ToHostContext() => new(EffectiveRegion, ClientLanguage);
 }
 
 public static class GameRegionResolver
 {
-    public static GameRegionSelection Resolve(GameRegionMode mode, string? clientLanguageName)
+    private const string ChineseLauncherName = "XIVLauncherCN";
+    private const string GlobalLauncherName = "XIVLauncher";
+
+    public static GameRegionSelection Resolve(
+        GameRegionMode mode,
+        string? clientLanguageName,
+        string? pluginConfigDirectory)
     {
         var normalizedLanguage = clientLanguageName?.Trim() ?? string.Empty;
-        // XIVLauncherCN exposes ChineseSimplified; every official international
-        // client language uses the Global packet/opcode family.
-        var detectedRegion = IsChineseClientLanguage(normalizedLanguage)
+        var detectedLauncherName = FindLauncherName(pluginConfigDirectory);
+        // Language packs can expose ChineseSimplified on the international client.
+        // The launcher-owned config root identifies the packet/opcode family instead.
+        var detectedRegion = string.Equals(
+                detectedLauncherName,
+                ChineseLauncherName,
+                StringComparison.OrdinalIgnoreCase)
             ? HostGameRegion.Chinese
             : HostGameRegion.Global;
         var effectiveRegion = mode switch
@@ -43,11 +56,40 @@ public static class GameRegionResolver
             detectedRegion,
             effectiveRegion,
             ResolveClientLanguage(normalizedLanguage),
-            string.IsNullOrWhiteSpace(normalizedLanguage) ? "Unknown" : normalizedLanguage);
+            string.IsNullOrWhiteSpace(normalizedLanguage) ? "Unknown" : normalizedLanguage,
+            detectedLauncherName);
     }
 
-    private static bool IsChineseClientLanguage(string languageName)
-        => languageName is "ChineseSimplified" or "Chinese";
+    private static string? FindLauncherName(string? pluginConfigDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(pluginConfigDirectory))
+        {
+            return null;
+        }
+
+        for (var current = new DirectoryInfo(Path.GetFullPath(pluginConfigDirectory));
+             current is not null;
+             current = current.Parent)
+        {
+            if (string.Equals(
+                    current.Name,
+                    ChineseLauncherName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return ChineseLauncherName;
+            }
+
+            if (string.Equals(
+                    current.Name,
+                    GlobalLauncherName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return GlobalLauncherName;
+            }
+        }
+
+        return null;
+    }
 
     private static HostClientLanguage ResolveClientLanguage(string languageName)
         => languageName switch
