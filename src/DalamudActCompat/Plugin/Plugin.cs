@@ -27,6 +27,7 @@ using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
 using System.Threading.Channels;
 using NativeGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
+using NativeFramework = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework;
 
 namespace DalamudActCompat.Plugin;
 
@@ -44,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly PluginServices services;
     private readonly string clientLanguageName;
+    private readonly byte? nativeClientLanguageCode;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
@@ -170,6 +172,7 @@ public sealed class Plugin : IDalamudPlugin
         // Client language is fixed for this plugin lifetime. Capturing the primitive name
         // keeps parser/FFLogs worker callbacks from reading a Dalamud service off-thread.
         clientLanguageName = dataManager.Language.ToString();
+        nativeClientLanguageCode = ReadNativeClientLanguageCode(log);
         pictoActOverlay = new PictoActOverlayService(
             gameGui,
             sigScanner,
@@ -3851,7 +3854,7 @@ public sealed class Plugin : IDalamudPlugin
         => GameRegionResolver.Resolve(
             configuration.GameRegionMode,
             clientLanguageName,
-            paths.ConfigDirectory);
+            nativeClientLanguageCode);
 
     private HostGameContext GetHostGameContext()
         => ResolveGameRegionSelection().ToHostContext();
@@ -3868,7 +3871,7 @@ public sealed class Plugin : IDalamudPlugin
         var selection = ResolveGameRegionSelection();
         logger.Information(
             $"Game region mode changed: mode={selection.Mode}, detected={selection.DetectedRegion}, " +
-            $"effective={selection.EffectiveRegion}, launcher={selection.DetectedLauncherName ?? "unknown"}, " +
+            $"effective={selection.EffectiveRegion}, nativeLanguageCode={selection.NativeClientLanguageCode?.ToString() ?? "unknown"}, " +
             $"language={selection.ClientLanguage}.");
         StartBackgroundOperation(() => ApplyGameRegionChangeAsync(selection));
     }
@@ -3946,6 +3949,22 @@ public sealed class Plugin : IDalamudPlugin
         => region == HostGameRegion.Chinese
             ? text.Get("国服", "China")
             : text.Get("国际服", "Global");
+
+    private static unsafe byte? ReadNativeClientLanguageCode(IPluginLog log)
+    {
+        try
+        {
+            var framework = NativeFramework.Instance();
+            return framework == null ? null : framework->ClientLanguage;
+        }
+        catch (Exception exception)
+        {
+            // A missing native address must not prevent startup; Auto visibly falls back
+            // to Global and the manual selector remains available.
+            log.Warning(exception, "The native FFXIV client region could not be read.");
+            return null;
+        }
+    }
 
     private void UpdateHtmlOverlaySuppression(DateTimeOffset now, bool force = false)
     {

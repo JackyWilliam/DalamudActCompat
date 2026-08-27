@@ -15,33 +15,26 @@ public sealed record GameRegionSelection(
     HostGameRegion EffectiveRegion,
     HostClientLanguage ClientLanguage,
     string ClientLanguageName,
-    string? DetectedLauncherName)
+    byte? NativeClientLanguageCode)
 {
     public bool IsManualOverride => Mode != GameRegionMode.Auto;
 
-    public bool HasDetectedLauncher => !string.IsNullOrWhiteSpace(DetectedLauncherName);
+    public bool HasDetectedRegion => NativeClientLanguageCode is >= 0 and <= 4;
 
     public HostGameContext ToHostContext() => new(EffectiveRegion, ClientLanguage);
 }
 
 public static class GameRegionResolver
 {
-    private const string ChineseLauncherName = "XIVLauncherCN";
-    private const string GlobalLauncherName = "XIVLauncher";
-
     public static GameRegionSelection Resolve(
         GameRegionMode mode,
         string? clientLanguageName,
-        string? pluginConfigDirectory)
+        byte? nativeClientLanguageCode)
     {
         var normalizedLanguage = clientLanguageName?.Trim() ?? string.Empty;
-        var detectedLauncherName = FindLauncherName(pluginConfigDirectory);
-        // Language packs can expose ChineseSimplified on the international client.
-        // The launcher-owned config root identifies the packet/opcode family instead.
-        var detectedRegion = string.Equals(
-                detectedLauncherName,
-                ChineseLauncherName,
-                StringComparison.OrdinalIgnoreCase)
+        // Framework.ClientLanguage is the game's native client code. Unlike Dalamud's
+        // data language, an international-client translation pack does not turn it into CN.
+        var detectedRegion = nativeClientLanguageCode == 4
             ? HostGameRegion.Chinese
             : HostGameRegion.Global;
         var effectiveRegion = mode switch
@@ -57,38 +50,7 @@ public static class GameRegionResolver
             effectiveRegion,
             ResolveClientLanguage(normalizedLanguage),
             string.IsNullOrWhiteSpace(normalizedLanguage) ? "Unknown" : normalizedLanguage,
-            detectedLauncherName);
-    }
-
-    private static string? FindLauncherName(string? pluginConfigDirectory)
-    {
-        if (string.IsNullOrWhiteSpace(pluginConfigDirectory))
-        {
-            return null;
-        }
-
-        for (var current = new DirectoryInfo(Path.GetFullPath(pluginConfigDirectory));
-             current is not null;
-             current = current.Parent)
-        {
-            if (string.Equals(
-                    current.Name,
-                    ChineseLauncherName,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return ChineseLauncherName;
-            }
-
-            if (string.Equals(
-                    current.Name,
-                    GlobalLauncherName,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return GlobalLauncherName;
-            }
-        }
-
-        return null;
+            nativeClientLanguageCode);
     }
 
     private static HostClientLanguage ResolveClientLanguage(string languageName)

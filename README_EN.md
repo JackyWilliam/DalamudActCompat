@@ -76,7 +76,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
 | Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
 
-Game region defaults to automatic detection from the launcher directory that owns the current Dalamud installation: `XIVLauncherCN` uses the China packet family and `XIVLauncher` uses Global. Client language is not used for region detection, so a Chinese language pack on the international client remains Global. An unrecognized custom directory defaults to Global and can be overridden manually. Changing the setting refreshes the running parser and extension Hosts without changing client-language action names or log parsing. The FFLogs estimate follows the same setting, using the CN partition for China and the latest worldwide partition for Global.
+Game region defaults to the native client-region value exposed by the game's Framework: the China client uses the China packet family and the international client uses Global. Dalamud language and installation paths are not used, so a Chinese language pack on the international client remains Global. If the game region cannot be read, DACT defaults to Global and allows a manual override. Changing the setting refreshes the running parser and extension Hosts without changing client-language action names or log parsing. The FFLogs estimate follows the same setting, using the CN partition for China and the latest worldwide partition for Global.
 
 ## Common commands
 

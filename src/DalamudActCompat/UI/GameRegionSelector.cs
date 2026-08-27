@@ -35,8 +35,8 @@ internal static class GameRegionSelector
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip(text.Get(
-                "自动模式按当前 Dalamud 所在的 XIVLauncherCN / XIVLauncher 目录识别，不使用客户端语言；手动切换会立即刷新解析器和正在运行的扩展 Host。",
-                "Auto uses the XIVLauncherCN / XIVLauncher directory that owns the current Dalamud installation, not the client language. A manual change immediately refreshes the parser and active extension Hosts."));
+                "自动模式读取游戏 Framework 的原生客户端区域值，不使用 Dalamud 语言或安装路径；手动切换会立即刷新解析器和正在运行的扩展 Host。",
+                "Auto reads the game's native client region value from Framework, not the Dalamud language or installation path. A manual change immediately refreshes the parser and active extension Hosts."));
         }
 
         // Region chooses packet/opcode tables, while language continues to follow the client
@@ -86,23 +86,23 @@ internal static class GameRegionSelector
     private static string FormatDetectionStatus(UiText text, GameRegionSelection selection)
     {
         var language = FormatLanguage(text, selection.ClientLanguage);
-        if (!selection.HasDetectedLauncher)
+        if (!selection.HasDetectedRegion)
         {
             return selection.IsManualOverride
                 ? text.Get(
-                    $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 未识别启动器目录 · 语言：{language}",
-                    $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Launcher directory not recognized · Language: {language}")
+                    $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 无法读取游戏区域 · 语言：{language}",
+                    $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Game region unavailable · Language: {language}")
                 : text.Get(
-                    $"未识别启动器目录，暂按国际服处理 · 可手动选择 · 语言：{language}",
-                    $"Launcher directory not recognized; using Global · Manual selection is available · Language: {language}");
+                    $"无法读取游戏区域，暂按国际服处理 · 可手动选择 · 语言：{language}",
+                    $"Game region unavailable; using Global · Manual selection is available · Language: {language}");
         }
 
         return selection.IsManualOverride
             ? text.Get(
-                $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 自动检测：{FormatRegion(text, selection.DetectedRegion)}（{selection.DetectedLauncherName}） · 语言：{language}",
-                $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Detected: {FormatRegion(text, selection.DetectedRegion)} ({selection.DetectedLauncherName}) · Language: {language}")
+                $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 自动检测：{FormatRegion(text, selection.DetectedRegion)}（游戏客户端） · 语言：{language}",
+                $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Detected: {FormatRegion(text, selection.DetectedRegion)} (game client) · Language: {language}")
             : text.Get(
-                $"已自动检测：{FormatRegion(text, selection.EffectiveRegion)}（{selection.DetectedLauncherName}） · 语言：{language}",
-                $"Detected: {FormatRegion(text, selection.EffectiveRegion)} ({selection.DetectedLauncherName}) · Language: {language}");
+                $"已自动检测：{FormatRegion(text, selection.EffectiveRegion)}（游戏客户端） · 语言：{language}",
+                $"Detected: {FormatRegion(text, selection.EffectiveRegion)} (game client) · Language: {language}");
     }
 }
