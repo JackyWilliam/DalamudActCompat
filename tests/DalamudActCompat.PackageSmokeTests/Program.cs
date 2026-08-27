@@ -3091,6 +3091,16 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("RoleSplitHealerWindow", StringComparison.Ordinal) &&
         editorSource.Contains("RoleSplitDamageWindow", StringComparison.Ordinal) &&
         editorSource.Contains("SynchronizeLegacyRoleSplitWindow", StringComparison.Ordinal) &&
+        editorSource.Contains("roleSplitHealerPreviewInteraction", StringComparison.Ordinal) &&
+        editorSource.Contains("CreateRoleSplitPreviewInteraction", StringComparison.Ordinal) &&
+        editorSource.Contains("SelectRoleSplitGroup(group, slotId)", StringComparison.Ordinal) &&
+        editorSource.Contains("ImGuiHoveredFlags.ChildWindows", StringComparison.Ordinal) &&
+        !editorSource.Contains(
+            "selectedRoleSplitGroup == RoleSplitGroup.DamageTank ? interaction : null",
+            StringComparison.Ordinal) &&
+        !editorSource.Contains(
+            "selectedRoleSplitGroup == RoleSplitGroup.Healer ? interaction : null",
+            StringComparison.Ordinal) &&
         editorSource.Contains("ActivateWindow(selectedKind)", StringComparison.Ordinal) &&
         editorSource.Contains("24 人本使用固定紧凑条", StringComparison.Ordinal) &&
         editorSource.Contains("profile.BackgroundOpacity", StringComparison.Ordinal) &&

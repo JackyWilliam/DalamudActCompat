@@ -31,6 +31,8 @@ public sealed class MeterStyleEditorWindow : Window
     private RoleSplitGroup selectedRoleSplitGroup;
     private string? selectedSlotId;
     private MeterPreviewInteraction? previewInteraction;
+    private MeterPreviewInteraction? roleSplitDamagePreviewInteraction;
+    private MeterPreviewInteraction? roleSplitHealerPreviewInteraction;
     private string? editingSnapshot;
     private bool closeActionHandled;
     private bool exitConfirmationRequested;
@@ -237,10 +239,7 @@ public sealed class MeterStyleEditorWindow : Window
             return;
         }
 
-        selectedRoleSplitGroup = (RoleSplitGroup)selectedIndex;
-        selectedSlotId = null;
-        EnsureSelectedSlot(CurrentSlots);
-        ResetPreviewInteraction();
+        SelectRoleSplitGroup((RoleSplitGroup)selectedIndex);
     }
 
     private bool DrawWindowControls(MeterWindowProfile profile)
@@ -369,14 +368,15 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.TextDisabled(KindDescription(selectedKind));
         ImGui.Separator();
         ImGui.TextWrapped(text.Get(
-            "点击预览中的表头或内容可选择槽位；按住后拖到另一项可交换顺序。",
-            "Click a header or value to select its slot; drag it onto another item to swap their order."));
+            "点击 D/T 或 H 预览会自动切换到对应分栏；点击表头或内容可选择槽位，按住后拖到另一项可交换顺序。",
+            "Click the D/T or H preview to switch panes automatically. Click a header or value to select its slot, then drag it onto another item to swap their order."));
         ImGui.Dummy(new Vector2(1, 4));
         var availableHeight = Math.Max(220, ImGui.GetContentRegionAvail().Y);
-        var interaction = previewInteraction ??= CreatePreviewInteraction(CurrentSlots);
         switch (selectedKind)
         {
             case MeterWindowKind.Horizontal:
+            {
+                var interaction = previewInteraction ??= CreatePreviewInteraction(CurrentSlots);
                 DrawRuntimePreviewFrame(
                     "horizontal-runtime-preview",
                     availableHeight,
@@ -386,30 +386,59 @@ public sealed class MeterStyleEditorWindow : Window
                         previewEncounter,
                         previewRows,
                         interaction));
-                break;
+                interaction.EndFrame();
+                return interaction.ConsumeChanged();
+            }
             case MeterWindowKind.RoleSplit:
+            {
+                var damageProfile = configuration.Meter.RoleSplitDamageWindow;
+                var healerProfile = configuration.Meter.RoleSplitHealerWindow;
+                var damageInteraction = roleSplitDamagePreviewInteraction ??=
+                    CreateRoleSplitPreviewInteraction(RoleSplitGroup.DamageTank);
+                var healerInteraction = roleSplitHealerPreviewInteraction ??=
+                    CreateRoleSplitPreviewInteraction(RoleSplitGroup.Healer);
                 var roleHeight = Math.Max(210, (availableHeight - 8) * 0.5f);
-                DrawRuntimePreviewFrame(
+                if (DrawRuntimePreviewFrame(
                     "role-damage-runtime-preview",
                     roleHeight,
-                    MeterWindow.ApplyBackgroundOpacity(Navy, profile.BackgroundOpacity),
-                    MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
+                    MeterWindow.ApplyBackgroundOpacity(Navy, damageProfile.BackgroundOpacity),
+                    MeterWindow.ApplyBackgroundOpacity(
+                        selectedRoleSplitGroup == RoleSplitGroup.DamageTank
+                            ? Gold
+                            : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.28f),
+                        damageProfile.BackgroundOpacity),
                     () => roleSplitDamageWindow.DrawEditorPreview(
                         previewEncounter,
                         previewRows,
-                        selectedRoleSplitGroup == RoleSplitGroup.DamageTank ? interaction : null));
+                        damageInteraction)))
+                {
+                    SelectRoleSplitGroup(RoleSplitGroup.DamageTank);
+                }
                 ImGui.Dummy(new Vector2(1, 8));
-                DrawRuntimePreviewFrame(
+                if (DrawRuntimePreviewFrame(
                     "role-healer-runtime-preview",
                     roleHeight,
-                    MeterWindow.ApplyBackgroundOpacity(Navy, profile.BackgroundOpacity),
-                    MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
+                    MeterWindow.ApplyBackgroundOpacity(Navy, healerProfile.BackgroundOpacity),
+                    MeterWindow.ApplyBackgroundOpacity(
+                        selectedRoleSplitGroup == RoleSplitGroup.Healer
+                            ? Gold
+                            : new Vector4(Gold.X, Gold.Y, Gold.Z, 0.28f),
+                        healerProfile.BackgroundOpacity),
                     () => roleSplitHealerWindow.DrawEditorPreview(
                         previewEncounter,
                         previewRows,
-                        selectedRoleSplitGroup == RoleSplitGroup.Healer ? interaction : null));
-                break;
+                        healerInteraction)))
+                {
+                    SelectRoleSplitGroup(RoleSplitGroup.Healer);
+                }
+                damageInteraction.EndFrame();
+                healerInteraction.EndFrame();
+                return damageInteraction.ConsumeChanged() |
+                       healerInteraction.ConsumeChanged();
+            }
             default:
+            {
+                var interaction = previewInteraction ??= CreatePreviewInteraction(CurrentSlots);
                 DrawRuntimePreviewFrame(
                     "classic-runtime-preview",
                     availableHeight,
@@ -419,13 +448,13 @@ public sealed class MeterStyleEditorWindow : Window
                         previewEncounter,
                         previewRows,
                         interaction));
-                break;
+                interaction.EndFrame();
+                return interaction.ConsumeChanged();
+            }
         }
-        interaction.EndFrame();
-        return interaction.ConsumeChanged();
     }
 
-    private static void DrawRuntimePreviewFrame(
+    private static bool DrawRuntimePreviewFrame(
         string id,
         float height,
         Vector4 background,
@@ -438,8 +467,11 @@ public sealed class MeterStyleEditorWindow : Window
         {
             draw();
         }
+        var clicked = ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows) &&
+                      ImGui.IsMouseClicked(ImGuiMouseButton.Left);
         ImGui.EndChild();
         ImGui.PopStyleColor(2);
+        return clicked;
     }
 
     private bool DrawEditorActions()
@@ -600,8 +632,40 @@ public sealed class MeterStyleEditorWindow : Window
             () => selectedSlotId,
             slotId => selectedSlotId = slotId);
 
+    private MeterPreviewInteraction CreateRoleSplitPreviewInteraction(RoleSplitGroup group)
+        => new(
+            RoleSplitProfile(group).Slots,
+            () => selectedRoleSplitGroup == group ? selectedSlotId : null,
+            slotId => SelectRoleSplitGroup(group, slotId));
+
     private void ResetPreviewInteraction()
-        => previewInteraction = CreatePreviewInteraction(CurrentSlots);
+    {
+        previewInteraction = CreatePreviewInteraction(CurrentSlots);
+        roleSplitDamagePreviewInteraction = CreateRoleSplitPreviewInteraction(RoleSplitGroup.DamageTank);
+        roleSplitHealerPreviewInteraction = CreateRoleSplitPreviewInteraction(RoleSplitGroup.Healer);
+    }
+
+    private MeterWindowProfile RoleSplitProfile(RoleSplitGroup group)
+        => group == RoleSplitGroup.Healer
+            ? configuration.Meter.RoleSplitHealerWindow
+            : configuration.Meter.RoleSplitDamageWindow;
+
+    private void SelectRoleSplitGroup(RoleSplitGroup group, string? slotId = null)
+    {
+        if (selectedRoleSplitGroup != group)
+        {
+            // A preview click must switch the property panels before selecting the
+            // clicked slot; otherwise H looks interactive while still editing D/T.
+            selectedRoleSplitGroup = group;
+            selectedSlotId = null;
+            EnsureSelectedSlot(RoleSplitProfile(group).Slots);
+        }
+
+        if (!string.IsNullOrWhiteSpace(slotId))
+        {
+            selectedSlotId = slotId;
+        }
+    }
 
     private static Encounter CreatePreviewEncounter()
     {
