@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.3.9.27",
+    [string] $ExpectedAssemblyVersion = "0.3.10.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -38,6 +38,11 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $pluginProject = Join-Path $projectRoot "src/DalamudActCompat"
 $outputPath = Join-Path $projectRoot $OutputDirectory
+$releaseTag = if ([string]::IsNullOrWhiteSpace($env:TAG_NAME)) {
+    "v$ExpectedAssemblyVersion"
+} else {
+    $env:TAG_NAME
+}
 
 function Get-ChildRelativePath {
     param(
@@ -117,6 +122,19 @@ function Assert-Utf16Text {
 }
 
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
+
+# Release discovery uses filename patterns, so stale packs from an earlier build could be
+# uploaded accidentally unless this run owns a clean set of generated artifacts.
+foreach ($pattern in @(
+    "DalamudActCompat.zip",
+    "DalamudActCompat-core.zip",
+    "host-*.zip",
+    "cactbot-*.zip",
+    "act-plugins-*.zip",
+    "resource-packs.json")) {
+    Get-ChildItem -LiteralPath $outputPath -Filter $pattern -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force
+}
 
 $zip = Get-ChildItem -Path $pluginProject -Recurse -Filter "DalamudActCompat.zip" |
     Where-Object { $_.FullName -match [Regex]::Escape($Configuration) } |
@@ -252,30 +270,6 @@ if ($RequireCompatibilityHost) {
     }
 
     Write-Host "Validated Compatibility Host: host/DalamudActCompat.Host.exe"
-
-    $pluginAssemblyPath = Join-Path $validationDir "DalamudActCompat.dll"
-    $pluginAssembly = [System.Reflection.Assembly]::LoadFile($pluginAssemblyPath)
-    $hostResources = @($pluginAssembly.GetManifestResourceNames() | Where-Object {
-        $_.StartsWith("DalamudActCompat.HostAssets.", [System.StringComparison]::Ordinal)
-    })
-    $requiredHostResources = @(
-        "DalamudActCompat.HostAssets.DalamudActCompat.Host.exe",
-        "DalamudActCompat.HostAssets.DalamudActCompat.Host.dll",
-        "DalamudActCompat.HostAssets.DalamudActCompat.Host.deps.json",
-        "DalamudActCompat.HostAssets.DalamudActCompat.Host.runtimeconfig.json",
-        "DalamudActCompat.HostAssets.DalamudActCompat.Protocol.dll",
-        "DalamudActCompat.HostAssets.Advanced Combat Tracker.dll",
-        "DalamudActCompat.HostAssets.FFXIV_ACT_Plugin.dll",
-        "DalamudActCompat.HostAssets.dnlib.dll",
-        "DalamudActCompat.HostAssets.Mono.Cecil.dll",
-        "DalamudActCompat.HostAssets.System.Speech.dll"
-    )
-    $missingHostResources = @($requiredHostResources | Where-Object { $_ -notin $hostResources })
-    if ($missingHostResources.Count -gt 0) {
-        throw "Plugin assembly is missing embedded Compatibility Host resources: $($missingHostResources -join ', ')"
-    }
-
-    Write-Host "Validated embedded Compatibility Host resources: $($requiredHostResources.Count)"
 
     $hostSpeechPath = Join-Path $validationDir "host/System.Speech.dll"
     $runtimeSpeechPath = Join-Path $validationDir "runtimes/win/lib/net10.0/System.Speech.dll"
@@ -447,6 +441,165 @@ Write-Host "Validated self-hosted ACT runtime files: $($requiredRuntimeFiles.Cou
 Write-Host "Validated bundled ACT plugin hashes: $(@($bundledPluginLock.plugins).Count)"
 Write-Host "Validated parser runtime versions: IINACT $ExpectedIinactVersion, OverlayPlugin Core $ExpectedOverlayPluginVersion, Unscrambler.XIV $ExpectedUnscramblerVersion, FFXIV_ACT_Plugin $ExpectedFfxivActPluginVersion, Machina $ExpectedMachinaVersion, Machina.FFXIV $ExpectedMachinaFfxivVersion"
 
-Write-Host "Collected plugin ZIP: $destination"
+function Get-DirectoryContentSha256 {
+    param([Parameter(Mandatory = $true)][string] $Directory)
+
+    $root = [IO.Path]::GetFullPath($Directory).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $aggregate = [Security.Cryptography.IncrementalHash]::CreateHash(
+        [Security.Cryptography.HashAlgorithmName]::SHA256)
+    try {
+        $files = Get-ChildItem -LiteralPath $root -Recurse -File |
+            Sort-Object { $_.FullName.ToUpperInvariant() }
+        foreach ($file in $files) {
+            $relative = $file.FullName.Substring($root.Length).Replace("\", "/")
+            $aggregate.AppendData([Text.Encoding]::UTF8.GetBytes($relative))
+            $aggregate.AppendData([byte[]] @(0))
+            $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+            [byte[]] $hashBytes = for ($index = 0; $index -lt $fileHash.Length; $index += 2) {
+                [Convert]::ToByte($fileHash.Substring($index, 2), 16)
+            }
+            $aggregate.AppendData($hashBytes)
+        }
+        return ([BitConverter]::ToString($aggregate.GetHashAndReset())).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $aggregate.Dispose()
+    }
+}
+
+function New-ResourcePack {
+    param(
+        [Parameter(Mandatory = $true)][string] $SourceDirectory,
+        [Parameter(Mandatory = $true)][string] $RootName,
+        [Parameter(Mandatory = $true)][string] $DestinationPath,
+        [Parameter(Mandatory = $true)][string] $StagingRoot
+    )
+
+    $packStage = Join-Path $StagingRoot ([Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $packStage | Out-Null
+    try {
+        Copy-Item -LiteralPath $SourceDirectory -Destination (Join-Path $packStage $RootName) -Recurse
+        $temporary = "$DestinationPath.tmp"
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+        [IO.Compression.ZipFile]::CreateFromDirectory(
+            $packStage,
+            $temporary,
+            [IO.Compression.CompressionLevel]::Optimal,
+            $false)
+        Move-Item -LiteralPath $temporary -Destination $DestinationPath -Force
+    } finally {
+        if (Test-Path -LiteralPath $packStage) {
+            Remove-Item -LiteralPath $packStage -Recurse -Force
+        }
+    }
+}
+
+function New-PackDescriptor {
+    param(
+        [Parameter(Mandatory = $true)][string] $Id,
+        [Parameter(Mandatory = $true)][string] $Version,
+        [Parameter(Mandatory = $true)][string] $FilePath,
+        [Parameter(Mandatory = $true)][string] $ContentDirectory,
+        [Parameter(Mandatory = $true)][string] $ContentSha256
+    )
+
+    $file = Get-Item -LiteralPath $FilePath
+    $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $FilePath).Hash.ToLowerInvariant()
+    $releaseUrl = "https://github.com/JackyWilliam/DalamudActCompat/releases/download/$releaseTag/$($file.Name)"
+    return [ordered] @{
+        id = $Id
+        version = $Version
+        fileName = $file.Name
+        size = $file.Length
+        sha256 = $sha
+        contentDirectory = $ContentDirectory
+        contentSha256 = $ContentSha256
+        urls = @(
+            $releaseUrl,
+            "https://gh-proxy.com/$releaseUrl"
+        )
+    }
+}
+
+$packStagingRoot = Join-Path $outputPath "pack-staging"
+if (Test-Path -LiteralPath $packStagingRoot) {
+    Remove-Item -LiteralPath $packStagingRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $packStagingRoot | Out-Null
+
+$hostSource = Join-Path $validationDir "host"
+$cactbotSource = Join-Path $validationDir "BundledCactbot"
+$pluginsSource = Join-Path $validationDir "BundledActPlugins"
+$hostContentHash = Get-DirectoryContentSha256 $hostSource
+$cactbotContentHash = Get-DirectoryContentSha256 $cactbotSource
+$pluginsContentHash = Get-DirectoryContentSha256 $pluginsSource
+
+$hostTemporaryPack = Join-Path $outputPath "host-pending.zip"
+New-ResourcePack $hostSource "host" $hostTemporaryPack $packStagingRoot
+$hostArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $hostTemporaryPack).Hash.ToLowerInvariant()
+$hostPack = Join-Path $outputPath "host-$hostArchiveHash.zip"
+Move-Item -LiteralPath $hostTemporaryPack -Destination $hostPack -Force
+
+$cactbotVersion = [string] $cactbotLock.version
+$cactbotPack = Join-Path $outputPath "cactbot-$cactbotVersion.zip"
+New-ResourcePack $cactbotSource "BundledCactbot" $cactbotPack $packStagingRoot
+
+$pluginsPack = Join-Path $outputPath "act-plugins-$ExpectedAssemblyVersion.zip"
+New-ResourcePack $pluginsSource "BundledActPlugins" $pluginsPack $packStagingRoot
+
+$packManifest = [ordered] @{
+    schemaVersion = 1
+    version = $ExpectedAssemblyVersion
+    packs = @(
+        (New-PackDescriptor "host" $ExpectedAssemblyVersion $hostPack "host" $hostContentHash),
+        (New-PackDescriptor "cactbot" $cactbotVersion $cactbotPack "BundledCactbot" $cactbotContentHash),
+        (New-PackDescriptor "act-plugins" $ExpectedAssemblyVersion $pluginsPack "BundledActPlugins" $pluginsContentHash)
+    )
+}
+$packManifestPath = Join-Path $outputPath "resource-packs.json"
+$packManifestJson = $packManifest | ConvertTo-Json -Depth 8
+[IO.File]::WriteAllText($packManifestPath, $packManifestJson, [Text.UTF8Encoding]::new($false))
+Copy-Item -LiteralPath $packManifestPath -Destination (Join-Path $validationDir "resource-packs.json") -Force
+
+$coreStaging = Join-Path $packStagingRoot "core"
+New-Item -ItemType Directory -Force -Path $coreStaging | Out-Null
+foreach ($item in Get-ChildItem -LiteralPath $validationDir) {
+    if ($item.Name -in @("host", "BundledCactbot", "BundledActPlugins")) {
+        continue
+    }
+    Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $coreStaging $item.Name) -Recurse
+}
+$corePack = Join-Path $outputPath "DalamudActCompat-core.zip"
+$coreTemporary = "$corePack.tmp"
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $coreStaging,
+    $coreTemporary,
+    [IO.Compression.CompressionLevel]::Optimal,
+    $false)
+Move-Item -LiteralPath $coreTemporary -Destination $corePack -Force
+
+foreach ($descriptor in $packManifest.packs) {
+    $packPath = Join-Path $outputPath $descriptor.fileName
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packPath).Hash.ToLowerInvariant()
+    if ((Get-Item -LiteralPath $packPath).Length -ne $descriptor.size -or
+        $actualHash -ne $descriptor.sha256) {
+        throw "Generated resource pack failed manifest verification: $($descriptor.id)"
+    }
+}
+if ((Get-Item -LiteralPath $corePack).Length -gt 32MB) {
+    throw "Core package exceeds the 32 MiB split-package budget."
+}
+
+# The full ZIP exists only as a validated staging artifact; release consumers receive the core.
+Remove-Item -LiteralPath $destination -Force
+Remove-Item -LiteralPath $packStagingRoot -Recurse -Force
+Remove-Item -LiteralPath $validationDir -Recurse -Force
+
+Write-Host "Collected core ZIP: $corePack"
+Write-Host "Collected resource packs: $([IO.Path]::GetFileName($hostPack)), $([IO.Path]::GetFileName($cactbotPack)), $([IO.Path]::GetFileName($pluginsPack))"
+Write-Host "Validated resource manifest: $packManifestPath"
 Write-Host "Validated AssemblyVersion: $($manifest.AssemblyVersion)"
 Write-Host "Validated DalamudApiLevel: $($manifest.DalamudApiLevel)"

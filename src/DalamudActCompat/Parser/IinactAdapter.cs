@@ -14,7 +14,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly PluginLogger logger;
     private readonly EncounterStateStore stateStore;
     private readonly EncounterService encounterService;
-    private readonly string logDirectory;
+    private readonly Func<string> getLogDirectory;
     private readonly IFramework framework;
     private readonly Func<uint> getTerritoryId;
     private readonly Func<bool> isBoundByDuty;
@@ -31,7 +31,6 @@ public sealed class IinactAdapter : IParserEngine
     private readonly DutyEncounterAccumulator dutySession = new();
     private readonly DutyEncounterFolderAccumulator dutyFolder = new();
     private readonly DutyWipeTracker dutyWipeTracker = new();
-    private readonly OpenWorldCombatResetTracker openWorldCombatResetTracker;
     private readonly HashSet<Guid> finalizedDutySegmentIds = [];
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
@@ -45,7 +44,7 @@ public sealed class IinactAdapter : IParserEngine
         PluginLogger logger,
         EncounterStateStore stateStore,
         EncounterService encounterService,
-        string logDirectory,
+        Func<string> getLogDirectory,
         IFramework framework,
         Func<uint> getTerritoryId,
         Func<bool> isBoundByDuty,
@@ -60,7 +59,7 @@ public sealed class IinactAdapter : IParserEngine
         this.logger = logger;
         this.stateStore = stateStore;
         this.encounterService = encounterService;
-        this.logDirectory = logDirectory;
+        this.getLogDirectory = getLogDirectory;
         this.framework = framework;
         this.getTerritoryId = getTerritoryId;
         this.isBoundByDuty = isBoundByDuty;
@@ -72,9 +71,6 @@ public sealed class IinactAdapter : IParserEngine
         this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
         frameworkGameState = CaptureFrameworkGameState();
         wasBoundByDuty = frameworkGameState.BoundByDuty;
-        openWorldCombatResetTracker = new OpenWorldCombatResetTracker(
-            wasBoundByDuty,
-            frameworkGameState.InCombat);
         dutyWipeTracker.Reset(frameworkGameState.DutyPartyWiped);
         // Subscribe only after the initial state exists so a concurrent ACT callback cannot
         // observe the default snapshot during construction.
@@ -125,7 +121,9 @@ public sealed class IinactAdapter : IParserEngine
             }
 
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            actRuntime.StartParser(logDirectory);
+            // Resolve on every start so a settings change can take effect through the existing
+            // restart path without rebuilding the parser adapter and all of its subscriptions.
+            actRuntime.StartParser(getLogDirectory());
 
             var runtimePlugins = customPlugins();
             LoadCustomPlugins(runtimePlugins.Where(MustLoadBeforeOverlay));
@@ -368,16 +366,10 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
+        // A finished pull remains visible until ACT publishes meaningful data for the next
+        // pull. Clearing here made every meter lose the result users were still reviewing.
+        stateStore.UpdateCurrent(encounter);
         encounterService.QueueFinishedEncounter(encounter);
-        if (gameState.InCombat)
-        {
-            stateStore.UpdateCurrent(encounter);
-            return;
-        }
-
-        // Open-world history is still saved, but a delayed ACT completion must not refill
-        // the live meter after the game has already reported that combat ended.
-        stateStore.ResetCurrent();
     }
 
     private void OnFrameworkUpdate(IFramework _)
@@ -390,7 +382,6 @@ public sealed class IinactAdapter : IParserEngine
 
         var boundByDuty = gameState.BoundByDuty;
         var inCombat = gameState.InCombat;
-        var resetOpenWorldMeter = openWorldCombatResetTracker.Observe(boundByDuty, inCombat);
         if (boundByDuty)
         {
             wasBoundByDuty = true;
@@ -412,12 +403,6 @@ public sealed class IinactAdapter : IParserEngine
             FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
         }
 
-        if (resetOpenWorldMeter)
-        {
-            // Runtime completion saves the encounter independently; the live meter should
-            // clear on the game-state edge instead of waiting for ACT's completion callback.
-            stateStore.ResetCurrent();
-        }
     }
 
     private FrameworkGameStateSnapshot CaptureFrameworkGameState()

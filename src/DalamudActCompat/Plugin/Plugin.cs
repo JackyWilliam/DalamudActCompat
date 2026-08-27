@@ -17,6 +17,7 @@ using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
+using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
@@ -26,6 +27,7 @@ using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
 using System.Threading.Channels;
 using NativeGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
+using NativeFramework = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework;
 
 namespace DalamudActCompat.Plugin;
 
@@ -42,10 +44,15 @@ public sealed class Plugin : IDalamudPlugin
         => boundByDuty && localPlayerUnconscious && !anyPartyMemberAlive;
 
     private readonly PluginServices services;
+    private readonly string clientLanguageName;
+    private readonly byte? nativeClientLanguageCode;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
+    private readonly ResourcePackManager resourcePackManager;
+    private readonly string packagedHostDirectory;
+    private readonly string bundledActPluginDirectory;
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
@@ -53,6 +60,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
+    private readonly HorizontalMeterWindow horizontalMeterWindow;
+    private readonly RoleSplitMeterWindow roleSplitDamageWindow;
+    private readonly RoleSplitMeterWindow roleSplitHealerWindow;
+    private readonly MeterStyleEditorWindow meterStyleEditorWindow;
+    private readonly SimplifiedHomeWindow simplifiedHomeWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterWindow encounterWindow;
@@ -121,6 +133,9 @@ public sealed class Plugin : IDalamudPlugin
     private Task? cactbotShutdownTask;
     private bool cactbotShutdownStarted;
     private int cactbotCancellationDisposed;
+    private DateTimeOffset nextForegroundCheckAt;
+    private bool htmlOverlaySuppressionApplied;
+    private SimplifiedWindowSnapshot? simplifiedWindowSnapshot;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -154,6 +169,10 @@ public sealed class Plugin : IDalamudPlugin
             condition,
             gameInteropProvider,
             notificationManager);
+        // Client language is fixed for this plugin lifetime. Capturing the primitive name
+        // keeps parser/FFLogs worker callbacks from reading a Dalamud service off-thread.
+        clientLanguageName = dataManager.Language.ToString();
+        nativeClientLanguageCode = ReadNativeClientLanguageCode(log);
         pictoActOverlay = new PictoActOverlayService(
             gameGui,
             sigScanner,
@@ -170,30 +189,66 @@ public sealed class Plugin : IDalamudPlugin
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious],
             partyList.Any(member => member.CurrentHP > 0));
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
-        var configurationMigrated = configuration.ApplyMigrations();
+        var configurationChanged = configuration.ApplyMigrations();
         configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
             configuration.Meter.SortMode);
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
-        if (string.IsNullOrWhiteSpace(configuration.LogDirectory))
+        paths.EnsureCreated();
+        var configuredLogDirectory = string.IsNullOrWhiteSpace(configuration.LogDirectory)
+            ? paths.CombatLogDirectory
+            : configuration.LogDirectory;
+        try
         {
-            configuration.LogDirectory = paths.CombatLogDirectory;
+            configuredLogDirectory = NormalizeCombatLogDirectory(configuredLogDirectory);
         }
-        if (configurationMigrated)
+        catch (Exception ex) when (IsCombatLogDirectoryException(ex))
+        {
+            logger.Warning(
+                $"Configured FFLogs upload log directory is invalid; using the default directory. {ex.Message}");
+            configuredLogDirectory = paths.CombatLogDirectory;
+        }
+        if (!string.Equals(configuration.LogDirectory, configuredLogDirectory, StringComparison.Ordinal))
+        {
+            configuration.LogDirectory = configuredLogDirectory;
+            configurationChanged = true;
+        }
+        if (configurationChanged)
         {
             pluginInterface.SavePluginConfig(configuration);
         }
 
+        var pluginAssemblyDirectory = pluginInterface.AssemblyLocation.Directory!.FullName;
+        resourcePackManager = new ResourcePackManager(
+            pluginAssemblyDirectory,
+            paths.ResourcePackCacheDirectory,
+            logger);
+        using (var resourceTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
+        {
+            bundledActPluginDirectory = resourcePackManager.ResolveDirectoryAsync(
+                    "act-plugins",
+                    BundledActPluginManager.DirectoryName,
+                    resourceTimeout.Token)
+                .GetAwaiter()
+                .GetResult();
+            packagedHostDirectory = resourcePackManager.ResolveDirectoryAsync(
+                    "host",
+                    "host",
+                    resourceTimeout.Token)
+                .GetAwaiter()
+                .GetResult();
+        }
+
         packageInstaller = new ActPluginPackageInstaller(paths);
         bundledPluginManager = new BundledActPluginManager(
-            pluginInterface.AssemblyLocation.Directory!.FullName,
+            bundledActPluginDirectory,
             typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown",
             packageInstaller,
-            configuration);
+            configuration,
+            directoryIsBundleRoot: true);
         bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
             paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
-        paths.EnsureCreated();
         var disabledUntrustedPlugin = false;
         foreach (var installed in packageInstaller.Discover(configuration.DisabledActPluginIds))
         {
@@ -213,7 +268,8 @@ public sealed class Plugin : IDalamudPlugin
         var hostIpcClient = new HostIpcClient(
             stateStore,
             logger,
-            BuildHostPermissionSnapshot);
+            BuildHostPermissionSnapshot,
+            GetHostGameContext);
         hostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
@@ -221,34 +277,39 @@ public sealed class Plugin : IDalamudPlugin
             hostIpcClient,
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1,
-            enableMemoryProtection: true);
+            enableMemoryProtection: true,
+            packagedHostDirectory: packagedHostDirectory);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
         var matchaIpcClient = new HostIpcClient(
             stateStore,
             logger,
-            BuildMatchaHostPermissionSnapshot);
+            BuildMatchaHostPermissionSnapshot,
+            GetHostGameContext);
         matchaHostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
             paths.ConfigDirectory,
             matchaIpcClient,
             logger,
-            matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1);
+            matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1,
+            packagedHostDirectory: packagedHostDirectory);
         matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
         var genericIpcClient = new HostIpcClient(
             stateStore,
             logger,
-            BuildGenericHostPermissionSnapshot);
+            BuildGenericHostPermissionSnapshot,
+            GetHostGameContext);
         genericHostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
             paths.ConfigDirectory,
             genericIpcClient,
-            logger);
+            logger,
+            packagedHostDirectory: packagedHostDirectory);
         genericHostSupervisor.MatchaTtsRequested += OnGenericTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
@@ -260,7 +321,8 @@ public sealed class Plugin : IDalamudPlugin
         fflogsEstimateService = new FflogsEstimateService(
             () => configuration.Fflogs,
             paths.FflogsCacheFile,
-            logger);
+            logger,
+            () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese);
         fflogsEstimateService.NotifyTerritoryChanged(
             clientState.TerritoryType,
             zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
@@ -268,6 +330,7 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface,
             log,
             dataManager,
+            () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese,
             // ACT publishes encounters from worker threads, so resolve the local name from the
             // immutable identity snapshot instead of reading IPlayerState in that callback.
             () => Volatile.Read(ref playerIdentitySnapshot)
@@ -316,7 +379,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             stateStore,
             encounterService,
-            paths.CombatLogDirectory,
+            ResolveCombatLogDirectory,
             framework,
             () => clientState.TerritoryType,
             () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
@@ -336,8 +399,6 @@ public sealed class Plugin : IDalamudPlugin
             "Assets");
         var logoTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-logo.jpg"));
-        var helpTexture = textureProvider.GetFromFile(
-            Path.Combine(assetDirectory, "HelpIcon.png"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
         var jobIcons = new JobIconTextureSet(
@@ -370,6 +431,44 @@ public sealed class Plugin : IDalamudPlugin
             zoneNameLocalizer.Localize,
             SaveConfiguration);
         meterWindow.IsOpen = configuration.Meter.IsVisible;
+        horizontalMeterWindow = new HorizontalMeterWindow(
+            meterService,
+            configuration,
+            text,
+            jobIcons,
+            SaveConfiguration)
+        {
+            IsOpen = configuration.Meter.IsVisible,
+        };
+        roleSplitDamageWindow = new RoleSplitMeterWindow(
+            meterService,
+            configuration,
+            text,
+            meterWindow,
+            SaveConfiguration,
+            RoleSplitGroup.DamageTank)
+        {
+            IsOpen = configuration.Meter.IsVisible,
+        };
+        roleSplitHealerWindow = new RoleSplitMeterWindow(
+            meterService,
+            configuration,
+            text,
+            meterWindow,
+            SaveConfiguration,
+            RoleSplitGroup.Healer)
+        {
+            IsOpen = configuration.Meter.IsVisible,
+        };
+        meterStyleEditorWindow = new MeterStyleEditorWindow(
+            configuration,
+            logoTexture,
+            meterWindow,
+            horizontalMeterWindow,
+            roleSplitDamageWindow,
+            roleSplitHealerWindow,
+            text,
+            SaveConfiguration);
         encounterWindow = new EncounterWindow(
             stateStore,
             paths,
@@ -409,6 +508,8 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
+            ResolveGameRegionSelection,
+            SetGameRegionMode,
             StartFactoryReset,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             SelectPluginPackage,
@@ -457,12 +558,16 @@ public sealed class Plugin : IDalamudPlugin
             combatQualitySnapshot,
             () => stateStore.GetSnapshot().Current,
             logoTexture,
-            helpTexture,
             () => helpWindow.IsOpen = true,
             SaveConfiguration,
             () => ApplyActPermissionChanges(),
+            ResolveGameRegionSelection,
+            SetGameRegionMode,
+            SetSimplifiedMode,
+            SetHideHtmlOverlaysWhenUnfocused,
             SetMeterVisible,
             OpenMeter,
+            meterStyleEditorWindow.Open,
             encounterWindow.OpenRecent,
             () => statusWindow.IsOpen,
             value => statusWindow.IsOpen = value,
@@ -478,6 +583,9 @@ public sealed class Plugin : IDalamudPlugin
             () => StartBundledPluginUpdateCheck(openWindow: true),
             OpenLogDirectory,
             OpenCombatLogDirectory,
+            ResolveCombatLogDirectory,
+            SelectCombatLogDirectory,
+            ResetCombatLogDirectory,
             BuildDiagnosticReport,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
@@ -503,7 +611,18 @@ public sealed class Plugin : IDalamudPlugin
         {
             IsOpen = true,
         };
+        simplifiedHomeWindow = new SimplifiedHomeWindow(
+            configuration,
+            logoTexture,
+            text,
+            SetMeterVisible,
+            () => SetSimplifiedMode(false));
         windowSystem.AddWindow(meterWindow);
+        windowSystem.AddWindow(horizontalMeterWindow);
+        windowSystem.AddWindow(roleSplitDamageWindow);
+        windowSystem.AddWindow(roleSplitHealerWindow);
+        windowSystem.AddWindow(meterStyleEditorWindow);
+        windowSystem.AddWindow(simplifiedHomeWindow);
         windowSystem.AddWindow(encounterWindow);
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(helpWindow);
@@ -513,17 +632,23 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(launcherWindow);
         thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
 
+        if (configuration.SimplifiedModeEnabled)
+        {
+            ApplySimplifiedWindowVisibility();
+        }
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Control Center. Args: on, off, meter, cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
+            HelpMessage = "Open Control Center. Args: on, off, meter, simple [on|off], cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
-        StartBundledCactbotInitialization(pluginInterface.AssemblyLocation.Directory!.FullName);
+        StartBundledCactbotInitialization();
         independentHostStartupTask = Task.Run(
             () => StartIndependentHostAsync(independentHostStartupCancellation.Token),
             CancellationToken.None);
@@ -595,7 +720,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
-        pictoActOverlay.Draw();
+        if (!configuration.SimplifiedModeEnabled)
+        {
+            pictoActOverlay.Draw();
+        }
         // The full-screen shield prevents clicks leaking into the game while an HTML overlay
         // is being positioned, but it must not sit above the controls used to finish editing.
         var hasVisibleManagementWindow = settingsWindow.IsOpen ||
@@ -604,7 +732,9 @@ public sealed class Plugin : IDalamudPlugin
                                          helpWindow.IsOpen ||
                                          launcherWindow.IsOpen ||
                                          thirdPartyPluginNoticeWindow.IsOpen ||
-                                         encounterWindow.IsOpen;
+                                         encounterWindow.IsOpen ||
+                                         simplifiedHomeWindow.IsOpen ||
+                                         meterStyleEditorWindow.IsOpen;
         OverlayEditShield.Draw(
             actRuntime.HasVisibleEditingOverlay,
             hasVisibleManagementWindow);
@@ -612,14 +742,35 @@ public sealed class Plugin : IDalamudPlugin
         fileDialogManager.Draw();
     }
 
-    private void OpenConfigUi() => settingsWindow.LocateAnimated();
+    private void OpenConfigUi()
+    {
+        if (configuration.SimplifiedModeEnabled)
+        {
+            simplifiedHomeWindow.LocateOnNextDraw();
+            return;
+        }
+
+        settingsWindow.LocateAnimated();
+    }
 
     private void OpenMainUi()
-        => settingsWindow.LocateAnimated();
+        => OpenConfigUi();
 
     private void OpenMeter()
     {
-        meterWindow.LocateOnNextDraw();
+        switch (configuration.Meter.ActiveWindowKind)
+        {
+            case MeterWindowKind.Horizontal:
+                horizontalMeterWindow.LocateOnNextDraw();
+                break;
+            case MeterWindowKind.RoleSplit:
+                roleSplitDamageWindow.LocateOnNextDraw();
+                roleSplitHealerWindow.LocateOnNextDraw();
+                break;
+            default:
+                meterWindow.LocateOnNextDraw();
+                break;
+        }
         SetMeterVisible(true);
     }
 
@@ -635,7 +786,111 @@ public sealed class Plugin : IDalamudPlugin
     {
         configuration.Meter.IsVisible = visible;
         meterWindow.IsOpen = visible;
+        horizontalMeterWindow.IsOpen = visible;
+        roleSplitDamageWindow.IsOpen = visible;
+        roleSplitHealerWindow.IsOpen = visible;
         SaveConfiguration();
+    }
+
+    private void SetHideHtmlOverlaysWhenUnfocused(bool enabled)
+    {
+        configuration.HideHtmlOverlaysWhenGameUnfocused = enabled;
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+        SaveConfiguration();
+    }
+
+    private void SetSimplifiedMode(bool enabled)
+    {
+        if (configuration.SimplifiedModeEnabled == enabled)
+        {
+            return;
+        }
+
+        configuration.SimplifiedModeEnabled = enabled;
+        if (enabled)
+        {
+            ApplySimplifiedWindowVisibility();
+            pictoActOverlay.Clear();
+            Volatile.Write(ref silverDasherEventsEnabled, 0);
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            StartBackgroundOperation(StopAllManagedHostsForSimplifiedModeAsync);
+        }
+        else
+        {
+            RestoreWindowsAfterSimplifiedMode();
+            StartBackgroundOperation(() => StartIndependentHostAsync(CancellationToken.None));
+        }
+
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+        SaveConfiguration();
+    }
+
+    private void ApplySimplifiedWindowVisibility()
+    {
+        simplifiedWindowSnapshot ??= new SimplifiedWindowSnapshot(
+            settingsWindow.IsOpen,
+            advancedSettingsWindow.IsOpen,
+            statusWindow.IsOpen,
+            helpWindow.IsOpen,
+            launcherWindow.IsOpen,
+            thirdPartyPluginNoticeWindow.IsOpen,
+            encounterWindow.IsOpen,
+            meterStyleEditorWindow.IsOpen);
+        settingsWindow.IsOpen = false;
+        advancedSettingsWindow.IsOpen = false;
+        statusWindow.IsOpen = false;
+        helpWindow.IsOpen = false;
+        launcherWindow.IsOpen = false;
+        thirdPartyPluginNoticeWindow.IsOpen = false;
+        encounterWindow.IsOpen = false;
+        meterStyleEditorWindow.IsOpen = false;
+        simplifiedHomeWindow.IsOpen = true;
+        meterWindow.IsOpen = configuration.Meter.IsVisible;
+        horizontalMeterWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitDamageWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitHealerWindow.IsOpen = configuration.Meter.IsVisible;
+    }
+
+    private void RestoreWindowsAfterSimplifiedMode()
+    {
+        simplifiedHomeWindow.IsOpen = false;
+        if (simplifiedWindowSnapshot is not { } snapshot)
+        {
+            launcherWindow.IsOpen = true;
+            return;
+        }
+
+        settingsWindow.IsOpen = snapshot.Settings;
+        advancedSettingsWindow.IsOpen = snapshot.AdvancedSettings;
+        statusWindow.IsOpen = snapshot.Status;
+        helpWindow.IsOpen = snapshot.Help;
+        launcherWindow.IsOpen = snapshot.Launcher;
+        thirdPartyPluginNoticeWindow.IsOpen = snapshot.ThirdPartyNotice;
+        encounterWindow.IsOpen = snapshot.EncounterHistory;
+        meterStyleEditorWindow.IsOpen = snapshot.MeterStyleEditor;
+        simplifiedWindowSnapshot = null;
+    }
+
+    private async Task StopAllManagedHostsForSimplifiedModeAsync()
+    {
+        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            logger.Information("Simplified mode stopped every DACT-managed ACT plugin host.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "Simplified mode could not stop every managed ACT plugin host cleanly.");
+        }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
     }
 
     private void OnCommand(string command, string arguments)
@@ -644,13 +899,29 @@ public sealed class Plugin : IDalamudPlugin
         var separator = trimmedArguments.IndexOf(' ');
         var verb = (separator < 0 ? trimmedArguments : trimmedArguments[..separator]).ToLowerInvariant();
         var remainder = separator < 0 ? string.Empty : trimmedArguments[(separator + 1)..].Trim();
+        if (configuration.SimplifiedModeEnabled &&
+            verb is not ("" or "on" or "simple" or "meter" or "clear"))
+        {
+            // Simplified mode is an operational boundary, not only a visual filter. Keeping
+            // non-meter commands inert prevents hidden tools from changing their desired state
+            // and unexpectedly reopening when the mode is disabled.
+            logger.Warning("Only meter, clear, and simple commands are available in simplified mode.");
+            return;
+        }
         switch (verb)
         {
             case "on":
-                settingsWindow.LocateAnimated();
+                OpenConfigUi();
                 break;
             case "":
-                settingsWindow.ToggleAnimated();
+                if (configuration.SimplifiedModeEnabled)
+                {
+                    simplifiedHomeWindow.LocateOnNextDraw();
+                }
+                else
+                {
+                    settingsWindow.ToggleAnimated();
+                }
                 break;
             case "off":
                 settingsWindow.HideAnimated();
@@ -677,6 +948,11 @@ public sealed class Plugin : IDalamudPlugin
                 OpenMeter();
                 break;
             case "host":
+                if (configuration.SimplifiedModeEnabled)
+                {
+                    logger.Warning("ACT plugin hosts stay stopped while simplified mode is enabled.");
+                    break;
+                }
                 StartBackgroundOperation(async () =>
                 {
                     try
@@ -719,6 +995,14 @@ public sealed class Plugin : IDalamudPlugin
             case "meter":
                 OpenMeter();
                 break;
+            case "simple":
+                SetSimplifiedMode(remainder.ToLowerInvariant() switch
+                {
+                    "on" => true,
+                    "off" => false,
+                    _ => !configuration.SimplifiedModeEnabled,
+                });
+                break;
             default:
                 // Unknown macros should show the authoritative command list instead of
                 // silently acting as `on`; this also makes the removed `settings` alias inert.
@@ -734,26 +1018,29 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void SaveConfiguration()
+        => _ = TrySaveConfiguration();
+
+    private bool TrySaveConfiguration()
     {
         try
         {
             services.PluginInterface.SavePluginConfig(configuration);
+            return true;
         }
         catch (Exception ex)
         {
             logger.Error(ex, "Failed to save plugin configuration.");
+            return false;
         }
     }
 
-    private void StartBundledCactbotInitialization(string pluginAssemblyDirectory)
+    private void StartBundledCactbotInitialization()
     {
         _ = StartCactbotOperation(
-            cancellationToken => EnsureBundledCactbotAsync(pluginAssemblyDirectory, cancellationToken));
+            EnsureBundledCactbotAsync);
     }
 
-    private async Task EnsureBundledCactbotAsync(
-        string pluginAssemblyDirectory,
-        CancellationToken cancellationToken)
+    private async Task EnsureBundledCactbotAsync(CancellationToken cancellationToken)
     {
         TrySetCactbotOperationStatus(CactbotOperationState.Checking);
         var gateAcquired = false;
@@ -761,9 +1048,15 @@ public sealed class Plugin : IDalamudPlugin
         {
             await cactbotFileOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             gateAcquired = true;
+            var bundledCactbotDirectory = await resourcePackManager.ResolveDirectoryAsync(
+                    "cactbot",
+                    BundledCactbotManager.DirectoryName,
+                    cancellationToken)
+                .ConfigureAwait(false);
             var bundledCactbotManager = new BundledCactbotManager(
-                pluginAssemblyDirectory,
-                cactbotInstaller);
+                bundledCactbotDirectory,
+                cactbotInstaller,
+                directoryIsBundleRoot: true);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(2));
             var installed = await bundledCactbotManager
@@ -1902,13 +2195,166 @@ public sealed class Plugin : IDalamudPlugin
 
     private string OpenCombatLogDirectory()
     {
-        Directory.CreateDirectory(paths.CombatLogDirectory);
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.CombatLogDirectory)
+        var directory = ResolveCombatLogDirectory();
+        Directory.CreateDirectory(directory);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory)
         {
             UseShellExecute = true,
         });
-        return paths.CombatLogDirectory;
+        return directory;
     }
+
+    private string ResolveCombatLogDirectory()
+        => string.IsNullOrWhiteSpace(configuration.LogDirectory)
+            ? paths.CombatLogDirectory
+            : configuration.LogDirectory;
+
+    private void SelectCombatLogDirectory(Action<bool, string> reportResult)
+    {
+        fileDialogManager.OpenFolderDialog(
+            text.Get("选择 FFLogs 上传日志目录", "Choose FFLogs upload log directory"),
+            (success, directory) =>
+            {
+                if (success && !string.IsNullOrWhiteSpace(directory))
+                {
+                    ApplyCombatLogDirectory(directory, reportResult);
+                }
+            });
+    }
+
+    private void ResetCombatLogDirectory(Action<bool, string> reportResult)
+        => ApplyCombatLogDirectory(paths.CombatLogDirectory, reportResult);
+
+    private void ApplyCombatLogDirectory(string requestedDirectory, Action<bool, string> reportResult)
+    {
+        if (!TryPrepareCombatLogDirectory(requestedDirectory, out var normalizedDirectory, out var error))
+        {
+            reportResult(
+                false,
+                $"{text.Get("目录不可用：", "Directory unavailable: ")}{error}");
+            return;
+        }
+
+        var previousDirectory = ResolveCombatLogDirectory();
+        var pathChanged = !string.Equals(
+            previousDirectory,
+            normalizedDirectory,
+            StringComparison.OrdinalIgnoreCase);
+        var parserWasFaulted = parserEngine.Status.State == ParserState.Faulted;
+        if (!pathChanged && !parserWasFaulted)
+        {
+            reportResult(true, text.Get("当前已经使用这个目录。", "This directory is already in use."));
+            return;
+        }
+
+        if (pathChanged)
+        {
+            configuration.LogDirectory = normalizedDirectory;
+            if (!TrySaveConfiguration())
+            {
+                configuration.LogDirectory = previousDirectory;
+                reportResult(
+                    false,
+                    text.Get("保存目录失败，仍使用原目录。", "Could not save the directory; the previous directory is still in use."));
+                return;
+            }
+
+            // Existing logs belong to the user and may still be needed for an upload, so a
+            // directory switch changes only future writes and never migrates or removes files.
+            logger.Information(
+                $"FFLogs upload log directory changed from '{previousDirectory}' to '{normalizedDirectory}'. " +
+                "Existing log files were left in place.");
+        }
+
+        var parserWasActive = parserEngine.Status.State is
+            ParserState.Running or
+            ParserState.Initializing or
+            ParserState.Faulted;
+        if (!parserWasActive)
+        {
+            reportResult(
+                true,
+                text.Get(
+                    "目录已保存，将在下次启动解析器时生效。",
+                    "Directory saved; it will take effect the next time the parser starts."));
+            return;
+        }
+
+        reportResult(
+            true,
+            text.Get("目录已保存，正在重启解析器。", "Directory saved; restarting the parser."));
+        StartBackgroundOperation(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
+                var status = parserEngine.Status;
+                reportResult(
+                    status.State == ParserState.Running,
+                    status.State == ParserState.Running
+                        ? text.Get("目录已更改，解析器已重启。", "Directory changed and the parser restarted.")
+                        : text.Get(
+                            "目录已保存，但解析器没有恢复；请查看上方状态。",
+                            "Directory saved, but the parser did not recover; check the status above."));
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Parser restart after changing the FFLogs upload log directory failed.");
+                reportResult(
+                    false,
+                    text.Get(
+                        "目录已保存，但解析器重启失败。",
+                        "Directory saved, but the parser restart failed."));
+            }
+        });
+    }
+
+    private static bool TryPrepareCombatLogDirectory(
+        string directory,
+        out string normalizedDirectory,
+        out string error)
+    {
+        normalizedDirectory = string.Empty;
+        error = string.Empty;
+        try
+        {
+            normalizedDirectory = NormalizeCombatLogDirectory(directory);
+            Directory.CreateDirectory(normalizedDirectory);
+            var probePath = Path.Combine(
+                normalizedDirectory,
+                $".dact-write-probe-{Guid.NewGuid():N}.tmp");
+            // Creating a delete-on-close probe verifies the exact permission needed by ACT
+            // without risking an existing user file or leaving test data in the log folder.
+            using var probe = new FileStream(
+                probePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1,
+                FileOptions.DeleteOnClose);
+            probe.WriteByte(0);
+            return true;
+        }
+        catch (Exception ex) when (IsCombatLogDirectoryException(ex))
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static string NormalizeCombatLogDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory.Trim()));
+    }
+
+    private static bool IsCombatLogDirectoryException(Exception exception)
+        => exception is ArgumentException or
+            NotSupportedException or
+            IOException or
+            UnauthorizedAccessException or
+            System.Security.SecurityException;
 
     private string BuildDiagnosticReport()
     {
@@ -2126,11 +2572,21 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StartIndependentHostAsync(CancellationToken cancellationToken)
     {
+        if (configuration.SimplifiedModeEnabled)
+        {
+            logger.Information("ACT plugin Host startup skipped because simplified mode is enabled.");
+            return;
+        }
+
         var lockAcquired = false;
         try
         {
             await hostTopologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             lockAcquired = true;
+            if (configuration.SimplifiedModeEnabled)
+            {
+                return;
+            }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
             await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
@@ -2679,6 +3135,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         finally
         {
+            resourcePackManager.Dispose();
             hostTopologyLock.Release();
         }
     }
@@ -2815,6 +3272,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdateForHost(IFramework _)
     {
         var now = DateTimeOffset.UtcNow;
+        UpdateHtmlOverlaySuppression(now);
         ApplyPendingPostNamazuHeading(now);
         // The shared Host carries timing-sensitive legacy actions, so ordinary pressure waits
         // for combat to end instead of interrupting Triggernometry or PostNamazu mid-pull.
@@ -3006,6 +3464,16 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)
     {
+        if (configuration.SimplifiedModeEnabled)
+        {
+            hostSupervisor.ReplyCommand(
+                invocation.CorrelationId,
+                false,
+                "disabled",
+                "ACT plugin commands are disabled in simplified mode.");
+            return;
+        }
+
         if (hostCommandQueue.Writer.TryWrite(invocation))
         {
             return;
@@ -3324,7 +3792,7 @@ public sealed class Plugin : IDalamudPlugin
             identities[identity.DisplayName] = identity;
         }
 
-        foreach (var member in EnumerateLocalPartyMembers(partyList))
+        foreach (var (member, partyGroup) in EnumeratePartyMembers(partyList))
         {
             var name = member.Name.TextValue;
             if (string.IsNullOrWhiteSpace(name))
@@ -3358,6 +3826,7 @@ public sealed class Plugin : IDalamudPlugin
                 PositionY = position.Y,
                 PositionZ = position.Z,
                 Rotation = rotations.GetValueOrDefault(member.EntityId),
+                PartyGroup = partyGroup,
             };
             identities[identity.DisplayName] = identity;
         }
@@ -3365,20 +3834,165 @@ public sealed class Plugin : IDalamudPlugin
         return identities.Values.ToArray();
     }
 
-    private static IEnumerable<Dalamud.Game.ClientState.Party.IPartyMember>
-        EnumerateLocalPartyMembers(IPartyList partyList)
+    private static IEnumerable<(Dalamud.Game.ClientState.Party.IPartyMember Member, int PartyGroup)>
+        EnumeratePartyMembers(IPartyList partyList)
     {
-        for (var index = 0; index < 8; index++)
+        var capacity = partyList.IsAlliance ? 24 : 8;
+        for (var index = 0; index < capacity; index++)
         {
-            // In alliance duties IPartyList's normal indexer switches to AllianceList.
-            // MainGroup remains the authoritative source for the local eight-player party.
-            var member = partyList.IsAlliance
-                ? partyList.CreatePartyMemberReference(partyList.GetPartyMemberAddress(index))
-                : partyList[index];
+            // Dalamud's alliance indexer is the only authoritative 24-player roster. Keeping
+            // its natural blocks of eight also gives the meter stable A/B/C grouping metadata.
+            var member = partyList[index];
             if (member is not null)
             {
-                yield return member;
+                yield return (member, partyList.IsAlliance ? (index / 8) + 1 : 0);
             }
         }
     }
+
+    private GameRegionSelection ResolveGameRegionSelection()
+        => GameRegionResolver.Resolve(
+            configuration.GameRegionMode,
+            clientLanguageName,
+            nativeClientLanguageCode);
+
+    private HostGameContext GetHostGameContext()
+        => ResolveGameRegionSelection().ToHostContext();
+
+    private void SetGameRegionMode(GameRegionMode mode)
+    {
+        if (configuration.GameRegionMode == mode)
+        {
+            return;
+        }
+
+        configuration.GameRegionMode = mode;
+        SaveConfiguration();
+        var selection = ResolveGameRegionSelection();
+        logger.Information(
+            $"Game region mode changed: mode={selection.Mode}, detected={selection.DetectedRegion}, " +
+            $"effective={selection.EffectiveRegion}, nativeLanguageCode={selection.NativeClientLanguageCode?.ToString() ?? "unknown"}, " +
+            $"language={selection.ClientLanguage}.");
+        StartBackgroundOperation(() => ApplyGameRegionChangeAsync(selection));
+    }
+
+    private async Task ApplyGameRegionChangeAsync(GameRegionSelection requestedSelection)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var parserWasActive = parserEngine.Status.State is
+            ParserState.Running or
+            ParserState.Initializing or
+            ParserState.Faulted;
+        if (parserWasActive)
+        {
+            await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
+        }
+
+        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            var sharedWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var matchaWasRunning = matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var genericWasRunning = genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+
+            // Host startup consumes region context during its handshake, so each active process
+            // must reconnect; changing the in-memory repository under loaded ACT plugins is unsafe.
+            if (genericWasRunning)
+            {
+                await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            if (matchaWasRunning)
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+            }
+            if (sharedWasRunning)
+            {
+                await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
+            }
+            if (matchaWasRunning && sharedWasRunning)
+            {
+                await StartMatchaAfterSharedHostAsync(timeout.Token, throwOnFailure: true)
+                    .ConfigureAwait(false);
+            }
+            if (genericWasRunning)
+            {
+                await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            hostTopologyLock.Release();
+        }
+
+        var appliedSelection = ResolveGameRegionSelection();
+        await services.Framework.RunOnFrameworkThread(() =>
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = text.Get("游戏区域已切换", "Game region changed"),
+                Content = text.Get(
+                    $"已切换为 {FormatGameRegion(appliedSelection.EffectiveRegion)}；解析器和正在运行的扩展 Host 已刷新。",
+                    $"Switched to {FormatGameRegion(appliedSelection.EffectiveRegion)}; the parser and active extension Hosts were refreshed."),
+            })).ConfigureAwait(false);
+
+        if (requestedSelection.Mode != configuration.GameRegionMode)
+        {
+            logger.Information(
+                "A newer game-region selection superseded this refresh; the latest selection will own the final restart.");
+        }
+    }
+
+    private string FormatGameRegion(HostGameRegion region)
+        => region == HostGameRegion.Chinese
+            ? text.Get("国服", "China")
+            : text.Get("国际服", "Global");
+
+    private static unsafe byte? ReadNativeClientLanguageCode(IPluginLog log)
+    {
+        try
+        {
+            var framework = NativeFramework.Instance();
+            return framework == null ? null : framework->ClientLanguage;
+        }
+        catch (Exception exception)
+        {
+            // A missing native address must not prevent startup; Auto visibly falls back
+            // to Global and the manual selector remains available.
+            log.Warning(exception, "The native FFXIV client region could not be read.");
+            return null;
+        }
+    }
+
+    private void UpdateHtmlOverlaySuppression(DateTimeOffset now, bool force = false)
+    {
+        if (!force && now < nextForegroundCheckAt)
+        {
+            return;
+        }
+
+        nextForegroundCheckAt = now.AddMilliseconds(100);
+        var focusSuppressed = configuration.HideHtmlOverlaysWhenGameUnfocused &&
+                              !GameForegroundDetector.IsCurrentProcessForeground();
+        var shouldSuppress = configuration.SimplifiedModeEnabled || focusSuppressed;
+        if (!force && shouldSuppress == htmlOverlaySuppressionApplied)
+        {
+            return;
+        }
+
+        htmlOverlaySuppressionApplied = shouldSuppress;
+        actRuntime.SetHtmlOverlaysSuppressed(shouldSuppress);
+    }
+
+    private sealed record SimplifiedWindowSnapshot(
+        bool Settings,
+        bool AdvancedSettings,
+        bool Status,
+        bool Help,
+        bool Launcher,
+        bool ThirdPartyNotice,
+        bool EncounterHistory,
+        bool MeterStyleEditor);
 }

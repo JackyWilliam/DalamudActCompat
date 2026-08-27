@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.9.27",
+    "AssemblyVersion":  "0.3.10.0",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.27/DalamudActCompat.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.0/DalamudActCompat-core.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.9.27/DalamudActCompat.zip",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.0/DalamudActCompat-core.zip",
     "LastUpdate":  1787385600000,
-    "Changelog":  "v0.3.9.27 修复重复或无效实体 ID 导致共享 Host 崩溃，并保留 TTS 时序与实时实体增量改进。",
+    "Changelog":  "v0.3.10.0 新增 24 人战斗统计、三套预设与横版自定义编辑器、精简模式、失焦隐藏网页悬浮窗，并实装按需资源分包。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

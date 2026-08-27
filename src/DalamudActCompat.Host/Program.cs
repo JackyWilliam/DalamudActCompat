@@ -181,7 +181,13 @@ internal static class Program
                                 "game-bridge",
                                 StringComparison.OrdinalIgnoreCase))
                         {
+                            // Keep the established process registration entry point intact for
+                            // extensions that discover it by reflection; region is additive.
                             HostPluginBridge.ConfigureGameProcess(hello.ProcessId);
+                            if (hello.GameContext is not null)
+                            {
+                                HostPluginBridge.ConfigureGameContext(hello.GameContext);
+                            }
                         }
 
                         await EnqueueControlAsync(

@@ -78,7 +78,14 @@ public sealed class MeterService
                 hitRates.CriticalHitPercent,
                 hitRates.DirectHitPercent,
                 hitRates.CriticalDirectHitPercent,
-                combatant.Deaths);
+                combatant.Deaths,
+                HighestDamageAction: combatant.HighestDamageAction,
+                HighestDamage: combatant.HighestDamage,
+                PartyGroup: combatant.PartyGroup,
+                PersonalDps: ResolvePersonalDps(combatant, damageDuration),
+                Rdps: ResolveRdps(combatant, damageDuration),
+                EncDps: ResolveEncounterDps(combatant, healingDuration),
+                ExtDps: ResolveExternalDps(combatant, healingDuration));
         });
 
         var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
@@ -88,7 +95,7 @@ public sealed class MeterService
                 .ThenByDescending(static row => row.Hps),
             _ => rows
                 .OrderBy(static row => IsLimitBreak(row.Id, row.Name))
-                .ThenByDescending(static row => row.Dps),
+                .ThenByDescending(static row => row.PersonalDps),
         };
 
         var playerRank = 0;
@@ -123,6 +130,26 @@ public sealed class MeterService
             DpsMetric.EncDps when combatant.EncDps > 0 => combatant.EncDps,
             _ => combatant.TotalDamage / encounterDuration,
         };
+
+    private static double ResolvePersonalDps(Combatant combatant, double encounterDuration)
+        => combatant.Dps > 0
+            ? combatant.Dps
+            : combatant.TotalDamage / encounterDuration;
+
+    private static double ResolveRdps(Combatant combatant, double encounterDuration)
+        => combatant.Rdps > 0
+            ? combatant.Rdps
+            : ResolvePersonalDps(combatant, encounterDuration);
+
+    private static double ResolveEncounterDps(Combatant combatant, double encounterDuration)
+        => combatant.EncDps > 0
+            ? combatant.EncDps
+            : combatant.TotalDamage / encounterDuration;
+
+    private static double ResolveExternalDps(Combatant combatant, double encounterDuration)
+        => combatant.ExtDps > 0
+            ? combatant.ExtDps
+            : ResolveEncounterDps(combatant, encounterDuration);
 
     internal static double? CalculateHitRate(int matchingHits, int damageHits)
         => damageHits > 0
@@ -169,4 +196,11 @@ public sealed record CombatantRow(
     double? DirectHitPercent,
     double? CriticalDirectHitPercent,
     int Deaths,
-    int? Rank = null);
+    int? Rank = null,
+    string HighestDamageAction = "",
+    long HighestDamage = 0,
+    int PartyGroup = 0,
+    double PersonalDps = 0,
+    double Rdps = 0,
+    double EncDps = 0,
+    double ExtDps = 0);

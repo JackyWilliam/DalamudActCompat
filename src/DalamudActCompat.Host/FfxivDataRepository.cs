@@ -16,6 +16,10 @@ internal sealed class FfxivDataRepository : IDataRepository
     private DateTimeOffset lastEntityUpdateTimestamp = DateTimeOffset.MinValue;
     private ReadOnlyCollection<Combatant> combatants =
         Array.AsReadOnly(Array.Empty<Combatant>());
+    // A legacy core does not send HostGameContext. Preserve its historical CN contract
+    // until a protocol-v7 handshake explicitly selects another region and language.
+    private Language selectedLanguage = Language.Chinese;
+    private byte gameRegion = (byte)HostGameRegion.Chinese;
     private int gameProcessId;
     private Process? gameProcess;
 
@@ -36,6 +40,24 @@ internal sealed class FfxivDataRepository : IDataRepository
             gameProcess?.Dispose();
             gameProcess = null;
             gameProcessId = processId;
+        }
+    }
+
+    public void SetGameContext(HostGameContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        lock (syncRoot)
+        {
+            selectedLanguage = context.Language switch
+            {
+                HostClientLanguage.Japanese => Language.Japanese,
+                HostClientLanguage.German => Language.German,
+                HostClientLanguage.French => Language.French,
+                HostClientLanguage.Chinese => Language.Chinese,
+                HostClientLanguage.Korean => Language.Korean,
+                _ => Language.English,
+            };
+            gameRegion = (byte)context.Region;
         }
     }
 
@@ -99,7 +121,13 @@ internal sealed class FfxivDataRepository : IDataRepository
         }
     }
 
-    public Language GetSelectedLanguageID() => Language.Chinese;
+    public Language GetSelectedLanguageID()
+    {
+        lock (syncRoot)
+        {
+            return selectedLanguage;
+        }
+    }
 
     public Process GetCurrentFFXIVProcess()
     {
@@ -213,7 +241,13 @@ internal sealed class FfxivDataRepository : IDataRepository
 
     public string[] GetAntiVirusNames() => [];
 
-    public byte GetGameRegion() => 2;
+    public byte GetGameRegion()
+    {
+        lock (syncRoot)
+        {
+            return gameRegion;
+        }
+    }
 
     private static ReadOnlyCollection<Combatant> MapCombatants(
         IEnumerable<HostFfxivCombatant> sources,

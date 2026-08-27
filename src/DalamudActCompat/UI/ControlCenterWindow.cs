@@ -41,6 +41,8 @@ public sealed class ControlCenterWindow : Window
         Url,
     }
 
+    private sealed record CombatLogDirectoryFeedback(string Message, bool IsError);
+
     private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
@@ -66,12 +68,16 @@ public sealed class ControlCenterWindow : Window
     private readonly CombatQualitySnapshot? combatQualitySnapshot;
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
-    private readonly ISharedImmediateTexture helpTexture;
     private readonly Action openHelp;
     private readonly Action saveConfiguration;
     private readonly Action applyPermissionChanges;
+    private readonly Func<GameRegionSelection> getGameRegionSelection;
+    private readonly Action<GameRegionMode> setGameRegionMode;
+    private readonly Action<bool> setSimplifiedMode;
+    private readonly Action<bool> setHideHtmlOverlaysWhenUnfocused;
     private readonly Action<bool> setMeterVisible;
     private readonly Action openMeter;
+    private readonly Action openMeterStyleEditor;
     private readonly Action openHistory;
     private readonly Func<bool> isStatusVisible;
     private readonly Action<bool> setStatusVisible;
@@ -87,6 +93,9 @@ public sealed class ControlCenterWindow : Window
     private readonly Action checkBundledPluginUpdates;
     private readonly Action openLogDirectory;
     private readonly Func<string> openCombatLogDirectory;
+    private readonly Func<string> getCombatLogDirectory;
+    private readonly Action<Action<bool, string>> selectCombatLogDirectory;
+    private readonly Action<Action<bool, string>> resetCombatLogDirectory;
     private readonly Func<string> buildDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
@@ -119,6 +128,9 @@ public sealed class ControlCenterWindow : Window
     private bool diagnosticCopyFeedbackIsError;
     private string? combatLogFolderFeedback;
     private bool combatLogFolderFeedbackIsError;
+    // Parser restart finishes off the draw thread, so replace one immutable snapshot to keep
+    // the result text and its success/error color from being observed out of sync.
+    private CombatLogDirectoryFeedback? combatLogDirectoryChangeFeedback;
     private VisibilityTransition visibilityTransition = VisibilityTransition.Closed;
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
@@ -143,12 +155,16 @@ public sealed class ControlCenterWindow : Window
         CombatQualitySnapshot? combatQualitySnapshot,
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
-        ISharedImmediateTexture helpTexture,
         Action openHelp,
         Action saveConfiguration,
         Action applyPermissionChanges,
+        Func<GameRegionSelection> getGameRegionSelection,
+        Action<GameRegionMode> setGameRegionMode,
+        Action<bool> setSimplifiedMode,
+        Action<bool> setHideHtmlOverlaysWhenUnfocused,
         Action<bool> setMeterVisible,
         Action openMeter,
+        Action openMeterStyleEditor,
         Action openHistory,
         Func<bool> isStatusVisible,
         Action<bool> setStatusVisible,
@@ -164,6 +180,9 @@ public sealed class ControlCenterWindow : Window
         Action checkBundledPluginUpdates,
         Action openLogDirectory,
         Func<string> openCombatLogDirectory,
+        Func<string> getCombatLogDirectory,
+        Action<Action<bool, string>> selectCombatLogDirectory,
+        Action<Action<bool, string>> resetCombatLogDirectory,
         Func<string> buildDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
@@ -189,12 +208,16 @@ public sealed class ControlCenterWindow : Window
         this.combatQualitySnapshot = combatQualitySnapshot;
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
-        this.helpTexture = helpTexture;
         this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
         this.applyPermissionChanges = applyPermissionChanges;
+        this.getGameRegionSelection = getGameRegionSelection;
+        this.setGameRegionMode = setGameRegionMode;
+        this.setSimplifiedMode = setSimplifiedMode;
+        this.setHideHtmlOverlaysWhenUnfocused = setHideHtmlOverlaysWhenUnfocused;
         this.setMeterVisible = setMeterVisible;
         this.openMeter = openMeter;
+        this.openMeterStyleEditor = openMeterStyleEditor;
         this.openHistory = openHistory;
         this.isStatusVisible = isStatusVisible;
         this.setStatusVisible = setStatusVisible;
@@ -210,6 +233,9 @@ public sealed class ControlCenterWindow : Window
         this.checkBundledPluginUpdates = checkBundledPluginUpdates;
         this.openLogDirectory = openLogDirectory;
         this.openCombatLogDirectory = openCombatLogDirectory;
+        this.getCombatLogDirectory = getCombatLogDirectory;
+        this.selectCombatLogDirectory = selectCombatLogDirectory;
+        this.resetCombatLogDirectory = resetCombatLogDirectory;
         this.buildDiagnosticReport = buildDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
@@ -427,7 +453,9 @@ public sealed class ControlCenterWindow : Window
                 stateLabel,
                 stateColor,
                 VersionLabel,
-                "control-center"))
+                "control-center",
+                helpAction: openHelp,
+                helpTooltip: text.Get("帮助", "Help")))
         {
             HideAnimated();
         }
@@ -557,10 +585,14 @@ public sealed class ControlCenterWindow : Window
         var generalHint = text.Get(
             "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
             "Quick button: left settings, right Combat Meter, hold middle mouse to move.");
+        var regionHint = text.Get(
+            "无法读取游戏区域，暂按国际服处理 · 可手动选择 · 语言：简体中文",
+            "Game region unavailable; using Global · Manual selection is available · Language: Simplified Chinese");
         var generalCardHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             ImGui.GetTextLineHeightWithSpacing() +
-            (ImGui.GetFrameHeightWithSpacing() * 3) +
+            (ImGui.GetFrameHeightWithSpacing() * 6) +
+            ImGui.CalcTextSize(regionHint, false, cardContentWidth).Y +
             ImGui.CalcTextSize(generalHint, false, cardContentWidth).Y +
             (ImGui.GetStyle().ItemSpacing.Y * 2);
         if (BrandedWindowChrome.BeginGoldCard(
@@ -577,6 +609,28 @@ public sealed class ControlCenterWindow : Window
                 text.Get("自动启动解析器", "Auto start parser"),
                 configuration.AutoStartParser,
                 value => configuration.AutoStartParser = value);
+            GameRegionSelector.Draw(
+                text,
+                getGameRegionSelection(),
+                setGameRegionMode);
+            var simplifiedMode = configuration.SimplifiedModeEnabled;
+            if (ImGui.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
+            {
+                setSimplifiedMode(simplifiedMode);
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "只保留解析和战斗统计；网页悬浮窗、扩展插件及其他 DACT 窗口会暂时关闭。可用 /actcompat simple off 退出。",
+                    "Keeps only parsing and the combat meter. Web overlays, extensions, and other DACT windows are temporarily closed. Use /actcompat simple off to exit."));
+            }
+            var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
+            if (ImGui.Checkbox(
+                    text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
+                    ref hideWhenUnfocused))
+            {
+                setHideHtmlOverlaysWhenUnfocused(hideWhenUnfocused);
+            }
             changed |= Checkbox(
                 text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
                 configuration.ShowLauncherButton,
@@ -585,50 +639,7 @@ public sealed class ControlCenterWindow : Window
         }
         BrandedWindowChrome.EndGoldCard();
 
-        ImGui.Spacing();
-        DrawHelpEntry();
         return changed;
-    }
-
-    private void DrawHelpEntry()
-    {
-        var label = text.Get("需要更多帮助吗？", "Need more help?");
-        var labelSize = ImGui.CalcTextSize(label);
-        var wrap = helpTexture.GetWrapOrEmpty();
-        var hasIcon = wrap.Handle.Handle != 0 && wrap.Width > 0 && wrap.Height > 0;
-        var iconHeight = ImGui.GetTextLineHeight();
-        var iconWidth = hasIcon
-            ? iconHeight * wrap.Width / wrap.Height
-            : 0;
-        var iconSpacing = hasIcon ? 8 : 0;
-        var entrySize = new Vector2(
-            iconWidth + iconSpacing + labelSize.X,
-            Math.Max(iconHeight, labelSize.Y));
-        if (ImGui.InvisibleButton(
-                "overview-help-entry",
-                entrySize))
-        {
-            openHelp();
-        }
-
-        var itemMin = ImGui.GetItemRectMin();
-        var hovered = ImGui.IsItemHovered();
-        var drawList = ImGui.GetWindowDrawList();
-        if (hasIcon)
-        {
-            var iconTop = itemMin.Y + ((entrySize.Y - iconHeight) * 0.5f);
-            drawList.AddImage(
-                wrap.Handle,
-                new Vector2(itemMin.X, iconTop),
-                new Vector2(itemMin.X + iconWidth, iconTop + iconHeight));
-        }
-
-        drawList.AddText(
-            new Vector2(
-                itemMin.X + iconWidth + iconSpacing,
-                itemMin.Y + ((entrySize.Y - labelSize.Y) * 0.5f)),
-            ImGui.GetColorU32(hovered ? IceBlue : new Vector4(0.82f, 0.86f, 0.92f, 1)),
-            label);
     }
 
     private void OpenCombatLogDirectoryForUpload()
@@ -671,152 +682,63 @@ public sealed class ControlCenterWindow : Window
             openMeter();
         }
 
-        changed |= Checkbox(text.Get("锁定窗口", "Lock window"), configuration.Meter.IsLocked, value => configuration.Meter.IsLocked = value);
+        ImGui.TextColored(IceBlue, text.Get("榜单模板", "Meter template"));
+        var activeKind = configuration.Meter.ActiveWindowKind;
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.BeginCombo("##meter-template", MeterKindLabel(activeKind)))
+        {
+            foreach (var kind in Enum.GetValues<MeterWindowKind>())
+            {
+                if (ImGui.Selectable(MeterKindLabel(kind), kind == activeKind))
+                {
+                    configuration.Meter.ActivateWindow(kind);
+                    changed = true;
+                }
+            }
+            ImGui.EndCombo();
+        }
         ImGui.SameLine();
-        changed |= Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), configuration.Meter.ClickThroughWhenLocked, value => configuration.Meter.ClickThroughWhenLocked = value);
-        changed |= Checkbox(text.Get("脱战自动隐藏", "Auto hide out of combat"), configuration.Meter.AutoHideOutOfCombat, value => configuration.Meter.AutoHideOutOfCombat = value);
-        changed |= SliderFloat(text.Get("背景透明度", "Background opacity"), configuration.Meter.BackgroundOpacity, 0, 1, value => configuration.Meter.BackgroundOpacity = value);
-        changed |= SliderFloat(text.Get("字体缩放", "Font scale"), configuration.Meter.FontScale, 0.75f, 1.8f, value => configuration.Meter.FontScale = value);
+        if (ImGui.Button(text.Get("自定义", "Customize")))
+        {
+            openMeterStyleEditor();
+        }
+        ImGui.TextDisabled(text.Get(
+            "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
+            "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots."));
+
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+        if (ImGui.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
+        {
+            resetEncounterConfirmationExpiresAt =
+                Environment.TickCount64 + ResetConfirmationMilliseconds;
+            ImGui.OpenPopup(ResetEncounterPopupId);
+        }
+        ImGui.PopStyleColor(3);
+        DrawResetEncounterConfirmation();
 
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
-        if (ImGui.SliderInt(text.Get("刷新间隔（毫秒）", "Refresh interval (ms)"), ref refreshInterval, 250, 2000))
+        if (ImGui.SliderInt(
+                text.Get("刷新间隔（毫秒）", "Refresh interval (ms)"),
+                ref refreshInterval,
+                250,
+                2000))
         {
             configuration.Meter.RefreshIntervalMs = refreshInterval;
             changed = true;
         }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        var meterDisplayDescription = text.Get(
-            "每名玩家固定一行；排序方式与实际显示列可以分别选择。",
-            "Each player uses one row; sorting and visible columns can be selected independently.");
-        var meterDisplayHint = text.Get(
-            "FFLogs 列仅在在线预估已开启且下方勾选时显示；其他列可自由组合。",
-            "The FFLogs column appears only when online estimates are enabled and selected below; other columns can be combined freely.");
-        var meterDisplayHeight =
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            (ImGui.GetFrameHeightWithSpacing() * 12) +
-            (ImGui.GetTextLineHeightWithSpacing() * 4) +
-            (ImGui.GetStyle().ItemSpacing.Y * 3);
-        if (ImGui.BeginChild(
-                "meter-display-controls",
-                new Vector2(-1, meterDisplayHeight),
-                true,
-                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
-        {
-            ImGui.TextColored(IceBlue, text.Get("战斗统计显示", "Combat Meter display"));
-            ImGui.TextDisabled(meterDisplayDescription);
-
-            var sortMode = MeterSortModeOptions.Normalize(configuration.Meter.SortMode);
-            if (ImGui.BeginCombo(
-                    text.Get("排序 / 主要数据", "Sort / primary metric"),
-                    sortMode == MeterSortMode.Hps ? "HPS" : "DPS"))
-            {
-                foreach (var mode in MeterSortModeOptions.Supported)
-                {
-                    if (ImGui.Selectable(
-                            mode == MeterSortMode.Hps ? "HPS" : "DPS",
-                            mode == sortMode))
-                    {
-                        configuration.Meter.SortMode = mode;
-                        changed = true;
-                    }
-                }
-                ImGui.EndCombo();
-            }
-
-            var dpsMetric = configuration.Meter.DpsMetric;
-            if (ImGui.BeginCombo(text.Get("DPS 口径", "DPS metric"), DpsMetricLabel(dpsMetric)))
-            {
-                foreach (var metric in Enum.GetValues<DpsMetric>())
-                {
-                    if (ImGui.Selectable(DpsMetricLabel(metric), metric == dpsMetric))
-                    {
-                        configuration.Meter.DpsMetric = metric;
-                        changed = true;
-                    }
-                }
-                ImGui.EndCombo();
-            }
-            if (configuration.Meter.DpsMetric == DpsMetric.Rdps)
-            {
-                ImGui.TextDisabled(text.Get(
-                    "rDPS（预估）：基于本地战斗事件与团队增益归因实时估算的团队贡献伤害。结果仅供参考，可能因游戏版本、战斗事件状态及统计口径产生少量差异。",
-                    "rDPS (estimated): real-time raid-contribution damage estimated from local combat events and party buffs. Results are informational and may vary slightly with game versions, event state, and statistical conventions."));
-            }
-
-            changed |= Checkbox(text.Get("战斗标题", "Encounter header"), configuration.Meter.ShowHeader, value => configuration.Meter.ShowHeader = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("职业", "Job"), configuration.Meter.ShowJob, value => configuration.Meter.ShowJob = value);
-            changed |= Checkbox(
-                text.Get("收起（只显示自己）", "Collapsed (self only)"),
-                configuration.Meter.CompactMode,
-                value => configuration.Meter.CompactMode = value);
-            ImGui.TextUnformatted(text.Get("显示列", "Visible columns"));
-            changed |= Checkbox("FFLogs", configuration.Meter.ShowFflogs, value => configuration.Meter.ShowFflogs = value);
-            ImGui.SameLine();
-            changed |= Checkbox("DPS", configuration.Meter.ShowDps, value => configuration.Meter.ShowDps = value);
-            ImGui.SameLine();
-            changed |= Checkbox("HPS", configuration.Meter.ShowHps, value => configuration.Meter.ShowHps = value);
-            changed |= Checkbox(text.Get("暴击 %", "CRIT %"), configuration.Meter.ShowCriticalHitRate, value => configuration.Meter.ShowCriticalHitRate = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("直击 %", "DH %"), configuration.Meter.ShowDirectHitRate, value => configuration.Meter.ShowDirectHitRate = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("直暴 %", "CDH %"), configuration.Meter.ShowCriticalDirectHitRate, value => configuration.Meter.ShowCriticalDirectHitRate = value);
-            changed |= Checkbox(text.Get("伤害占比 %", "Damage %"), configuration.Meter.ShowDamagePercent, value => configuration.Meter.ShowDamagePercent = value);
-            ImGui.SameLine();
-            changed |= Checkbox(text.Get("死亡", "Deaths"), configuration.Meter.ShowDeaths, value => configuration.Meter.ShowDeaths = value);
-            if (configuration.Meter.ShowJob)
-            {
-                var jobStyle = configuration.Meter.JobDisplayStyle;
-                ImGui.SetNextItemWidth(190);
-                if (ImGui.BeginCombo(
-                        text.Get("职业显示方式", "Job display"),
-                        JobDisplayFormatter.Label(jobStyle, text)))
-                {
-                    foreach (var style in Enum.GetValues<JobDisplayStyle>())
-                    {
-                        if (ImGui.Selectable(
-                                JobDisplayFormatter.Label(style, text),
-                                style == jobStyle))
-                        {
-                            configuration.Meter.JobDisplayStyle = style;
-                            changed = true;
-                        }
-                    }
-                    ImGui.EndCombo();
-                }
-            }
-
-            var localPlayerColor = configuration.Meter.LocalPlayerColor;
-            if (ImGui.ColorEdit4(text.Get("自己的高亮颜色", "Your highlight color"), ref localPlayerColor))
-            {
-                configuration.Meter.LocalPlayerColor = localPlayerColor;
-                changed = true;
-            }
-
-            ImGui.TextDisabled(meterDisplayHint);
-
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
-            if (ImGui.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
-            {
-                resetEncounterConfirmationExpiresAt =
-                    Environment.TickCount64 + ResetConfirmationMilliseconds;
-                ImGui.OpenPopup(ResetEncounterPopupId);
-            }
-            ImGui.PopStyleColor(3);
-        }
-        ImGui.EndChild();
-        DrawResetEncounterConfirmation();
-
         changed |= DrawPlayerIdentityControls();
         changed |= DrawFflogsSettings();
-
         return changed;
     }
+
+    private string MeterKindLabel(MeterWindowKind kind) => kind switch
+    {
+        MeterWindowKind.Horizontal => text.Get("横版", "Horizontal"),
+        MeterWindowKind.RoleSplit => text.Get("职能分栏", "Role split"),
+        _ => text.Get("经典榜", "Classic"),
+    };
 
     private void DrawResetEncounterConfirmation()
     {
@@ -883,6 +805,19 @@ public sealed class ControlCenterWindow : Window
                 "Cactbot uses installed local pages and is managed here; other web overlays can still be created separately."));
 
         var changed = false;
+        var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
+        if (ImGui.Checkbox(
+                text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
+                ref hideWhenUnfocused))
+        {
+            setHideHtmlOverlaysWhenUnfocused(hideWhenUnfocused);
+        }
+        ImGui.TextDisabled(text.Get(
+            "仅临时隐藏网页悬浮窗，不改变各悬浮窗保存的开启状态。",
+            "Temporarily hides web overlays without changing their saved open state."));
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
         configuration.OverlayWindows ??= new Dictionary<string, HtmlOverlayWindowSettings>(
             StringComparer.OrdinalIgnoreCase);
         var allTemplates = getOverlayTemplates();
@@ -2105,7 +2040,7 @@ public sealed class ControlCenterWindow : Window
         var reference = fflogsEstimateService.ReferenceSnapshot;
         DrawSection("FFLogs Reference");
         DrawRow("Region", reference.Region);
-        DrawRow("Partition", reference.Partition.ToString());
+        DrawRow("Partition", reference.Partition?.ToString() ?? "Latest");
         DrawRow("Parse Metric", reference.Metric);
         DrawRow(
             "Percentile Data",
@@ -2163,6 +2098,8 @@ public sealed class ControlCenterWindow : Window
         {
             openBundledPluginNotice();
         }
+
+        DrawCombatLogDirectorySettings();
 
         if (ImGui.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
         {
@@ -2284,6 +2221,49 @@ public sealed class ControlCenterWindow : Window
         }
         return changed;
     }
+
+    private void DrawCombatLogDirectorySettings()
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("FFLogs 上传日志", "FFLogs upload logs"));
+        ImGui.TextDisabled(text.Get("当前路径", "Current path"));
+        ImGui.TextWrapped(getCombatLogDirectory());
+
+        if (ImGui.Button(text.Get("更改目录...", "Change directory...")))
+        {
+            selectCombatLogDirectory(ReportCombatLogDirectoryChange);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(text.Get(
+                "只更改之后写入的原始 Network 日志；旧日志不会移动或删除。解析器正在运行时会自动重启，战斗中切换可能截断当前战斗。",
+                "Changes only future raw Network log writes; existing logs are not moved or deleted. A running parser restarts automatically, which may split the current encounter."));
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(text.Get("恢复默认", "Restore default")))
+        {
+            resetCombatLogDirectory(ReportCombatLogDirectoryChange);
+        }
+
+        var feedback = Volatile.Read(ref combatLogDirectoryChangeFeedback);
+        if (feedback is not null)
+        {
+            ImGui.TextColored(
+                feedback.IsError
+                    ? new Vector4(0.95f, 0.45f, 0.40f, 1)
+                    : IceBlue,
+                feedback.Message);
+        }
+
+        ImGui.Spacing();
+    }
+
+    private void ReportCombatLogDirectoryChange(bool success, string message)
+        => Volatile.Write(
+            ref combatLogDirectoryChangeFeedback,
+            new CombatLogDirectoryFeedback(message, !success));
 
     private void CopyDiagnosticReport()
     {
@@ -2539,15 +2519,6 @@ public sealed class ControlCenterWindow : Window
         _ => state.ToString(),
     };
 
-    private string DpsMetricLabel(DpsMetric metric) => metric switch
-    {
-        DpsMetric.Rdps => text.Get("rDPS（团队贡献估算）", "rDPS (estimated raid contribution)"),
-        DpsMetric.Dps => text.Get("DPS（个人有效动作时长）", "DPS (personal active duration)"),
-        DpsMetric.EncDps => text.Get("EncDPS（整场战斗时长）", "EncDPS (encounter duration)"),
-        DpsMetric.ExtDps => text.Get("ExtDPS（ACT 兼容字段）", "ExtDPS (ACT compatibility field)"),
-        _ => metric.ToString(),
-    };
-
     private bool DrawPlayerIdentityControls()
     {
         var changed = false;
@@ -2594,9 +2565,10 @@ public sealed class ControlCenterWindow : Window
         var referenceDate = reference.LatestDataUpdatedAt is { } updatedAt
             ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd")
             : "--";
+        var partitionLabel = reference.Partition?.ToString() ?? text.Get("最新", "Latest");
         ImGui.TextDisabled(text.Get(
-            $"区域 {reference.Region} · 分区 {reference.Partition} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
-            $"Region {reference.Region} · Partition {reference.Partition} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
+            $"区域 {reference.Region} · 分区 {partitionLabel} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
+            $"Region {reference.Region} · Partition {partitionLabel} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
 
         var changed = false;
         if (ImGui.BeginTable(
@@ -2735,8 +2707,8 @@ public sealed class ControlCenterWindow : Window
                     "The current territory is outside the latest raid tier; historical rankings will not be loaded."));
             }
             ImGui.TextDisabled(text.Get(
-                "榜单换季时只需更新内置副本表，不依赖国服客户端返回英文 Boss 名。",
-                "Tier rollovers only require updating the built-in duty table; English boss names are not required from the CN client."));
+                "榜单区域跟随上方游戏区域设置；国服使用 CN 分区，国际服使用 FFLogs 最新全球分区。",
+                "The ranking population follows the game-region setting above: CN partition for China, latest global partition for Global."));
             ImGui.EndTable();
         }
 

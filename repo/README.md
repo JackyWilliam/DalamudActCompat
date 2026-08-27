@@ -11,7 +11,7 @@ This directory contains the `pluginmaster.json` file that should be copied or mi
 The plugin ZIP should be published from the source repository release:
 
 ```text
-https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.1.0/DalamudActCompat.zip
+https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.0/DalamudActCompat-core.zip
 ```
 
-Keep the raw JSON URL and release ZIP URL separate. Dalamud users add the raw JSON URL; the JSON points Dalamud to the ZIP artifact.
+Keep the raw JSON URL and release ZIP URL separate. Dalamud users add the raw JSON URL; the JSON points Dalamud to the core ZIP. The core then verifies and caches the separately published Host, Cactbot, and bundled-extension packs.

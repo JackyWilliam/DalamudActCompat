@@ -14,7 +14,8 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 
 | 功能 | 实际用途 |
 | --- | --- |
-| 游戏内战斗统计 | 查看 DPS、rDPS、HPS、暴击率、直击率、伤害占比、死亡和本地 FFLogs 区间估算 |
+| 游戏内战斗统计 | 查看 4/8/24 人 DPS、rDPS、HPS、总伤害、最高伤害、命中率、死亡和本地 FFLogs 区间估算 |
+| 统计样式 | 经典榜、横版和职能分栏三选一；8 人经典表格可自定义，24 人使用固定的职业/名字 + DPS/HPS 紧凑条 |
 | 战斗历史 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志 |
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
@@ -37,7 +38,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 输入 `/xlplugins`，搜索 **Dalamud ACT Compat**，点击安装。
 
-发布包目前约 65 MiB，包含解析器、Host、Cactbot 资源和随包扩展。网络较慢时下载可能需要一段时间；建议让插件安装器完成下载，不要手动解压到插件目录。
+0.3.10.0 起，Dalamud 先安装约 18 MiB 的核心包，插件再按缺失项获取 Host、Cactbot 和随包扩展资源；已验证的同版本缓存不会重复下载。下载中断可续传，更新失败时会保留上一份已验证资源。不要手动解压分包到插件目录。
 
 ### 3. 完成首次启动
 
@@ -69,11 +70,13 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 | 页面 | 这里能做什么 |
 | --- | --- |
-| 概览 | 查看解析器状态；开关解析和自动启动；打开统计、历史、运行状态与日志目录 |
-| 战斗统计 | 显示、定位、锁定或穿透统计窗；设置排序、统计口径、列、透明度和 FFLogs 估算 |
-| 悬浮窗 | 安装 Cactbot；管理文字提醒、时间轴和自定义 HTML 悬浮窗 |
+| 概览 | 查看解析器状态；开关解析、自动启动、失焦隐藏网页悬浮窗和精简模式；打开统计、历史、运行状态与日志目录 |
+| 战斗统计 | 在三个互斥模板间切换；设置 8/24 人模式、DPS/HPS 排序、独立统计槽位、透明度和 FFLogs 估算 |
+| 悬浮窗 | 安装 Cactbot；管理文字提醒、时间轴和自定义 HTML 悬浮窗；设置游戏失焦时隐藏网页悬浮窗 |
 | 扩展 | 启停扩展；打开扩展配置；检查来源与更新；导入 DLL/ZIP；分配权限 |
-| 设置 | 重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |
+| 设置 | 自动检测或手动选择国服/国际服；重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |
+
+“游戏区域”默认读取游戏 Framework 的原生客户端区域值：国服客户端使用国服网络协议，国际服客户端使用国际服网络协议；不根据 Dalamud 语言或安装路径判断，因此国际服中文语言包不会被误判。无法读取游戏区域时暂按国际服处理，并可手动覆盖；切换后插件会刷新正在运行的解析器与扩展 Host，而动作名和日志语言仍跟随游戏客户端。FFLogs 区间估算会同步使用国服 CN 分区或国际服最新全球分区。
 
 ## 常用命令
 
@@ -82,6 +85,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 | `/actcompat` | 打开或关闭控制中心 |
 | `/actcompat on` / `/actcompat off` | 明确打开 / 关闭控制中心 |
 | `/actcompat meter` | 打开并定位战斗统计 |
+| `/actcompat simple on` / `/actcompat simple off` | 进入 / 退出精简模式；精简主页只保留统计窗开关与退出入口 |
 | `/actcompat history` | 打开近期战斗 |
 | `/actcompat logs` | 打开已保存的日志文件列表 |
 | `/actcompat status` | 查看解析器与各 Host 的运行状态 |
@@ -97,10 +101,11 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 - **EncDPS**：按整场战斗经过时间计算，更接近传统 ACT 的整场口径。
 - **rDPS**：根据本地战斗事件和团队增益归属实时估算，不等于 FFLogs 服务器端结果。
 - **HPS**：按本把战斗从开怪到结束的完整时间计算，包括转阶段和目标不可选中的时间。
+- **最高伤害**：记录本场最高的一次命中；之后出现更高伤害时替换，相同伤害不抖动，下一场重新记录。
 - **FFLogs 区间估算**：把本场数据代入本地缓存曲线，只用于即时参考，不是上传后的正式排名。
 - **`--`**：当前还没有足够的有效数据，不表示数值为零。
 
-副本内团灭重开后，实时统计从零开始；历史页仍把同一次进本放在一个文件夹里，每一把作为独立子记录保存。转阶段产生的 ACT 片段只在内部合并，不会被误拆成多把。
+战斗结束后，实时统计会保留上一把结果；下一场出现有效数据后才从零替换。副本内团灭重开后也遵循这一规则；历史页仍把同一次进本放在一个文件夹里，每一把作为独立子记录保存。转阶段产生的 ACT 片段只在内部合并，不会被误拆成多把。
 
 “重置当前战斗”只结束并清空当前显示，不会删除已经保存的历史和原始 Network 日志。玩家 ID 遮盖也只影响界面显示，不会改写日志内容。
 

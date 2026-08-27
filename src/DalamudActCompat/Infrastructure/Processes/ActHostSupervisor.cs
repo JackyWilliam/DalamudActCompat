@@ -57,9 +57,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         PluginLogger logger,
         Func<bool>? silverDasherEventsEnabled = null,
         Func<bool>? matchaEventsEnabled = null,
-        bool enableMemoryProtection = false)
+        bool enableMemoryProtection = false,
+        string? packagedHostDirectory = null)
     {
-        assets = new CompatibilityHostAssets(hostDirectory, logger);
+        assets = new CompatibilityHostAssets(hostDirectory, logger, packagedHostDirectory);
         process = new CompatibilityHostProcess(logger);
         this.ipc = ipc;
         this.logger = logger;

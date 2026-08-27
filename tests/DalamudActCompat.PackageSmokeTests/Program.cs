@@ -27,6 +27,7 @@ using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Processes;
+using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
@@ -48,6 +49,7 @@ Directory.CreateDirectory(testRoot);
 try
 {
     ValidateSettingsSerializerMemberTypes();
+    ValidateGameRegionSelection();
     ValidateActPluginDataCompatibility();
     ValidateActCustomTriggerCompatibility();
     ValidateSynchronousActInvocation();
@@ -59,6 +61,7 @@ try
     ValidateBoundedHostQueue();
     ValidateHostMemoryProtectionPolicy();
     ValidateVersionedCompatibilityHostExtraction(testRoot);
+    await ValidateResourcePackLifecycleAsync(testRoot);
     ValidateSilverDasherPermissionIsolation();
     await ValidateSilverDasherNotificationIpcAsync();
     await ValidatePostNamazuHeadingIpcAsync();
@@ -92,6 +95,7 @@ try
     ValidateChinese755hOpcodes();
     ValidateMeterRows();
     ValidateMeterLayout();
+    ValidateIndependentMeterWindows();
     ValidatePictoActOverlayCommands();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
@@ -99,9 +103,11 @@ try
     ValidateDutyEncounterFolderAggregation();
     ValidateDutyEncounterPartySizes();
     ValidateDutyEncounterRosterReplacement();
+    ValidateHighestDamageAggregation();
     ValidateControlCenterPresentation();
     ValidateInstalledPluginVersionDisplay(testRoot);
     ValidateDiagnosticReport(testRoot);
+    ValidateCombatLogDirectoryConfiguration(testRoot);
     ValidateFflogsEstimateCurve();
     await ValidateFflogsPersistenceAsync(testRoot);
     ValidateFflogsCurrentEncounterTable();
@@ -367,6 +373,116 @@ finally
     }
 }
 
+static void ValidateGameRegionSelection()
+{
+    var automaticChinese = GameRegionResolver.Resolve(
+        GameRegionMode.Auto,
+        "English",
+        nativeClientLanguageCode: 4);
+    var automaticGlobalWithChineseLanguagePack = GameRegionResolver.Resolve(
+        GameRegionMode.Auto,
+        "ChineseSimplified",
+        nativeClientLanguageCode: 1);
+    var allInternationalNativeCodesRemainGlobal = Enumerable.Range(0, 4).All(code =>
+    {
+        var selection = GameRegionResolver.Resolve(
+            GameRegionMode.Auto,
+            "ChineseSimplified",
+            (byte)code);
+        return selection is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Global,
+            HasDetectedRegion: true,
+        };
+    });
+    var unavailableNativeRegion = GameRegionResolver.Resolve(
+        GameRegionMode.Auto,
+        "ChineseSimplified",
+        nativeClientLanguageCode: null);
+    var manualGlobal = GameRegionResolver.Resolve(
+        GameRegionMode.Global,
+        "ChineseSimplified",
+        nativeClientLanguageCode: 4);
+    var manualChinese = GameRegionResolver.Resolve(
+        GameRegionMode.Chinese,
+        "English",
+        nativeClientLanguageCode: 0);
+    Assert(
+        automaticChinese is
+        {
+            DetectedRegion: HostGameRegion.Chinese,
+            EffectiveRegion: HostGameRegion.Chinese,
+            ClientLanguage: HostClientLanguage.English,
+            NativeClientLanguageCode: 4,
+            HasDetectedRegion: true,
+            IsManualOverride: false,
+        } &&
+        automaticGlobalWithChineseLanguagePack is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Global,
+            ClientLanguage: HostClientLanguage.Chinese,
+            NativeClientLanguageCode: 1,
+            HasDetectedRegion: true,
+        } &&
+        allInternationalNativeCodesRemainGlobal &&
+        unavailableNativeRegion is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Global,
+            ClientLanguage: HostClientLanguage.Chinese,
+            NativeClientLanguageCode: null,
+            HasDetectedRegion: false,
+        } &&
+        manualGlobal is
+        {
+            DetectedRegion: HostGameRegion.Chinese,
+            EffectiveRegion: HostGameRegion.Global,
+            ClientLanguage: HostClientLanguage.Chinese,
+            IsManualOverride: true,
+        } &&
+        manualChinese is
+        {
+            DetectedRegion: HostGameRegion.Global,
+            EffectiveRegion: HostGameRegion.Chinese,
+            ClientLanguage: HostClientLanguage.English,
+        },
+        "Native-client or manual CN/Global selection was not resolved independently from Dalamud language.");
+
+    var configuration = new PluginConfiguration
+    {
+        Version = 10,
+        GameRegionMode = GameRegionMode.Chinese,
+    };
+    Assert(
+        configuration.ApplyMigrations() &&
+        configuration.Version == 16 &&
+        configuration.GameRegionMode == GameRegionMode.Auto,
+        "Existing configurations were not migrated to automatic region detection.");
+
+    configuration.GameRegionMode = GameRegionMode.Global;
+    var snapshot = configuration.CreateSnapshot();
+    configuration.GameRegionMode = GameRegionMode.Chinese;
+    configuration.RestoreFrom(snapshot);
+    Assert(
+        configuration.GameRegionMode == GameRegionMode.Global,
+        "A manual game-region override did not survive configuration snapshot restore.");
+
+    IINACT.FfxivActPluginWrapper.ConfigureRegion(
+        Dalamud.Game.ClientLanguage.English,
+        chineseRegionOverride: true);
+    Assert(
+        OpcodeManager.Instance.GameRegion == GameRegion.Chinese,
+        "The parser ignored a manual Chinese-region override on a Global-language client.");
+    IINACT.FfxivActPluginWrapper.ConfigureRegion(
+        Dalamud.Game.ClientLanguage.English,
+        chineseRegionOverride: false);
+    Assert(
+        OpcodeManager.Instance.GameRegion == GameRegion.Global,
+        "The parser ignored a manual Global-region override.");
+}
+
 static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
 {
     var hostRoot = Path.Combine(testRoot, "versioned-host-assets");
@@ -375,7 +491,17 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     File.WriteAllText(legacyHost, "locked previous host build");
 
     var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
-    var assets = new CompatibilityHostAssets(hostRoot, new PluginLogger(log));
+    var packagedHost = Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "bin",
+        "Release",
+        "host");
+    var assets = new CompatibilityHostAssets(
+        hostRoot,
+        new PluginLogger(log),
+        packagedHost);
     Assert(
         !string.Equals(assets.TargetDirectory, hostRoot, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(
@@ -407,6 +533,308 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     {
         assets.EnsureExtracted();
     }
+}
+
+static async Task ValidateResourcePackLifecycleAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "resource-pack-lifecycle");
+    Directory.CreateDirectory(root);
+    var log = new PluginLogger(DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>());
+
+    var resumeFixture = CreateResourcePackFixture(root, "resume", "resume-content", "1");
+    var resumeCalls = 0;
+    var resumeHandler = new ScriptedHttpMessageHandler(request =>
+    {
+        resumeCalls++;
+        if (resumeCalls == 1)
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new InterruptingReadStream(
+                    resumeFixture.ArchiveBytes,
+                    resumeFixture.ArchiveBytes.Length / 2)),
+            };
+        }
+
+        var offset = request.Headers.Range?.Ranges.Single().From ?? 0;
+        Assert(offset > 0, "An interrupted resource pack was restarted instead of resumed.");
+        return ByteResponse(
+            resumeFixture.ArchiveBytes[(int)offset..],
+            HttpStatusCode.PartialContent);
+    });
+    var resumeEntry = resumeFixture.Entry with { Urls = ["https://packs.test/resume"] };
+    WriteResourceCatalog(resumeFixture.PluginDirectory, resumeEntry);
+    var resumeManager = new ResourcePackManager(
+        resumeFixture.PluginDirectory,
+        resumeFixture.CacheDirectory,
+        log,
+        new HttpClient(resumeHandler));
+    var resumed = await resumeManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(resumed, "payload.txt")) == "resume-content" &&
+        resumeCalls == 2,
+        "Interrupted resource pack download did not resume and install atomically.");
+    _ = await resumeManager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
+    Assert(resumeCalls == 2, "Resolving the same content hash downloaded the resource pack again.");
+
+    var offlineHandler = new ScriptedHttpMessageHandler(_ =>
+        throw new InvalidOperationException("A verified offline cache unexpectedly used the network."));
+    var offlineManager = new ResourcePackManager(
+        resumeFixture.PluginDirectory,
+        resumeFixture.CacheDirectory,
+        log,
+        new HttpClient(offlineHandler));
+    var offlineDirectory = await offlineManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        offlineDirectory == resumed && offlineHandler.Requests.Count == 0,
+        "A verified same-hash cache was not available while offline.");
+
+    File.WriteAllText(Path.Combine(resumed, "payload.txt"), "corrupted");
+    var repairHandler = new ScriptedHttpMessageHandler(_ => ByteResponse(resumeFixture.ArchiveBytes));
+    var repairManager = new ResourcePackManager(
+        resumeFixture.PluginDirectory,
+        resumeFixture.CacheDirectory,
+        log,
+        new HttpClient(repairHandler));
+    var repaired = await repairManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    var installedRoot = Directory.GetParent(repaired)!.FullName;
+    var idRoot = Directory.GetParent(installedRoot)!.FullName;
+    Assert(
+        File.ReadAllText(Path.Combine(repaired, "payload.txt")) == "resume-content" &&
+        repairHandler.Requests.Count == 1 &&
+        Directory.GetDirectories(
+            idRoot,
+            $"{Path.GetFileName(installedRoot)}.corrupt-*",
+            SearchOption.TopDirectoryOnly).Length == 1,
+        "A corrupted immutable cache was not quarantined and repaired from the verified archive.");
+
+    var fallbackFixture = CreateResourcePackFixture(root, "source-fallback", "fallback-content", "1");
+    var fallbackHandler = new ScriptedHttpMessageHandler(request =>
+        request.RequestUri!.Host == "primary.test"
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : ByteResponse(fallbackFixture.ArchiveBytes));
+    WriteResourceCatalog(
+        fallbackFixture.PluginDirectory,
+        fallbackFixture.Entry with
+        {
+            Urls = ["https://primary.test/pack", "https://secondary.test/pack"],
+        });
+    var fallbackManager = new ResourcePackManager(
+        fallbackFixture.PluginDirectory,
+        fallbackFixture.CacheDirectory,
+        log,
+        new HttpClient(fallbackHandler));
+    var fallbackDirectory = await fallbackManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(fallbackDirectory, "payload.txt")) == "fallback-content" &&
+        fallbackHandler.Requests.Any(uri => uri.Host == "primary.test") &&
+        fallbackHandler.Requests.Any(uri => uri.Host == "secondary.test"),
+        "Resource pack mirror fallback did not advance past a failed primary source.");
+
+    var badHashFixture = CreateResourcePackFixture(root, "bad-hash", "bad-hash-content", "1");
+    WriteResourceCatalog(
+        badHashFixture.PluginDirectory,
+        badHashFixture.Entry with
+        {
+            Sha256 = new string('0', 64),
+            Urls = ["https://packs.test/bad-hash"],
+        });
+    var badHashManager = new ResourcePackManager(
+        badHashFixture.PluginDirectory,
+        badHashFixture.CacheDirectory,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(badHashFixture.ArchiveBytes))));
+    await AssertThrowsAsync<InvalidDataException>(() => badHashManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None));
+
+    var completedPartialFixture = CreateResourcePackFixture(
+        root,
+        "completed-partial",
+        "completed-before-install",
+        "1");
+    WriteResourceCatalog(completedPartialFixture.PluginDirectory, completedPartialFixture.Entry);
+    var completedDownloadDirectory = Path.Combine(
+        completedPartialFixture.CacheDirectory,
+        ".downloads");
+    Directory.CreateDirectory(completedDownloadDirectory);
+    var completedPartialPath = Path.Combine(
+        completedDownloadDirectory,
+        $"test-pack-{completedPartialFixture.Entry.Sha256}.partial");
+    File.WriteAllBytes(completedPartialPath, completedPartialFixture.ArchiveBytes);
+    var completedPartialHandler = new ScriptedHttpMessageHandler(_ =>
+        throw new InvalidOperationException("A completed partial archive unexpectedly used the network."));
+    var completedPartialManager = new ResourcePackManager(
+        completedPartialFixture.PluginDirectory,
+        completedPartialFixture.CacheDirectory,
+        log,
+        new HttpClient(completedPartialHandler));
+    var completedPartialDirectory = await completedPartialManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(completedPartialDirectory, "payload.txt")) ==
+        "completed-before-install" &&
+        completedPartialHandler.Requests.Count == 0 &&
+        !File.Exists(completedPartialPath),
+        "A complete interrupted download was not verified and installed without an HTTP 416 retry.");
+
+    var migrationFixture = CreateResourcePackFixture(root, "migration", "legacy-content", "1");
+    var legacyDirectory = Path.Combine(migrationFixture.PluginDirectory, "legacy");
+    Directory.CreateDirectory(legacyDirectory);
+    File.WriteAllText(Path.Combine(legacyDirectory, "payload.txt"), "legacy-content");
+    WriteResourceCatalog(migrationFixture.PluginDirectory, migrationFixture.Entry);
+    var migrationHandler = new ScriptedHttpMessageHandler(_ =>
+        throw new InvalidOperationException("Legacy migration unexpectedly used the network."));
+    var migrationManager = new ResourcePackManager(
+        migrationFixture.PluginDirectory,
+        migrationFixture.CacheDirectory,
+        log,
+        new HttpClient(migrationHandler));
+    var migrated = await migrationManager.ResolveDirectoryAsync(
+        "test-pack",
+        "legacy",
+        CancellationToken.None);
+    Assert(
+        !string.Equals(migrated, legacyDirectory, StringComparison.OrdinalIgnoreCase) &&
+        File.ReadAllText(Path.Combine(migrated, "payload.txt")) == "legacy-content" &&
+        migrationHandler.Requests.Count == 0,
+        "An existing all-in-one resource directory was not migrated into the hash cache.");
+
+    var lockFixture = CreateResourcePackFixture(root, "lock", "locked-content", "1");
+    WriteResourceCatalog(
+        lockFixture.PluginDirectory,
+        lockFixture.Entry with { Urls = ["https://packs.test/lock"] });
+    var lockRoot = Path.Combine(lockFixture.CacheDirectory, "test-pack");
+    Directory.CreateDirectory(lockRoot);
+    var lockPath = Path.Combine(lockRoot, ".install.lock");
+    var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+    var lockManager = new ResourcePackManager(
+        lockFixture.PluginDirectory,
+        lockFixture.CacheDirectory,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(lockFixture.ArchiveBytes))));
+    var lockedResolution = lockManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    await Task.Delay(250);
+    Assert(!lockedResolution.IsCompleted, "Resource pack installation ignored its exclusive file lock.");
+    heldLock.Dispose();
+    var lockedDirectory = await lockedResolution;
+    Assert(
+        File.ReadAllText(Path.Combine(lockedDirectory, "payload.txt")) == "locked-content",
+        "Resource pack installation did not continue after its file lock was released.");
+
+    var rollbackV1 = CreateResourcePackFixture(root, "rollback", "stable-content", "1");
+    WriteResourceCatalog(
+        rollbackV1.PluginDirectory,
+        rollbackV1.Entry with { Urls = ["https://packs.test/v1"] });
+    var rollbackCache = rollbackV1.CacheDirectory;
+    var v1Manager = new ResourcePackManager(
+        rollbackV1.PluginDirectory,
+        rollbackCache,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(rollbackV1.ArchiveBytes))));
+    _ = await v1Manager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
+    var rollbackV2 = CreateResourcePackFixture(root, "rollback-v2-source", "new-content", "2");
+    WriteResourceCatalog(
+        rollbackV1.PluginDirectory,
+        rollbackV2.Entry with { Urls = ["https://packs.test/unavailable"] });
+    var rollbackManager = new ResourcePackManager(
+        rollbackV1.PluginDirectory,
+        rollbackCache,
+        log,
+        new HttpClient(new ScriptedHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))));
+    var rolledBack = await rollbackManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(rolledBack, "payload.txt")) == "stable-content",
+        "A failed resource update did not roll back to the previous verified cache.");
+}
+
+static ResourcePackFixture CreateResourcePackFixture(
+    string root,
+    string name,
+    string content,
+    string version)
+{
+    var fixtureRoot = Path.Combine(root, name);
+    var pluginDirectory = Path.Combine(fixtureRoot, "plugin");
+    var cacheDirectory = Path.Combine(fixtureRoot, "cache");
+    var sourceDirectory = Path.Combine(fixtureRoot, "source");
+    Directory.CreateDirectory(pluginDirectory);
+    Directory.CreateDirectory(cacheDirectory);
+    Directory.CreateDirectory(sourceDirectory);
+    File.WriteAllText(Path.Combine(sourceDirectory, "payload.txt"), content);
+    var archivePath = Path.Combine(fixtureRoot, "pack.zip");
+    using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+    {
+        archive.CreateEntryFromFile(
+            Path.Combine(sourceDirectory, "payload.txt"),
+            "payload/payload.txt",
+            CompressionLevel.NoCompression);
+    }
+    var archiveBytes = File.ReadAllBytes(archivePath);
+    var entry = new ResourcePackEntry(
+        "test-pack",
+        version,
+        "pack.zip",
+        archiveBytes.Length,
+        Convert.ToHexString(SHA256.HashData(archiveBytes)).ToLowerInvariant(),
+        "payload",
+        ResourcePackManager.ComputeDirectoryHash(sourceDirectory),
+        ["https://packs.test/pack"]);
+    return new ResourcePackFixture(pluginDirectory, cacheDirectory, archiveBytes, entry);
+}
+
+static void WriteResourceCatalog(string pluginDirectory, ResourcePackEntry entry)
+{
+    File.WriteAllText(
+        Path.Combine(pluginDirectory, ResourcePackManager.ManifestFileName),
+        JsonSerializer.Serialize(
+            new ResourcePackCatalog(1, entry.Version, [entry]),
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true,
+            }));
+}
+
+static HttpResponseMessage ByteResponse(
+    byte[] bytes,
+    HttpStatusCode status = HttpStatusCode.OK)
+    => new(status) { Content = new ByteArrayContent(bytes) };
+
+static async Task AssertThrowsAsync<TException>(Func<Task> action)
+    where TException : Exception
+{
+    try
+    {
+        await action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+    throw new InvalidOperationException($"Expected {typeof(TException).Name} was not thrown.");
 }
 
 static void ValidatePictoActOverlayCommands()
@@ -781,6 +1209,57 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(MathF.Abs(northAngle) - MathF.PI) < 0.0001f,
         "PictoACT Dir north or single-value Scale defaults drifted from the original protocol.");
 
+    var expectedP3Positions = new (float X, float Z)[][]
+    {
+        [
+            (111.36f, 89.95f),
+            (100.926310f, 84.860844f),
+            (89.95f, 88.64f),
+            (84.860844f, 99.073690f),
+            (88.64f, 110.05f),
+            (99.073690f, 115.139156f),
+            (110.05f, 111.36f),
+            (115.139156f, 100.926310f),
+        ],
+        [
+            (111.36f, 110.05f),
+            (115.139156f, 99.073690f),
+            (110.05f, 88.64f),
+            (99.073690f, 84.860844f),
+            (88.64f, 89.95f),
+            (84.860844f, 100.926310f),
+            (89.95f, 111.36f),
+            (100.926310f, 115.139156f),
+        ],
+    };
+    for (var keepYIndex = 0; keepYIndex < expectedP3Positions.Length; keepYIndex++)
+    {
+        var keepY = keepYIndex == 0;
+        for (var direction = 0; direction < 8; direction++)
+        {
+            // This is the raw U6b P3 expression path: Triggernometry forwards the
+            // function text to PictoACT instead of expanding it before the callback.
+            var p3Guide = PictoActOverlayService.Parse(
+                $"Omen: m0532om_don01x\nt: 9.7\nO: 100, 100\n" +
+                $"θ: DirToRad({direction}, 8)\n+Y: {keepY}\n" +
+                "Pos: 11.36, -10.05, 0.1\nScale: 1, 1, 20").Single().Shape!;
+            var expected = expectedP3Positions[keepYIndex][direction];
+            Assert(
+                MathF.Abs(p3Guide.Position.X - expected.X) < 0.0001f &&
+                MathF.Abs(p3Guide.Position.Z - expected.Z) < 0.0001f,
+                $"PictoACT U6b P3 DirToRad transform drifted for direction {direction}, " +
+                $"keepY={keepY}: actual={p3Guide.Position}, expected=({expected.X}, {expected.Z}).");
+        }
+    }
+
+    var negativeDirectionDivision = PictoActOverlayService.Parse(
+        "Omen: Circle\nt: 5\nO: 100, 100\nθ: dir2rad(0, -8)\n" +
+        "Pos: 11.36, -10.05, 0.1\nScale: 1").Single().Shape!;
+    Assert(
+        negativeDirectionDivision.TransformRotation is { } negativeRotation &&
+        MathF.Abs(negativeRotation - (-MathF.PI * 7 / 8)) < 0.0001f,
+        "PictoACT dir2rad negative divisions lost Triggernometry's half-step semantics.");
+
     var polygonCommand = PictoActOverlayService.Parse(
         "Action: △\nTag: POLYGON\nt: 8\nO: 100, 100\nθ: pi\n" +
         "Points: 0, -12; 3, -20; -3, -20; 0.001, -12; 0, -16\n" +
@@ -1003,7 +1482,7 @@ static void ValidatePluginRepositoryMetadata()
         .GetName()
         .Version!
         .ToString(4);
-    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat.zip";
+    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat-core.zip";
     Assert(
         entry.GetProperty("AssemblyVersion").GetString() == assemblyVersion &&
         entry.GetProperty("DownloadLinkInstall").GetString() is { } installUrl &&
@@ -1424,7 +1903,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 9 &&
+        legacyConfiguration.Version == 16 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1454,7 +1933,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 9 &&
+        parserMigration.Version == 16 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1468,17 +1947,250 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 9 &&
+        newConfiguration.Version == 16 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
         newConfiguration.AutoStartParser &&
+        newConfiguration.HideHtmlOverlaysWhenGameUnfocused &&
+        !newConfiguration.SimplifiedModeEnabled &&
         !newConfiguration.EnableFflogsParityRecorder &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).OpenOnStartup &&
         newConfiguration.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened,
         "A new installation does not default to rDPS, keep SilverDasher disabled, or start the parser independently of third-party confirmation.");
+    Assert(
+        newConfiguration.Meter.ClassicWindow.IsEnabled &&
+        !newConfiguration.Meter.HorizontalWindow.IsEnabled &&
+        !newConfiguration.Meter.RoleSplitWindow.IsEnabled &&
+        newConfiguration.Meter.ClassicWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.HorizontalWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitDamageWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitHealerWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitDamageSlots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitHealerSlots.Count >= 8 &&
+        newConfiguration.Meter.ShowTotalDamage &&
+        newConfiguration.Meter.ShowHighestDamage,
+        "The classic default or independently configurable Meter windows are missing.");
+    var previousHorizontalUser = new PluginConfiguration
+    {
+        Version = 11,
+        Meter = new MeterSettings
+        {
+            Preset = MeterPreset.HorizontalTransparent,
+            IsLocked = true,
+            AutoHideOutOfCombat = true,
+        },
+    };
+    Assert(
+        previousHorizontalUser.ApplyMigrations() &&
+        previousHorizontalUser.Version == 16 &&
+        !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
+        previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
+        previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
+        previousHorizontalUser.Meter.HorizontalWindow.AutoHideOutOfCombat &&
+        !previousHorizontalUser.Meter.RoleSplitWindow.IsEnabled,
+        "The selected legacy preset was not migrated to its independent window.");
+    var previousCompositeIdentityUser = new PluginConfiguration
+    {
+        Version = 12,
+    };
+    previousCompositeIdentityUser.Meter.ClassicWindow.ItemWidth = 210;
+    previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled = true;
+    previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled = true;
+    previousCompositeIdentityUser.Meter.ClassicWindow.Slots =
+    [
+        new MeterSlotDefinition(MeterSlotMetric.Job, 0, 0, 4, 2, MeterSlotAlignment.Left),
+        new MeterSlotDefinition(MeterSlotMetric.PlayerName, 0, 0, 4, 2, MeterSlotAlignment.Left)
+        {
+            Visible = false,
+        },
+        new MeterSlotDefinition(MeterSlotMetric.Dps, 0, 0, 4, 2, MeterSlotAlignment.Left),
+    ];
+    Assert(
+        previousCompositeIdentityUser.ApplyMigrations() &&
+        previousCompositeIdentityUser.Version == 16 &&
+        previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
+        !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
+        !previousCompositeIdentityUser.Meter.RoleSplitWindow.IsEnabled &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.ItemWidth == 150 &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.Count(static slot =>
+            slot.Metric == MeterSlotMetric.PlayerIdentity) == 1 &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.All(static slot =>
+            slot.Metric is not MeterSlotMetric.Job and not MeterSlotMetric.PlayerName) &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.Any(static slot =>
+            slot.Metric == MeterSlotMetric.Fflogs) &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.Any(static slot =>
+            !slot.Visible && slot.Metric == MeterSlotMetric.EncDps) &&
+        previousCompositeIdentityUser.Meter.ClassicWindow.Slots.Any(static slot =>
+            !slot.Visible && slot.Metric == MeterSlotMetric.ExtDps),
+        "The v13/v14 migrations did not merge job/name, add independent DPS rates, preserve the classic table, or enforce one active meter.");
+    var previousOpacityUser = new PluginConfiguration
+    {
+        Version = 13,
+        Meter = new MeterSettings
+        {
+            BackgroundOpacity = 0.42f,
+            RoleSplitDamageCompact = true,
+            RoleSplitHealerCompact = true,
+        },
+    };
+    Assert(
+        previousOpacityUser.ApplyMigrations() &&
+        previousOpacityUser.Version == 16 &&
+        Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
+        Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
+        previousOpacityUser.Meter.RoleSplitDamageCompact &&
+        previousOpacityUser.Meter.RoleSplitHealerCompact,
+        "The v14 migration did not preserve opacity or the independent role-collapse states.");
+    var previousSharedRoleUser = new PluginConfiguration
+    {
+        Version = 14,
+    };
+    previousSharedRoleUser.Meter.RoleSplitWindow.Slots =
+    [
+        new MeterSlotDefinition(
+            MeterSlotMetric.Hps,
+            0,
+            0,
+            4,
+            2,
+            MeterSlotAlignment.Right)
+        {
+            Visible = false,
+        },
+        new MeterSlotDefinition(
+            MeterSlotMetric.Dps,
+            0,
+            0,
+            4,
+            2,
+            MeterSlotAlignment.Right),
+    ];
+    Assert(
+        previousSharedRoleUser.ApplyMigrations() &&
+        previousSharedRoleUser.Version == 16 &&
+        previousSharedRoleUser.Meter.RoleSplitDamageSlots.Select(static slot =>
+            (slot.Metric, slot.Visible)).SequenceEqual(
+                previousSharedRoleUser.Meter.RoleSplitHealerSlots.Select(static slot =>
+                    (slot.Metric, slot.Visible))) &&
+        previousSharedRoleUser.Meter.RoleSplitDamageSlots.Zip(
+            previousSharedRoleUser.Meter.RoleSplitHealerSlots).All(static pair =>
+                pair.First.Id != pair.Second.Id),
+        "The v15 migration did not clone the former shared role columns into independent D/T and H lists.");
+    previousSharedRoleUser.Meter.RoleSplitHealerSlots[0].Visible = true;
+    Assert(
+        !previousSharedRoleUser.Meter.RoleSplitDamageSlots[0].Visible,
+        "Editing an H column still mutates the D/T column configuration.");
+    var healerDpsSlot = previousSharedRoleUser.Meter.RoleSplitHealerSlots.Single(static slot =>
+        slot.Metric == MeterSlotMetric.Dps);
+    healerDpsSlot.Visible = false;
+    previousSharedRoleUser.Meter.NormalizeCustomization();
+    Assert(
+        !healerDpsSlot.Visible,
+        "Normalizing the H column list forced DPS back on after the user disabled it.");
+    var previousSharedRoleAppearance = new PluginConfiguration
+    {
+        Version = 15,
+    };
+    previousSharedRoleAppearance.Meter.ActivateWindow(MeterWindowKind.RoleSplit);
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.IsLocked = true;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.ClickThroughWhenLocked = true;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.AutoHideOutOfCombat = true;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.ShowHeader = false;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.FontScale = 1.35f;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.BackgroundOpacity = 0.37f;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.ItemWidth = 318;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.SortMode = MeterSortMode.Hps;
+    Assert(
+        previousSharedRoleAppearance.ApplyMigrations() &&
+        previousSharedRoleAppearance.Version == 16 &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsEnabled &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsEnabled &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.ClickThroughWhenLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ClickThroughWhenLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.AutoHideOutOfCombat &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.AutoHideOutOfCombat &&
+        !previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
+        !previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ShowHeader &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.FontScale - 1.35f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.FontScale - 1.35f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.BackgroundOpacity - 0.37f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.BackgroundOpacity - 0.37f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.ItemWidth - 318) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ItemWidth - 318) < 0.0001f &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.SortMode == MeterSortMode.Hps &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.SortMode == MeterSortMode.Hps,
+        "The v16 migration did not preserve the former shared role appearance in both panes.");
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked = false;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ShowHeader = true;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.FontScale = 0.82f;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.BackgroundOpacity = 0.19f;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.Slots.Single(static slot =>
+        slot.Metric == MeterSlotMetric.TotalHealing).Visible = false;
+    var restoredRoleAppearance = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(previousSharedRoleAppearance));
+    Assert(
+        restoredRoleAppearance is not null &&
+        restoredRoleAppearance.Version == 16 &&
+        restoredRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
+        !restoredRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
+        !restoredRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
+        restoredRoleAppearance.Meter.RoleSplitHealerWindow.ShowHeader &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitDamageWindow.FontScale - 1.35f) < 0.0001f &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitHealerWindow.FontScale - 0.82f) < 0.0001f &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitDamageWindow.BackgroundOpacity - 0.37f) < 0.0001f &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitHealerWindow.BackgroundOpacity - 0.19f) < 0.0001f &&
+        restoredRoleAppearance.Meter.RoleSplitDamageWindow.Slots.Single(static slot =>
+            slot.Metric == MeterSlotMetric.TotalHealing).Visible &&
+        !restoredRoleAppearance.Meter.RoleSplitHealerWindow.Slots.Single(static slot =>
+            slot.Metric == MeterSlotMetric.TotalHealing).Visible,
+        "D/T and H window appearance settings are still coupled or were not persisted.");
+    var customStyle = new MeterCustomStyle
+    {
+        Name = "Watch layout",
+        Slots =
+        [
+            new MeterSlotDefinition(
+                MeterSlotMetric.HighestDamage,
+                23,
+                5,
+                20,
+                9,
+                MeterSlotAlignment.Right),
+        ],
+    };
+    Assert(
+        customStyle.Normalize() &&
+        customStyle.Slots[0].ColumnSpan == 1 &&
+        customStyle.Slots[0].RowSpan == 1,
+        "The horizontal custom-style grid did not snap slot bounds into 24x6.");
+    var clonedStyle = customStyle.Clone("Watch layout copy");
+    Assert(
+        clonedStyle.Id != customStyle.Id &&
+        clonedStyle.Slots[0].Id != customStyle.Slots[0].Id &&
+        clonedStyle.Slots[0].Metric == MeterSlotMetric.HighestDamage,
+        "Duplicating a custom Meter style reused mutable slot identities or lost its data assignment.");
+    var restoredCustomStyle = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterCustomStyle>(
+                                  Newtonsoft.Json.JsonConvert.SerializeObject(customStyle))
+                              ?? throw new InvalidOperationException(
+                                  "The custom Meter style could not be restored.");
+    var reloadedCustomStyle = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterCustomStyle>(
+                                  Newtonsoft.Json.JsonConvert.SerializeObject(restoredCustomStyle))
+                              ?? throw new InvalidOperationException(
+                                  "The custom Meter style could not be reloaded.");
+    // A cold start must replace constructor defaults; merging here grows the slot list
+    // on every load and also makes an untouched editor appear modified.
+    Assert(
+        restoredCustomStyle.Slots.Count == 1 &&
+        reloadedCustomStyle.Slots.Count == 1 &&
+        reloadedCustomStyle.Slots[0].Metric == MeterSlotMetric.HighestDamage,
+        "Custom Meter style slots were appended to defaults during repeated JSON loads.");
 
     var previousDebugConfiguration = new PluginConfiguration
     {
@@ -1488,7 +2200,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 9 &&
+        previousDebugConfiguration.Version == 16 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -1500,7 +2212,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 9 &&
+        previousV6Configuration.Version == 16 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -1508,6 +2220,20 @@ static void ValidateMeterRows()
         !previousV6Configuration.ApplyMigrations() &&
         !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "A post-migration manual SilverDasher enable choice was overwritten.");
+    var manuallyEnabledSilverDasher = new PluginConfiguration();
+    manuallyEnabledSilverDasher.DisabledActPluginIds.Remove("silverdasher");
+    var coldStartedSilverDasher = Newtonsoft.Json.JsonConvert.DeserializeObject<
+                                      PluginConfiguration>(
+                                      Newtonsoft.Json.JsonConvert.SerializeObject(
+                                          manuallyEnabledSilverDasher))
+                                  ?? throw new InvalidOperationException(
+                                      "The SilverDasher configuration could not be restored.");
+    // This round-trip models Dalamud's next-game cold start, where Json.NET must
+    // replace the non-empty default set with the user's saved empty array.
+    Assert(
+        !coldStartedSilverDasher.ApplyMigrations() &&
+        !coldStartedSilverDasher.DisabledActPluginIds.Contains("silverdasher"),
+        "A serialized manual SilverDasher enable choice was lost during cold start.");
 
     var previousGenericPluginUser = new PluginConfiguration
     {
@@ -1524,7 +2250,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 9 &&
+        previousGenericPluginUser.Version == 16 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -1536,7 +2262,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 9 &&
+        previousEdpsUser.Version == 16 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -1552,7 +2278,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 9 &&
+        previousCustomMetricUser.Version == 16 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -1581,7 +2307,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 9 &&
+        previousTimelineUser.Version == 16 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -1670,7 +2396,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 9 &&
+        previousV5CactbotUser.Version == 16 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -1818,9 +2544,11 @@ static void ValidateMeterRows()
     Thread.Sleep(settings.RefreshIntervalMs + 20);
     rows = meter.GetRows();
     Assert(
-        rows[0].Name == "Healer@Beta" && rows[0].Dps == 11_000 &&
-        rows[1].Name == "Tank@Alpha" && rows[1].Dps == 9_500,
-        "The Meter did not display and sort by the calculated rDPS field.");
+        rows[0].Name == "Tank@Alpha" &&
+        rows[0].PersonalDps == 11_000 && rows[0].Rdps == 9_500 &&
+        rows[1].Name == "Healer@Beta" &&
+        rows[1].PersonalDps == 2_500 && rows[1].Rdps == 11_000,
+        "The DPS ranking did not remain personal-DPS ordered or independent rDPS values were lost.");
 
     settings.SortMode = MeterSortMode.Hps;
     Thread.Sleep(settings.RefreshIntervalMs + 20);
@@ -1967,12 +2695,33 @@ static void ValidateMeterLayout()
             "CombatEnded.png")),
         "The requested running, transition, or ended Combat Meter status icon is missing.");
     Assert(
-        MeterWindow.MinimumTableWidthWithFflogs == 373 &&
-        MeterWindow.MinimumTableWidthWithoutFflogs == 326 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(380, 373) &&
-        MeterWindow.ShouldEnableHorizontalScroll(360, 373),
-        "The compact default Meter width no longer delays horizontal scrolling.");
+        new MeterSettings().ClassicWindow.ItemWidth == 150 &&
+        !new MeterSettings().ClassicAllianceView,
+        "The classic Meter no longer starts in editable 8-player mode.");
     var defaultColumns = new MeterSettings();
+    var headerStart = new DateTimeOffset(2026, 8, 25, 20, 0, 0, TimeSpan.FromHours(8));
+    var headerEncounter = new Encounter(
+        Guid.NewGuid(),
+        headerStart,
+        headerStart.AddMinutes(2),
+        "Training Dummy",
+        "Training Dummy",
+        [],
+        [],
+        [],
+        [],
+        [],
+        [])
+    {
+        CombatDuration = TimeSpan.FromSeconds(1),
+    };
+    Assert(
+        MeterWindow.ResolveHeaderDuration(headerEncounter) == TimeSpan.FromMinutes(2),
+        "The Combat Meter header reused the one-second damage denominator " +
+        "instead of the fight duration.");
+    Assert(
+        Math.Abs(MeterWindow.ResolveStableColumnWidth(28, 1, 28, 8) - 34) < 0.0001f,
+        "A Meter column did not reserve its six-pixel header padding before truncating the label.");
     var clickThroughSettings = new MeterSettings
     {
         IsLocked = true,
@@ -1994,20 +2743,70 @@ static void ValidateMeterLayout()
         (clickThroughScrollableRows & MeterWindow.HorizontalScrollbarFlagMask) != 0 &&
         (unlockedRows & MeterWindow.NoInputsFlagMask) == 0,
         "The expanded Combat Meter child window does not follow the locked click-through setting.");
+    var summaryVisibilitySettings = new MeterSettings();
     Assert(
-        defaultColumns.ShowFflogs &&
-        defaultColumns.ShowDps &&
-        !defaultColumns.ShowHps &&
-        defaultColumns.ShowCriticalHitRate &&
-        !defaultColumns.ShowDirectHitRate &&
-        defaultColumns.ShowCriticalDirectHitRate &&
-        defaultColumns.ShowDamagePercent &&
-        defaultColumns.ShowDeaths &&
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) ==
-        MeterWindow.MinimumTableWidthWithFflogs &&
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) ==
-        MeterWindow.MinimumTableWidthWithoutFflogs,
-        "The requested FFLogs/DPS/CRIT/CDH/damage/deaths default column set is not preserved.");
+        MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        "The expanded classic Meter unexpectedly hid its team summary.");
+    summaryVisibilitySettings.CompactMode = true;
+    Assert(
+        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        "The collapsed classic Meter still rendered its team summary.");
+    summaryVisibilitySettings.CompactMode = false;
+    summaryVisibilitySettings.ClassicAllianceView = true;
+    Assert(
+        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        "The fixed 24-player classic layout unexpectedly rendered the editable team summary.");
+    Assert(
+        MeterWindow.ResolveIdentityColumnWidth(600, 600, 240, 90) == 240 &&
+        MeterWindow.ResolveIdentityColumnWidth(500, 600, 240, 90) == 140 &&
+        MeterWindow.ResolveIdentityColumnWidth(450, 600, 240, 90) == 90 &&
+        MeterWindow.ResolveIdentityColumnWidth(700, 600, 240, 90) == 340 &&
+        !MeterWindow.ShouldEnableHorizontalScroll(450, 450) &&
+        MeterWindow.ShouldEnableHorizontalScroll(448, 450),
+        "The identity column did not shrink to its minimum before enabling horizontal scrolling.");
+    var defaultClassicSlots = defaultColumns.ClassicWindow.Slots;
+    Assert(
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.PlayerIdentity) &&
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.Dps) &&
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.TotalDamage) &&
+        defaultClassicSlots.Any(static slot =>
+            slot.Visible && slot.Metric == MeterSlotMetric.HighestDamageAction) &&
+        defaultClassicSlots.Any(static slot =>
+            !slot.Visible && slot.Metric == MeterSlotMetric.Fflogs) &&
+        defaultClassicSlots.Any(static slot =>
+            !slot.Visible && slot.Metric == MeterSlotMetric.EncDps) &&
+        defaultClassicSlots.Any(static slot =>
+            !slot.Visible && slot.Metric == MeterSlotMetric.ExtDps) &&
+        defaultClassicSlots.All(static slot =>
+            slot.Metric is not MeterSlotMetric.Job and not MeterSlotMetric.PlayerName),
+        "The classic defaults lost composite identity, independent rate metrics, team totals, max hit, or the optional FFLogs slot.");
+    var independentRateRow = new CombatantRow(
+        "rate-row",
+        "Rate Row",
+        "SAM",
+        false,
+        1_000,
+        0,
+        180_000,
+        0,
+        100,
+        null,
+        null,
+        null,
+        0,
+        PersonalDps: 1_000,
+        Rdps: 1_100,
+        EncDps: 900,
+        ExtDps: 850);
+    Assert(
+        MeterSlotPresentation.Value(MeterSlotMetric.Dps, independentRateRow, "Rate Row") == "1,000" &&
+        MeterSlotPresentation.Value(MeterSlotMetric.Rdps, independentRateRow, "Rate Row") == "1,100" &&
+        MeterSlotPresentation.Value(MeterSlotMetric.EncDps, independentRateRow, "Rate Row") == "900" &&
+        MeterSlotPresentation.Value(MeterSlotMetric.ExtDps, independentRateRow, "Rate Row") == "850",
+        "Independent DPS-rate slots no longer render their own values.");
     var existingColumnChoices = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
         "{\"ShowHps\":true,\"ShowDirectHitRate\":true}")!;
     Assert(
@@ -2024,11 +2823,6 @@ static void ValidateMeterLayout()
     defaultColumns.ShowFflogs = true;
     defaultColumns.ShowHps = true;
     defaultColumns.ShowDirectHitRate = true;
-    Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: true) == 472 &&
-        !MeterWindow.ShouldEnableHorizontalScroll(500, 472) &&
-        MeterWindow.ShouldEnableHorizontalScroll(460, 472),
-        "Enabling every Meter column shows a horizontal scrollbar before name compression is exhausted.");
     defaultColumns.ShowFflogs = false;
     defaultColumns.ShowDps = false;
     defaultColumns.ShowHps = false;
@@ -2036,21 +2830,24 @@ static void ValidateMeterLayout()
     defaultColumns.ShowDirectHitRate = false;
     defaultColumns.ShowCriticalDirectHitRate = false;
     defaultColumns.ShowDamagePercent = false;
+    defaultColumns.ShowTotalDamage = false;
+    defaultColumns.ShowHighestDamage = false;
     defaultColumns.ShowDeaths = false;
-    Assert(
-        MeterWindow.CalculateMinimumTableWidth(defaultColumns, showFflogs: false) == 101,
-        "Hidden Meter columns still reserve horizontal layout width.");
     var restoredColumns = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
         Newtonsoft.Json.JsonConvert.SerializeObject(defaultColumns));
     Assert(
         restoredColumns is not null &&
         !restoredColumns.ShowFflogs &&
         !restoredColumns.ShowDps &&
+        !restoredColumns.ShowRdps &&
         !restoredColumns.ShowHps &&
         !restoredColumns.ShowCriticalHitRate &&
         !restoredColumns.ShowDirectHitRate &&
         !restoredColumns.ShowCriticalDirectHitRate &&
         !restoredColumns.ShowDamagePercent &&
+        !restoredColumns.ShowTotalDamage &&
+        !restoredColumns.ShowTotalHealing &&
+        !restoredColumns.ShowHighestDamage &&
         !restoredColumns.ShowDeaths,
         "Customized Meter column visibility does not survive configuration persistence.");
     var opaqueBackground = new System.Numerics.Vector4(0.1f, 0.2f, 0.3f, 0.8f);
@@ -2209,6 +3006,286 @@ static void ValidateMeterLayout()
         "A known Territory ID did not take priority over ACT's English zone name.");
 }
 
+static void ValidateIndependentMeterWindows()
+{
+    var projectRoot = FindProjectRoot();
+    var classicSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterWindow.cs"));
+    var horizontalSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "HorizontalMeterWindow.cs"));
+    var roleSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "RoleSplitMeterWindow.cs"));
+    var editorSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterStyleEditorWindow.cs"));
+    var meterSettingsSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterSettings.cs"));
+    var previewInteractionSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterPreviewInteraction.cs"));
+    var simplifiedSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "SimplifiedHomeWindow.cs"));
+    var controlCenterSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "ControlCenterWindow.cs"));
+    var settingsSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "SettingsWindow.cs"));
+
+    Assert(
+        typeof(HorizontalMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        typeof(RoleSplitMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        typeof(MeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
+        horizontalSource.Contains("ImGui.SetNextWindowBgAlpha(0)", StringComparison.Ordinal) &&
+        horizontalSource.Contains("ImGuiCol.WindowBg, Vector4.Zero", StringComparison.Ordinal) &&
+        horizontalSource.Contains("ImGuiCol.ChildBg, Vector4.Zero", StringComparison.Ordinal) &&
+        !horizontalSource.Contains("AddRectFilled", StringComparison.Ordinal) &&
+        horizontalSource.Contains("scrollOffset", StringComparison.Ordinal) &&
+        horizontalSource.Contains("viewport.Size.Y / 3", StringComparison.Ordinal) &&
+        horizontalSource.Contains("Flags |= ImGuiWindowFlags.NoResize", StringComparison.Ordinal) &&
+        horizontalSource.Contains("MeterSlotPresentation.SelectParty", StringComparison.Ordinal) &&
+        horizontalSource.Contains("horizontal-party-", StringComparison.Ordinal),
+        "The horizontal Meter is not a transparent eight-player slider with an alliance party selector.");
+    Assert(
+        classicSource.Contains("DrawClassicTable", StringComparison.Ordinal) &&
+        classicSource.Contains("DrawAllianceCompactTiles", StringComparison.Ordinal) &&
+        classicSource.Contains("players.Take(24)", StringComparison.Ordinal) &&
+        classicSource.Contains("ClassicAllianceView", StringComparison.Ordinal) &&
+        classicSource.Contains("classic-party-size-popup", StringComparison.Ordinal) &&
+        classicSource.Contains("layout.EncDps", StringComparison.Ordinal) &&
+        classicSource.Contains("layout.ExtDps", StringComparison.Ordinal) &&
+        classicSource.Contains("layout.Identity", StringComparison.Ordinal) &&
+        classicSource.Contains("case MeterSlotMetric.PlayerIdentity", StringComparison.Ordinal) &&
+        !classicSource.Contains("NameRight", StringComparison.Ordinal) &&
+        !classicSource.Contains("最高技能", StringComparison.Ordinal) &&
+        classicSource.Contains("DrawRankingModeIcon", StringComparison.Ordinal) &&
+        classicSource.Contains("FirstOrDefault(static row => row.IsLocalPlayer)", StringComparison.Ordinal) &&
+        classicSource.Contains("minimumIdentityWidth", StringComparison.Ordinal) &&
+        classicSource.Contains("杰克...", StringComparison.Ordinal) &&
+        classicSource.Contains("SetTooltip(displayName)", StringComparison.Ordinal) &&
+        classicSource.Contains("ShouldDrawTeamSummary(settings)", StringComparison.Ordinal) &&
+        classicSource.Contains("MinimumSize = new Vector2(120, 90)", StringComparison.Ordinal),
+        "The classic Meter lost its table modes, compact summary rule, or compressible identity column.");
+    Assert(
+        roleSource.Contains("DalamudActCompatRoleSplitDamageMeter", StringComparison.Ordinal) &&
+        roleSource.Contains("DalamudActCompatRoleSplitHealerMeter", StringComparison.Ordinal) &&
+        roleSource.Contains("classicRenderer.DrawClassicTable", StringComparison.Ordinal) &&
+        roleSource.Contains("CreateTableSettings", StringComparison.Ordinal) &&
+        roleSource.Contains("Profile.BackgroundOpacity", StringComparison.Ordinal) &&
+        roleSource.Contains("RoleSplitDamageCompact", StringComparison.Ordinal) &&
+        roleSource.Contains("DrawChevron", StringComparison.Ordinal) &&
+        roleSource.Contains("ApplyCompactWindowHeight(hasEncounter: false", StringComparison.Ordinal) &&
+        roleSource.Contains("AdvanceWindowHeightAnimation", StringComparison.Ordinal) &&
+        roleSource.Contains("MeterWindow.EaseOutCubic", StringComparison.Ordinal) &&
+        roleSource.Contains("configuration.Meter.RoleSplitDamageWindow", StringComparison.Ordinal) &&
+        roleSource.Contains("configuration.Meter.RoleSplitHealerWindow", StringComparison.Ordinal) &&
+        roleSource.Contains("private List<MeterSlotDefinition> Slots => Profile.Slots", StringComparison.Ordinal) &&
+        roleSource.Contains("ShowDps = Has(MeterSlotMetric.Dps)", StringComparison.Ordinal) &&
+        roleSource.Contains("ShowHps = Has(MeterSlotMetric.Hps)", StringComparison.Ordinal) &&
+        !roleSource.Contains("leadingDamage", StringComparison.Ordinal) &&
+        !roleSource.Contains("titleHovered", StringComparison.Ordinal),
+        "Role split lost its independent D/T/H columns, collapse control, empty-state collapse, or height animation.");
+    Assert(
+        editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
+        editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
+        editorSource.Contains("页面预览", StringComparison.Ordinal) &&
+        !editorSource.Contains("真实页面预览", StringComparison.Ordinal) &&
+        editorSource.Contains("meterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("horizontalMeterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("roleSplitDamageWindow.DrawEditorPreview", StringComparison.Ordinal) &&
+        editorSource.Contains("meter-editor-role-group", StringComparison.Ordinal) &&
+        editorSource.Contains("RoleSplitHealerWindow", StringComparison.Ordinal) &&
+        editorSource.Contains("RoleSplitDamageWindow", StringComparison.Ordinal) &&
+        editorSource.Contains("SynchronizeLegacyRoleSplitWindow", StringComparison.Ordinal) &&
+        editorSource.Contains("roleSplitHealerPreviewInteraction", StringComparison.Ordinal) &&
+        editorSource.Contains("CreateRoleSplitPreviewInteraction", StringComparison.Ordinal) &&
+        editorSource.Contains("SelectRoleSplitGroup(group, slotId)", StringComparison.Ordinal) &&
+        editorSource.Contains("ImGuiHoveredFlags.ChildWindows", StringComparison.Ordinal) &&
+        !editorSource.Contains(
+            "selectedRoleSplitGroup == RoleSplitGroup.DamageTank ? interaction : null",
+            StringComparison.Ordinal) &&
+        !editorSource.Contains(
+            "selectedRoleSplitGroup == RoleSplitGroup.Healer ? interaction : null",
+            StringComparison.Ordinal) &&
+        editorSource.Contains("ActivateWindow(selectedKind)", StringComparison.Ordinal) &&
+        editorSource.Contains("24 人本使用固定紧凑条", StringComparison.Ordinal) &&
+        editorSource.Contains("profile.BackgroundOpacity", StringComparison.Ordinal) &&
+        editorSource.Contains("configuration.Fflogs.Enabled", StringComparison.Ordinal) &&
+        editorSource.Contains("Move up", StringComparison.Ordinal) &&
+        editorSource.Contains("Move down", StringComparison.Ordinal) &&
+        editorSource.Contains("保存", StringComparison.Ordinal) &&
+        editorSource.Contains("取消", StringComparison.Ordinal) &&
+        editorSource.Contains("真的要退出吗？", StringComparison.Ordinal) &&
+        editorSource.Contains("保存并退出", StringComparison.Ordinal) &&
+        editorSource.Contains("不保存并退出", StringComparison.Ordinal) &&
+        editorSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
+        editorSource.Contains("editingSnapshot", StringComparison.Ordinal) &&
+        !editorSource.Contains("hasUnsavedChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("if (!HasUnsavedConfigurationChanges())", StringComparison.Ordinal) &&
+        editorSource.Contains("HasUnsavedConfigurationChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("SerializeForChangeDetection", StringComparison.Ordinal) &&
+        editorSource.Contains("CloseWithoutChanges", StringComparison.Ordinal) &&
+        editorSource.Contains("ImGuiWindowFlags.NoScrollbar", StringComparison.Ordinal) &&
+        editorSource.Contains("ImGui.GetFrameHeightWithSpacing()", StringComparison.Ordinal) &&
+        editorSource.Contains("DrawInlineHelp", StringComparison.Ordinal) &&
+        editorSource.Contains("moveButtonWidth", StringComparison.Ordinal) &&
+        previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
+        previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
+        meterSettingsSource.Contains("MigrateIndependentRoleSplitWindows", StringComparison.Ordinal) &&
+        meterSettingsSource.Contains("CopyRoleSplitAppearance", StringComparison.Ordinal) &&
+        !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
+        !editorSource.Contains("24×6", StringComparison.Ordinal) &&
+        !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
+        "The shared Meter editor lost runtime-identical previews, compact non-scrolling chrome, mutual activation, opacity, FFLogs gating, or dynamic slots.");
+    var serializeForChangeDetection = typeof(MeterStyleEditorWindow).GetMethod(
+                                          "SerializeForChangeDetection",
+                                          BindingFlags.Static | BindingFlags.NonPublic)
+                                      ?? throw new InvalidOperationException(
+                                          "Meter editor change-detection serializer was not found.");
+    var cleanEditorSettings = new MeterSettings
+    {
+        CustomStyles =
+        [
+            new MeterCustomStyle
+            {
+                Slots =
+                [
+                    new MeterSlotDefinition(
+                        MeterSlotMetric.HighestDamage,
+                        0,
+                        0,
+                        1,
+                        1,
+                        MeterSlotAlignment.Right),
+                ],
+            },
+        ],
+    };
+    var transientEditorSettings = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
+                                      Newtonsoft.Json.JsonConvert.SerializeObject(cleanEditorSettings))
+                                  ?? throw new InvalidOperationException(
+                                      "Meter editor test settings could not be cloned.");
+    transientEditorSettings.HorizontalWindow.IsEditing = true;
+    var cleanFingerprint = (string)serializeForChangeDetection.Invoke(null, [cleanEditorSettings])!;
+    var transientFingerprint = (string)serializeForChangeDetection.Invoke(null, [transientEditorSettings])!;
+    transientEditorSettings.HorizontalWindow.FontScale += 0.1f;
+    var changedFingerprint = (string)serializeForChangeDetection.Invoke(null, [transientEditorSettings])!;
+    Assert(
+        transientEditorSettings.CustomStyles.Single().Slots.Count == 1 &&
+        cleanFingerprint == transientFingerprint &&
+        cleanFingerprint != changedFingerprint,
+        "Meter editor dirty-state detection prompts for tab browsing or misses a real style change.");
+    Assert(
+        controlCenterSource.Contains("BeginCombo(\"##meter-template\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal) &&
+        Regex.Matches(controlCenterSource, "游戏失去焦点时隐藏网页悬浮窗").Count >= 2 &&
+        !controlCenterSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
+        !settingsSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("DrawMeterKindRadio", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("SynchronizeClassicProfileFromQuickSettings", StringComparison.Ordinal),
+        "Combat Meter settings did not consolidate template selection into a dropdown with external ID and FFLogs controls.");
+    Assert(
+        simplifiedSource.Contains("显示战斗统计悬浮窗", StringComparison.Ordinal) &&
+        simplifiedSource.Contains("退出精简模式", StringComparison.Ordinal) &&
+        simplifiedSource.Contains("关闭精简主页", StringComparison.Ordinal) &&
+        simplifiedSource.Contains("IsOpen = false", StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            simplifiedSource,
+            "ImGui\\.Button\\(\\s*text\\.Get\\(\"退出精简模式\"") &&
+        !simplifiedSource.Contains("EnableParsing", StringComparison.Ordinal) &&
+        !simplifiedSource.Contains("HTML", StringComparison.Ordinal),
+        "Simplified mode lost its dedicated controls or independent close action.");
+
+    var settings = new MeterSettings();
+    settings.ActivateWindow(MeterWindowKind.Horizontal);
+    settings.HorizontalWindow.Slots.Add(new MeterSlotDefinition(
+        MeterSlotMetric.TotalHealing,
+        0,
+        0,
+        4,
+        2,
+        MeterSlotAlignment.Left));
+    var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(settings));
+    Assert(
+        restored is not null &&
+        !restored.ClassicWindow.IsEnabled &&
+        restored.HorizontalWindow.IsEnabled &&
+        !restored.RoleSplitWindow.IsEnabled &&
+        restored.ActiveWindowKind == MeterWindowKind.Horizontal &&
+        restored.HorizontalWindow.Slots.Count == settings.HorizontalWindow.Slots.Count &&
+        restored.HorizontalWindow.Slots.Any(static slot =>
+            slot.Metric == MeterSlotMetric.TotalHealing),
+        "Single-template visibility or dynamic slots did not survive configuration persistence.");
+    settings.ActivateWindow(MeterWindowKind.RoleSplit);
+    Assert(
+        !settings.ClassicWindow.IsEnabled &&
+        !settings.HorizontalWindow.IsEnabled &&
+        settings.RoleSplitWindow.IsEnabled &&
+        settings.RoleSplitDamageWindow.IsEnabled &&
+        settings.RoleSplitHealerWindow.IsEnabled &&
+        settings.ActiveWindowKind == MeterWindowKind.RoleSplit,
+        "Selecting role split did not disable both other meter templates.");
+
+    var rankingProfile = new MeterWindowProfile
+    {
+        Slots =
+        [
+            new MeterSlotDefinition(MeterSlotMetric.Rdps, 0, 0, 4, 2, MeterSlotAlignment.Left),
+            new MeterSlotDefinition(MeterSlotMetric.Dps, 0, 0, 4, 2, MeterSlotAlignment.Left),
+            new MeterSlotDefinition(MeterSlotMetric.Hps, 0, 0, 4, 2, MeterSlotAlignment.Left)
+            {
+                Visible = false,
+            },
+        ],
+    };
+    Assert(
+        MeterSlotPresentation.ReplacePrimaryMetric(rankingProfile, MeterSortMode.Hps) &&
+        rankingProfile.Slots[0].Metric == MeterSlotMetric.Hps &&
+        rankingProfile.Slots[1].Metric == MeterSlotMetric.Dps &&
+        rankingProfile.Slots.Count(static slot => slot.Metric == MeterSlotMetric.Hps) == 1 &&
+        MeterSlotPresentation.ReplacePrimaryMetric(rankingProfile, MeterSortMode.Dps) &&
+        rankingProfile.Slots[0].Metric == MeterSlotMetric.Dps &&
+        rankingProfile.Slots.Count(static slot => slot.Metric == MeterSlotMetric.Dps) == 1 &&
+        rankingProfile.Slots.All(static slot =>
+            !slot.Visible || slot.Metric != MeterSlotMetric.Hps),
+        "DPS/HPS switching did not replace the earliest visible damage-rate slot without duplicates.");
+}
+
 static void ValidateFflogsEstimateCurve()
 {
     var estimatePercentile = typeof(FflogsEstimateService).GetMethod(
@@ -2299,10 +3376,14 @@ static void ValidateFflogsEstimateCurve()
         fflogsSource.Contains(
             "metric = CurrentFflogsEncounterTable.RankingMetric",
             StringComparison.Ordinal) &&
+        fflogsSource.Contains("$serverRegion: String", StringComparison.Ordinal) &&
+        fflogsSource.Contains("$partition: Int", StringComparison.Ordinal) &&
         fflogsSource.Contains("serverRegion: $serverRegion", StringComparison.Ordinal) &&
         fflogsSource.Contains("partition: $partition", StringComparison.Ordinal) &&
+        fflogsSource.Contains("serverRegion = scope.ServerRegion", StringComparison.Ordinal) &&
+        fflogsSource.Contains("partition = scope.Partition", StringComparison.Ordinal) &&
         fflogsSource.Contains("var encounterDps = combatant.Dps", StringComparison.Ordinal),
-        "FFLogs curves are no longer sourced from the CN DPS ranking population or the lookup stopped using actual DPS.");
+        "FFLogs curves stopped following the selected game region or the lookup stopped using actual DPS.");
 
     var legendary = FflogsEstimateService.ColorForPercentile(100);
     var pink = FflogsEstimateService.ColorForPercentile(99);
@@ -2448,6 +3529,22 @@ static void ValidateFflogsCurrentEncounterTable()
                            BindingFlags.Static | BindingFlags.NonPublic)
                        ?? throw new InvalidOperationException(
                            "The FFLogs phase observer was not found.");
+    var getRankingScope = tableType.GetMethod(
+                              "GetRankingScope",
+                              BindingFlags.Static | BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "The FFLogs ranking scope resolver was not found.");
+
+    var chineseScope = getRankingScope.Invoke(null, [true])
+                       ?? throw new InvalidOperationException("The Chinese FFLogs ranking scope was null.");
+    var globalScope = getRankingScope.Invoke(null, [false])
+                      ?? throw new InvalidOperationException("The global FFLogs ranking scope was null.");
+    Assert(
+        ReadProperty<string>(chineseScope, "ServerRegion") == "CN" &&
+        ReadProperty<int?>(chineseScope, "Partition") == 9 &&
+        ReadProperty<string?>(globalScope, "ServerRegion") is null &&
+        ReadProperty<int?>(globalScope, "Partition") is null,
+        "FFLogs ranking scopes no longer pin CN to partition 9 or use the latest global population.");
 
     object?[] normalM4Arguments = [1326u, 1, null];
     Assert(
@@ -2476,6 +3573,9 @@ static void ValidateFflogsCurrentEncounterTable()
     static int ReadEncounterValue(object? encounter, string propertyName)
         => (int)(encounter?.GetType().GetProperty(propertyName)?.GetValue(encounter)
                  ?? throw new InvalidOperationException($"Resolved FFLogs encounter has no {propertyName}."));
+
+    static T ReadProperty<T>(object value, string propertyName)
+        => (T)value.GetType().GetProperty(propertyName)!.GetValue(value)!;
 }
 
 static void ValidateEncounterParticipantsSurvivePartyDeparture()
@@ -2874,24 +3974,47 @@ static void ValidateDutyEncounterFolderAggregation()
 
 static void ValidateDutyWipeTracking()
 {
-    var openWorldTracker = new OpenWorldCombatResetTracker(
-        boundByDuty: false,
-        inCombat: false);
+    var now = DateTimeOffset.UtcNow;
+    var finishedPull = new Encounter(
+        Guid.NewGuid(),
+        now.AddMinutes(-1),
+        now,
+        "Test zone",
+        "Test target",
+        [new Combatant("local", "Player", "PLD", true, 1000, 0, 0)],
+        [],
+        [],
+        [],
+        [],
+        []);
+    var stateStore = new EncounterStateStore();
+    stateStore.UpdateCurrent(finishedPull);
     Assert(
-        !openWorldTracker.Observe(boundByDuty: false, inCombat: true) &&
-        openWorldTracker.Observe(boundByDuty: false, inCombat: false) &&
-        !openWorldTracker.Observe(boundByDuty: false, inCombat: false),
-        "An open-world combat exit did not reset exactly once.");
-
-    var dutyBoundaryTracker = new OpenWorldCombatResetTracker(
-        boundByDuty: true,
-        inCombat: true);
+        stateStore.GetDisplayEncounter()?.Id == finishedPull.Id &&
+        stateStore.GetDisplayEncounter()?.IsActive == false,
+        "A completed pull was not retained for post-combat review.");
+    var nextPull = finishedPull with
+    {
+        Id = Guid.NewGuid(),
+        StartTime = now.AddSeconds(5),
+        EndTime = null,
+        Combatants =
+        [
+            finishedPull.Combatants[0] with
+            {
+                TotalDamage = 25,
+            },
+        ],
+    };
+    stateStore.UpdateCurrent(nextPull);
     Assert(
-        !dutyBoundaryTracker.Observe(boundByDuty: true, inCombat: false) &&
-        !dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: false) &&
-        !dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: true) &&
-        dutyBoundaryTracker.Observe(boundByDuty: false, inCombat: false),
-        "A duty transition reset the open-world meter or blocked the next real outdoor reset.");
+        stateStore.GetDisplayEncounter() is { IsActive: true } currentPull &&
+        currentPull.Id == nextPull.Id && currentPull.TotalDamage == 25,
+        "Meaningful data from the next pull did not replace the retained result from zero.");
+    stateStore.ResetCurrent();
+    Assert(
+        stateStore.GetDisplayEncounter() is null,
+        "A manual reset allowed retained totals to bounce back into the meter.");
 
     var tracker = new DutyWipeTracker();
     Assert(
@@ -3210,6 +4333,9 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawCombatLogDirectorySettings();", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("text.Get(\"当前路径\", \"Current path\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("text.Get(\"更改目录...\", \"Change directory...\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
@@ -3479,6 +4605,9 @@ static void ValidateControlCenterPresentation()
         .ToHashSet(StringComparer.Ordinal);
     var missingLegacyPaths = legacyConfigurationPaths
         .Except(controlCenterConfigurationPaths, StringComparer.Ordinal)
+        // The metric selector was intentionally retired once DPS/rDPS/HPS became
+        // independent columns; retaining it in the parser model keeps old JSON readable.
+        .Where(static path => path != "configuration.Meter.DpsMetric")
         .Order(StringComparer.Ordinal)
         .ToArray();
     Assert(
@@ -4492,6 +5621,25 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
     {
         await service.DisposeAsync();
     }
+
+    var globalService = new FflogsEstimateService(
+        () => new FflogsSettings(),
+        cachePath,
+        new PluginLogger(log),
+        useChineseRankings: () => false);
+    try
+    {
+        var globalReference = globalService.ReferenceSnapshot;
+        Assert(
+            globalReference.Region == "Global" &&
+            globalReference.Partition is null &&
+            globalReference.CurveCount == 0,
+            "A Global client reused the cached CN partition or exposed a fixed partition number.");
+    }
+    finally
+    {
+        await globalService.DisposeAsync();
+    }
 }
 
 static async Task ValidateFactoryResetRollbackAsync(string testRoot)
@@ -4864,7 +6012,7 @@ static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
 
 static void ValidateDutyEncounterRosterReplacement()
 {
-    foreach (var partySize in new[] { 4, 8 })
+    foreach (var partySize in new[] { 4, 8, 24 })
     {
         var start = new DateTimeOffset(2026, 8, 12, 12, 0, 0, TimeSpan.Zero);
         var original = CreatePartySegment(
@@ -4959,6 +6107,46 @@ static void ValidateDutyEncounterRosterReplacement()
             original.Combatants.Any(combatant => combatant.Id == $"player-{partySize}"),
             $"The {partySize}-player pull did not keep its current roster separate from earlier snapshots.");
     }
+}
+
+static void ValidateHighestDamageAggregation()
+{
+    var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+    Encounter Segment(int offset, string action, long amount)
+        => new(
+            Guid.NewGuid(),
+            start.AddSeconds(offset),
+            start.AddSeconds(offset + 10),
+            "Test duty",
+            "Test target",
+            [new Combatant(
+                "player",
+                "Player",
+                "SAM",
+                true,
+                1_000,
+                0,
+                0,
+                HighestDamageAction: action,
+                HighestDamage: amount,
+                PartyGroup: 2)],
+            [], [], [], [], []);
+
+    var accumulator = new DutyEncounterAccumulator();
+    var first = Segment(0, "First", 100);
+    var equal = Segment(20, "Equal should not replace", 100);
+    var higher = Segment(40, "Higher", 120);
+    _ = accumulator.Update(first, finished: true, first.EndTime!.Value);
+    _ = accumulator.Update(equal, finished: true, equal.EndTime!.Value);
+    _ = accumulator.Update(higher, finished: true, higher.EndTime!.Value);
+    var completed = accumulator.Complete(higher.EndTime.Value)
+                    ?? throw new InvalidOperationException("Highest-hit duty did not complete.");
+    var player = completed.Combatants.Single();
+    Assert(
+        player.HighestDamageAction == "Higher" &&
+        player.HighestDamage == 120 &&
+        player.PartyGroup == 2,
+        "Duty aggregation did not replace only on a strictly higher hit or preserve alliance metadata.");
 }
 
 static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
@@ -7261,6 +8449,18 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "Meter",
         "MeterWindow.cs"));
+    var meterEditorSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterStyleEditorWindow.cs"));
+    var roleSplitSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "RoleSplitMeterWindow.cs"));
     var launcherWindowSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -7291,6 +8491,12 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "HelpWindow.cs"));
+    var brandedChromeSource = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat",
+        "UI",
+        "BrandedWindowChrome.cs"));
     var macroPluginSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -7333,12 +8539,6 @@ static void ValidateHtmlOverlayDefaults()
         "images",
         "readme",
         name));
-    var helpIconPath = Path.Combine(
-        FindProjectRoot(),
-        "src",
-        "DalamudActCompat",
-        "Assets",
-        "HelpIcon.png");
     // README structure is part of the install/support contract, but its wording may evolve.
     Assert(
         !readmeSource.Contains("/actcompat settings", StringComparison.Ordinal) &&
@@ -7397,21 +8597,20 @@ static void ValidateHtmlOverlayDefaults()
         settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
         "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
-    var helpEntryStart = controlCenterSource.IndexOf(
-        "private void DrawHelpEntry()",
-        StringComparison.Ordinal);
-    var helpEntryEnd = controlCenterSource.IndexOf(
-        "private void OpenCombatLogDirectoryForUpload()",
-        StringComparison.Ordinal);
-    var helpEntrySource = helpEntryStart >= 0 && helpEntryEnd > helpEntryStart
-        ? controlCenterSource[helpEntryStart..helpEntryEnd]
-        : string.Empty;
     Assert(
-        File.Exists(helpIconPath) && new FileInfo(helpIconPath).Length > 0 &&
-        controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("openHelp();", StringComparison.Ordinal) &&
-        helpEntrySource.Contains("iconHeight * wrap.Width / wrap.Height", StringComparison.Ordinal) &&
-        !helpEntrySource.Contains("AddRect", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("helpAction: openHelp", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("helpTooltip: text.Get(\"帮助\", \"Help\")", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("DrawHelpEntry", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("?##help-{id}", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("helpAction();", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("const float actionButtonSize = 28;", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("actionButtonOffsetY", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains(
+            "new Vector2(actionButtonSize, actionButtonSize)",
+            StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("const float helpCloseGap = 3;", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("actionButtonSize + helpCloseGap", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
@@ -7431,14 +8630,21 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("停止产生相关战斗数据 5 秒后清空实时统计", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("只有确认全队团灭后重新开怪才从 0 开始", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("战斗结束后悬浮窗会保留上一把结果", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("手动重置会立即清空", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("新配置默认显示 FFLogs、DPS、暴击%、直暴%", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("24 人本把所有玩家放在同一紧凑列表", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("总伤害、最高伤害和死亡", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("最高伤害使用紧凑宽度显示", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("三个模板互斥启用", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("页面预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("设为 0 时背景完全透明", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("横版始终没有背景", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("只有存在未保存修改时", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("没有修改会直接关闭", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("职业 / ID 会先缩到两字", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS", StringComparison.Ordinal) &&
         helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
         helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
         helpWindowSource.Contains("实际 FileVersion", StringComparison.Ordinal) &&
@@ -7447,6 +8653,7 @@ static void ValidateHtmlOverlayDefaults()
             "/actcompat on",
             "/actcompat off",
             "/actcompat meter",
+            "/actcompat simple on|off",
             "/actcompat history",
             "/actcompat logs",
             "/actcompat status",
@@ -7463,12 +8670,18 @@ static void ValidateHtmlOverlayDefaults()
         Regex.IsMatch(
             macroPluginSource,
             "case \\\"off\\\":\\s+settingsWindow\\.HideAnimated\\(\\);") &&
-        Regex.IsMatch(
-            macroPluginSource,
-            "case \\\"on\\\":\\s+settingsWindow\\.LocateAnimated\\(\\);") &&
-        Regex.IsMatch(
-            macroPluginSource,
-            "case \\\"\\\":\\s+settingsWindow\\.ToggleAnimated\\(\\);") &&
+        macroPluginSource.Contains("case \"on\":", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("OpenConfigUi();", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("case \"simple\":", StringComparison.Ordinal) &&
+        macroPluginSource.Contains("SetSimplifiedMode", StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "verb is not (\"\" or \"on\" or \"simple\" or \"meter\" or \"clear\")",
+            StringComparison.Ordinal) &&
+        macroPluginSource.Contains(
+            "Only meter, clear, and simple commands are available in simplified mode.",
+            StringComparison.Ordinal) &&
+        macroPluginSource.Contains("GameForegroundDetector.IsCurrentProcessForeground()", StringComparison.Ordinal) &&
+        launcherWindowSource.Contains("!configuration.SimplifiedModeEnabled", StringComparison.Ordinal) &&
         Regex.IsMatch(
             macroPluginSource,
             "case \\\"meter\\\":\\s+OpenMeter\\(\\);") &&
@@ -7510,6 +8723,8 @@ static void ValidateHtmlOverlayDefaults()
             "RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds)",
             StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutyWipeTracker.Observe", StringComparison.Ordinal) &&
+        !parserAdapterSource.Contains("OpenWorldCombatResetTracker", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("stateStore.UpdateCurrent(encounter);", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("isDutyPartyWiped()", StringComparison.Ordinal) &&
         !parserAdapterSource.Contains("finished && !inCombat", StringComparison.Ordinal) &&
         macroPluginSource.Contains("ConditionFlag.Unconscious", StringComparison.Ordinal) &&
@@ -7572,20 +8787,20 @@ static void ValidateHtmlOverlayDefaults()
         !meterWindowSource.Contains("ResetCurrent", StringComparison.Ordinal) &&
         !meterWindowSource.Contains("清空当前战斗", StringComparison.Ordinal) &&
         !meterWindowSource.Contains("DrawControls(", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("meter-column-header", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("#  玩家", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("layout.DirectHit", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("MeasureColumnWidths", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("DrawClassicTable", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("DrawAllianceCompactTiles", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("MeterSlotPresentation.DisplayName", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("DrawTeamSummary", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("FormatHighestDamage", StringComparison.Ordinal) &&
         meterWindowSource.Contains("const string ellipsis = \"...\"", StringComparison.Ordinal) &&
         meterWindowSource.Contains("ApplyBackgroundOpacity", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("configuration.Meter.ShowFflogs", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("configuration.Meter.ShowDirectHitRate", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("configuration.Meter.ShowFflogs", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("configuration.Meter.ShowDirectHitRate", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("configuration.Meter.BackgroundOpacity, 0, 1", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("configuration.Meter.BackgroundOpacity, 0, 1.0f", StringComparison.Ordinal) &&
-        meterWindowSource.Contains("jobIcons.GetLimitBreak()", StringComparison.Ordinal),
-        "The Meter overlay controls, customizable columns, transparent background, or Limit Break icon regressed.");
+        meterEditorSource.Contains("profile.BackgroundOpacity", StringComparison.Ordinal) &&
+        roleSplitSource.Contains("Profile.BackgroundOpacity", StringComparison.Ordinal) &&
+        meterEditorSource.Contains("configuration.Meter.LocalPlayerColor", StringComparison.Ordinal) &&
+        meterEditorSource.Contains("MeterSlotDefaults.EditableMetrics", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal),
+        "The Meter tiles, external identity/FFLogs settings, team summary, or editor-owned style controls regressed.");
 
     var settings = new HtmlOverlayWindowSettings();
     Assert(!settings.IsVisible, "HTML overlays must remain closed until explicitly opened.");
@@ -8065,6 +9280,9 @@ static void ValidateHtmlOverlayDefaults()
         htmlOverlayFormSource.Contains("RetryFailedWebViewAsync", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("pendingInitialization", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("ShutdownCompletion", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("private volatile bool desiredVisible;", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("public void SetTemporarilyHidden(bool hidden)", StringComparison.Ordinal) &&
+        htmlOverlayFormSource.Contains("if (desiredVisible)", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains("form.BeginInvoke(async () =>", StringComparison.Ordinal) &&
         !htmlOverlayFormSource.Contains("form.Invoke(() =>", StringComparison.Ordinal) &&
         htmlOverlayFormSource.Contains(
@@ -8088,6 +9306,9 @@ static void ValidateHtmlOverlayDefaults()
         selfHostedRuntimeSource.Contains(
             "ReleaseWebViewSessionLockWhenSafe",
             StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains("SetHtmlOverlaysSuppressed", StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains("cactbotSettings?.SetTemporarilyHidden", StringComparison.Ordinal) &&
+        selfHostedRuntimeSource.Contains("window.SetTemporarilyHidden(suppressed)", StringComparison.Ordinal) &&
         Regex.Matches(
             selfHostedRuntimeSource,
             Regex.Escape("cactbotOverlay.Show();")).Count == 1,
@@ -9384,7 +10605,10 @@ static void ValidateActEncounterMapping()
                 "local", "You", "SAM", true, 120_000, 2_000, 0,
                 13_000, 12_000, 12_000,
                 DamageHits: 40, CriticalHits: 12, CriticalDirectHits: 4,
-                Rdps: 11_500, DirectHits: 16),
+                Rdps: 11_500, DirectHits: 16,
+                HighestDamageAction: "Midare Setsugekka",
+                HighestDamage: 99_999,
+                PartyGroup: 3),
             new ActCombatantSnapshot("healer", "Healer", "WHM", false, 20_000, 90_000, 1),
             new ActCombatantSnapshot(
                 "early",
@@ -9402,6 +10626,7 @@ static void ValidateActEncounterMapping()
     {
         CombatDuration = TimeSpan.FromSeconds(9),
         IsTransitioning = true,
+        PartyCapacity = 24,
     };
 
     var encounter = ActEncounterMapper.Map(snapshot);
@@ -9409,8 +10634,10 @@ static void ValidateActEncounterMapping()
     Assert(encounter.StartTime == start, "ACT encounter start time was not preserved.");
     Assert(encounter.IsActive, "Active ACT encounter was mapped as finished.");
     Assert(
-        encounter.IsTransitioning && encounter.CombatDuration == TimeSpan.FromSeconds(9),
-        "ACT transition state or effective combat duration was not mapped.");
+        encounter.IsTransitioning &&
+        encounter.CombatDuration == TimeSpan.FromSeconds(9) &&
+        encounter.PartyCapacity == 24,
+        "ACT transition state, effective combat duration, or party capacity was not mapped.");
     Assert(encounter.TotalDamage == 140_001, "ACT combatant damage totals were not mapped.");
     Assert(encounter.TotalHealing == 92_000, "ACT combatant healing totals were not mapped.");
     Assert(encounter.TotalDeaths == 1, "ACT combatant deaths were not mapped.");
@@ -9426,6 +10653,11 @@ static void ValidateActEncounterMapping()
         local.DamageHits == 40 && local.CriticalHits == 12 &&
         local.DirectHits == 16 && local.CriticalDirectHits == 4,
         "ACT critical, direct, and critical-direct hit counts were not mapped.");
+    Assert(
+        local.HighestDamageAction == "Midare Setsugekka" &&
+        local.HighestDamage == 99_999 &&
+        local.PartyGroup == 3,
+        "ACT highest-hit or 24-player alliance metadata was not mapped.");
     var legacyHistoryJson = System.Text.Json.Nodes.JsonNode
         .Parse(JsonSerializer.Serialize(encounter))!
         .AsObject();
@@ -9479,6 +10711,14 @@ static void ValidateChineseCombatChatParsing()
             out var announcedActor) &&
         announcedActor == "附近玩家",
         "Chinese split combat chat did not update its announced actor before the damage line.");
+    Assert(
+        ChineseCombatChatParser.TryExtractActionAnnouncement(
+            "埃斯蒂尼安丿咏唱了“注药III”。",
+            out var castingActor,
+            out var castingAction) &&
+        castingActor == "埃斯蒂尼安丿" &&
+        castingAction == "注药III",
+        "Chinese cast announcements were not accepted as split combat context.");
     Assert(
         ChineseCombatChatParser.TryParse(
             "埃斯蒂尼安丿发动攻击 \uE06F 木人受到了3714点伤害。",
@@ -9584,25 +10824,94 @@ static void ValidateChineseCombatChatParsing()
         limitBreakDamage == 936686,
         "Chinese Limit Break damage was attributed to the player instead of the synthetic LB combatant.");
 
+    Assert(
+        NetworkDamageFallbackParser.TryParse(
+            "21|2026-08-24T22:11:10.0000000+08:00|10028D6F|埃斯蒂尼安丿|5EF8|注药III|400018C8|木人|752003|9F630000",
+            out var chineseNetworkDamage) &&
+        chineseNetworkDamage.SourceId == 0x10028D6F &&
+        chineseNetworkDamage.SourceName == "埃斯蒂尼安丿" &&
+        chineseNetworkDamage.TargetName == "木人" &&
+        chineseNetworkDamage.ActionName == "注药III" &&
+        chineseNetworkDamage.Damage == 40803 &&
+        chineseNetworkDamage.IsCritical &&
+        !chineseNetworkDamage.IsDirectHit,
+        "The real Sage Dosis III network line did not produce region-neutral fallback damage.");
+    Assert(
+        NetworkDamageFallbackParser.TryParse(
+            "21|2026-08-24T14:11:10.0000000Z|10028D6F|Example Player|5EF8|Dosis III|400018C8|Striking Dummy|752003|9F630000",
+            out var globalNetworkDamage) &&
+        globalNetworkDamage.Damage == chineseNetworkDamage.Damage &&
+        globalNetworkDamage.ActionName == "Dosis III",
+        "The structured damage fallback still depends on Chinese combat text.");
+    Assert(
+        NetworkDamageFallbackParser.TryParse(
+            "24|2026-08-24T14:11:13.0000000Z|400018C8|Striking Dummy|DoT|0|00000ABC|0|0|0|0|0|0|0|0|0|0|10028D6F|Example Player|checksum",
+            out var periodicNetworkDamage) &&
+        periodicNetworkDamage.SourceId == 0x10028D6F &&
+        periodicNetworkDamage.TargetName == "Striking Dummy" &&
+        periodicNetworkDamage.Damage == 0xABC &&
+        periodicNetworkDamage.ActionName == "DoT",
+        "Region-neutral fallback damage dropped periodic damage after the opening cast.");
+
     var snapshotTime = DateTimeOffset.UtcNow;
-    var emptyActSnapshot = new ActEncounterSnapshot(
+    var healingActSnapshot = new ActEncounterSnapshot(
         Guid.NewGuid(),
         snapshotTime,
         snapshotTime,
         "Middle La Noscea",
         "木人",
-        [new ActCombatantSnapshot("player", "Player", "PLD", true, 0, 0, 0)]);
+        [new ActCombatantSnapshot("player", "Player", "SGE", true, 0, 16703, 0)]);
     var chatFallbackSnapshot = new ActEncounterSnapshot(
-        emptyActSnapshot.Id,
+        healingActSnapshot.Id,
         snapshotTime,
         snapshotTime,
         "Middle La Noscea",
         "木人",
-        [new ActCombatantSnapshot("player", "Player", "PLD", true, 936686, 0, 0)]);
+        [new ActCombatantSnapshot(
+            "player",
+            "Player",
+            "SGE",
+            true,
+            40803,
+            0,
+            0,
+            Dps: 40803,
+            DamageHits: 1,
+            CriticalHits: 1,
+            HighestDamageAction: "Dosis III",
+            HighestDamage: 40803)]);
+    var mergedFallbackSnapshot = SelfHostedActRuntime.MergeFallbackDamage(
+        healingActSnapshot,
+        chatFallbackSnapshot);
     Assert(
-        SelfHostedActRuntime.ShouldPreferChatFallback(emptyActSnapshot, chatFallbackSnapshot) &&
-        !SelfHostedActRuntime.ShouldPreferChatFallback(chatFallbackSnapshot, emptyActSnapshot),
-        "A zero-damage ACT completion snapshot can still overwrite a valid chat fallback snapshot.");
+        mergedFallbackSnapshot?.Combatants.Single() is
+        {
+            TotalDamage: 40803,
+            TotalHealing: 16703,
+            DamageHits: 1,
+            CriticalHits: 1,
+            HighestDamageAction: "Dosis III",
+        },
+        "Fallback damage replaced the healer's ACT healing instead of merging the missing fields.");
+    var authoritativeActSnapshot = healingActSnapshot with
+    {
+        Combatants =
+        [
+            healingActSnapshot.Combatants[0] with
+            {
+                TotalDamage = 12345,
+                Dps = 12345,
+            },
+        ],
+    };
+    Assert(
+        SelfHostedActRuntime.MergeFallbackDamage(
+            authoritativeActSnapshot,
+            chatFallbackSnapshot)?.Combatants.Single().TotalDamage == 12345 &&
+        ReferenceEquals(
+            SelfHostedActRuntime.MergeFallbackDamage(null, chatFallbackSnapshot),
+            chatFallbackSnapshot),
+        "Fallback damage double-counted an authoritative ACT total or failed to cover an empty ACT snapshot.");
 }
 
 static void ValidateDiagnosticReport(string testRoot)
@@ -9762,6 +11071,62 @@ static void Assert(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static void ValidateCombatLogDirectoryConfiguration(string testRoot)
+{
+    var pluginType = typeof(ControlCenterWindow).Assembly.GetType(
+        "DalamudActCompat.Plugin.Plugin",
+        throwOnError: true)!;
+    var prepareDirectory = pluginType.GetMethod(
+        "TryPrepareCombatLogDirectory",
+        BindingFlags.NonPublic | BindingFlags.Static)!;
+    var requestedDirectory = Path.Combine(testRoot, "custom-fflogs-upload-logs");
+    object?[] validArguments = [requestedDirectory, null, null];
+    var valid = (bool)prepareDirectory.Invoke(null, validArguments)!;
+    var normalizedDirectory = (string)validArguments[1]!;
+    Assert(
+        valid &&
+        normalizedDirectory == Path.GetFullPath(requestedDirectory) &&
+        Directory.Exists(normalizedDirectory) &&
+        !Directory.EnumerateFiles(normalizedDirectory, ".dact-write-probe-*.tmp").Any(),
+        "A writable custom FFLogs upload directory was rejected or its permission probe was left behind.");
+
+    object?[] invalidArguments = [" ", null, null];
+    Assert(
+        !(bool)prepareDirectory.Invoke(null, invalidArguments)! &&
+        !string.IsNullOrWhiteSpace((string)invalidArguments[2]!),
+        "An empty FFLogs upload directory was accepted without a validation error.");
+
+    var fileInsteadOfDirectory = Path.Combine(testRoot, "fflogs-directory-collision");
+    File.WriteAllText(fileInsteadOfDirectory, "occupied");
+    object?[] unwritableArguments = [fileInsteadOfDirectory, null, null];
+    Assert(
+        !(bool)prepareDirectory.Invoke(null, unwritableArguments)! &&
+        !string.IsNullOrWhiteSpace((string)unwritableArguments[2]!),
+        "A file collision was accepted as a writable FFLogs upload directory.");
+
+    var restoredConfiguration = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(new PluginConfiguration
+        {
+            LogDirectory = normalizedDirectory,
+        }));
+    var constructorParameters = typeof(ControlCenterWindow).GetConstructors().Single().GetParameters();
+    Assert(
+        restoredConfiguration?.LogDirectory == normalizedDirectory &&
+        constructorParameters.Any(parameter =>
+            parameter.Name == "getCombatLogDirectory" &&
+            parameter.ParameterType == typeof(Func<string>)) &&
+        constructorParameters.Any(parameter =>
+            parameter.Name == "selectCombatLogDirectory" &&
+            parameter.ParameterType == typeof(Action<Action<bool, string>>)) &&
+        constructorParameters.Any(parameter =>
+            parameter.Name == "resetCombatLogDirectory" &&
+            parameter.ParameterType == typeof(Action<Action<bool, string>>)) &&
+        typeof(IinactAdapter).GetConstructors().Single().GetParameters().Any(parameter =>
+            parameter.Name == "getLogDirectory" &&
+            parameter.ParameterType == typeof(Func<string>)),
+        "The custom upload directory is not persisted, exposed on Settings, or resolved again when the parser restarts.");
 }
 
 public sealed class GenericActPluginFixture : IActPluginV1
@@ -10178,5 +11543,105 @@ internal sealed class BundledPluginUpdateHandler : HttpMessageHandler
         }
 
         return output.ToArray();
+    }
+}
+
+sealed record ResourcePackFixture(
+    string PluginDirectory,
+    string CacheDirectory,
+    byte[] ArchiveBytes,
+    ResourcePackEntry Entry);
+
+sealed class ScriptedHttpMessageHandler(
+    Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
+{
+    private readonly object syncRoot = new();
+    private readonly List<Uri> requests = [];
+
+    public IReadOnlyList<Uri> Requests
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return requests.ToArray();
+            }
+        }
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        lock (syncRoot)
+        {
+            requests.Add(request.RequestUri!);
+        }
+        return Task.FromResult(responseFactory(request));
+    }
+}
+
+sealed class InterruptingReadStream(byte[] bytes, int interruptAfter) : Stream
+{
+    private readonly MemoryStream inner = new(bytes, writable: false);
+    private bool interrupted;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => inner.Length;
+    public override long Position
+    {
+        get => inner.Position;
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        ThrowIfInterrupted();
+        var available = Math.Min(count, interruptAfter - (int)inner.Position);
+        return inner.Read(buffer, offset, Math.Max(0, available));
+    }
+
+    public override int Read(Span<byte> buffer)
+    {
+        ThrowIfInterrupted();
+        var available = Math.Min(buffer.Length, interruptAfter - (int)inner.Position);
+        return inner.Read(buffer[..Math.Max(0, available)]);
+    }
+
+    public override ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(Read(buffer.Span));
+    }
+
+    private void ThrowIfInterrupted()
+    {
+        if (inner.Position < interruptAfter || interrupted)
+        {
+            return;
+        }
+        interrupted = true;
+        throw new IOException("simulated interrupted download");
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            inner.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }

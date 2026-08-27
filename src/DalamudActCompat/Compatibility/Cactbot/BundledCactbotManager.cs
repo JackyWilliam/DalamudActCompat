@@ -13,10 +13,13 @@ public sealed class BundledCactbotManager
 
     public BundledCactbotManager(
         string pluginAssemblyDirectory,
-        CactbotPackageInstaller installer)
+        CactbotPackageInstaller installer,
+        bool directoryIsBundleRoot = false)
     {
         this.installer = installer;
-        package = LoadAndValidate(Path.Combine(pluginAssemblyDirectory, DirectoryName));
+        package = LoadAndValidate(directoryIsBundleRoot
+            ? pluginAssemblyDirectory
+            : Path.Combine(pluginAssemblyDirectory, DirectoryName));
     }
 
     public string BundledVersion => package.Version;

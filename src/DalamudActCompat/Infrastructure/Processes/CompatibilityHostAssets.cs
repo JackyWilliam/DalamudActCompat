@@ -13,10 +13,17 @@ public sealed class CompatibilityHostAssets
     private readonly string targetDirectory;
     private readonly PluginLogger logger;
     private readonly Assembly assembly;
+    private readonly string? packagedHostDirectory;
 
-    public CompatibilityHostAssets(string targetRootDirectory, PluginLogger logger)
+    public CompatibilityHostAssets(
+        string targetRootDirectory,
+        PluginLogger logger,
+        string? packagedHostDirectory = null)
     {
         this.logger = logger;
+        this.packagedHostDirectory = string.IsNullOrWhiteSpace(packagedHostDirectory)
+            ? null
+            : Path.GetFullPath(packagedHostDirectory);
         assembly = typeof(CompatibilityHostAssets).Assembly;
         targetDirectory = Path.Combine(
             Path.GetFullPath(targetRootDirectory),
@@ -37,6 +44,12 @@ public sealed class CompatibilityHostAssets
 
     private void EnsureExtractedLocked()
     {
+        if (packagedHostDirectory is not null && Directory.Exists(packagedHostDirectory))
+        {
+            EnsurePackagedFilesCopied();
+            return;
+        }
+
         var resources = assembly.GetManifestResourceNames()
             .Where(name => name.StartsWith(ResourcePrefix, StringComparison.Ordinal))
             .ToArray();
@@ -80,6 +93,52 @@ public sealed class CompatibilityHostAssets
         }
 
         logger.Information($"Compatibility host assets are available under {targetDirectory}.");
+    }
+
+    private void EnsurePackagedFilesCopied()
+    {
+        Directory.CreateDirectory(targetDirectory);
+        foreach (var source in Directory.GetFiles(packagedHostDirectory!, "*", SearchOption.TopDirectoryOnly))
+        {
+            var destination = Path.Combine(targetDirectory, Path.GetFileName(source));
+            if (File.Exists(destination) && FilesMatch(source, destination))
+            {
+                continue;
+            }
+
+            var temporary = destination + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.Copy(source, temporary, overwrite: false);
+                using (var output = new FileStream(temporary, FileMode.Open, FileAccess.Write, FileShare.None))
+                {
+                    output.Flush(flushToDisk: true);
+                }
+                File.Move(temporary, destination, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
+            }
+        }
+
+        logger.Information($"Compatibility host resource pack is available under {targetDirectory}.");
+    }
+
+    private static bool FilesMatch(string left, string right)
+    {
+        var leftInfo = new FileInfo(left);
+        var rightInfo = new FileInfo(right);
+        if (leftInfo.Length != rightInfo.Length)
+        {
+            return false;
+        }
+        using var leftStream = leftInfo.OpenRead();
+        using var rightStream = rightInfo.OpenRead();
+        return SHA256.HashData(leftStream).AsSpan().SequenceEqual(SHA256.HashData(rightStream));
     }
 
     private static string GetAssetSetDirectoryName(Assembly sourceAssembly)

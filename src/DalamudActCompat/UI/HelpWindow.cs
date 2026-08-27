@@ -364,8 +364,8 @@ public sealed class HelpWindow : Window
                 "概览：查看解析器是否运行，开关解析和自动启动，并打开战斗统计、战斗历史、运行状态或 FFLogs 原始日志目录。日常确认状态从这里开始。",
                 "Overview: check whether the parser is running, control parsing and automatic startup, and open Combat Meter, history, Runtime Status, or the raw FFLogs log folder. Start routine checks here."));
             DrawBullet(text.Get(
-                "战斗统计：显示或定位统计窗，调整锁定、穿透、自动隐藏、DPS/HPS 排序、DPS 口径、职业显示、匿名显示和 FFLogs DPS Parse 预估。",
-                "Combat Meter: show or locate the meter and configure lock, click-through, auto hide, DPS/HPS sorting, DPS metric, job labels, anonymization, and estimated FFLogs DPS Parse."));
+                "战斗统计：显示或定位统计窗，切换互斥模板和 8/24 人模式，并调整锁定、穿透、自动隐藏、独立统计槽位、职业显示、匿名显示和 FFLogs DPS Parse 预估。",
+                "Combat Meter: show or locate the meter; switch the exclusive template and 8/24-player mode; configure lock, click-through, auto hide, independent metric slots, job labels, anonymization, and estimated FFLogs DPS Parse."));
             DrawBullet(text.Get(
                 "悬浮窗：安装或设置 Cactbot，从本地模板添加窗口，或用可信网址创建 HTML 悬浮窗；打开过的窗口在上方列表中分别管理。",
                 "Overlays: install or configure Cactbot, add windows from local templates, or create an HTML overlay from a trusted URL. Previously opened windows are managed individually in the upper list."));
@@ -379,8 +379,8 @@ public sealed class HelpWindow : Window
         DrawCard("help-start-first-fight", text.Get("第一场战斗怎么确认成功", "Confirming your first encounter"), 246, () =>
         {
             DrawBullet(text.Get(
-                "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。联盟其他小队、宠物和普通 NPC 不会作为独立玩家行显示。",
-                "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party; other alliance parties, pets, and ordinary NPCs are not separate player rows."));
+                "进入副本或攻击木人后产生一次有效伤害；战斗统计应出现自己和当前小队成员。经典榜可在标题区切换 8 人本与 24 人本；24 人本把所有玩家放在同一紧凑列表，不按 A/B/C 分组。宠物和普通 NPC 不会作为独立玩家行显示。",
+                "Enter a duty or attack a striking dummy and deal valid damage. Combat Meter should show you and the current party. The classic header switches between 8-player and 24-player mode; 24-player mode keeps everyone in one compact, ungrouped list. Pets and ordinary NPCs are not separate player rows."));
             DrawBullet(text.Get(
                 "右键 ACT 快捷按钮可打开或关闭战斗统计，输入 /actcompat meter 可打开并定位；战斗结束后用 /actcompat history 查看近期战斗。",
                 "Right-click the ACT quick button to open or close Combat Meter, or use /actcompat meter to open and locate it. After combat, use /actcompat history for recent encounters."));
@@ -425,25 +425,28 @@ public sealed class HelpWindow : Window
                 "“脱战自动隐藏”只改变显示状态，不会停止解析或删除战斗数据。",
                 "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
             DrawBullet(text.Get(
-                "背景透明度会统一作用于窗口、标题、表头、玩家行和进度条的底色；设为 0 时背景完全透明，但文字和图标仍会显示。它不会改变计算结果。",
-                "Background opacity applies consistently to the window, title, table header, player rows, and bar fills. At zero the background is fully transparent while text and icons remain visible. It does not change calculations."));
+                "经典榜、D/T 榜和 H 榜分别保存背景透明度，并统一作用于窗口、标题、表头、玩家行和进度条底色；横版始终没有背景，因此不提供该滑块。",
+                "Classic, D/T, and H save opacity independently and apply it to the window, header, table rows, and bar fills. Horizontal always has no background, so it has no opacity slider."));
         });
-        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 492, () =>
+        DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 640, () =>
         {
             DrawBullet(text.Get(
                 "先关闭“锁定窗口”，把统计窗拖到需要的位置，再重新锁定；需要让鼠标操作游戏时同时开启“锁定时鼠标穿透”。",
                 "First disable Lock window, move the meter to the desired position, then lock it again. Also enable Click-through when locked when mouse input should go to the game."));
             DrawBullet(text.Get(
-                "“排序 / 主要数据”只决定按 DPS 还是 HPS 排名；“DPS 口径”决定 DPS 列使用个人有效时长、整场时长、兼容字段或预估 rDPS。它们不会强制打开或关闭显示列。",
-                "Sort / primary metric controls only DPS or HPS ranking. DPS metric selects personal active duration, full-encounter duration, the compatibility field, or estimated rDPS for the DPS column. Neither setting forces a display column on or off."));
+                "DPS/HPS 榜按钮只决定排名方向和主要数据；DPS、EncDPS、ExtDPS、rDPS 与 HPS 都是独立槽位，可分别显示或隐藏，不再使用全局 DPS 计算口径。",
+                "The DPS/HPS ranking button only controls ranking and the primary value. DPS, EncDPS, ExtDPS, rDPS, and HPS are independent slots that can be shown or hidden separately; there is no global DPS-metric selector."));
             DrawBullet(text.Get(
-                "在“显示列”中可分别开关 FFLogs、DPS、HPS、暴击%、直击%、直暴%、伤害占比%和死亡。新配置默认显示 FFLogs、DPS、暴击%、直暴%、伤害占比%和死亡；HPS 与直击%默认关闭，也可以自行打开。FFLogs 只有同时开启在线预估和 FFLogs 显示列时才出现。",
-                "Visible columns independently controls FFLogs, DPS, HPS, CRIT %, DH %, CDH %, damage %, and deaths. New configurations show FFLogs, DPS, CRIT %, CDH %, damage %, and deaths by default; HPS and DH % remain available but start disabled. FFLogs appears only when both online estimates and its display column are enabled."));
+                "在槽位列表中可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高伤害和死亡。最高伤害使用紧凑宽度显示，悬停可查看完整技能名与数值；FFLogs 只有同时开启在线预估和对应槽位时才出现。",
+                "Slots independently control FFLogs, DPS, EncDPS, ExtDPS, rDPS, HPS, CRIT %, DH %, CDH %, damage %, total damage, highest single-hit action, and deaths. FFLogs appears only when both online estimates and its slot are enabled."));
             DrawBullet(text.Get(
-                "“收起（只显示自己）”只隐藏其他队员的行，不会停止统计；想看全队时取消勾选。玩家 ID 遮盖也只影响界面，不会改写战斗日志。",
-                "Collapsed (self only) hides other party rows without stopping collection. Disable it to see the party. Player-ID masking also affects only the UI and does not rewrite combat logs."));
+                "经典榜、横版和职能分栏三个模板互斥启用。职能分栏中的 D/T 与 H 各自保存标题、字号、透明度、锁定、穿透、脱战隐藏和槽位；DPS、HPS、全队汇总等内容由当前分栏自己的槽位决定，H 榜不会强制添加 DPS。24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。横版没有背景，可横向滑动并按当前榜单排序。编辑器的页面预览直接复用真实悬浮窗渲染，并支持点选、拖动排序以及保存或取消修改。只有存在未保存修改时，点击取消或右上角关闭才会询问保存并退出、不保存并退出或继续编辑；没有修改会直接关闭。",
+                "Classic, Horizontal, and Role split are mutually exclusive templates. Within Role split, D/T and H independently save the header, font size, opacity, lock, click-through, auto-hide, and slots. DPS, HPS, and team summaries are controlled by the current pane's own slots, and H never forces a DPS slot. The 24-player classic mode is fixed to job/name plus the current DPS/HPS value. Horizontal stays background-free and scrollable. Page preview reuses the runtime renderer and supports selection and drag ordering. Cancel or the top-right close button asks whether to save, discard, or keep editing only when unsaved changes exist; an unchanged editor closes immediately."));
             DrawBullet(text.Get(
-                "副本外在本队停止产生相关战斗数据 5 秒后清空实时统计，下一场战斗从 0 开始；队友先开怪时不会因本地角色仍处于脱战状态而反复清空。副本内则持续累计；普通脱战、阶段切换、击杀前置目标和 ACT 自动分段都不会清零。只有确认全队团灭后重新开怪才从 0 开始，即使副本存档从 P2 等中间阶段开始，也不会继承上一把。",
+                "经典榜收起后只保留自己并隐藏全队汇总；职能分栏会分别收起到自己所在行（找不到自己时保留首行）。空数据时也可收起，收起不会停止统计。职业 / ID 会先缩到两字省略显示，只有继续缩小窗口才出现横向滚动；悬停可查看完整名称。玩家 ID 遮盖只影响界面，不会改写战斗日志。",
+                "Collapsed Classic keeps only your row and hides the team summary. Each role-split window collapses independently to your row, or its first row when you are absent. Empty windows can also collapse, without stopping collection. Job / ID shrinks to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Player-ID masking affects only the UI and does not rewrite combat logs."));
+            DrawBullet(text.Get(
+                "战斗结束后悬浮窗会保留上一把结果，方便继续查看；下一场出现有效战斗数据后会用新数据从 0 重新计算。普通脱战、阶段切换、击杀前置目标和 ACT 自动分段不会提前清零。副本内只有确认全队团灭后的重新开怪才开始新一把；手动重置会立即清空，并阻止旧总数在后续刷新中弹回。",
                 "Outside duties, the live meter clears after the party produces no relevant combat data for five seconds, so a party member pulling first no longer causes repeated resets while the local player is still out of combat. Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
             DrawBullet(text.Get(
                 "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
@@ -523,6 +526,9 @@ public sealed class HelpWindow : Window
             DrawCommand("on", "/actcompat on", text.Get("始终打开插件控制中心。", "Always open the plugin control center."));
             DrawCommand("off", "/actcompat off", text.Get("关闭插件控制中心。", "Close the plugin control center."));
             DrawCommand("meter", "/actcompat meter", text.Get("打开战斗统计。", "Open Combat Meter."));
+            DrawCommand("simple", "/actcompat simple on|off", text.Get(
+                "开启或退出精简模式；即使其他界面已关闭，也可用 off 恢复。",
+                "Enable or exit simplified mode; off remains available when every other UI is closed."));
             DrawCommand("history", "/actcompat history", text.Get("打开近期战斗。", "Open recent encounters."));
             DrawCommand("logs", "/actcompat logs", text.Get("打开已保存的日志文件列表。", "Open the saved log-file list."));
             DrawCommand("status", "/actcompat status", text.Get("打开解析器与 Host 运行状态。", "Open parser and Host runtime status."));
@@ -757,8 +763,8 @@ public sealed class HelpWindow : Window
                 "确认概览和 /actcompat status 中的解析器为“运行中”，然后攻击木人或副本敌人并实际造成几次有效伤害。仅打开窗口、进本、选中目标或站在战斗区域不会产生统计。",
                 "Confirm that the parser is Running on Overview and in /actcompat status, then attack a striking dummy or duty enemy and deal several valid hits. Opening the window, entering a duty, targeting an enemy, or merely standing in combat does not create statistics."));
             DrawBullet(text.Get(
-                "“收起（只显示自己）”开启时只显示自己；取消后才显示当前小队。联盟其他小队、宠物和普通 NPC 不作为独立玩家行，离队与补位成员也按当前小队容量处理。",
-                "Collapsed (self only) shows only you; disable it to show the current party. Other alliance parties, pets, and ordinary NPCs are not separate player rows, and replacements are kept within the current party capacity."));
+                "“收起（只显示自己）”开启时只显示自己；取消后，8 人本显示当前小队。切到 24 人本时最多显示 24 名玩家，并放在同一个固定紧凑列表中。宠物和普通 NPC 不作为独立玩家行。",
+                "Collapsed (self only) shows only you; disable it to show the current party in 8-player mode. Switching to 24-player mode shows up to 24 players in one fixed compact list. Pets and ordinary NPCs are not separate player rows."));
             DrawBullet(text.Get(
                 "解析器已运行且已造成伤害，但数次刷新后仍完全没有行：先重启解析器并重新打一个全新的木人或副本样本。不要用重置当前战斗或恢复出厂设置代替这一步。",
                 "If the parser is running and damage was dealt but no rows appear after several refreshes, restart the parser and create a new striking-dummy or duty sample. Do not substitute Reset current encounter or Factory reset for this check."));
@@ -934,7 +940,7 @@ public sealed class HelpWindow : Window
             Entry(HelpPage.MacroCommands, "help-commands-overlays", "悬浮窗命令", "Overlay commands", "打开 Cactbot 或指定 HTML 模板。", "Open Cactbot or a named HTML template.", "cactbot overlay template 模板"),
             Entry(HelpPage.MacroCommands, "help-commands-maintenance", "维护与诊断命令", "Maintenance commands", "清空、安装、Host、停止和恢复出厂设置。", "Clear, install, Host, stop, and factory reset commands.", "clear install host stop factory-reset sample DLL ZIP"),
             Entry(HelpPage.CombatMeter, "help-meter-display", "窗口显示与交互", "Meter display", "锁定、穿透、自动隐藏和界面缩放。", "Lock, click-through, auto hide, and display scaling.", "锁定 鼠标穿透 compact opacity font"),
-            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置位置、排序、口径、显示列、每把文件夹、收起、匿名和重置。", "Configure position, sorting, metrics, visible columns, pull folders, collapsed mode, anonymization, and reset.", "定位 只显示自己 全队 玩家 ID 清空 当前战斗 FFLogs DPS HPS 暴击 直击 直暴 占比 死亡 文件夹 一把 分段 记录"),
+            Entry(HelpPage.CombatMeter, "help-meter-setup", "第一次配置战斗统计", "Configure Combat Meter", "设置模板、8/24 人切换、位置、显示列、透明度、匿名和重置。", "Configure templates, 8/24-player mode, position, visible columns, opacity, anonymization, and reset.", "定位 8人 24人 模板 只显示自己 玩家 ID 清空 当前战斗 FFLogs DPS HPS 暴击 直击 直暴 占比 死亡"),
             Entry(HelpPage.CombatMeter, "help-meter-metrics", "DPS 与 HPS 口径", "DPS and HPS metrics", "解释 DPS、EncDPS、ExtDPS、rDPS 和 HPS。", "Definitions for DPS, EncDPS, ExtDPS, rDPS, and HPS.", "团队贡献 预估 active duration damage healing"),
             Entry(HelpPage.CombatMeter, "help-meter-hit-rates", "暴击率、直击率与直暴率", "CRIT, DH, and CDH rates", "解释百分比跳动、有效样本与 --。", "Explains changing percentages, valid samples, and --.", "暴击 直击 直暴 crit direct hit DH CDH 数字跳动 闪"),
             Entry(HelpPage.CombatMeter, "help-meter-fflogs", "DPS Parse 与 FFLogs", "DPS Parse and FFLogs", "解释本地预估、缓存日期和正式成绩差异。", "Explains local estimates, cache dates, and final-report differences.", "排名 percentile partition 分区 curve 曲线 上传"),

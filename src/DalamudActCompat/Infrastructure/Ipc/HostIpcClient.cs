@@ -16,6 +16,7 @@ public sealed class HostIpcClient : IAsyncDisposable
     private readonly EncounterStateStore stateStore;
     private readonly PluginLogger logger;
     private readonly Func<HostPermissionSnapshot> permissionSnapshot;
+    private readonly Func<HostGameContext?> gameContext;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly BoundedHostMessageQueue outbound = new();
     private readonly ConcurrentQueue<HostDiagnostic> diagnostics = new();
@@ -46,14 +47,16 @@ public sealed class HostIpcClient : IAsyncDisposable
     public HostIpcClient(
         EncounterStateStore stateStore,
         PluginLogger logger,
-        Func<HostPermissionSnapshot>? permissionSnapshot = null)
+        Func<HostPermissionSnapshot>? permissionSnapshot = null,
+        Func<HostGameContext?>? gameContext = null)
     {
         this.stateStore = stateStore;
         this.logger = logger;
         this.permissionSnapshot = permissionSnapshot
-                                  ?? (() => new HostPermissionSnapshot(
-                                      new Dictionary<string, IReadOnlyList<string>>(),
-                                      []));
+                                   ?? (() => new HostPermissionSnapshot(
+                                       new Dictionary<string, IReadOnlyList<string>>(),
+                                       []));
+        this.gameContext = gameContext ?? (static () => null);
     }
 
     public event EventHandler<Exception>? Faulted;
@@ -166,7 +169,8 @@ public sealed class HostIpcClient : IAsyncDisposable
                         "game-bridge",
                         typeof(HostIpcClient).Assembly.GetName().Version?.ToString() ?? "unknown",
                         Environment.ProcessId,
-                        [HostProtocol.CurrentVersion])))
+                        [HostProtocol.CurrentVersion],
+                        gameContext())))
             {
                 throw new InvalidOperationException("Host control queue rejected the hello message.");
             }

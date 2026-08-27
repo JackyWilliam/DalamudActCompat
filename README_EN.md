@@ -14,7 +14,8 @@ The project is currently released and validated primarily on **Windows with XIVL
 
 | Feature | What it is for |
 | --- | --- |
-| In-game combat meter | View DPS, rDPS, HPS, critical/direct-hit rates, damage share, deaths, and a local FFLogs percentile estimate |
+| In-game combat meter | View 4/8/24-player DPS, rDPS, HPS, total damage, highest-hit actions, hit rates, deaths, and a local FFLogs percentile estimate |
+| Meter styles | Choose one of Classic, Horizontal, or Role Split; customize ordered slots in Page preview while Horizontal remains background-free |
 | Encounter history | Store runs and individual pulls, then inspect party data and raw logs |
 | Cactbot / HTML overlays | Install Cactbot resources and create, resize, lock, or click through in-game overlays |
 | Common ACT extensions | Use Triggernometry, PostNamazu, ACT.FoxTTS, SilverDasher, and Cafe.Matcha |
@@ -37,7 +38,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 Enter `/xlplugins`, search for **Dalamud ACT Compat**, and select Install.
 
-The release archive is currently about 65 MiB because it includes the parser, Hosts, Cactbot resources, and bundled extensions. A slow connection may take a while; let the plugin installer finish instead of extracting the archive into the plugin directory manually.
+Starting with 0.3.10.0, Dalamud installs an approximately 18 MiB core package, then the plugin fetches only missing Host, Cactbot, and bundled-extension resources. Verified same-version caches are reused; interrupted downloads resume, and a failed update retains the previous verified resources. Do not manually extract resource packs into the plugin directory.
 
 ### 3. Complete first-time setup
 
@@ -69,11 +70,13 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 
 | Page | What you can do there |
 | --- | --- |
-| Overview | Inspect parser state; toggle parsing and autostart; open the meter, history, runtime status, and log directory |
-| Combat Meter | Show, locate, lock, or click through the meter; configure sorting, metrics, columns, opacity, and FFLogs estimates |
-| Overlays | Install Cactbot and manage alerts, timelines, and custom HTML overlays |
+| Overview | Inspect parser state; toggle parsing, autostart, unfocused web-overlay hiding, and Simplified mode; open the meter, history, runtime status, and log directory |
+| Combat Meter | Select one of three mutually exclusive templates; customize the 8-player classic table, use fixed job/name + DPS/HPS rows for 24 players, and configure opacity or FFLogs where supported |
+| Overlays | Install Cactbot, manage alerts, timelines, and custom HTML overlays, and hide web overlays when the game is unfocused |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
-| Settings | Restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
+| Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
+
+Game region defaults to the native client-region value exposed by the game's Framework: the China client uses the China packet family and the international client uses Global. Dalamud language and installation paths are not used, so a Chinese language pack on the international client remains Global. If the game region cannot be read, DACT defaults to Global and allows a manual override. Changing the setting refreshes the running parser and extension Hosts without changing client-language action names or log parsing. The FFLogs estimate follows the same setting, using the CN partition for China and the latest worldwide partition for Global.
 
 ## Common commands
 
@@ -82,6 +85,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | `/actcompat` | Open or close the Control Center |
 | `/actcompat on` / `/actcompat off` | Explicitly open / close the Control Center |
 | `/actcompat meter` | Open and locate the Combat Meter |
+| `/actcompat simple on` / `/actcompat simple off` | Enter / leave Simplified mode; its home page only toggles the meter or exits the mode |
 | `/actcompat history` | Open recent encounters |
 | `/actcompat logs` | Open the saved log-file list |
 | `/actcompat status` | Inspect the parser and Host runtime state |
@@ -97,10 +101,11 @@ Diagnostic and development commands also include `/actcompat host`, `stop`, `sam
 - **EncDPS** uses the full encounter duration, closer to the traditional whole-encounter ACT metric.
 - **rDPS** is estimated locally from combat events and party-buff attribution. It is not the authoritative FFLogs result.
 - **HPS** uses the full pull duration from engagement to end, including transitions and untargetable periods.
+- **Highest hit** keeps the largest single hit in the current encounter, replaces it only with a larger hit, and resets for the next encounter.
 - **FFLogs percentile estimate** applies the current encounter data to cached curves for immediate reference. It is not an uploaded parse ranking.
 - **`--`** means that no valid value is available yet; it does not mean zero.
 
-After a party wipe inside a duty, the live meter starts the next pull from zero. Encounter History keeps the whole duty visit in one folder and stores each pull as a separate child record. ACT segments created during phase transitions are merged internally instead of appearing as separate pulls.
+After combat ends, the live meter retains the previous result until meaningful data from the next pull replaces it from zero. Duty wipes follow the same rule. Encounter History keeps the whole duty visit in one folder and stores each pull as a separate child record. ACT segments created during phase transitions are merged internally instead of appearing as separate pulls.
 
 Reset current encounter ends and clears only the current display. It does not delete saved history or raw Network logs. Player-ID masking also changes only the UI and does not rewrite log contents.
 

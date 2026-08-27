@@ -66,6 +66,8 @@ public sealed record ActPlayerIdentity(
 
     public float Rotation { get; init; }
 
+    public int PartyGroup { get; init; }
+
     public string DisplayName
         => string.IsNullOrWhiteSpace(World) ? Name : $"{Name}@{World}";
 }

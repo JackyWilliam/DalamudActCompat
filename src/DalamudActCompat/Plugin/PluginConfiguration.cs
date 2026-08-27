@@ -9,7 +9,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 9;
+    private const int CurrentVersion = 16;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -33,7 +33,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public string UiLanguage { get; set; } = "zh-CN";
 
+    public GameRegionMode GameRegionMode { get; set; } = GameRegionMode.Auto;
+
     public bool ShowLauncherButton { get; set; } = true;
+
+    public bool HideHtmlOverlaysWhenGameUnfocused { get; set; } = true;
+
+    public bool SimplifiedModeEnabled { get; set; }
 
     public int LauncherButtonSize { get; set; } = 80;
 
@@ -55,6 +61,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
 
+    // Json.NET otherwise reuses this default set, so a saved [] cannot preserve
+    // the user's explicit choice to enable SilverDasher across a cold start.
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public HashSet<string> DisabledActPluginIds { get; set; } =
         CreateDefaultDisabledActPluginIds();
 
@@ -87,6 +96,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Meter = new MeterSettings();
             changed = true;
         }
+        changed |= Meter.NormalizeCustomization();
         if (Version < 2)
         {
             changed |= Meter.MigrateLegacyLocalPlayerColor();
@@ -223,6 +233,61 @@ public sealed class PluginConfiguration : IPluginConfiguration
             Version = 9;
             changed = true;
         }
+        if (Version < 10)
+        {
+            // Existing users keep the classic meter while the new visibility policy starts
+            // enabled exactly like a fresh install; simplified mode remains opt-in.
+            HideHtmlOverlaysWhenGameUnfocused = true;
+            SimplifiedModeEnabled = false;
+            Version = 10;
+            changed = true;
+        }
+        if (Version < 11)
+        {
+            // Existing installations inherit detection instead of being silently pinned to
+            // the CN behavior that older builds happened to expose.
+            GameRegionMode = GameRegionMode.Auto;
+            Version = 11;
+            changed = true;
+        }
+        if (Version < 12)
+        {
+            changed |= Meter.MigrateIndependentWindows();
+            changed |= Meter.NormalizeCustomization();
+            Version = 12;
+            changed = true;
+        }
+        if (Version < 13)
+        {
+            // Job and name describe one player identity. Keeping them independently
+            // configurable created incomplete rows and duplicated editor slots.
+            changed |= Meter.MigratePlayerIdentitySlots();
+            changed |= Meter.NormalizeCustomization();
+            Version = 13;
+            changed = true;
+        }
+        if (Version < 14)
+        {
+            changed |= Meter.NormalizeCustomization();
+            changed |= Meter.MigrateMeterFeedbackLayout();
+            changed |= Meter.NormalizeCustomization();
+            Version = 14;
+            changed = true;
+        }
+        if (Version < 15)
+        {
+            changed |= Meter.MigrateIndependentRoleSplitSlots();
+            changed |= Meter.NormalizeCustomization();
+            Version = 15;
+            changed = true;
+        }
+        if (Version < 16)
+        {
+            changed |= Meter.MigrateIndependentRoleSplitWindows();
+            changed |= Meter.NormalizeCustomization();
+            Version = 16;
+            changed = true;
+        }
 
         return changed;
     }
@@ -240,7 +305,10 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
+        GameRegionMode = GameRegionMode.Auto;
         ShowLauncherButton = true;
+        HideHtmlOverlaysWhenGameUnfocused = true;
+        SimplifiedModeEnabled = false;
         LauncherButtonSize = 80;
         LauncherPositionX = 80;
         LauncherPositionY = 160;
@@ -277,7 +345,10 @@ public sealed class PluginConfiguration : IPluginConfiguration
         LogDirectory = snapshot.LogDirectory;
         ActPluginDirectory = snapshot.ActPluginDirectory;
         UiLanguage = snapshot.UiLanguage;
+        GameRegionMode = snapshot.GameRegionMode;
         ShowLauncherButton = snapshot.ShowLauncherButton;
+        HideHtmlOverlaysWhenGameUnfocused = snapshot.HideHtmlOverlaysWhenGameUnfocused;
+        SimplifiedModeEnabled = snapshot.SimplifiedModeEnabled;
         LauncherButtonSize = snapshot.LauncherButtonSize;
         LauncherPositionX = snapshot.LauncherPositionX;
         LauncherPositionY = snapshot.LauncherPositionY;

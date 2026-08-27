@@ -515,6 +515,8 @@ internal sealed class HtmlOverlayForm : IDisposable
     private bool leftButtonWasDown;
     private bool ownsMouseCapture;
     private volatile bool visible;
+    private volatile bool desiredVisible;
+    private volatile bool temporarilyHidden;
     private bool disposing;
     private bool applyingSettings;
     private bool loaderAcquired;
@@ -639,6 +641,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     public void Show()
     {
+        desiredVisible = true;
         if (settings is not null)
         {
             settings.IsVisible = true;
@@ -687,8 +690,16 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             form.BeginInvoke(async () =>
             {
-                form.Show();
-                visible = true;
+                if (temporarilyHidden)
+                {
+                    form.Hide();
+                    visible = false;
+                }
+                else
+                {
+                    form.Show();
+                    visible = true;
+                }
                 if (settings is not null)
                 {
                     settings.IsVisible = true;
@@ -719,8 +730,57 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
     }
 
+    public void SetTemporarilyHidden(bool hidden)
+    {
+        temporarilyHidden = hidden;
+        var targetForm = form;
+        if (targetForm is null || targetForm.IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            targetForm.BeginInvoke(() =>
+            {
+                if (hidden)
+                {
+                    StopEditMonitor();
+                    inputProxy?.Hide();
+                    editChrome?.Hide();
+                    targetForm.Hide();
+                    visible = false;
+                    return;
+                }
+
+                // Temporary suppression never changes the desired visibility saved in JSON.
+                if (desiredVisible)
+                {
+                    targetForm.Show();
+                    targetForm.WindowState = FormWindowState.Normal;
+                    visible = true;
+                    if (overlayMode)
+                    {
+                        ApplyOverlaySettings();
+                    }
+                }
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (!disposing)
+            {
+                log.Warning(ex, $"Could not apply temporary visibility to {title}.");
+            }
+        }
+    }
+
     public void Hide()
     {
+        desiredVisible = false;
         visible = false;
         if (settings is not null)
         {
@@ -878,7 +938,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             form.SizeChanged += OnOverlayBoundsChanged;
             form.Shown += async (_, _) =>
             {
-                visible = true;
+                visible = !temporarilyHidden;
                 if (settings is not null)
                 {
                     settings.IsVisible = true;
@@ -892,6 +952,11 @@ internal sealed class HtmlOverlayForm : IDisposable
                 if (overlayMode)
                 {
                     ApplyOverlaySettings();
+                }
+
+                if (temporarilyHidden)
+                {
+                    form.Hide();
                 }
 
                 await TrackInitializationAsync();
@@ -2416,6 +2481,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void OnFormClosing(object? sender, FormClosingEventArgs args)
     {
+        desiredVisible = false;
         visible = false;
         if (settings is not null)
         {

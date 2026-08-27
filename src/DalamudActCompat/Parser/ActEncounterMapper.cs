@@ -23,7 +23,10 @@ public static class ActEncounterMapper
                 Math.Max(0, combatant.CriticalHits),
                 Math.Max(0, combatant.CriticalDirectHits),
                 Rdps: NormalizeRate(combatant.Rdps),
-                DirectHits: Math.Max(0, combatant.DirectHits)))
+                DirectHits: Math.Max(0, combatant.DirectHits),
+                HighestDamageAction: combatant.HighestDamageAction ?? string.Empty,
+                HighestDamage: Math.Max(0, combatant.HighestDamage),
+                PartyGroup: Math.Clamp(combatant.PartyGroup, 0, 3)))
             .ToArray();
         var jobs = combatants
             .Where(static combatant => !string.IsNullOrWhiteSpace(combatant.Job))
@@ -50,6 +53,7 @@ public static class ActEncounterMapper
         {
             CombatDuration = source.CombatDuration,
             IsTransitioning = source.IsTransitioning,
+            PartyCapacity = Math.Max(0, source.PartyCapacity),
         };
     }
 

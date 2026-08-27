@@ -5,7 +5,7 @@ namespace DalamudActCompat.Protocol;
 
 public static class HostProtocol
 {
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int ControlQueueCapacity = 256;
     public const int DataQueueCapacity = 8192;
@@ -93,11 +93,32 @@ public sealed record HostEnvelope(
             JsonSerializer.SerializeToElement(payload));
 }
 
+public enum HostGameRegion
+{
+    Global = 1,
+    Chinese = 2,
+}
+
+public enum HostClientLanguage
+{
+    English,
+    Japanese,
+    German,
+    French,
+    Chinese,
+    Korean,
+}
+
+public sealed record HostGameContext(
+    HostGameRegion Region,
+    HostClientLanguage Language);
+
 public sealed record HostHello(
     string Role,
     string Version,
     int ProcessId,
-    IReadOnlyList<int> SupportedProtocolVersions);
+    IReadOnlyList<int> SupportedProtocolVersions,
+    HostGameContext? GameContext = null);
 
 public sealed record HostHeartbeat(
     long LastReceivedSequence,
