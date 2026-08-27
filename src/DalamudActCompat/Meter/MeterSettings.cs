@@ -77,15 +77,34 @@ public sealed class MeterSettings
         ItemWidth = 250,
     };
 
-    // D/T and H share one physical-window style, but their columns must remain independent.
-    // Keeping the lists outside RoleSplitWindow preserves the existing window settings JSON.
+    // RoleSplitWindow remains the single template controller for backward-compatible
+    // activation. Each physical pane owns a full profile so editing H cannot alter D/T.
+    public MeterWindowProfile RoleSplitDamageWindow { get; set; } = CreateRoleSplitPaneProfile();
+
+    public MeterWindowProfile RoleSplitHealerWindow { get; set; } = CreateRoleSplitPaneProfile();
+
+    // Keep the v15 JSON fields as live aliases so downgrades retain both slot lists.
     [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
-    public List<MeterSlotDefinition> RoleSplitDamageSlots { get; set; } =
-        MeterSlotDefaults.CreateRoleSplit();
+    public List<MeterSlotDefinition> RoleSplitDamageSlots
+    {
+        get => RoleSplitDamageWindow.Slots;
+        set
+        {
+            RoleSplitDamageWindow ??= CreateRoleSplitPaneProfile();
+            RoleSplitDamageWindow.Slots = value ?? [];
+        }
+    }
 
     [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
-    public List<MeterSlotDefinition> RoleSplitHealerSlots { get; set; } =
-        MeterSlotDefaults.CreateRoleSplit();
+    public List<MeterSlotDefinition> RoleSplitHealerSlots
+    {
+        get => RoleSplitHealerWindow.Slots;
+        set
+        {
+            RoleSplitHealerWindow ??= CreateRoleSplitPaneProfile();
+            RoleSplitHealerWindow.Slots = value ?? [];
+        }
+    }
 
     public bool IsLocked { get; set; }
 
@@ -205,17 +224,13 @@ public sealed class MeterSettings
             Slots = MeterSlotDefaults.CreateRoleSplit(),
             ItemWidth = 250,
         };
+        RoleSplitDamageWindow ??= CreateRoleSplitPaneProfile();
+        RoleSplitHealerWindow ??= CreateRoleSplitPaneProfile();
         changed |= ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
         changed |= HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
         changed |= RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
-        RoleSplitDamageSlots ??= [];
-        RoleSplitHealerSlots ??= [];
-        changed |= MeterWindowProfile.NormalizeSlots(
-            RoleSplitDamageSlots,
-            MeterSlotDefaults.CreateRoleSplit());
-        changed |= MeterWindowProfile.NormalizeSlots(
-            RoleSplitHealerSlots,
-            MeterSlotDefaults.CreateRoleSplit());
+        changed |= RoleSplitDamageWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        changed |= RoleSplitHealerWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
         changed |= NormalizeActiveWindow();
         CustomStyles ??= [];
         var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -275,7 +290,7 @@ public sealed class MeterSettings
         => ActiveWindowKind switch
         {
             MeterWindowKind.Horizontal => HorizontalWindow,
-            MeterWindowKind.RoleSplit => RoleSplitWindow,
+            MeterWindowKind.RoleSplit => RoleSplitDamageWindow,
             _ => ClassicWindow,
         };
 
@@ -284,12 +299,14 @@ public sealed class MeterSettings
         ClassicWindow.IsEnabled = kind == MeterWindowKind.Classic;
         HorizontalWindow.IsEnabled = kind == MeterWindowKind.Horizontal;
         RoleSplitWindow.IsEnabled = kind == MeterWindowKind.RoleSplit;
+        RoleSplitDamageWindow.IsEnabled = RoleSplitWindow.IsEnabled;
+        RoleSplitHealerWindow.IsEnabled = RoleSplitWindow.IsEnabled;
         // The legacy meter service reads this shared value. Synchronizing it only when
         // a template becomes active preserves each template's independent ranking mode.
         SortMode = kind switch
         {
             MeterWindowKind.Horizontal => HorizontalWindow.SortMode,
-            MeterWindowKind.RoleSplit => RoleSplitWindow.SortMode,
+            MeterWindowKind.RoleSplit => RoleSplitDamageWindow.SortMode,
             _ => ClassicWindow.SortMode,
         };
     }
@@ -305,6 +322,8 @@ public sealed class MeterSettings
         }
         changed |= MergePlayerIdentity(HorizontalWindow.Slots);
         changed |= MergePlayerIdentity(RoleSplitWindow.Slots);
+        changed |= MergePlayerIdentity(RoleSplitDamageWindow.Slots);
+        changed |= MergePlayerIdentity(RoleSplitHealerWindow.Slots);
         foreach (var style in CustomStyles)
         {
             changed |= MergePlayerIdentity(style.Slots);
@@ -364,6 +383,27 @@ public sealed class MeterSettings
             .Select(static slot => slot.Clone())
             .ToList();
         return true;
+    }
+
+    internal bool MigrateIndependentRoleSplitWindows()
+    {
+        // v15 split only the slot lists. Copy the shared appearance once so every
+        // existing visual choice survives while future edits remain pane-local.
+        CopyRoleSplitAppearance(RoleSplitWindow, RoleSplitDamageWindow);
+        CopyRoleSplitAppearance(RoleSplitWindow, RoleSplitHealerWindow);
+        return true;
+    }
+
+    internal void SynchronizeLegacyRoleSplitWindow()
+    {
+        // Older builds understand only RoleSplitWindow. Mirror D/T as the safest
+        // downgrade fallback without coupling the live D/T and H profiles again.
+        var enabled = RoleSplitWindow.IsEnabled;
+        CopyRoleSplitAppearance(RoleSplitDamageWindow, RoleSplitWindow);
+        RoleSplitWindow.IsEnabled = enabled;
+        RoleSplitWindow.Slots = RoleSplitDamageWindow.Slots
+            .Select(static slot => slot.Clone())
+            .ToList();
     }
 
     internal bool MigrateIndependentWindows()
@@ -427,12 +467,22 @@ public sealed class MeterSettings
 
     private bool NormalizeActiveWindow()
     {
+        var changed = false;
+        if (RoleSplitDamageWindow.IsEnabled != RoleSplitWindow.IsEnabled ||
+            RoleSplitHealerWindow.IsEnabled != RoleSplitWindow.IsEnabled)
+        {
+            // The two panes are one template even though their visual profiles differ.
+            RoleSplitDamageWindow.IsEnabled = RoleSplitWindow.IsEnabled;
+            RoleSplitHealerWindow.IsEnabled = RoleSplitWindow.IsEnabled;
+            changed = true;
+        }
+
         var enabledCount = Convert.ToInt32(ClassicWindow.IsEnabled) +
                            Convert.ToInt32(HorizontalWindow.IsEnabled) +
                            Convert.ToInt32(RoleSplitWindow.IsEnabled);
         if (enabledCount == 1)
         {
-            return false;
+            return changed;
         }
 
         var selected = ClassicWindow.IsEnabled
@@ -444,6 +494,29 @@ public sealed class MeterSettings
                     : MeterWindowKind.Classic;
         ActivateWindow(selected);
         return true;
+    }
+
+    private static MeterWindowProfile CreateRoleSplitPaneProfile()
+        => new()
+        {
+            BackgroundOpacity = 0.85f,
+            Slots = MeterSlotDefaults.CreateRoleSplit(),
+            ItemWidth = 250,
+        };
+
+    private static void CopyRoleSplitAppearance(
+        MeterWindowProfile source,
+        MeterWindowProfile destination)
+    {
+        destination.IsEnabled = source.IsEnabled;
+        destination.IsLocked = source.IsLocked;
+        destination.ClickThroughWhenLocked = source.ClickThroughWhenLocked;
+        destination.AutoHideOutOfCombat = source.AutoHideOutOfCombat;
+        destination.ShowHeader = source.ShowHeader;
+        destination.FontScale = source.FontScale;
+        destination.BackgroundOpacity = source.BackgroundOpacity;
+        destination.ItemWidth = source.ItemWidth;
+        destination.SortMode = source.SortMode;
     }
 
     private static bool MergePlayerIdentity(List<MeterSlotDefinition> slots)

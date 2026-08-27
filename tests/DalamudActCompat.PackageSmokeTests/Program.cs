@@ -419,7 +419,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 15 &&
+        configuration.Version == 16 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -1865,7 +1865,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 15 &&
+        legacyConfiguration.Version == 16 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -1895,7 +1895,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 15 &&
+        parserMigration.Version == 16 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -1909,7 +1909,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 15 &&
+        newConfiguration.Version == 16 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -1929,6 +1929,8 @@ static void ValidateMeterRows()
         newConfiguration.Meter.ClassicWindow.Slots.Count >= 8 &&
         newConfiguration.Meter.HorizontalWindow.Slots.Count >= 8 &&
         newConfiguration.Meter.RoleSplitWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitDamageWindow.Slots.Count >= 8 &&
+        newConfiguration.Meter.RoleSplitHealerWindow.Slots.Count >= 8 &&
         newConfiguration.Meter.RoleSplitDamageSlots.Count >= 8 &&
         newConfiguration.Meter.RoleSplitHealerSlots.Count >= 8 &&
         newConfiguration.Meter.ShowTotalDamage &&
@@ -1946,7 +1948,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousHorizontalUser.ApplyMigrations() &&
-        previousHorizontalUser.Version == 15 &&
+        previousHorizontalUser.Version == 16 &&
         !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
@@ -1971,7 +1973,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousCompositeIdentityUser.ApplyMigrations() &&
-        previousCompositeIdentityUser.Version == 15 &&
+        previousCompositeIdentityUser.Version == 16 &&
         previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
         previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
         !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
@@ -2000,7 +2002,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousOpacityUser.ApplyMigrations() &&
-        previousOpacityUser.Version == 15 &&
+        previousOpacityUser.Version == 16 &&
         Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         previousOpacityUser.Meter.RoleSplitDamageCompact &&
@@ -2032,7 +2034,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousSharedRoleUser.ApplyMigrations() &&
-        previousSharedRoleUser.Version == 15 &&
+        previousSharedRoleUser.Version == 16 &&
         previousSharedRoleUser.Meter.RoleSplitDamageSlots.Select(static slot =>
             (slot.Metric, slot.Visible)).SequenceEqual(
                 previousSharedRoleUser.Meter.RoleSplitHealerSlots.Select(static slot =>
@@ -2052,6 +2054,65 @@ static void ValidateMeterRows()
     Assert(
         !healerDpsSlot.Visible,
         "Normalizing the H column list forced DPS back on after the user disabled it.");
+    var previousSharedRoleAppearance = new PluginConfiguration
+    {
+        Version = 15,
+    };
+    previousSharedRoleAppearance.Meter.ActivateWindow(MeterWindowKind.RoleSplit);
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.IsLocked = true;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.ClickThroughWhenLocked = true;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.AutoHideOutOfCombat = true;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.ShowHeader = false;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.FontScale = 1.35f;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.BackgroundOpacity = 0.37f;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.ItemWidth = 318;
+    previousSharedRoleAppearance.Meter.RoleSplitWindow.SortMode = MeterSortMode.Hps;
+    Assert(
+        previousSharedRoleAppearance.ApplyMigrations() &&
+        previousSharedRoleAppearance.Version == 16 &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsEnabled &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsEnabled &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.ClickThroughWhenLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ClickThroughWhenLocked &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.AutoHideOutOfCombat &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.AutoHideOutOfCombat &&
+        !previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
+        !previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ShowHeader &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.FontScale - 1.35f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.FontScale - 1.35f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.BackgroundOpacity - 0.37f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.BackgroundOpacity - 0.37f) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.ItemWidth - 318) < 0.0001f &&
+        Math.Abs(previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ItemWidth - 318) < 0.0001f &&
+        previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.SortMode == MeterSortMode.Hps &&
+        previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.SortMode == MeterSortMode.Hps,
+        "The v16 migration did not preserve the former shared role appearance in both panes.");
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked = false;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.ShowHeader = true;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.FontScale = 0.82f;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.BackgroundOpacity = 0.19f;
+    previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.Slots.Single(static slot =>
+        slot.Metric == MeterSlotMetric.TotalHealing).Visible = false;
+    var restoredRoleAppearance = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+        Newtonsoft.Json.JsonConvert.SerializeObject(previousSharedRoleAppearance));
+    Assert(
+        restoredRoleAppearance is not null &&
+        restoredRoleAppearance.Version == 16 &&
+        restoredRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
+        !restoredRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
+        !restoredRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
+        restoredRoleAppearance.Meter.RoleSplitHealerWindow.ShowHeader &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitDamageWindow.FontScale - 1.35f) < 0.0001f &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitHealerWindow.FontScale - 0.82f) < 0.0001f &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitDamageWindow.BackgroundOpacity - 0.37f) < 0.0001f &&
+        Math.Abs(restoredRoleAppearance.Meter.RoleSplitHealerWindow.BackgroundOpacity - 0.19f) < 0.0001f &&
+        restoredRoleAppearance.Meter.RoleSplitDamageWindow.Slots.Single(static slot =>
+            slot.Metric == MeterSlotMetric.TotalHealing).Visible &&
+        !restoredRoleAppearance.Meter.RoleSplitHealerWindow.Slots.Single(static slot =>
+            slot.Metric == MeterSlotMetric.TotalHealing).Visible,
+        "D/T and H window appearance settings are still coupled or were not persisted.");
     var customStyle = new MeterCustomStyle
     {
         Name = "Watch layout",
@@ -2101,7 +2162,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 15 &&
+        previousDebugConfiguration.Version == 16 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -2113,7 +2174,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 15 &&
+        previousV6Configuration.Version == 16 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -2151,7 +2212,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 15 &&
+        previousGenericPluginUser.Version == 16 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -2163,7 +2224,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 15 &&
+        previousEdpsUser.Version == 16 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -2179,7 +2240,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 15 &&
+        previousCustomMetricUser.Version == 16 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2208,7 +2269,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 15 &&
+        previousTimelineUser.Version == 16 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2297,7 +2358,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 15 &&
+        previousV5CactbotUser.Version == 16 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -2934,6 +2995,12 @@ static void ValidateIndependentMeterWindows()
         "DalamudActCompat",
         "Meter",
         "MeterStyleEditorWindow.cs"));
+    var meterSettingsSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Meter",
+        "MeterSettings.cs"));
     var previewInteractionSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -3004,8 +3071,9 @@ static void ValidateIndependentMeterWindows()
         roleSource.Contains("ApplyCompactWindowHeight(hasEncounter: false", StringComparison.Ordinal) &&
         roleSource.Contains("AdvanceWindowHeightAnimation", StringComparison.Ordinal) &&
         roleSource.Contains("MeterWindow.EaseOutCubic", StringComparison.Ordinal) &&
-        roleSource.Contains("configuration.Meter.RoleSplitDamageSlots", StringComparison.Ordinal) &&
-        roleSource.Contains("configuration.Meter.RoleSplitHealerSlots", StringComparison.Ordinal) &&
+        roleSource.Contains("configuration.Meter.RoleSplitDamageWindow", StringComparison.Ordinal) &&
+        roleSource.Contains("configuration.Meter.RoleSplitHealerWindow", StringComparison.Ordinal) &&
+        roleSource.Contains("private List<MeterSlotDefinition> Slots => Profile.Slots", StringComparison.Ordinal) &&
         roleSource.Contains("ShowDps = Has(MeterSlotMetric.Dps)", StringComparison.Ordinal) &&
         roleSource.Contains("ShowHps = Has(MeterSlotMetric.Hps)", StringComparison.Ordinal) &&
         !roleSource.Contains("leadingDamage", StringComparison.Ordinal) &&
@@ -3020,8 +3088,9 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("horizontalMeterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
         editorSource.Contains("roleSplitDamageWindow.DrawEditorPreview", StringComparison.Ordinal) &&
         editorSource.Contains("meter-editor-role-group", StringComparison.Ordinal) &&
-        editorSource.Contains("RoleSplitHealerSlots", StringComparison.Ordinal) &&
-        editorSource.Contains("RoleSplitDamageSlots", StringComparison.Ordinal) &&
+        editorSource.Contains("RoleSplitHealerWindow", StringComparison.Ordinal) &&
+        editorSource.Contains("RoleSplitDamageWindow", StringComparison.Ordinal) &&
+        editorSource.Contains("SynchronizeLegacyRoleSplitWindow", StringComparison.Ordinal) &&
         editorSource.Contains("ActivateWindow(selectedKind)", StringComparison.Ordinal) &&
         editorSource.Contains("24 人本使用固定紧凑条", StringComparison.Ordinal) &&
         editorSource.Contains("profile.BackgroundOpacity", StringComparison.Ordinal) &&
@@ -3046,6 +3115,8 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("moveButtonWidth", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
+        meterSettingsSource.Contains("MigrateIndependentRoleSplitWindows", StringComparison.Ordinal) &&
+        meterSettingsSource.Contains("CopyRoleSplitAppearance", StringComparison.Ordinal) &&
         !editorSource.Contains("DragMode", StringComparison.Ordinal) &&
         !editorSource.Contains("24×6", StringComparison.Ordinal) &&
         !editorSource.Contains("BeginDragDrop", StringComparison.Ordinal),
@@ -3137,6 +3208,8 @@ static void ValidateIndependentMeterWindows()
         !settings.ClassicWindow.IsEnabled &&
         !settings.HorizontalWindow.IsEnabled &&
         settings.RoleSplitWindow.IsEnabled &&
+        settings.RoleSplitDamageWindow.IsEnabled &&
+        settings.RoleSplitHealerWindow.IsEnabled &&
         settings.ActiveWindowKind == MeterWindowKind.RoleSplit,
         "Selecting role split did not disable both other meter templates.");
 

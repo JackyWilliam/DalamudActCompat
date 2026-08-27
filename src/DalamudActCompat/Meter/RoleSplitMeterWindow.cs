@@ -65,11 +65,11 @@ public sealed class RoleSplitMeterWindow : Window
         };
     }
 
-    private MeterWindowProfile Profile => configuration.Meter.RoleSplitWindow;
+    private MeterWindowProfile Profile => group == RoleSplitGroup.Healer
+        ? configuration.Meter.RoleSplitHealerWindow
+        : configuration.Meter.RoleSplitDamageWindow;
 
-    private List<MeterSlotDefinition> Slots => group == RoleSplitGroup.Healer
-        ? configuration.Meter.RoleSplitHealerSlots
-        : configuration.Meter.RoleSplitDamageSlots;
+    private List<MeterSlotDefinition> Slots => Profile.Slots;
 
     private bool Compact
     {
@@ -98,7 +98,7 @@ public sealed class RoleSplitMeterWindow : Window
             group == RoleSplitGroup.Healer
                 ? "Healer HPS###DalamudActCompatRoleSplitHealerMeter"
                 : "D / T Damage###DalamudActCompatRoleSplitDamageMeter");
-        if (!configuration.Meter.IsVisible || !Profile.IsEnabled)
+        if (!configuration.Meter.IsVisible || !configuration.Meter.RoleSplitWindow.IsEnabled)
         {
             return false;
         }

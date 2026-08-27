@@ -214,17 +214,13 @@ public sealed class MeterStyleEditorWindow : Window
     private MeterWindowProfile CurrentProfile => selectedKind switch
     {
         MeterWindowKind.Horizontal => configuration.Meter.HorizontalWindow,
-        MeterWindowKind.RoleSplit => configuration.Meter.RoleSplitWindow,
+        MeterWindowKind.RoleSplit when selectedRoleSplitGroup == RoleSplitGroup.Healer =>
+            configuration.Meter.RoleSplitHealerWindow,
+        MeterWindowKind.RoleSplit => configuration.Meter.RoleSplitDamageWindow,
         _ => configuration.Meter.ClassicWindow,
     };
 
-    private List<MeterSlotDefinition> CurrentSlots => selectedKind switch
-    {
-        MeterWindowKind.RoleSplit when selectedRoleSplitGroup == RoleSplitGroup.Healer =>
-            configuration.Meter.RoleSplitHealerSlots,
-        MeterWindowKind.RoleSplit => configuration.Meter.RoleSplitDamageSlots,
-        _ => CurrentProfile.Slots,
-    };
+    private List<MeterSlotDefinition> CurrentSlots => CurrentProfile.Slots;
 
     private void DrawRoleSplitSlotSelector()
     {
@@ -555,12 +551,9 @@ public sealed class MeterStyleEditorWindow : Window
         configuration.Meter.ClassicWindow.Normalize(MeterSlotDefaults.CreateClassic());
         configuration.Meter.HorizontalWindow.Normalize(MeterSlotDefaults.CreateHorizontal());
         configuration.Meter.RoleSplitWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
-        MeterWindowProfile.NormalizeSlots(
-            configuration.Meter.RoleSplitDamageSlots,
-            MeterSlotDefaults.CreateRoleSplit());
-        MeterWindowProfile.NormalizeSlots(
-            configuration.Meter.RoleSplitHealerSlots,
-            MeterSlotDefaults.CreateRoleSplit());
+        configuration.Meter.RoleSplitDamageWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        configuration.Meter.RoleSplitHealerWindow.Normalize(MeterSlotDefaults.CreateRoleSplit());
+        configuration.Meter.SynchronizeLegacyRoleSplitWindow();
         SynchronizeClassicSettings();
         SetEditingProfile(null);
         saveConfiguration();
@@ -957,30 +950,12 @@ public sealed class MeterStyleEditorWindow : Window
 
     private void ReplaceCurrentSlots(List<MeterSlotDefinition> slots)
     {
-        if (selectedKind != MeterWindowKind.RoleSplit)
-        {
-            CurrentProfile.Slots = slots;
-        }
-        else if (selectedRoleSplitGroup == RoleSplitGroup.Healer)
-        {
-            configuration.Meter.RoleSplitHealerSlots = slots;
-        }
-        else
-        {
-            configuration.Meter.RoleSplitDamageSlots = slots;
-        }
-
+        CurrentProfile.Slots = slots;
         ResetPreviewInteraction();
     }
 
     private void NormalizeCurrentSlots()
     {
-        if (selectedKind == MeterWindowKind.RoleSplit)
-        {
-            MeterWindowProfile.NormalizeSlots(CurrentSlots, MeterSlotDefaults.CreateRoleSplit());
-            return;
-        }
-
         CurrentProfile.Normalize(DefaultSlots(selectedKind));
     }
 
@@ -993,6 +968,8 @@ public sealed class MeterStyleEditorWindow : Window
         configuration.Meter.ClassicWindow.IsEditing = kind == MeterWindowKind.Classic;
         configuration.Meter.HorizontalWindow.IsEditing = kind == MeterWindowKind.Horizontal;
         configuration.Meter.RoleSplitWindow.IsEditing = kind == MeterWindowKind.RoleSplit;
+        configuration.Meter.RoleSplitDamageWindow.IsEditing = kind == MeterWindowKind.RoleSplit;
+        configuration.Meter.RoleSplitHealerWindow.IsEditing = kind == MeterWindowKind.RoleSplit;
     }
 
     private static IReadOnlyList<MeterSlotDefinition> DefaultSlots(MeterWindowKind kind)
