@@ -51,8 +51,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
     private readonly ResourcePackManager resourcePackManager;
-    private readonly string packagedHostDirectory;
-    private readonly string bundledActPluginDirectory;
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
@@ -119,6 +117,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Task hostCommandWorker;
     private readonly CancellationTokenSource independentHostStartupCancellation = new();
     private readonly Task independentHostStartupTask;
+    private readonly Task bundledActPluginInitializationTask;
     private readonly object backgroundOperationLock = new();
     private readonly List<Task> backgroundOperations = [];
     private bool backgroundOperationShutdownStarted;
@@ -223,29 +222,33 @@ public sealed class Plugin : IDalamudPlugin
             pluginAssemblyDirectory,
             paths.ResourcePackCacheDirectory,
             logger);
-        using (var resourceTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
-        {
-            bundledActPluginDirectory = resourcePackManager.ResolveDirectoryAsync(
-                    "act-plugins",
-                    BundledActPluginManager.DirectoryName,
-                    resourceTimeout.Token)
-                .GetAwaiter()
-                .GetResult();
-            packagedHostDirectory = resourcePackManager.ResolveDirectoryAsync(
-                    "host",
-                    "host",
-                    resourceTimeout.Token)
-                .GetAwaiter()
-                .GetResult();
-        }
+        var hasBundledActPluginResources = resourcePackManager.TryResolveAvailableDirectory(
+            "act-plugins",
+            BundledActPluginManager.DirectoryName,
+            out var bundledActPluginDirectory);
+        var hasPackagedHostResources = resourcePackManager.TryResolveAvailableDirectory(
+            "host",
+            "host",
+            out var packagedHostDirectory);
 
         packageInstaller = new ActPluginPackageInstaller(paths);
         bundledPluginManager = new BundledActPluginManager(
-            bundledActPluginDirectory,
             typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown",
             packageInstaller,
-            configuration,
-            directoryIsBundleRoot: true);
+            configuration);
+        if (hasBundledActPluginResources)
+        {
+            try
+            {
+                bundledPluginManager.LoadBundle(bundledActPluginDirectory);
+            }
+            catch (Exception ex)
+            {
+                // A broken optional bundle must not turn a usable parser/UI into a failed plugin load.
+                logger.Error(ex, "Cached bundled ACT plugin resources are invalid; extensions remain unavailable while the pack is repaired in the background.");
+                hasBundledActPluginResources = false;
+            }
+        }
         bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
             paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
@@ -278,7 +281,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1,
             enableMemoryProtection: true,
-            packagedHostDirectory: packagedHostDirectory);
+            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
@@ -294,7 +297,7 @@ public sealed class Plugin : IDalamudPlugin
             matchaIpcClient,
             logger,
             matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1,
-            packagedHostDirectory: packagedHostDirectory);
+            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null);
         matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
@@ -309,7 +312,7 @@ public sealed class Plugin : IDalamudPlugin
             paths.ConfigDirectory,
             genericIpcClient,
             logger,
-            packagedHostDirectory: packagedHostDirectory);
+            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null);
         genericHostSupervisor.MatchaTtsRequested += OnGenericTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
@@ -649,13 +652,14 @@ public sealed class Plugin : IDalamudPlugin
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
         StartBundledCactbotInitialization();
-        independentHostStartupTask = Task.Run(
-            () => StartIndependentHostAsync(independentHostStartupCancellation.Token),
+        bundledActPluginInitializationTask = Task.Run(
+            () => InitializeBundledActPluginResourcesAsync(bundledUpdateCancellation.Token),
             CancellationToken.None);
-        if (configuration.AutoCheckBundledPluginUpdates)
-        {
-            StartBundledPluginUpdateCheck(openWindow: false);
-        }
+        independentHostStartupTask = Task.Run(
+            () => InitializeHostResourcesAndStartAsync(
+                hasPackagedHostResources,
+                independentHostStartupCancellation.Token),
+            CancellationToken.None);
     }
 
     public string Name => "Dalamud ACT Compat";
@@ -1031,6 +1035,136 @@ public sealed class Plugin : IDalamudPlugin
         {
             logger.Error(ex, "Failed to save plugin configuration.");
             return false;
+        }
+    }
+
+    private async Task InitializeBundledActPluginResourcesAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var directory = await ResolveResourcePackWithTimeoutAsync(
+                    "act-plugins",
+                    BundledActPluginManager.DirectoryName,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            bundledPluginManager.LoadBundle(directory);
+            logger.Information(
+                $"Bundled ACT plugin resource pack is available under {directory}.");
+            await services.Framework.RunOnFrameworkThread(
+                    thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending)
+                .ConfigureAwait(false);
+            if (configuration.AutoCheckBundledPluginUpdates)
+            {
+                StartBundledPluginUpdateCheck(openWindow: false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(
+                "Bundled ACT plugin resources are unavailable; DACT remains loaded and " +
+                $"only bundled extensions are disabled: {ex.GetBaseException().Message}");
+            await TryNotifyResourcePackFailureAsync(
+                    "ACT 扩展资源下载失败；DACT 基础解析和界面仍可使用，可稍后重启重试。",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task InitializeHostResourcesAndStartAsync(
+        bool cachedResourcesAvailable,
+        CancellationToken cancellationToken)
+    {
+        if (cachedResourcesAvailable)
+        {
+            // A verified previous cache should keep installed extensions available immediately;
+            // resolving the current pack continues in the background for the next Host restart.
+            await StartIndependentHostAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var directory = await ResolveResourcePackWithTimeoutAsync(
+                    "host",
+                    "host",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            hostSupervisor.SetPackagedHostDirectory(directory);
+            matchaHostSupervisor.SetPackagedHostDirectory(directory);
+            genericHostSupervisor.SetPackagedHostDirectory(directory);
+            if (!cachedResourcesAvailable)
+            {
+                await StartIndependentHostAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(
+                "Compatibility Host resources are unavailable; DACT remains loaded and " +
+                $"traditional ACT extensions stay disabled: {ex.GetBaseException().Message}");
+            await TryNotifyResourcePackFailureAsync(
+                    "兼容 Host 资源下载失败；DACT 基础解析和界面仍可使用，传统 ACT 扩展暂不可用。",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task<string> ResolveResourcePackWithTimeoutAsync(
+        string packId,
+        string localDirectoryName,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        try
+        {
+            return await resourcePackManager.ResolveDirectoryAsync(
+                    packId,
+                    localDirectoryName,
+                    timeout.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            timeout.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Resource pack '{packId}' did not become available within three minutes.");
+        }
+    }
+
+    private async Task TryNotifyResourcePackFailureAsync(
+        string content,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            await services.Framework.RunOnFrameworkThread(() =>
+                services.NotificationManager.AddNotification(new Notification
+                {
+                    Title = "ACT 兼容资源不可用",
+                    Content = content,
+                    Type = NotificationType.Warning,
+                })).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            // Notification failure is diagnostic-only and must not turn degradation into a crash.
+            logger.Warning($"Could not show the resource-pack failure notification: {ex.Message}");
         }
     }
 
@@ -3118,6 +3252,7 @@ public sealed class Plugin : IDalamudPlugin
     private async Task DisposeRemainingComponentsAsync()
     {
         await ShutdownCactbotOperationsAsync().ConfigureAwait(false);
+        await bundledActPluginInitializationTask.ConfigureAwait(false);
         await independentHostStartupTask.ConfigureAwait(false);
         independentHostStartupCancellation.Dispose();
         await hostTopologyLock.WaitAsync().ConfigureAwait(false);

@@ -91,8 +91,12 @@ public sealed class ResourcePackManager : IDisposable
             UpdateState(entry.Id, entry.Sha256);
             return Path.Combine(exact, entry.ContentDirectory);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (
+            ex is not OperationCanceledException ||
+            !cancellationToken.IsCancellationRequested)
         {
+            // HttpClient reports its own timeout as TaskCanceledException. Only the caller's
+            // cancellation is terminal; transport timeouts still get cache fallback handling.
             var fallback = TryResolvePrevious(entry.Id, entry.Sha256);
             if (fallback is not null)
             {
@@ -103,6 +107,47 @@ public sealed class ResourcePackManager : IDisposable
 
             throw;
         }
+    }
+
+    public bool TryResolveAvailableDirectory(
+        string packId,
+        string localDirectoryName,
+        out string directory)
+    {
+        var localDirectory = Path.Combine(pluginDirectory, localDirectoryName);
+        var entry = catalog?.Packs.FirstOrDefault(candidate => string.Equals(
+            candidate.Id,
+            packId,
+            StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            directory = Directory.Exists(localDirectory) ? localDirectory : string.Empty;
+            return directory.Length > 0;
+        }
+
+        ValidateEntry(entry);
+        var exact = GetContentDirectory(entry);
+        if (IsInstalledPackValid(entry, exact))
+        {
+            UpdateState(entry.Id, entry.Sha256);
+            directory = Path.Combine(exact, entry.ContentDirectory);
+            return true;
+        }
+
+        if (Directory.Exists(localDirectory) &&
+            string.Equals(
+                ComputeDirectoryHash(localDirectory),
+                entry.ContentSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // Existing monolithic installations remain usable immediately; the background
+            // resolver migrates this directory into the immutable cache without blocking load.
+            directory = localDirectory;
+            return true;
+        }
+
+        directory = TryResolvePrevious(entry.Id, entry.Sha256) ?? string.Empty;
+        return directory.Length > 0;
     }
 
     private async Task DownloadAndInstallAsync(
@@ -151,7 +196,9 @@ public sealed class ResourcePackManager : IDisposable
                     TryDeleteFile(partialPath);
                     return;
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (
+                    ex is not OperationCanceledException ||
+                    !cancellationToken.IsCancellationRequested)
                 {
                     lastFailure = ex;
                     logger.Warning(

@@ -138,6 +138,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             DroppedMatchaNetworkMessages = Interlocked.Read(ref droppedMatchaNetworkEvents),
         };
 
+    public void SetPackagedHostDirectory(string directory)
+        => assets.SetPackagedHostDirectory(directory);
+
     public event EventHandler<HostCommandInvocation>? CommandRequested;
 
     public event EventHandler<HostPostNamazuHeading>? PostNamazuHeadingRequested;

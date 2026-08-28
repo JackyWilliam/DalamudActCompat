@@ -533,6 +533,16 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     {
         assets.EnsureExtracted();
     }
+
+    var lateBoundRoot = Path.Combine(testRoot, "late-bound-host-assets");
+    var lateBoundAssets = new CompatibilityHostAssets(
+        lateBoundRoot,
+        new PluginLogger(log));
+    lateBoundAssets.SetPackagedHostDirectory(packagedHost);
+    lateBoundAssets.EnsureExtracted();
+    Assert(
+        File.Exists(Path.Combine(lateBoundAssets.TargetDirectory, "DalamudActCompat.Host.exe")),
+        "A Host resource pack completed after plugin construction but was not accepted for startup.");
 }
 
 static async Task ValidateResourcePackLifecycleAsync(string testRoot)
@@ -587,6 +597,14 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
         resumeFixture.CacheDirectory,
         log,
         new HttpClient(offlineHandler));
+    Assert(
+        offlineManager.TryResolveAvailableDirectory(
+            "test-pack",
+            "missing",
+            out var immediatelyAvailableDirectory) &&
+        immediatelyAvailableDirectory == resumed &&
+        offlineHandler.Requests.Count == 0,
+        "Plugin startup could not reuse a verified resource pack without touching the network.");
     var offlineDirectory = await offlineManager.ResolveDirectoryAsync(
         "test-pack",
         "missing",
@@ -642,6 +660,32 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
         fallbackHandler.Requests.Any(uri => uri.Host == "primary.test") &&
         fallbackHandler.Requests.Any(uri => uri.Host == "secondary.test"),
         "Resource pack mirror fallback did not advance past a failed primary source.");
+
+    var timeoutFixture = CreateResourcePackFixture(root, "timeout-fallback", "timeout-content", "1");
+    var timeoutHandler = new ScriptedHttpMessageHandler(request =>
+        request.RequestUri!.Host == "timeout.test"
+            ? throw new TaskCanceledException("simulated HttpClient timeout")
+            : ByteResponse(timeoutFixture.ArchiveBytes));
+    WriteResourceCatalog(
+        timeoutFixture.PluginDirectory,
+        timeoutFixture.Entry with
+        {
+            Urls = ["https://timeout.test/pack", "https://secondary.test/pack"],
+        });
+    var timeoutManager = new ResourcePackManager(
+        timeoutFixture.PluginDirectory,
+        timeoutFixture.CacheDirectory,
+        log,
+        new HttpClient(timeoutHandler));
+    var timeoutDirectory = await timeoutManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(timeoutDirectory, "payload.txt")) == "timeout-content" &&
+        timeoutHandler.Requests.Any(uri => uri.Host == "timeout.test") &&
+        timeoutHandler.Requests.Any(uri => uri.Host == "secondary.test"),
+        "An HttpClient timeout was mistaken for caller cancellation and skipped mirror fallback.");
 
     var badHashFixture = CreateResourcePackFixture(root, "bad-hash", "bad-hash-content", "1");
     WriteResourceCatalog(
@@ -4795,6 +4839,9 @@ static void ValidateParserDependencyVersions()
     var chinese755h = document.RootElement
         .GetProperty("Chinese")
         .GetProperty("2026.08.05.0000.0000");
+    var global755h2 = document.RootElement
+        .GetProperty("Global")
+        .GetProperty("2026.08.11.0000.0000");
     Assert(
         chinese755h.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 188 &&
         chinese755h.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 979 &&
@@ -4802,6 +4849,13 @@ static void ValidateParserDependencyVersions()
         chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
         chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
         "OverlayPlugin Chinese 7.55h opcodes are stale.");
+    Assert(
+        global755h2.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 135 &&
+        global755h2.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 273 &&
+        global755h2.GetProperty("Countdown").GetProperty("opcode").GetInt32() == 120 &&
+        global755h2.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 572 &&
+        global755h2.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 301,
+        "OverlayPlugin Global 7.55h2 opcodes are stale.");
 }
 
 static void ValidateSilverDasherPermissionIsolation()
@@ -4974,16 +5028,31 @@ static void ValidateUnscramblerSupportPolicy()
     var chineseRuntimeFactory = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
         "GetChineseRuntimeVersionConstant",
         BindingFlags.NonPublic | BindingFlags.Static);
+    var globalRuntimePolicy = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "CanUseGlobalRuntimeVersionConstants",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    var globalRuntimeFactory = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "GetGlobalRuntimeVersionConstant",
+        BindingFlags.NonPublic | BindingFlags.Static);
     Assert(
         bundledPolicy is not null &&
         chineseRuntimePolicy is not null &&
-        chineseRuntimeFactory is not null,
+        chineseRuntimeFactory is not null &&
+        globalRuntimePolicy is not null &&
+        globalRuntimeFactory is not null,
         "Unscrambler support policy is missing.");
 
     static bool InvokeBundled(MethodInfo policy, GameRegion region, string version)
         => policy.Invoke(null, [region, version]) is true;
 
     static bool InvokeChineseRuntime(
+        MethodInfo policy,
+        GameRegion region,
+        string version,
+        int opcodeKeyTableSize)
+        => policy.Invoke(null, [region, version, opcodeKeyTableSize]) is true;
+
+    static bool InvokeGlobalRuntime(
         MethodInfo policy,
         GameRegion region,
         string version,
@@ -5031,6 +5100,102 @@ static void ValidateUnscramblerSupportPolicy()
             opcode == pair.Value),
         "Unscrambler 7.55h1 contains incomplete or stale obfuscated opcodes.");
 
+    const string global755h2 = "2026.08.11.0000.0000";
+    const uint global755h2OpcodeKeyTableOffset = 0x23184C0;
+    const int global755h2OpcodeKeyTableSize = 77 * 4;
+    var expectedGlobal755h2Opcodes = new Dictionary<string, int>
+    {
+        ["PlayerSpawn"] = 0x32D,
+        ["NpcSpawn"] = 0x0E9,
+        ["NpcSpawn2"] = 0x21C,
+        ["ActionEffect01"] = 0x371,
+        ["ActionEffect08"] = 0x3C8,
+        ["ActionEffect16"] = 0x1AF,
+        ["ActionEffect24"] = 0x35A,
+        ["ActionEffect32"] = 0x3D5,
+        ["StatusEffectList"] = 0x2EC,
+        ["StatusEffectList3"] = 0x263,
+        ["Examine"] = 0x097,
+        ["UpdateGearset"] = 0x173,
+        ["UpdateParty"] = 0x3E4,
+        ["ActorControl"] = 0x096,
+        ["ActorCast"] = 0x136,
+        ["UnknownEffect01"] = 0x33C,
+        ["UnknownEffect16"] = 0x1D8,
+        ["ActionEffect02"] = 0x2F4,
+        ["ActionEffect04"] = 0x3AD,
+    };
+    var global755h2RuntimeConstants =
+        (Unscrambler.Constants.VersionConstants)globalRuntimeFactory!.Invoke(
+            null,
+            [
+                global755h2,
+                global755h2OpcodeKeyTableOffset,
+                global755h2OpcodeKeyTableSize,
+            ])!;
+    var global755h2Unscrambler = new Unscrambler.Unscramble.Versions.Unscrambler73();
+    global755h2Unscrambler.Initialize(global755h2RuntimeConstants);
+    Assert(
+        global755h2RuntimeConstants.OpcodeKeyTableOffset == global755h2OpcodeKeyTableOffset &&
+        global755h2RuntimeConstants.OpcodeKeyTableSize == global755h2OpcodeKeyTableSize &&
+        global755h2RuntimeConstants.TableOffsets.Length == 0 &&
+        global755h2RuntimeConstants.MidTableOffset == 0 &&
+        global755h2RuntimeConstants.DayTableOffset == 0 &&
+        global755h2RuntimeConstants.ObfuscatedOpcodes.Count == expectedGlobal755h2Opcodes.Count &&
+        expectedGlobal755h2Opcodes.All(pair =>
+            global755h2RuntimeConstants.ObfuscatedOpcodes.TryGetValue(pair.Key, out var opcode) &&
+            opcode == pair.Value),
+        "Global 7.55h2 runtime constants are incomplete or do not use the discovered key table.");
+
+    var unscramblerToMachina = new Dictionary<string, string>
+    {
+        ["PlayerSpawn"] = "PlayerSpawn",
+        ["NpcSpawn"] = "NpcSpawn",
+        ["NpcSpawn2"] = "NpcSpawn2",
+        ["ActionEffect01"] = "Ability1",
+        ["ActionEffect08"] = "Ability8",
+        ["ActionEffect16"] = "Ability16",
+        ["ActionEffect24"] = "Ability24",
+        ["ActionEffect32"] = "Ability32",
+        ["StatusEffectList"] = "StatusEffectList",
+        ["StatusEffectList3"] = "StatusEffectList3",
+        ["ActorControl"] = "ActorControl",
+        ["ActorCast"] = "ActorCast",
+    };
+    OpcodeManager.Instance.SetRegion(GameRegion.Global);
+    var global755h2MachinaOpcodes = OpcodeManager.Instance.CurrentOpcodes;
+    foreach (var pair in unscramblerToMachina)
+    {
+        Assert(
+            global755h2RuntimeConstants.ObfuscatedOpcodes[pair.Key] ==
+            global755h2MachinaOpcodes[pair.Value],
+            $"Unscrambler opcode {pair.Key} does not match Global Machina {pair.Value}.");
+    }
+    Assert(
+        InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Global,
+            global755h2,
+            global755h2OpcodeKeyTableSize),
+        "Global 7.55h2 does not use its verified runtime profile.");
+    Assert(
+        !InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Global,
+            global755h2,
+            global755h2OpcodeKeyTableSize - 4) &&
+        !InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Chinese,
+            global755h2,
+            global755h2OpcodeKeyTableSize) &&
+        !InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Global,
+            "2099.01.01.0000.0000",
+            global755h2OpcodeKeyTableSize),
+        "An unverified region, version, or Global key-table size is marked ranking-safe.");
+
     var chineseRuntimeConstants = (Unscrambler.Constants.VersionConstants)chineseRuntimeFactory!.Invoke(
         null,
         [chinese755h, chineseOpcodeKeyTableOffset, opcodeKeyTableSize])!;
@@ -5051,21 +5216,6 @@ static void ValidateUnscramblerSupportPolicy()
 
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
     var chineseOpcodes = OpcodeManager.Instance.CurrentOpcodes;
-    var unscramblerToMachina = new Dictionary<string, string>
-    {
-        ["PlayerSpawn"] = "PlayerSpawn",
-        ["NpcSpawn"] = "NpcSpawn",
-        ["NpcSpawn2"] = "NpcSpawn2",
-        ["ActionEffect01"] = "Ability1",
-        ["ActionEffect08"] = "Ability8",
-        ["ActionEffect16"] = "Ability16",
-        ["ActionEffect24"] = "Ability24",
-        ["ActionEffect32"] = "Ability32",
-        ["StatusEffectList"] = "StatusEffectList",
-        ["StatusEffectList3"] = "StatusEffectList3",
-        ["ActorControl"] = "ActorControl",
-        ["ActorCast"] = "ActorCast",
-    };
     foreach (var pair in unscramblerToMachina)
     {
         Assert(
@@ -5136,10 +5286,15 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     var installer = new ActPluginPackageInstaller(paths);
     var configuration = new DalamudActCompat.Plugin.PluginConfiguration();
     var manager = new BundledActPluginManager(
-        bundleParent,
         "0.2.31.0",
         installer,
         configuration);
+    Assert(
+        manager.Plugins.Count == 0 && manager.GetPendingDisclosures().Count == 0,
+        "A missing startup resource pack prevented creation of an empty bundled-plugin manager.");
+    // Resource acquisition happens after the plugin constructor returns, so the manager must
+    // accept the verified bundle only when that background work completes.
+    manager.LoadBundle(Path.Combine(bundleParent, BundledActPluginManager.DirectoryName));
 
     var pending = manager.GetPendingDisclosures();
     Assert(pending.Count == 5, "A new install did not require all five bundled extension disclosures.");
@@ -6226,6 +6381,7 @@ static void ValidatePluginUnloadOwnership()
         projectSource.Contains("<CanUnloadAsync>true</CanUnloadAsync>", StringComparison.Ordinal) &&
         lifecycleSource.Contains("startupTask = Task.Run", StringComparison.Ordinal) &&
         lifecycleSource.Contains("await trackedStartup.ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("await bundledActPluginInitializationTask.ConfigureAwait(false);", StringComparison.Ordinal) &&
         pluginSource.Contains("await independentHostStartupTask.ConfigureAwait(false);", StringComparison.Ordinal) &&
         pluginSource.Contains("await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);", StringComparison.Ordinal) &&
         pluginSource.Contains("DisposeComponentsAsync().GetAwaiter().GetResult();", StringComparison.Ordinal) &&
