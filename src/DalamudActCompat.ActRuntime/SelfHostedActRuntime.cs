@@ -2732,7 +2732,23 @@ public sealed class SelfHostedActRuntime : IDisposable
             };
         }
 
-        return primary with { Combatants = merged };
+        // ACT can see only a late fragment when an opcode is stale while the structured
+        // fallback still has the first and last damage lines. Keep the widest trustworthy
+        // boundary so the header does not collapse a real pull to 00:00/00:01.
+        var startTime = primary.StartTime <= fallback.StartTime
+            ? primary.StartTime
+            : fallback.StartTime;
+        var endTime = primary.EndTime is null || fallback.EndTime is null
+            ? null
+            : primary.EndTime >= fallback.EndTime
+                ? primary.EndTime
+                : fallback.EndTime;
+        return primary with
+        {
+            StartTime = startTime,
+            EndTime = endTime,
+            Combatants = merged,
+        };
     }
 
     private void ObserveParityRawLine(string rawLine)
@@ -2961,7 +2977,11 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private CombatantHitCounts GetDamageHitCounts(CombatantData combatant)
     {
-        var allDamage = combatant.AllOut.Values.MaxBy(static attack => attack.Hits);
+        var allDamage = combatant.Items.TryGetValue(
+                CombatantData.DamageTypeDataOutgoingDamage,
+                out var outgoingDamage)
+            ? outgoingDamage.Items.Values.MaxBy(static attack => attack.Hits)
+            : null;
         if (allDamage is null)
         {
             return new CombatantHitCounts(
@@ -3003,9 +3023,15 @@ public sealed class SelfHostedActRuntime : IDisposable
             counter.CriticalDirectHits);
     }
 
-    private static HighestDamageHit GetHighestDamageHit(CombatantData combatant)
+    internal static HighestDamageHit GetHighestDamageHit(CombatantData combatant)
     {
-        var allDamage = combatant.AllOut.Values.MaxBy(static attack => attack.Hits);
+        // AllOut also contains outgoing healing. Restricting the aggregate here keeps a
+        // healer's largest cure out of the damage column and binds the action to this combatant.
+        var allDamage = combatant.Items.TryGetValue(
+                CombatantData.DamageTypeDataOutgoingDamage,
+                out var outgoingDamage)
+            ? outgoingDamage.Items.Values.MaxBy(static attack => attack.Hits)
+            : null;
         var swing = allDamage?.Items
             .Where(static item => (long)item.Damage > 0)
             .MaxBy(static item => (long)item.Damage);
@@ -3014,7 +3040,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             : new HighestDamageHit(swing.AttackType ?? string.Empty, (long)swing.Damage);
     }
 
-    private readonly record struct HighestDamageHit(string Action, long Amount);
+    internal readonly record struct HighestDamageHit(string Action, long Amount);
 
     private sealed class DamageHitCounter(AttackType source)
     {

@@ -1,4 +1,6 @@
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.ActRuntime;
@@ -8,6 +10,7 @@ using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
@@ -99,6 +102,9 @@ public sealed class ControlCenterWindow : Window
     private readonly Func<string> buildDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
+    private readonly Func<ResourcePackOperationStatus> getBundledActResourceStatus;
+    private readonly Action startBundledActResourceDownload;
+    private readonly Action cancelBundledActResourceDownload;
     private readonly Func<bool> isCactbotInstalled;
     private readonly Func<CactbotOperationStatus> getCactbotOperationStatus;
     private readonly Action selectCactbotPackage;
@@ -186,6 +192,9 @@ public sealed class ControlCenterWindow : Window
         Func<string> buildDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
+        Func<ResourcePackOperationStatus> getBundledActResourceStatus,
+        Action startBundledActResourceDownload,
+        Action cancelBundledActResourceDownload,
         Func<bool> isCactbotInstalled,
         Func<CactbotOperationStatus> getCactbotOperationStatus,
         Action selectCactbotPackage,
@@ -239,6 +248,9 @@ public sealed class ControlCenterWindow : Window
         this.buildDiagnosticReport = buildDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
+        this.getBundledActResourceStatus = getBundledActResourceStatus;
+        this.startBundledActResourceDownload = startBundledActResourceDownload;
+        this.cancelBundledActResourceDownload = cancelBundledActResourceDownload;
         this.isCactbotInstalled = isCactbotInstalled;
         this.getCactbotOperationStatus = getCactbotOperationStatus;
         this.selectCactbotPackage = selectCactbotPackage;
@@ -1935,7 +1947,43 @@ public sealed class ControlCenterWindow : Window
         var changed = false;
         enabledChanged = false;
         ImGui.PushID($"extension-{pluginId}");
-        if (installed is null)
+        var resourceStatus = getBundledActResourceStatus();
+        if (resourceStatus.State != ResourcePackOperationState.Ready)
+        {
+            ImGui.TextUnformatted(displayName);
+            ImGui.SameLine();
+            if (resourceStatus.State == ResourcePackOperationState.Downloading)
+            {
+                ImGui.TextColored(
+                    IceBlue,
+                    text.Get(
+                        $"下载中...{resourceStatus.ProgressPercent}%",
+                        $"Downloading...{resourceStatus.ProgressPercent}%"));
+                ImGui.SameLine();
+                if (ImGuiComponents.IconButton(FontAwesomeIcon.Times))
+                {
+                    cancelBundledActResourceDownload();
+                }
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(text.Get("取消下载", "Cancel download"));
+                }
+            }
+            else if (resourceStatus.State == ResourcePackOperationState.Unavailable)
+            {
+                ImGui.TextDisabled(text.Get("不可用", "Unavailable"));
+                ImGui.SameLine();
+                if (ImGuiComponents.IconButton(FontAwesomeIcon.Download))
+                {
+                    startBundledActResourceDownload();
+                }
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(text.Get("下载扩展组件", "Download extension components"));
+                }
+            }
+        }
+        else if (installed is null)
         {
             ImGui.TextUnformatted(displayName);
             ImGui.SameLine();

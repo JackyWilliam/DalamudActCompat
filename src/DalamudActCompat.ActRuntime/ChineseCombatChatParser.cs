@@ -84,9 +84,7 @@ public sealed class ChineseCombatChatContext
     public const string LimitBreakActorName = "Limit Break";
     private static readonly TimeSpan ActorContextLifetime = TimeSpan.FromSeconds(2);
     private readonly IReadOnlySet<string> limitBreakActionNames;
-    private string pendingActor = string.Empty;
-    private string pendingAction = string.Empty;
-    private DateTimeOffset pendingActorObservedAt;
+    private readonly Queue<PendingActionContext> pendingActions = new();
 
     public ChineseCombatChatContext(IReadOnlySet<string>? limitBreakActionNames = null)
     {
@@ -143,20 +141,51 @@ public sealed class ChineseCombatChatContext
             out var announcedAction);
         if (hasActorAnnouncement)
         {
-            pendingActor = !string.IsNullOrWhiteSpace(announcedAction) &&
-                           limitBreakActionNames.Contains(announcedAction)
+            var canonicalActor = !string.IsNullOrWhiteSpace(announcedAction) &&
+                                 limitBreakActionNames.Contains(announcedAction)
                 ? LimitBreakActorName
                 : announcedActor;
-            pendingAction = announcedAction;
-            pendingActorObservedAt = observedAt;
+            if (ChineseCombatChatParser.TryParse(
+                    message,
+                    canonicalActor,
+                    out actor,
+                    out target,
+                    out damage,
+                    out isCritical,
+                    out isDirectHit))
+            {
+                action = announcedAction;
+                return true;
+            }
+
+            // Split chat lines from multiple party members can interleave. FIFO pairing is
+            // deliberately one-shot so a later announcement cannot steal another actor's hit.
+            pendingActions.Enqueue(new PendingActionContext(
+                canonicalActor,
+                announcedAction,
+                observedAt));
+            actor = string.Empty;
+            target = string.Empty;
+            damage = 0;
+            action = string.Empty;
+            isCritical = false;
+            isDirectHit = false;
+            return false;
         }
 
-        var elapsed = observedAt - pendingActorObservedAt;
-        var inheritedActor = elapsed >= TimeSpan.Zero && elapsed <= ActorContextLifetime
-            ? pendingActor
+        while (pendingActions.Count > 0 &&
+               observedAt - pendingActions.Peek().ObservedAt > ActorContextLifetime)
+        {
+            pendingActions.Dequeue();
+        }
+
+        var pending = pendingActions.Count > 0 ? pendingActions.Peek() : null;
+        var elapsed = pending is null ? TimeSpan.MaxValue : observedAt - pending.ObservedAt;
+        var inheritedActor = pending is not null && elapsed >= TimeSpan.Zero
+            ? pending.Actor
             : string.Empty;
-        action = elapsed >= TimeSpan.Zero && elapsed <= ActorContextLifetime
-            ? pendingAction
+        action = pending is not null && elapsed >= TimeSpan.Zero
+            ? pending.Action
             : string.Empty;
         if (ChineseCombatChatParser.TryParse(
                 message,
@@ -167,6 +196,10 @@ public sealed class ChineseCombatChatContext
                 out isCritical,
                 out isDirectHit))
         {
+            if (pending is not null)
+            {
+                pendingActions.Dequeue();
+            }
             return true;
         }
 
@@ -174,17 +207,17 @@ public sealed class ChineseCombatChatContext
         isDirectHit = false;
         action = string.Empty;
 
-        if (!hasActorAnnouncement)
-        {
-            Clear();
-        }
+        Clear();
         return false;
     }
 
     public void Clear()
     {
-        pendingActor = string.Empty;
-        pendingAction = string.Empty;
-        pendingActorObservedAt = default;
+        pendingActions.Clear();
     }
+
+    private sealed record PendingActionContext(
+        string Actor,
+        string Action,
+        DateTimeOffset ObservedAt);
 }

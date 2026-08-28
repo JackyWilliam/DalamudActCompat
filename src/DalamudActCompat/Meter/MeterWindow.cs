@@ -33,7 +33,7 @@ public sealed class MeterWindow : Window
     private const float HitRateColumnWidth = 43;
     private const float DamagePercentColumnWidth = 46;
     private const float TotalDamageColumnWidth = 76;
-    private const float HighestDamageColumnWidth = 82;
+    private const float HighestDamageColumnWidth = 112;
     private const float DeathsColumnWidth = 28;
     private const float RankColumnWidth = 28;
     private const float IdentityColumnWidth = 150;
@@ -1092,13 +1092,13 @@ public sealed class MeterWindow : Window
         var scale = Math.Clamp(settings.FontScale, 0.75f, 1.8f);
         var right = Math.Max(0, availableWidth - (TableRightPadding * scale));
         var preferredTableWidth = CalculateRequiredTableWidth(widths, settings.FontScale);
-        var resolvedIdentityWidth = widths.Identity is not { } identityWidth
-            ? 0
-            : ResolveIdentityColumnWidth(
+        var (resolvedIdentityWidth, resolvedHighestDamageWidth) =
+            ResolveAdaptiveColumnWidths(
                 availableWidth,
                 preferredTableWidth,
-                identityWidth,
-                minimumIdentityWidth);
+                widths.Identity,
+                minimumIdentityWidth,
+                widths.HighestDamage);
         MeterColumn Take(float width, MeterSlotDefinition? slot = null)
         {
             right -= width;
@@ -1175,8 +1175,8 @@ public sealed class MeterWindow : Window
                     totalHealing = Take(value, slot);
                     break;
                 case MeterSlotMetric.HighestDamageAction or MeterSlotMetric.HighestDamage
-                    when highestDamage is null && widths.HighestDamage is { } value:
-                    highestDamage = Take(value, slot);
+                    when highestDamage is null && widths.HighestDamage is not null:
+                    highestDamage = Take(resolvedHighestDamageWidth, slot);
                     break;
                 case MeterSlotMetric.Deaths when deaths is null && widths.Deaths is { } value:
                     deaths = Take(value, slot);
@@ -1202,7 +1202,9 @@ public sealed class MeterWindow : Window
         damagePercent ??= widths.DamagePercent is { } damagePercentWidth ? Take(damagePercentWidth) : null;
         totalDamage ??= widths.TotalDamage is { } totalDamageWidth ? Take(totalDamageWidth) : null;
         totalHealing ??= widths.TotalHealing is { } totalHealingWidth ? Take(totalHealingWidth) : null;
-        highestDamage ??= widths.HighestDamage is { } highestDamageWidth ? Take(highestDamageWidth) : null;
+        highestDamage ??= widths.HighestDamage is not null
+            ? Take(resolvedHighestDamageWidth)
+            : null;
         deaths ??= widths.Deaths is { } deathsWidth ? Take(deathsWidth) : null;
         return new MeterColumnLayout(
             rank,
@@ -1924,6 +1926,35 @@ public sealed class MeterWindow : Window
                minimumIdentityWidth,
                preferredIdentityWidth - Math.Max(0, preferredTableWidth - availableTableWidth)) +
            Math.Max(0, availableTableWidth - preferredTableWidth);
+
+    internal static (float Identity, float HighestDamage) ResolveAdaptiveColumnWidths(
+        float availableTableWidth,
+        float preferredTableWidth,
+        float? preferredIdentityWidth,
+        float minimumIdentityWidth,
+        float? preferredHighestDamageWidth)
+    {
+        var identity = preferredIdentityWidth is { } identityWidth
+            ? Math.Max(
+                minimumIdentityWidth,
+                identityWidth - Math.Max(0, preferredTableWidth - availableTableWidth))
+            : 0;
+        var highestDamage = preferredHighestDamageWidth ?? 0;
+        var extra = Math.Max(0, availableTableWidth - preferredTableWidth);
+        if (preferredHighestDamageWidth is not null)
+        {
+            // Player IDs still benefit from a wide window, but the action column must also
+            // gain readable space instead of remaining permanently fixed at its minimum.
+            var highestDamageShare = preferredIdentityWidth is null ? extra : extra * 0.6f;
+            highestDamage += highestDamageShare;
+            identity += extra - highestDamageShare;
+        }
+        else
+        {
+            identity += extra;
+        }
+        return (identity, highestDamage);
+    }
 
     internal static bool ShouldEnableHorizontalScroll(float availableWidth, float requiredWidth)
         => requiredWidth > availableWidth + 1;

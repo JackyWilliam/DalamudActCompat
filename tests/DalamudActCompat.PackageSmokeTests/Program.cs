@@ -579,16 +579,53 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
         resumeFixture.CacheDirectory,
         log,
         new HttpClient(resumeHandler));
+    var reportedProgress = new List<ResourcePackDownloadProgress>();
     var resumed = await resumeManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None,
+        new InlineProgress<ResourcePackDownloadProgress>(reportedProgress.Add));
+    Assert(
+        File.ReadAllText(Path.Combine(resumed, "payload.txt")) == "resume-content" &&
+        resumeCalls == 2 &&
+        reportedProgress.Count > 0 &&
+        reportedProgress[^1].Percent == 100 &&
+        reportedProgress.All(static item => item.Percent is >= 0 and <= 100),
+        "Interrupted resource pack download did not resume, report progress, and install atomically.");
+    _ = await resumeManager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
+    Assert(resumeCalls == 2, "Resolving the same content hash downloaded the resource pack again.");
+
+    var cancelFixture = CreateResourcePackFixture(root, "cancel", "cancel-content", "1");
+    var cancelEntry = cancelFixture.Entry with { Urls = ["https://packs.test/cancel"] };
+    WriteResourceCatalog(cancelFixture.PluginDirectory, cancelEntry);
+    var cancelHandler = new ScriptedHttpMessageHandler(_ => ByteResponse(cancelFixture.ArchiveBytes));
+    var cancelManager = new ResourcePackManager(
+        cancelFixture.PluginDirectory,
+        cancelFixture.CacheDirectory,
+        log,
+        new HttpClient(cancelHandler));
+    using var downloadCancellation = new CancellationTokenSource();
+    await AssertThrowsAsync<OperationCanceledException>(() => cancelManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        downloadCancellation.Token,
+        new InlineProgress<ResourcePackDownloadProgress>(progress =>
+        {
+            if (progress.BytesReceived > 0)
+            {
+                downloadCancellation.Cancel();
+            }
+        })));
+    Assert(
+        !Directory.Exists(Path.Combine(cancelFixture.CacheDirectory, cancelEntry.Id, cancelEntry.Sha256)),
+        "Cancelling a resource download still installed the core components.");
+    var recoveredAfterCancel = await cancelManager.ResolveDirectoryAsync(
         "test-pack",
         "missing",
         CancellationToken.None);
     Assert(
-        File.ReadAllText(Path.Combine(resumed, "payload.txt")) == "resume-content" &&
-        resumeCalls == 2,
-        "Interrupted resource pack download did not resume and install atomically.");
-    _ = await resumeManager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
-    Assert(resumeCalls == 2, "Resolving the same content hash downloaded the resource pack again.");
+        File.ReadAllText(Path.Combine(recoveredAfterCancel, "payload.txt")) == "cancel-content",
+        "A cancelled resource download could not be retried from its retained partial archive.");
 
     var offlineHandler = new ScriptedHttpMessageHandler(_ =>
         throw new InvalidOperationException("A verified offline cache unexpectedly used the network."));
@@ -2808,6 +2845,24 @@ static void ValidateMeterLayout()
         !MeterWindow.ShouldEnableHorizontalScroll(450, 450) &&
         MeterWindow.ShouldEnableHorizontalScroll(448, 450),
         "The identity column did not shrink to its minimum before enabling horizontal scrolling.");
+    var adaptiveWideColumns = MeterWindow.ResolveAdaptiveColumnWidths(
+        800,
+        600,
+        240,
+        90,
+        112);
+    var adaptiveNarrowColumns = MeterWindow.ResolveAdaptiveColumnWidths(
+        500,
+        600,
+        240,
+        90,
+        112);
+    Assert(
+        adaptiveWideColumns.Identity == 320 &&
+        adaptiveWideColumns.HighestDamage == 232 &&
+        adaptiveNarrowColumns.Identity == 140 &&
+        adaptiveNarrowColumns.HighestDamage == 112,
+        "A wide Meter did not share spare width with the highest-damage column or changed narrow-window compression.");
     var defaultClassicSlots = defaultColumns.ClassicWindow.Slots;
     Assert(
         defaultClassicSlots.Any(static slot =>
@@ -4356,6 +4411,8 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var coreResourceWindowSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "CoreResourceDownloadWindow.cs"));
     var configurationSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "PluginConfiguration.cs"));
     var hostSupervisorSource = File.ReadAllText(Path.Combine(
@@ -4388,6 +4445,15 @@ static void ValidateControlCenterPresentation()
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
         "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
+    Assert(
+        controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("下载中...", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("不可用", StringComparison.Ordinal) &&
+        coreResourceWindowSource.Contains("ImGui.ProgressBar", StringComparison.Ordinal) &&
+        coreResourceWindowSource.Contains("是否下载核心组件？", StringComparison.Ordinal) &&
+        pluginSource.Contains("coreResourceDownloadWindow.Open", StringComparison.Ordinal),
+        "Resource failure recovery no longer exposes unavailable, download, progress, cancel, and core retry UI states.");
     Assert(
         !controlCenterSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
         !settingsSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
@@ -6302,6 +6368,19 @@ static void ValidateHighestDamageAggregation()
         player.HighestDamage == 120 &&
         player.PartyGroup == 2,
         "Duty aggregation did not replace only on a strictly higher hit or preserve alliance metadata.");
+
+    ActGlobals.Init();
+    Advanced_Combat_Tracker.Resources.NotActMainFormatter.SetupEnvironment();
+    var actEncounter = new EncounterData("Player", "Test duty", false, null!);
+    var actCombatant = new CombatantData("Player", actEncounter);
+    actCombatant.AddCombatAction(new MasterSwing(
+        2, false, 8_000, start.DateTime, 1, "Damage skill", "Player", "damage", "Target"));
+    actCombatant.AddCombatAction(new MasterSwing(
+        3, false, 63_300, start.AddMilliseconds(10).DateTime, 2, "Large heal", "Player", "healing", "Player"));
+    var highestDamage = SelfHostedActRuntime.GetHighestDamageHit(actCombatant);
+    Assert(
+        highestDamage.Action == "Damage skill" && highestDamage.Amount == 8_000,
+        "Highest damage selected a larger outgoing heal instead of the combatant's own damage action.");
 }
 
 static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
@@ -10953,6 +11032,40 @@ static void ValidateChineseCombatChatParsing()
         contextualActor == "队友",
         "Adjacent split combat lines no longer retain their legitimate attacker context.");
 
+    var interleavedContext = new ChineseCombatChatContext();
+    Assert(
+        !interleavedContext.TryParse(
+            "队员甲发动了“技能甲”。",
+            observedAt,
+            out _, out _, out _) &&
+        !interleavedContext.TryParse(
+            "队员乙发动了“技能乙”。",
+            observedAt.AddMilliseconds(10),
+            out _, out _, out _) &&
+        interleavedContext.TryParse(
+            "  \uE06F 木人受到了1000点伤害。",
+            observedAt.AddMilliseconds(20),
+            out var firstInterleavedActor,
+            out _,
+            out _,
+            out var firstInterleavedAction,
+            out _,
+            out _) &&
+        interleavedContext.TryParse(
+            "  \uE06F 木人受到了2000点伤害。",
+            observedAt.AddMilliseconds(30),
+            out var secondInterleavedActor,
+            out _,
+            out _,
+            out var secondInterleavedAction,
+            out _,
+            out _) &&
+        firstInterleavedActor == "队员甲" &&
+        firstInterleavedAction == "技能甲" &&
+        secondInterleavedActor == "队员乙" &&
+        secondInterleavedAction == "技能乙",
+        "Interleaved Chinese action announcements crossed actors or highest-damage action names.");
+
     Assert(
         SelfHostedActRuntime.IsDamageDealingLimitBreakAction(9, canTargetHostile: true) &&
         SelfHostedActRuntime.IsDamageDealingLimitBreakAction(15, canTargetHostile: true) &&
@@ -11012,15 +11125,15 @@ static void ValidateChineseCombatChatParsing()
     var snapshotTime = DateTimeOffset.UtcNow;
     var healingActSnapshot = new ActEncounterSnapshot(
         Guid.NewGuid(),
-        snapshotTime,
-        snapshotTime,
+        snapshotTime.AddSeconds(4),
+        snapshotTime.AddSeconds(5),
         "Middle La Noscea",
         "木人",
         [new ActCombatantSnapshot("player", "Player", "SGE", true, 0, 16703, 0)]);
     var chatFallbackSnapshot = new ActEncounterSnapshot(
         healingActSnapshot.Id,
         snapshotTime,
-        snapshotTime,
+        snapshotTime.AddSeconds(12),
         "Middle La Noscea",
         "木人",
         [new ActCombatantSnapshot(
@@ -11047,8 +11160,10 @@ static void ValidateChineseCombatChatParsing()
             DamageHits: 1,
             CriticalHits: 1,
             HighestDamageAction: "Dosis III",
-        },
-        "Fallback damage replaced the healer's ACT healing instead of merging the missing fields.");
+        } &&
+        mergedFallbackSnapshot.StartTime == snapshotTime &&
+        mergedFallbackSnapshot.EndTime == snapshotTime.AddSeconds(12),
+        "Fallback damage replaced ACT healing or failed to restore fragmented fight boundaries.");
     var authoritativeActSnapshot = healingActSnapshot with
     {
         Combatants =
@@ -11707,6 +11822,11 @@ sealed record ResourcePackFixture(
     string CacheDirectory,
     byte[] ArchiveBytes,
     ResourcePackEntry Entry);
+
+sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+{
+    public void Report(T value) => report(value);
+}
 
 sealed class ScriptedHttpMessageHandler(
     Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
