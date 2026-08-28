@@ -10442,10 +10442,13 @@ static async Task ValidateOverlayWebSocketFatalAcceptRecoveryAsync()
     Assert(
         !((NetCoreServer.TcpServer)originalServer).IsAccepting,
         "The invalid WebSocket listener remained in the recursive accept state.");
+    // Windows may report either fatal code for the same externally closed listener, depending on runtime timing.
+    var fatalAcceptErrors = logger.Messages.Where(message =>
+        message.Contains("caught an error with code NotSocket", StringComparison.Ordinal) ||
+        message.Contains("caught an error with code InvalidArgument", StringComparison.Ordinal)).ToArray();
     Assert(
-        logger.Messages.Count(message =>
-            message.Contains("caught an error with code NotSocket", StringComparison.Ordinal)) == 1,
-        "The invalid WebSocket listener emitted more than one NotSocket error before its circuit breaker ran.");
+        fatalAcceptErrors.Length == 1,
+        $"The invalid WebSocket listener emitted {fatalAcceptErrors.Length} fatal errors before its circuit breaker ran.");
     Assert(
         logger.Messages.Any(message =>
             message.Contains("recovered with a new listener", StringComparison.Ordinal)),
