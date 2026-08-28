@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.10.0",
+    "AssemblyVersion":  "0.3.10.1",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.0/DalamudActCompat-core.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.1/DalamudActCompat-core.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.0/DalamudActCompat-core.zip",
-    "LastUpdate":  1787385600000,
-    "Changelog":  "v0.3.10.0 新增 24 人战斗统计、三套预设与横版自定义编辑器、精简模式、失焦隐藏网页悬浮窗，并实装按需资源分包。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.1/DalamudActCompat-core.zip",
+    "LastUpdate":  1787888007685,
+    "Changelog":  "v0.3.10.1 修复国际服漏人、资源下载失败阻止启动、最高伤害混入治疗或串人、列宽和短战斗计时。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

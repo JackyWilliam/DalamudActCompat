@@ -13,7 +13,7 @@ public sealed class CompatibilityHostAssets
     private readonly string targetDirectory;
     private readonly PluginLogger logger;
     private readonly Assembly assembly;
-    private readonly string? packagedHostDirectory;
+    private string? packagedHostDirectory;
 
     public CompatibilityHostAssets(
         string targetRootDirectory,
@@ -32,6 +32,23 @@ public sealed class CompatibilityHostAssets
 
     public string TargetDirectory => targetDirectory;
 
+    public void SetPackagedHostDirectory(string directory)
+    {
+        var normalized = Path.GetFullPath(directory);
+        if (!Directory.Exists(normalized))
+        {
+            throw new DirectoryNotFoundException(
+                $"Compatibility host resource directory does not exist: {normalized}");
+        }
+
+        lock (ExtractionLock)
+        {
+            // Resource downloads complete after plugin construction. Updating the source under
+            // the extraction lock keeps a concurrent Host start from observing a partial switch.
+            packagedHostDirectory = normalized;
+        }
+    }
+
     public void EnsureExtracted()
     {
         // All Host roles use the same embedded files. Serializing extraction prevents
@@ -44,9 +61,10 @@ public sealed class CompatibilityHostAssets
 
     private void EnsureExtractedLocked()
     {
-        if (packagedHostDirectory is not null && Directory.Exists(packagedHostDirectory))
+        var packagedDirectory = packagedHostDirectory;
+        if (packagedDirectory is not null && Directory.Exists(packagedDirectory))
         {
-            EnsurePackagedFilesCopied();
+            EnsurePackagedFilesCopied(packagedDirectory);
             return;
         }
 
@@ -95,10 +113,10 @@ public sealed class CompatibilityHostAssets
         logger.Information($"Compatibility host assets are available under {targetDirectory}.");
     }
 
-    private void EnsurePackagedFilesCopied()
+    private void EnsurePackagedFilesCopied(string packagedDirectory)
     {
         Directory.CreateDirectory(targetDirectory);
-        foreach (var source in Directory.GetFiles(packagedHostDirectory!, "*", SearchOption.TopDirectoryOnly))
+        foreach (var source in Directory.GetFiles(packagedDirectory, "*", SearchOption.TopDirectoryOnly))
         {
             var destination = Path.Combine(targetDirectory, Path.GetFileName(source));
             if (File.Exists(destination) && FilesMatch(source, destination))

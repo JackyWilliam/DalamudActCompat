@@ -39,7 +39,8 @@ public sealed class ResourcePackManager : IDisposable
     public async Task<string> ResolveDirectoryAsync(
         string packId,
         string localDirectoryName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<ResourcePackDownloadProgress>? progress = null)
     {
         var localDirectory = Path.Combine(pluginDirectory, localDirectoryName);
         var entry = catalog?.Packs.FirstOrDefault(candidate => string.Equals(
@@ -87,12 +88,16 @@ public sealed class ResourcePackManager : IDisposable
 
         try
         {
-            await DownloadAndInstallAsync(entry, cancellationToken).ConfigureAwait(false);
+            await DownloadAndInstallAsync(entry, cancellationToken, progress).ConfigureAwait(false);
             UpdateState(entry.Id, entry.Sha256);
             return Path.Combine(exact, entry.ContentDirectory);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (
+            ex is not OperationCanceledException ||
+            !cancellationToken.IsCancellationRequested)
         {
+            // HttpClient reports its own timeout as TaskCanceledException. Only the caller's
+            // cancellation is terminal; transport timeouts still get cache fallback handling.
             var fallback = TryResolvePrevious(entry.Id, entry.Sha256);
             if (fallback is not null)
             {
@@ -105,9 +110,51 @@ public sealed class ResourcePackManager : IDisposable
         }
     }
 
+    public bool TryResolveAvailableDirectory(
+        string packId,
+        string localDirectoryName,
+        out string directory)
+    {
+        var localDirectory = Path.Combine(pluginDirectory, localDirectoryName);
+        var entry = catalog?.Packs.FirstOrDefault(candidate => string.Equals(
+            candidate.Id,
+            packId,
+            StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            directory = Directory.Exists(localDirectory) ? localDirectory : string.Empty;
+            return directory.Length > 0;
+        }
+
+        ValidateEntry(entry);
+        var exact = GetContentDirectory(entry);
+        if (IsInstalledPackValid(entry, exact))
+        {
+            UpdateState(entry.Id, entry.Sha256);
+            directory = Path.Combine(exact, entry.ContentDirectory);
+            return true;
+        }
+
+        if (Directory.Exists(localDirectory) &&
+            string.Equals(
+                ComputeDirectoryHash(localDirectory),
+                entry.ContentSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // Existing monolithic installations remain usable immediately; the background
+            // resolver migrates this directory into the immutable cache without blocking load.
+            directory = localDirectory;
+            return true;
+        }
+
+        directory = TryResolvePrevious(entry.Id, entry.Sha256) ?? string.Empty;
+        return directory.Length > 0;
+    }
+
     private async Task DownloadAndInstallAsync(
         ResourcePackEntry entry,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<ResourcePackDownloadProgress>? progress)
     {
         var downloadDirectory = Path.Combine(cacheDirectory, ".downloads");
         Directory.CreateDirectory(downloadDirectory);
@@ -121,7 +168,10 @@ public sealed class ResourcePackManager : IDisposable
                 {
                     // A process may stop after the final byte reaches disk but before install.
                     // Reusing that verified archive avoids a Range request beyond EOF (HTTP 416).
+                    cancellationToken.ThrowIfCancellationRequested();
                     ValidateArchive(entry, partialPath);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report(new ResourcePackDownloadProgress(entry.Size, entry.Size));
                     ExtractAndInstallAtomically(entry, partialPath);
                     TryDeleteFile(partialPath);
                     return;
@@ -144,14 +194,23 @@ public sealed class ResourcePackManager : IDisposable
             {
                 try
                 {
-                    await DownloadWithResumeAsync(url, partialPath, cancellationToken)
+                    await DownloadWithResumeAsync(
+                            url,
+                            partialPath,
+                            entry.Size,
+                            cancellationToken,
+                            progress)
                         .ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
                     ValidateArchive(entry, partialPath);
+                    cancellationToken.ThrowIfCancellationRequested();
                     ExtractAndInstallAtomically(entry, partialPath);
                     TryDeleteFile(partialPath);
                     return;
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (
+                    ex is not OperationCanceledException ||
+                    !cancellationToken.IsCancellationRequested)
                 {
                     lastFailure = ex;
                     logger.Warning(
@@ -173,7 +232,9 @@ public sealed class ResourcePackManager : IDisposable
     private async Task DownloadWithResumeAsync(
         string url,
         string partialPath,
-        CancellationToken cancellationToken)
+        long expectedLength,
+        CancellationToken cancellationToken,
+        IProgress<ResourcePackDownloadProgress>? progress)
     {
         var existingLength = File.Exists(partialPath) ? new FileInfo(partialPath).Length : 0;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -198,7 +259,24 @@ public sealed class ResourcePackManager : IDisposable
             FileShare.Read,
             128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
-        await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+        var received = append ? existingLength : 0;
+        progress?.Report(new ResourcePackDownloadProgress(received, expectedLength));
+        var buffer = new byte[128 * 1024];
+        while (true)
+        {
+            var count = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (count == 0)
+            {
+                break;
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, count), cancellationToken)
+                .ConfigureAwait(false);
+            received += count;
+            // Progress is based on the signed manifest size rather than response headers,
+            // because mirrors and resumed Range responses report different content lengths.
+            progress?.Report(new ResourcePackDownloadProgress(received, expectedLength));
+        }
         await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
         destination.Flush(flushToDisk: true);
     }

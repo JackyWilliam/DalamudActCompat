@@ -533,6 +533,16 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     {
         assets.EnsureExtracted();
     }
+
+    var lateBoundRoot = Path.Combine(testRoot, "late-bound-host-assets");
+    var lateBoundAssets = new CompatibilityHostAssets(
+        lateBoundRoot,
+        new PluginLogger(log));
+    lateBoundAssets.SetPackagedHostDirectory(packagedHost);
+    lateBoundAssets.EnsureExtracted();
+    Assert(
+        File.Exists(Path.Combine(lateBoundAssets.TargetDirectory, "DalamudActCompat.Host.exe")),
+        "A Host resource pack completed after plugin construction but was not accepted for startup.");
 }
 
 static async Task ValidateResourcePackLifecycleAsync(string testRoot)
@@ -569,16 +579,53 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
         resumeFixture.CacheDirectory,
         log,
         new HttpClient(resumeHandler));
+    var reportedProgress = new List<ResourcePackDownloadProgress>();
     var resumed = await resumeManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None,
+        new InlineProgress<ResourcePackDownloadProgress>(reportedProgress.Add));
+    Assert(
+        File.ReadAllText(Path.Combine(resumed, "payload.txt")) == "resume-content" &&
+        resumeCalls == 2 &&
+        reportedProgress.Count > 0 &&
+        reportedProgress[^1].Percent == 100 &&
+        reportedProgress.All(static item => item.Percent is >= 0 and <= 100),
+        "Interrupted resource pack download did not resume, report progress, and install atomically.");
+    _ = await resumeManager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
+    Assert(resumeCalls == 2, "Resolving the same content hash downloaded the resource pack again.");
+
+    var cancelFixture = CreateResourcePackFixture(root, "cancel", "cancel-content", "1");
+    var cancelEntry = cancelFixture.Entry with { Urls = ["https://packs.test/cancel"] };
+    WriteResourceCatalog(cancelFixture.PluginDirectory, cancelEntry);
+    var cancelHandler = new ScriptedHttpMessageHandler(_ => ByteResponse(cancelFixture.ArchiveBytes));
+    var cancelManager = new ResourcePackManager(
+        cancelFixture.PluginDirectory,
+        cancelFixture.CacheDirectory,
+        log,
+        new HttpClient(cancelHandler));
+    using var downloadCancellation = new CancellationTokenSource();
+    await AssertThrowsAsync<OperationCanceledException>(() => cancelManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        downloadCancellation.Token,
+        new InlineProgress<ResourcePackDownloadProgress>(progress =>
+        {
+            if (progress.BytesReceived > 0)
+            {
+                downloadCancellation.Cancel();
+            }
+        })));
+    Assert(
+        !Directory.Exists(Path.Combine(cancelFixture.CacheDirectory, cancelEntry.Id, cancelEntry.Sha256)),
+        "Cancelling a resource download still installed the core components.");
+    var recoveredAfterCancel = await cancelManager.ResolveDirectoryAsync(
         "test-pack",
         "missing",
         CancellationToken.None);
     Assert(
-        File.ReadAllText(Path.Combine(resumed, "payload.txt")) == "resume-content" &&
-        resumeCalls == 2,
-        "Interrupted resource pack download did not resume and install atomically.");
-    _ = await resumeManager.ResolveDirectoryAsync("test-pack", "missing", CancellationToken.None);
-    Assert(resumeCalls == 2, "Resolving the same content hash downloaded the resource pack again.");
+        File.ReadAllText(Path.Combine(recoveredAfterCancel, "payload.txt")) == "cancel-content",
+        "A cancelled resource download could not be retried from its retained partial archive.");
 
     var offlineHandler = new ScriptedHttpMessageHandler(_ =>
         throw new InvalidOperationException("A verified offline cache unexpectedly used the network."));
@@ -587,6 +634,14 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
         resumeFixture.CacheDirectory,
         log,
         new HttpClient(offlineHandler));
+    Assert(
+        offlineManager.TryResolveAvailableDirectory(
+            "test-pack",
+            "missing",
+            out var immediatelyAvailableDirectory) &&
+        immediatelyAvailableDirectory == resumed &&
+        offlineHandler.Requests.Count == 0,
+        "Plugin startup could not reuse a verified resource pack without touching the network.");
     var offlineDirectory = await offlineManager.ResolveDirectoryAsync(
         "test-pack",
         "missing",
@@ -642,6 +697,32 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
         fallbackHandler.Requests.Any(uri => uri.Host == "primary.test") &&
         fallbackHandler.Requests.Any(uri => uri.Host == "secondary.test"),
         "Resource pack mirror fallback did not advance past a failed primary source.");
+
+    var timeoutFixture = CreateResourcePackFixture(root, "timeout-fallback", "timeout-content", "1");
+    var timeoutHandler = new ScriptedHttpMessageHandler(request =>
+        request.RequestUri!.Host == "timeout.test"
+            ? throw new TaskCanceledException("simulated HttpClient timeout")
+            : ByteResponse(timeoutFixture.ArchiveBytes));
+    WriteResourceCatalog(
+        timeoutFixture.PluginDirectory,
+        timeoutFixture.Entry with
+        {
+            Urls = ["https://timeout.test/pack", "https://secondary.test/pack"],
+        });
+    var timeoutManager = new ResourcePackManager(
+        timeoutFixture.PluginDirectory,
+        timeoutFixture.CacheDirectory,
+        log,
+        new HttpClient(timeoutHandler));
+    var timeoutDirectory = await timeoutManager.ResolveDirectoryAsync(
+        "test-pack",
+        "missing",
+        CancellationToken.None);
+    Assert(
+        File.ReadAllText(Path.Combine(timeoutDirectory, "payload.txt")) == "timeout-content" &&
+        timeoutHandler.Requests.Any(uri => uri.Host == "timeout.test") &&
+        timeoutHandler.Requests.Any(uri => uri.Host == "secondary.test"),
+        "An HttpClient timeout was mistaken for caller cancellation and skipped mirror fallback.");
 
     var badHashFixture = CreateResourcePackFixture(root, "bad-hash", "bad-hash-content", "1");
     WriteResourceCatalog(
@@ -2764,6 +2845,24 @@ static void ValidateMeterLayout()
         !MeterWindow.ShouldEnableHorizontalScroll(450, 450) &&
         MeterWindow.ShouldEnableHorizontalScroll(448, 450),
         "The identity column did not shrink to its minimum before enabling horizontal scrolling.");
+    var adaptiveWideColumns = MeterWindow.ResolveAdaptiveColumnWidths(
+        800,
+        600,
+        240,
+        90,
+        112);
+    var adaptiveNarrowColumns = MeterWindow.ResolveAdaptiveColumnWidths(
+        500,
+        600,
+        240,
+        90,
+        112);
+    Assert(
+        adaptiveWideColumns.Identity == 320 &&
+        adaptiveWideColumns.HighestDamage == 232 &&
+        adaptiveNarrowColumns.Identity == 140 &&
+        adaptiveNarrowColumns.HighestDamage == 112,
+        "A wide Meter did not share spare width with the highest-damage column or changed narrow-window compression.");
     var defaultClassicSlots = defaultColumns.ClassicWindow.Slots;
     Assert(
         defaultClassicSlots.Any(static slot =>
@@ -4312,6 +4411,8 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var coreResourceWindowSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "CoreResourceDownloadWindow.cs"));
     var configurationSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "PluginConfiguration.cs"));
     var hostSupervisorSource = File.ReadAllText(Path.Combine(
@@ -4344,6 +4445,15 @@ static void ValidateControlCenterPresentation()
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
         "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
+    Assert(
+        controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("下载中...", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("不可用", StringComparison.Ordinal) &&
+        coreResourceWindowSource.Contains("ImGui.ProgressBar", StringComparison.Ordinal) &&
+        coreResourceWindowSource.Contains("是否下载核心组件？", StringComparison.Ordinal) &&
+        pluginSource.Contains("coreResourceDownloadWindow.Open", StringComparison.Ordinal),
+        "Resource failure recovery no longer exposes unavailable, download, progress, cancel, and core retry UI states.");
     Assert(
         !controlCenterSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
         !settingsSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
@@ -4795,6 +4905,9 @@ static void ValidateParserDependencyVersions()
     var chinese755h = document.RootElement
         .GetProperty("Chinese")
         .GetProperty("2026.08.05.0000.0000");
+    var global755h2 = document.RootElement
+        .GetProperty("Global")
+        .GetProperty("2026.08.11.0000.0000");
     Assert(
         chinese755h.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 188 &&
         chinese755h.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 979 &&
@@ -4802,6 +4915,13 @@ static void ValidateParserDependencyVersions()
         chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
         chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
         "OverlayPlugin Chinese 7.55h opcodes are stale.");
+    Assert(
+        global755h2.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 135 &&
+        global755h2.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 273 &&
+        global755h2.GetProperty("Countdown").GetProperty("opcode").GetInt32() == 120 &&
+        global755h2.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 572 &&
+        global755h2.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 301,
+        "OverlayPlugin Global 7.55h2 opcodes are stale.");
 }
 
 static void ValidateSilverDasherPermissionIsolation()
@@ -4974,16 +5094,31 @@ static void ValidateUnscramblerSupportPolicy()
     var chineseRuntimeFactory = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
         "GetChineseRuntimeVersionConstant",
         BindingFlags.NonPublic | BindingFlags.Static);
+    var globalRuntimePolicy = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "CanUseGlobalRuntimeVersionConstants",
+        BindingFlags.NonPublic | BindingFlags.Static);
+    var globalRuntimeFactory = typeof(IINACT.Network.ZoneDownHookManager).GetMethod(
+        "GetGlobalRuntimeVersionConstant",
+        BindingFlags.NonPublic | BindingFlags.Static);
     Assert(
         bundledPolicy is not null &&
         chineseRuntimePolicy is not null &&
-        chineseRuntimeFactory is not null,
+        chineseRuntimeFactory is not null &&
+        globalRuntimePolicy is not null &&
+        globalRuntimeFactory is not null,
         "Unscrambler support policy is missing.");
 
     static bool InvokeBundled(MethodInfo policy, GameRegion region, string version)
         => policy.Invoke(null, [region, version]) is true;
 
     static bool InvokeChineseRuntime(
+        MethodInfo policy,
+        GameRegion region,
+        string version,
+        int opcodeKeyTableSize)
+        => policy.Invoke(null, [region, version, opcodeKeyTableSize]) is true;
+
+    static bool InvokeGlobalRuntime(
         MethodInfo policy,
         GameRegion region,
         string version,
@@ -5031,6 +5166,102 @@ static void ValidateUnscramblerSupportPolicy()
             opcode == pair.Value),
         "Unscrambler 7.55h1 contains incomplete or stale obfuscated opcodes.");
 
+    const string global755h2 = "2026.08.11.0000.0000";
+    const uint global755h2OpcodeKeyTableOffset = 0x23184C0;
+    const int global755h2OpcodeKeyTableSize = 77 * 4;
+    var expectedGlobal755h2Opcodes = new Dictionary<string, int>
+    {
+        ["PlayerSpawn"] = 0x32D,
+        ["NpcSpawn"] = 0x0E9,
+        ["NpcSpawn2"] = 0x21C,
+        ["ActionEffect01"] = 0x371,
+        ["ActionEffect08"] = 0x3C8,
+        ["ActionEffect16"] = 0x1AF,
+        ["ActionEffect24"] = 0x35A,
+        ["ActionEffect32"] = 0x3D5,
+        ["StatusEffectList"] = 0x2EC,
+        ["StatusEffectList3"] = 0x263,
+        ["Examine"] = 0x097,
+        ["UpdateGearset"] = 0x173,
+        ["UpdateParty"] = 0x3E4,
+        ["ActorControl"] = 0x096,
+        ["ActorCast"] = 0x136,
+        ["UnknownEffect01"] = 0x33C,
+        ["UnknownEffect16"] = 0x1D8,
+        ["ActionEffect02"] = 0x2F4,
+        ["ActionEffect04"] = 0x3AD,
+    };
+    var global755h2RuntimeConstants =
+        (Unscrambler.Constants.VersionConstants)globalRuntimeFactory!.Invoke(
+            null,
+            [
+                global755h2,
+                global755h2OpcodeKeyTableOffset,
+                global755h2OpcodeKeyTableSize,
+            ])!;
+    var global755h2Unscrambler = new Unscrambler.Unscramble.Versions.Unscrambler73();
+    global755h2Unscrambler.Initialize(global755h2RuntimeConstants);
+    Assert(
+        global755h2RuntimeConstants.OpcodeKeyTableOffset == global755h2OpcodeKeyTableOffset &&
+        global755h2RuntimeConstants.OpcodeKeyTableSize == global755h2OpcodeKeyTableSize &&
+        global755h2RuntimeConstants.TableOffsets.Length == 0 &&
+        global755h2RuntimeConstants.MidTableOffset == 0 &&
+        global755h2RuntimeConstants.DayTableOffset == 0 &&
+        global755h2RuntimeConstants.ObfuscatedOpcodes.Count == expectedGlobal755h2Opcodes.Count &&
+        expectedGlobal755h2Opcodes.All(pair =>
+            global755h2RuntimeConstants.ObfuscatedOpcodes.TryGetValue(pair.Key, out var opcode) &&
+            opcode == pair.Value),
+        "Global 7.55h2 runtime constants are incomplete or do not use the discovered key table.");
+
+    var unscramblerToMachina = new Dictionary<string, string>
+    {
+        ["PlayerSpawn"] = "PlayerSpawn",
+        ["NpcSpawn"] = "NpcSpawn",
+        ["NpcSpawn2"] = "NpcSpawn2",
+        ["ActionEffect01"] = "Ability1",
+        ["ActionEffect08"] = "Ability8",
+        ["ActionEffect16"] = "Ability16",
+        ["ActionEffect24"] = "Ability24",
+        ["ActionEffect32"] = "Ability32",
+        ["StatusEffectList"] = "StatusEffectList",
+        ["StatusEffectList3"] = "StatusEffectList3",
+        ["ActorControl"] = "ActorControl",
+        ["ActorCast"] = "ActorCast",
+    };
+    OpcodeManager.Instance.SetRegion(GameRegion.Global);
+    var global755h2MachinaOpcodes = OpcodeManager.Instance.CurrentOpcodes;
+    foreach (var pair in unscramblerToMachina)
+    {
+        Assert(
+            global755h2RuntimeConstants.ObfuscatedOpcodes[pair.Key] ==
+            global755h2MachinaOpcodes[pair.Value],
+            $"Unscrambler opcode {pair.Key} does not match Global Machina {pair.Value}.");
+    }
+    Assert(
+        InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Global,
+            global755h2,
+            global755h2OpcodeKeyTableSize),
+        "Global 7.55h2 does not use its verified runtime profile.");
+    Assert(
+        !InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Global,
+            global755h2,
+            global755h2OpcodeKeyTableSize - 4) &&
+        !InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Chinese,
+            global755h2,
+            global755h2OpcodeKeyTableSize) &&
+        !InvokeGlobalRuntime(
+            globalRuntimePolicy!,
+            GameRegion.Global,
+            "2099.01.01.0000.0000",
+            global755h2OpcodeKeyTableSize),
+        "An unverified region, version, or Global key-table size is marked ranking-safe.");
+
     var chineseRuntimeConstants = (Unscrambler.Constants.VersionConstants)chineseRuntimeFactory!.Invoke(
         null,
         [chinese755h, chineseOpcodeKeyTableOffset, opcodeKeyTableSize])!;
@@ -5051,21 +5282,6 @@ static void ValidateUnscramblerSupportPolicy()
 
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
     var chineseOpcodes = OpcodeManager.Instance.CurrentOpcodes;
-    var unscramblerToMachina = new Dictionary<string, string>
-    {
-        ["PlayerSpawn"] = "PlayerSpawn",
-        ["NpcSpawn"] = "NpcSpawn",
-        ["NpcSpawn2"] = "NpcSpawn2",
-        ["ActionEffect01"] = "Ability1",
-        ["ActionEffect08"] = "Ability8",
-        ["ActionEffect16"] = "Ability16",
-        ["ActionEffect24"] = "Ability24",
-        ["ActionEffect32"] = "Ability32",
-        ["StatusEffectList"] = "StatusEffectList",
-        ["StatusEffectList3"] = "StatusEffectList3",
-        ["ActorControl"] = "ActorControl",
-        ["ActorCast"] = "ActorCast",
-    };
     foreach (var pair in unscramblerToMachina)
     {
         Assert(
@@ -5136,10 +5352,15 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     var installer = new ActPluginPackageInstaller(paths);
     var configuration = new DalamudActCompat.Plugin.PluginConfiguration();
     var manager = new BundledActPluginManager(
-        bundleParent,
         "0.2.31.0",
         installer,
         configuration);
+    Assert(
+        manager.Plugins.Count == 0 && manager.GetPendingDisclosures().Count == 0,
+        "A missing startup resource pack prevented creation of an empty bundled-plugin manager.");
+    // Resource acquisition happens after the plugin constructor returns, so the manager must
+    // accept the verified bundle only when that background work completes.
+    manager.LoadBundle(Path.Combine(bundleParent, BundledActPluginManager.DirectoryName));
 
     var pending = manager.GetPendingDisclosures();
     Assert(pending.Count == 5, "A new install did not require all five bundled extension disclosures.");
@@ -6147,6 +6368,19 @@ static void ValidateHighestDamageAggregation()
         player.HighestDamage == 120 &&
         player.PartyGroup == 2,
         "Duty aggregation did not replace only on a strictly higher hit or preserve alliance metadata.");
+
+    ActGlobals.Init();
+    Advanced_Combat_Tracker.Resources.NotActMainFormatter.SetupEnvironment();
+    var actEncounter = new EncounterData("Player", "Test duty", false, null!);
+    var actCombatant = new CombatantData("Player", actEncounter);
+    actCombatant.AddCombatAction(new MasterSwing(
+        2, false, 8_000, start.DateTime, 1, "Damage skill", "Player", "damage", "Target"));
+    actCombatant.AddCombatAction(new MasterSwing(
+        3, false, 63_300, start.AddMilliseconds(10).DateTime, 2, "Large heal", "Player", "healing", "Player"));
+    var highestDamage = SelfHostedActRuntime.GetHighestDamageHit(actCombatant);
+    Assert(
+        highestDamage.Action == "Damage skill" && highestDamage.Amount == 8_000,
+        "Highest damage selected a larger outgoing heal instead of the combatant's own damage action.");
 }
 
 static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
@@ -6226,6 +6460,7 @@ static void ValidatePluginUnloadOwnership()
         projectSource.Contains("<CanUnloadAsync>true</CanUnloadAsync>", StringComparison.Ordinal) &&
         lifecycleSource.Contains("startupTask = Task.Run", StringComparison.Ordinal) &&
         lifecycleSource.Contains("await trackedStartup.ConfigureAwait(false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("await bundledActPluginInitializationTask.ConfigureAwait(false);", StringComparison.Ordinal) &&
         pluginSource.Contains("await independentHostStartupTask.ConfigureAwait(false);", StringComparison.Ordinal) &&
         pluginSource.Contains("await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);", StringComparison.Ordinal) &&
         pluginSource.Contains("DisposeComponentsAsync().GetAwaiter().GetResult();", StringComparison.Ordinal) &&
@@ -10207,10 +10442,13 @@ static async Task ValidateOverlayWebSocketFatalAcceptRecoveryAsync()
     Assert(
         !((NetCoreServer.TcpServer)originalServer).IsAccepting,
         "The invalid WebSocket listener remained in the recursive accept state.");
+    // Windows may report either fatal code for the same externally closed listener, depending on runtime timing.
+    var fatalAcceptErrors = logger.Messages.Where(message =>
+        message.Contains("caught an error with code NotSocket", StringComparison.Ordinal) ||
+        message.Contains("caught an error with code InvalidArgument", StringComparison.Ordinal)).ToArray();
     Assert(
-        logger.Messages.Count(message =>
-            message.Contains("caught an error with code NotSocket", StringComparison.Ordinal)) == 1,
-        "The invalid WebSocket listener emitted more than one NotSocket error before its circuit breaker ran.");
+        fatalAcceptErrors.Length == 1,
+        $"The invalid WebSocket listener emitted {fatalAcceptErrors.Length} fatal errors before its circuit breaker ran.");
     Assert(
         logger.Messages.Any(message =>
             message.Contains("recovered with a new listener", StringComparison.Ordinal)),
@@ -10797,6 +11035,40 @@ static void ValidateChineseCombatChatParsing()
         contextualActor == "队友",
         "Adjacent split combat lines no longer retain their legitimate attacker context.");
 
+    var interleavedContext = new ChineseCombatChatContext();
+    Assert(
+        !interleavedContext.TryParse(
+            "队员甲发动了“技能甲”。",
+            observedAt,
+            out _, out _, out _) &&
+        !interleavedContext.TryParse(
+            "队员乙发动了“技能乙”。",
+            observedAt.AddMilliseconds(10),
+            out _, out _, out _) &&
+        interleavedContext.TryParse(
+            "  \uE06F 木人受到了1000点伤害。",
+            observedAt.AddMilliseconds(20),
+            out var firstInterleavedActor,
+            out _,
+            out _,
+            out var firstInterleavedAction,
+            out _,
+            out _) &&
+        interleavedContext.TryParse(
+            "  \uE06F 木人受到了2000点伤害。",
+            observedAt.AddMilliseconds(30),
+            out var secondInterleavedActor,
+            out _,
+            out _,
+            out var secondInterleavedAction,
+            out _,
+            out _) &&
+        firstInterleavedActor == "队员甲" &&
+        firstInterleavedAction == "技能甲" &&
+        secondInterleavedActor == "队员乙" &&
+        secondInterleavedAction == "技能乙",
+        "Interleaved Chinese action announcements crossed actors or highest-damage action names.");
+
     Assert(
         SelfHostedActRuntime.IsDamageDealingLimitBreakAction(9, canTargetHostile: true) &&
         SelfHostedActRuntime.IsDamageDealingLimitBreakAction(15, canTargetHostile: true) &&
@@ -10856,15 +11128,15 @@ static void ValidateChineseCombatChatParsing()
     var snapshotTime = DateTimeOffset.UtcNow;
     var healingActSnapshot = new ActEncounterSnapshot(
         Guid.NewGuid(),
-        snapshotTime,
-        snapshotTime,
+        snapshotTime.AddSeconds(4),
+        snapshotTime.AddSeconds(5),
         "Middle La Noscea",
         "木人",
         [new ActCombatantSnapshot("player", "Player", "SGE", true, 0, 16703, 0)]);
     var chatFallbackSnapshot = new ActEncounterSnapshot(
         healingActSnapshot.Id,
         snapshotTime,
-        snapshotTime,
+        snapshotTime.AddSeconds(12),
         "Middle La Noscea",
         "木人",
         [new ActCombatantSnapshot(
@@ -10891,8 +11163,10 @@ static void ValidateChineseCombatChatParsing()
             DamageHits: 1,
             CriticalHits: 1,
             HighestDamageAction: "Dosis III",
-        },
-        "Fallback damage replaced the healer's ACT healing instead of merging the missing fields.");
+        } &&
+        mergedFallbackSnapshot.StartTime == snapshotTime &&
+        mergedFallbackSnapshot.EndTime == snapshotTime.AddSeconds(12),
+        "Fallback damage replaced ACT healing or failed to restore fragmented fight boundaries.");
     var authoritativeActSnapshot = healingActSnapshot with
     {
         Combatants =
@@ -11551,6 +11825,11 @@ sealed record ResourcePackFixture(
     string CacheDirectory,
     byte[] ArchiveBytes,
     ResourcePackEntry Entry);
+
+sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+{
+    public void Report(T value) => report(value);
+}
 
 sealed class ScriptedHttpMessageHandler(
     Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler

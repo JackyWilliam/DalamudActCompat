@@ -14,7 +14,7 @@ public sealed class BundledActPluginManager
     private readonly ActPluginPackageInstaller installer;
     private readonly PluginConfiguration configuration;
     private readonly string hostVersion;
-    private readonly IReadOnlyList<BundledActPluginDescriptor> bundledPlugins;
+    private IReadOnlyList<BundledActPluginDescriptor> bundledPlugins = [];
     private readonly Dictionary<string, BundledActPluginDescriptor> onlineUpdates =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly object updateLock = new();
@@ -25,16 +25,45 @@ public sealed class BundledActPluginManager
         ActPluginPackageInstaller installer,
         PluginConfiguration configuration,
         bool directoryIsBundleRoot = false)
+        : this(hostVersion, installer, configuration)
     {
-        this.installer = installer;
-        this.configuration = configuration;
-        this.hostVersion = hostVersion;
-        bundledPlugins = LoadAndValidate(directoryIsBundleRoot
+        LoadBundle(directoryIsBundleRoot
             ? pluginAssemblyDirectory
             : Path.Combine(pluginAssemblyDirectory, DirectoryName));
     }
 
-    public IReadOnlyList<BundledActPluginDescriptor> Plugins => bundledPlugins;
+    public BundledActPluginManager(
+        string hostVersion,
+        ActPluginPackageInstaller installer,
+        PluginConfiguration configuration)
+    {
+        this.installer = installer;
+        this.configuration = configuration;
+        this.hostVersion = hostVersion;
+    }
+
+    public IReadOnlyList<BundledActPluginDescriptor> Plugins
+    {
+        get
+        {
+            lock (updateLock)
+            {
+                return bundledPlugins.ToArray();
+            }
+        }
+    }
+
+    public void LoadBundle(string bundleDirectory)
+    {
+        var loaded = LoadAndValidate(bundleDirectory);
+        lock (updateLock)
+        {
+            // Online candidates are tied to the disclosure baseline from one bundle version.
+            // Replacing the pack must not carry those candidates into the new baseline.
+            bundledPlugins = loaded;
+            onlineUpdates.Clear();
+        }
+    }
 
     public IReadOnlyList<BundledActPluginDescriptor> GetDisclosures()
     {
@@ -126,18 +155,18 @@ public sealed class BundledActPluginManager
 
     public bool IsAllowedToLoad(InstalledActPlugin installed)
     {
-        var bundled = bundledPlugins.FirstOrDefault(plugin =>
-            string.Equals(
-                plugin.Id,
-                installed.Manifest.Id,
-                StringComparison.OrdinalIgnoreCase));
-        if (bundled is null)
-        {
-            return true;
-        }
-
         lock (updateLock)
         {
+            var bundled = bundledPlugins.FirstOrDefault(plugin =>
+                string.Equals(
+                    plugin.Id,
+                    installed.Manifest.Id,
+                    StringComparison.OrdinalIgnoreCase));
+            if (bundled is null)
+            {
+                return true;
+            }
+
             var effective = GetEffectivePlugin(bundled, [installed]);
             return IsAcknowledged(effective) &&
                    IsCurrentPackage(installed, effective);
