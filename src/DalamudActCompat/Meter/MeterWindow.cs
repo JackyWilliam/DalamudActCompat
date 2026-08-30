@@ -33,7 +33,8 @@ public sealed class MeterWindow : Window
     private const float HitRateColumnWidth = 43;
     private const float DamagePercentColumnWidth = 46;
     private const float TotalDamageColumnWidth = 76;
-    private const float HighestDamageColumnWidth = 112;
+    private const float HighestDamageColumnWidth = 104;
+    private const float SyntheticBoldOffset = 0.6f;
     private const float DeathsColumnWidth = 28;
     private const float RankColumnWidth = 28;
     private const float IdentityColumnWidth = 150;
@@ -1394,26 +1395,30 @@ public sealed class MeterWindow : Window
 
         var color = ImGui.GetColorU32(new Vector4(0.70f, 0.74f, 0.80f, 1));
         var lineY = start.Y + (headerHeight - ImGui.GetTextLineHeight()) * 0.5f;
-        void DrawColumnHeader(string label, MeterColumn column, bool alignLeft = false)
+        void DrawColumnHeader(
+            string label,
+            MeterColumn column,
+            MeterSlotAlignment alignment = MeterSlotAlignment.Right)
         {
             var fittedLabel = TrimToWidth(label, Math.Max(1, column.Width - 6));
             var size = ImGui.CalcTextSize(fittedLabel);
             var columnStart = new Vector2(start.X + column.Offset, start.Y);
             var columnEnd = new Vector2(columnStart.X + column.Width, end.Y);
             previewInteraction?.Observe(column.Slot, columnStart, columnEnd, drawList);
-            var columnX = alignLeft
-                ? columnStart.X + 3
-                : columnStart.X + Math.Max(0, column.Width - size.X);
+            var columnX = columnStart.X + ResolveColumnTextOffset(
+                column.Width,
+                size.X,
+                alignment);
             drawList.AddText(new Vector2(columnX, lineY), color, fittedLabel);
         }
 
         if (layout.Rank is { } rank)
         {
-            DrawColumnHeader("#", rank, alignLeft: true);
+            DrawColumnHeader("#", rank, MeterSlotAlignment.Left);
         }
         if (layout.Identity is { } identity)
         {
-            DrawColumnHeader(text.Get("职业 / ID", "Job / ID"), identity, alignLeft: true);
+            DrawColumnHeader(text.Get("职业 / ID", "Job / ID"), identity, MeterSlotAlignment.Left);
         }
         if (layout.Fflogs is { } fflogs)
         {
@@ -1465,7 +1470,12 @@ public sealed class MeterWindow : Window
         }
         if (layout.HighestDamage is { } highestDamage)
         {
-            DrawColumnHeader(text.Get("最高伤害", "Max hit"), highestDamage);
+            // The action-and-value field reads as one visual unit, so its header and
+            // clipped row values share a centered axis while numeric metrics stay right-aligned.
+            DrawColumnHeader(
+                text.Get("最高伤害", "Max hit"),
+                highestDamage,
+                MeterSlotAlignment.Center);
         }
         if (layout.Deaths is { } deaths)
         {
@@ -1621,11 +1631,59 @@ public sealed class MeterWindow : Window
 
         var lineY = start.Y + (rowHeight - ImGui.GetTextLineHeight()) * 0.5f;
 
-        void DrawColumn(string value, MeterColumn column, Vector4 color)
+        void DrawColumn(
+            string value,
+            MeterColumn column,
+            Vector4 color,
+            MeterSlotAlignment alignment = MeterSlotAlignment.Right)
         {
             var size = ImGui.CalcTextSize(value);
-            var columnX = start.X + column.Offset + Math.Max(0, column.Width - size.X);
+            var columnX = start.X + column.Offset + ResolveColumnTextOffset(
+                column.Width,
+                size.X,
+                alignment);
             drawList.AddText(new Vector2(columnX, lineY), ImGui.GetColorU32(color), value);
+            previewInteraction?.Observe(
+                column.Slot,
+                new Vector2(start.X + column.Offset, start.Y),
+                new Vector2(start.X + column.Offset + column.Width, end.Y),
+                drawList,
+                highlightSelection: false);
+        }
+
+        void DrawHighestDamageColumn(MeterColumn column)
+        {
+            var color = new Vector4(0.94f, 0.68f, 0.48f, 1);
+            if (row.HighestDamage <= 0 || string.IsNullOrWhiteSpace(row.HighestDamageAction))
+            {
+                DrawColumn(
+                    FormatHighestDamage(row),
+                    column,
+                    color,
+                    MeterSlotAlignment.Center);
+                return;
+            }
+
+            var amount = FormatCompactNumber(row.HighestDamage);
+            var amountWidth = ImGui.CalcTextSize(amount).X;
+            var gap = ImGui.CalcTextSize(" ").X;
+            var maximumActionWidth = Math.Max(
+                1,
+                column.Width - amountWidth - gap - SyntheticBoldOffset);
+            var action = TrimToWidth(row.HighestDamageAction, maximumActionWidth);
+            var actionWidth = ImGui.CalcTextSize(action).X;
+            var groupWidth = actionWidth + SyntheticBoldOffset + gap + amountWidth;
+            var groupX = start.X + column.Offset + ResolveColumnTextOffset(
+                column.Width,
+                groupWidth,
+                MeterSlotAlignment.Center);
+            var packedColor = ImGui.GetColorU32(color);
+
+            DrawBoldText(drawList, new Vector2(groupX, lineY), packedColor, action);
+            drawList.AddText(
+                new Vector2(groupX + actionWidth + SyntheticBoldOffset + gap, lineY),
+                packedColor,
+                amount);
             previewInteraction?.Observe(
                 column.Slot,
                 new Vector2(start.X + column.Offset, start.Y),
@@ -1700,10 +1758,7 @@ public sealed class MeterWindow : Window
         }
         if (layout.HighestDamage is { } highestDamage)
         {
-            DrawColumn(
-                TrimToWidth(FormatHighestDamage(row), highestDamage.Width),
-                highestDamage,
-                new Vector4(0.94f, 0.68f, 0.48f, 1));
+            DrawHighestDamageColumn(highestDamage);
             highestDamageHovered = ImGui.IsMouseHoveringRect(
                 new Vector2(start.X + highestDamage.Offset, start.Y),
                 new Vector2(start.X + highestDamage.Offset + highestDamage.Width, end.Y));
@@ -1788,6 +1843,18 @@ public sealed class MeterWindow : Window
             : string.IsNullOrWhiteSpace(row.HighestDamageAction)
                 ? FormatCompactNumber(row.HighestDamage)
                 : $"{row.HighestDamageAction} {FormatCompactNumber(row.HighestDamage)}";
+
+    private static void DrawBoldText(
+        ImDrawListPtr drawList,
+        Vector2 position,
+        uint color,
+        string value)
+    {
+        // Reuse the active table/header font so localized skill names keep identical size
+        // and glyph coverage; a subpixel second pass adds weight without a separate font atlas.
+        drawList.AddText(position, color, value);
+        drawList.AddText(position + new Vector2(SyntheticBoldOffset, 0), color, value);
+    }
 
     internal static float NormalizeBackgroundOpacity(float opacity)
         => float.IsFinite(opacity)
@@ -1963,8 +2030,8 @@ public sealed class MeterWindow : Window
         var extra = Math.Max(0, availableTableWidth - preferredTableWidth);
         if (preferredHighestDamageWidth is not null)
         {
-            // Player IDs still benefit from a wide window, but the action column must also
-            // gain readable space instead of remaining permanently fixed at its minimum.
+            // Preserve the established wide-window ratio; the nominal eight-pixel reduction
+            // should not compound into a larger change as the window grows.
             var highestDamageShare = preferredIdentityWidth is null ? extra : extra * 0.6f;
             highestDamage += highestDamageShare;
             identity += extra - highestDamageShare;
@@ -1975,6 +2042,17 @@ public sealed class MeterWindow : Window
         }
         return (identity, highestDamage);
     }
+
+    internal static float ResolveColumnTextOffset(
+        float columnWidth,
+        float textWidth,
+        MeterSlotAlignment alignment)
+        => alignment switch
+        {
+            MeterSlotAlignment.Left => 3,
+            MeterSlotAlignment.Center => Math.Max(0, (columnWidth - textWidth) * 0.5f),
+            _ => Math.Max(0, columnWidth - textWidth),
+        };
 
     internal static bool ShouldEnableHorizontalScroll(float availableWidth, float requiredWidth)
         => requiredWidth > availableWidth + 1;

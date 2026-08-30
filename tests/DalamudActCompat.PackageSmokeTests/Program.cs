@@ -2857,18 +2857,20 @@ static void ValidateMeterLayout()
         600,
         240,
         90,
-        112);
+        104);
     var adaptiveNarrowColumns = MeterWindow.ResolveAdaptiveColumnWidths(
         500,
         600,
         240,
         90,
-        112);
+        104);
     Assert(
         adaptiveWideColumns.Identity == 320 &&
-        adaptiveWideColumns.HighestDamage == 232 &&
+        adaptiveWideColumns.HighestDamage == 224 &&
         adaptiveNarrowColumns.Identity == 140 &&
-        adaptiveNarrowColumns.HighestDamage == 112,
+        adaptiveNarrowColumns.HighestDamage == 104 &&
+        MeterWindow.ResolveColumnTextOffset(104, 40, MeterSlotAlignment.Center) == 32 &&
+        MeterWindow.ResolveColumnTextOffset(104, 40, MeterSlotAlignment.Right) == 64,
         "A wide Meter did not share spare width with the highest-damage column or changed narrow-window compression.");
     var defaultClassicSlots = defaultColumns.ClassicWindow.Slots;
     Assert(
@@ -9170,6 +9172,8 @@ static void ValidateHtmlOverlayDefaults()
         meterWindowSource.Contains("MeterSlotPresentation.DisplayName", StringComparison.Ordinal) &&
         meterWindowSource.Contains("DrawTeamSummary", StringComparison.Ordinal) &&
         meterWindowSource.Contains("FormatHighestDamage", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("DrawBoldText(", StringComparison.Ordinal) &&
+        meterWindowSource.Contains("MeterSlotAlignment.Center", StringComparison.Ordinal) &&
         meterWindowSource.Contains("const string ellipsis = \"...\"", StringComparison.Ordinal) &&
         meterWindowSource.Contains("ApplyBackgroundOpacity", StringComparison.Ordinal) &&
         meterEditorSource.Contains("profile.BackgroundOpacity", StringComparison.Ordinal) &&
