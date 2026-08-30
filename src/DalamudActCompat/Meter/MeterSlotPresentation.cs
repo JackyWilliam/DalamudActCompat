@@ -79,13 +79,14 @@ internal static class MeterSlotPresentation
 
     public static IReadOnlyList<CombatantRow> SortAndRank(
         IEnumerable<CombatantRow> rows,
-        MeterSortMode sortMode)
+        MeterSortMode sortMode,
+        DpsMetric dpsMetric = DpsMetric.Dps)
     {
         var ordered = MeterSortModeOptions.Normalize(sortMode) == MeterSortMode.Hps
             ? rows.OrderBy(static row => MeterService.IsLimitBreak(row.Id, row.Name))
                 .ThenByDescending(static row => row.Hps)
             : rows.OrderBy(static row => MeterService.IsLimitBreak(row.Id, row.Name))
-                .ThenByDescending(static row => row.PersonalDps);
+                .ThenByDescending(row => DpsScore(row, dpsMetric));
         var rank = 0;
         return ordered.Select(row => row with
         {
@@ -93,6 +94,31 @@ internal static class MeterSlotPresentation
                 MeterService.IsLimitBreak(row.Id, row.Name),
                 ref rank),
         }).ToArray();
+    }
+
+    public static double DpsScore(CombatantRow row, DpsMetric metric)
+        => NormalizeDpsMetric(metric) switch
+        {
+            DpsMetric.Rdps => row.Rdps,
+            DpsMetric.EncDps => row.EncDps,
+            DpsMetric.ExtDps => row.ExtDps,
+            _ => row.PersonalDps,
+        };
+
+    public static DpsMetric NormalizeDpsMetric(DpsMetric metric)
+        => Enum.IsDefined(metric) ? metric : DpsMetric.Dps;
+
+    public static bool TryGetDpsMetric(MeterSlotMetric metric, out DpsMetric dpsMetric)
+    {
+        dpsMetric = metric switch
+        {
+            MeterSlotMetric.Rdps => DpsMetric.Rdps,
+            MeterSlotMetric.EncDps => DpsMetric.EncDps,
+            MeterSlotMetric.ExtDps => DpsMetric.ExtDps,
+            _ => DpsMetric.Dps,
+        };
+        return metric is MeterSlotMetric.Dps or MeterSlotMetric.Rdps or
+            MeterSlotMetric.EncDps or MeterSlotMetric.ExtDps;
     }
 
     public static bool ReplacePrimaryMetric(MeterWindowProfile profile, MeterSortMode mode)

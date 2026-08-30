@@ -19,6 +19,7 @@ public sealed class SettingsWindow : Window
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
     private readonly Action saveConfiguration;
+    private readonly Func<int, bool> applyHistoryLimit;
     private readonly Action applyPermissionChanges;
     private readonly Func<GameRegionSelection> getGameRegionSelection;
     private readonly Action<GameRegionMode> setGameRegionMode;
@@ -44,6 +45,7 @@ public sealed class SettingsWindow : Window
     private string? resetResult;
     private string? selectedUsedCactbotOverlay;
     private string? selectedAvailableCactbotOverlay;
+    private int? historyLimitDraft;
 
     public SettingsWindow(
         PluginConfiguration configuration,
@@ -51,6 +53,7 @@ public sealed class SettingsWindow : Window
         PluginPaths paths,
         PluginLogger logger,
         Action saveConfiguration,
+        Func<int, bool> applyHistoryLimit,
         Action applyPermissionChanges,
         Func<GameRegionSelection> getGameRegionSelection,
         Action<GameRegionMode> setGameRegionMode,
@@ -78,6 +81,7 @@ public sealed class SettingsWindow : Window
         this.paths = paths;
         this.logger = logger;
         this.saveConfiguration = saveConfiguration;
+        this.applyHistoryLimit = applyHistoryLimit;
         this.applyPermissionChanges = applyPermissionChanges;
         this.getGameRegionSelection = getGameRegionSelection;
         this.setGameRegionMode = setGameRegionMode;
@@ -364,12 +368,7 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.Separator();
-        var historyLimit = configuration.HistoryLimit;
-        if (ImGui.SliderInt(text.Get("历史记录上限", "History limit"), ref historyLimit, 1, 200))
-        {
-            configuration.HistoryLimit = historyLimit;
-            changed = true;
-        }
+        DrawHistoryLimitEditor();
 
         changed |= Checkbox(text.Get("显示战斗统计", "Combat Meter visible"), configuration.Meter.IsVisible, value => configuration.Meter.IsVisible = value);
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
@@ -435,7 +434,39 @@ public sealed class SettingsWindow : Window
 
     public override void OnClose()
     {
+        historyLimitDraft = null;
         saveConfiguration();
+    }
+
+    private void DrawHistoryLimitEditor()
+    {
+        var draft = historyLimitDraft ?? configuration.HistoryLimit;
+        if (ImGui.SliderInt(text.Get("历史记录上限", "History limit"), ref draft, 1, 200))
+        {
+            historyLimitDraft = draft;
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "战斗历史、战斗 JSON 与 Network 日志分别保留此数量。",
+            "Encounter history, encounter JSON, and Network logs each keep this many."));
+        if (historyLimitDraft is not { } pending || pending == configuration.HistoryLimit)
+        {
+            historyLimitDraft = null;
+            return;
+        }
+
+        // The value owns destructive retention. Dragging edits only a draft so cleanup
+        // cannot start until the user explicitly confirms it.
+        if (ImGui.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
+            applyHistoryLimit(pending))
+        {
+            historyLimitDraft = null;
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
+        {
+            historyLimitDraft = null;
+        }
     }
 
     public void Detach() => parserEngine.StatusChanged -= OnParserStatusChanged;

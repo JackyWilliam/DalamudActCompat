@@ -117,6 +117,7 @@ try
     await ValidatePluginLifecycleShutdownAsync(testRoot);
     ValidatePluginUnloadOwnership();
     await ValidateEncounterShutdownFlushAsync(testRoot);
+    await ValidateEncounterRetentionAsync(testRoot);
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
 
@@ -2548,6 +2549,12 @@ static void ValidateMeterRows()
         SortMode = MeterSortMode.Dps,
     };
     var meter = new MeterService(state, settings);
+    var futureStart = DateTimeOffset.UtcNow.AddSeconds(10);
+    Assert(
+        (encounter with { StartTime = futureStart, EndTime = null }).Duration == TimeSpan.Zero &&
+        (encounter with { StartTime = futureStart, EndTime = futureStart.AddSeconds(-1) }).Duration ==
+        TimeSpan.Zero,
+        "Encounter duration exposed a negative countdown during clock or log timestamp skew.");
     var rows = meter.GetRows();
     Assert(
         rows.Count == 3 &&
@@ -2906,6 +2913,33 @@ static void ValidateMeterLayout()
         MeterSlotPresentation.Value(MeterSlotMetric.EncDps, independentRateRow, "Rate Row") == "900" &&
         MeterSlotPresentation.Value(MeterSlotMetric.ExtDps, independentRateRow, "Rate Row") == "850",
         "Independent DPS-rate slots no longer render their own values.");
+    var inverseRateRow = independentRateRow with
+    {
+        Id = "inverse-rate-row",
+        Name = "Inverse Rate Row",
+        PersonalDps = 1_200,
+        Rdps = 800,
+        EncDps = 1_300,
+        ExtDps = 1_400,
+    };
+    Assert(
+        MeterSlotPresentation.SortAndRank(
+            [independentRateRow, inverseRateRow],
+            MeterSortMode.Dps,
+            DpsMetric.Dps)[0].Id == inverseRateRow.Id &&
+        MeterSlotPresentation.SortAndRank(
+            [independentRateRow, inverseRateRow],
+            MeterSortMode.Dps,
+            DpsMetric.Rdps)[0].Id == independentRateRow.Id &&
+        MeterSlotPresentation.SortAndRank(
+            [independentRateRow, inverseRateRow],
+            MeterSortMode.Dps,
+            DpsMetric.EncDps)[0].Id == inverseRateRow.Id &&
+        MeterSlotPresentation.SortAndRank(
+            [independentRateRow, inverseRateRow],
+            MeterSortMode.Dps,
+            DpsMetric.ExtDps)[0].Id == inverseRateRow.Id,
+        "A window did not rank rows with its selected DPS, rDPS, EncDPS, or ExtDPS metric.");
     var existingColumnChoices = Newtonsoft.Json.JsonConvert.DeserializeObject<MeterSettings>(
         "{\"ShowHps\":true,\"ShowDirectHitRate\":true}")!;
     Assert(
@@ -3164,6 +3198,11 @@ static void ValidateIndependentMeterWindows()
         "SettingsWindow.cs"));
 
     Assert(
+        editorSource.Contains("设为 DPS 排序依据", StringComparison.Ordinal) &&
+        editorSource.Contains("profile.DpsSortMetric = dpsMetric", StringComparison.Ordinal),
+        "The selected DPS slot has no right-side action for choosing the ranking metric.");
+
+    Assert(
         typeof(HorizontalMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         typeof(RoleSplitMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         typeof(MeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
@@ -3180,7 +3219,7 @@ static void ValidateIndependentMeterWindows()
     Assert(
         classicSource.Contains("DrawClassicTable", StringComparison.Ordinal) &&
         classicSource.Contains("DrawAllianceCompactTiles", StringComparison.Ordinal) &&
-        classicSource.Contains("players.Take(24)", StringComparison.Ordinal) &&
+        classicSource.Contains("ranked.Take(24)", StringComparison.Ordinal) &&
         classicSource.Contains("ClassicAllianceView", StringComparison.Ordinal) &&
         classicSource.Contains("classic-party-size-popup", StringComparison.Ordinal) &&
         classicSource.Contains("layout.EncDps", StringComparison.Ordinal) &&
@@ -3213,6 +3252,7 @@ static void ValidateIndependentMeterWindows()
         roleSource.Contains("private List<MeterSlotDefinition> Slots => Profile.Slots", StringComparison.Ordinal) &&
         roleSource.Contains("ShowDps = Has(MeterSlotMetric.Dps)", StringComparison.Ordinal) &&
         roleSource.Contains("ShowHps = Has(MeterSlotMetric.Hps)", StringComparison.Ordinal) &&
+        roleSource.Contains("DpsSortMetric = Profile.DpsSortMetric", StringComparison.Ordinal) &&
         !roleSource.Contains("leadingDamage", StringComparison.Ordinal) &&
         !roleSource.Contains("titleHovered", StringComparison.Ordinal),
         "Role split lost its independent D/T/H columns, collapse control, empty-state collapse, or height animation.");
@@ -4565,6 +4605,8 @@ static void ValidateControlCenterPresentation()
         thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(", StringComparison.Ordinal) &&
         thirdPartySource.Contains("未确认的扩展保持禁用", StringComparison.Ordinal) &&
         thirdPartySource.Contains("BeginPermissionChoice();", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("shouldPromptForPermissions()", StringComparison.Ordinal) &&
+        pluginSource.Contains("HasExplicitActCapabilityDecision", StringComparison.Ordinal) &&
         pluginSource.Contains("installCommitted = true;", StringComparison.Ordinal) &&
         pluginSource.Contains("BundledPluginInstallOutcome.RuntimeRecoveryPending", StringComparison.Ordinal) &&
         thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
@@ -4861,11 +4903,11 @@ static void ValidatePostNamazuOverlayHandlerResponse()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 5),
-        "IINACT is not at 2.10.3.5.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 6),
+        "IINACT is not at 2.10.3.6.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 104, 0),
-        "OverlayPlugin Core is not at 0.19.104.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 105, 0),
+        "OverlayPlugin Core is not at 0.19.105.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -4875,7 +4917,7 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.55.1.0",
+        "7.55.2.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
@@ -4885,7 +4927,7 @@ static void ValidateParserDependencyVersions()
     Assert(
         FetchDependencies.LogFormatIdentity.Matches(
             logfileAssemblyPath,
-            new Version(2, 10, 3, 5)),
+            new Version(2, 10, 3, 6)),
         $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
@@ -5295,6 +5337,9 @@ static void ValidateUnscramblerSupportPolicy()
         InvokeBundled(bundledPolicy!, GameRegion.Global, chinese755h),
         "Global 7.55h no longer uses its bundled Unscrambler constants.");
     Assert(
+        InvokeBundled(bundledPolicy!, GameRegion.Global, global755h2),
+        "Global 7.55h2 no longer uses Unscrambler.XIV 7.55.2 bundled constants.");
+    Assert(
         !InvokeBundled(bundledPolicy!, GameRegion.Korean, chinese755h),
         "Korean clients incorrectly reuse Global Unscrambler constants.");
     Assert(
@@ -5393,7 +5438,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.Maintainer.Contains("582145824", StringComparison.Ordinal) &&
             plugin.DisableOnlineUpdates &&
             !plugin.EnableAfterInstall &&
-            plugin.PackageSha256 == "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866" &&
+            plugin.PackageSha256 == "0999e18e103d0c9e8e7db3dfde12b23f1ff2df9565472d2aa832ebeaa3f7341d" &&
             File.Exists(plugin.PackagePath)),
         "SilverDasher complete-package version, support group, fixed hash, or bundled artifact is missing.");
     Assert(
@@ -5415,6 +5460,14 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         manager.GetPendingDisclosures().Count == 0,
         "Acknowledged current bundled DLLs still required disclosure.");
+    var migratedPluginId = configuration.BundledPluginDisclosureKeys.Keys.First();
+    var stableDisclosureKey = configuration.BundledPluginDisclosureKeys[migratedPluginId];
+    configuration.BundledPluginDisclosureKeys[migratedPluginId] =
+        $"0.2.30.0|{stableDisclosureKey}";
+    Assert(
+        manager.GetPendingDisclosures().Count == 0 &&
+        configuration.BundledPluginDisclosureKeys[migratedPluginId] == stableDisclosureKey,
+        "A legacy Host-version-prefixed disclosure key was not migrated in place.");
     Assert(
         manager.GetDisclosures().Count == 5 &&
         manager.GetDisclosures().All(plugin =>
@@ -5562,11 +5615,58 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         installer,
         configuration);
     Assert(
-        nextRelease.GetPendingDisclosures().Count == 5,
-        "A DalamudActCompat update did not require every bundled extension disclosure again.");
+        nextRelease.GetPendingDisclosures().Count == 0,
+        "An unchanged bundled artifact asked for disclosure again after a Host update.");
+    var currentInstalled = installer
+        .Discover(configuration.DisabledActPluginIds)
+        .Where(plugin => !string.Equals(
+            plugin.InstallDirectory,
+            duplicateDirectory,
+            StringComparison.OrdinalIgnoreCase))
+        .ToArray();
     Assert(
-        installed.All(plugin => !nextRelease.IsAllowedToLoad(plugin)),
-        "Bundled DLLs were loadable before acknowledging the new host release notice.");
+        currentInstalled.All(nextRelease.IsAllowedToLoad),
+        "Accepted current bundled DLLs became unloadable after an unrelated Host update.");
+
+    var changedBaselineRecord = configuration.BundledPluginUpdateRecords.First();
+    var acceptedBaselineSha = changedBaselineRecord.Value.BundledSha256WhenAccepted;
+    changedBaselineRecord.Value.BundledSha256WhenAccepted = new string('0', 64);
+    var changedBaselineRelease = new BundledActPluginManager(
+        bundleParent,
+        "0.2.32.0",
+        installer,
+        configuration);
+    Assert(
+        changedBaselineRelease.GetPendingDisclosures().Any(plugin =>
+            string.Equals(
+                plugin.Id,
+                changedBaselineRecord.Key,
+                StringComparison.OrdinalIgnoreCase)),
+        "A changed bundled artifact was masked by an older accepted online update.");
+    changedBaselineRecord.Value.BundledSha256WhenAccepted = acceptedBaselineSha;
+
+    Assert(
+        BundledActPluginCapabilities.FullPermissionConfirmation.Any(entry =>
+            entry.Capabilities.Any(capability =>
+                !configuration.HasExplicitActCapabilityDecision(
+                    entry.PluginId,
+                    capability))),
+        "A fresh configuration unexpectedly contains explicit bundled capability decisions.");
+    foreach (var (pluginId, capabilities) in
+             BundledActPluginCapabilities.FullPermissionConfirmation)
+    {
+        foreach (var capability in capabilities)
+        {
+            configuration.SetActCapability(pluginId, capability, allowed: false);
+        }
+    }
+    Assert(
+        BundledActPluginCapabilities.FullPermissionConfirmation.All(entry =>
+            entry.Capabilities.All(capability =>
+                configuration.HasExplicitActCapabilityDecision(
+                    entry.PluginId,
+                    capability))),
+        "Stored bundled capability decisions still look incomplete and would reopen the permission prompt.");
 }
 
 static async Task ValidateCactbotMissingTargetBackupRecoveryAsync(
@@ -6229,6 +6329,49 @@ static async Task ValidateEncounterShutdownFlushAsync(string testRoot)
     Assert(
         Directory.EnumerateFiles(paths.EncounterLogDirectory, "*.json").Count() == 1,
         "An encounter submitted immediately before shutdown did not write its individual log.");
+}
+
+static async Task ValidateEncounterRetentionAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "encounter-retention");
+    var paths = new PluginPaths(root);
+    var networkDirectory = Path.Combine(root, "custom-network-logs");
+    Directory.CreateDirectory(networkDirectory);
+    for (var index = 0; index < 4; index++)
+    {
+        var path = Path.Combine(networkDirectory, $"Network_{index}.log");
+        await File.WriteAllTextAsync(path, index.ToString());
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(index - 4));
+    }
+
+    var repository = new EncounterRepository(new JsonFileStore(), paths);
+    var configuration = new PluginConfiguration { HistoryLimit = 2 };
+    var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
+    var service = new EncounterService(
+        repository,
+        new EncounterStateStore(),
+        configuration,
+        new PluginLogger(log),
+        paths,
+        () => networkDirectory);
+    await service.InitializeAsync(CancellationToken.None);
+    var start = DateTimeOffset.UtcNow.AddMinutes(-3);
+    for (var index = 0; index < 3; index++)
+    {
+        service.QueueFinishedEncounter(SampleEncounterFactory.Create(start.AddMinutes(index)) with
+        {
+            Id = Guid.NewGuid(),
+            EndTime = start.AddMinutes(index).AddSeconds(30),
+        });
+    }
+    await service.DisposeAsync();
+
+    var history = await repository.LoadRecentAsync(CancellationToken.None);
+    Assert(
+        history.Count == 2 &&
+        Directory.EnumerateFiles(paths.EncounterLogDirectory, "*.json").Count() == 2 &&
+        Directory.EnumerateFiles(networkDirectory, "Network_*.log").Count() == 2,
+        "History, encounter JSON, and Network logs were not independently retained at the configured count.");
 }
 
 static void ValidateDutyEncounterRosterReplacement()

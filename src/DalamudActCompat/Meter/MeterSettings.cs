@@ -517,6 +517,7 @@ public sealed class MeterSettings
         destination.BackgroundOpacity = source.BackgroundOpacity;
         destination.ItemWidth = source.ItemWidth;
         destination.SortMode = source.SortMode;
+        destination.DpsSortMetric = source.DpsSortMetric;
     }
 
     private static bool MergePlayerIdentity(List<MeterSlotDefinition> slots)

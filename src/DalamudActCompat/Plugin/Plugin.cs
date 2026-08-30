@@ -333,7 +333,13 @@ public sealed class Plugin : IDalamudPlugin
             CancellationToken.None);
         var jsonStore = new JsonFileStore();
         var repository = new EncounterRepository(jsonStore, paths);
-        encounterService = new EncounterService(repository, stateStore, configuration, logger, paths);
+        encounterService = new EncounterService(
+            repository,
+            stateStore,
+            configuration,
+            logger,
+            paths,
+            ResolveCombatLogDirectory);
         zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
         fflogsEstimateService = new FflogsEstimateService(
             () => configuration.Fflogs,
@@ -512,6 +518,7 @@ public sealed class Plugin : IDalamudPlugin
             bundledPluginManager.GetDisclosures,
             bundledPluginManager.GetPendingDisclosures,
             InstallBundledPluginsAsync,
+            ShouldPromptForBundledPluginPermissions,
             ConfigureBundledPluginPermissions,
             ShouldOfferFoxTtsPro,
             CompleteBundledPluginSetup,
@@ -524,6 +531,7 @@ public sealed class Plugin : IDalamudPlugin
             paths,
             logger,
             SaveConfiguration,
+            ApplyHistoryLimit,
             () => ApplyActPermissionChanges(),
             ResolveGameRegionSelection,
             SetGameRegionMode,
@@ -577,6 +585,7 @@ public sealed class Plugin : IDalamudPlugin
             logoTexture,
             () => helpWindow.IsOpen = true,
             SaveConfiguration,
+            ApplyHistoryLimit,
             () => ApplyActPermissionChanges(),
             ResolveGameRegionSelection,
             SetGameRegionMode,
@@ -1075,6 +1084,29 @@ public sealed class Plugin : IDalamudPlugin
             logger.Error(ex, "Failed to save plugin configuration.");
             return false;
         }
+    }
+
+    private bool ApplyHistoryLimit(int requestedLimit)
+    {
+        var normalizedLimit = Math.Clamp(requestedLimit, 1, 200);
+        if (normalizedLimit == configuration.HistoryLimit)
+        {
+            return true;
+        }
+
+        var previousLimit = configuration.HistoryLimit;
+        configuration.HistoryLimit = normalizedLimit;
+        if (!TrySaveConfiguration())
+        {
+            configuration.HistoryLimit = previousLimit;
+            return false;
+        }
+
+        encounterService.QueueRetentionCleanup();
+        logger.Information(
+            $"Retention limit changed from {previousLimit} to {normalizedLimit}; " +
+            "encounter history, encounter snapshots, and Network logs will each keep that many files.");
+        return true;
     }
 
     private ResourcePackOperationStatus GetBundledActResourceStatus()
@@ -2824,6 +2856,13 @@ public sealed class Plugin : IDalamudPlugin
             ? "All declared capabilities were enabled for bundled ACT plugins, including SilverDasher and Matcha, by user choice."
             : "Bundled ACT plugin permissions were reset to safe defaults by user choice.");
     }
+
+    private bool ShouldPromptForBundledPluginPermissions()
+        => BundledActPluginCapabilities.FullPermissionConfirmation.Any(entry =>
+            entry.Capabilities.Any(capability =>
+                !configuration.HasExplicitActCapabilityDecision(
+                    entry.PluginId,
+                    capability)));
 
     internal static bool ShouldEnableBundledCapability(
         bool enableFullFunctionality,

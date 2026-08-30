@@ -198,6 +198,88 @@ public static class HostPluginBridge
         };
     }
 
+    public static string ReadSilverDasherDataFile(string path)
+    {
+        DemandSilverDasherCapability("ReadLocalConfiguration");
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        string root;
+        lock (SilverDasherContextLock)
+        {
+            root = silverDasherRoot
+                   ?? throw new InvalidOperationException(
+                       "SilverDasher runtime root has not been configured.");
+        }
+
+        var rootPrefix = root.TrimEnd(
+                             Path.DirectorySeparatorChar,
+                             Path.AltDirectorySeparatorChar) +
+                         Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException(
+                $"SilverDasher data path is outside its plugin root: {fullPath}");
+        }
+
+        var payload = File.ReadAllText(fullPath);
+        return string.Equals(
+            Path.GetFileName(fullPath),
+            "opcodes.json",
+            StringComparison.OrdinalIgnoreCase)
+            ? NormalizeSilverDasherOpcodePayload(payload)
+            : payload;
+    }
+
+    public static string NormalizeSilverDasherOpcodePayload(string payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        JObject root;
+        try
+        {
+            root = JObject.Parse(payload);
+        }
+        catch (Newtonsoft.Json.JsonException)
+        {
+            return payload;
+        }
+
+        if (root["data"] is not JArray data)
+        {
+            return payload;
+        }
+
+        var replacements = new Dictionary<string, (string Chinese, string Global)>(
+            StringComparer.Ordinal)
+        {
+            ["InitZone"] = ("0x028D", "0x0161"),
+            // Global FateInfo is a synthetic FFXIV_ACT_Plugin packet, not a zone opcode.
+            ["FateInfo"] = ("0x00E9", "0xF009"),
+            ["ActorControlSelf"] = ("0x035D", "0x037C"),
+        };
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in data.OfType<JObject>())
+        {
+            var name = item.Value<string>("name");
+            if (name is null || !replacements.TryGetValue(name, out var values))
+            {
+                continue;
+            }
+
+            item["cn"] = values.Chinese;
+            item["global"] = values.Global;
+            found.Add(name);
+        }
+
+        if (!found.SetEquals(replacements.Keys))
+        {
+            // A shape change should remain visible to SilverDasher's own corruption handling.
+            return payload;
+        }
+
+        root["version"] = "20260830";
+        return root.ToString(Newtonsoft.Json.Formatting.None);
+    }
+
     public static Process GetSilverDasherGameProcess()
     {
         DemandSilverDasherCapability("NativeGameMemory");

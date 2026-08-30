@@ -33,6 +33,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getPending;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>, Task<BundledPluginInstallOutcome>> install;
+    private readonly Func<bool> shouldPromptForPermissions;
     private readonly Action<bool> configureFullPermissions;
     private readonly Func<bool> shouldOfferTtsPro;
     private readonly Action<FoxTtsProChoice> completeSetup;
@@ -55,6 +56,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures,
         Func<IReadOnlyList<BundledActPluginDescriptor>> getPending,
         Func<IReadOnlyList<BundledActPluginDescriptor>, Task<BundledPluginInstallOutcome>> install,
+        Func<bool> shouldPromptForPermissions,
         Action<bool> configureFullPermissions,
         Func<bool> shouldOfferTtsPro,
         Action<FoxTtsProChoice> completeSetup,
@@ -66,6 +68,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         this.getDisclosures = getDisclosures;
         this.getPending = getPending;
         this.install = install;
+        this.shouldPromptForPermissions = shouldPromptForPermissions;
         this.configureFullPermissions = configureFullPermissions;
         this.shouldOfferTtsPro = shouldOfferTtsPro;
         this.completeSetup = completeSetup;
@@ -327,7 +330,14 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 : text.Get(
                     $"内置 DLL 和告知记录已保存；兼容 Host 正在后台恢复：{outcome.RuntimeWarning}",
                     $"Bundled DLLs and acknowledgements were saved; the compatibility Host is recovering in the background: {outcome.RuntimeWarning}");
-            BeginPermissionChoice();
+            if (shouldPromptForPermissions())
+            {
+                BeginPermissionChoice();
+            }
+            else
+            {
+                ContinueAfterPermissionChoice();
+            }
         }
         catch (Exception ex)
         {
@@ -347,6 +357,20 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         showPermissionChoice = true;
         permissionPopupRequested = true;
         IsOpen = true;
+    }
+
+    private void ContinueAfterPermissionChoice()
+    {
+        if (shouldOfferTtsPro())
+        {
+            showTtsProChoice = true;
+            ttsProPopupRequested = true;
+            IsOpen = true;
+            return;
+        }
+
+        completeSetup(FoxTtsProChoice.KeepCurrent);
+        IsOpen = false;
     }
 
     private void Refresh(bool openWhenPending)
@@ -501,17 +525,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             configureFullPermissions(enableFull);
             showPermissionChoice = false;
             ImGui.CloseCurrentPopup();
-            if (shouldOfferTtsPro())
-            {
-                showTtsProChoice = true;
-                ttsProPopupRequested = true;
-                IsOpen = true;
-            }
-            else
-            {
-                completeSetup(FoxTtsProChoice.KeepCurrent);
-                IsOpen = false;
-            }
+            ContinueAfterPermissionChoice();
         }
 
         ImGui.EndPopup();

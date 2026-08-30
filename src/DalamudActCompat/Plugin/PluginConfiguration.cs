@@ -378,6 +378,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
         return IsActCapabilityAllowedByDefault(capability);
     }
 
+    public bool HasExplicitActCapabilityDecision(
+        string pluginId,
+        ActCapability capability)
+        => ActPluginPermissions is not null &&
+           ActPluginPermissions.TryGetValue(pluginId, out var pluginPermissions) &&
+           pluginPermissions.ContainsKey(capability);
+
     internal static bool IsActCapabilityAllowedByDefault(ActCapability capability)
         => capability is
             ActCapability.ReadCombatLogs or

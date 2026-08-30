@@ -2407,6 +2407,9 @@ public sealed class SelfHostedActRuntime : IDisposable
             ActEncounterSnapshot? fallbackSnapshot = null;
             string? unmatchedNames = null;
             ParityCompletionRequest? parityCompletion = null;
+            // NotACT exposes its internal ActionDataLock through this ACT-compatible
+            // property. Keep every traversal of CombatantData/AttackType swings inside
+            // it because the parser appends to those collections on another thread.
             lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
             {
                 lock (encounterSync)

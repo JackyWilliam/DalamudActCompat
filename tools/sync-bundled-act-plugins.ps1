@@ -161,7 +161,7 @@ New-Item -ItemType Directory -Force -Path `
     $postNamazuDirectory | Out-Null
 
 $silverPackage = Join-Path $destinationRoot "silverdasher/SilverDasher-0.6.0.4-cafe.zip"
-$silverPackageSha256 = "8d73b14af27cc4781ddf09b7926c5d99a11cd5b8a02b94fd90430acf38371866"
+$silverPackageSha256 = "0999e18e103d0c9e8e7db3dfde12b23f1ff2df9565472d2aa832ebeaa3f7341d"
 $silverAssemblyPath = "Plugins/SilverDasher/SilverDasher.dll"
 $silverAssemblySha256 = "a3f356743a438b49cc0796858ca3b127e79de90e4d7e960177ebda50a8568cf8"
 if (-not (Test-Path -LiteralPath $silverPackage) -or
