@@ -1908,6 +1908,16 @@ public static class LegacyAssemblyRewriter
                 method.Parameters.Count == 1 &&
                 method.ReturnType.FullName == typeof(Task).FullName);
         InsertBooleanGuard(repositoryUpdate, networkAllowed, returnCompletedTask: true);
+        var defaultRepositoryLoad = module.Types
+            .SelectMany(EnumerateTypes)
+            .SelectMany(type => type.Methods)
+            .Single(method =>
+                method.Name == "LoadDefaultRepoCN" &&
+                method.Parameters.Count == 1 &&
+                method.ReturnType.MetadataType == MetadataType.Void);
+        // The Chinese build loads its default repository manifest before entering the guarded
+        // updater, so this separate entry point must honor the same network permission.
+        InsertBooleanGuard(defaultRepositoryLoad, networkAllowed, returnCompletedTask: false);
         var endpointStart = module.Types
             .SelectMany(EnumerateTypes)
             .Single(type => type.FullName == "Triggernometry.Core.Endpoint")

@@ -2669,6 +2669,11 @@ void ValidateTriggernometryLaunchProcessPatch()
     var repositoryType = definition.MainModule.Types
         .SelectMany(EnumerateCecilTypes)
         .Single(type => type.FullName == "Triggernometry.Core.Repository");
+    var realPluginType = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName == "Triggernometry.Core.RealPlugin");
+    var loadDefaultRepository = realPluginType.Methods.Single(method =>
+        method.Name == "LoadDefaultRepoCN" && method.Parameters.Count == 1);
     var tryLoadLocalBackup = repositoryType.Methods.Single(method =>
         method.Name == "TryLoadLocalBackup" && method.Parameters.Count == 0);
     var saveLocalBackup = repositoryType.Methods.Single(method =>
@@ -2684,6 +2689,10 @@ void ValidateTriggernometryLaunchProcessPatch()
             called.Name == methodName);
 
     Assert(
+        CountCalls(
+            loadDefaultRepository,
+            typeof(HostPluginBridge).FullName!,
+            nameof(HostPluginBridge.IsTriggernometryNetworkAllowed)) == 1 &&
         CountCalls(tryLoadLocalBackup, typeof(File).FullName!, nameof(File.Exists)) == 1 &&
         CountCalls(tryLoadLocalBackup, typeof(File).FullName!, nameof(File.ReadAllBytes)) == 1 &&
         CountCalls(
@@ -2704,7 +2713,7 @@ void ValidateTriggernometryLaunchProcessPatch()
             repositoryUpdateMoveNext,
             "Triggernometry.Core.Repository",
             "TryLoadLocalBackup") >= 2,
-        "Triggernometry's patched repository updater no longer saves or reloads its local XML backup on startup/update failure.");
+        "Triggernometry's repository path bypassed the network gate or no longer preserves its local XML backup on startup/update failure.");
 
     var exportUnserialize = definition.MainModule.Types
         .SelectMany(EnumerateCecilTypes)
