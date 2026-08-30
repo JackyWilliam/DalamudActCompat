@@ -69,6 +69,8 @@ public sealed class MeterWindowProfile
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
 
+    public DpsMetric DpsSortMetric { get; set; } = DpsMetric.Dps;
+
     [JsonIgnore]
     public bool IsEditing { get; set; }
 
@@ -95,6 +97,12 @@ public sealed class MeterWindowProfile
         if (SortMode != normalizedSortMode)
         {
             SortMode = normalizedSortMode;
+            changed = true;
+        }
+        var normalizedDpsSortMetric = MeterSlotPresentation.NormalizeDpsMetric(DpsSortMetric);
+        if (DpsSortMetric != normalizedDpsSortMetric)
+        {
+            DpsSortMetric = normalizedDpsSortMetric;
             changed = true;
         }
 

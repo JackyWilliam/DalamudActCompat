@@ -144,8 +144,20 @@ public sealed partial class ActPluginPackageInstaller
             return [];
         }
 
+        string[] directories;
+        try
+        {
+            // Installation swaps directories atomically. Snapshot first so a concurrent
+            // move/delete cannot throw later from a deferred filesystem enumerator.
+            directories = Directory.GetDirectories(paths.ActPluginDirectory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+
         var plugins = new List<InstalledActPlugin>();
-        foreach (var directory in Directory.EnumerateDirectories(paths.ActPluginDirectory))
+        foreach (var directory in directories)
         {
             try
             {

@@ -879,6 +879,29 @@ public sealed class MeterStyleEditorWindow : Window
             changed = true;
         }
         ImGui.EndDisabled();
+        if (MeterSlotPresentation.TryGetDpsMetric(slot.Metric, out var dpsMetric))
+        {
+            var isRankingMetric = profile.DpsSortMetric == dpsMetric;
+            ImGui.BeginDisabled(!slot.Visible || isRankingMetric);
+            if (ImGui.Button(
+                    text.Get(
+                        isRankingMetric ? "✓ 当前 DPS 排序依据" : "设为 DPS 排序依据",
+                        isRankingMetric ? "✓ Current DPS ranking metric" : "Use for DPS ranking"),
+                    new Vector2(-1, 0)))
+            {
+                // Ranking belongs to the window profile, not the global meter, so each
+                // template can choose its own DPS definition without changing its columns.
+                profile.DpsSortMetric = dpsMetric;
+                changed = true;
+            }
+            ImGui.EndDisabled();
+            if (!slot.Visible)
+            {
+                ImGui.TextDisabled(text.Get(
+                    "请先启用这个槽位。",
+                    "Enable this slot before using it for ranking."));
+            }
+        }
         if (!canUseSelectedSlot && slot.Metric == MeterSlotMetric.Fflogs)
         {
             ImGui.TextWrapped(text.Get(

@@ -137,7 +137,8 @@ public sealed class HorizontalMeterWindow : Window
 
         var allRows = MeterSlotPresentation.SortAndRank(
             meterService.GetRows(encounter),
-            Profile.SortMode);
+            Profile.SortMode,
+            Profile.DpsSortMetric);
         var partyGroup = ResolvePartyGroup(encounter, allRows);
         DrawHeader(encounter, allRows);
         var rows = MeterSlotPresentation.SelectParty(allRows, partyGroup);
@@ -210,7 +211,10 @@ public sealed class HorizontalMeterWindow : Window
         MeterPreviewInteraction previewInteraction)
     {
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
-        var ranked = MeterSlotPresentation.SortAndRank(rows, Profile.SortMode);
+        var ranked = MeterSlotPresentation.SortAndRank(
+            rows,
+            Profile.SortMode,
+            Profile.DpsSortMetric);
         var partyGroup = ResolvePartyGroup(encounter, ranked, persistChanges: false);
         DrawHeader(encounter, ranked, embeddedPreview: true);
         DrawSlidingPlayers(

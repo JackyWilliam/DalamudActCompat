@@ -59,6 +59,8 @@ public sealed class BundledActPluginUpdateRecord
 {
     public string HostVersionWhenAccepted { get; set; } = string.Empty;
 
+    public string BundledSha256WhenAccepted { get; set; } = string.Empty;
+
     public string Version { get; set; } = string.Empty;
 
     public string DownloadUrl { get; set; } = string.Empty;

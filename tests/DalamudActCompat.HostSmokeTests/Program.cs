@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -3012,6 +3013,50 @@ void ValidateMatchaAssemblyContract(string packagePath)
                 "Matcha did not receive the hash-pinned upstream runtime constants.");
         }
 
+        var opcodeStorage = loadedAssembly.GetType(
+                                "Cafe.Matcha.Constant.OpcodeStorage",
+                                throwOnError: true)!
+                            ?? throw new TypeLoadException(
+                                "Cafe.Matcha.Constant.OpcodeStorage");
+        var globalOpcodes = opcodeStorage.GetField(
+                                "Global",
+                                BindingFlags.Public | BindingFlags.Static)!
+                                .GetValue(null) as IDictionary
+                            ?? throw new InvalidDataException(
+                                "Matcha Global opcode storage is not a dictionary.");
+        var expectedGlobalOpcodes = new Dictionary<ushort, string>
+        {
+            [0x0096] = "ActorControl",
+            [0x037C] = "ActorControlSelf",
+            [0x027D] = "CEDirector",
+            [0x012E] = "CompanyAirshipStatus",
+            [0x03AF] = "CompanySubmersibleStatus",
+            [0x0197] = "ContentFinderNotifyPop",
+            [0x02C7] = "ResumeEventScene32",
+            [0x01A5] = "EventPlay",
+            [0x0278] = "EventStart",
+            [0x0097] = "Examine",
+            [0x0161] = "InitZone",
+            [0x0104] = "InventoryTransaction",
+            [0x0204] = "ItemInfo",
+            [0x0190] = "MarketBoardItemListing",
+            [0x022F] = "MarketBoardItemListingCount",
+            [0x017B] = "MarketBoardItemListingHistory",
+            [0x835B] = "MarketBoardRequestItemListingInfo",
+            [0x00E9] = "NpcSpawn",
+            [0x00A6] = "PlayerSetup",
+            [0x032D] = "PlayerSpawn",
+            [0x01A2] = "SubmarineStatusList",
+        };
+        Assert(
+            globalOpcodes.Count == expectedGlobalOpcodes.Count &&
+            expectedGlobalOpcodes.All(pair =>
+                string.Equals(
+                    globalOpcodes[pair.Key]?.ToString(),
+                    pair.Value,
+                    StringComparison.Ordinal)),
+            "Matcha Global opcode storage was not normalized to the verified 7.55h2 table.");
+
         var bridge = loadedAssembly.GetType(
                          "Cafe.Matcha.Utils.DactBridge",
                          throwOnError: true)!
@@ -3468,6 +3513,7 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
                     [
                         "NativeGameMemory",
                         "ReadCombatLogs",
+                        "ReadLocalConfiguration",
                         "NetworkRequest",
                     ],
                 },
@@ -3484,6 +3530,24 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         normalizedPayload["c"]?["x"]?.Type == JTokenType.Integer &&
         normalizedPayload["c"]?["y"]?.Type == JTokenType.Integer,
         "SilverDasher MQTT integer-string compatibility did not normalize the exact known fields.");
+    var normalizedOpcodePayload = JObject.Parse(
+        HostPluginBridge.NormalizeSilverDasherOpcodePayload(
+            "{\"version\":\"1\",\"data\":[" +
+            "{\"name\":\"InitZone\",\"cn\":\"0x1\",\"global\":\"0x2\"}," +
+            "{\"name\":\"FateInfo\",\"cn\":\"0x3\",\"global\":\"0x4\"}," +
+            "{\"name\":\"ActorControlSelf\",\"cn\":\"0x5\",\"global\":\"0x6\"}]}"));
+    var normalizedOpcodes = normalizedOpcodePayload["data"]!
+        .Children<JObject>()
+        .ToDictionary(item => item.Value<string>("name")!, StringComparer.Ordinal);
+    Assert(
+        normalizedOpcodePayload.Value<string>("version") == "20260830" &&
+        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x028D" &&
+        normalizedOpcodes["InitZone"].Value<string>("global") == "0x0161" &&
+        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x00E9" &&
+        normalizedOpcodes["FateInfo"].Value<string>("global") == "0xF009" &&
+        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x035D" &&
+        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x037C",
+        "SilverDasher opcode data was not normalized to Chinese 7.55h / Global 7.55h2.");
     var judge = rewrittenCore
                        .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
                        .GetMethod(
@@ -3605,6 +3669,9 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         var mqttNormalizationCalls = calls.Count(called =>
             called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
             called.Name == nameof(HostPluginBridge.NormalizeSilverDasherMqttPayload));
+        var opcodeDataBridgeCalls = calls.Count(called =>
+            called.DeclaringType.FullName == typeof(HostPluginBridge).FullName &&
+            called.Name == nameof(HostPluginBridge.ReadSilverDasherDataFile));
         var dynamicCombatantNames = scanMobs.Body.Instructions.Count(instruction =>
                 instruction.OpCode.Code == Code.Ldstr &&
                 instruction.Operand is string name &&
@@ -3632,7 +3699,7 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
             ttsBridgeCalls == 2 && legacyTtsCalls == 0 &&
             notificationBridgeCalls == 1 && nativeNotificationCalls == 0 &&
             combatantRepositoryCalls == 1 && dynamicCombatantNames == 0 &&
-            mqttNormalizationCalls == 1 &&
+            mqttNormalizationCalls == 1 && opcodeDataBridgeCalls == 1 &&
             wpfDispatchCalls >= 4 && winFormsUiDispatchCalls == 0 &&
             unknownOpcodeGuard,
             "SilverDasher core did not isolate its exact process/TTS/notification/data call sites: " +
@@ -3640,7 +3707,7 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
             $"ttsBridge={ttsBridgeCalls}, ttsLegacy={legacyTtsCalls}, " +
             $"notificationBridge={notificationBridgeCalls}, notificationNative={nativeNotificationCalls}, " +
             $"combatantRepository={combatantRepositoryCalls}, dynamicCombatant={dynamicCombatantNames}, " +
-            $"mqttNormalization={mqttNormalizationCalls}, " +
+            $"mqttNormalization={mqttNormalizationCalls}, opcodeDataBridge={opcodeDataBridgeCalls}, " +
             $"wpfDispatch={wpfDispatchCalls}, winFormsDispatch={winFormsUiDispatchCalls}, " +
             $"unknownOpcodeGuard={unknownOpcodeGuard}.");
     }

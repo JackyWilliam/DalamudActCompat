@@ -30,7 +30,16 @@ public sealed record Encounter(
     // wipe never leaks totals into the next attempt.
     public IReadOnlyList<Encounter> SegmentRecords { get; init; } = [];
 
-    public TimeSpan Duration => (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
+    public TimeSpan Duration
+    {
+        get
+        {
+            var elapsed = (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
+            // ACT timestamps and the local wall clock can briefly disagree after a pull
+            // resumes. A duration is elapsed time, so exposing a negative value is invalid.
+            return elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed;
+        }
+    }
 
     [System.Text.Json.Serialization.JsonIgnore]
     public TimeSpan EffectiveDuration

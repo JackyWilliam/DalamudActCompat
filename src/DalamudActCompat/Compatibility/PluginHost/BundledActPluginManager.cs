@@ -240,6 +240,12 @@ public sealed class BundledActPluginManager
                         new BundledActPluginUpdateRecord
                         {
                             HostVersionWhenAccepted = hostVersion,
+                            BundledSha256WhenAccepted = bundledPlugins
+                                .First(bundled => string.Equals(
+                                    bundled.Id,
+                                    plugin.Id,
+                                    StringComparison.OrdinalIgnoreCase))
+                                .Sha256,
                             Version = plugin.Version,
                             DownloadUrl = plugin.DownloadUrl,
                             SourceUrl = plugin.SourceUrl,
@@ -329,17 +335,35 @@ public sealed class BundledActPluginManager
         var comparison = BundledActPluginUpdateChecker.CompareVersions(
             record.Version,
             bundled.Version);
-        if (comparison < 0 ||
-            comparison == 0 &&
-            !string.Equals(
-                record.Sha256,
-                bundled.Sha256,
-                StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(
-                record.HostVersionWhenAccepted,
-                hostVersion,
-                StringComparison.Ordinal))
+        if (comparison < 0)
         {
+            record = null!;
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(record.BundledSha256WhenAccepted))
+        {
+            // Older records only named the Host release. Migrate them when the same Host
+            // created the record or the exact downloaded artifact was explicitly accepted.
+            if (!string.Equals(
+                    record.HostVersionWhenAccepted,
+                    hostVersion,
+                    StringComparison.Ordinal) &&
+                !IsUpdateRecordAcknowledged(bundled.Id, record))
+            {
+                record = null!;
+                return false;
+            }
+
+            record.BundledSha256WhenAccepted = bundled.Sha256;
+        }
+        else if (!string.Equals(
+                     record.BundledSha256WhenAccepted,
+                     bundled.Sha256,
+                     StringComparison.OrdinalIgnoreCase))
+        {
+            // A changed bundle is a new trust baseline even when its display version was
+            // accidentally left unchanged, so do not let an older online record mask it.
             record = null!;
             return false;
         }
@@ -347,21 +371,55 @@ public sealed class BundledActPluginManager
         return true;
     }
 
+    private bool IsUpdateRecordAcknowledged(
+        string pluginId,
+        BundledActPluginUpdateRecord record)
+    {
+        configuration.BundledPluginDisclosureKeys ??=
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!configuration.BundledPluginDisclosureKeys.TryGetValue(
+                pluginId,
+                out var accepted))
+        {
+            return false;
+        }
+
+        var stable = $"{pluginId}|{record.Version}|{record.Sha256}|";
+        return string.Equals(accepted, stable, StringComparison.Ordinal) ||
+               accepted.EndsWith($"|{stable}", StringComparison.Ordinal);
+    }
+
     private bool IsAcknowledged(BundledActPluginDescriptor plugin)
     {
         configuration.BundledPluginDisclosureKeys ??=
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        return configuration.BundledPluginDisclosureKeys.TryGetValue(
-                   plugin.Id,
-                   out var accepted) &&
-               string.Equals(
-                   accepted,
-                   GetDisclosureKey(plugin),
-                   StringComparison.Ordinal);
+        if (!configuration.BundledPluginDisclosureKeys.TryGetValue(
+                plugin.Id,
+                out var accepted))
+        {
+            return false;
+        }
+
+        var current = GetDisclosureKey(plugin);
+        if (string.Equals(accepted, current, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Releases before 0.3.10.2 prefixed the stable artifact identity with the Host
+        // version. Accept and migrate that exact legacy suffix so an unchanged DLL does
+        // not ask for the same disclosure after every DalamudActCompat update.
+        if (!accepted.EndsWith($"|{current}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        configuration.BundledPluginDisclosureKeys[plugin.Id] = current;
+        return true;
     }
 
-    private string GetDisclosureKey(BundledActPluginDescriptor plugin)
-        => $"{hostVersion}|{plugin.Id}|{plugin.Version}|{plugin.Sha256}|{plugin.PackageSha256}";
+    private static string GetDisclosureKey(BundledActPluginDescriptor plugin)
+        => $"{plugin.Id}|{plugin.Version}|{plugin.Sha256}|{plugin.PackageSha256}";
 
     private static bool IsCurrentPackage(
         InstalledActPlugin installed,

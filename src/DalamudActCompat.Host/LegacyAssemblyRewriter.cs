@@ -148,7 +148,61 @@ public static class LegacyAssemblyRewriter
             writable: false);
         var assembly = loadContext.LoadFromStream(assemblyImage);
         ApplyMatchaUpstreamSecrets(assembly, secrets);
+        ApplyMatchaGlobal755Hotfix2Opcodes(assembly);
         return assembly;
+    }
+
+    private static void ApplyMatchaGlobal755Hotfix2Opcodes(Assembly assembly)
+    {
+        var storageType = assembly.GetType(
+                              "Cafe.Matcha.Constant.OpcodeStorage",
+                              throwOnError: true)!
+                          ?? throw new TypeLoadException(
+                              "Matcha opcode storage is missing.");
+        var opcodeType = assembly.GetType(
+                             "Cafe.Matcha.Constant.MatchaOpcode",
+                             throwOnError: true)!
+                         ?? throw new TypeLoadException(
+                             "Matcha opcode enum is missing.");
+        var globalField = storageType.GetField(
+                              "Global",
+                              BindingFlags.Public | BindingFlags.Static)
+                          ?? throw new MissingFieldException(storageType.FullName, "Global");
+        var global = globalField.GetValue(null) as IDictionary
+                     ?? throw new InvalidDataException(
+                         "Matcha Global opcode storage has an unexpected shape.");
+        var verified = new Dictionary<ushort, string>
+        {
+            [0x0096] = "ActorControl",
+            [0x037C] = "ActorControlSelf",
+            [0x027D] = "CEDirector",
+            [0x012E] = "CompanyAirshipStatus",
+            [0x03AF] = "CompanySubmersibleStatus",
+            [0x0197] = "ContentFinderNotifyPop",
+            [0x02C7] = "ResumeEventScene32",
+            [0x01A5] = "EventPlay",
+            [0x0278] = "EventStart",
+            [0x0097] = "Examine",
+            [0x0161] = "InitZone",
+            [0x0104] = "InventoryTransaction",
+            [0x0204] = "ItemInfo",
+            [0x0190] = "MarketBoardItemListing",
+            [0x022F] = "MarketBoardItemListingCount",
+            [0x017B] = "MarketBoardItemListingHistory",
+            [0x835B] = "MarketBoardRequestItemListingInfo",
+            [0x00E9] = "NpcSpawn",
+            [0x00A6] = "PlayerSetup",
+            [0x032D] = "PlayerSpawn",
+            [0x01A2] = "SubmarineStatusList",
+        };
+
+        // FateInfo and WorldVisitQueue are not published in the verified 7.55h2 table.
+        // Omitting them is safer than retaining stale keys that now identify other packets.
+        global.Clear();
+        foreach (var (opcode, name) in verified)
+        {
+            global.Add(opcode, Enum.Parse(opcodeType, name));
+        }
     }
 
     private static MatchaUpstreamSecrets ExtractMatchaUpstreamSecrets(
@@ -442,6 +496,7 @@ public static class LegacyAssemblyRewriter
         RewriteSilverDasherNotifications(module);
         RewriteSilverDasherCombatantLookup(module);
         RewriteSilverDasherMqttPayload(module);
+        RewriteSilverDasherOpcodeData(module);
         RewriteSilverDasherUnknownOpcodeGuard(module);
         RewriteSilverDasherWpfDispatch(module);
 
@@ -894,6 +949,41 @@ public static class LegacyAssemblyRewriter
         il.InsertBefore(first, il.Create(OpCodes.Ldarg_2));
         il.InsertBefore(first, il.Create(OpCodes.Call, normalize));
         il.InsertBefore(first, il.Create(OpCodes.Starg, unpack.Parameters[1]));
+    }
+
+    private static void RewriteSilverDasherOpcodeData(ModuleDefinition module)
+    {
+        var storage = module.GetType("SilverDasher.ACT.Storages.BaseStorage")
+                      ?? throw new TypeLoadException(
+                          "SilverDasher base storage is missing.");
+        var loadData = storage.Methods.SingleOrDefault(method =>
+            method.Name == "LoadData" &&
+            method.HasGenericParameters &&
+            method.GenericParameters.Count == 1 &&
+            method.Parameters.Count == 2 &&
+            method.Parameters[0].ParameterType.MetadataType == MetadataType.String &&
+            method.HasBody)
+                       ?? throw new MissingMethodException(storage.FullName, "LoadData<T>");
+        var readCalls = loadData.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(File).FullName &&
+                called.Name == nameof(File.ReadAllText) &&
+                called.Parameters.Count == 1)
+            .ToArray();
+        if (readCalls.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"SilverDasher data-file surface changed; expected 1 read, found {readCalls.Length}.");
+        }
+
+        // Route the exact data-file read through the scoped bridge so a downloaded
+        // opcode file cannot restore stale Global values after the bundled seed loads.
+        readCalls[0].OpCode = OpCodes.Call;
+        readCalls[0].Operand = module.ImportReference(
+            typeof(HostPluginBridge).GetMethod(
+                nameof(HostPluginBridge.ReadSilverDasherDataFile),
+                BindingFlags.Public | BindingFlags.Static)!);
     }
 
     private static void RewriteSilverDasherUnknownOpcodeGuard(ModuleDefinition module)

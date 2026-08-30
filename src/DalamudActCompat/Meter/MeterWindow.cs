@@ -394,7 +394,7 @@ public sealed class MeterWindow : Window
             return;
         }
 
-        var mode = MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps
+        var mode = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode) == MeterSortMode.Hps
             ? MeterSortMode.Dps
             : MeterSortMode.Hps;
         settings.SortMode = mode;
@@ -414,7 +414,7 @@ public sealed class MeterWindow : Window
         Vector2 end,
         bool hovered)
     {
-        var hps = MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps;
+        var hps = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode) == MeterSortMode.Hps;
         DrawHeaderIconFrame(drawList, settings, start, end, hovered, hps ? HealingGreen : IceBlue);
         var color = ImGui.GetColorU32(hovered ? Vector4.One : hps ? HealingGreen : IceBlue);
         var label = hps ? text.Get("HPS 榜", "HPS") : text.Get("DPS 榜", "DPS");
@@ -901,14 +901,18 @@ public sealed class MeterWindow : Window
             return localPlayer is null ? [] : [localPlayer];
         }
 
+        var ranked = MeterSlotPresentation.SortAndRank(
+            players,
+            settings.ClassicWindow.SortMode,
+            settings.ClassicWindow.DpsSortMetric);
         if (settings.ClassicAllianceView)
         {
-            return players.Take(24).ToArray();
+            return ranked.Take(24).ToArray();
         }
 
         return MeterSlotPresentation.SelectParty(
-            players,
-            MeterSlotPresentation.ResolveLocalPartyGroup(players));
+            ranked,
+            MeterSlotPresentation.ResolveLocalPartyGroup(ranked));
     }
 
     internal void DrawClassicTable(
@@ -918,7 +922,7 @@ public sealed class MeterWindow : Window
         string childId,
         MeterPreviewInteraction? previewInteraction = null)
     {
-        var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
+        var sortMode = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode);
         var showFflogs = ShouldShowFflogsColumn(configuration.Fflogs.Enabled, settings);
         var columnWidths = MeasureColumnWidths(rows, settings, showFflogs);
         var availableTableWidth = ImGui.GetContentRegionAvail().X;
@@ -955,7 +959,9 @@ public sealed class MeterWindow : Window
                 settings,
                 minimumIdentityWidth);
             DrawTableHeader(layout, settings, previewInteraction);
-            var maximumScore = Math.Max(1, rows.Max(row => Score(row, sortMode)));
+            var maximumScore = Math.Max(
+                1,
+                rows.Max(row => Score(row, sortMode, settings.ClassicWindow.DpsSortMetric)));
             foreach (var row in rows)
             {
                 DrawCombatantRow(
@@ -987,7 +993,12 @@ public sealed class MeterWindow : Window
         var tileWidth = Math.Max(42, (availableWidth - ((columns - 1) * spacing)) / columns);
         const float tileHeight = 34;
         var origin = ImGui.GetCursorScreenPos();
-        var maximumScore = Math.Max(1, rows.Max(row => Score(row, settings.SortMode)));
+        var maximumScore = Math.Max(
+            1,
+            rows.Max(row => Score(
+                row,
+                settings.ClassicWindow.SortMode,
+                settings.ClassicWindow.DpsSortMetric)));
         for (var index = 0; index < rows.Count; index++)
         {
             var column = index % columns;
@@ -1029,7 +1040,13 @@ public sealed class MeterWindow : Window
                 hovered ? NavyHover : NavyRaised,
                 settings.ClassicWindow.BackgroundOpacity)),
             6);
-        var ratio = (float)Math.Clamp(Score(row, settings.SortMode) / maximumScore, 0, 1);
+        var ratio = (float)Math.Clamp(
+            Score(
+                row,
+                settings.ClassicWindow.SortMode,
+                settings.ClassicWindow.DpsSortMetric) / maximumScore,
+            0,
+            1);
         var jobColor = JobColor(row.Job);
         drawList.AddRectFilled(
             start,
@@ -1042,9 +1059,9 @@ public sealed class MeterWindow : Window
         var displayName = MeterSlotPresentation.DisplayName(row, encounter, settings, text);
         var cursorX = start.X + 7;
         cursorX += DrawTileJob(row, new Vector2(cursorX, start.Y + 6), 21, settings) + 5;
-        var value = MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps
+        var value = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode) == MeterSortMode.Hps
             ? $"{row.Hps:N0}"
-            : $"{row.PersonalDps:N0}";
+            : $"{MeterSlotPresentation.DpsScore(row, settings.ClassicWindow.DpsSortMetric):N0}";
         var valueWidth = ImGui.CalcTextSize(value).X;
         drawList.AddText(
             new Vector2(cursorX, start.Y + 8),
@@ -1053,7 +1070,7 @@ public sealed class MeterWindow : Window
         drawList.AddText(
             new Vector2(start.X + size.X - valueWidth - 7, start.Y + 8),
             ImGui.GetColorU32(
-                MeterSortModeOptions.Normalize(settings.SortMode) == MeterSortMode.Hps
+                MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode) == MeterSortMode.Hps
                     ? HealingGreen
                     : PrimaryRateColor(row.IsLocalPlayer)),
             value);
@@ -1503,9 +1520,12 @@ public sealed class MeterWindow : Window
                 settings.ClassicWindow.BackgroundOpacity)),
             5);
 
-        var sortMode = MeterSortModeOptions.Normalize(settings.SortMode);
+        var sortMode = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode);
         var jobColor = JobColor(row.Job);
-        var ratio = (float)Math.Clamp(Score(row, sortMode) / maximumScore, 0, 1);
+        var ratio = (float)Math.Clamp(
+            Score(row, sortMode, settings.ClassicWindow.DpsSortMetric) / maximumScore,
+            0,
+            1);
         var configuredLocalColor = settings.LocalPlayerColor;
         var barColor = row.IsLocalPlayer
             ? new Vector4(
@@ -1966,10 +1986,13 @@ public sealed class MeterWindow : Window
             ? rows.Where(static row => row.IsLocalPlayer).ToArray()
             : rows;
 
-    private static double Score(CombatantRow row, MeterSortMode mode) => mode switch
+    private static double Score(
+        CombatantRow row,
+        MeterSortMode mode,
+        DpsMetric dpsMetric) => mode switch
     {
         MeterSortMode.Hps => row.Hps,
-        _ => row.PersonalDps,
+        _ => MeterSlotPresentation.DpsScore(row, dpsMetric),
     };
 
     internal static Vector4 PrimaryRateColor(bool isLocalPlayer)

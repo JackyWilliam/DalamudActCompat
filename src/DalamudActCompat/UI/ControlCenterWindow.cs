@@ -73,6 +73,7 @@ public sealed class ControlCenterWindow : Window
     private readonly ISharedImmediateTexture logoTexture;
     private readonly Action openHelp;
     private readonly Action saveConfiguration;
+    private readonly Func<int, bool> applyHistoryLimit;
     private readonly Action applyPermissionChanges;
     private readonly Func<GameRegionSelection> getGameRegionSelection;
     private readonly Action<GameRegionMode> setGameRegionMode;
@@ -151,6 +152,7 @@ public sealed class ControlCenterWindow : Window
     private bool genericDeletePopupRequested;
     private bool focusOnNextDraw;
     private bool locateOnNextDraw;
+    private int? historyLimitDraft;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -163,6 +165,7 @@ public sealed class ControlCenterWindow : Window
         ISharedImmediateTexture logoTexture,
         Action openHelp,
         Action saveConfiguration,
+        Func<int, bool> applyHistoryLimit,
         Action applyPermissionChanges,
         Func<GameRegionSelection> getGameRegionSelection,
         Action<GameRegionMode> setGameRegionMode,
@@ -219,6 +222,7 @@ public sealed class ControlCenterWindow : Window
         this.logoTexture = logoTexture;
         this.openHelp = openHelp;
         this.saveConfiguration = saveConfiguration;
+        this.applyHistoryLimit = applyHistoryLimit;
         this.applyPermissionChanges = applyPermissionChanges;
         this.getGameRegionSelection = getGameRegionSelection;
         this.setGameRegionMode = setGameRegionMode;
@@ -421,9 +425,44 @@ public sealed class ControlCenterWindow : Window
         }
     }
 
-    public override void OnClose() => saveConfiguration();
+    public override void OnClose()
+    {
+        historyLimitDraft = null;
+        saveConfiguration();
+    }
 
     public void Detach() => parserEngine.StatusChanged -= OnParserStatusChanged;
+
+    private void DrawHistoryLimitEditor()
+    {
+        var draft = historyLimitDraft ?? configuration.HistoryLimit;
+        if (ImGui.SliderInt(text.Get("历史记录上限", "History limit"), ref draft, 1, 200))
+        {
+            historyLimitDraft = draft;
+        }
+
+        ImGui.TextDisabled(text.Get(
+            "战斗历史、战斗 JSON 与 Network 日志分别保留此数量。",
+            "Encounter history, encounter JSON, and Network logs each keep this many."));
+        if (historyLimitDraft is not { } pending || pending == configuration.HistoryLimit)
+        {
+            historyLimitDraft = null;
+            return;
+        }
+
+        // This page shares the same destructive setting as advanced settings, so both
+        // entry points require the same explicit confirmation contract.
+        if (ImGui.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
+            applyHistoryLimit(pending))
+        {
+            historyLimitDraft = null;
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
+        {
+            historyLimitDraft = null;
+        }
+    }
 
     private string FormatCactbotStatus()
     {
@@ -2223,12 +2262,7 @@ public sealed class ControlCenterWindow : Window
             changed = true;
         }
 
-        var historyLimit = configuration.HistoryLimit;
-        if (ImGui.SliderInt(text.Get("历史记录上限", "History limit"), ref historyLimit, 1, 200))
-        {
-            configuration.HistoryLimit = historyLimit;
-            changed = true;
-        }
+        DrawHistoryLimitEditor();
 
         ImGui.Spacing();
         ImGui.Separator();

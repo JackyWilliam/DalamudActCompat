@@ -187,7 +187,8 @@ public sealed class RoleSplitMeterWindow : Window
         var useHealing = group == RoleSplitGroup.Healer;
         var groupRows = MeterSlotPresentation.SortAndRank(
             rows.Where(row => JobRoleClassifier.IsHealer(row.Job) == useHealing),
-            useHealing ? MeterSortMode.Hps : MeterSortMode.Dps);
+            useHealing ? MeterSortMode.Hps : MeterSortMode.Dps,
+            Profile.DpsSortMetric);
         if (Compact && groupRows.Count > 1)
         {
             var retained = groupRows.FirstOrDefault(static row => row.IsLocalPlayer) ?? groupRows[0];
@@ -217,7 +218,8 @@ public sealed class RoleSplitMeterWindow : Window
         var useHealing = group == RoleSplitGroup.Healer;
         var groupRows = MeterSlotPresentation.SortAndRank(
             rows.Where(row => JobRoleClassifier.IsHealer(row.Job) == useHealing),
-            useHealing ? MeterSortMode.Hps : MeterSortMode.Dps);
+            useHealing ? MeterSortMode.Hps : MeterSortMode.Dps,
+            Profile.DpsSortMetric);
         if (Compact && groupRows.Count > 1)
         {
             var retained = groupRows.FirstOrDefault(static row => row.IsLocalPlayer) ?? groupRows[0];
@@ -457,6 +459,7 @@ public sealed class RoleSplitMeterWindow : Window
                 BackgroundOpacity = Profile.BackgroundOpacity,
                 FontScale = Profile.FontScale,
                 SortMode = useHealing ? MeterSortMode.Hps : MeterSortMode.Dps,
+                DpsSortMetric = Profile.DpsSortMetric,
                 Slots = slots,
             },
             IsLocked = Profile.IsLocked,
