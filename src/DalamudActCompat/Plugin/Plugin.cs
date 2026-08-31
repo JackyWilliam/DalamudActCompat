@@ -65,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SimplifiedHomeWindow simplifiedHomeWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
     private readonly ZoneNameLocalizer zoneNameLocalizer;
+    private readonly EncounterModeStateProvider encounterModeStateProvider;
     private readonly EncounterWindow encounterWindow;
     private readonly ControlCenterWindow settingsWindow;
     private readonly HelpWindow helpWindow;
@@ -195,6 +196,12 @@ public sealed class Plugin : IDalamudPlugin
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious],
             partyList.Any(member => member.CurrentHP > 0));
+        encounterModeStateProvider = new EncounterModeStateProvider(
+            dataManager,
+            clientState,
+            condition,
+            dutyPartyWiped,
+            log);
         configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         var configurationChanged = configuration.ApplyMigrations();
         configuration.Meter.SortMode = MeterSortModeOptions.Normalize(
@@ -363,6 +370,7 @@ public sealed class Plugin : IDalamudPlugin
             chatGui,
             framework,
             condition,
+            encounterModeStateProvider.Read,
             gameInteropProvider,
             sigScanner,
             notificationManager,
@@ -404,10 +412,7 @@ public sealed class Plugin : IDalamudPlugin
             encounterService,
             ResolveCombatLogDirectory,
             framework,
-            () => clientState.TerritoryType,
-            () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
-            () => condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
-            dutyPartyWiped,
+            encounterModeStateProvider.Read,
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
@@ -3732,6 +3737,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdateForHost(IFramework _)
     {
+        // This handler is registered before both parser consumers, so they observe one
+        // coherent mode snapshot for the entire Framework frame.
+        encounterModeStateProvider.Update();
         var now = DateTimeOffset.UtcNow;
         UpdateHtmlOverlaySuppression(now);
         ApplyPendingPostNamazuHeading(now);

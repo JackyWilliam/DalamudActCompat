@@ -16,10 +16,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly EncounterService encounterService;
     private readonly Func<string> getLogDirectory;
     private readonly IFramework framework;
-    private readonly Func<uint> getTerritoryId;
-    private readonly Func<bool> isBoundByDuty;
-    private readonly Func<bool> isInCombat;
-    private readonly Func<bool> isDutyPartyWiped;
+    private readonly Func<EncounterModeSnapshot> getEncounterModeSnapshot;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
@@ -28,6 +25,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
     private readonly object frameworkGameStateLock = new();
+    private readonly object encounterModeTransitionLock = new();
     private readonly DutyEncounterAccumulator dutySession = new();
     private readonly DutyEncounterFolderAccumulator dutyFolder = new();
     private readonly DutyWipeTracker dutyWipeTracker = new();
@@ -35,8 +33,10 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Queue<Guid> finalizedDutySegmentOrder = [];
     private CancellationTokenSource? activeRun;
     private ParserStatus status = ParserStatus.Disabled;
-    private FrameworkGameStateSnapshot frameworkGameState;
-    private volatile bool wasBoundByDuty;
+    private EncounterModeSnapshot frameworkGameState;
+    private EncounterMode? accumulatedMode;
+    private bool encounterCallbacksSuppressed;
+    private bool frameworkUpdatesSubscribed;
     private bool disposed;
 
     public IinactAdapter(
@@ -46,10 +46,7 @@ public sealed class IinactAdapter : IParserEngine
         EncounterService encounterService,
         Func<string> getLogDirectory,
         IFramework framework,
-        Func<uint> getTerritoryId,
-        Func<bool> isBoundByDuty,
-        Func<bool> isInCombat,
-        Func<bool> isDutyPartyWiped,
+        Func<EncounterModeSnapshot> getEncounterModeSnapshot,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
         Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
@@ -61,21 +58,16 @@ public sealed class IinactAdapter : IParserEngine
         this.encounterService = encounterService;
         this.getLogDirectory = getLogDirectory;
         this.framework = framework;
-        this.getTerritoryId = getTerritoryId;
-        this.isBoundByDuty = isBoundByDuty;
-        this.isInCombat = isInCombat;
-        this.isDutyPartyWiped = isDutyPartyWiped;
+        this.getEncounterModeSnapshot = getEncounterModeSnapshot;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
         this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
-        frameworkGameState = CaptureFrameworkGameState();
-        wasBoundByDuty = frameworkGameState.BoundByDuty;
+        frameworkGameState = getEncounterModeSnapshot();
         dutyWipeTracker.Reset(frameworkGameState.DutyPartyWiped);
         // Subscribe only after the initial state exists so a concurrent ACT callback cannot
         // observe the default snapshot during construction.
         actRuntime.EncounterChanged += OnEncounterChanged;
-        framework.Update += OnFrameworkUpdate;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -123,7 +115,9 @@ public sealed class IinactAdapter : IParserEngine
             activeRun = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             // Resolve on every start so a settings change can take effect through the existing
             // restart path without rebuilding the parser adapter and all of its subscriptions.
+            RefreshFrameworkGameState();
             actRuntime.StartParser(getLogDirectory());
+            SubscribeFrameworkUpdates();
 
             var runtimePlugins = customPlugins();
             LoadCustomPlugins(runtimePlugins.Where(MustLoadBeforeOverlay));
@@ -203,11 +197,26 @@ public sealed class IinactAdapter : IParserEngine
 
     private void StopCore(bool updateStatus)
     {
-        FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
+        UnsubscribeFrameworkUpdates();
         activeRun?.Cancel();
         activeRun?.Dispose();
         activeRun = null;
-        actRuntime.StopParser();
+        lock (encounterModeTransitionLock)
+        {
+            encounterCallbacksSuppressed = true;
+            FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: true);
+        }
+        try
+        {
+            actRuntime.StopParser();
+        }
+        finally
+        {
+            lock (encounterModeTransitionLock)
+            {
+                encounterCallbacksSuppressed = false;
+            }
+        }
         if (updateStatus)
         {
             SetStatus(ParserState.Stopped, "Parser stopped.");
@@ -230,23 +239,29 @@ public sealed class IinactAdapter : IParserEngine
 
     public void ResetCurrentEncounter()
     {
-        var currentEncounterId = stateStore.GetSnapshot().Current?.Id;
-        var gameState = ReadFrameworkGameState();
-        lock (dutySessionLock)
+        lock (encounterModeTransitionLock)
         {
-            RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
-            if (currentEncounterId is { } id && id != Guid.Empty)
+            var currentEncounterId = stateStore.GetSnapshot().Current?.Id;
+            var gameState = ReadFrameworkGameState();
+            lock (dutySessionLock)
             {
-                RememberFinalizedSegmentsUnsafe([id]);
+                RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
+                if (currentEncounterId is { } id && id != Guid.Empty)
+                {
+                    RememberFinalizedSegmentsUnsafe([id]);
+                }
+
+                // Resetting only the UI lets the next ACT refresh republish the same totals.
+                // Closing the underlying segment keeps the meter empty until a genuinely new pull.
+                dutySession.Reset();
+                dutyWipeTracker.Reset(gameState.DutyPartyWiped);
+                accumulatedMode = EncounterModePolicy.AccumulatesSegments(gameState.Mode)
+                    ? gameState.Mode
+                    : null;
             }
 
-            // Resetting only the UI lets the next ACT refresh republish the same totals.
-            // Closing the underlying segment keeps the meter empty until a genuinely new pull.
-            dutySession.Reset();
-            dutyWipeTracker.Reset(gameState.DutyPartyWiped);
+            stateStore.ResetCurrent();
         }
-
-        stateStore.ResetCurrent();
     }
 
     public async ValueTask DisposeAsync()
@@ -272,7 +287,7 @@ public sealed class IinactAdapter : IParserEngine
             {
                 SetStatus(ParserState.Stopped, "Parser disposed.");
                 actRuntime.EncounterChanged -= OnEncounterChanged;
-                framework.Update -= OnFrameworkUpdate;
+                UnsubscribeFrameworkUpdates();
                 actRuntime.Dispose();
             }
         }
@@ -284,12 +299,28 @@ public sealed class IinactAdapter : IParserEngine
 
     private void OnEncounterChanged(ActEncounterSnapshot snapshot, bool finished)
     {
+        // Serializing callbacks with the Framework transition closes the narrow race where
+        // the final old-mode ACT update could otherwise arrive while its accumulator closes.
+        lock (encounterModeTransitionLock)
+        {
+            if (encounterCallbacksSuppressed)
+            {
+                return;
+            }
+            OnEncounterChangedSerialized(snapshot, finished);
+        }
+    }
+
+    private void OnEncounterChangedSerialized(ActEncounterSnapshot snapshot, bool finished)
+    {
         // ACT may publish from its worker thread. Read one coherent primitive-only snapshot
         // instead of touching Dalamud services or mixing values from different framework frames.
         var gameState = ReadFrameworkGameState();
         var encounter = ActEncounterMapper.Map(snapshot) with
         {
-            TerritoryId = gameState.TerritoryId,
+            TerritoryId = snapshot.TerritoryId != 0
+                ? snapshot.TerritoryId
+                : gameState.TerritoryId,
         };
         // ACT can open and immediately close an encounter for a missed action.
         // Do not let that empty snapshot replace the meter or become a history file.
@@ -308,13 +339,21 @@ public sealed class IinactAdapter : IParserEngine
             }
         }
 
-        var boundByDuty = gameState.BoundByDuty;
-        if (boundByDuty)
+        var segmentMode = snapshot.EncounterMode;
+        if (EncounterModePolicy.AccumulatesSegments(segmentMode))
         {
             Encounter displayEncounter;
             lock (dutySessionLock)
             {
-                wasBoundByDuty = true;
+                // Mode transitions are finalized by the Framework callback before the ACT
+                // runtime ends its old segment. Rejecting a mismatched late callback prevents
+                // that old segment from reopening the just-closed accumulator.
+                if (!CanAccumulateSegment(segmentMode, gameState.Mode, accumulatedMode))
+                {
+                    return;
+                }
+
+                accumulatedMode = segmentMode;
                 displayEncounter = dutySession.Update(
                     encounter,
                     finished,
@@ -329,35 +368,15 @@ public sealed class IinactAdapter : IParserEngine
             return;
         }
 
-        if (wasBoundByDuty)
+        if (gameState.Mode != EncounterMode.OpenWorld)
         {
-            var sameDutyZone = false;
-            lock (dutySessionLock)
+            if (finished)
             {
-                sameDutyZone = dutySession.HasData &&
-                               string.Equals(
-                                   dutySession.ZoneName,
-                                   encounter.ZoneName,
-                                   StringComparison.OrdinalIgnoreCase);
-                if (sameDutyZone)
-                {
-                    _ = dutySession.Update(
-                        encounter,
-                        finished,
-                        DateTimeOffset.UtcNow,
-                        snapshot.CurrentPartyMemberIds,
-                        snapshot.PartyCapacity);
-                }
+                // The open-world segment that was force-ended on entry still belongs in
+                // history, but it must not replace the newly active duty display.
+                encounterService.QueueFinishedEncounter(encounter);
             }
-
-            FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
-            lock (dutySessionLock)
-            {
-                if (sameDutyZone || finalizedDutySegmentIds.Contains(snapshot.Id))
-                {
-                    return;
-                }
-            }
+            return;
         }
 
         if (!finished)
@@ -374,48 +393,86 @@ public sealed class IinactAdapter : IParserEngine
 
     private void OnFrameworkUpdate(IFramework _)
     {
-        var gameState = CaptureFrameworkGameState();
+        lock (encounterModeTransitionLock)
+        {
+            OnFrameworkUpdateSerialized();
+        }
+    }
+
+    private void RefreshFrameworkGameState()
+    {
+        lock (encounterModeTransitionLock)
+        {
+            var gameState = getEncounterModeSnapshot();
+            lock (frameworkGameStateLock)
+            {
+                frameworkGameState = gameState;
+            }
+            dutyWipeTracker.Reset(gameState.DutyPartyWiped);
+        }
+    }
+
+    private void SubscribeFrameworkUpdates()
+    {
+        if (frameworkUpdatesSubscribed)
+        {
+            return;
+        }
+
+        // StartParser registers the runtime first. Registering the accumulator second lets
+        // the runtime publish its final old-mode snapshot before this handler closes the mode.
+        framework.Update += OnFrameworkUpdate;
+        frameworkUpdatesSubscribed = true;
+    }
+
+    private void UnsubscribeFrameworkUpdates()
+    {
+        if (!frameworkUpdatesSubscribed)
+        {
+            return;
+        }
+
+        framework.Update -= OnFrameworkUpdate;
+        frameworkUpdatesSubscribed = false;
+    }
+
+    private void OnFrameworkUpdateSerialized()
+    {
+        var previousGameState = ReadFrameworkGameState();
+        var gameState = getEncounterModeSnapshot();
         lock (frameworkGameStateLock)
         {
             frameworkGameState = gameState;
         }
 
-        var boundByDuty = gameState.BoundByDuty;
-        var inCombat = gameState.InCombat;
-        if (boundByDuty)
+        if (ShouldFinalizeAccumulatedMode(previousGameState.Mode, gameState.Mode))
         {
-            wasBoundByDuty = true;
+            FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: true);
+        }
+
+        if (gameState.Mode == EncounterMode.DutyAttempt)
+        {
+            if (previousGameState.Mode != EncounterMode.DutyAttempt)
+            {
+                dutyWipeTracker.Reset(gameState.DutyPartyWiped);
+            }
             if (dutyWipeTracker.Observe(
-                    boundByDuty: true,
-                    inCombat,
+                    trackDutyAttempt: true,
+                    gameState.InCombat,
                     gameState.DutyPartyWiped))
             {
                 // Only an observed all-party death creates the next pull. Ordinary combat
                 // flag drops keep accumulating exactly like the original meter behavior.
-                FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: false);
+                FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: false);
             }
             return;
         }
 
+        // A local eight-player party wipe never represents a 48-player field-duty wipe.
         dutyWipeTracker.Reset();
-        if (wasBoundByDuty)
-        {
-            FinalizeDutyAttempt(DateTimeOffset.UtcNow, leavingDuty: true);
-        }
-
     }
 
-    private FrameworkGameStateSnapshot CaptureFrameworkGameState()
-    {
-        var boundByDuty = isBoundByDuty();
-        return new FrameworkGameStateSnapshot(
-            getTerritoryId(),
-            boundByDuty,
-            isInCombat(),
-            boundByDuty && isDutyPartyWiped());
-    }
-
-    private FrameworkGameStateSnapshot ReadFrameworkGameState()
+    private EncounterModeSnapshot ReadFrameworkGameState()
     {
         lock (frameworkGameStateLock)
         {
@@ -423,16 +480,12 @@ public sealed class IinactAdapter : IParserEngine
         }
     }
 
-    private void FinalizeDutyAttempt(DateTimeOffset endTime, bool leavingDuty)
+    private void FinalizeAccumulatedEncounter(DateTimeOffset endTime, bool completeFolder)
     {
         Encounter? completedPull;
         Encounter? folderSnapshot;
         lock (dutySessionLock)
         {
-            if (leavingDuty)
-            {
-                wasBoundByDuty = false;
-            }
             RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
             completedPull = dutySession.Complete(endTime);
             if (completedPull is not null)
@@ -445,9 +498,10 @@ public sealed class IinactAdapter : IParserEngine
                 folderSnapshot = null;
             }
 
-            if (leavingDuty)
+            if (completeFolder)
             {
                 folderSnapshot = dutyFolder.Complete() ?? folderSnapshot;
+                accumulatedMode = null;
             }
         }
 
@@ -483,6 +537,20 @@ public sealed class IinactAdapter : IParserEngine
            encounter.TotalHealing > 0 ||
            encounter.TotalDeaths > 0;
 
+    internal static bool CanAccumulateSegment(
+        EncounterMode segmentMode,
+        EncounterMode gameMode,
+        EncounterMode? currentAccumulatorMode)
+        => EncounterModePolicy.AccumulatesSegments(segmentMode) &&
+           segmentMode == gameMode &&
+           (currentAccumulatorMode is null || currentAccumulatorMode == segmentMode);
+
+    internal static bool ShouldFinalizeAccumulatedMode(
+        EncounterMode previousMode,
+        EncounterMode currentMode)
+        => previousMode != currentMode &&
+           EncounterModePolicy.AccumulatesSegments(previousMode);
+
     private Encounter CaptureFflogsEstimatesSafely(Encounter encounter)
     {
         try
@@ -507,9 +575,4 @@ public sealed class IinactAdapter : IParserEngine
         StatusChanged?.Invoke(this, next);
     }
 
-    private readonly record struct FrameworkGameStateSnapshot(
-        uint TerritoryId,
-        bool BoundByDuty,
-        bool InCombat,
-        bool DutyPartyWiped);
 }

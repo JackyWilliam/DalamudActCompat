@@ -56,6 +56,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly IChatGui chatGui;
     private readonly IFramework framework;
     private readonly ICondition condition;
+    private readonly Func<EncounterModeSnapshot> encounterModeSnapshot;
     private readonly IGameInteropProvider gameInteropProvider;
     private readonly INotificationManager notificationManager;
     private readonly Func<bool> localDeathWhilePartyContinues;
@@ -102,6 +103,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
     private Guid activeEncounterId;
+    private EncounterMode activeEncounterMode;
+    private uint activeEncounterTerritoryId;
     private int activeEncounterPartyCapacity;
     private readonly Dictionary<string, ActPlayerIdentity> activeEncounterIdentities =
         new(StringComparer.OrdinalIgnoreCase);
@@ -116,6 +119,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, long> chatHighestDamageTotals = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<RecentNetworkDamage> recentNetworkDamage = [];
     private Guid chatEncounterId;
+    private EncounterMode chatEncounterMode;
+    private uint chatEncounterTerritoryId;
     private DateTimeOffset chatEncounterStart;
     private DateTimeOffset chatLastDamage;
     private DateTimeOffset activeEncounterRelevantStart;
@@ -147,6 +152,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         IChatGui chatGui,
         IFramework framework,
         ICondition condition,
+        Func<EncounterModeSnapshot> encounterModeSnapshot,
         IGameInteropProvider gameInteropProvider,
         ISigScanner sigScanner,
         INotificationManager notificationManager,
@@ -169,7 +175,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
-        frameworkInCombat = condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
+        this.encounterModeSnapshot = encounterModeSnapshot;
+        frameworkInCombat = encounterModeSnapshot().InCombat;
         this.gameInteropProvider = gameInteropProvider;
         this.notificationManager = notificationManager;
         this.localDeathWhilePartyContinues = localDeathWhilePartyContinues;
@@ -1768,6 +1775,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             effectiveDamageEncounter = null;
             activeEncounter = null;
             activeEncounterId = Guid.Empty;
+            activeEncounterMode = EncounterMode.OpenWorld;
+            activeEncounterTerritoryId = 0;
             activeEncounterPartyCapacity = 0;
             activeEncounterIdentities.Clear();
             activeEncounterPublished = false;
@@ -1990,6 +1999,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                 observedDeaths.Clear();
             }
             chatEncounterId = Guid.NewGuid();
+            var gameState = encounterModeSnapshot();
+            chatEncounterMode = gameState.Mode;
+            chatEncounterTerritoryId = gameState.TerritoryId;
             chatEncounterStart = now;
         }
 
@@ -2048,7 +2060,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private void OnFrameworkUpdate(IFramework _)
     {
         var identities = playerIdentities();
-        var inCombat = condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
+        var gameState = encounterModeSnapshot();
+        var inCombat = gameState.InCombat;
         frameworkInCombat = inCombat;
         gameStateProvider.Update(
             identities,
@@ -2060,6 +2073,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         ActEncounterSnapshot? completedChatEncounter = null;
         EncounterData? transitionEncounterToPublish = null;
         EncounterData? activeEncounterToEnd = null;
+        var endingAtModeBoundary = false;
         lock (encounterSync)
         {
             var now = DateTimeOffset.Now;
@@ -2097,12 +2111,14 @@ public sealed class SelfHostedActRuntime : IDisposable
                 }
             }
 
+            endingAtModeBoundary = activeEncounter is not null &&
+                                   activeEncounterMode != gameState.Mode;
             if (activeEncounter is not null &&
-                OpenWorldEncounterEndPolicy.ShouldEnd(
-                    condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
+                (endingAtModeBoundary || OpenWorldEncounterEndPolicy.ShouldEnd(
+                    gameState.Mode,
                     inCombat,
                     lastRelevantCombatAction,
-                    now))
+                    now)))
             {
                 activeEncounterToEnd = activeEncounter;
             }
@@ -2137,7 +2153,11 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
             catch (Exception ex)
             {
-                log.Error(ex, "Failed to end the local open-world ACT encounter.");
+                log.Error(
+                    ex,
+                    endingAtModeBoundary
+                        ? "Failed to end the ACT encounter at a mode boundary."
+                        : "Failed to end the local open-world ACT encounter.");
                 lock (encounterSync)
                 {
                     lastRelevantCombatAction = DateTimeOffset.Now;
@@ -2206,6 +2226,12 @@ public sealed class SelfHostedActRuntime : IDisposable
                 string.IsNullOrWhiteSpace(chatEnemy) ? "Encounter" : chatEnemy,
                 combatants)
             {
+                EncounterMode = activeEncounterId == Guid.Empty
+                    ? chatEncounterMode
+                    : activeEncounterMode,
+                TerritoryId = activeEncounterId == Guid.Empty
+                    ? chatEncounterTerritoryId
+                    : activeEncounterTerritoryId,
                 CurrentPartyMemberIds = identities
                     .Select(static identity => identity.DisplayName)
                     .ToArray(),
@@ -2424,6 +2450,17 @@ public sealed class SelfHostedActRuntime : IDisposable
                         activeEncounterId = continuesChatEncounter
                             ? chatEncounterId
                             : Guid.NewGuid();
+                        if (continuesChatEncounter)
+                        {
+                            activeEncounterMode = chatEncounterMode;
+                            activeEncounterTerritoryId = chatEncounterTerritoryId;
+                        }
+                        else
+                        {
+                            var gameState = encounterModeSnapshot();
+                            activeEncounterMode = gameState.Mode;
+                            activeEncounterTerritoryId = gameState.TerritoryId;
+                        }
                         activeEncounterPublished = false;
                         activeEncounterNamesLogged = false;
                         if (activeEncounterRelevantStart == default)
@@ -2552,6 +2589,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                             encounter.Title ?? string.Empty,
                             combatants)
                         {
+                            EncounterMode = activeEncounterMode,
+                            TerritoryId = activeEncounterTerritoryId,
                             CombatDuration = TimeSpan.FromSeconds(effectiveEncounterSeconds),
                             IsTransitioning = !finished &&
                                               encounterDurationTracker.IsTransitioningAt(
@@ -2613,6 +2652,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                         activeEncounter = null;
 
                         activeEncounterId = Guid.Empty;
+                        activeEncounterMode = EncounterMode.OpenWorld;
+                        activeEncounterTerritoryId = 0;
                         activeEncounterPartyCapacity = 0;
                         activeEncounterIdentities.Clear();
                         activeEncounterPublished = false;
@@ -3141,6 +3182,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private void ResetChatEncounterUnsafe()
     {
         chatEncounterId = Guid.Empty;
+        chatEncounterMode = EncounterMode.OpenWorld;
+        chatEncounterTerritoryId = 0;
         chatEncounterStart = default;
         chatLastDamage = default;
         chatEncounterDirty = false;
