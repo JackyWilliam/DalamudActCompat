@@ -76,7 +76,7 @@ git push
 Before uploading a release, always collect and validate the zip:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\collect-release.ps1 -ExpectedAssemblyVersion 0.3.10.3 -ExpectedDalamudApiLevel 15
+powershell -ExecutionPolicy Bypass -File .\tools\collect-release.ps1 -ExpectedAssemblyVersion 0.3.10.4 -ExpectedDalamudApiLevel 15
 ```
 
 If the script reports `AssemblyVersion`, `DalamudApiLevel`, or `host/DalamudActCompat.Host.exe` mismatch, run a clean rebuild before publishing:

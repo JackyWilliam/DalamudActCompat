@@ -5,9 +5,9 @@ internal sealed class DutyWipeTracker
     private bool wipePending;
     private bool wasPartyWiped;
 
-    public bool Observe(bool boundByDuty, bool inCombat, bool partyWiped)
+    public bool Observe(bool trackDutyAttempt, bool inCombat, bool partyWiped)
     {
-        if (!boundByDuty)
+        if (!trackDutyAttempt)
         {
             Reset();
             return false;

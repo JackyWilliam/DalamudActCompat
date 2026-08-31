@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.3.10.3",
+    "AssemblyVersion":  "0.3.10.4",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.3/DalamudActCompat-core.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.4/DalamudActCompat-core.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.3/DalamudActCompat-core.zip",
-    "LastUpdate":  1788099313312,
-    "Changelog":  "v0.3.10.3 缩小经典榜最高伤害列，将标题与内容居中，并加粗技能名称。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.4/DalamudActCompat-core.zip",
+    "LastUpdate":  1788150216238,
+    "Changelog":  "v0.3.10.4 修复探索区连续 FATE/CE 统计不重置，并让兵武塔、攻城战、达尔里阿达与塔类大型任务按整场累计。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

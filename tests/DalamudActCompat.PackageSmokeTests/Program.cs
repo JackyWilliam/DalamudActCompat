@@ -73,6 +73,7 @@ try
     ValidateFfxivEntityDeltaBuilder();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
+    ValidateEncounterModePolicy();
     ValidateParserFrameworkStateOwnership();
     ValidateRaidDpsEstimator();
     ValidateFflogsParityReplay(testRoot);
@@ -4159,20 +4160,20 @@ static void ValidateDutyWipeTracking()
 
     var tracker = new DutyWipeTracker();
     Assert(
-        !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: false) &&
-        !tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: false),
+        !tracker.Observe(trackDutyAttempt: true, inCombat: true, partyWiped: false) &&
+        !tracker.Observe(trackDutyAttempt: true, inCombat: false, partyWiped: false),
         "An ordinary combat exit was mistaken for a party wipe.");
     Assert(
-        !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: true) &&
-        tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: true) &&
-        !tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: true),
+        !tracker.Observe(trackDutyAttempt: true, inCombat: true, partyWiped: true) &&
+        tracker.Observe(trackDutyAttempt: true, inCombat: false, partyWiped: true) &&
+        !tracker.Observe(trackDutyAttempt: true, inCombat: false, partyWiped: true),
         "A real party wipe was not latched until combat ended, or it reset more than once.");
     Assert(
-        !tracker.Observe(boundByDuty: true, inCombat: true, partyWiped: false) &&
-        tracker.Observe(boundByDuty: true, inCombat: false, partyWiped: true),
+        !tracker.Observe(trackDutyAttempt: true, inCombat: true, partyWiped: false) &&
+        tracker.Observe(trackDutyAttempt: true, inCombat: false, partyWiped: true),
         "A later repull could not produce its own independent wipe reset.");
     Assert(
-        !tracker.Observe(boundByDuty: false, inCombat: false, partyWiped: true),
+        !tracker.Observe(trackDutyAttempt: false, inCombat: false, partyWiped: true),
         "Leaving a duty was incorrectly reported as an in-duty wipe.");
     Assert(
         Plugin.IsDutyPartyWiped(
@@ -5857,7 +5858,7 @@ static void ValidateFflogsConcurrencyBoundaries()
             "encounter = CaptureFflogsEstimatesSafely(encounter);",
             StringComparison.Ordinal) is var captureIndex &&
         captureIndex >= 0 &&
-        captureIndex < adapterSource.IndexOf("var boundByDuty", StringComparison.Ordinal) &&
+        captureIndex < adapterSource.IndexOf("var segmentMode", StringComparison.Ordinal) &&
         controlCenterSource.Contains("UpdateFflogsSettings", StringComparison.Ordinal) &&
         controlCenterSource.Contains("configuration.Fflogs = next;", StringComparison.Ordinal),
         "FFLogs background preloading, UI ownership, task tracking, or serialized cache persistence regressed.");
@@ -6943,17 +6944,30 @@ static void ValidateCombatEventScoping()
     var now = DateTimeOffset.UtcNow;
     Assert(
         !OpenWorldEncounterEndPolicy.ShouldEnd(
-            boundByDuty: false,
+            EncounterMode.OpenWorld,
             localPlayerInCombat: false,
             lastRelevantCombatAction: now.AddSeconds(-4),
             now) &&
         OpenWorldEncounterEndPolicy.ShouldEnd(
-            boundByDuty: false,
+            EncounterMode.OpenWorld,
             localPlayerInCombat: false,
             lastRelevantCombatAction: now.AddSeconds(-5),
             now) &&
-        !OpenWorldEncounterEndPolicy.ShouldEnd(true, false, now.AddMinutes(-1), now) &&
-        !OpenWorldEncounterEndPolicy.ShouldEnd(false, true, now.AddMinutes(-1), now),
+        !OpenWorldEncounterEndPolicy.ShouldEnd(
+            EncounterMode.DutyAttempt,
+            false,
+            now.AddMinutes(-1),
+            now) &&
+        !OpenWorldEncounterEndPolicy.ShouldEnd(
+            EncounterMode.LargeScaleFieldDuty,
+            false,
+            now.AddMinutes(-1),
+            now) &&
+        !OpenWorldEncounterEndPolicy.ShouldEnd(
+            EncounterMode.OpenWorld,
+            true,
+            now.AddMinutes(-1),
+            now),
         "An outdoor party encounter still follows the local combat flag instead of bounded inactivity.");
 
     var runtimeSource = File.ReadAllText(Path.Combine(
@@ -6962,13 +6976,147 @@ static void ValidateCombatEventScoping()
         "DalamudActCompat.ActRuntime",
         "SelfHostedActRuntime.cs"));
     Assert(
-        runtimeSource.Contains("ConditionFlag.BoundByDuty", StringComparison.Ordinal) &&
+        runtimeSource.Contains("encounterModeSnapshot()", StringComparison.Ordinal) &&
+        runtimeSource.Contains("activeEncounterMode != gameState.Mode", StringComparison.Ordinal) &&
         runtimeSource.Contains("lastRelevantCombatAction", StringComparison.Ordinal) &&
         runtimeSource.Contains("OpenWorldEncounterEndPolicy.ShouldEnd", StringComparison.Ordinal) &&
         runtimeSource.Contains("ActGlobals.oFormActMain.EndCombat(true)", StringComparison.Ordinal) &&
         runtimeSource.Contains("counter.DirectHits++;", StringComparison.Ordinal) &&
         runtimeSource.Contains("chatDirectHitTotals", StringComparison.Ordinal),
         "Combat scoping or direct-hit collection regressed in the self-hosted ACT runtime.");
+}
+
+static void ValidateEncounterModePolicy()
+{
+    Assert(
+        new uint[] { 26, 38, 41, 47, 48, 61 }
+            .All(EncounterModeStateProvider.IsExplorationIntendedUse) &&
+        !EncounterModeStateProvider.IsExplorationIntendedUse(52) &&
+        !EncounterModeStateProvider.IsExplorationIntendedUse(53),
+        "The exploration TIU set is incomplete or incorrectly includes Delubrum Reginae.");
+    Assert(
+        EncounterModePolicy.Resolve(
+            EncounterMode.OpenWorld,
+            isLoading: false,
+            territoryKnown: true,
+            explorationTerritory: true,
+            boundByDuty: true,
+            largeScaleDynamicEventInside: false,
+            baldesionArsenalInside: false) == EncounterMode.OpenWorld,
+        "An exploration-zone FATE can still be classified as a duty by BoundByDuty.");
+    Assert(
+        EncounterModePolicy.Resolve(
+            EncounterMode.OpenWorld,
+            isLoading: false,
+            territoryKnown: true,
+            explorationTerritory: false,
+            boundByDuty: true,
+            largeScaleDynamicEventInside: false,
+            baldesionArsenalInside: false) == EncounterMode.DutyAttempt,
+        "A normal duty no longer enters the attempt accumulator.");
+    Assert(
+        EncounterModePolicy.Resolve(
+            EncounterMode.OpenWorld,
+            isLoading: false,
+            territoryKnown: true,
+            explorationTerritory: true,
+            boundByDuty: true,
+            largeScaleDynamicEventInside: true,
+            baldesionArsenalInside: false) == EncounterMode.LargeScaleFieldDuty &&
+        EncounterModePolicy.Resolve(
+            EncounterMode.OpenWorld,
+            isLoading: false,
+            territoryKnown: true,
+            explorationTerritory: true,
+            boundByDuty: true,
+            largeScaleDynamicEventInside: false,
+            baldesionArsenalInside: true) == EncounterMode.LargeScaleFieldDuty,
+        "A dynamic large-scale duty or Baldesion Arsenal map was not recognized.");
+    Assert(
+        EncounterModePolicy.Resolve(
+            EncounterMode.LargeScaleFieldDuty,
+            isLoading: true,
+            territoryKnown: true,
+            explorationTerritory: true,
+            boundByDuty: false,
+            largeScaleDynamicEventInside: false,
+            baldesionArsenalInside: false) == EncounterMode.LargeScaleFieldDuty &&
+        EncounterModePolicy.Resolve(
+            EncounterMode.OpenWorld,
+            isLoading: true,
+            territoryKnown: true,
+            explorationTerritory: true,
+            boundByDuty: true,
+            largeScaleDynamicEventInside: false,
+            baldesionArsenalInside: false) == EncounterMode.OpenWorld,
+        "Loading either splits a confirmed large-scale duty or promotes an unconfirmed registration.");
+    Assert(
+        EncounterModePolicy.Resolve(
+            EncounterMode.OpenWorld,
+            isLoading: false,
+            territoryKnown: false,
+            explorationTerritory: false,
+            boundByDuty: true,
+            largeScaleDynamicEventInside: false,
+            baldesionArsenalInside: false) == EncounterMode.DutyAttempt,
+        "Unknown territory metadata no longer preserves BoundByDuty compatibility.");
+    Assert(
+        IinactAdapter.CanAccumulateSegment(
+            EncounterMode.DutyAttempt,
+            EncounterMode.DutyAttempt,
+            EncounterMode.DutyAttempt) &&
+        IinactAdapter.CanAccumulateSegment(
+            EncounterMode.LargeScaleFieldDuty,
+            EncounterMode.LargeScaleFieldDuty,
+            null) &&
+        !IinactAdapter.CanAccumulateSegment(
+            EncounterMode.LargeScaleFieldDuty,
+            EncounterMode.OpenWorld,
+            null) &&
+        !IinactAdapter.CanAccumulateSegment(
+            EncounterMode.DutyAttempt,
+            EncounterMode.LargeScaleFieldDuty,
+            EncounterMode.LargeScaleFieldDuty),
+        "A late ACT callback can still reopen a finalized or different-mode accumulator.");
+    Assert(
+        IinactAdapter.ShouldFinalizeAccumulatedMode(
+            EncounterMode.DutyAttempt,
+            EncounterMode.OpenWorld) &&
+        IinactAdapter.ShouldFinalizeAccumulatedMode(
+            EncounterMode.LargeScaleFieldDuty,
+            EncounterMode.OpenWorld) &&
+        !IinactAdapter.ShouldFinalizeAccumulatedMode(
+            EncounterMode.OpenWorld,
+            EncounterMode.LargeScaleFieldDuty) &&
+        !IinactAdapter.ShouldFinalizeAccumulatedMode(
+            EncounterMode.LargeScaleFieldDuty,
+            EncounterMode.LargeScaleFieldDuty),
+        "Encounter-mode boundaries no longer finalize exactly the accumulated side.");
+
+    var projectRoot = FindProjectRoot();
+    var providerSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Parser",
+        "EncounterModeStateProvider.cs"));
+    var adapterSource = File.ReadAllText(Path.Combine(
+        projectRoot,
+        "src",
+        "DalamudActCompat",
+        "Parser",
+        "IinactAdapter.cs"));
+    Assert(
+        providerSource.Contains("26, 38, 41, 47, 48, 61", StringComparison.Ordinal) &&
+        providerSource.Contains("row.EventType.RowId == 4", StringComparison.Ordinal) &&
+        providerSource.Contains("GetCurrentEvent()", StringComparison.Ordinal) &&
+        providerSource.Contains("DynamicEventState.Inactive", StringComparison.Ordinal) &&
+        providerSource.Contains("row.PlaceName.RowId != mainPlaceName", StringComparison.Ordinal) &&
+        !providerSource.Contains("520, 521, 524, 525, 526, 527", StringComparison.Ordinal) &&
+        adapterSource.Contains("gameState.Mode == EncounterMode.DutyAttempt", StringComparison.Ordinal) &&
+        adapterSource.Contains("lock (encounterModeTransitionLock)", StringComparison.Ordinal) &&
+        adapterSource.Contains("A local eight-player party wipe never represents", StringComparison.Ordinal),
+        "The table-driven field-operation classifier or large-scale wipe boundary regressed.");
 }
 
 static void ValidateParserFrameworkStateOwnership()
@@ -7015,7 +7163,21 @@ static void ValidateParserFrameworkStateOwnership()
         !encounterSource.Contains("getTerritoryId()", StringComparison.Ordinal) &&
         !encounterSource.Contains("isBoundByDuty()", StringComparison.Ordinal) &&
         !encounterSource.Contains("isInCombat()", StringComparison.Ordinal) &&
-        adapterSource.Contains("var gameState = CaptureFrameworkGameState();", StringComparison.Ordinal) &&
+        adapterSource.Contains("var gameState = getEncounterModeSnapshot();", StringComparison.Ordinal) &&
+        pluginSource.Contains("encounterModeStateProvider.Update();", StringComparison.Ordinal) &&
+        pluginSource.Contains("encounterModeStateProvider.Read", StringComparison.Ordinal) &&
+        adapterSource.IndexOf("actRuntime.StartParser", StringComparison.Ordinal) is var runtimeStartIndex &&
+        runtimeStartIndex >= 0 &&
+        runtimeStartIndex < adapterSource.IndexOf(
+            "SubscribeFrameworkUpdates();",
+            StringComparison.Ordinal) &&
+        pluginSource.IndexOf(
+            "framework.Update += OnFrameworkUpdateForHost",
+            StringComparison.Ordinal) is var providerSubscriptionIndex &&
+        providerSubscriptionIndex >= 0 &&
+        providerSubscriptionIndex < pluginSource.IndexOf(
+            "new IinactAdapter(",
+            StringComparison.Ordinal) &&
         overlaySource.Contains("frameworkInCombat", StringComparison.Ordinal) &&
         !overlaySource.Contains("condition[", StringComparison.Ordinal) &&
         !pluginSource.Contains("() => playerState.CharacterName", StringComparison.Ordinal) &&
@@ -9105,11 +9267,11 @@ static void ValidateHtmlOverlayDefaults()
         parserAdapterSource.Contains("dutyWipeTracker.Observe", StringComparison.Ordinal) &&
         !parserAdapterSource.Contains("OpenWorldCombatResetTracker", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("stateStore.UpdateCurrent(encounter);", StringComparison.Ordinal) &&
-        parserAdapterSource.Contains("isDutyPartyWiped()", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("getEncounterModeSnapshot()", StringComparison.Ordinal) &&
         !parserAdapterSource.Contains("finished && !inCombat", StringComparison.Ordinal) &&
         macroPluginSource.Contains("ConditionFlag.Unconscious", StringComparison.Ordinal) &&
         macroPluginSource.Contains("IsDutyPartyWiped", StringComparison.Ordinal) &&
-        parserAdapterSource.Contains("leavingDuty: false", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("completeFolder: false", StringComparison.Ordinal) &&
         macroPluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutySession.Reset();", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("dutyFolder.Add(completedPull)", StringComparison.Ordinal) &&

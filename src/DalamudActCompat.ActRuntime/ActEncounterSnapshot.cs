@@ -12,6 +12,12 @@ public sealed record ActEncounterSnapshot(
 
     public bool IsTransitioning { get; init; }
 
+    // The mode belongs to the ACT segment at creation time. Carrying it with worker-thread
+    // callbacks prevents a late completion from being reclassified after a zone boundary.
+    public EncounterMode EncounterMode { get; init; } = EncounterMode.OpenWorld;
+
+    public uint TerritoryId { get; init; }
+
     // Combatants contain ACT totals, while this transient roster metadata lets the duty
     // accumulator distinguish a replacement from an additional historical participant.
     public IReadOnlyList<string> CurrentPartyMemberIds { get; init; } = [];
