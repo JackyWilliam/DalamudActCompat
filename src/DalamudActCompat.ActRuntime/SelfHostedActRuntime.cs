@@ -642,6 +642,23 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         Directory.CreateDirectory(logDirectory);
+        var sessionStartedAt = DateTime.Now;
+        var logfileVersion = typeof(FFXIV_ACT_Plugin.Logfile.ILogOutput).Assembly
+            .GetName()
+            .Version
+            ?? throw new InvalidOperationException(
+                "FFXIV_ACT_Plugin.Logfile does not expose an assembly version.");
+        var archivedLogPath = NetworkLogSessionRotator.RotateExisting(
+            logDirectory,
+            logfileVersion,
+            sessionStartedAt,
+            TimeSpan.FromSeconds(3));
+        if (archivedLogPath is not null)
+        {
+            log.Information(
+                $"Archived the previous parser session log as '{archivedLogPath}'.");
+        }
+
         Directory.CreateDirectory(Path.Combine(pluginInterface.ConfigDirectory.FullName, "Config"));
         SetUpstreamLogger();
         ActGlobals.Init();

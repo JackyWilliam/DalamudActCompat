@@ -109,6 +109,7 @@ try
     ValidateInstalledPluginVersionDisplay(testRoot);
     ValidateDiagnosticReport(testRoot);
     ValidateCombatLogDirectoryConfiguration(testRoot);
+    ValidateNetworkLogSessionRotation(testRoot);
     ValidateFflogsEstimateCurve();
     await ValidateFflogsPersistenceAsync(testRoot);
     ValidateFflogsCurrentEncounterTable();
@@ -11710,6 +11711,84 @@ static void ValidateCombatLogDirectoryConfiguration(string testRoot)
             parameter.Name == "getLogDirectory" &&
             parameter.ParameterType == typeof(Func<string>)),
         "The custom upload directory is not persisted, exposed on Settings, or resolved again when the parser restarts.");
+}
+
+static void ValidateNetworkLogSessionRotation(string testRoot)
+{
+    var logDirectory = Path.Combine(testRoot, "network-log-session-rotation");
+    Directory.CreateDirectory(logDirectory);
+    var logfileVersion = new Version(3, 0, 2, 8);
+    var sessionStartedAt = new DateTime(2026, 9, 2, 14, 30, 45, 123, DateTimeKind.Local);
+    var activeLogPath = NetworkLogSessionRotator.BuildActiveLogPath(
+        logDirectory,
+        logfileVersion,
+        sessionStartedAt);
+    Assert(
+        Path.GetFileName(activeLogPath) == "Network_30208_20260902.log",
+        "Network log rotation did not mirror the upstream logfile naming rule.");
+
+    var unrelatedLogPath = Path.Combine(logDirectory, "Network_21035_20260902.log");
+    File.WriteAllText(unrelatedLogPath, "different parser version");
+    File.WriteAllText(activeLogPath, "first parser session");
+    var archivedLogPath = NetworkLogSessionRotator.RotateExisting(
+        logDirectory,
+        logfileVersion,
+        sessionStartedAt,
+        TimeSpan.Zero);
+    Assert(
+        archivedLogPath is not null &&
+        Path.GetFileName(archivedLogPath) ==
+            "Network_30208_20260902_session-20260902-143045123.log" &&
+        !File.Exists(activeLogPath) &&
+        File.ReadAllText(unrelatedLogPath) == "different parser version" &&
+        File.ReadAllText(archivedLogPath) == "first parser session",
+        "The current Network log was not isolated without disturbing other parser versions.");
+
+    File.WriteAllText(activeLogPath, "second parser session");
+    var collisionArchivePath = NetworkLogSessionRotator.RotateExisting(
+        logDirectory,
+        logfileVersion,
+        sessionStartedAt,
+        TimeSpan.Zero);
+    Assert(
+        collisionArchivePath is not null &&
+        Path.GetFileName(collisionArchivePath) ==
+            "Network_30208_20260902_session-20260902-143045123-2.log" &&
+        File.ReadAllText(collisionArchivePath) == "second parser session",
+        "Network log rotation overwrote an existing session archive.");
+
+    File.WriteAllText(activeLogPath, "locked parser session");
+    using (var lockedLog = new FileStream(
+               activeLogPath,
+               FileMode.Open,
+               FileAccess.ReadWrite,
+               FileShare.ReadWrite))
+    {
+        try
+        {
+            NetworkLogSessionRotator.RotateExisting(
+                logDirectory,
+                logfileVersion,
+                sessionStartedAt.AddSeconds(1),
+                TimeSpan.Zero);
+            throw new InvalidOperationException(
+                "Network log rotation appended after the previous session remained locked.");
+        }
+        catch (IOException)
+        {
+            // A locked previous session must block startup so incompatible parser
+            // identities can never be appended to the same physical file.
+        }
+    }
+
+    Assert(
+        File.Exists(activeLogPath) &&
+        NetworkLogSessionRotator.RotateExisting(
+            logDirectory,
+            logfileVersion,
+            sessionStartedAt.AddSeconds(2),
+            TimeSpan.Zero) is not null,
+        "Network log rotation did not recover after the previous writer released the file.");
 }
 
 public sealed class GenericActPluginFixture : IActPluginV1
