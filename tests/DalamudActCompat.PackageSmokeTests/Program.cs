@@ -122,6 +122,7 @@ try
     await ValidateEncounterRetentionAsync(testRoot);
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
+    await ValidatePortableConfigurationArchiveAsync(testRoot);
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -5965,6 +5966,263 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
     {
         await globalService.DisposeAsync();
     }
+}
+
+static async Task ValidatePortableConfigurationArchiveAsync(string testRoot)
+{
+    var configurationRoot = Path.Combine(testRoot, "portable-configuration-source");
+    var archiveDirectory = Path.Combine(testRoot, "portable-configuration-archives");
+    Directory.CreateDirectory(configurationRoot);
+    Directory.CreateDirectory(archiveDirectory);
+
+    async Task WriteConfigurationFileAsync(string relativePath, string contents)
+    {
+        var path = Path.Combine(configurationRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, contents);
+    }
+
+    const string dactScope = "DalamudActCompat.json";
+    var triggerScope = Path.Combine("plugin-configs", "Triggernometry");
+    var matchaScope = Path.Combine("plugin-configs", "Matcha");
+    var absentScope = Path.Combine("plugin-configs", "AbsentPlugin");
+    string[] portableScopes = [dactScope, triggerScope, matchaScope, absentScope];
+
+    await WriteConfigurationFileAsync(dactScope, "{\"meter\":\"cloud\"}");
+    await WriteConfigurationFileAsync(
+        Path.Combine(triggerScope, "config.xml"),
+        "<triggers>cloud</triggers>");
+    await WriteConfigurationFileAsync(
+        Path.Combine(matchaScope, "profiles", "default.json"),
+        "{\"profile\":\"cloud\"}");
+    await WriteConfigurationFileAsync(
+        Path.Combine("logs", "ffxiv", "Network_test.log"),
+        "private combat log");
+    await WriteConfigurationFileAsync(
+        Path.Combine("host", "DalamudActCompat.Host.exe"),
+        "machine-specific binary");
+    await WriteConfigurationFileAsync(
+        Path.Combine("webview2", "Cookies"),
+        "machine-specific cookie");
+
+    var service = new PortableConfigurationArchiveService();
+    var exportedArchive = Path.Combine(archiveDirectory, "cloud-snapshot.dactbackup");
+    var export = await service.ExportAsync(
+        configurationRoot,
+        exportedArchive,
+        portableScopes,
+        CancellationToken.None);
+    Assert(
+        export.ScopeCount == 4 &&
+        export.FileCount == 3 &&
+        export.UncompressedBytes > 0 &&
+        File.Exists(exportedArchive),
+        "Portable configuration export did not capture the declared DACT/plugin scopes.");
+
+    using (var archive = ZipFile.OpenRead(exportedArchive))
+    {
+        var entryNames = archive.Entries
+            .Select(static entry => entry.FullName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var manifestEntry = archive.GetEntry("manifest.json")
+                            ?? throw new InvalidOperationException(
+                                "Portable configuration archive has no manifest.");
+        using var manifestReader = new StreamReader(manifestEntry.Open());
+        var manifestText = await manifestReader.ReadToEndAsync();
+        Assert(
+            entryNames.SetEquals(
+            [
+                "manifest.json",
+                "payload/DalamudActCompat.json",
+                "payload/plugin-configs/Matcha/profiles/default.json",
+                "payload/plugin-configs/Triggernometry/config.xml",
+            ]) &&
+            !manifestText.Contains(configurationRoot, StringComparison.OrdinalIgnoreCase) &&
+            !manifestText.Contains("logs", StringComparison.OrdinalIgnoreCase) &&
+            !manifestText.Contains("host", StringComparison.OrdinalIgnoreCase) &&
+            !manifestText.Contains("webview2", StringComparison.OrdinalIgnoreCase),
+            "Portable configuration export leaked excluded machine data or absolute paths.");
+    }
+
+    // Simulate a different computer with defaults, changed plugin settings, and
+    // files that should disappear when a declared scope is replaced exactly.
+    await WriteConfigurationFileAsync(dactScope, "{\"meter\":\"local\"}");
+    await WriteConfigurationFileAsync(
+        Path.Combine(triggerScope, "config.xml"),
+        "<triggers>local</triggers>");
+    await WriteConfigurationFileAsync(
+        Path.Combine(triggerScope, "local-only.xml"),
+        "<local />");
+    Directory.Delete(Path.Combine(configurationRoot, matchaScope), recursive: true);
+    await WriteConfigurationFileAsync(
+        Path.Combine(absentScope, "local.json"),
+        "{\"local\":true}");
+    await WriteConfigurationFileAsync(
+        Path.Combine("logs", "ffxiv", "Network_test.log"),
+        "local combat log");
+
+    var rollbackArchive = Path.Combine(archiveDirectory, "before-cloud-restore.dactbackup");
+    var restored = await service.RestoreAsync(
+        exportedArchive,
+        configurationRoot,
+        rollbackArchive,
+        CancellationToken.None);
+    Assert(
+        restored.ScopeCount == 4 &&
+        restored.FileCount == 3 &&
+        File.Exists(rollbackArchive) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"cloud\"}" &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, triggerScope, "config.xml")) ==
+        "<triggers>cloud</triggers>" &&
+        !File.Exists(Path.Combine(configurationRoot, triggerScope, "local-only.xml")) &&
+        await File.ReadAllTextAsync(
+            Path.Combine(configurationRoot, matchaScope, "profiles", "default.json")) ==
+        "{\"profile\":\"cloud\"}" &&
+        !Directory.Exists(Path.Combine(configurationRoot, absentScope)) &&
+        await File.ReadAllTextAsync(
+            Path.Combine(configurationRoot, "logs", "ffxiv", "Network_test.log")) ==
+        "local combat log",
+        "Portable configuration restore did not replace only the declared scopes.");
+
+    var undoRollbackArchive = Path.Combine(archiveDirectory, "before-manual-undo.dactbackup");
+    await service.RestoreAsync(
+        rollbackArchive,
+        configurationRoot,
+        undoRollbackArchive,
+        CancellationToken.None);
+    Assert(
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"local\"}" &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, triggerScope, "config.xml")) ==
+        "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(configurationRoot, triggerScope, "local-only.xml")) &&
+        !Directory.Exists(Path.Combine(configurationRoot, matchaScope)) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, absentScope, "local.json")) ==
+        "{\"local\":true}" &&
+        await File.ReadAllTextAsync(
+            Path.Combine(configurationRoot, "logs", "ffxiv", "Network_test.log")) ==
+        "local combat log",
+        "The rollback snapshot could not restore the exact pre-cloud local state.");
+
+    var failingService = new PortableConfigurationArchiveService
+    {
+        BeforeScopeCommit = (index, _) =>
+        {
+            if (index == 2)
+            {
+                throw new IOException("simulated cloud restore commit failure");
+            }
+        },
+    };
+    var failureRollbackArchive = Path.Combine(
+        archiveDirectory,
+        "before-failed-restore.dactbackup");
+    var restoreFailed = false;
+    try
+    {
+        await failingService.RestoreAsync(
+            exportedArchive,
+            configurationRoot,
+            failureRollbackArchive,
+            CancellationToken.None);
+    }
+    catch (IOException ex) when (ex.Message == "simulated cloud restore commit failure")
+    {
+        restoreFailed = true;
+    }
+
+    Assert(
+        restoreFailed &&
+        File.Exists(failureRollbackArchive) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"local\"}" &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, triggerScope, "config.xml")) ==
+        "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(configurationRoot, triggerScope, "local-only.xml")) &&
+        !Directory.Exists(Path.Combine(configurationRoot, matchaScope)) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, absentScope, "local.json")) ==
+        "{\"local\":true}",
+        "A mid-commit cloud restore failure did not roll every changed scope back.");
+
+    var tamperedArchive = Path.Combine(archiveDirectory, "tampered-payload.dactbackup");
+    File.Copy(exportedArchive, tamperedArchive);
+    using (var archive = ZipFile.Open(tamperedArchive, ZipArchiveMode.Update))
+    {
+        const string triggerEntryName =
+            "payload/plugin-configs/Triggernometry/config.xml";
+        archive.GetEntry(triggerEntryName)?.Delete();
+        var tamperedEntry = archive.CreateEntry(triggerEntryName);
+        await using var tamperedWriter = new StreamWriter(tamperedEntry.Open());
+        // The replacement has the same byte length, so integrity must depend on
+        // the manifest hash rather than an incidental ZIP length mismatch.
+        await tamperedWriter.WriteAsync("<triggers>evil!</triggers>");
+    }
+
+    var tamperedRejected = false;
+    var tamperedRollback = Path.Combine(archiveDirectory, "tampered-rollback.dactbackup");
+    try
+    {
+        await service.RestoreAsync(
+            tamperedArchive,
+            configurationRoot,
+            tamperedRollback,
+            CancellationToken.None);
+    }
+    catch (InvalidDataException)
+    {
+        tamperedRejected = true;
+    }
+    Assert(
+        tamperedRejected &&
+        !File.Exists(tamperedRollback) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"local\"}",
+        "Portable configuration restore accepted a payload with a forged manifest hash.");
+
+    var maliciousArchive = Path.Combine(archiveDirectory, "path-traversal.dactbackup");
+    using (var archive = ZipFile.Open(maliciousArchive, ZipArchiveMode.Create))
+    {
+        var manifestEntry = archive.CreateEntry("manifest.json");
+        await using var manifestWriter = new StreamWriter(manifestEntry.Open());
+        await manifestWriter.WriteAsync(
+            """
+            {
+              "formatVersion": 1,
+              "createdAtUtc": "2026-09-02T00:00:00+00:00",
+              "scopes": [
+                { "relativePath": "../escaped.json", "kind": "File" }
+              ],
+              "files": [
+                {
+                  "relativePath": "../escaped.json",
+                  "length": 1,
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                }
+              ]
+            }
+            """);
+    }
+
+    var traversalRejected = false;
+    var maliciousRollback = Path.Combine(archiveDirectory, "malicious-rollback.dactbackup");
+    try
+    {
+        await service.RestoreAsync(
+            maliciousArchive,
+            configurationRoot,
+            maliciousRollback,
+            CancellationToken.None);
+    }
+    catch (InvalidDataException)
+    {
+        traversalRejected = true;
+    }
+    Assert(
+        traversalRejected &&
+        !File.Exists(Path.Combine(testRoot, "escaped.json")) &&
+        !File.Exists(maliciousRollback),
+        "Portable configuration restore accepted a path traversal or mutated state before validation.");
 }
 
 static async Task ValidateFactoryResetRollbackAsync(string testRoot)
