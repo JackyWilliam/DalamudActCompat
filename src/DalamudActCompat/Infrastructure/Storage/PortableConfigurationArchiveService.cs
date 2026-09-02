@@ -119,7 +119,8 @@ internal sealed class PortableConfigurationArchiveService
         string archivePath,
         string configurationRoot,
         string rollbackArchivePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, CancellationToken, Task>? prepareRollbackAsync = null)
     {
         var root = ValidateConfigurationRoot(configurationRoot, mustExist: false);
         var sourceArchive = ValidateArchivePathOutsideRoot(root, archivePath);
@@ -168,6 +169,13 @@ internal sealed class PortableConfigurationArchiveService
             // the same snapshot also documents the exact state used by automatic rollback.
             await ExportAsync(root, rollbackArchive, relativeScopes, cancellationToken)
                 .ConfigureAwait(false);
+            if (prepareRollbackAsync is not null)
+            {
+                // The cloud layer encrypts the rollback before any live file changes,
+                // so an encryption failure cannot leave the installation half-restored.
+                await prepareRollbackAsync(rollbackArchive, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             ApplySnapshot(root, stagedRoot, undoRoot, manifest, cancellationToken);
 
             return new PortableConfigurationRestoreResult(
@@ -179,6 +187,58 @@ internal sealed class PortableConfigurationArchiveService
         finally
         {
             TryDeleteDirectory(operationRoot);
+        }
+    }
+
+    internal async Task<PortableConfigurationArchiveInspection> ExtractVerifiedAsync(
+        string archivePath,
+        string configurationRoot,
+        string destinationRoot,
+        CancellationToken cancellationToken)
+    {
+        var root = ValidateConfigurationRoot(configurationRoot, mustExist: false);
+        var sourceArchive = ValidateArchivePathOutsideRoot(root, archivePath);
+        if (!File.Exists(sourceArchive))
+        {
+            throw new FileNotFoundException(
+                "Portable configuration archive was not found.",
+                sourceArchive);
+        }
+
+        var destination = Path.GetFullPath(destinationRoot);
+        if (EntryExists(destination))
+        {
+            throw new IOException(
+                $"Portable configuration extraction directory already exists: {destination}");
+        }
+
+        Directory.CreateDirectory(destination);
+        try
+        {
+            var manifest = await ValidateAndExtractAsync(
+                    sourceArchive,
+                    root,
+                    destination,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new PortableConfigurationArchiveInspection(
+                manifest.CreatedAtUtc,
+                manifest.Scopes
+                    .Select(static scope => new PortableConfigurationArchiveScope(
+                        scope.RelativePath,
+                        scope.Kind))
+                    .ToArray(),
+                manifest.Files
+                    .Select(static file => new PortableConfigurationArchiveFile(
+                        file.RelativePath,
+                        file.Length,
+                        file.Sha256))
+                    .ToArray());
+        }
+        catch
+        {
+            TryDeleteDirectory(destination);
+            throw;
         }
     }
 
@@ -851,12 +911,13 @@ internal sealed class PortableConfigurationArchiveService
         public string Sha256 { get; set; } = string.Empty;
     }
 
-    private enum ArchiveScopeKind
-    {
-        Missing,
-        File,
-        Directory,
-    }
+}
+
+internal enum ArchiveScopeKind
+{
+    Missing,
+    File,
+    Directory,
 }
 
 internal sealed record PortableConfigurationExportResult(
@@ -870,3 +931,17 @@ internal sealed record PortableConfigurationRestoreResult(
     string RollbackArchivePath,
     int ScopeCount,
     int FileCount);
+
+internal sealed record PortableConfigurationArchiveInspection(
+    DateTimeOffset CreatedAtUtc,
+    IReadOnlyList<PortableConfigurationArchiveScope> Scopes,
+    IReadOnlyList<PortableConfigurationArchiveFile> Files);
+
+internal sealed record PortableConfigurationArchiveScope(
+    string RelativePath,
+    ArchiveScopeKind Kind);
+
+internal sealed record PortableConfigurationArchiveFile(
+    string RelativePath,
+    long Length,
+    string Sha256);

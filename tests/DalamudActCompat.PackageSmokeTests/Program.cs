@@ -123,6 +123,8 @@ try
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
     await ValidatePortableConfigurationArchiveAsync(testRoot);
+    await ValidateEncryptedConfigurationBackupAsync(testRoot);
+    await ValidateRealConfigurationBackupFixtureAsync(testRoot);
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -6223,6 +6225,464 @@ static async Task ValidatePortableConfigurationArchiveAsync(string testRoot)
         !File.Exists(Path.Combine(testRoot, "escaped.json")) &&
         !File.Exists(maliciousRollback),
         "Portable configuration restore accepted a path traversal or mutated state before validation.");
+}
+
+static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
+{
+    var fixtureRoot = Path.Combine(testRoot, "encrypted-configuration-backup");
+    var configurationRoot = Path.Combine(fixtureRoot, "pluginConfigs");
+    var pluginConfigurationDirectory = Path.Combine(configurationRoot, "DalamudActCompat");
+    var archiveDirectory = Path.Combine(fixtureRoot, "archives");
+    Directory.CreateDirectory(pluginConfigurationDirectory);
+    Directory.CreateDirectory(archiveDirectory);
+
+    static async Task WriteFileAsync(string root, string relativePath, string contents)
+    {
+        var path = Path.Combine(root, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, contents);
+    }
+
+    const string cloudSecret = "cloud-fflogs-secret-for-encryption-test";
+    var mainConfigurationPath = Path.Combine(configurationRoot, "DalamudActCompat.json");
+    var cloudConfiguration = new JObject
+    {
+        ["Version"] = 16,
+        ["LogDirectory"] = @"D:\old-computer\network-logs",
+        ["ActPluginDirectory"] = @"D:\old-computer\act-plugins",
+        ["HistoryLimit"] = 73,
+        ["CloudMarker"] = "cloud",
+        ["Fflogs"] = new JObject
+        {
+            ["Enabled"] = true,
+            ["ClientId"] = "cloud-client",
+            ["ClientSecret"] = cloudSecret,
+        },
+        ["ActPluginPermissions"] = new JObject
+        {
+            ["triggernometry"] = new JObject { ["HighRiskScript"] = true },
+        },
+    };
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        cloudConfiguration.ToString(Newtonsoft.Json.Formatting.Indented));
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "RainbowMage.OverlayPlugin.config.json",
+        "{\"overlay\":\"cloud\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "Triggernometry.config.xml"),
+        "<triggers>cloud</triggers>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "Cafe.Matcha.config"),
+        "{\"matcha\":\"cloud\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "PostNamazu.config.xml"),
+        "<postnamazu>cloud</postnamazu>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "ACT.FoxTTS.config.xml"),
+        "<foxtts>cloud</foxtts>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("SilverDasher", "config.json"),
+        "{\"silverdasher\":\"cloud\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("cactbot_user", "raidboss", "data", "user.js"),
+        "export const cloud = true;");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("logs", "ffxiv", "Network_private.log"),
+        "cloud log must never enter the backup");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("host", "machine.dll"),
+        "machine binary must never enter the backup");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "RainbowMage.OverlayPlugin.config.json.backup",
+        "old local backup must never enter the cloud backup");
+
+    var service = new PortableConfigurationBackupService();
+    Assert(
+        service.IncludedPaths.Count == 8 &&
+        service.IncludedPaths.Contains(
+            "DalamudActCompat/SilverDasher/config.json",
+            StringComparer.OrdinalIgnoreCase),
+        "The encrypted backup whitelist does not contain the agreed DACT/plugin scopes.");
+    var recoveryKey = service.GenerateRecoveryKey();
+    var encryptedArchive = Path.Combine(archiveDirectory, "cloud.dactcloud");
+    var exported = await service.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        encryptedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    var encryptedBytes = await File.ReadAllBytesAsync(encryptedArchive);
+    Assert(
+        exported.ScopeCount == 8 &&
+        exported.FileCount == 8 &&
+        exported.UncompressedBytes > 0 &&
+        exported.EncryptedBytes == encryptedBytes.Length &&
+        !encryptedBytes.AsSpan().StartsWith("PK"u8) &&
+        encryptedBytes.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(cloudSecret)) < 0,
+        "The cloud backup was not encrypted before it became uploadable.");
+
+    const string localLogDirectory = @"E:\new-computer\network-logs";
+    const string localPluginDirectory = @"E:\new-computer\act-plugins";
+    var localConfiguration = new JObject
+    {
+        ["Version"] = 16,
+        ["LogDirectory"] = localLogDirectory,
+        ["ActPluginDirectory"] = localPluginDirectory,
+        ["HistoryLimit"] = 12,
+        ["CloudMarker"] = "local",
+        ["Fflogs"] = new JObject
+        {
+            ["ClientId"] = "local-client",
+            ["ClientSecret"] = "local-secret",
+        },
+    };
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        localConfiguration.ToString(Newtonsoft.Json.Formatting.Indented));
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "Triggernometry.config.xml"),
+        "<triggers>local</triggers>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "local-only.xml"),
+        "<local />");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("cactbot_user", "local-only.js"),
+        "export const localOnly = true;");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("SilverDasher", "config.json"),
+        "{\"silverdasher\":\"local\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("logs", "ffxiv", "Network_private.log"),
+        "local log remains local");
+
+    var preview = await service.PreviewRestoreAsync(
+        encryptedArchive,
+        pluginConfigurationDirectory,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        preview.FileCount == 8 &&
+        preview.ChangedFiles >= 3 &&
+        preview.RemovedFiles >= 1 &&
+        preview.Scopes.Count == 8,
+        "Encrypted backup preview did not report the pending exact-scope changes.");
+
+    var wrongKeyRejected = false;
+    try
+    {
+        await service.PreviewRestoreAsync(
+            encryptedArchive,
+            pluginConfigurationDirectory,
+            service.GenerateRecoveryKey(),
+            CancellationToken.None);
+    }
+    catch (CryptographicException)
+    {
+        wrongKeyRejected = true;
+    }
+    Assert(
+        wrongKeyRejected &&
+        JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath))["CloudMarker"]?.Value<string>() ==
+        "local",
+        "A wrong recovery key was accepted or changed live configuration during preview.");
+
+    var tamperedArchive = Path.Combine(archiveDirectory, "tampered.dactcloud");
+    File.Copy(encryptedArchive, tamperedArchive);
+    var tamperedBytes = await File.ReadAllBytesAsync(tamperedArchive);
+    tamperedBytes[^1] ^= 0x5A;
+    await File.WriteAllBytesAsync(tamperedArchive, tamperedBytes);
+    var tamperRejected = false;
+    try
+    {
+        await service.PreviewRestoreAsync(
+            tamperedArchive,
+            pluginConfigurationDirectory,
+            recoveryKey,
+            CancellationToken.None);
+    }
+    catch (CryptographicException)
+    {
+        tamperRejected = true;
+    }
+    Assert(
+        tamperRejected,
+        "Authenticated client-side encryption accepted a modified cloud payload.");
+
+    var encryptedRollback = Path.Combine(archiveDirectory, "before-cloud-restore.dactcloud");
+    var restored = await service.RestoreEncryptedAsync(
+        encryptedArchive,
+        pluginConfigurationDirectory,
+        encryptedRollback,
+        recoveryKey,
+        CancellationToken.None);
+    var restoredConfiguration = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        restored.ScopeCount == 8 &&
+        restored.FileCount == 8 &&
+        File.Exists(encryptedRollback) &&
+        !File.ReadAllBytes(encryptedRollback).AsSpan().StartsWith("PK"u8) &&
+        restoredConfiguration["CloudMarker"]?.Value<string>() == "cloud" &&
+        restoredConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        restoredConfiguration["ActPluginDirectory"]?.Value<string>() == localPluginDirectory &&
+        restoredConfiguration["Fflogs"]?["ClientSecret"]?.Value<string>() == cloudSecret &&
+        restoredConfiguration["ActPluginPermissions"]?["triggernometry"]?["HighRiskScript"]?
+            .Value<bool>() == true &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "Config",
+            "Triggernometry.config.xml")) == "<triggers>cloud</triggers>" &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "Config", "local-only.xml")) &&
+        !File.Exists(Path.Combine(pluginConfigurationDirectory, "cactbot_user", "local-only.js")) &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "logs",
+            "ffxiv",
+            "Network_private.log")) == "local log remains local" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "RainbowMage.OverlayPlugin.config.json.backup")) ==
+        "old local backup must never enter the cloud backup",
+        "Encrypted restore did not apply the cloud snapshot while preserving local paths and exclusions.");
+
+    var rollbackOfRollback = Path.Combine(archiveDirectory, "before-manual-rollback.dactcloud");
+    await service.RestoreEncryptedAsync(
+        encryptedRollback,
+        pluginConfigurationDirectory,
+        rollbackOfRollback,
+        recoveryKey,
+        CancellationToken.None);
+    var rolledBackConfiguration = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        rolledBackConfiguration["CloudMarker"]?.Value<string>() == "local" &&
+        rolledBackConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "Config",
+            "Triggernometry.config.xml")) == "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "Config", "local-only.xml")) &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "cactbot_user", "local-only.js")),
+        "The encrypted pre-restore snapshot could not roll back the full local state.");
+
+    var failingArchiveService = new PortableConfigurationArchiveService
+    {
+        BeforeScopeCommit = (index, _) =>
+        {
+            if (index == 3)
+            {
+                throw new IOException("simulated encrypted restore failure");
+            }
+        },
+    };
+    var failingService = new PortableConfigurationBackupService(
+        failingArchiveService,
+        new PortableConfigurationEncryptionService());
+    var failureRollback = Path.Combine(archiveDirectory, "before-failed-restore.dactcloud");
+    var restoreFailed = false;
+    try
+    {
+        await failingService.RestoreEncryptedAsync(
+            encryptedArchive,
+            pluginConfigurationDirectory,
+            failureRollback,
+            recoveryKey,
+            CancellationToken.None);
+    }
+    catch (IOException ex) when (ex.Message == "simulated encrypted restore failure")
+    {
+        restoreFailed = true;
+    }
+    var afterFailureConfiguration = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        restoreFailed &&
+        File.Exists(failureRollback) &&
+        afterFailureConfiguration["CloudMarker"]?.Value<string>() == "local" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "Config",
+            "Triggernometry.config.xml")) == "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "Config", "local-only.xml")) &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "cactbot_user", "local-only.js")),
+        "A failed encrypted restore did not automatically return every committed scope to its prior state.");
+}
+
+static async Task ValidateRealConfigurationBackupFixtureAsync(string testRoot)
+{
+    var sourcePluginConfigurationDirectory =
+        Environment.GetEnvironmentVariable("DACT_REAL_CONFIGURATION_DIRECTORY");
+    if (string.IsNullOrWhiteSpace(sourcePluginConfigurationDirectory))
+    {
+        return;
+    }
+
+    var sourceDirectory = Path.GetFullPath(sourcePluginConfigurationDirectory);
+    var sourceRoot = Path.GetDirectoryName(sourceDirectory)
+                     ?? throw new InvalidOperationException(
+                         "Real DACT configuration fixture has no parent directory.");
+    var service = new PortableConfigurationBackupService();
+    var sourceFilesBefore = CaptureIncludedFileHashes(sourceRoot, service.IncludedPaths);
+    var fixtureRoot = Path.Combine(testRoot, "real-configuration-backup-fixture");
+    var targetRoot = Path.Combine(fixtureRoot, "pluginConfigs");
+    var targetDirectory = Path.Combine(targetRoot, "DalamudActCompat");
+    var archiveDirectory = Path.Combine(fixtureRoot, "archives");
+    Directory.CreateDirectory(targetDirectory);
+    Directory.CreateDirectory(archiveDirectory);
+
+    foreach (var relativePath in service.IncludedPaths)
+    {
+        CopyFixtureEntry(
+            Path.Combine(sourceRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)),
+            Path.Combine(targetRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    var targetMainConfiguration = Path.Combine(targetRoot, "DalamudActCompat.json");
+    var originalConfiguration = JObject.Parse(await File.ReadAllTextAsync(targetMainConfiguration));
+    var originalHistoryLimit = originalConfiguration["HistoryLimit"]?.Value<int>() ?? 20;
+    var localLogDirectory = Path.Combine(targetDirectory, "logs", "ffxiv");
+    var localPluginDirectory = Path.Combine(targetDirectory, "act-plugins-custom");
+    originalConfiguration["HistoryLimit"] = originalHistoryLimit + 1;
+    originalConfiguration["LogDirectory"] = localLogDirectory;
+    originalConfiguration["ActPluginDirectory"] = localPluginDirectory;
+    await File.WriteAllTextAsync(
+        targetMainConfiguration,
+        originalConfiguration.ToString(Newtonsoft.Json.Formatting.Indented));
+
+    var changedPluginFile = service.IncludedPaths
+        .Select(path => Path.Combine(targetRoot, path.Replace('/', Path.DirectorySeparatorChar)))
+        .Where(path => !path.Equals(targetMainConfiguration, StringComparison.OrdinalIgnoreCase))
+        .FirstOrDefault(File.Exists);
+    byte[]? changedPluginBytes = null;
+    if (changedPluginFile is not null)
+    {
+        changedPluginBytes = await File.ReadAllBytesAsync(changedPluginFile);
+        await using var append = new FileStream(changedPluginFile, FileMode.Append, FileAccess.Write);
+        await append.WriteAsync("\n"u8.ToArray());
+    }
+
+    var recoveryKey = service.GenerateRecoveryKey();
+    var encryptedArchive = Path.Combine(archiveDirectory, "real-copy.dactcloud");
+    await service.ExportEncryptedAsync(
+        sourceDirectory,
+        encryptedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    var preview = await service.PreviewRestoreAsync(
+        encryptedArchive,
+        targetDirectory,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        preview.ChangedFiles >= 1,
+        "The real configuration copy did not expose the intentional restore difference.");
+
+    var rollback = Path.Combine(archiveDirectory, "real-copy-rollback.dactcloud");
+    await service.RestoreEncryptedAsync(
+        encryptedArchive,
+        targetDirectory,
+        rollback,
+        recoveryKey,
+        CancellationToken.None);
+    var restoredConfiguration = JObject.Parse(await File.ReadAllTextAsync(targetMainConfiguration));
+    Assert(
+        restoredConfiguration["HistoryLimit"]?.Value<int>() == originalHistoryLimit &&
+        restoredConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        restoredConfiguration["ActPluginDirectory"]?.Value<string>() == localPluginDirectory &&
+        File.Exists(rollback),
+        "The real configuration copy did not restore portable data or preserve new-machine paths.");
+    if (changedPluginFile is not null && changedPluginBytes is not null)
+    {
+        var sourcePluginFile = Path.Combine(
+            sourceRoot,
+            Path.GetRelativePath(targetRoot, changedPluginFile));
+        var restoredPluginHash = SHA256.HashData(
+            await File.ReadAllBytesAsync(changedPluginFile));
+        var sourcePluginHash = SHA256.HashData(
+            await File.ReadAllBytesAsync(sourcePluginFile));
+        Assert(
+            restoredPluginHash.AsSpan().SequenceEqual(sourcePluginHash),
+            "The real third-party plugin configuration copy was not restored byte-for-byte.");
+    }
+
+    var rollbackOfRollback = Path.Combine(archiveDirectory, "real-copy-rollback-undo.dactcloud");
+    await service.RestoreEncryptedAsync(
+        rollback,
+        targetDirectory,
+        rollbackOfRollback,
+        recoveryKey,
+        CancellationToken.None);
+    var rolledBackConfiguration = JObject.Parse(await File.ReadAllTextAsync(targetMainConfiguration));
+    Assert(
+        rolledBackConfiguration["HistoryLimit"]?.Value<int>() == originalHistoryLimit + 1 &&
+        sourceFilesBefore.OrderBy(static pair => pair.Key).SequenceEqual(
+            CaptureIncludedFileHashes(sourceRoot, service.IncludedPaths)
+                .OrderBy(static pair => pair.Key)),
+        "The real configuration rollback failed or the read-only source fixture was modified.");
+
+    static Dictionary<string, string> CaptureIncludedFileHashes(
+        string root,
+        IReadOnlyList<string> includedPaths)
+    {
+        var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var relativePath in includedPaths)
+        {
+            var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(path))
+            {
+                hashes[relativePath] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+            }
+            else if (Directory.Exists(path))
+            {
+                foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    var fileRelativePath = Path.GetRelativePath(root, file)
+                        .Replace(Path.DirectorySeparatorChar, '/');
+                    hashes[fileRelativePath] = Convert.ToHexString(
+                        SHA256.HashData(File.ReadAllBytes(file)));
+                }
+            }
+        }
+        return hashes;
+    }
+
+    static void CopyFixtureEntry(string source, string destination)
+    {
+        if (File.Exists(source))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination);
+            return;
+        }
+        if (!Directory.Exists(source))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
 }
 
 static async Task ValidateFactoryResetRollbackAsync(string testRoot)
