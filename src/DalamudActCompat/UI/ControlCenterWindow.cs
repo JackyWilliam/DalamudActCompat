@@ -170,6 +170,7 @@ public sealed class ControlCenterWindow : Window
     private string cloudActivationKey = string.Empty;
     private string cloudResetCode = string.Empty;
     private string cloudRecoveryKey = string.Empty;
+    private string cloudInviteeContact = string.Empty;
     private bool cloudRememberLogin = true;
     private string? selectedCloudBackupId;
     private string? cloudPreviewRequestedBackupId;
@@ -2463,10 +2464,26 @@ public sealed class ControlCenterWindow : Window
             ImGui.TextDisabled(text.Get(
                 $"已生成 {invitations.Used}/{invitations.Quota}，剩余 {invitations.Remaining} 个名额。",
                 $"Generated {invitations.Used}/{invitations.Quota}; {invitations.Remaining} slots remain."));
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputTextWithHint(
+                "###cloud-invitee-contact",
+                text.Get("受邀好友的游戏 ID 或 QQ ID", "Invitee game ID or QQ ID"),
+                ref cloudInviteeContact,
+                81);
+            var normalizedInviteeContact = cloudInviteeContact.Trim();
+            var inviteeContactValid = normalizedInviteeContact.Length is >= 2 and <= 80;
+            ImGui.BeginDisabled(snapshot.IsBusy || invitations.Remaining <= 0 || !inviteeContactValid);
             if (!snapshot.IsBusy && invitations.Remaining > 0 &&
                 ImGui.Button(text.Get("生成好友激活码", "Create friend activation key")))
             {
-                cloud.CreateInvitation();
+                cloud.CreateInvitation(normalizedInviteeContact);
+            }
+            ImGui.EndDisabled();
+            if (!inviteeContactValid && !string.IsNullOrWhiteSpace(cloudInviteeContact))
+            {
+                ImGui.TextDisabled(text.Get(
+                    "游戏 ID 或 QQ ID 长度需要为 2 到 80 个字符。",
+                    "The game ID or QQ ID must contain 2 to 80 characters."));
             }
             if (!string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare))
             {
@@ -2489,7 +2506,8 @@ public sealed class ControlCenterWindow : Window
             foreach (var invitation in invitations.Invitations)
             {
                 ImGui.BulletText(
-                    $"{invitation.Name} · …{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
+                    $"{invitation.Name} · {invitation.InviteeContact ?? "—"} · " +
+                    $"…{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
             }
         }
         ImGui.BeginDisabled();

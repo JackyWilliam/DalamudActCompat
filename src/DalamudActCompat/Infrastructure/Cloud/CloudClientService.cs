@@ -396,11 +396,16 @@ internal sealed class CloudClientService : IDisposable
                 false);
         }, cancellationToken);
 
-    public Task CreateInvitationAsync(CancellationToken cancellationToken)
+    public Task CreateInvitationAsync(
+        string inviteeContact,
+        CancellationToken cancellationToken)
         => RunExclusiveAsync("正在生成好友激活码…", async token =>
         {
             var current = RequireCredentials();
-            var created = await apiClient.CreateInvitationAsync(current.Token, token)
+            var created = await apiClient.CreateInvitationAsync(
+                    current.Token,
+                    inviteeContact,
+                    token)
                 .ConfigureAwait(false);
             var invitations = await apiClient.ListInvitationsAsync(current.Token, token)
                 .ConfigureAwait(false);

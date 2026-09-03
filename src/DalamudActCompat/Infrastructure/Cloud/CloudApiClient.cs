@@ -34,6 +34,7 @@ internal sealed record CloudInvitation(
     string Id,
     string CodeHint,
     string Name,
+    string? InviteeContact,
     string Status,
     DateTimeOffset CreatedAt,
     DateTimeOffset? ExpiresAt,
@@ -50,6 +51,7 @@ internal sealed record CloudCreatedInvitation(
     string ActivationKey,
     string CodeHint,
     string Name,
+    string InviteeContact,
     string Status,
     DateTimeOffset CreatedAt);
 
@@ -254,11 +256,12 @@ internal sealed class CloudApiClient : IDisposable
 
     public Task<CloudCreatedInvitation> CreateInvitationAsync(
         string token,
+        string inviteeContact,
         CancellationToken cancellationToken)
         => SendJsonAsync<CloudCreatedInvitation>(
             HttpMethod.Post,
             "api/v1/invitations",
-            null,
+            new { inviteeContact },
             token,
             cancellationToken);
 

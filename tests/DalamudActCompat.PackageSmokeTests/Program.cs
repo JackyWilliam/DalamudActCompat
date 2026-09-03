@@ -12757,6 +12757,7 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
                         id = "invite-id",
                         codeHint = "DACT-…TEST",
                         name = "好友邀请",
+                        inviteeContact = "好友游戏ID",
                         status = "available",
                         createdAt,
                         expiresAt = (DateTimeOffset?)null,
@@ -12768,12 +12769,18 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
         if (path.EndsWith("/invitations", StringComparison.Ordinal) &&
             request.Method == HttpMethod.Post)
         {
+            var requestBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var requestJson = JsonDocument.Parse(requestBody);
+            Assert(
+                requestJson.RootElement.GetProperty("inviteeContact").GetString() == "好友QQ12345",
+                "Cloud invitation creation omitted the invitee game or QQ identifier.");
             return JsonResponse(HttpStatusCode.Created, new
             {
                 id = "invite-id-2",
                 activationKey = "DACT-FRIEND-KEY",
                 codeHint = "DACT-…-KEY",
                 name = "好友邀请",
+                inviteeContact = "好友QQ12345",
                 status = "unused",
                 createdAt,
             });
@@ -12851,10 +12858,14 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
         invitations.Quota == 3 && invitations.Remaining == 2 &&
         invitations.Invitations.Single().Status == "available",
         "Cloud invitation quota or history was not parsed.");
-    var invitation = await api.CreateInvitationAsync("session-token", CancellationToken.None);
+    var invitation = await api.CreateInvitationAsync(
+        "session-token",
+        "好友QQ12345",
+        CancellationToken.None);
     Assert(
-        invitation.ActivationKey == "DACT-FRIEND-KEY",
-        "Cloud invitation creation did not expose its one-time activation key.");
+        invitation.ActivationKey == "DACT-FRIEND-KEY" &&
+        invitation.InviteeContact == "好友QQ12345",
+        "Cloud invitation creation did not preserve its invitee contact or expose its one-time activation key.");
 
     var versions = await api.ListBackupsAsync("session-token", CancellationToken.None);
     Assert(versions.Count == 1 && versions[0].Id == "backup-id", "Cloud versions were not parsed.");

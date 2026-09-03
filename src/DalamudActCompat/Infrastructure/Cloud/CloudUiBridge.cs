@@ -28,7 +28,7 @@ public sealed class CloudUiBridge
         Action<CloudPasswordResetRequest> resetPassword,
         Action logout,
         Action refresh,
-        Action createInvitation,
+        Action<string> createInvitation,
         Action upload,
         Action<string> previewRestore,
         Action<string> restore,
@@ -53,7 +53,7 @@ public sealed class CloudUiBridge
     internal Action<CloudPasswordResetRequest> ResetPassword { get; }
     internal Action Logout { get; }
     internal Action Refresh { get; }
-    internal Action CreateInvitation { get; }
+    internal Action<string> CreateInvitation { get; }
     internal Action Upload { get; }
     internal Action<string> PreviewRestore { get; }
     internal Action<string> Restore { get; }

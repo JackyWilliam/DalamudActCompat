@@ -679,7 +679,8 @@ public sealed class Plugin : IDalamudPlugin
                     token)),
                 () => StartCloudOperation(cloudClient.LogoutAsync),
                 () => StartCloudOperation(cloudClient.RefreshBackupsAsync),
-                () => StartCloudOperation(cloudClient.CreateInvitationAsync),
+                inviteeContact => StartCloudOperation(
+                    token => cloudClient.CreateInvitationAsync(inviteeContact, token)),
                 StartCloudUpload,
                 backupId => StartCloudOperation(
                     token => cloudClient.PreviewRestoreAsync(backupId, token)),
