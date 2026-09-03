@@ -2315,15 +2315,15 @@ public sealed class ControlCenterWindow : Window
 
         var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
         if (ImGui.Checkbox(
-                text.Get("自动同步配置", "Automatically sync configuration"),
+                text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"),
                 ref autoCloudSyncEnabled))
         {
             configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
             saveConfiguration();
         }
         DrawAuthenticationMutedText(text.Get(
-            "更改停止 2 分钟后同步；每天再兜底检查一次。",
-            "Syncs 2 minutes after changes stop, with a daily fallback check."));
+            "每次打开游戏并登录后检查一次；配置没变化就不上传，退出游戏时不会等待网络。",
+            "Checks once after each game launch and sign-in; unchanged settings are not uploaded, and shutdown never waits for the network."));
         ImGui.Spacing();
 
         if (snapshot.IsSignedIn)
@@ -2846,12 +2846,22 @@ public sealed class ControlCenterWindow : Window
             ? 0
             : ImGui.CalcTextSize(statusMessage, false, wrapWidth).Y;
         var syncHint = text.Get(
-            "更改停止 2 分钟后自动同步；战斗中延后，每天再兜底检查一次。",
-            "Auto-sync runs 2 minutes after changes stop, waits during combat, and checks daily.");
+            "每次打开游戏并登录后自动检查一次；配置没变化就不上传。退出时不阻塞游戏，本次会话的最终更改会在下次打开游戏后同步。",
+            "Checks once after each game launch and sign-in, skipping unchanged settings. Shutdown is never delayed; final session changes sync next launch.");
+        var style = ImGui.GetStyle();
+        var lineHeight = ImGui.GetTextLineHeightWithSpacing();
+        var actionHeight = Math.Max(32, ImGui.GetFrameHeight());
+        // Every row uses live ImGui metrics because global font/UI scaling changes both
+        // line height and spacing; a fixed budget can clip the final action button.
         var cardHeight =
-            190 +
+            (style.WindowPadding.Y * 2) +
+            (lineHeight * 4) +
             statusMessageHeight +
-            ImGui.CalcTextSize(syncHint, false, wrapWidth).Y;
+            ImGui.CalcTextSize(syncHint, false, wrapWidth).Y +
+            ImGui.GetFrameHeightWithSpacing() +
+            actionHeight +
+            (style.ItemSpacing.Y * 7) +
+            18;
 
         if (BrandedWindowChrome.BeginGoldCard(
                 "cloud-summary-card",
@@ -2899,7 +2909,7 @@ public sealed class ControlCenterWindow : Window
             ImGui.Spacing();
             var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
             if (ImGui.Checkbox(
-                    text.Get("自动同步配置", "Automatically sync configuration"),
+                    text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"),
                     ref autoCloudSyncEnabled))
             {
                 configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
@@ -2908,7 +2918,9 @@ public sealed class ControlCenterWindow : Window
             DrawAuthenticationMutedText(syncHint);
 
             ImGui.BeginDisabled(snapshot.IsBusy);
-            if (ImGui.Button(text.Get("刷新状态", "Refresh status"), new Vector2(118, 32)))
+            if (ImGui.Button(
+                    text.Get("刷新状态", "Refresh status"),
+                    new Vector2(118, actionHeight)))
             {
                 cloud.Refresh();
             }
@@ -2925,16 +2937,27 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawCloudRecoveryKeyCard(string recoveryKey)
     {
+        var recoveryTitle = text.Get(
+            "恢复密钥只显示这一次，请立即离线保存",
+            "Save this recovery key offline now; it is shown only once");
+        var wrapWidth = Math.Max(
+            1,
+            ImGui.GetContentRegionAvail().X -
+            (ImGui.GetStyle().WindowPadding.X * 2));
+        var cardHeight =
+            (ImGui.GetStyle().WindowPadding.Y * 2) +
+            ImGui.CalcTextSize(recoveryTitle, false, wrapWidth).Y +
+            ImGui.GetFrameHeightWithSpacing() +
+            (ImGui.GetStyle().ItemSpacing.Y * 3) +
+            12;
         if (BrandedWindowChrome.BeginGoldCard(
                 "cloud-recovery-key-card",
-                102,
+                cardHeight,
                 allowScrolling: false))
         {
             ImGui.TextColored(
                 new Vector4(1f, 0.72f, 0.25f, 1),
-                text.Get(
-                    "恢复密钥只显示这一次，请立即离线保存",
-                    "Save this recovery key offline now; it is shown only once"));
+                recoveryTitle);
             var visibleRecoveryKey = recoveryKey;
             ImGui.SetNextItemWidth(-90);
             ImGui.InputText(
@@ -2996,8 +3019,8 @@ public sealed class ControlCenterWindow : Window
             if (snapshot.Backups.Count == 0)
             {
                 DrawAuthenticationMutedText(text.Get(
-                    "暂无备份。开启自动同步后，首次同步会在配置稳定 2 分钟后创建。",
-                    "No backup yet. With auto-sync on, the first backup is created after settings remain quiet for 2 minutes."));
+                    "暂无备份。开启自动同步后，下次打开游戏并登录时会自动创建第一份备份。",
+                    "No backup yet. With auto-sync enabled, the first backup is created after the next game launch and sign-in."));
             }
             else
             {

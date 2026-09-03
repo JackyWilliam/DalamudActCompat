@@ -8,6 +8,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -4528,8 +4529,10 @@ static void ValidateControlCenterPresentation()
         !controlCenterSource.Contains("最多保留最近 10 个密文版本", StringComparison.Ordinal) &&
         controlCenterSource.Contains("Up to 2 encrypted versions with different content are retained", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("The latest 10 encrypted versions are retained", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("自动同步配置", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("更改停止 2 分钟后自动同步", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("打开游戏后自动同步配置", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("每次打开游戏并登录后自动检查一次", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("配置没变化就不上传", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("最终更改会在下次打开游戏后同步", StringComparison.Ordinal) &&
         controlCenterSource.Contains("cloud-summary-card", StringComparison.Ordinal) &&
         controlCenterSource.Contains("cloud-backup-card", StringComparison.Ordinal) &&
         controlCenterSource.Contains("cloud-invitation-support-card", StringComparison.Ordinal) &&
@@ -4540,9 +4543,11 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("支持不会解除封禁、跳过风控或改变功能权限", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("客户端只上传不可逆的 SHA-256 设备指纹", StringComparison.Ordinal) &&
         configurationSource.Contains("AutoCloudSyncEnabled { get; set; } = true", StringComparison.Ordinal) &&
-        pluginSource.Contains("CreateCloudConfigurationWatcher", StringComparison.Ordinal) &&
+        pluginSource.Contains("ScheduleCloudStartupSync(DateTimeOffset.UtcNow)", StringComparison.Ordinal) &&
+        pluginSource.Contains("cloudStartupSyncRequested", StringComparison.Ordinal) &&
+        !pluginSource.Contains("FileSystemWatcher", StringComparison.Ordinal) &&
         pluginSource.Contains("TryStartCloudAutoSync(now);", StringComparison.Ordinal) &&
-        pluginSource.Contains("cloudMainConfigurationSaveHealthy", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!TrySaveConfiguration())", StringComparison.Ordinal) &&
         pluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
         pluginSource.Contains("AutoUploadIfChangedAsync", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
@@ -10084,6 +10089,12 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
         helpWindowSource.Contains("help-search-card", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.Dummy(new Vector2(0, 8))", StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            helpWindowSource,
+            "\"help-search-card\",\\s*new Vector2\\(-1, 58\\),\\s*false") &&
+        !helpWindowSource.Contains(
+            "ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f))",
+            StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.Button(\"Search\"", StringComparison.Ordinal) &&
         helpWindowSource.Contains("searchDraft", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("text.Get(\"清除\", \"Clear\")", StringComparison.Ordinal) &&
@@ -10204,6 +10215,26 @@ static void ValidateHtmlOverlayDefaults()
         !HelpWindow.MatchesSearch("FFLogs 上传", "FFLogs 本地预估") &&
         !HelpWindow.MatchesSearch("   ", "任意内容"),
         "Help search no longer supports case-insensitive multi-keyword matching or empty-query handling.");
+    var launcherPositionAtLargeSize = LauncherWindow.ResolveViewportPosition(
+        new Vector2(21, 22),
+        Vector2.Zero,
+        new Vector2(1920, 1080),
+        68);
+    var launcherPositionAtSmallSize = LauncherWindow.ResolveViewportPosition(
+        new Vector2(21, 22),
+        Vector2.Zero,
+        new Vector2(1280, 720),
+        68);
+    var launcherPositionInDesktopViewport = LauncherWindow.ResolveViewportPosition(
+        new Vector2(21, 22),
+        new Vector2(400, 300),
+        new Vector2(1280, 720),
+        68);
+    Assert(
+        launcherPositionAtLargeSize == new Vector2(21, 22) &&
+        launcherPositionAtSmallSize == launcherPositionAtLargeSize &&
+        launcherPositionInDesktopViewport == new Vector2(421, 322),
+        "The quick button no longer preserves viewport-relative coordinates when the game window changes size or desktop position.");
     Assert(
         controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
         controlCenterSource.Contains(

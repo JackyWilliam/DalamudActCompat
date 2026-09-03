@@ -39,8 +39,6 @@ public sealed class Plugin : IDalamudPlugin
     private const string CommandName = "/actcompat";
     private const uint MatchaWorldChangedIconId = 61835;
     private const uint MatchaDutyEnteredIconId = 61832;
-    private static readonly TimeSpan CloudAutoSyncDebounce = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan CloudAutoSyncDailyInterval = TimeSpan.FromDays(1);
     private static readonly TimeSpan CloudAutoSyncRetryDelay = TimeSpan.FromMinutes(10);
 
     internal static bool IsDutyPartyWiped(
@@ -85,7 +83,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly CloudClientService cloudClient;
-    private readonly FileSystemWatcher cloudConfigurationWatcher;
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
     private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
@@ -175,9 +172,8 @@ public sealed class Plugin : IDalamudPlugin
     private Task cloudRuntimeTransitionTask = Task.CompletedTask;
     private int bundledAutoUpdateCheckStarted;
     private long cloudAutoSyncDueUtcTicks;
-    private long cloudDailySyncDueUtcTicks;
     private int cloudAutoSyncRunning;
-    private int cloudMainConfigurationSaveHealthy = 1;
+    private int cloudStartupSyncRequested;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -244,12 +240,6 @@ public sealed class Plugin : IDalamudPlugin
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         paths.EnsureCreated();
         cloudClient = new CloudClientService(paths);
-        cloudConfigurationWatcher = CreateCloudConfigurationWatcher(paths.ConfigDirectory);
-        cloudConfigurationWatcher.Changed += OnPortableConfigurationChanged;
-        cloudConfigurationWatcher.Created += OnPortableConfigurationChanged;
-        cloudConfigurationWatcher.Deleted += OnPortableConfigurationChanged;
-        cloudConfigurationWatcher.Renamed += OnPortableConfigurationRenamed;
-        cloudConfigurationWatcher.EnableRaisingEvents = true;
         enforcedCloudBan = cloudClient.ActiveBan;
         var configuredLogDirectory = string.IsNullOrWhiteSpace(configuration.LogDirectory)
             ? paths.CombatLogDirectory
@@ -789,12 +779,6 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         Interlocked.Exchange(ref pluginDisposing, 1);
-        cloudConfigurationWatcher.EnableRaisingEvents = false;
-        cloudConfigurationWatcher.Changed -= OnPortableConfigurationChanged;
-        cloudConfigurationWatcher.Created -= OnPortableConfigurationChanged;
-        cloudConfigurationWatcher.Deleted -= OnPortableConfigurationChanged;
-        cloudConfigurationWatcher.Renamed -= OnPortableConfigurationRenamed;
-        cloudConfigurationWatcher.Dispose();
         AbandonPendingCloudBanParserStop();
         bundledUpdateCancellation.Cancel();
         cloudOperationCancellation.Cancel();
@@ -912,13 +896,11 @@ public sealed class Plugin : IDalamudPlugin
         Volatile.Write(ref cloudRuntimeAuthorized, nextState);
         if (authenticated)
         {
-            InitializeDailyCloudSync(DateTimeOffset.UtcNow);
+            ScheduleCloudStartupSync(DateTimeOffset.UtcNow);
             RestoreWindowsAfterAuthenticationGate();
         }
         else
         {
-            Interlocked.Exchange(ref cloudAutoSyncDueUtcTicks, 0);
-            Interlocked.Exchange(ref cloudDailySyncDueUtcTicks, 0);
             CancelCloudRuntimeSession();
             RestrictWindowsToAuthenticationGate(openGate: true);
         }
@@ -1632,13 +1614,10 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             services.PluginInterface.SavePluginConfig(configuration);
-            Volatile.Write(ref cloudMainConfigurationSaveHealthy, 1);
-            ScheduleCloudAutoSync();
             return true;
         }
         catch (Exception ex)
         {
-            Volatile.Write(ref cloudMainConfigurationSaveHealthy, 0);
             if (Volatile.Read(ref pluginDisposing) == 0)
             {
                 cloudClient.ReportExternalFailure(new IOException(
@@ -2382,86 +2361,31 @@ public sealed class Plugin : IDalamudPlugin
             keepStoppedAfterSuccess: false,
             token));
 
-    private static FileSystemWatcher CreateCloudConfigurationWatcher(
-        string pluginConfigurationDirectory)
+    private void ScheduleCloudStartupSync(DateTimeOffset now)
     {
-        var configurationRoot = Path.GetDirectoryName(pluginConfigurationDirectory)
-                                ?? throw new InvalidOperationException(
-                                    "DACT configuration directory has no parent directory.");
-        return new FileSystemWatcher(configurationRoot)
-        {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName |
-                           NotifyFilters.DirectoryName |
-                           NotifyFilters.LastWrite |
-                           NotifyFilters.Size,
-        };
-    }
-
-    private void OnPortableConfigurationChanged(object sender, FileSystemEventArgs args)
-    {
-        if (cloudClient.IsPortableConfigurationPath(args.FullPath))
-        {
-            ScheduleCloudAutoSync();
-        }
-    }
-
-    private void OnPortableConfigurationRenamed(object sender, RenamedEventArgs args)
-    {
-        if (cloudClient.IsPortableConfigurationPath(args.FullPath) ||
-            cloudClient.IsPortableConfigurationPath(args.OldFullPath))
-        {
-            ScheduleCloudAutoSync();
-        }
-    }
-
-    private void ScheduleCloudAutoSync()
-    {
-        if (!configuration.AutoCloudSyncEnabled ||
-            Volatile.Read(ref pluginDisposing) != 0)
+        if (Volatile.Read(ref pluginDisposing) != 0 ||
+            Interlocked.Exchange(ref cloudStartupSyncRequested, 1) != 0)
         {
             return;
         }
 
+        // One content-deduplicated check per game process captures the previous session's
+        // final files without delaying shutdown or reacting to every file-system event.
         Interlocked.Exchange(
             ref cloudAutoSyncDueUtcTicks,
-            DateTimeOffset.UtcNow.Add(CloudAutoSyncDebounce).UtcDateTime.Ticks);
-    }
-
-    private void InitializeDailyCloudSync(DateTimeOffset now)
-    {
-        var latestBackup = cloudClient.Snapshot.Backups.FirstOrDefault();
-        // The remote timestamp survives game and PC restarts, so no additional local
-        // state file is needed merely to preserve the once-per-day fallback.
-        var due = latestBackup is null
-            ? now.Add(CloudAutoSyncDebounce)
-            : latestBackup.CreatedAt.Add(CloudAutoSyncDailyInterval);
-        Interlocked.Exchange(
-            ref cloudDailySyncDueUtcTicks,
-            Math.Max(now.UtcDateTime.Ticks, due.UtcDateTime.Ticks));
+            now.UtcDateTime.Ticks);
     }
 
     private void TryStartCloudAutoSync(DateTimeOffset now)
     {
         if (!configuration.AutoCloudSyncEnabled)
         {
-            Interlocked.Exchange(ref cloudAutoSyncDueUtcTicks, 0);
-            Interlocked.Exchange(ref cloudDailySyncDueUtcTicks, 0);
-            return;
-        }
-        if (Volatile.Read(ref cloudMainConfigurationSaveHealthy) == 0)
-        {
             return;
         }
 
         var nowTicks = now.UtcDateTime.Ticks;
-        if (Volatile.Read(ref cloudDailySyncDueUtcTicks) == 0)
-        {
-            InitializeDailyCloudSync(now);
-        }
-        var changeDue = Volatile.Read(ref cloudAutoSyncDueUtcTicks);
-        var dailyDue = Volatile.Read(ref cloudDailySyncDueUtcTicks);
-        if ((changeDue == 0 || changeDue > nowTicks) && dailyDue > nowTicks)
+        var dueTicks = Volatile.Read(ref cloudAutoSyncDueUtcTicks);
+        if (dueTicks == 0 || dueTicks > nowTicks)
         {
             return;
         }
@@ -2473,12 +2397,19 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        // Refuse to upload an older on-disk main configuration. A failed save is surfaced
+        // in the cloud page and retried later, while DACT keeps its current runtime state.
+        if (!TrySaveConfiguration())
+        {
+            Interlocked.Exchange(
+                ref cloudAutoSyncDueUtcTicks,
+                now.Add(CloudAutoSyncRetryDelay).UtcDateTime.Ticks);
+            Interlocked.Exchange(ref cloudAutoSyncRunning, 0);
+            return;
+        }
         Interlocked.Exchange(ref cloudAutoSyncDueUtcTicks, 0);
-        Interlocked.Exchange(
-            ref cloudDailySyncDueUtcTicks,
-            now.Add(CloudAutoSyncDailyInterval).UtcDateTime.Ticks);
-        // The quiet-period snapshot avoids repeatedly stopping parsers and extensions.
-        // A manual upload remains available when the user needs an exact quiesced snapshot.
+        // The startup check is content-deduplicated. A manual upload remains available when
+        // the user needs a fresh snapshot during the same game session.
         StartCloudOperation(async token =>
         {
             try

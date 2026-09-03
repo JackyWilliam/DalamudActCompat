@@ -205,12 +205,12 @@ public sealed class HelpWindow : Window
     {
         ImGui.Dummy(new Vector2(0, 8));
         ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f));
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
+        // The input and button already define this toolbar; an additional child border adds visual clutter.
         if (ImGui.BeginChild(
                 "help-search-card",
                 new Vector2(-1, 58),
-                true,
+                false,
                 ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 7);
@@ -240,7 +240,7 @@ public sealed class HelpWindow : Window
         }
         ImGui.EndChild();
         ImGui.PopStyleVar();
-        ImGui.PopStyleColor(2);
+        ImGui.PopStyleColor();
         ImGui.Spacing();
     }
 
