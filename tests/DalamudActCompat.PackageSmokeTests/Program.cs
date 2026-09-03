@@ -4478,6 +4478,8 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var parserAdapterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Parser", "IinactAdapter.cs"));
     var coreResourceWindowSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "CoreResourceDownloadWindow.cs"));
     var configurationSource = File.ReadAllText(Path.Combine(
@@ -4511,6 +4513,10 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("DrawCombatLogDirectorySettings();", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"当前路径\", \"Current path\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"更改目录...\", \"Change directory...\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("最多保留最近 2 个密文版本", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("最多保留最近 10 个密文版本", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("The latest 2 encrypted versions are retained", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("The latest 10 encrypted versions are retained", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
@@ -4518,7 +4524,7 @@ static void ValidateControlCenterPresentation()
             parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
-        "The responsive branded login gate, Settings & Account page, guarded recovery action, diagnostic copy, or upload-log shortcut is missing from the control center.");
+        "The branded login gate, Settings & Account page, two-version cloud limit, guarded recovery action, diagnostic copy, or upload-log shortcut is missing from the control center.");
     Assert(
         controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
         controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
@@ -4795,6 +4801,25 @@ static void ValidateControlCenterPresentation()
             "public async Task<bool> RestartAsync",
             StringComparison.Ordinal),
         "ACT permissions are not saved before the final Host refresh, or FoxTTS Pro is not written between Host stop and start.");
+
+    var cloudBanStopIndex = pluginSource.IndexOf(
+        "private async Task StopDactForCloudBanAsync()",
+        StringComparison.Ordinal);
+    var ordinaryStopIndex = pluginSource.IndexOf(
+        "private async Task StopDactComponentsAsync",
+        cloudBanStopIndex,
+        StringComparison.Ordinal);
+    var cloudBanStopMethod = pluginSource[cloudBanStopIndex..ordinaryStopIndex];
+    Assert(
+        cloudBanStopMethod.Contains("RequestCloudBanParserStopAsync()", StringComparison.Ordinal) &&
+        cloudBanStopMethod.Contains("StopDactHostsAsync", StringComparison.Ordinal) &&
+        !cloudBanStopMethod.Contains("parserEngine.StopAsync", StringComparison.Ordinal) &&
+        pluginSource.Contains(
+            "TryStopParserForCloudBanOnFrameworkThread();",
+            StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("framework.IsInFrameworkUpdateThread", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("lifecycleLock.Wait(0)", StringComparison.Ordinal),
+        "Live-ban enforcement can still unload game hooks from the cloud SSE worker instead of a framework frame.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",

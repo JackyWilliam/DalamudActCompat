@@ -311,6 +311,34 @@ public sealed class IinactAdapter : IParserEngine
         }
     }
 
+    public bool TryStopForAccessRevocation()
+    {
+        if (!framework.IsInFrameworkUpdateThread)
+        {
+            throw new InvalidOperationException(
+                "Access-revocation parser teardown must run on the framework update thread.");
+        }
+        if (!lifecycleLock.Wait(0))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!disposed)
+            {
+                // Dalamud hook lifetimes and framework callbacks share this thread boundary;
+                // the cloud SSE worker must never tear them down concurrently.
+                StopCore(updateStatus: true);
+            }
+            return true;
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
     private void OnEncounterChangedSerialized(ActEncounterSnapshot snapshot, bool finished)
     {
         // ACT may publish from its worker thread. Read one coherent primitive-only snapshot

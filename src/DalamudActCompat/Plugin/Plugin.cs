@@ -57,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
+    private readonly IinactAdapter parserAdapter;
     private readonly SelfHostedActRuntime actRuntime;
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
@@ -154,8 +155,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly object cloudBanLock = new();
     private CloudBanNotice? enforcedCloudBan;
     private Task cloudBanEnforcementTask = Task.CompletedTask;
+    private TaskCompletionSource<bool>? cloudBanParserStopCompletion;
+    private int cloudBanParserStopPending;
     private int cloudAccessBlocked;
     private int cloudBanLifted;
+    private int pluginDisposing;
     private readonly object cloudRuntimeCancellationLock = new();
     private readonly SemaphoreSlim cloudRuntimeTransitionGate = new(1, 1);
     private CancellationTokenSource? cloudRuntimeCancellation;
@@ -426,7 +430,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.NetworkSent += OnNetworkSentForMatchaHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;
         framework.Update += OnFrameworkUpdateForHost;
-        parserEngine = new ParserEngine(new IinactAdapter(
+        parserAdapter = new IinactAdapter(
             actRuntime,
             logger,
             stateStore,
@@ -437,7 +441,8 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
-            fflogsEstimateService.CaptureAvailableEstimates));
+            fflogsEstimateService.CaptureAvailableEstimates);
+        parserEngine = new ParserEngine(parserAdapter);
         var meterService = new MeterService(stateStore, configuration.Meter);
 
         _ = new OverlayManager(new OverlayEventBus());
@@ -755,6 +760,8 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        Interlocked.Exchange(ref pluginDisposing, 1);
+        AbandonPendingCloudBanParserStop();
         bundledUpdateCancellation.Cancel();
         cloudOperationCancellation.Cancel();
         BeginCactbotShutdown();
@@ -1099,7 +1106,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StopDactForCloudBanAsync()
     {
-        await StopDactComponentsAsync("Cloud ban").ConfigureAwait(false);
+        var initialParserStop = RequestCloudBanParserStopAsync();
+        await StopDactHostsAsync("Cloud ban").ConfigureAwait(false);
+        await initialParserStop.ConfigureAwait(false);
 
         try
         {
@@ -1120,7 +1129,8 @@ public sealed class Plugin : IDalamudPlugin
             logger.Error(ex.GetBaseException(), "Cloud ban could not join every in-flight DACT operation cleanly.");
         }
 
-        await StopDactComponentsAsync("Cloud ban").ConfigureAwait(false);
+        await RequestCloudBanParserStopAsync().ConfigureAwait(false);
+        await StopDactHostsAsync("Cloud ban").ConfigureAwait(false);
     }
 
     private async Task StopDactComponentsAsync(string reason)
@@ -1131,6 +1141,11 @@ public sealed class Plugin : IDalamudPlugin
         await StopDactComponentAsync(reason, "parser", parserEngine.StopAsync)
             .ConfigureAwait(false);
 
+        await StopDactHostsAsync(reason).ConfigureAwait(false);
+    }
+
+    private async Task StopDactHostsAsync(string reason)
+    {
         var lockAcquired = false;
         try
         {
@@ -1155,6 +1170,74 @@ public sealed class Plugin : IDalamudPlugin
                 hostTopologyLock.Release();
             }
         }
+    }
+
+    private Task RequestCloudBanParserStopAsync()
+    {
+        lock (cloudBanLock)
+        {
+            if (Volatile.Read(ref pluginDisposing) != 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            cloudBanParserStopCompletion = completion;
+            Volatile.Write(ref cloudBanParserStopPending, 1);
+            return completion.Task;
+        }
+    }
+
+    private void TryStopParserForCloudBanOnFrameworkThread()
+    {
+        if (Volatile.Read(ref cloudBanParserStopPending) == 0)
+        {
+            return;
+        }
+
+        TaskCompletionSource<bool>? completion;
+        lock (cloudBanLock)
+        {
+            completion = cloudBanParserStopCompletion;
+        }
+        if (completion is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!parserAdapter.TryStopForAccessRevocation())
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref cloudBanParserStopPending, 0);
+            completion.TrySetResult(true);
+            logger.Information("Cloud ban stopped the in-process parser on the framework thread.");
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Exchange(ref cloudBanParserStopPending, 0);
+            completion.TrySetResult(false);
+            logger.Error(ex, "Cloud ban could not stop the in-process parser safely.");
+        }
+    }
+
+    private void AbandonPendingCloudBanParserStop()
+    {
+        TaskCompletionSource<bool>? completion;
+        lock (cloudBanLock)
+        {
+            Interlocked.Exchange(ref cloudBanParserStopPending, 0);
+            completion = cloudBanParserStopCompletion;
+            cloudBanParserStopCompletion = null;
+        }
+
+        // Normal plugin disposal already owns parser teardown. Releasing this waiter avoids
+        // deadlocking unload while the framework update callback is being detached.
+        completion?.TrySetResult(false);
     }
 
     private async Task StopDactComponentAsync(
@@ -4577,6 +4660,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdateForHost(IFramework _)
     {
         SynchronizeCloudAuthenticationState();
+        TryStopParserForCloudBanOnFrameworkThread();
         if (!IsDactAccessAllowed())
         {
             return;

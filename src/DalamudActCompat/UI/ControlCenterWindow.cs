@@ -2761,8 +2761,8 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("云端版本", "Cloud versions"));
         ImGui.TextDisabled(text.Get(
-            "最多保留最近 10 个密文版本。上传会短暂停止解析器与扩展，完成后自动恢复。",
-            "The latest 10 encrypted versions are retained. Upload briefly stops parsers and extensions, then restores them."));
+            "最多保留最近 2 个密文版本。上传会短暂停止解析器与扩展，完成后自动恢复。",
+            "The latest 2 encrypted versions are retained. Upload briefly stops parsers and extensions, then restores them."));
         if (!snapshot.IsBusy && ImGui.Button(text.Get("上传当前配置", "Upload current configuration")))
         {
             cloud.Upload();
