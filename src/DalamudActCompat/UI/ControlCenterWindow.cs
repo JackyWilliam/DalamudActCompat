@@ -416,6 +416,24 @@ public sealed class ControlCenterWindow : Window
         try
         {
             DrawWindowChrome();
+            var cloudSnapshot = cloud.GetSnapshot();
+            if (!cloudSnapshot.IsSignedIn)
+            {
+                ImGui.Spacing();
+                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, -1), true))
+                {
+                    DrawAuthenticationGate(cloudSnapshot);
+                }
+                ImGui.EndChild();
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(cloudSnapshot.RecoveryKeyToSave))
+            {
+                // Registration reveals the recovery key once, so keep it visible instead
+                // of dropping the user onto the previously selected functional page.
+                selectedPage = Page.Cloud;
+            }
             DrawPageTabs();
             ImGui.Spacing();
             if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, -1), true))
@@ -546,7 +564,7 @@ public sealed class ControlCenterWindow : Window
             (Page.Overlays, text.Get("悬浮窗", "Overlays")),
             (Page.Extensions, text.Get("扩展", "Extensions")),
             (Page.Cloud, text.Get("云同步", "Cloud Sync")),
-            (Page.Diagnostics, text.Get("设置", "Settings")),
+            (Page.Diagnostics, text.Get("设置&账号", "Settings & Account")),
         };
         var currentIndex = Array.FindIndex(tabs, tab => tab.Page == selectedPage);
         var nextIndex = BrandedWindowChrome.DrawNavigationRail(
@@ -2190,7 +2208,7 @@ public sealed class ControlCenterWindow : Window
     {
         var snapshot = cloud.GetSnapshot();
         DrawPageHeader(
-            text.Get("账号与云同步", "Account and Cloud Sync"),
+            text.Get("云同步", "Cloud Sync"),
             text.Get(
                 "配置在本机加密后上传；服务器无法读取内容，也不会自动覆盖本机。",
                 "Configuration is encrypted locally before upload. The server cannot read it and never overwrites this PC automatically."));
@@ -2210,14 +2228,34 @@ public sealed class ControlCenterWindow : Window
         }
         ImGui.Spacing();
 
-        if (!snapshot.IsSignedIn)
-        {
-            DrawCloudAuthentication(snapshot);
-            return false;
-        }
-
         DrawSignedInCloud(snapshot);
         return false;
+    }
+
+    private void DrawAuthenticationGate(CloudClientSnapshot snapshot)
+    {
+        DrawPageHeader(
+            text.Get("登录 DACT", "Sign in to DACT"),
+            text.Get(
+                "登录成功后才能使用 DACT 的解析器、悬浮窗和扩展服务。",
+                "Sign in before using DACT parsers, overlays, and extension services."));
+        ImGui.TextColored(
+            snapshot.StatusIsError
+                ? new Vector4(0.96f, 0.42f, 0.38f, 1)
+                : new Vector4(0.45f, 0.88f, 0.62f, 1),
+            snapshot.StatusMessage);
+        if (snapshot.IsBusy)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled(text.Get("处理中…", "Working…"));
+        }
+        ImGui.Spacing();
+        if (string.IsNullOrWhiteSpace(cloudUsername) &&
+            !string.IsNullOrWhiteSpace(snapshot.Username))
+        {
+            cloudUsername = snapshot.Username;
+        }
+        DrawCloudAuthentication(snapshot);
     }
 
     private void DrawCloudAuthentication(CloudClientSnapshot snapshot)
@@ -2391,24 +2429,9 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawSignedInCloud(CloudClientSnapshot snapshot)
     {
-        ImGui.TextColored(Gold, text.Get("当前账号", "Current account"));
-        ImGui.SameLine();
-        ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
-        if (snapshot.SessionExpiresAt is { } expiresAt)
-        {
-            ImGui.TextDisabled(text.Get(
-                $"登录有效期至 {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}",
-                $"Session expires {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}"));
-        }
         if (!snapshot.IsBusy && ImGui.Button(text.Get("刷新版本", "Refresh versions")))
         {
             cloud.Refresh();
-        }
-        ImGui.SameLine();
-        if (!snapshot.IsBusy && ImGui.Button(text.Get("退出登录", "Sign out")))
-        {
-            cloud.Logout();
-            ClearCloudSecrets();
         }
 
         if (!string.IsNullOrWhiteSpace(snapshot.RecoveryKeyToSave))
@@ -2582,12 +2605,6 @@ public sealed class ControlCenterWindow : Window
             }
         }
 
-        ImGui.Spacing();
-        if (ImGui.CollapsingHeader(text.Get("使用管理员重置码修改密码", "Change password with an administrator reset code")))
-        {
-            cloudUsername = snapshot.Username ?? string.Empty;
-            DrawCloudPasswordResetForm(snapshot.IsBusy, hasLocalRecoveryKey: true);
-        }
     }
 
     private void ClearCloudSecrets()
@@ -2614,13 +2631,47 @@ public sealed class ControlCenterWindow : Window
             _ => status,
         };
 
+    private void DrawAccountSettings()
+    {
+        var snapshot = cloud.GetSnapshot();
+        ImGui.TextColored(Gold, text.Get("账号", "Account"));
+        ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
+        if (snapshot.SessionExpiresAt is { } expiresAt)
+        {
+            ImGui.TextDisabled(text.Get(
+                $"登录有效期至 {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}",
+                $"Session expires {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}"));
+        }
+        if (!snapshot.IsBusy && ImGui.Button(text.Get("退出登录", "Sign out")))
+        {
+            cloud.Logout();
+            ClearCloudSecrets();
+        }
+
+        if (ImGui.CollapsingHeader(text.Get(
+                "使用管理员重置码修改密码",
+                "Change password with an administrator reset code")))
+        {
+            cloudUsername = snapshot.Username ?? string.Empty;
+            ImGui.Checkbox(
+                text.Get("重置后自动登录", "Sign in automatically after reset"),
+                ref cloudRememberLogin);
+            DrawCloudPasswordResetForm(snapshot.IsBusy, hasLocalRecoveryKey: true);
+        }
+    }
+
     private bool DrawDiagnostics()
     {
         DrawPageHeader(
-            text.Get("设置", "Settings"),
+            text.Get("设置&账号", "Settings & Account"),
             text.Get(
-                "运行状态、语言、快捷按钮与恢复选项。",
-                "Runtime status, language, quick-button, and recovery options."));
+                "运行状态、账号、语言、快捷按钮与恢复选项。",
+                "Runtime status, account, language, quick-button, and recovery options."));
+
+        DrawAccountSettings();
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
 
         ImGui.TextColored(Gold, $"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
         ImGui.TextWrapped(parserStatus.Message);

@@ -89,25 +89,18 @@ internal sealed class CloudClientService : IDisposable
             ? candidate
             : null;
         activeBan = TryLoadBan();
-        snapshot = credentials is null
-            ? CloudClientSnapshot.SignedOut() with
-            {
-                ActiveBan = activeBan,
-                HasSavedRecoveryKey = storedAccount is not null,
-            }
-            : new CloudClientSnapshot(
-                true,
-                false,
-                credentials.Username,
-                credentials.ExpiresAt,
-                Array.Empty<CloudBackupVersion>(),
-                "正在验证已保存的登录状态…",
-                false,
-                null,
-                null,
-                FindLatestRollbackPath(),
-                ActiveBan: activeBan,
-                HasSavedRecoveryKey: true);
+        // A protected token is only a candidate for auto-login. DACT must remain locked
+        // until the server has validated that token and its current ban state.
+        snapshot = CloudClientSnapshot.SignedOut(
+            credentials is null ? "请登录或注册账号。" : "正在验证已保存的登录状态…") with
+        {
+            IsBusy = credentials is not null,
+            Username = credentials?.Username,
+            SessionExpiresAt = credentials?.ExpiresAt,
+            LastRollbackPath = FindLatestRollbackPath(),
+            ActiveBan = activeBan,
+            HasSavedRecoveryKey = storedAccount is not null,
+        };
         monitorTasks.Add(Task.Run(() => RunBanMarkerMonitorAsync(monitorShutdown.Token)));
     }
 
@@ -359,16 +352,31 @@ internal sealed class CloudClientService : IDisposable
         => RunExclusiveAsync("正在退出登录…", async token =>
         {
             var current = credentials;
+            Exception? localCleanupFailure = null;
+            try
+            {
+                // Revoke local access before the network request so a slow or unavailable
+                // server cannot leave DACT usable after the user pressed Sign out.
+                ClearCredentials("已退出登录。", isError: false);
+            }
+            catch (Exception ex)
+            {
+                localCleanupFailure = ex;
+            }
             if (current is not null)
             {
                 try
                 {
                     await apiClient.LogoutAsync(current.Token, token).ConfigureAwait(false);
                 }
-                finally
+                catch (Exception ex) when (localCleanupFailure is not null)
                 {
-                    ClearCredentials("已退出登录。", isError: false);
+                    throw new AggregateException(localCleanupFailure, ex);
                 }
+            }
+            if (localCleanupFailure is not null)
+            {
+                throw localCleanupFailure;
             }
         }, cancellationToken);
 

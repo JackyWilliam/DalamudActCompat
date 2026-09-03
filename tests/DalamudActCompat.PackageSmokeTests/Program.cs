@@ -129,6 +129,7 @@ try
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
     await ValidateCloudApiContractAsync(testRoot);
+    await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
     await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
     await ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(testRoot);
     await ValidateCloudBanResponseEnforcesMarkerAsync(testRoot);
@@ -4496,7 +4497,10 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat.Host", "WindowsNotificationCenter.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置&账号\", \"Settings & Account\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-gate", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawAuthenticationGate(cloudSnapshot);", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("private void DrawAccountSettings()", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
@@ -4510,7 +4514,7 @@ static void ValidateControlCenterPresentation()
             parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
-        "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
+        "The login gate, Settings & Account page, guarded recovery action, diagnostic copy, or upload-log shortcut is missing from the control center.");
     Assert(
         controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
         controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
@@ -4564,6 +4568,24 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("overview-general-card", StringComparison.Ordinal) &&
         controlCenterSource.Contains("关闭运行状态", StringComparison.Ordinal),
         "The fixed navigation, gold overview cards, or runtime-status toggle is missing.");
+    var hostResourceMethodStart = pluginSource.IndexOf(
+        "private async Task InitializeHostResourcesAsync",
+        StringComparison.Ordinal);
+    var resourceResolverMethodStart = pluginSource.IndexOf(
+        "private async Task<string> ResolveResourcePackWithTimeoutAsync",
+        hostResourceMethodStart,
+        StringComparison.Ordinal);
+    var hostResourceMethod = pluginSource[hostResourceMethodStart..resourceResolverMethodStart];
+    var constructorSourceForAuthentication = pluginSource[..pluginSource.IndexOf(
+        "public string Name",
+        StringComparison.Ordinal)];
+    Assert(
+        constructorSourceForAuthentication.Contains("StartInitialResourcePreparation();", StringComparison.Ordinal) &&
+        !constructorSourceForAuthentication.Contains("lifecycle.Start();", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!cloudClient.Snapshot.IsSignedIn)", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!IsDactAccessAllowed())", StringComparison.Ordinal) &&
+        !hostResourceMethod.Contains("StartIndependentHostAsync", StringComparison.Ordinal),
+        "Authentication no longer gates DACT runtime startup, or core resource download still starts a Host before login.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
@@ -4685,10 +4707,10 @@ static void ValidateControlCenterPresentation()
         "public string Name",
         StringComparison.Ordinal);
     var pluginConstructor = pluginSource[..pluginConstructorEnd];
-    var lifecycleStartForCactbot = pluginConstructor.IndexOf(
+    var lifecycleStartForCactbot = pluginSource.IndexOf(
         "lifecycle.Start();",
         StringComparison.Ordinal);
-    var cactbotInitializationStart = pluginConstructor.IndexOf(
+    var cactbotInitializationStart = pluginSource.IndexOf(
         "StartBundledCactbotInitialization",
         StringComparison.Ordinal);
     Assert(
@@ -7328,6 +7350,32 @@ static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
 
     await parser.DisposeAsync();
     await encounterService.DisposeAsync();
+
+    var lockedRoot = Path.Combine(testRoot, "plugin-lifecycle-authentication-gate");
+    var lockedPaths = new PluginPaths(lockedRoot);
+    var lockedParser = new TestParserEngine(ParserState.Stopped);
+    var lockedEncounterService = new EncounterService(
+        new EncounterRepository(new JsonFileStore(), lockedPaths),
+        new EncounterStateStore(),
+        configuration,
+        logger,
+        lockedPaths);
+    var lockedLifecycle = new PluginLifecycle(
+        lockedParser,
+        lockedEncounterService,
+        lockedPaths,
+        configuration,
+        logger,
+        TimeSpan.Zero,
+        canStartParser: () => false);
+    lockedLifecycle.Start();
+    await lockedLifecycle.WaitForStartupAsync(CancellationToken.None);
+    Assert(
+        lockedParser.StartCount == 0,
+        "Plugin lifecycle started the parser while the account gate was locked.");
+    await lockedLifecycle.DisposeAsync();
+    await lockedParser.DisposeAsync();
+    await lockedEncounterService.DisposeAsync();
 }
 
 static void ValidatePluginUnloadOwnership()
@@ -12826,6 +12874,80 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
     Assert(
         File.ReadAllBytes(downloadPath).SequenceEqual(backupBytes),
         "Cloud download failed authenticated size/hash verification.");
+}
+
+static async Task ValidateSavedCloudSessionRequiresServerValidationAsync(string testRoot)
+{
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-auto-login-gate"));
+    paths.EnsureCreated();
+    var credentialStore = new CloudCredentialStore(paths.CloudCredentialFile);
+    credentialStore.Save(new CloudStoredCredentials(
+        "saved_user",
+        "saved-session-token",
+        DateTimeOffset.UtcNow.AddDays(1),
+        new PortableConfigurationBackupService().GenerateRecoveryKey()));
+    using var logoutRequestStarted = new ManualResetEventSlim();
+    using var releaseLogout = new ManualResetEventSlim();
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/logout", StringComparison.Ordinal))
+        {
+            logoutRequestStarted.Set();
+            releaseLogout.Wait(TimeSpan.FromSeconds(5));
+            return JsonResponse(HttpStatusCode.NoContent, new { });
+        }
+        if (path.EndsWith("/auth/me", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { username = "saved_user" });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { backups = Array.Empty<object>() });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 0,
+                remaining = 3,
+                invitations = Array.Empty<object>(),
+            });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new
+        {
+            error = "not_found",
+            message = "missing",
+        });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    using var service = new CloudClientService(
+        paths,
+        api,
+        credentialStore,
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+
+    Assert(
+        !service.Snapshot.IsSignedIn && service.Snapshot.IsBusy &&
+        service.Snapshot.Username == "saved_user",
+        "A saved auto-login token unlocked DACT before server validation completed.");
+    await service.InitializeAsync(CancellationToken.None);
+    Assert(service.Snapshot.IsSignedIn, "A server-validated saved session did not unlock DACT.");
+
+    var logoutTask = Task.Run(() => service.LogoutAsync(CancellationToken.None));
+    Assert(
+        logoutRequestStarted.Wait(TimeSpan.FromSeconds(2)),
+        "Cloud logout did not reach the server request.");
+    Assert(
+        !service.Snapshot.IsSignedIn && !File.Exists(paths.CloudCredentialFile),
+        "Cloud logout waited for the server before revoking local DACT access.");
+    releaseLogout.Set();
+    await logoutTask;
 }
 
 static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(string testRoot)

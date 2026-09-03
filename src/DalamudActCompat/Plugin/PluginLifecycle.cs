@@ -12,6 +12,7 @@ internal sealed class PluginLifecycle : IAsyncDisposable
     private readonly PluginPaths paths;
     private readonly PluginConfiguration configuration;
     private readonly PluginLogger logger;
+    private readonly Func<bool> canStartParser;
     private readonly CancellationTokenSource shutdown = new();
     private readonly TimeSpan startupDelay;
     private readonly object syncRoot = new();
@@ -26,7 +27,8 @@ internal sealed class PluginLifecycle : IAsyncDisposable
         PluginPaths paths,
         PluginConfiguration configuration,
         PluginLogger logger,
-        TimeSpan? startupDelay = null)
+        TimeSpan? startupDelay = null,
+        Func<bool>? canStartParser = null)
     {
         this.parserEngine = parserEngine;
         this.encounterService = encounterService;
@@ -34,6 +36,7 @@ internal sealed class PluginLifecycle : IAsyncDisposable
         this.configuration = configuration;
         this.logger = logger;
         this.startupDelay = startupDelay ?? TimeSpan.FromMilliseconds(1500);
+        this.canStartParser = canStartParser ?? (() => true);
     }
 
     public void Start()
@@ -96,7 +99,7 @@ internal sealed class PluginLifecycle : IAsyncDisposable
             await Task.Delay(startupDelay, cancellationToken).ConfigureAwait(false);
             paths.EnsureCreated();
             await encounterService.InitializeAsync(cancellationToken).ConfigureAwait(false);
-            if (configuration.EnableParsing && configuration.AutoStartParser)
+            if (configuration.EnableParsing && configuration.AutoStartParser && canStartParser())
             {
                 await parserEngine.StartAsync(cancellationToken).ConfigureAwait(false);
             }
