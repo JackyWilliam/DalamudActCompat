@@ -78,6 +78,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly LauncherWindow launcherWindow;
     private readonly CoreResourceDownloadWindow coreResourceDownloadWindow;
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
+    private readonly CloudBanNoticeWindow cloudBanNoticeWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly CloudClientService cloudClient;
@@ -159,6 +160,7 @@ public sealed class Plugin : IDalamudPlugin
     private int cloudBanParserStopPending;
     private int cloudAccessBlocked;
     private int cloudBanLifted;
+    private int pluginInitialized;
     private int pluginDisposing;
     private readonly object cloudRuntimeCancellationLock = new();
     private readonly SemaphoreSlim cloudRuntimeTransitionGate = new(1, 1);
@@ -696,6 +698,7 @@ public sealed class Plugin : IDalamudPlugin
             GetHostResourceStatus,
             StartHostResourceDownload,
             CancelHostResourceDownload);
+        cloudBanNoticeWindow = new CloudBanNoticeWindow(text, logoTexture);
         launcherWindow = new LauncherWindow(
             configuration,
             launcherTexture,
@@ -725,6 +728,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
         windowSystem.AddWindow(coreResourceDownloadWindow);
+        windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
         RestrictWindowsToAuthenticationGate(openGate: true);
 
@@ -745,14 +749,23 @@ public sealed class Plugin : IDalamudPlugin
             canStartParser: IsDactAccessAllowed);
         cloudClient.BanReceived += OnCloudBanReceived;
         cloudClient.BanLifted += OnCloudBanLifted;
-        if (enforcedCloudBan is null)
-        {
-            StartInitialResourcePreparation();
-        }
-        StartCloudOperation(cloudClient.InitializeAsync);
+        // Framework updates were subscribed before parser consumers to preserve frame
+        // ordering. They may run during construction, so expose UI state only now.
+        Volatile.Write(ref pluginInitialized, 1);
         if (enforcedCloudBan is { } startupBan)
         {
             OnCloudBanReceived(startupBan);
+            // The marker monitor starts with the cloud client and can confirm an unban
+            // while this comparatively large constructor is still wiring its subscribers.
+            if (cloudClient.ActiveBan is null)
+            {
+                OnCloudBanLifted();
+            }
+        }
+        else
+        {
+            StartInitialResourcePreparation();
+            StartCloudOperation(cloudClient.InitializeAsync);
         }
     }
 
@@ -826,7 +839,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
-            DrawCloudBanDialog();
+            windowSystem.Draw();
             return;
         }
         if (!cloudClient.Snapshot.IsSignedIn)
@@ -1038,29 +1051,27 @@ public sealed class Plugin : IDalamudPlugin
         {
             enforcedCloudBan = notice;
             Volatile.Write(ref cloudBanLifted, 0);
-            if (Interlocked.Exchange(ref cloudAccessBlocked, 1) != 0)
+            if (Interlocked.Exchange(ref cloudAccessBlocked, 1) == 0)
             {
-                return;
+                // Every startup/restart source is made permanently inert for this plugin
+                // lifetime before the asynchronous process stops begin.
+                Volatile.Write(ref cloudRuntimeAuthorized, 0);
+                Volatile.Write(ref observedCloudAuthenticationState, 0);
+                CancelCloudRuntimeSession();
+                bundledUpdateCancellation.Cancel();
+                cloudOperationCancellation.Cancel();
+                independentHostStartupCancellation.Cancel();
+                BeginCactbotShutdown();
+                BeginBackgroundOperationShutdown();
+                fflogsEstimateService.BeginShutdown();
+                factoryResetOperations.BeginShutdown();
+                lifecycle.BeginShutdown();
+                hostCommandCancellation.Cancel();
+                Volatile.Write(ref silverDasherEventsEnabled, 0);
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                cloudBanEnforcementTask = Task.Run(StopDactForCloudBanAsync, CancellationToken.None);
             }
-
-            // Every startup/restart source is made permanently inert for this plugin
-            // lifetime before the asynchronous process stops begin.
-            Volatile.Write(ref cloudRuntimeAuthorized, 0);
-            Volatile.Write(ref observedCloudAuthenticationState, 0);
-            CancelCloudRuntimeSession();
-            bundledUpdateCancellation.Cancel();
-            cloudOperationCancellation.Cancel();
-            independentHostStartupCancellation.Cancel();
-            BeginCactbotShutdown();
-            BeginBackgroundOperationShutdown();
-            fflogsEstimateService.BeginShutdown();
-            factoryResetOperations.BeginShutdown();
-            lifecycle.BeginShutdown();
-            hostCommandCancellation.Cancel();
-            Volatile.Write(ref silverDasherEventsEnabled, 0);
-            Volatile.Write(ref matchaEventsEnabled, 0);
-            actRuntime.SetNetworkSentCaptureEnabled(false);
-            cloudBanEnforcementTask = Task.Run(StopDactForCloudBanAsync, CancellationToken.None);
         }
 
         _ = services.Framework.RunOnFrameworkThread(() =>
@@ -1080,6 +1091,7 @@ public sealed class Plugin : IDalamudPlugin
             meterStyleEditorWindow.IsOpen = false;
             simplifiedHomeWindow.IsOpen = false;
             coreResourceDownloadWindow.IsOpen = false;
+            cloudBanNoticeWindow.Show(notice, lifted: false);
             services.NotificationManager.AddNotification(new()
             {
                 Title = "DACT 已被禁用",
@@ -1091,17 +1103,27 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCloudBanLifted()
     {
-        if (Volatile.Read(ref cloudAccessBlocked) == 0)
+        CloudBanNotice? notice;
+        lock (cloudBanLock)
         {
-            return;
+            notice = enforcedCloudBan;
+            if (notice is null ||
+                Volatile.Read(ref cloudAccessBlocked) == 0 ||
+                Interlocked.Exchange(ref cloudBanLifted, 1) != 0)
+            {
+                return;
+            }
         }
-        Volatile.Write(ref cloudBanLifted, 1);
+
         _ = services.Framework.RunOnFrameworkThread(() =>
+        {
+            cloudBanNoticeWindow.Show(notice, lifted: true);
             services.NotificationManager.AddNotification(new()
             {
                 Title = "DACT 封禁已解除",
                 Content = "请重启游戏或重载 DACT，然后重新登录以恢复功能。",
-            }));
+            });
+        });
     }
 
     private async Task StopDactForCloudBanAsync()
@@ -1258,71 +1280,10 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void DrawCloudBanDialog()
-    {
-        CloudBanNotice? notice;
-        lock (cloudBanLock)
-        {
-            notice = enforcedCloudBan;
-        }
-        if (notice is null)
-        {
-            return;
-        }
-
-        const string popupId = "DACT 访问已禁用###DalamudActCompatCloudBan";
-        ImGui.OpenPopup(popupId);
-        ImGui.SetNextWindowSize(new Vector2(560, 0), ImGuiCond.Appearing);
-        if (!ImGui.BeginPopupModal(
-                popupId,
-                ImGuiWindowFlags.AlwaysAutoResize |
-                ImGuiWindowFlags.NoResize |
-                ImGuiWindowFlags.NoMove))
-        {
-            return;
-        }
-
-        if (Volatile.Read(ref cloudBanLifted) != 0)
-        {
-            ImGui.TextColored(
-                new Vector4(0.45f, 0.88f, 0.62f, 1),
-                "封禁已由服务器解除");
-            ImGui.TextWrapped("本次运行中的 DACT 服务不会重新启动。请重启游戏或重载 DACT，然后重新登录。");
-        }
-        else
-        {
-            ImGui.TextColored(
-                new Vector4(0.96f, 0.42f, 0.38f, 1),
-                "您的账号已经被封禁");
-            ImGui.Separator();
-            ImGui.TextUnformatted($"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}");
-            ImGui.TextUnformatted(notice.BanExpiresAt is { } expiresAt
-                ? $"封禁结束：{expiresAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"
-                : "封禁结束：永久");
-            ImGui.TextUnformatted($"封禁方式：{FormatCloudBanType(notice.BanType)}");
-            if (!string.IsNullOrWhiteSpace(notice.BanReason))
-            {
-                ImGui.TextWrapped($"封禁原因：{notice.BanReason}");
-            }
-            ImGui.Spacing();
-            ImGui.TextWrapped("DACT 解析器、悬浮窗和所有 DACT 管理的扩展服务已停止。服务器解除封禁前，本机封禁标记会自动恢复。");
-        }
-        ImGui.EndPopup();
-    }
-
     private static string BuildCloudBanSummary(CloudBanNotice notice)
         => string.IsNullOrWhiteSpace(notice.BanReason)
             ? $"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"
             : $"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}；原因：{notice.BanReason}";
-
-    private static string FormatCloudBanType(string type)
-        => type switch
-        {
-            "device" => "机器码封禁",
-            "cascade" => "连坐封禁",
-            "unknown" => "本地封禁标记",
-            _ => "账号封禁",
-        };
 
     private void OpenConfigUi()
     {
@@ -4659,6 +4620,13 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdateForHost(IFramework _)
     {
+        if (Volatile.Read(ref pluginInitialized) == 0)
+        {
+            // The subscription order is intentional, but a construction-time frame must
+            // not touch windows that have not yet been assigned.
+            return;
+        }
+
         SynchronizeCloudAuthenticationState();
         TryStopParserForCloudBanOnFrameworkThread();
         if (!IsDactAccessAllowed())

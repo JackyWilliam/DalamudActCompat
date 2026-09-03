@@ -4482,6 +4482,8 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "Parser", "IinactAdapter.cs"));
     var coreResourceWindowSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "CoreResourceDownloadWindow.cs"));
+    var cloudBanNoticeSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "CloudBanNoticeWindow.cs"));
     var configurationSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "PluginConfiguration.cs"));
     var hostSupervisorSource = File.ReadAllText(Path.Combine(
@@ -4810,6 +4812,12 @@ static void ValidateControlCenterPresentation()
         cloudBanStopIndex,
         StringComparison.Ordinal);
     var cloudBanStopMethod = pluginSource[cloudBanStopIndex..ordinaryStopIndex];
+    var startupBanIndex = constructorSourceForAuthentication.IndexOf(
+        "OnCloudBanReceived(startupBan);",
+        StringComparison.Ordinal);
+    var cloudInitializeIndex = constructorSourceForAuthentication.IndexOf(
+        "StartCloudOperation(cloudClient.InitializeAsync);",
+        StringComparison.Ordinal);
     Assert(
         cloudBanStopMethod.Contains("RequestCloudBanParserStopAsync()", StringComparison.Ordinal) &&
         cloudBanStopMethod.Contains("StopDactHostsAsync", StringComparison.Ordinal) &&
@@ -4820,6 +4828,23 @@ static void ValidateControlCenterPresentation()
         parserAdapterSource.Contains("framework.IsInFrameworkUpdateThread", StringComparison.Ordinal) &&
         parserAdapterSource.Contains("lifecycleLock.Wait(0)", StringComparison.Ordinal),
         "Live-ban enforcement can still unload game hooks from the cloud SSE worker instead of a framework frame.");
+    Assert(
+        pluginSource.Contains("Volatile.Read(ref pluginInitialized) == 0", StringComparison.Ordinal) &&
+        constructorSourceForAuthentication.Contains("Volatile.Write(ref pluginInitialized, 1);", StringComparison.Ordinal) &&
+        startupBanIndex >= 0 &&
+        cloudInitializeIndex > startupBanIndex &&
+        constructorSourceForAuthentication.Contains("if (cloudClient.ActiveBan is null)", StringComparison.Ordinal) &&
+        pluginSource.Contains("cloudBanNoticeWindow.Show(notice, lifted: false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("cloudBanNoticeWindow.Show(notice, lifted: true);", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavInputs", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavFocus", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("text.Get(\"确认\", \"Confirm\")", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("账号已解封", StringComparison.Ordinal) &&
+        !cloudBanNoticeSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
+        !cloudBanNoticeSource.Contains("OpenPopup", StringComparison.Ordinal) &&
+        !cloudBanNoticeSource.Contains("OverlayEditShield", StringComparison.Ordinal),
+        "Ban/unban notification is modal, unbranded, dismisses game input, or can lose a construction-time server unban.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
