@@ -13,7 +13,8 @@ internal sealed record CloudAuthenticationResponse(
     string TokenType,
     DateTimeOffset ExpiresAt,
     CloudApiUser User,
-    CloudKeyEnvelope? KeyEnvelope);
+    CloudKeyEnvelope? KeyEnvelope,
+    bool WasBanRevoked = false);
 
 internal sealed record CloudBackupVersion(
     string Id,

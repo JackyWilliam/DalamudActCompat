@@ -17,6 +17,7 @@ internal sealed class CloudBanNoticeWindow : Window
     private readonly ISharedImmediateTexture logoTexture;
     private CloudBanNotice? notice;
     private bool lifted;
+    private bool requiresRestart;
     private bool locateOnNextDraw;
     private bool outerFrameStylePushed;
 
@@ -42,10 +43,14 @@ internal sealed class CloudBanNoticeWindow : Window
                 ImGuiWindowFlags.NoFocusOnAppearing;
     }
 
-    public void Show(CloudBanNotice nextNotice, bool lifted)
+    public void Show(
+        CloudBanNotice? nextNotice,
+        bool lifted,
+        bool requiresRestart = false)
     {
         notice = nextNotice;
         this.lifted = lifted;
+        this.requiresRestart = requiresRestart;
         locateOnNextDraw = true;
         IsOpen = true;
     }
@@ -83,7 +88,7 @@ internal sealed class CloudBanNoticeWindow : Window
     public override void Draw()
     {
         var current = notice;
-        if (current is null)
+        if (current is null && !lifted)
         {
             IsOpen = false;
             return;
@@ -117,7 +122,7 @@ internal sealed class CloudBanNoticeWindow : Window
                 }
                 else
                 {
-                    DrawBannedContent(current);
+                    DrawBannedContent(current!);
                 }
             }
             BrandedWindowChrome.EndGoldCard();
@@ -164,20 +169,27 @@ internal sealed class CloudBanNoticeWindow : Window
             "The DACT parser, overlays, and all DACT-managed extension services have stopped. Confirm only dismisses this notice; it does not remove the ban."));
     }
 
-    private void DrawLiftedContent(CloudBanNotice current)
+    private void DrawLiftedContent(CloudBanNotice? current)
     {
         ImGui.TextColored(IceBlue, text.Get("您的账号已经解除封禁", "Your account is no longer banned"));
         ImGui.Separator();
         ImGui.TextWrapped(text.Get(
             "服务器已确认该账号的封禁已经解除。",
             "The server confirmed that this account is no longer banned."));
-        ImGui.TextDisabled(text.Get(
-            $"原封禁时间：{current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
-            $"Previous ban time: {current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"));
+        if (current is not null)
+        {
+            ImGui.TextDisabled(text.Get(
+                $"原封禁时间：{current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
+                $"Previous ban time: {current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"));
+        }
         ImGui.Spacing();
         ImGui.TextWrapped(text.Get(
-            "为避免在当前运行中自动重启已经停止的原生服务，请重新加载 DACT 或重启游戏，然后重新登录。",
-            "To avoid restarting stopped native services during this run, reload DACT or restart the game, then sign in again."));
+            requiresRestart
+                ? "为避免在当前运行中自动重启已经停止的原生服务，请重新加载 DACT 或重启游戏，然后重新登录。"
+                : "服务器已将解封状态附在本次登录结果中，本次登录已经生效，可以继续使用 DACT。",
+            requiresRestart
+                ? "To avoid restarting stopped native services during this run, reload DACT or restart the game, then sign in again."
+                : "The server included the unban state in this login result. This login is active and DACT can be used."));
     }
 
     private static string FormatBanType(string type, bool chinese)

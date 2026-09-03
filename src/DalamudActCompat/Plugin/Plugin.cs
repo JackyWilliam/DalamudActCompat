@@ -759,7 +759,7 @@ public sealed class Plugin : IDalamudPlugin
             // while this comparatively large constructor is still wiring its subscribers.
             if (cloudClient.ActiveBan is null)
             {
-                OnCloudBanLifted();
+                OnCloudBanLifted(startupBan);
             }
         }
         else
@@ -863,6 +863,7 @@ public sealed class Plugin : IDalamudPlugin
                                          launcherWindow.IsOpen ||
                                          thirdPartyPluginNoticeWindow.IsOpen ||
                                          coreResourceDownloadWindow.IsOpen ||
+                                         cloudBanNoticeWindow.IsOpen ||
                                          encounterWindow.IsOpen ||
                                          simplifiedHomeWindow.IsOpen ||
                                          meterStyleEditorWindow.IsOpen;
@@ -1101,15 +1102,14 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
-    private void OnCloudBanLifted()
+    private void OnCloudBanLifted(CloudBanNotice? liftedNotice)
     {
-        CloudBanNotice? notice;
+        CloudBanNotice? notice = liftedNotice;
+        var requiresRestart = Volatile.Read(ref cloudAccessBlocked) != 0;
         lock (cloudBanLock)
         {
-            notice = enforcedCloudBan;
-            if (notice is null ||
-                Volatile.Read(ref cloudAccessBlocked) == 0 ||
-                Interlocked.Exchange(ref cloudBanLifted, 1) != 0)
+            notice ??= enforcedCloudBan;
+            if (Interlocked.Exchange(ref cloudBanLifted, 1) != 0)
             {
                 return;
             }
@@ -1117,11 +1117,16 @@ public sealed class Plugin : IDalamudPlugin
 
         _ = services.Framework.RunOnFrameworkThread(() =>
         {
-            cloudBanNoticeWindow.Show(notice, lifted: true);
+            cloudBanNoticeWindow.Show(
+                notice,
+                lifted: true,
+                requiresRestart: requiresRestart);
             services.NotificationManager.AddNotification(new()
             {
                 Title = "DACT 封禁已解除",
-                Content = "请重启游戏或重载 DACT，然后重新登录以恢复功能。",
+                Content = requiresRestart
+                    ? "请重启游戏或重载 DACT，然后重新登录以恢复功能。"
+                    : "服务器已确认解封，本次登录已经生效。",
             });
         });
     }

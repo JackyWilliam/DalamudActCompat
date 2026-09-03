@@ -106,7 +106,7 @@ internal sealed class CloudClientService : IDisposable
 
     public event Action<CloudBanNotice>? BanReceived;
 
-    public event Action? BanLifted;
+    public event Action<CloudBanNotice?>? BanLifted;
 
     public CloudBanNotice? ActiveBan
     {
@@ -273,7 +273,7 @@ internal sealed class CloudClientService : IDisposable
                 effectiveRecoveryKey,
                 rememberLogin);
             var saved = authentication.Credentials;
-            LiftBanAfterServerConfirmation();
+            LiftBanAfterServerConfirmation(response.WasBanRevoked);
             var loginMessage = authentication.PersistenceWarning is null
                 ? "登录成功。请选择版本后预览或恢复。"
                 : $"登录成功，但{authentication.PersistenceWarning}。";
@@ -1086,22 +1086,24 @@ internal sealed class CloudClientService : IDisposable
         }
     }
 
-    private void LiftBanAfterServerConfirmation()
+    private void LiftBanAfterServerConfirmation(bool serverReportedRevocation = false)
     {
-        var changed = false;
+        CloudBanNotice? liftedBan = null;
+        var shouldNotify = serverReportedRevocation;
         lock (stateLock)
         {
             if (activeBan is not null)
             {
+                liftedBan = activeBan;
                 banStore.Clear();
                 activeBan = null;
                 snapshot = snapshot with { ActiveBan = null };
-                changed = true;
+                shouldNotify = true;
             }
         }
-        if (changed)
+        if (shouldNotify)
         {
-            BanLifted?.Invoke();
+            BanLifted?.Invoke(liftedBan);
         }
     }
 

@@ -130,6 +130,7 @@ try
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
     await ValidateCloudApiContractAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
+    await ValidateFirstLoginReportsServerUnbanAsync(testRoot);
     await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
     await ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(testRoot);
     await ValidateCloudBanResponseEnforcesMarkerAsync(testRoot);
@@ -4835,7 +4836,8 @@ static void ValidateControlCenterPresentation()
         cloudInitializeIndex > startupBanIndex &&
         constructorSourceForAuthentication.Contains("if (cloudClient.ActiveBan is null)", StringComparison.Ordinal) &&
         pluginSource.Contains("cloudBanNoticeWindow.Show(notice, lifted: false);", StringComparison.Ordinal) &&
-        pluginSource.Contains("cloudBanNoticeWindow.Show(notice, lifted: true);", StringComparison.Ordinal) &&
+        pluginSource.Contains("requiresRestart: requiresRestart", StringComparison.Ordinal) &&
+        pluginSource.Contains("本次登录已经生效", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavInputs", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavFocus", StringComparison.Ordinal) &&
@@ -13013,6 +13015,76 @@ static async Task ValidateSavedCloudSessionRequiresServerValidationAsync(string 
         "Cloud logout waited for the server before revoking local DACT access.");
     releaseLogout.Set();
     await logoutTask;
+}
+
+static async Task ValidateFirstLoginReportsServerUnbanAsync(string testRoot)
+{
+    const string password = "unban-login-password";
+    var backupService = new PortableConfigurationBackupService();
+    var envelopeService = new CloudKeyEnvelopeService();
+    var recoveryKey = backupService.GenerateRecoveryKey();
+    var envelope = envelopeService.Create(recoveryKey, password);
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/login", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                token = "unban-login-token",
+                tokenType = "Bearer",
+                expiresAt = DateTimeOffset.UtcNow.AddDays(1),
+                user = new { id = "unban-user-id", username = "unban_user" },
+                keyEnvelope = envelope,
+                wasBanRevoked = true,
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { backups = Array.Empty<object>() });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 0,
+                remaining = 3,
+                invitations = Array.Empty<object>(),
+            });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new
+        {
+            error = "not_found",
+            message = "missing",
+        });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-first-login-unban"));
+    paths.EnsureCreated();
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(paths.CloudCredentialFile),
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        envelopeService,
+        backupService);
+    var notification = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    service.BanLifted += previousBan => notification.TrySetResult(previousBan is null);
+
+    await service.LoginAsync(
+        "unban_user",
+        password,
+        recoveryKey,
+        rememberLogin: false,
+        cancellationToken: CancellationToken.None);
+    Assert(
+        await notification.Task.WaitAsync(TimeSpan.FromSeconds(2)) &&
+        service.Snapshot.IsSignedIn,
+        "The first successful login after an administrator unban did not surface the server notice.");
 }
 
 static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(string testRoot)
