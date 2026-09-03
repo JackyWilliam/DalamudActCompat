@@ -75,6 +75,7 @@ public sealed class ControlCenterWindow : Window
     private const string PluginInstallFailurePopupId =
         "第三方插件导入失败###DalamudActCompatPluginInstallFailure";
     private const string ResetEncounterPopupId = "重置当前战斗###DalamudActCompatResetEncounter";
+    private const string CloudQuickPopupId = "云同步状态###DalamudActCompatCloudQuickStatus";
 
     private readonly PluginConfiguration configuration;
     private readonly IParserEngine parserEngine;
@@ -181,6 +182,7 @@ public sealed class ControlCenterWindow : Window
     private string? cloudPreviewRequestedBackupId;
     private bool confirmCloudRestore;
     private bool confirmCloudRollback;
+    private bool cloudQuickPopupRequested;
 
     public ControlCenterWindow(
         PluginConfiguration configuration,
@@ -421,8 +423,9 @@ public sealed class ControlCenterWindow : Window
         PushTheme();
         try
         {
-            DrawWindowChrome();
             var cloudSnapshot = cloud.GetSnapshot();
+            DrawWindowChrome(cloudSnapshot);
+            DrawCloudQuickPopup(cloudSnapshot);
             if (!cloudSnapshot.IsSignedIn)
             {
                 ImGui.Spacing();
@@ -541,12 +544,13 @@ public sealed class ControlCenterWindow : Window
             0,
             1);
 
-    private void DrawWindowChrome()
+    private void DrawWindowChrome(CloudClientSnapshot cloudSnapshot)
     {
         var stateLabel = $"● {LocalizeState(parserStatus.State)}";
         var stateColor = parserStatus.State == ParserState.Running
             ? IceBlue
             : new Vector4(0.70f, 0.72f, 0.76f, 1);
+        var (cloudStatusLabel, cloudStatusColor) = ResolveCloudStatus(cloudSnapshot);
         if (BrandedWindowChrome.Draw(
                 logoTexture,
                 text.Get("主页", "Home"),
@@ -555,7 +559,11 @@ public sealed class ControlCenterWindow : Window
                 VersionLabel,
                 "control-center",
                 helpAction: openHelp,
-                helpTooltip: text.Get("帮助", "Help")))
+                helpTooltip: text.Get("帮助", "Help"),
+                statusAction: () => cloudQuickPopupRequested = true,
+                statusLabel: $"● {cloudStatusLabel}",
+                statusColor: cloudStatusColor,
+                statusTooltip: text.Get("查看云同步状态", "View cloud sync status")))
         {
             HideAnimated();
         }
@@ -2216,26 +2224,134 @@ public sealed class ControlCenterWindow : Window
         DrawPageHeader(
             text.Get("云同步", "Cloud Sync"),
             text.Get(
-                "配置在本机加密后上传；服务器无法读取内容，也不会自动覆盖本机。",
-                "Configuration is encrypted locally before upload. The server cannot read it and never overwrites this PC automatically."));
-        ImGui.TextDisabled(text.Get(
-            "为执行账号安全和机器封禁，客户端只上传不可逆的 SHA-256 设备指纹，不上传原始机器信息。",
-            "For account security and device bans, only an irreversible SHA-256 device fingerprint is uploaded; raw machine identifiers stay local."));
-
-        ImGui.TextColored(
-            snapshot.StatusIsError
-                ? new Vector4(0.96f, 0.42f, 0.38f, 1)
-                : new Vector4(0.45f, 0.88f, 0.62f, 1),
-            snapshot.StatusMessage);
-        if (snapshot.IsBusy)
-        {
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get("处理中…", "Working…"));
-        }
-        ImGui.Spacing();
+                "自动保护常用配置，管理最近两份备份，并在需要时安全恢复。",
+                "Automatically protect settings, manage the latest two backups, and restore safely when needed."),
+            showDivider: false);
 
         DrawSignedInCloud(snapshot);
         return false;
+    }
+
+    private (string Label, Vector4 Color) ResolveCloudStatus(CloudClientSnapshot snapshot)
+    {
+        if (!snapshot.IsSignedIn)
+        {
+            return (text.Get("云同步未登录", "Cloud signed out"), new Vector4(0.62f, 0.66f, 0.71f, 1));
+        }
+        if (snapshot.StatusIsError)
+        {
+            return (text.Get("云同步异常", "Cloud error"), new Vector4(1, 0.45f, 0.42f, 1));
+        }
+        if (snapshot.IsBusy)
+        {
+            return (text.Get("云同步处理中", "Cloud working"), Gold);
+        }
+        if (!configuration.AutoCloudSyncEnabled)
+        {
+            return (text.Get("自动同步已关闭", "Auto-sync off"), new Vector4(0.62f, 0.66f, 0.71f, 1));
+        }
+        if (snapshot.Backups.Count == 0)
+        {
+            return (text.Get("等待首次同步", "Awaiting first sync"), Gold);
+        }
+        return (text.Get("云同步正常", "Cloud sync ready"), new Vector4(0.45f, 0.88f, 0.62f, 1));
+    }
+
+    private void DrawCloudQuickPopup(CloudClientSnapshot snapshot)
+    {
+        if (cloudQuickPopupRequested)
+        {
+            ImGui.OpenPopup(CloudQuickPopupId);
+            cloudQuickPopupRequested = false;
+        }
+
+        const float popupWidth = 390;
+        var parentPosition = ImGui.GetWindowPos();
+        var parentSize = ImGui.GetWindowSize();
+        ImGui.SetNextWindowPos(
+            new Vector2(
+                parentPosition.X + Math.Max(12, parentSize.X - popupWidth - 42),
+                parentPosition.Y + 48),
+            ImGuiCond.Appearing);
+        ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
+        if (!ImGui.BeginPopup(
+                CloudQuickPopupId,
+                ImGuiWindowFlags.AlwaysAutoResize |
+                ImGuiWindowFlags.NoResize |
+                ImGuiWindowFlags.NoMove))
+        {
+            ImGui.PopStyleColor(2);
+            ImGui.PopStyleVar(2);
+            return;
+        }
+
+        var (statusLabel, statusColor) = ResolveCloudStatus(snapshot);
+        ImGui.TextColored(Gold, text.Get("云同步状态", "Cloud sync status"));
+        ImGui.TextColored(statusColor, $"● {statusLabel}");
+        if (!string.IsNullOrWhiteSpace(snapshot.StatusMessage))
+        {
+            ImGui.TextWrapped(snapshot.StatusMessage);
+        }
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        DrawCloudQuickRow(
+            text.Get("账号", "Account"),
+            snapshot.IsSignedIn
+                ? snapshot.Username ?? "—"
+                : text.Get("尚未登录", "Signed out"));
+        DrawCloudQuickRow(
+            text.Get("最近备份", "Latest backup"),
+            snapshot.Backups.FirstOrDefault() is { } latestBackup
+                ? latestBackup.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+                : text.Get("暂无", "None"));
+        DrawCloudQuickRow(
+            text.Get("云端版本", "Cloud versions"),
+            $"{snapshot.Backups.Count}/2");
+
+        var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
+        if (ImGui.Checkbox(
+                text.Get("自动同步配置", "Automatically sync configuration"),
+                ref autoCloudSyncEnabled))
+        {
+            configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
+            saveConfiguration();
+        }
+        DrawAuthenticationMutedText(text.Get(
+            "更改停止 2 分钟后同步；每天再兜底检查一次。",
+            "Syncs 2 minutes after changes stop, with a daily fallback check."));
+        ImGui.Spacing();
+
+        if (snapshot.IsSignedIn)
+        {
+            ImGui.BeginDisabled(snapshot.IsBusy);
+            if (ImGui.Button(text.Get("刷新状态", "Refresh status"), new Vector2(118, 34)))
+            {
+                cloud.Refresh();
+            }
+            ImGui.EndDisabled();
+            ImGui.SameLine();
+        }
+        if (ImGui.Button(text.Get("打开云同步", "Open Cloud Sync"), new Vector2(142, 34)))
+        {
+            selectedPage = Page.Cloud;
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndPopup();
+        ImGui.PopStyleColor(2);
+        ImGui.PopStyleVar(2);
+    }
+
+    private static void DrawCloudQuickRow(string label, string value)
+    {
+        ImGui.TextDisabled(label);
+        ImGui.SameLine(122);
+        ImGui.TextUnformatted(value);
     }
 
     private void DrawAuthenticationGate(CloudClientSnapshot snapshot)
@@ -2704,18 +2820,122 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawSignedInCloud(CloudClientSnapshot snapshot)
     {
-        if (!snapshot.IsBusy && ImGui.Button(text.Get("刷新版本", "Refresh versions")))
-        {
-            cloud.Refresh();
-        }
+        DrawCloudSummaryCard(snapshot);
 
         if (!string.IsNullOrWhiteSpace(snapshot.RecoveryKeyToSave))
         {
             ImGui.Spacing();
+            DrawCloudRecoveryKeyCard(snapshot.RecoveryKeyToSave);
+        }
+
+        ImGui.Spacing();
+        DrawCloudBackupCard(snapshot);
+        ImGui.Spacing();
+        DrawCloudInvitationAndSupportCard(snapshot);
+    }
+
+    private void DrawCloudSummaryCard(CloudClientSnapshot snapshot)
+    {
+        var statusMessage = snapshot.IsBusy
+            ? $"{snapshot.StatusMessage}  {text.Get("处理中…", "Working…")}"
+            : snapshot.StatusMessage;
+        var wrapWidth = Math.Max(
+            1,
+            ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().WindowPadding.X * 2));
+        var statusMessageHeight = string.IsNullOrWhiteSpace(statusMessage)
+            ? 0
+            : ImGui.CalcTextSize(statusMessage, false, wrapWidth).Y;
+        var syncHint = text.Get(
+            "更改停止 2 分钟后自动同步；战斗中延后，每天再兜底检查一次。",
+            "Auto-sync runs 2 minutes after changes stop, waits during combat, and checks daily.");
+        var cardHeight =
+            190 +
+            statusMessageHeight +
+            ImGui.CalcTextSize(syncHint, false, wrapWidth).Y;
+
+        if (BrandedWindowChrome.BeginGoldCard(
+                "cloud-summary-card",
+                cardHeight,
+                allowScrolling: false))
+        {
+            var (statusLabel, statusColor) = ResolveCloudStatus(snapshot);
+            ImGui.TextColored(Gold, text.Get("同步概览", "Sync overview"));
+            ImGui.TextColored(statusColor, $"● {statusLabel}");
+            if (!string.IsNullOrWhiteSpace(statusMessage))
+            {
+                ImGui.TextWrapped(statusMessage);
+            }
+
+            ImGui.Spacing();
+            if (ImGui.BeginTable(
+                    "cloud-summary-metrics",
+                    3,
+                    ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchSame))
+            {
+                ImGui.TableNextColumn();
+                DrawCloudMetric(
+                    text.Get("自动同步", "Auto-sync"),
+                    configuration.AutoCloudSyncEnabled
+                        ? text.Get("已开启", "On")
+                        : text.Get("已关闭", "Off"),
+                    configuration.AutoCloudSyncEnabled
+                        ? new Vector4(0.45f, 0.88f, 0.62f, 1)
+                        : AuthenticationMutedText);
+                ImGui.TableNextColumn();
+                DrawCloudMetric(
+                    text.Get("云端版本", "Cloud versions"),
+                    $"{snapshot.Backups.Count}/2",
+                    IceBlue);
+                ImGui.TableNextColumn();
+                DrawCloudMetric(
+                    text.Get("最近备份", "Latest backup"),
+                    snapshot.Backups.FirstOrDefault() is { } latestBackup
+                        ? latestBackup.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")
+                        : text.Get("暂无", "None"),
+                    IceBlue);
+                ImGui.EndTable();
+            }
+
+            ImGui.Spacing();
+            var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
+            if (ImGui.Checkbox(
+                    text.Get("自动同步配置", "Automatically sync configuration"),
+                    ref autoCloudSyncEnabled))
+            {
+                configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
+                saveConfiguration();
+            }
+            DrawAuthenticationMutedText(syncHint);
+
+            ImGui.BeginDisabled(snapshot.IsBusy);
+            if (ImGui.Button(text.Get("刷新状态", "Refresh status"), new Vector2(118, 32)))
+            {
+                cloud.Refresh();
+            }
+            ImGui.EndDisabled();
+        }
+        BrandedWindowChrome.EndGoldCard();
+    }
+
+    private static void DrawCloudMetric(string label, string value, Vector4 color)
+    {
+        ImGui.TextDisabled(label);
+        ImGui.TextColored(color, value);
+    }
+
+    private void DrawCloudRecoveryKeyCard(string recoveryKey)
+    {
+        if (BrandedWindowChrome.BeginGoldCard(
+                "cloud-recovery-key-card",
+                102,
+                allowScrolling: false))
+        {
             ImGui.TextColored(
                 new Vector4(1f, 0.72f, 0.25f, 1),
-                text.Get("恢复密钥只显示这一次，请离线保存：", "Save this recovery key offline; it is shown only once:"));
-            var visibleRecoveryKey = snapshot.RecoveryKeyToSave;
+                text.Get(
+                    "恢复密钥只显示这一次，请立即离线保存",
+                    "Save this recovery key offline now; it is shown only once"));
+            var visibleRecoveryKey = recoveryKey;
             ImGui.SetNextItemWidth(-90);
             ImGui.InputText(
                 "###cloud-created-recovery-key",
@@ -2725,189 +2945,264 @@ public sealed class ControlCenterWindow : Window
             ImGui.SameLine();
             if (ImGui.Button(text.Get("复制", "Copy")))
             {
-                ImGui.SetClipboardText(snapshot.RecoveryKeyToSave);
+                ImGui.SetClipboardText(recoveryKey);
             }
         }
+        BrandedWindowChrome.EndGoldCard();
+    }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("好友邀请", "Friend invitations"));
-        if (snapshot.Invitations is { } invitations)
+    private void DrawCloudBackupCard(CloudClientSnapshot snapshot)
+    {
+        var previewHeight = snapshot.RestorePreview is { } activePreview &&
+                            cloudPreviewRequestedBackupId == selectedCloudBackupId
+            ? 116 + (activePreview.Scopes.Count * ImGui.GetTextLineHeightWithSpacing())
+            : 0;
+        var rollbackHeight = string.IsNullOrWhiteSpace(snapshot.LastRollbackPath) ? 0 : 44;
+        var cardHeight =
+            290 +
+            (snapshot.Backups.Count * ImGui.GetFrameHeightWithSpacing()) +
+            previewHeight +
+            rollbackHeight;
+
+        if (BrandedWindowChrome.BeginGoldCard(
+                "cloud-backup-card",
+                cardHeight,
+                allowScrolling: false))
         {
-            ImGui.TextDisabled(text.Get(
-                $"已生成 {invitations.Used}/{invitations.Quota}，剩余 {invitations.Remaining} 个名额。",
-                $"Generated {invitations.Used}/{invitations.Quota}; {invitations.Remaining} slots remain."));
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint(
-                "###cloud-invitee-contact",
-                text.Get("受邀好友的游戏 ID 或 QQ ID", "Invitee game ID or QQ ID"),
-                ref cloudInviteeContact,
-                81);
-            var normalizedInviteeContact = cloudInviteeContact.Trim();
-            var inviteeContactValid = normalizedInviteeContact.Length is >= 2 and <= 80;
-            ImGui.BeginDisabled(snapshot.IsBusy || invitations.Remaining <= 0 || !inviteeContactValid);
-            if (!snapshot.IsBusy && invitations.Remaining > 0 &&
-                ImGui.Button(text.Get("生成好友激活码", "Create friend activation key")))
+            ImGui.TextColored(Gold, text.Get("备份与恢复", "Backup & restore"));
+            DrawAuthenticationMutedText(text.Get(
+                "配置在本机加密后上传，服务器无法读取；恢复前始终先预览变更。",
+                "Settings are encrypted on this PC before upload. Always preview changes before restoring."));
+            DrawAuthenticationMutedText(text.Get(
+                "最多保留最近 2 个不同内容的密文版本；相同配置不会重复占用空间。",
+                "Up to 2 encrypted versions with different content are retained; unchanged settings use no extra slot."));
+
+            ImGui.BeginDisabled(snapshot.IsBusy);
+            if (ImGui.Button(text.Get("上传当前配置", "Upload current configuration"), new Vector2(152, 34)))
             {
-                cloud.CreateInvitation(normalizedInviteeContact);
+                cloud.Upload();
             }
             ImGui.EndDisabled();
-            if (!inviteeContactValid && !string.IsNullOrWhiteSpace(cloudInviteeContact))
+            if (ImGui.IsItemHovered())
             {
-                ImGui.TextDisabled(text.Get(
-                    "游戏 ID 或 QQ ID 长度需要为 2 到 80 个字符。",
-                    "The game ID or QQ ID must contain 2 to 80 characters."));
+                ImGui.SetTooltip(text.Get(
+                    "手动上传会短暂停止解析器与扩展，完成后自动恢复。",
+                    "Manual upload briefly stops parsers and extensions, then restores them."));
             }
-            if (!string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare))
-            {
-                var invitationKey = snapshot.InvitationKeyToShare;
-                ImGui.SetNextItemWidth(-90);
-                ImGui.InputText(
-                    "###cloud-created-invitation-key",
-                    ref invitationKey,
-                    96,
-                    ImGuiInputTextFlags.ReadOnly);
-                ImGui.SameLine();
-                if (ImGui.Button(text.Get("复制###copy-invitation", "Copy###copy-invitation")))
-                {
-                    ImGui.SetClipboardText(snapshot.InvitationKeyToShare);
-                }
-                ImGui.TextDisabled(text.Get(
-                    "完整激活码只显示这一次，请现在发给好友。",
-                    "The complete key is shown once; share it now."));
-            }
-            foreach (var invitation in invitations.Invitations)
-            {
-                ImGui.BulletText(
-                    $"{invitation.Name} · {invitation.InviteeContact ?? "—"} · " +
-                    $"…{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
-            }
-        }
-        ImGui.BeginDisabled();
-        ImGui.Button(text.Get("爱发电支持（即将开放）", "Buy me a coffee (coming soon)"));
-        ImGui.EndDisabled();
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("云端版本", "Cloud versions"));
-        var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
-        if (ImGui.Checkbox(
-                text.Get("自动同步配置", "Automatically sync configuration"),
-                ref autoCloudSyncEnabled))
-        {
-            configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
-            saveConfiguration();
-        }
-        ImGui.TextDisabled(text.Get(
-            "配置停止变化 2 分钟后自动上传，每天再检查一次；战斗中会延后，内容没变不新增版本。",
-            "Uploads after configuration is quiet for 2 minutes and checks daily; combat defers it, and unchanged content creates no version."));
-        ImGui.TextDisabled(text.Get(
-            "最多保留最近 2 个密文版本。手动上传会短暂停止解析器与扩展，完成后自动恢复。",
-            "The latest 2 encrypted versions are retained. Manual upload briefly stops parsers and extensions, then restores them."));
-        if (!snapshot.IsBusy && ImGui.Button(text.Get("上传当前配置", "Upload current configuration")))
-        {
-            cloud.Upload();
-        }
-
-        if (snapshot.Backups.Count == 0)
-        {
-            ImGui.TextDisabled(text.Get("还没有云端备份。", "No cloud backups yet."));
-        }
-        else
-        {
-            if (snapshot.Backups.All(backup => backup.Id != selectedCloudBackupId))
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.TextColored(IceBlue, text.Get("选择云端版本", "Choose a cloud version"));
+            if (snapshot.Backups.Count == 0)
             {
-                selectedCloudBackupId = snapshot.Backups[0].Id;
-                cloudPreviewRequestedBackupId = null;
-                confirmCloudRestore = false;
+                DrawAuthenticationMutedText(text.Get(
+                    "暂无备份。开启自动同步后，首次同步会在配置稳定 2 分钟后创建。",
+                    "No backup yet. With auto-sync on, the first backup is created after settings remain quiet for 2 minutes."));
             }
-            foreach (var backup in snapshot.Backups)
+            else
             {
-                var selected = backup.Id == selectedCloudBackupId;
-                var label = $"{backup.CreatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}  " +
-                            $"{FormatCloudBytes(backup.SizeBytes)}###{backup.Id}";
-                if (ImGui.Selectable(label, selected))
+                if (snapshot.Backups.All(backup => backup.Id != selectedCloudBackupId))
                 {
-                    selectedCloudBackupId = backup.Id;
+                    selectedCloudBackupId = snapshot.Backups[0].Id;
                     cloudPreviewRequestedBackupId = null;
                     confirmCloudRestore = false;
                 }
-            }
-        }
-
-        var canUseSelection = !snapshot.IsBusy && !string.IsNullOrWhiteSpace(selectedCloudBackupId);
-        if (canUseSelection && ImGui.Button(text.Get("预览恢复内容", "Preview restore")))
-        {
-            cloudPreviewRequestedBackupId = selectedCloudBackupId;
-            confirmCloudRestore = false;
-            cloud.PreviewRestore(selectedCloudBackupId!);
-        }
-
-        if (snapshot.RestorePreview is { } preview &&
-            cloudPreviewRequestedBackupId == selectedCloudBackupId)
-        {
-            ImGui.TextWrapped(text.Get(
-                $"将新增 {preview.AddedFiles}、修改 {preview.ChangedFiles}、删除 {preview.RemovedFiles} 个文件；" +
-                $"共 {preview.FileCount} 个文件。新电脑的日志目录和 ACT 插件目录会保留。",
-                $"Adds {preview.AddedFiles}, changes {preview.ChangedFiles}, and removes {preview.RemovedFiles} files; " +
-                $"{preview.FileCount} files total. This PC's log and ACT plugin paths are preserved."));
-            foreach (var scope in preview.Scopes)
-            {
-                ImGui.BulletText(
-                    $"{scope.RelativePath}: +{scope.AddedFiles} ~{scope.ChangedFiles} -{scope.RemovedFiles} ={scope.UnchangedFiles}");
-            }
-            if (!confirmCloudRestore)
-            {
-                if (!snapshot.IsBusy && ImGui.Button(text.Get("恢复这个版本", "Restore this version")))
+                foreach (var backup in snapshot.Backups)
                 {
-                    confirmCloudRestore = true;
+                    var selected = backup.Id == selectedCloudBackupId;
+                    var label = $"{backup.CreatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}  " +
+                                $"{FormatCloudBytes(backup.SizeBytes)}###{backup.Id}";
+                    if (ImGui.Selectable(label, selected))
+                    {
+                        selectedCloudBackupId = backup.Id;
+                        cloudPreviewRequestedBackupId = null;
+                        confirmCloudRestore = false;
+                    }
                 }
             }
-            else
+
+            var canUseSelection =
+                !snapshot.IsBusy &&
+                !string.IsNullOrWhiteSpace(selectedCloudBackupId);
+            ImGui.BeginDisabled(!canUseSelection);
+            if (ImGui.Button(text.Get("预览恢复内容", "Preview restore"), new Vector2(142, 32)))
+            {
+                cloudPreviewRequestedBackupId = selectedCloudBackupId;
+                confirmCloudRestore = false;
+                cloud.PreviewRestore(selectedCloudBackupId!);
+            }
+            ImGui.EndDisabled();
+
+            if (snapshot.RestorePreview is { } preview &&
+                cloudPreviewRequestedBackupId == selectedCloudBackupId)
+            {
+                ImGui.TextWrapped(text.Get(
+                    $"将新增 {preview.AddedFiles}、修改 {preview.ChangedFiles}、删除 {preview.RemovedFiles} 个文件；" +
+                    $"共 {preview.FileCount} 个文件。新电脑的日志目录和 ACT 插件目录会保留。",
+                    $"Adds {preview.AddedFiles}, changes {preview.ChangedFiles}, and removes {preview.RemovedFiles} files; " +
+                    $"{preview.FileCount} files total. This PC's log and ACT plugin paths are preserved."));
+                foreach (var scope in preview.Scopes)
+                {
+                    ImGui.BulletText(
+                        $"{scope.RelativePath}: +{scope.AddedFiles} ~{scope.ChangedFiles} -{scope.RemovedFiles} ={scope.UnchangedFiles}");
+                }
+                if (!confirmCloudRestore)
+                {
+                    ImGui.BeginDisabled(snapshot.IsBusy);
+                    if (ImGui.Button(text.Get("恢复这个版本", "Restore this version")))
+                    {
+                        confirmCloudRestore = true;
+                    }
+                    ImGui.EndDisabled();
+                }
+                else
+                {
+                    ImGui.TextColored(
+                        new Vector4(1f, 0.56f, 0.30f, 1),
+                        text.Get(
+                            "将覆盖白名单内的本机配置，完成后必须重载 DACT。",
+                            "Whitelisted local settings will be replaced; DACT must be reloaded afterward."));
+                    ImGui.BeginDisabled(snapshot.IsBusy);
+                    if (ImGui.Button(text.Get("确认覆盖", "Confirm restore")))
+                    {
+                        cloud.Restore(selectedCloudBackupId!);
+                        confirmCloudRestore = false;
+                    }
+                    ImGui.EndDisabled();
+                    ImGui.SameLine();
+                    if (ImGui.Button(text.Get("取消", "Cancel")))
+                    {
+                        confirmCloudRestore = false;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.LastRollbackPath))
+            {
+                ImGui.Spacing();
+                if (!confirmCloudRollback)
+                {
+                    ImGui.BeginDisabled(snapshot.IsBusy);
+                    if (ImGui.Button(text.Get("撤销上次恢复", "Undo last restore")))
+                    {
+                        confirmCloudRollback = true;
+                    }
+                    ImGui.EndDisabled();
+                }
+                else
+                {
+                    ImGui.BeginDisabled(snapshot.IsBusy);
+                    if (ImGui.Button(text.Get("确认回滚", "Confirm rollback")))
+                    {
+                        cloud.Rollback();
+                        confirmCloudRollback = false;
+                    }
+                    ImGui.EndDisabled();
+                    ImGui.SameLine();
+                    if (ImGui.Button(text.Get("取消###cloud-rollback", "Cancel###cloud-rollback")))
+                    {
+                        confirmCloudRollback = false;
+                    }
+                }
+            }
+        }
+        BrandedWindowChrome.EndGoldCard();
+    }
+
+    private void DrawCloudInvitationAndSupportCard(CloudClientSnapshot snapshot)
+    {
+        var invitationCount = snapshot.Invitations?.Invitations.Count ?? 0;
+        var shareKeyHeight = string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare) ? 0 : 62;
+        var cardHeight =
+            390 +
+            shareKeyHeight +
+            (invitationCount * ImGui.GetTextLineHeightWithSpacing());
+
+        if (BrandedWindowChrome.BeginGoldCard(
+                "cloud-invitation-support-card",
+                cardHeight,
+                allowScrolling: false))
+        {
+            ImGui.TextColored(Gold, text.Get("邀请好友", "Invite friends"));
+            if (snapshot.Invitations is { } invitations)
             {
                 ImGui.TextColored(
-                    new Vector4(1f, 0.56f, 0.30f, 1),
-                    text.Get("将覆盖白名单内的本机配置，完成后必须重载 DACT。", "Whitelisted local settings will be replaced; DACT must be reloaded afterward."));
-                if (!snapshot.IsBusy && ImGui.Button(text.Get("确认覆盖", "Confirm restore")))
+                    IceBlue,
+                    text.Get(
+                        $"已使用 {invitations.Used}/{invitations.Quota} · 剩余 {invitations.Remaining}",
+                        $"{invitations.Used}/{invitations.Quota} used · {invitations.Remaining} remaining"));
+                DrawAuthenticationMutedText(text.Get(
+                    "每个激活码只能使用一次。请填写受邀好友的游戏 ID 或 QQ ID，方便后续核对。",
+                    "Each activation key can be used once. Enter the friend's game ID or QQ ID for later verification."));
+                ImGui.SetNextItemWidth(-1);
+                ImGui.InputTextWithHint(
+                    "###cloud-invitee-contact",
+                    text.Get("受邀好友的游戏 ID 或 QQ ID", "Invitee game ID or QQ ID"),
+                    ref cloudInviteeContact,
+                    81);
+                var normalizedInviteeContact = cloudInviteeContact.Trim();
+                var inviteeContactValid = normalizedInviteeContact.Length is >= 2 and <= 80;
+                ImGui.BeginDisabled(
+                    snapshot.IsBusy ||
+                    invitations.Remaining <= 0 ||
+                    !inviteeContactValid);
+                if (ImGui.Button(text.Get("生成好友激活码", "Create friend activation key")))
                 {
-                    cloud.Restore(selectedCloudBackupId!);
-                    confirmCloudRestore = false;
+                    cloud.CreateInvitation(normalizedInviteeContact);
                 }
-                ImGui.SameLine();
-                if (ImGui.Button(text.Get("取消", "Cancel")))
+                ImGui.EndDisabled();
+                if (!inviteeContactValid && !string.IsNullOrWhiteSpace(cloudInviteeContact))
                 {
-                    confirmCloudRestore = false;
+                    DrawAuthenticationMutedText(text.Get(
+                        "游戏 ID 或 QQ ID 长度需要为 2 到 80 个字符。",
+                        "The game ID or QQ ID must contain 2 to 80 characters."));
+                }
+                if (!string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare))
+                {
+                    var invitationKey = snapshot.InvitationKeyToShare;
+                    ImGui.SetNextItemWidth(-90);
+                    ImGui.InputText(
+                        "###cloud-created-invitation-key",
+                        ref invitationKey,
+                        96,
+                        ImGuiInputTextFlags.ReadOnly);
+                    ImGui.SameLine();
+                    if (ImGui.Button(text.Get("复制###copy-invitation", "Copy###copy-invitation")))
+                    {
+                        ImGui.SetClipboardText(snapshot.InvitationKeyToShare);
+                    }
+                    DrawAuthenticationMutedText(text.Get(
+                        "完整激活码只显示这一次，请现在发给好友。",
+                        "The complete key is shown once; share it now."));
+                }
+                foreach (var invitation in invitations.Invitations)
+                {
+                    ImGui.BulletText(
+                        $"{invitation.Name} · {invitation.InviteeContact ?? "—"} · " +
+                        $"…{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
                 }
             }
-        }
 
-        if (!string.IsNullOrWhiteSpace(snapshot.LastRollbackPath))
-        {
             ImGui.Spacing();
-            if (!confirmCloudRollback)
-            {
-                if (!snapshot.IsBusy && ImGui.Button(text.Get("撤销上次恢复", "Undo last restore")))
-                {
-                    confirmCloudRollback = true;
-                }
-            }
-            else
-            {
-                if (!snapshot.IsBusy && ImGui.Button(text.Get("确认回滚", "Confirm rollback")))
-                {
-                    cloud.Rollback();
-                    confirmCloudRollback = false;
-                }
-                ImGui.SameLine();
-                if (ImGui.Button(text.Get("取消###cloud-rollback", "Cancel###cloud-rollback")))
-                {
-                    confirmCloudRollback = false;
-                }
-            }
+            ImGui.Separator();
+            ImGui.Spacing();
+            ImGui.TextColored(Gold, text.Get("支持 DACT", "Support DACT"));
+            ImGui.TextWrapped(text.Get(
+                "你的支持将用于账号与加密备份服务器的持续运行，以及 DACT 的维护和后续开发。",
+                "Your support helps keep the account and encrypted-backup server online and funds ongoing DACT maintenance and development."));
+            ImGui.TextColored(IceBlue, text.Get(
+                "支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额。",
+                "Supporters may contact the administrator to request more friend-invite slots beyond the default 3."));
+            DrawAuthenticationMutedText(text.Get(
+                "支持不会解除封禁、跳过风控或改变功能权限。",
+                "Support does not remove bans, bypass risk controls, or change feature permissions."));
+            ImGui.BeginDisabled();
+            ImGui.Button(
+                text.Get("爱发电支持（即将开放）", "Buy me a coffee (coming soon)"),
+                new Vector2(190, 34));
+            ImGui.EndDisabled();
         }
-
+        BrandedWindowChrome.EndGoldCard();
     }
 
     private void ClearCloudSecrets()

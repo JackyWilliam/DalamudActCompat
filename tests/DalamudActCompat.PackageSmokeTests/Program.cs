@@ -4524,12 +4524,21 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("DrawCombatLogDirectorySettings();", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"当前路径\", \"Current path\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"更改目录...\", \"Change directory...\")", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("最多保留最近 2 个密文版本", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("最多保留最近 2 个不同内容的密文版本", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("最多保留最近 10 个密文版本", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("The latest 2 encrypted versions are retained", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("Up to 2 encrypted versions with different content are retained", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("The latest 10 encrypted versions are retained", StringComparison.Ordinal) &&
         controlCenterSource.Contains("自动同步配置", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("配置停止变化 2 分钟后自动上传", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("更改停止 2 分钟后自动同步", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("cloud-summary-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("cloud-backup-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("cloud-invitation-support-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("CloudQuickPopupId", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("statusAction: () => cloudQuickPopupRequested = true", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("查看云同步状态", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("支持不会解除封禁、跳过风控或改变功能权限", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("客户端只上传不可逆的 SHA-256 设备指纹", StringComparison.Ordinal) &&
         configurationSource.Contains("AutoCloudSyncEnabled { get; set; } = true", StringComparison.Ordinal) &&
         pluginSource.Contains("CreateCloudConfigurationWatcher", StringComparison.Ordinal) &&
         pluginSource.Contains("TryStartCloudAutoSync(now);", StringComparison.Ordinal) &&
@@ -10062,6 +10071,9 @@ static void ValidateHtmlOverlayDefaults()
             StringComparison.Ordinal) &&
         brandedChromeSource.Contains("const float helpCloseGap = 3;", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("actionButtonSize + helpCloseGap", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("statusWidth", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("statusAction();", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("##status-{id}", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
