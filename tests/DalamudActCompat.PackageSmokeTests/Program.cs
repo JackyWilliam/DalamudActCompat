@@ -130,6 +130,8 @@ try
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
     await ValidateCloudApiContractAsync(testRoot);
     await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
+    await ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(testRoot);
+    await ValidateCloudBanResponseEnforcesMarkerAsync(testRoot);
     var cloudIntegrationBaseUrl = Environment.GetEnvironmentVariable(
         "DACT_CLOUD_INTEGRATION_BASE_URL");
     var cloudIntegrationAdminToken = Environment.GetEnvironmentVariable(
@@ -12584,6 +12586,35 @@ static void ValidateCloudKeyEnvelopeAndCredentialProtection(string testRoot)
         protectedBytes.AsSpan().IndexOf("dact1_"u8) < 0,
         "Cloud credential file exposed a session token or recovery key in plaintext.");
 
+    var recoveryOnly = credentials with
+    {
+        Token = string.Empty,
+        ExpiresAt = DateTimeOffset.MinValue,
+    };
+    store.Save(recoveryOnly);
+    Assert(
+        store.Load() == recoveryOnly,
+        "Cloud credential store rejected the recovery-only state needed after session revocation.");
+
+    var banPath = Path.Combine(testRoot, "cloud-security", "ban.dat");
+    var banStore = new CloudBanStore(banPath);
+    var notice = new CloudBanNotice(
+        "account_banned",
+        "account",
+        DateTimeOffset.UtcNow,
+        null,
+        "private-test-reason");
+    banStore.Save(notice);
+    Assert(banStore.Load() == notice, "DPAPI cloud ban marker did not round-trip.");
+    Assert(
+        File.ReadAllBytes(banPath).AsSpan().IndexOf("private-test-reason"u8) < 0,
+        "Cloud ban marker exposed its server-provided reason in plaintext.");
+    File.Delete(banPath);
+    banStore.EnsurePresent(notice);
+    Assert(
+        File.Exists(banPath) && banStore.Load() == notice,
+        "Deleted cloud ban marker was not restored from the in-memory ban state.");
+
     var paths = new PluginPaths(Path.Combine(testRoot, "cloud-machine"));
     paths.EnsureCreated();
     var identity = new CloudMachineIdentity(paths.CloudDeviceFile);
@@ -12625,6 +12656,78 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
                 expiresAt = createdAt.AddDays(30),
                 user = new { id = "user-id", username = "cloud_user" },
                 keyEnvelope = envelope,
+            });
+        }
+        if (path.EndsWith("/auth/access-status", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                banned = true,
+                sessionActive = false,
+                wasBanRevoked = false,
+                banType = "account",
+                bannedAt = createdAt,
+                banExpiresAt = (DateTimeOffset?)null,
+                banReason = "contract-test",
+            });
+        }
+        if (path.EndsWith("/auth/key-envelope", StringComparison.Ordinal) &&
+            request.Method == HttpMethod.Put)
+        {
+            return JsonResponse(HttpStatusCode.OK, new { keyEnvelope = envelope });
+        }
+        if (path.EndsWith("/auth/events", StringComparison.Ordinal))
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                code = "account_banned",
+                banType = "account",
+                bannedAt = createdAt,
+                banExpiresAt = (DateTimeOffset?)null,
+                banReason = "contract-test",
+            });
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent($"event: ban\ndata: {json}\n\n"),
+            };
+            response.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+            return response;
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal) &&
+            request.Method == HttpMethod.Get)
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 1,
+                remaining = 2,
+                invitations = new[]
+                {
+                    new
+                    {
+                        id = "invite-id",
+                        codeHint = "DACT-…TEST",
+                        name = "好友邀请",
+                        status = "available",
+                        createdAt,
+                        expiresAt = (DateTimeOffset?)null,
+                        usedAt = (DateTimeOffset?)null,
+                    },
+                },
+            });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal) &&
+            request.Method == HttpMethod.Post)
+        {
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                id = "invite-id-2",
+                activationKey = "DACT-FRIEND-KEY",
+                codeHint = "DACT-…-KEY",
+                name = "好友邀请",
+                status = "unused",
+                createdAt,
             });
         }
         if (path.EndsWith("/backups", StringComparison.Ordinal) && request.Method == HttpMethod.Get)
@@ -12676,6 +12779,34 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
     Assert(
         authentication.User.Username == "cloud_user" && authentication.KeyEnvelope == envelope,
         "Cloud authentication response lost account or envelope fields.");
+
+    var access = await api.GetAccessStatusAsync("session-token", CancellationToken.None);
+    Assert(
+        access.Banned && access.BanType == "account" && access.BanReason == "contract-test",
+        "Cloud access status lost the server-provided ban details.");
+    await api.UpdateKeyEnvelopeAsync("session-token", envelope, CancellationToken.None);
+    CloudBanNotice? liveBan = null;
+    await api.ListenForBanEventsAsync(
+        "session-token",
+        notice =>
+        {
+            liveBan = notice;
+            return Task.CompletedTask;
+        },
+        CancellationToken.None);
+    Assert(
+        liveBan is { Code: "account_banned", BanReason: "contract-test" },
+        "Cloud event stream did not deliver the live ban notice.");
+
+    var invitations = await api.ListInvitationsAsync("session-token", CancellationToken.None);
+    Assert(
+        invitations.Quota == 3 && invitations.Remaining == 2 &&
+        invitations.Invitations.Single().Status == "available",
+        "Cloud invitation quota or history was not parsed.");
+    var invitation = await api.CreateInvitationAsync("session-token", CancellationToken.None);
+    Assert(
+        invitation.ActivationKey == "DACT-FRIEND-KEY",
+        "Cloud invitation creation did not expose its one-time activation key.");
 
     var versions = await api.ListBackupsAsync("session-token", CancellationToken.None);
     Assert(versions.Count == 1 && versions[0].Id == "backup-id", "Cloud versions were not parsed.");
@@ -12733,6 +12864,7 @@ static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(st
         paths,
         api,
         new CloudCredentialStore(paths.CloudCredentialFile),
+        new CloudBanStore(paths.CloudBanFile),
         new CloudMachineIdentity(paths.CloudDeviceFile),
         new CloudKeyEnvelopeService(),
         new PortableConfigurationBackupService());
@@ -12741,7 +12873,8 @@ static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(st
         "registration_user",
         "registration-password",
         "DACT-TEST",
-        CancellationToken.None);
+        rememberLogin: true,
+        cancellationToken: CancellationToken.None);
 
     var snapshot = service.Snapshot;
     Assert(
@@ -12750,6 +12883,186 @@ static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(st
         snapshot.RecoveryKeyToSave?.StartsWith("dact1_", StringComparison.Ordinal) == true &&
         File.Exists(paths.CloudCredentialFile),
         "A transient version-list failure hid the committed registration or its recovery key.");
+
+    var optOutPaths = new PluginPaths(Path.Combine(
+        testRoot,
+        "cloud-registration-no-auto-login"));
+    optOutPaths.EnsureCreated();
+    using var optOutService = new CloudClientService(
+        optOutPaths,
+        api,
+        new CloudCredentialStore(optOutPaths.CloudCredentialFile),
+        new CloudBanStore(optOutPaths.CloudBanFile),
+        new CloudMachineIdentity(optOutPaths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    await optOutService.RegisterAsync(
+        "registration_user",
+        "registration-password",
+        "DACT-TEST",
+        rememberLogin: false,
+        cancellationToken: CancellationToken.None);
+    Assert(
+        optOutService.Snapshot.IsSignedIn && !File.Exists(optOutPaths.CloudCredentialFile),
+        "Disabling auto-login still persisted the cloud session on disk.");
+}
+
+static async Task ValidateCloudBanResponseEnforcesMarkerAsync(string testRoot)
+{
+    var bannedAt = DateTimeOffset.UtcNow;
+    var handler = new ScriptedHttpMessageHandler(request =>
+        request.RequestUri!.AbsolutePath.EndsWith("/auth/login", StringComparison.Ordinal)
+            ? JsonResponse(HttpStatusCode.Forbidden, new
+            {
+                error = "account_banned",
+                message = "您的账号已经被封禁。",
+                banType = "cascade",
+                bannedAt,
+                banExpiresAt = (DateTimeOffset?)null,
+                banReason = "resale-test",
+            })
+            : JsonResponse(HttpStatusCode.NotFound, new
+            {
+                error = "not_found",
+                message = "missing",
+            }));
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-ban-response"));
+    paths.EnsureCreated();
+    var banStore = new CloudBanStore(paths.CloudBanFile);
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(paths.CloudCredentialFile),
+        banStore,
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    var notification = new TaskCompletionSource<CloudBanNotice>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    service.BanReceived += notice => notification.TrySetResult(notice);
+
+    await service.LoginAsync(
+        "banned_user",
+        "banned-password",
+        string.Empty,
+        rememberLogin: true,
+        cancellationToken: CancellationToken.None);
+    var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    Assert(
+        received.BanType == "cascade" && received.BanReason == "resale-test" &&
+        service.Snapshot.ActiveBan == received && File.Exists(paths.CloudBanFile),
+        "A login-time ban did not switch the client into its persistent blocked state.");
+
+    File.Delete(paths.CloudBanFile);
+    var deadline = DateTime.UtcNow.AddSeconds(3);
+    while (!File.Exists(paths.CloudBanFile) && DateTime.UtcNow < deadline)
+    {
+        await Task.Delay(50);
+    }
+    Assert(
+        File.Exists(paths.CloudBanFile) && banStore.Load() == received,
+        "The running client did not restore a deleted cloud ban marker.");
+
+    var corruptPaths = new PluginPaths(Path.Combine(testRoot, "cloud-corrupt-ban-marker"));
+    corruptPaths.EnsureCreated();
+    File.WriteAllBytes(corruptPaths.CloudBanFile, "not-a-valid-dpapi-marker"u8.ToArray());
+    using var corruptMarkerService = new CloudClientService(
+        corruptPaths,
+        api,
+        new CloudCredentialStore(corruptPaths.CloudCredentialFile),
+        new CloudBanStore(corruptPaths.CloudBanFile),
+        new CloudMachineIdentity(corruptPaths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    Assert(
+        corruptMarkerService.ActiveBan?.BanType == "unknown",
+        "A present but damaged cloud ban marker incorrectly failed open.");
+
+    var directoryMarkerPaths = new PluginPaths(
+        Path.Combine(testRoot, "cloud-directory-ban-marker"));
+    directoryMarkerPaths.EnsureCreated();
+    Directory.CreateDirectory(directoryMarkerPaths.CloudBanFile);
+    using var directoryMarkerService = new CloudClientService(
+        directoryMarkerPaths,
+        api,
+        new CloudCredentialStore(directoryMarkerPaths.CloudCredentialFile),
+        new CloudBanStore(directoryMarkerPaths.CloudBanFile),
+        new CloudMachineIdentity(directoryMarkerPaths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    Assert(
+        directoryMarkerService.ActiveBan?.BanType == "unknown",
+        "Replacing the cloud ban marker with a directory incorrectly failed open.");
+}
+
+static async Task ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(
+    string testRoot)
+{
+    var createdAt = DateTimeOffset.UtcNow;
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/register", StringComparison.Ordinal))
+        {
+            using var registration = JsonDocument.Parse(
+                request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                token = "committed-registration-token",
+                tokenType = "Bearer",
+                expiresAt = createdAt.AddDays(30),
+                user = new { id = "committed-user-id", username = "committed_user" },
+                keyEnvelope = registration.RootElement.GetProperty("keyEnvelope").Clone(),
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { backups = Array.Empty<object>() });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 0,
+                remaining = 3,
+                invitations = Array.Empty<object>(),
+            });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new
+        {
+            error = "not_found",
+            message = "missing",
+        });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-credential-write-failure"));
+    paths.EnsureCreated();
+    var directoryInPlaceOfCredentialFile = Path.Combine(paths.ConfigDirectory, "account-directory");
+    Directory.CreateDirectory(directoryInPlaceOfCredentialFile);
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(directoryInPlaceOfCredentialFile),
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+
+    await service.RegisterAsync(
+        "committed_user",
+        "registration-password",
+        "DACT-TEST",
+        rememberLogin: true,
+        cancellationToken: CancellationToken.None);
+    Assert(
+        service.Snapshot.IsSignedIn && service.Snapshot.StatusIsError &&
+        service.Snapshot.StatusMessage.Contains("自动登录状态未能保存", StringComparison.Ordinal) &&
+        service.Snapshot.RecoveryKeyToSave?.StartsWith("dact1_", StringComparison.Ordinal) == true,
+        "A local credential write failure hid a remotely committed registration or recovery key.");
 }
 
 static HttpResponseMessage JsonResponse(HttpStatusCode status, object value)

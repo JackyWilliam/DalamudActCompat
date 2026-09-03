@@ -13,7 +13,11 @@ internal sealed record CloudClientSnapshot(
     bool StatusIsError,
     string? RecoveryKeyToSave,
     PortableConfigurationBackupPreview? RestorePreview,
-    string? LastRollbackPath)
+    string? LastRollbackPath,
+    CloudInvitationSummary? Invitations = null,
+    string? InvitationKeyToShare = null,
+    CloudBanNotice? ActiveBan = null,
+    bool HasSavedRecoveryKey = false)
 {
     public static CloudClientSnapshot SignedOut(string message = "请登录或注册账号。")
         => new(
@@ -35,11 +39,19 @@ internal sealed class CloudClientService : IDisposable
     private readonly SemaphoreSlim operationGate = new(1, 1);
     private readonly CloudApiClient apiClient;
     private readonly CloudCredentialStore credentialStore;
+    private readonly CloudBanStore banStore;
     private readonly CloudMachineIdentity machineIdentity;
     private readonly CloudKeyEnvelopeService envelopeService;
     private readonly PortableConfigurationBackupService backupService;
     private readonly PluginPaths paths;
+    private readonly CancellationTokenSource monitorShutdown = new();
+    private readonly object monitorLock = new();
+    private readonly List<Task> monitorTasks = [];
+    private CancellationTokenSource? sessionMonitorCancellation;
+    private CloudStoredCredentials? storedAccount;
     private CloudStoredCredentials? credentials;
+    private CloudBanNotice? activeBan;
+    private bool persistCurrentAccount;
     private CloudClientSnapshot snapshot;
 
     public CloudClientService(PluginPaths paths)
@@ -47,6 +59,7 @@ internal sealed class CloudClientService : IDisposable
             paths,
             new CloudApiClient(),
             new CloudCredentialStore(paths.CloudCredentialFile),
+            new CloudBanStore(paths.CloudBanFile),
             new CloudMachineIdentity(paths.CloudDeviceFile),
             new CloudKeyEnvelopeService(),
             new PortableConfigurationBackupService())
@@ -57,6 +70,7 @@ internal sealed class CloudClientService : IDisposable
         PluginPaths paths,
         CloudApiClient apiClient,
         CloudCredentialStore credentialStore,
+        CloudBanStore banStore,
         CloudMachineIdentity machineIdentity,
         CloudKeyEnvelopeService envelopeService,
         PortableConfigurationBackupService backupService)
@@ -64,12 +78,23 @@ internal sealed class CloudClientService : IDisposable
         this.paths = paths;
         this.apiClient = apiClient;
         this.credentialStore = credentialStore;
+        this.banStore = banStore;
         this.machineIdentity = machineIdentity;
         this.envelopeService = envelopeService;
         this.backupService = backupService;
-        credentials = TryLoadCredentials();
+        storedAccount = TryLoadStoredAccount();
+        persistCurrentAccount = storedAccount is not null;
+        credentials = storedAccount is { } candidate && candidate.Token.Length > 0 &&
+                      candidate.ExpiresAt > DateTimeOffset.UtcNow
+            ? candidate
+            : null;
+        activeBan = TryLoadBan();
         snapshot = credentials is null
-            ? CloudClientSnapshot.SignedOut()
+            ? CloudClientSnapshot.SignedOut() with
+            {
+                ActiveBan = activeBan,
+                HasSavedRecoveryKey = storedAccount is not null,
+            }
             : new CloudClientSnapshot(
                 true,
                 false,
@@ -80,7 +105,25 @@ internal sealed class CloudClientService : IDisposable
                 false,
                 null,
                 null,
-                FindLatestRollbackPath());
+                FindLatestRollbackPath(),
+                ActiveBan: activeBan,
+                HasSavedRecoveryKey: true);
+        monitorTasks.Add(Task.Run(() => RunBanMarkerMonitorAsync(monitorShutdown.Token)));
+    }
+
+    public event Action<CloudBanNotice>? BanReceived;
+
+    public event Action? BanLifted;
+
+    public CloudBanNotice? ActiveBan
+    {
+        get
+        {
+            lock (stateLock)
+            {
+                return activeBan;
+            }
+        }
     }
 
     public CloudClientSnapshot Snapshot
@@ -96,6 +139,29 @@ internal sealed class CloudClientService : IDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
+        var saved = storedAccount;
+        if (saved is null || string.IsNullOrWhiteSpace(saved.Token))
+        {
+            return;
+        }
+        if (ActiveBan is not null)
+        {
+            await RunExclusiveAsync("正在确认封禁状态…", async token =>
+            {
+                var access = await apiClient.GetAccessStatusAsync(saved.Token, token)
+                    .ConfigureAwait(false);
+                if (access.Banned)
+                {
+                    ApplyBan(ToBanNotice(access));
+                    return;
+                }
+                LiftBanAfterServerConfirmation();
+                InvalidateSessionPreservingRecoveryKey(
+                    "封禁已解除。请重启游戏或重载 DACT，然后重新登录。",
+                    isError: false);
+            }, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         if (credentials is null)
         {
             return;
@@ -109,9 +175,13 @@ internal sealed class CloudClientService : IDisposable
                 return;
             }
             await apiClient.ValidateSessionAsync(current.Token, token).ConfigureAwait(false);
+            StartSessionMonitor(current);
             var backups = await apiClient.ListBackupsAsync(current.Token, token)
                 .ConfigureAwait(false);
-            SetSignedIn(current, backups, "云账号已连接。", false);
+            var invitations = await apiClient.ListInvitationsAsync(current.Token, token)
+                .ConfigureAwait(false);
+            LiftBanAfterServerConfirmation();
+            SetSignedIn(current, backups, invitations, "云账号已连接。", false);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -119,6 +189,7 @@ internal sealed class CloudClientService : IDisposable
         string username,
         string password,
         string activationKey,
+        bool rememberLogin,
         CancellationToken cancellationToken)
         => RunExclusiveAsync("正在注册账号…", async token =>
         {
@@ -133,28 +204,40 @@ internal sealed class CloudClientService : IDisposable
                     token)
                 .ConfigureAwait(false);
             ValidateReturnedEnvelope(response, password, recoveryKey);
-            var saved = SaveAuthentication(response, recoveryKey);
+            var authentication = SaveAuthentication(response, recoveryKey, rememberLogin);
+            var saved = authentication.Credentials;
+            LiftBanAfterServerConfirmation();
+            var registrationMessage = authentication.PersistenceWarning is null
+                ? "注册成功。请立即抄下恢复密钥；它只在本次注册后显示。"
+                : $"注册成功，但{authentication.PersistenceWarning}。请立即抄下恢复密钥；它只在本次注册后显示。";
             // Registration is already committed remotely. Publish the recovery key before
             // the optional version-list refresh so a transient read failure cannot hide it.
             SetSignedIn(
                 saved,
                 Array.Empty<CloudBackupVersion>(),
-                "注册成功。请立即抄下恢复密钥；它只在本次注册后显示。",
-                false,
+                null,
+                registrationMessage,
+                authentication.PersistenceWarning is not null,
                 recoveryKey);
+            StartSessionMonitor(saved);
             var backups = await apiClient.ListBackupsAsync(saved.Token, token)
+                .ConfigureAwait(false);
+            var invitations = await apiClient.ListInvitationsAsync(saved.Token, token)
                 .ConfigureAwait(false);
             SetSignedIn(
                 saved,
                 backups,
-                "注册成功。请立即抄下恢复密钥；它只在本次注册后显示。",
-                false,
+                invitations,
+                registrationMessage,
+                authentication.PersistenceWarning is not null,
                 recoveryKey);
         }, cancellationToken);
 
     public Task LoginAsync(
         string username,
         string password,
+        string suppliedRecoveryKey,
+        bool rememberLogin,
         CancellationToken cancellationToken)
         => RunExclusiveAsync("正在登录…", async token =>
         {
@@ -168,24 +251,58 @@ internal sealed class CloudClientService : IDisposable
             {
                 throw new InvalidDataException("账号缺少云端加密密钥，无法安全读取备份。");
             }
-            string recoveryKey;
+            string effectiveRecoveryKey;
             try
             {
-                recoveryKey = envelopeService.Open(response.KeyEnvelope, password);
+                effectiveRecoveryKey = envelopeService.Open(response.KeyEnvelope, password);
             }
             catch (CryptographicException ex)
             {
-                throw new InvalidDataException("账号加密密钥校验失败，请联系管理员。", ex);
+                effectiveRecoveryKey = ResolveRecoveryKey(username, suppliedRecoveryKey);
+                var replacementEnvelope = envelopeService.Create(effectiveRecoveryKey, password);
+                if (!string.Equals(
+                        replacementEnvelope.KeyId,
+                        response.KeyEnvelope.KeyId,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "恢复密钥与该账号不匹配，无法重新封装云备份密钥。",
+                        ex);
+                }
+                await apiClient.UpdateKeyEnvelopeAsync(
+                        response.Token,
+                        replacementEnvelope,
+                        token)
+                    .ConfigureAwait(false);
             }
-            var saved = SaveAuthentication(response, recoveryKey);
+            var authentication = SaveAuthentication(
+                response,
+                effectiveRecoveryKey,
+                rememberLogin);
+            var saved = authentication.Credentials;
+            LiftBanAfterServerConfirmation();
+            var loginMessage = authentication.PersistenceWarning is null
+                ? "登录成功。请选择版本后预览或恢复。"
+                : $"登录成功，但{authentication.PersistenceWarning}。";
             SetSignedIn(
                 saved,
                 Array.Empty<CloudBackupVersion>(),
-                "登录成功，正在读取云端版本…",
-                false);
+                null,
+                authentication.PersistenceWarning is null
+                    ? "登录成功，正在读取云端版本…"
+                    : loginMessage,
+                authentication.PersistenceWarning is not null);
+            StartSessionMonitor(saved);
             var backups = await apiClient.ListBackupsAsync(saved.Token, token)
                 .ConfigureAwait(false);
-            SetSignedIn(saved, backups, "登录成功。请选择版本后预览或恢复。", false);
+            var invitations = await apiClient.ListInvitationsAsync(saved.Token, token)
+                .ConfigureAwait(false);
+            SetSignedIn(
+                saved,
+                backups,
+                invitations,
+                loginMessage,
+                authentication.PersistenceWarning is not null);
         }, cancellationToken);
 
     public Task ResetPasswordAsync(
@@ -193,6 +310,7 @@ internal sealed class CloudClientService : IDisposable
         string resetCode,
         string newPassword,
         string recoveryKey,
+        bool rememberLogin,
         CancellationToken cancellationToken)
         => RunExclusiveAsync("正在重置密码…", async token =>
         {
@@ -207,15 +325,34 @@ internal sealed class CloudClientService : IDisposable
                     token)
                 .ConfigureAwait(false);
             ValidateReturnedEnvelope(response, newPassword, effectiveRecoveryKey);
-            var saved = SaveAuthentication(response, effectiveRecoveryKey);
+            var authentication = SaveAuthentication(
+                response,
+                effectiveRecoveryKey,
+                rememberLogin);
+            var saved = authentication.Credentials;
+            LiftBanAfterServerConfirmation();
+            var resetMessage = authentication.PersistenceWarning is null
+                ? "密码已重置，其他设备的旧登录已失效。"
+                : $"密码已重置，但{authentication.PersistenceWarning}。";
             SetSignedIn(
                 saved,
                 Array.Empty<CloudBackupVersion>(),
-                "密码已重置，正在读取云端版本…",
-                false);
+                null,
+                authentication.PersistenceWarning is null
+                    ? "密码已重置，正在读取云端版本…"
+                    : resetMessage,
+                authentication.PersistenceWarning is not null);
+            StartSessionMonitor(saved);
             var backups = await apiClient.ListBackupsAsync(saved.Token, token)
                 .ConfigureAwait(false);
-            SetSignedIn(saved, backups, "密码已重置，其他设备的旧登录已失效。", false);
+            var invitations = await apiClient.ListInvitationsAsync(saved.Token, token)
+                .ConfigureAwait(false);
+            SetSignedIn(
+                saved,
+                backups,
+                invitations,
+                resetMessage,
+                authentication.PersistenceWarning is not null);
         }, cancellationToken);
 
     public Task LogoutAsync(CancellationToken cancellationToken)
@@ -241,7 +378,31 @@ internal sealed class CloudClientService : IDisposable
             var current = RequireCredentials();
             var backups = await apiClient.ListBackupsAsync(current.Token, token)
                 .ConfigureAwait(false);
-            SetSignedIn(current, backups, $"已刷新，共 {backups.Count} 个云端版本。", false);
+            var invitations = await apiClient.ListInvitationsAsync(current.Token, token)
+                .ConfigureAwait(false);
+            SetSignedIn(
+                current,
+                backups,
+                invitations,
+                $"已刷新，共 {backups.Count} 个云端版本。",
+                false);
+        }, cancellationToken);
+
+    public Task CreateInvitationAsync(CancellationToken cancellationToken)
+        => RunExclusiveAsync("正在生成好友激活码…", async token =>
+        {
+            var current = RequireCredentials();
+            var created = await apiClient.CreateInvitationAsync(current.Token, token)
+                .ConfigureAwait(false);
+            var invitations = await apiClient.ListInvitationsAsync(current.Token, token)
+                .ConfigureAwait(false);
+            SetSignedIn(
+                current,
+                Snapshot.Backups,
+                invitations,
+                "好友激活码已生成；完整激活码只显示这一次。",
+                false,
+                invitationKeyToShare: created.ActivationKey);
         }, cancellationToken);
 
     public Task<bool> UploadAsync(
@@ -266,6 +427,7 @@ internal sealed class CloudClientService : IDisposable
                 SetSignedIn(
                     current,
                     backups,
+                    Snapshot.Invitations,
                     $"上传完成：{uploaded.CreatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}。",
                     false);
                 return true;
@@ -373,6 +535,22 @@ internal sealed class CloudClientService : IDisposable
 
     public void Dispose()
     {
+        monitorShutdown.Cancel();
+        CancelSessionMonitor();
+        Task[] tasks;
+        lock (monitorLock)
+        {
+            tasks = monitorTasks.ToArray();
+        }
+        try
+        {
+            Task.WhenAll(tasks).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        sessionMonitorCancellation?.Dispose();
+        monitorShutdown.Dispose();
         operationGate.Dispose();
         apiClient.Dispose();
     }
@@ -392,7 +570,10 @@ internal sealed class CloudClientService : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            SetFailure("操作已取消。", false);
+            if (ActiveBan is null)
+            {
+                SetFailure("操作已取消。", false);
+            }
         }
         catch (Exception ex)
         {
@@ -419,7 +600,10 @@ internal sealed class CloudClientService : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            SetFailure("操作已取消。", false);
+            if (ActiveBan is null)
+            {
+                SetFailure("操作已取消。", false);
+            }
             return false;
         }
         catch (Exception ex)
@@ -458,29 +642,61 @@ internal sealed class CloudClientService : IDisposable
 
     private void HandleOperationFailure(Exception exception)
     {
-        if (exception is CloudApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
+        if (exception is CloudApiException apiException &&
+            apiException.ToBanNotice() is { } ban)
         {
-            ClearCredentials("登录已失效，请重新登录。", isError: true);
+            ApplyBan(ban);
+            return;
+        }
+        if (exception is CloudApiException unauthorized &&
+            unauthorized.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            InvalidateSessionPreservingRecoveryKey("登录已失效，请重新登录。", isError: true);
             return;
         }
         SetFailure(exception.GetBaseException().Message, true);
     }
 
-    private CloudStoredCredentials SaveAuthentication(
+    private (CloudStoredCredentials Credentials, string? PersistenceWarning) SaveAuthentication(
         CloudAuthenticationResponse response,
-        string recoveryKey)
+        string recoveryKey,
+        bool rememberLogin)
     {
         var saved = new CloudStoredCredentials(
             response.User.Username,
             response.Token,
             response.ExpiresAt,
             recoveryKey);
-        credentialStore.Save(saved);
+        string? persistenceWarning = null;
+        var persisted = false;
+        try
+        {
+            if (rememberLogin)
+            {
+                credentialStore.Save(saved);
+                persisted = true;
+            }
+            else
+            {
+                credentialStore.Clear();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Authentication has already committed remotely. Keep the usable in-memory
+            // session and surface the local persistence failure instead of hiding success.
+            credentialStore.TryClear();
+            persistenceWarning = rememberLogin
+                ? $"自动登录状态未能保存：{ex.GetBaseException().Message}"
+                : $"旧的自动登录状态未能清除：{ex.GetBaseException().Message}";
+        }
         lock (stateLock)
         {
             credentials = saved;
+            storedAccount = persisted ? saved : null;
+            persistCurrentAccount = persisted;
         }
-        return saved;
+        return (saved, persistenceWarning);
     }
 
     private void ValidateReturnedEnvelope(
@@ -507,10 +723,11 @@ internal sealed class CloudClientService : IDisposable
         }
         lock (stateLock)
         {
-            if (credentials is not null &&
-                credentials.Username.Equals(username.Trim(), StringComparison.OrdinalIgnoreCase))
+            var candidate = credentials ?? storedAccount;
+            if (candidate is not null &&
+                candidate.Username.Equals(username.Trim(), StringComparison.OrdinalIgnoreCase))
             {
-                return credentials.RecoveryKey;
+                return candidate.RecoveryKey;
             }
         }
         throw new InvalidOperationException("请输入注册时保存的恢复密钥。旧备份无法由服务器解密。");
@@ -529,17 +746,11 @@ internal sealed class CloudClientService : IDisposable
         => Snapshot.Backups.FirstOrDefault(backup => backup.Id == backupId)
            ?? throw new InvalidOperationException("请选择仍存在的云端版本。");
 
-    private CloudStoredCredentials? TryLoadCredentials()
+    private CloudStoredCredentials? TryLoadStoredAccount()
     {
         try
         {
-            var loaded = credentialStore.Load();
-            if (loaded?.ExpiresAt <= DateTimeOffset.UtcNow)
-            {
-                credentialStore.TryClear();
-                return null;
-            }
-            return loaded;
+            return credentialStore.Load();
         }
         catch
         {
@@ -562,12 +773,15 @@ internal sealed class CloudClientService : IDisposable
         lock (stateLock)
         {
             credentials = null;
+            storedAccount = null;
+            persistCurrentAccount = false;
             snapshot = CloudClientSnapshot.SignedOut(message) with
             {
                 IsBusy = snapshot.IsBusy,
                 StatusIsError = isError,
             };
         }
+        CancelSessionMonitor();
         if (cleanupFailure is not null)
         {
             // The server session may already be revoked, so the in-memory state must still
@@ -576,23 +790,393 @@ internal sealed class CloudClientService : IDisposable
         }
     }
 
+    private void InvalidateSessionPreservingRecoveryKey(string message, bool isError)
+    {
+        CloudStoredCredentials? recovery;
+        bool shouldPersist;
+        lock (stateLock)
+        {
+            recovery = credentials ?? storedAccount;
+            shouldPersist = persistCurrentAccount;
+            credentials = null;
+            if (recovery is not null && shouldPersist)
+            {
+                storedAccount = recovery with
+                {
+                    Token = string.Empty,
+                    ExpiresAt = DateTimeOffset.MinValue,
+                };
+            }
+            snapshot = CloudClientSnapshot.SignedOut(message) with
+            {
+                StatusIsError = isError,
+                ActiveBan = activeBan,
+                HasSavedRecoveryKey = storedAccount is not null,
+            };
+        }
+        if (recovery is not null && shouldPersist)
+        {
+            try
+            {
+                credentialStore.Save(recovery with
+                {
+                    Token = string.Empty,
+                    ExpiresAt = DateTimeOffset.MinValue,
+                });
+            }
+            catch (Exception ex)
+            {
+                // Authentication must still become invalid in memory when Windows cannot
+                // refresh the optional recovery-only copy on disk.
+                SetFailure($"{message}（无法保存本机恢复密钥：{ex.GetBaseException().Message}）", true);
+            }
+        }
+        CancelSessionMonitor();
+    }
+
+    private void StartSessionMonitor(CloudStoredCredentials current)
+    {
+        CancellationTokenSource? previous;
+        CancellationTokenSource next;
+        lock (monitorLock)
+        {
+            previous = sessionMonitorCancellation;
+            next = CancellationTokenSource.CreateLinkedTokenSource(monitorShutdown.Token);
+            sessionMonitorCancellation = next;
+            monitorTasks.Add(Task.Run(
+                () => RunSessionMonitorAsync(current, next.Token),
+                CancellationToken.None));
+        }
+        previous?.Cancel();
+    }
+
+    private void CancelSessionMonitor()
+    {
+        lock (monitorLock)
+        {
+            sessionMonitorCancellation?.Cancel();
+        }
+    }
+
+    private bool IsCurrentSession(CloudStoredCredentials candidate)
+    {
+        lock (stateLock)
+        {
+            // A late 401 from a cancelled monitor belongs to its original token and
+            // must not sign out a newer session established on the same client object.
+            return credentials is { } current &&
+                   string.Equals(current.Token, candidate.Token, StringComparison.Ordinal);
+        }
+    }
+
+    private bool ShouldApplyBan(
+        CloudStoredCredentials monitoredSession,
+        CloudBanNotice notice)
+        => notice.BanType == "device" || IsCurrentSession(monitoredSession);
+
+    private async Task RunSessionMonitorAsync(
+        CloudStoredCredentials current,
+        CancellationToken cancellationToken)
+    {
+        await Task.WhenAll(
+                RunEventMonitorAsync(current, cancellationToken),
+                RunHeartbeatMonitorAsync(current, cancellationToken))
+            .ConfigureAwait(false);
+    }
+
+    private async Task RunEventMonitorAsync(
+        CloudStoredCredentials current,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await apiClient.ListenForBanEventsAsync(
+                        current.Token,
+                        notice =>
+                        {
+                            if (ShouldApplyBan(current, notice))
+                            {
+                                ApplyBan(notice);
+                            }
+                            return Task.CompletedTask;
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
+            {
+                if (ShouldApplyBan(current, ban))
+                {
+                    ApplyBan(ban);
+                }
+                return;
+            }
+            catch (CloudApiException ex) when (
+                ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                if (IsCurrentSession(current))
+                {
+                    InvalidateSessionPreservingRecoveryKey(
+                        "登录已失效，请重新登录。",
+                        isError: true);
+                }
+                return;
+            }
+            catch
+            {
+                // A dropped real-time connection is expected on network changes;
+                // heartbeat validation remains the authoritative fallback.
+            }
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunHeartbeatMonitorAsync(
+        CloudStoredCredentials current,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await apiClient.ValidateSessionAsync(current.Token, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
+            {
+                if (ShouldApplyBan(current, ban))
+                {
+                    ApplyBan(ban);
+                }
+                return;
+            }
+            catch (CloudApiException ex) when (
+                ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                if (IsCurrentSession(current))
+                {
+                    InvalidateSessionPreservingRecoveryKey(
+                        "登录已失效，请重新登录。",
+                        isError: true);
+                }
+                return;
+            }
+            catch when (!cancellationToken.IsCancellationRequested)
+            {
+                // Temporary server failures do not erase a valid local session. The
+                // next heartbeat and SSE reconnect retry independently.
+            }
+        }
+    }
+
+    private async Task RunBanMarkerMonitorAsync(CancellationToken cancellationToken)
+    {
+        var nextServerCheck = DateTimeOffset.MinValue;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            CloudBanNotice? ban;
+            CloudStoredCredentials? account;
+            lock (stateLock)
+            {
+                ban = activeBan;
+                account = credentials ?? storedAccount;
+            }
+            if (ban is not null)
+            {
+                try
+                {
+                    banStore.EnsurePresent(ban);
+                }
+                catch (Exception ex)
+                {
+                    SetFailure($"无法恢复本地封禁标记：{ex.GetBaseException().Message}", true);
+                }
+
+                if (account is not null && account.Token.Length > 0 &&
+                    DateTimeOffset.UtcNow >= nextServerCheck)
+                {
+                    nextServerCheck = DateTimeOffset.UtcNow.AddSeconds(15);
+                    try
+                    {
+                        var access = await apiClient.GetAccessStatusAsync(
+                                account.Token,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (access.Banned)
+                        {
+                            ApplyBan(ToBanNotice(access));
+                        }
+                        else if (access.WasBanRevoked)
+                        {
+                            LiftBanAfterServerConfirmation();
+                            InvalidateSessionPreservingRecoveryKey(
+                                "封禁已解除。请重启游戏或重载 DACT，然后重新登录。",
+                                isError: false);
+                        }
+                    }
+                    catch (CloudApiException ex) when (
+                        ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                    {
+                        // Only an authenticated server confirmation can remove a local
+                        // ban marker; a missing token leaves it fail-closed.
+                    }
+                    catch when (!cancellationToken.IsCancellationRequested)
+                    {
+                    }
+                }
+            }
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyBan(CloudBanNotice notice)
+    {
+        Exception? markerFailure = null;
+        try
+        {
+            banStore.EnsurePresent(notice);
+        }
+        catch (Exception ex)
+        {
+            markerFailure = ex;
+        }
+        var changed = false;
+        lock (stateLock)
+        {
+            changed = activeBan != notice;
+            activeBan = notice;
+            var message = FormatBanMessage(notice);
+            if (markerFailure is not null)
+            {
+                // Server authority wins even if the redundant disk marker cannot be
+                // persisted; the current process must still shut every DACT capability down.
+                message += $"（本地封禁标记写入失败：{markerFailure.GetBaseException().Message}）";
+            }
+            snapshot = CloudClientSnapshot.SignedOut(message) with
+            {
+                StatusIsError = true,
+                ActiveBan = notice,
+                HasSavedRecoveryKey = storedAccount is not null,
+            };
+        }
+        CancelSessionMonitor();
+        if (changed)
+        {
+            BanReceived?.Invoke(notice);
+        }
+    }
+
+    private void LiftBanAfterServerConfirmation()
+    {
+        var changed = false;
+        lock (stateLock)
+        {
+            if (activeBan is not null)
+            {
+                banStore.Clear();
+                activeBan = null;
+                snapshot = snapshot with { ActiveBan = null };
+                changed = true;
+            }
+        }
+        if (changed)
+        {
+            BanLifted?.Invoke();
+        }
+    }
+
+    private CloudBanNotice? TryLoadBan()
+    {
+        try
+        {
+            return banStore.Load();
+        }
+        catch
+        {
+            if (!File.Exists(paths.CloudBanFile) && !Directory.Exists(paths.CloudBanFile))
+            {
+                return null;
+            }
+            DateTimeOffset detectedAt;
+            try
+            {
+                detectedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(paths.CloudBanFile));
+            }
+            catch
+            {
+                detectedAt = DateTimeOffset.UtcNow;
+            }
+            // Corruption is not proof that a server-issued marker is safe to ignore. Keep
+            // the client fail-closed until a preserved authenticated session confirms unban.
+            return new CloudBanNotice(
+                "local_ban_marker",
+                "unknown",
+                detectedAt,
+                null,
+                null);
+        }
+    }
+
+    private static CloudBanNotice ToBanNotice(CloudAccessStatus access)
+        => access.BannedAt is { } bannedAt && !string.IsNullOrWhiteSpace(access.BanType)
+            ? new CloudBanNotice(
+                access.BanType == "device" ? "device_banned" : "account_banned",
+                access.BanType,
+                bannedAt,
+                access.BanExpiresAt,
+                access.BanReason)
+            : throw new InvalidDataException("Cloud access status omitted ban details.");
+
+    private static string FormatBanMessage(CloudBanNotice notice)
+    {
+        var message = $"您的账号已经被封禁（封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}）";
+        return string.IsNullOrWhiteSpace(notice.BanReason)
+            ? message
+            : $"{message} 封禁原因：{notice.BanReason}";
+    }
+
     private void SetSignedIn(
         CloudStoredCredentials current,
         IReadOnlyList<CloudBackupVersion> backups,
+        CloudInvitationSummary? invitations,
         string message,
         bool isError,
-        string? recoveryKeyToSave = null)
-        => SetSnapshot(new CloudClientSnapshot(
-            true,
-            true,
-            current.Username,
-            current.ExpiresAt,
-            backups.ToArray(),
-            message,
-            isError,
-            recoveryKeyToSave,
-            null,
-            FindLatestRollbackPath()));
+        string? recoveryKeyToSave = null,
+        string? invitationKeyToShare = null)
+    {
+        var rollbackPath = FindLatestRollbackPath();
+        lock (stateLock)
+        {
+            // A response from an operation started before the live ban event must never
+            // resurrect the signed-in UI after access has already been revoked.
+            if (activeBan is not null)
+            {
+                return;
+            }
+            snapshot = new CloudClientSnapshot(
+                true,
+                true,
+                current.Username,
+                current.ExpiresAt,
+                backups.ToArray(),
+                message,
+                isError,
+                recoveryKeyToSave,
+                null,
+                rollbackPath,
+                invitations,
+                invitationKeyToShare,
+                null,
+                storedAccount is not null);
+        }
+    }
 
     private void SetFailure(string message, bool isError)
         => SetSnapshot(Snapshot with { StatusMessage = message, StatusIsError = isError });

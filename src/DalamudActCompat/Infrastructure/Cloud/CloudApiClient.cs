@@ -21,14 +21,70 @@ internal sealed record CloudBackupVersion(
     long SizeBytes,
     string Sha256);
 
+internal sealed record CloudAccessStatus(
+    bool Banned,
+    bool SessionActive,
+    bool WasBanRevoked,
+    string? BanType,
+    DateTimeOffset? BannedAt,
+    DateTimeOffset? BanExpiresAt,
+    string? BanReason);
+
+internal sealed record CloudInvitation(
+    string Id,
+    string CodeHint,
+    string Name,
+    string Status,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? ExpiresAt,
+    DateTimeOffset? UsedAt);
+
+internal sealed record CloudInvitationSummary(
+    int Quota,
+    int Used,
+    int Remaining,
+    IReadOnlyList<CloudInvitation> Invitations);
+
+internal sealed record CloudCreatedInvitation(
+    string Id,
+    string ActivationKey,
+    string CodeHint,
+    string Name,
+    string Status,
+    DateTimeOffset CreatedAt);
+
 internal sealed class CloudApiException(
     HttpStatusCode statusCode,
     string code,
-    string message) : Exception(message)
+    string message,
+    string? banType = null,
+    DateTimeOffset? bannedAt = null,
+    DateTimeOffset? banExpiresAt = null,
+    string? banReason = null) : Exception(message)
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
 
     public string Code { get; } = code;
+
+    public string? BanType { get; } = banType;
+
+    public DateTimeOffset? BannedAt { get; } = bannedAt;
+
+    public DateTimeOffset? BanExpiresAt { get; } = banExpiresAt;
+
+    public string? BanReason { get; } = banReason;
+
+    public CloudBanNotice? ToBanNotice()
+        => Code is "account_banned" or "device_banned" &&
+           !string.IsNullOrWhiteSpace(BanType) &&
+           BannedAt is { } effectiveBannedAt
+            ? new CloudBanNotice(
+                Code,
+                BanType,
+                effectiveBannedAt,
+                BanExpiresAt,
+                BanReason)
+            : null;
 }
 
 internal sealed class CloudApiClient : IDisposable
@@ -100,6 +156,70 @@ internal sealed class CloudApiClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
+    public Task<CloudAccessStatus> GetAccessStatusAsync(
+        string token,
+        CancellationToken cancellationToken)
+        => SendJsonAsync<CloudAccessStatus>(
+            HttpMethod.Get,
+            "api/v1/auth/access-status",
+            null,
+            token,
+            cancellationToken);
+
+    public Task UpdateKeyEnvelopeAsync(
+        string token,
+        CloudKeyEnvelope keyEnvelope,
+        CancellationToken cancellationToken)
+        => SendJsonAsync<KeyEnvelopeResponse>(
+            HttpMethod.Put,
+            "api/v1/auth/key-envelope",
+            new { keyEnvelope },
+            token,
+            cancellationToken);
+
+    public async Task ListenForBanEventsAsync(
+        string token,
+        Func<CloudBanNotice, Task> onBan,
+        CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Get, "api/v1/auth/events", token);
+        using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+        string? eventName = null;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                return;
+            }
+            if (line.StartsWith("event: ", StringComparison.Ordinal))
+            {
+                eventName = line[7..];
+                continue;
+            }
+            if (eventName == "ban" && line.StartsWith("data: ", StringComparison.Ordinal))
+            {
+                var notice = JsonSerializer.Deserialize<CloudBanNotice>(line[6..], JsonOptions)
+                             ?? throw new InvalidDataException(
+                                 "Cloud service returned an empty ban event.");
+                await onBan(notice).ConfigureAwait(false);
+                return;
+            }
+            if (line.Length == 0)
+            {
+                eventName = null;
+            }
+        }
+    }
+
     public async Task LogoutAsync(string token, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Post, "api/v1/auth/logout", token);
@@ -121,6 +241,26 @@ internal sealed class CloudApiClient : IDisposable
             .ConfigureAwait(false);
         return response.Backups;
     }
+
+    public Task<CloudInvitationSummary> ListInvitationsAsync(
+        string token,
+        CancellationToken cancellationToken)
+        => SendJsonAsync<CloudInvitationSummary>(
+            HttpMethod.Get,
+            "api/v1/invitations",
+            null,
+            token,
+            cancellationToken);
+
+    public Task<CloudCreatedInvitation> CreateInvitationAsync(
+        string token,
+        CancellationToken cancellationToken)
+        => SendJsonAsync<CloudCreatedInvitation>(
+            HttpMethod.Post,
+            "api/v1/invitations",
+            null,
+            token,
+            cancellationToken);
 
     public async Task<CloudBackupVersion> UploadBackupAsync(
         string token,
@@ -280,7 +420,14 @@ internal sealed class CloudApiClient : IDisposable
         {
             var error = await ReadJsonAsync<ApiError>(response, cancellationToken)
                 .ConfigureAwait(false);
-            throw new CloudApiException(response.StatusCode, error.Error, error.Message);
+            throw new CloudApiException(
+                response.StatusCode,
+                error.Error,
+                error.Message,
+                error.BanType,
+                error.BannedAt,
+                error.BanExpiresAt,
+                error.BanReason);
         }
         catch (CloudApiException)
         {
@@ -319,5 +466,13 @@ internal sealed class CloudApiClient : IDisposable
 
     private sealed record BackupListResponse(IReadOnlyList<CloudBackupVersion> Backups);
 
-    private sealed record ApiError(string Error, string Message);
+    private sealed record KeyEnvelopeResponse(CloudKeyEnvelope KeyEnvelope);
+
+    private sealed record ApiError(
+        string Error,
+        string Message,
+        string? BanType,
+        DateTimeOffset? BannedAt,
+        DateTimeOffset? BanExpiresAt,
+        string? BanReason);
 }

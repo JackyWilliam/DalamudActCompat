@@ -170,6 +170,7 @@ public sealed class ControlCenterWindow : Window
     private string cloudActivationKey = string.Empty;
     private string cloudResetCode = string.Empty;
     private string cloudRecoveryKey = string.Empty;
+    private bool cloudRememberLogin = true;
     private string? selectedCloudBackupId;
     private string? cloudPreviewRequestedBackupId;
     private bool confirmCloudRestore;
@@ -2211,7 +2212,7 @@ public sealed class ControlCenterWindow : Window
 
         if (!snapshot.IsSignedIn)
         {
-            DrawCloudAuthentication(snapshot.IsBusy);
+            DrawCloudAuthentication(snapshot);
             return false;
         }
 
@@ -2219,8 +2220,9 @@ public sealed class ControlCenterWindow : Window
         return false;
     }
 
-    private void DrawCloudAuthentication(bool busy)
+    private void DrawCloudAuthentication(CloudClientSnapshot snapshot)
     {
+        var busy = snapshot.IsBusy;
         if (ImGui.Button(text.Get("登录", "Login")))
         {
             cloudAuthenticationPage = CloudAuthenticationPage.Login;
@@ -2243,6 +2245,12 @@ public sealed class ControlCenterWindow : Window
             text.Get("用户名###cloud-username", "Username###cloud-username"),
             ref cloudUsername,
             32);
+        ImGui.Checkbox(
+            text.Get("自动登录", "Sign in automatically"),
+            ref cloudRememberLogin);
+        ImGui.TextDisabled(text.Get(
+            "勾选后，登录状态会使用 Windows 当前用户加密并在重启后恢复。",
+            "When enabled, Windows protects the saved session for future restarts."));
 
         switch (cloudAuthenticationPage)
         {
@@ -2253,7 +2261,7 @@ public sealed class ControlCenterWindow : Window
                 DrawCloudRegistrationForm(busy);
                 break;
             case CloudAuthenticationPage.ResetPassword:
-                DrawCloudPasswordResetForm(busy, hasLocalRecoveryKey: false);
+                DrawCloudPasswordResetForm(busy, snapshot.HasSavedRecoveryKey);
                 break;
         }
     }
@@ -2266,14 +2274,27 @@ public sealed class ControlCenterWindow : Window
             ref cloudPassword,
             128,
             ImGuiInputTextFlags.Password);
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText(
+            text.Get(
+                "恢复密钥（通常留空）###cloud-login-recovery-key",
+                "Recovery key (normally blank)###cloud-login-recovery-key"),
+            ref cloudRecoveryKey,
+            96,
+            ImGuiInputTextFlags.Password);
         if (!busy && ImGui.Button(text.Get("登录云账号", "Sign in")))
         {
-            cloud.Login(new CloudLoginRequest(cloudUsername, cloudPassword));
+            cloud.Login(new CloudLoginRequest(
+                cloudUsername,
+                cloudPassword,
+                cloudRecoveryKey,
+                cloudRememberLogin));
             cloudPassword = string.Empty;
+            cloudRecoveryKey = string.Empty;
         }
         ImGui.TextDisabled(text.Get(
-            "新电脑登录后只显示云端版本，仍需手动预览和确认恢复。",
-            "A new PC only lists cloud versions after login; preview and confirmation remain manual."));
+            "管理员直接重置密码后，如本机没有保存密钥，请输入注册时保存的恢复密钥。",
+            "After a direct administrator reset, enter the recovery key if this PC has not saved it."));
     }
 
     private void DrawCloudRegistrationForm(bool busy)
@@ -2303,7 +2324,8 @@ public sealed class ControlCenterWindow : Window
             cloud.Register(new CloudRegistrationRequest(
                 cloudUsername,
                 cloudPassword,
-                cloudActivationKey));
+                cloudActivationKey,
+                cloudRememberLogin));
             ClearCloudSecrets();
         }
         if (!string.IsNullOrEmpty(cloudPasswordConfirmation) && !passwordsMatch)
@@ -2361,7 +2383,8 @@ public sealed class ControlCenterWindow : Window
                 cloudUsername,
                 cloudResetCode,
                 cloudPassword,
-                cloudRecoveryKey));
+                cloudRecoveryKey,
+                cloudRememberLogin));
             ClearCloudSecrets();
         }
     }
@@ -2407,6 +2430,48 @@ public sealed class ControlCenterWindow : Window
                 ImGui.SetClipboardText(snapshot.RecoveryKeyToSave);
             }
         }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextColored(Gold, text.Get("好友邀请", "Friend invitations"));
+        if (snapshot.Invitations is { } invitations)
+        {
+            ImGui.TextDisabled(text.Get(
+                $"已生成 {invitations.Used}/{invitations.Quota}，剩余 {invitations.Remaining} 个名额。",
+                $"Generated {invitations.Used}/{invitations.Quota}; {invitations.Remaining} slots remain."));
+            if (!snapshot.IsBusy && invitations.Remaining > 0 &&
+                ImGui.Button(text.Get("生成好友激活码", "Create friend activation key")))
+            {
+                cloud.CreateInvitation();
+            }
+            if (!string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare))
+            {
+                var invitationKey = snapshot.InvitationKeyToShare;
+                ImGui.SetNextItemWidth(-90);
+                ImGui.InputText(
+                    "###cloud-created-invitation-key",
+                    ref invitationKey,
+                    96,
+                    ImGuiInputTextFlags.ReadOnly);
+                ImGui.SameLine();
+                if (ImGui.Button(text.Get("复制###copy-invitation", "Copy###copy-invitation")))
+                {
+                    ImGui.SetClipboardText(snapshot.InvitationKeyToShare);
+                }
+                ImGui.TextDisabled(text.Get(
+                    "完整激活码只显示这一次，请现在发给好友。",
+                    "The complete key is shown once; share it now."));
+            }
+            foreach (var invitation in invitations.Invitations)
+            {
+                ImGui.BulletText(
+                    $"{invitation.Name} · …{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
+            }
+        }
+        ImGui.BeginDisabled();
+        ImGui.Button(text.Get("爱发电支持（即将开放）", "Buy me a coffee (coming soon)"));
+        ImGui.EndDisabled();
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -2538,6 +2603,16 @@ public sealed class ControlCenterWindow : Window
         => bytes >= 1024 * 1024
             ? $"{bytes / (1024d * 1024d):0.0} MiB"
             : $"{Math.Max(1, bytes / 1024d):0.0} KiB";
+
+    private string FormatInvitationStatus(string status)
+        => status switch
+        {
+            "available" => text.Get("可用", "Available"),
+            "used" => text.Get("已使用", "Used"),
+            "revoked" => text.Get("已撤销", "Revoked"),
+            "expired" => text.Get("已过期", "Expired"),
+            _ => status,
+        };
 
     private bool DrawDiagnostics()
     {

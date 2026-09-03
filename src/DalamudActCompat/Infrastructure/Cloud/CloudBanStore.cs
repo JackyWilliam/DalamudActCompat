@@ -4,24 +4,31 @@ using System.Text.Json;
 
 namespace DalamudActCompat.Infrastructure.Cloud;
 
-internal sealed record CloudStoredCredentials(
-    string Username,
-    string Token,
-    DateTimeOffset ExpiresAt,
-    string RecoveryKey);
+internal sealed record CloudBanNotice(
+    string Code,
+    string BanType,
+    DateTimeOffset BannedAt,
+    DateTimeOffset? BanExpiresAt,
+    string? BanReason);
 
-internal sealed class CloudCredentialStore(string path)
+internal sealed class CloudBanStore(string path)
 {
     private const int CurrentFormat = 1;
     private static readonly byte[] Entropy =
-        Encoding.UTF8.GetBytes("DalamudActCompat.CloudAccount.v1");
+        Encoding.UTF8.GetBytes("DalamudActCompat.CloudBan.v1");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string path = Path.GetFullPath(path);
 
-    public CloudStoredCredentials? Load()
+    public CloudBanNotice? Load()
     {
         if (!File.Exists(path))
         {
+            // A directory or another non-file entry at the marker path is not absence.
+            // Treat it as tampering so replacing the marker cannot make startup fail open.
+            if (Directory.Exists(path))
+            {
+                throw new InvalidDataException("Saved cloud ban state is not a file.");
+            }
             return null;
         }
 
@@ -33,22 +40,20 @@ internal sealed class CloudCredentialStore(string path)
                 protectedBytes,
                 Entropy,
                 DataProtectionScope.CurrentUser);
-            var document = JsonSerializer.Deserialize<CredentialDocument>(plaintext, JsonOptions);
+            var document = JsonSerializer.Deserialize<BanDocument>(plaintext, JsonOptions);
             if (document is null || document.Format != CurrentFormat ||
-                string.IsNullOrWhiteSpace(document.Username) ||
-                document.Token is null ||
-                string.IsNullOrWhiteSpace(document.RecoveryKey))
+                string.IsNullOrWhiteSpace(document.Code) ||
+                string.IsNullOrWhiteSpace(document.BanType) ||
+                document.BannedAt == default)
             {
-                throw new InvalidDataException("Saved cloud credentials are invalid.");
+                throw new InvalidDataException("Saved cloud ban state is invalid.");
             }
-            var recoveryKeyBytes = Storage.PortableConfigurationEncryptionService.ParseRecoveryKey(
-                document.RecoveryKey);
-            CryptographicOperations.ZeroMemory(recoveryKeyBytes);
-            return new CloudStoredCredentials(
-                document.Username,
-                document.Token,
-                document.ExpiresAt,
-                document.RecoveryKey);
+            return new CloudBanNotice(
+                document.Code,
+                document.BanType,
+                document.BannedAt,
+                document.BanExpiresAt,
+                string.IsNullOrWhiteSpace(document.BanReason) ? null : document.BanReason);
         }
         finally
         {
@@ -60,14 +65,15 @@ internal sealed class CloudCredentialStore(string path)
         }
     }
 
-    public void Save(CloudStoredCredentials credentials)
+    public void Save(CloudBanNotice notice)
     {
-        var document = new CredentialDocument(
+        var document = new BanDocument(
             CurrentFormat,
-            credentials.Username,
-            credentials.Token,
-            credentials.ExpiresAt,
-            credentials.RecoveryKey);
+            notice.Code,
+            notice.BanType,
+            notice.BannedAt,
+            notice.BanExpiresAt,
+            notice.BanReason);
         var plaintext = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
         byte[]? protectedBytes = null;
         var temporaryPath = $"{path}.tmp-{Guid.NewGuid():N}";
@@ -79,7 +85,7 @@ internal sealed class CloudCredentialStore(string path)
                 DataProtectionScope.CurrentUser);
             Directory.CreateDirectory(
                 Path.GetDirectoryName(path)
-                ?? throw new InvalidOperationException("Credential file has no parent directory."));
+                ?? throw new InvalidOperationException("Ban file has no parent directory."));
             File.WriteAllBytes(temporaryPath, protectedBytes);
             File.Move(temporaryPath, path, true);
         }
@@ -94,6 +100,16 @@ internal sealed class CloudCredentialStore(string path)
         }
     }
 
+    public void EnsurePresent(CloudBanNotice notice)
+    {
+        // Existing state is left untouched. The rewrite exists only to repair
+        // deletion while this process still holds authoritative server state.
+        if (!File.Exists(path))
+        {
+            Save(notice);
+        }
+    }
+
     public void Clear()
     {
         if (File.Exists(path))
@@ -101,8 +117,6 @@ internal sealed class CloudCredentialStore(string path)
             File.Delete(path);
         }
     }
-
-    public void TryClear() => TryDelete(path);
 
     private static void TryDelete(string target)
     {
@@ -115,15 +129,15 @@ internal sealed class CloudCredentialStore(string path)
         }
         catch
         {
-            // Corrupt/expired startup state is best-effort cleanup; explicit logout
-            // uses Clear so the UI never claims a token was removed when it was not.
+            // Temporary cleanup must not replace the persistence error.
         }
     }
 
-    private sealed record CredentialDocument(
+    private sealed record BanDocument(
         int Format,
-        string Username,
-        string Token,
-        DateTimeOffset ExpiresAt,
-        string RecoveryKey);
+        string Code,
+        string BanType,
+        DateTimeOffset BannedAt,
+        DateTimeOffset? BanExpiresAt,
+        string? BanReason);
 }

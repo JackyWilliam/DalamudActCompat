@@ -30,6 +30,7 @@ public sealed class PluginPaths
         ResourcePackCacheDirectory = Path.Combine(ConfigDirectory, "resource-packs");
         CloudCredentialFile = Path.Combine(ConfigDirectory, "cloud-account.dat");
         CloudDeviceFile = Path.Combine(ConfigDirectory, "cloud-device.dat");
+        CloudBanFile = Path.Combine(ConfigDirectory, "cloud-ban.dat");
         CloudRollbackDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "DalamudActCompat",
@@ -65,6 +66,8 @@ public sealed class PluginPaths
     public string CloudCredentialFile { get; }
 
     public string CloudDeviceFile { get; }
+
+    public string CloudBanFile { get; }
 
     public string CloudRollbackDirectory { get; }
 
