@@ -4499,6 +4499,10 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置&账号\", \"Settings & Account\"))", StringComparison.Ordinal) &&
         controlCenterSource.Contains("account-authentication-gate", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-hero", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("stackAuthenticationLayout", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-navigation", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawAuthenticationGate(cloudSnapshot);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("private void DrawAccountSettings()", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
@@ -4514,7 +4518,7 @@ static void ValidateControlCenterPresentation()
             parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
-        "The login gate, Settings & Account page, guarded recovery action, diagnostic copy, or upload-log shortcut is missing from the control center.");
+        "The responsive branded login gate, Settings & Account page, guarded recovery action, diagnostic copy, or upload-log shortcut is missing from the control center.");
     Assert(
         controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
         controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&

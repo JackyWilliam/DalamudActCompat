@@ -60,6 +60,10 @@ public sealed class ControlCenterWindow : Window
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
     private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static readonly Vector4 AuthenticationHeroBackground = new(0.045f, 0.075f, 0.105f, 1);
+    private static readonly Vector4 AuthenticationCardBackground = new(0.055f, 0.070f, 0.095f, 1);
+    private static readonly Vector4 AuthenticationBorder = new(0.25f, 0.48f, 0.60f, 0.62f);
+    private static readonly Vector4 AuthenticationMutedText = new(0.62f, 0.68f, 0.74f, 1);
     private static readonly string VersionLabel = BuildVersionLabel();
     private const int OpenAnimationMilliseconds = 180;
     private const int CloseAnimationMilliseconds = 160;
@@ -421,7 +425,7 @@ public sealed class ControlCenterWindow : Window
             if (!cloudSnapshot.IsSignedIn)
             {
                 ImGui.Spacing();
-                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, -1), true))
+                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, -1), false))
                 {
                     DrawAuthenticationGate(cloudSnapshot);
                 }
@@ -2235,61 +2239,110 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawAuthenticationGate(CloudClientSnapshot snapshot)
     {
-        DrawPageHeader(
-            text.Get("登录 DACT", "Sign in to DACT"),
-            text.Get(
-                "登录成功后才能使用 DACT 的解析器、悬浮窗和扩展服务。",
-                "Sign in before using DACT parsers, overlays, and extension services."));
-        ImGui.TextColored(
-            snapshot.StatusIsError
-                ? new Vector4(0.96f, 0.42f, 0.38f, 1)
-                : new Vector4(0.45f, 0.88f, 0.62f, 1),
-            snapshot.StatusMessage);
-        if (snapshot.IsBusy)
-        {
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get("处理中…", "Working…"));
-        }
-        ImGui.Spacing();
         if (string.IsNullOrWhiteSpace(cloudUsername) &&
             !string.IsNullOrWhiteSpace(snapshot.Username))
         {
             cloudUsername = snapshot.Username;
         }
-        DrawCloudAuthentication(snapshot);
+
+        var available = ImGui.GetContentRegionAvail();
+        // At the minimum supported window width, two columns leave the credential
+        // fields too narrow to scan safely, so the brand panel becomes a compact banner.
+        var stackAuthenticationLayout = available.X < 820;
+        if (stackAuthenticationLayout)
+        {
+            if (BeginAuthenticationPanel(
+                    "account-authentication-hero",
+                    new Vector2(-1, 142),
+                    hero: true,
+                    allowScrolling: false))
+            {
+                DrawAuthenticationHero(compact: true);
+            }
+            EndAuthenticationPanel();
+            ImGui.Spacing();
+            if (BeginAuthenticationPanel(
+                    "account-authentication-card",
+                    new Vector2(-1, -1),
+                    hero: false,
+                    allowScrolling: true))
+            {
+                DrawCloudAuthentication(snapshot);
+            }
+            EndAuthenticationPanel();
+            return;
+        }
+
+        const float panelGap = 14;
+        var heroWidth = Math.Clamp(available.X * 0.37f, 292, 342);
+        if (BeginAuthenticationPanel(
+                "account-authentication-hero",
+                new Vector2(heroWidth, -1),
+                hero: true,
+                allowScrolling: false))
+        {
+            DrawAuthenticationHero(compact: false);
+        }
+        EndAuthenticationPanel();
+        ImGui.SameLine(0, panelGap);
+        if (BeginAuthenticationPanel(
+                "account-authentication-card",
+                new Vector2(-1, -1),
+                hero: false,
+                allowScrolling: true))
+        {
+            DrawCloudAuthentication(snapshot);
+        }
+        EndAuthenticationPanel();
     }
 
     private void DrawCloudAuthentication(CloudClientSnapshot snapshot)
     {
         var busy = snapshot.IsBusy;
-        if (ImGui.Button(text.Get("登录", "Login")))
-        {
-            cloudAuthenticationPage = CloudAuthenticationPage.Login;
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("注册账号", "Register")))
-        {
-            cloudAuthenticationPage = CloudAuthenticationPage.Register;
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(text.Get("重置密码", "Reset password")))
-        {
-            cloudAuthenticationPage = CloudAuthenticationPage.ResetPassword;
-        }
-        ImGui.Separator();
+        ImGui.TextColored(Gold, text.Get("账号入口", "ACCOUNT ACCESS"));
+        DrawAuthenticationMutedText(text.Get(
+            "验证账号后进入 DACT 控制中心",
+            "Verify your account to enter the DACT control center"));
         ImGui.Spacing();
 
-        ImGui.SetNextItemWidth(340);
-        ImGui.InputText(
-            text.Get("用户名###cloud-username", "Username###cloud-username"),
+        var authenticationPages = new[]
+        {
+            text.Get("登录", "Login"),
+            text.Get("注册", "Register"),
+            text.Get("重置密码", "Reset password"),
+        };
+        var selectedAuthenticationPage = BrandedWindowChrome.DrawNavigationRail(
+            "account-authentication-navigation",
+            authenticationPages,
+            (int)cloudAuthenticationPage,
+            height: 34);
+        cloudAuthenticationPage = (CloudAuthenticationPage)selectedAuthenticationPage;
+        ImGui.Spacing();
+
+        var (pageTitle, pageDescription) = cloudAuthenticationPage switch
+        {
+            CloudAuthenticationPage.Register => (
+                text.Get("创建 DACT 账号", "Create a DACT account"),
+                text.Get("使用一次性激活码完成注册并绑定本机。", "Register with a one-time activation key and bind this PC.")),
+            CloudAuthenticationPage.ResetPassword => (
+                text.Get("重设账号密码", "Reset account password"),
+                text.Get("使用管理员重置码和恢复密钥保护原有云配置。", "Use an administrator reset code and recovery key to protect existing cloud data.")),
+            _ => (
+                text.Get("欢迎回来", "Welcome back"),
+                text.Get("输入账号和密码，继续使用 DACT。", "Enter your username and password to continue.")),
+        };
+        ImGui.TextColored(IceBlue, pageTitle);
+        DrawAuthenticationMutedText(pageDescription);
+        ImGui.Spacing();
+        DrawAuthenticationStatus(snapshot);
+        ImGui.Spacing();
+
+        DrawAuthenticationInput(
+            text.Get("用户名", "Username"),
+            text.Get("请输入账号名", "Enter your username"),
+            "cloud-username",
             ref cloudUsername,
             32);
-        ImGui.Checkbox(
-            text.Get("自动登录", "Sign in automatically"),
-            ref cloudRememberLogin);
-        ImGui.TextDisabled(text.Get(
-            "勾选后，登录状态会使用 Windows 当前用户加密并在重启后恢复。",
-            "When enabled, Windows protects the saved session for future restarts."));
 
         switch (cloudAuthenticationPage)
         {
@@ -2307,21 +2360,30 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawCloudLoginForm(bool busy)
     {
-        ImGui.SetNextItemWidth(340);
-        ImGui.InputText(
-            text.Get("密码###cloud-password", "Password###cloud-password"),
+        DrawAuthenticationInput(
+            text.Get("密码", "Password"),
+            text.Get("请输入密码", "Enter your password"),
+            "cloud-password",
             ref cloudPassword,
             128,
             ImGuiInputTextFlags.Password);
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText(
-            text.Get(
-                "恢复密钥（通常留空）###cloud-login-recovery-key",
-                "Recovery key (normally blank)###cloud-login-recovery-key"),
-            ref cloudRecoveryKey,
-            96,
-            ImGuiInputTextFlags.Password);
-        if (!busy && ImGui.Button(text.Get("登录云账号", "Sign in")))
+        if (ImGui.CollapsingHeader(text.Get(
+                "管理员改密后的恢复选项###cloud-login-recovery-options",
+                "Recovery after an administrator reset###cloud-login-recovery-options")))
+        {
+            DrawAuthenticationInput(
+                text.Get("恢复密钥", "Recovery key"),
+                text.Get("通常无需填写", "Normally not required"),
+                "cloud-login-recovery-key",
+                ref cloudRecoveryKey,
+                96,
+                ImGuiInputTextFlags.Password);
+            DrawAuthenticationMutedText(text.Get(
+                "仅当管理员直接重置过密码，且本机没有保存账号密钥时才需要。",
+                "Only required after a direct administrator reset when this PC has no saved account key."));
+        }
+        DrawAuthenticationPersistenceOption();
+        if (DrawAuthenticationPrimaryButton(text.Get("登录 DACT", "Sign in to DACT"), !busy))
         {
             cloud.Login(new CloudLoginRequest(
                 cloudUsername,
@@ -2331,34 +2393,36 @@ public sealed class ControlCenterWindow : Window
             cloudPassword = string.Empty;
             cloudRecoveryKey = string.Empty;
         }
-        ImGui.TextDisabled(text.Get(
-            "管理员直接重置密码后，如本机没有保存密钥，请输入注册时保存的恢复密钥。",
-            "After a direct administrator reset, enter the recovery key if this PC has not saved it."));
     }
 
     private void DrawCloudRegistrationForm(bool busy)
     {
-        ImGui.SetNextItemWidth(340);
-        ImGui.InputText(
-            text.Get("密码（至少 10 位）###cloud-register-password", "Password (10+ characters)###cloud-register-password"),
+        DrawAuthenticationInput(
+            text.Get("密码", "Password"),
+            text.Get("至少 10 位", "At least 10 characters"),
+            "cloud-register-password",
             ref cloudPassword,
             128,
             ImGuiInputTextFlags.Password);
-        ImGui.SetNextItemWidth(340);
-        ImGui.InputText(
-            text.Get("确认密码###cloud-register-confirm", "Confirm password###cloud-register-confirm"),
+        DrawAuthenticationInput(
+            text.Get("确认密码", "Confirm password"),
+            text.Get("再次输入密码", "Enter your password again"),
+            "cloud-register-confirm",
             ref cloudPasswordConfirmation,
             128,
             ImGuiInputTextFlags.Password);
-        ImGui.SetNextItemWidth(520);
-        ImGui.InputText(
-            text.Get("激活码###cloud-activation-key", "Activation key###cloud-activation-key"),
+        DrawAuthenticationInput(
+            text.Get("一次性激活码", "One-time activation key"),
+            text.Get("输入管理员或好友发放的激活码", "Enter an activation key from an administrator or friend"),
+            "cloud-activation-key",
             ref cloudActivationKey,
             96);
         var passwordsMatch = cloudPassword.Length >= 10 &&
                              cloudPassword == cloudPasswordConfirmation;
-        if (!busy && passwordsMatch &&
-            ImGui.Button(text.Get("注册并绑定本机", "Register and bind this PC")))
+        DrawAuthenticationPersistenceOption();
+        if (DrawAuthenticationPrimaryButton(
+                text.Get("注册并绑定本机", "Register and bind this PC"),
+                !busy && passwordsMatch))
         {
             cloud.Register(new CloudRegistrationRequest(
                 cloudUsername,
@@ -2373,39 +2437,43 @@ public sealed class ControlCenterWindow : Window
                 new Vector4(0.96f, 0.42f, 0.38f, 1),
                 text.Get("两次密码不一致，或密码不足 10 位。", "Passwords differ or contain fewer than 10 characters."));
         }
-        ImGui.TextDisabled(text.Get(
-            "注册必须同时提供用户名、密码和管理员发放的一次性激活码。",
-            "Registration requires a username, password, and one-time administrator activation key."));
+        DrawAuthenticationMutedText(text.Get(
+            "注册必须同时提供用户名、密码和有效的一次性激活码。",
+            "Registration requires a username, password, and valid one-time activation key."));
     }
 
     private void DrawCloudPasswordResetForm(bool busy, bool hasLocalRecoveryKey)
     {
-        ImGui.SetNextItemWidth(520);
-        ImGui.InputText(
-            text.Get("管理员密码重置码###cloud-reset-code", "Administrator reset code###cloud-reset-code"),
+        DrawAuthenticationInput(
+            text.Get("管理员密码重置码", "Administrator reset code"),
+            text.Get("输入管理员提供的一次性重置码", "Enter the one-time code from an administrator"),
+            "cloud-reset-code",
             ref cloudResetCode,
             96);
-        ImGui.SetNextItemWidth(340);
-        ImGui.InputText(
-            text.Get("新密码###cloud-new-password", "New password###cloud-new-password"),
+        DrawAuthenticationInput(
+            text.Get("新密码", "New password"),
+            text.Get("至少 10 位", "At least 10 characters"),
+            "cloud-new-password",
             ref cloudPassword,
             128,
             ImGuiInputTextFlags.Password);
-        ImGui.SetNextItemWidth(340);
-        ImGui.InputText(
-            text.Get("确认新密码###cloud-new-password-confirm", "Confirm new password###cloud-new-password-confirm"),
+        DrawAuthenticationInput(
+            text.Get("确认新密码", "Confirm new password"),
+            text.Get("再次输入新密码", "Enter the new password again"),
+            "cloud-new-password-confirm",
             ref cloudPasswordConfirmation,
             128,
             ImGuiInputTextFlags.Password);
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText(
-            text.Get(
-                "恢复密钥###cloud-recovery-key",
-                "Recovery key###cloud-recovery-key"),
+        DrawAuthenticationInput(
+            text.Get("恢复密钥", "Recovery key"),
+            hasLocalRecoveryKey
+                ? text.Get("本机已保存，可留空", "Saved on this PC; may be left blank")
+                : text.Get("输入注册时保存的 dact1_ 密钥", "Enter the dact1_ key saved at registration"),
+            "cloud-recovery-key",
             ref cloudRecoveryKey,
             96,
             ImGuiInputTextFlags.Password);
-        ImGui.TextDisabled(hasLocalRecoveryKey
+        DrawAuthenticationMutedText(hasLocalRecoveryKey
             ? text.Get(
                 "本机已保存账号密钥；恢复密钥可留空。",
                 "This PC has the account key, so the recovery key can remain empty.")
@@ -2415,8 +2483,11 @@ public sealed class ControlCenterWindow : Window
 
         var passwordsMatch = cloudPassword.Length >= 10 &&
                              cloudPassword == cloudPasswordConfirmation;
-        if (!busy && passwordsMatch && (hasLocalRecoveryKey || !string.IsNullOrWhiteSpace(cloudRecoveryKey)) &&
-            ImGui.Button(text.Get("确认重置密码", "Reset password")))
+        DrawAuthenticationPersistenceOption();
+        if (DrawAuthenticationPrimaryButton(
+                text.Get("确认重置密码", "Reset password"),
+                !busy && passwordsMatch &&
+                (hasLocalRecoveryKey || !string.IsNullOrWhiteSpace(cloudRecoveryKey))))
         {
             cloud.ResetPassword(new CloudPasswordResetRequest(
                 cloudUsername,
@@ -2426,6 +2497,177 @@ public sealed class ControlCenterWindow : Window
                 cloudRememberLogin));
             ClearCloudSecrets();
         }
+    }
+
+    private void DrawAuthenticationHero(bool compact)
+    {
+        var wrap = logoTexture.GetWrapOrEmpty();
+        if (compact)
+        {
+            ImGui.Image(wrap.Handle, new Vector2(48));
+            ImGui.SameLine();
+            ImGui.BeginGroup();
+            ImGui.TextColored(Gold, "DACT");
+            ImGui.TextColored(IceBlue, text.Get("账号与云服务", "ACCOUNT & CLOUD"));
+            ImGui.EndGroup();
+            ImGui.Spacing();
+            DrawAuthenticationMutedText(text.Get(
+                "账号验证后启用解析器、悬浮窗与扩展 · Windows 加密自动登录 · 配置本地加密后上传",
+                "Account-gated runtime · Windows-protected auto-login · Locally encrypted cloud backups"));
+            return;
+        }
+
+        const float logoSize = 82;
+        var logoOffset = Math.Max(0, (ImGui.GetContentRegionAvail().X - logoSize) * 0.5f);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + logoOffset);
+        ImGui.Image(wrap.Handle, new Vector2(logoSize));
+        ImGui.Spacing();
+        DrawCenteredAuthenticationText("DACT", Gold);
+        DrawCenteredAuthenticationText(text.Get("账号与云服务", "ACCOUNT & CLOUD"), IceBlue);
+        ImGui.Dummy(new Vector2(0, 16));
+        DrawAuthenticationMutedText(text.Get(
+            "连接你的 DACT 工作区，在一处管理解析器、悬浮窗、扩展与加密配置。",
+            "Connect your DACT workspace and manage parsers, overlays, extensions, and encrypted settings in one place."));
+        ImGui.Dummy(new Vector2(0, 18));
+        DrawAuthenticationFeature(
+            text.Get("账号验证后启用", "Enabled after verification"),
+            text.Get("未登录时 DACT 功能保持关闭。", "DACT features stay off while signed out."));
+        DrawAuthenticationFeature(
+            text.Get("安全自动登录", "Protected auto-login"),
+            text.Get("登录状态由 Windows 当前用户加密。", "Windows protects the session for the current user."));
+        DrawAuthenticationFeature(
+            text.Get("加密云同步", "Encrypted cloud sync"),
+            text.Get("配置在本地加密后才会上传。", "Settings are encrypted locally before upload."));
+    }
+
+    private static bool BeginAuthenticationPanel(
+        string id,
+        Vector2 size,
+        bool hero,
+        bool allowScrolling)
+    {
+        ImGui.PushStyleColor(
+            ImGuiCol.ChildBg,
+            hero ? AuthenticationHeroBackground : AuthenticationCardBackground);
+        ImGui.PushStyleColor(
+            ImGuiCol.Border,
+            hero
+                ? new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f)
+                : AuthenticationBorder);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 11);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(22, 20));
+        var flags = allowScrolling
+            ? ImGuiWindowFlags.None
+            : ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+        return ImGui.BeginChild(id, size, true, flags);
+    }
+
+    private static void EndAuthenticationPanel()
+    {
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(2);
+    }
+
+    private void DrawAuthenticationFeature(string title, string description)
+    {
+        ImGui.TextColored(IceBlue, "◆");
+        ImGui.SameLine();
+        ImGui.BeginGroup();
+        ImGui.TextColored(new Vector4(0.90f, 0.94f, 0.98f, 1), title);
+        DrawAuthenticationMutedText(description);
+        ImGui.EndGroup();
+        ImGui.Dummy(new Vector2(0, 9));
+    }
+
+    private static void DrawCenteredAuthenticationText(string value, Vector4 color)
+    {
+        var offset = Math.Max(0, (ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize(value).X) * 0.5f);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + offset);
+        ImGui.TextColored(color, value);
+    }
+
+    private static void DrawAuthenticationMutedText(string value)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, AuthenticationMutedText);
+        ImGui.TextWrapped(value);
+        ImGui.PopStyleColor();
+    }
+
+    private void DrawAuthenticationStatus(CloudClientSnapshot snapshot)
+    {
+        var statusMessage = snapshot.IsBusy
+            ? $"{snapshot.StatusMessage}  {text.Get("处理中…", "Working…")}"
+            : snapshot.StatusMessage;
+        if (string.IsNullOrWhiteSpace(statusMessage))
+        {
+            return;
+        }
+
+        var statusTextColor = snapshot.StatusIsError
+            ? new Vector4(1, 0.52f, 0.48f, 1)
+            : new Vector4(0.58f, 0.86f, 1, 1);
+        var statusBackground = snapshot.StatusIsError
+            ? new Vector4(0.30f, 0.075f, 0.075f, 0.70f)
+            : new Vector4(0.07f, 0.18f, 0.24f, 0.78f);
+        var wrapWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - 42);
+        var statusHeight = Math.Max(40, ImGui.CalcTextSize(statusMessage, false, wrapWidth).Y + 16);
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, statusBackground);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 6);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10, 8));
+        if (ImGui.BeginChild(
+                "account-authentication-status",
+                new Vector2(-1, statusHeight),
+                false,
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+        {
+            ImGui.TextColored(statusTextColor, snapshot.StatusIsError ? "!" : "●");
+            ImGui.SameLine();
+            ImGui.PushStyleColor(ImGuiCol.Text, statusTextColor);
+            ImGui.TextWrapped(statusMessage);
+            ImGui.PopStyleColor();
+        }
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor();
+    }
+
+    private void DrawAuthenticationInput(
+        string label,
+        string hint,
+        string id,
+        ref string value,
+        int maxLength,
+        ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
+    {
+        ImGui.TextDisabled(label);
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint($"##{id}", hint, ref value, maxLength, flags);
+    }
+
+    private void DrawAuthenticationPersistenceOption()
+    {
+        ImGui.Spacing();
+        ImGui.Checkbox(text.Get("自动登录", "Sign in automatically"), ref cloudRememberLogin);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(text.Get(
+                "登录状态使用 Windows 当前用户加密，并在重启游戏或电脑后恢复。",
+                "Windows protects the saved session for this user and restores it after a game or PC restart."));
+        }
+    }
+
+    private static bool DrawAuthenticationPrimaryButton(string label, bool enabled)
+    {
+        ImGui.BeginDisabled(!enabled);
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.10f, 0.36f, 0.50f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.48f, 0.64f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.56f, 0.72f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
+        var clicked = ImGui.Button(label, new Vector2(-1, 38));
+        ImGui.PopStyleColor(4);
+        ImGui.EndDisabled();
+        return enabled && clicked;
     }
 
     private void DrawSignedInCloud(CloudClientSnapshot snapshot)
