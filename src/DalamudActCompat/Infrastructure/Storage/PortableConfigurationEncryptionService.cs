@@ -168,7 +168,7 @@ internal sealed class PortableConfigurationEncryptionService
         }
     }
 
-    private static byte[] ParseRecoveryKey(string recoveryKey)
+    internal static byte[] ParseRecoveryKey(string recoveryKey)
     {
         if (string.IsNullOrWhiteSpace(recoveryKey) ||
             !recoveryKey.StartsWith(RecoveryKeyPrefix, StringComparison.Ordinal))
@@ -192,13 +192,13 @@ internal sealed class PortableConfigurationEncryptionService
         }
     }
 
-    private static string ToBase64Url(byte[] value)
+    internal static string ToBase64Url(ReadOnlySpan<byte> value)
         => Convert.ToBase64String(value)
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
 
-    private static byte[] FromBase64Url(string value)
+    internal static byte[] FromBase64Url(string value)
     {
         var normalized = value.Replace('-', '+').Replace('_', '/');
         normalized += new string('=', (4 - normalized.Length % 4) % 4);

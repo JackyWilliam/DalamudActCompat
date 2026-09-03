@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -23,6 +24,7 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Diagnostics;
+using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -125,6 +127,21 @@ try
     await ValidatePortableConfigurationArchiveAsync(testRoot);
     await ValidateEncryptedConfigurationBackupAsync(testRoot);
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
+    ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
+    await ValidateCloudApiContractAsync(testRoot);
+    await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
+    var cloudIntegrationBaseUrl = Environment.GetEnvironmentVariable(
+        "DACT_CLOUD_INTEGRATION_BASE_URL");
+    var cloudIntegrationAdminToken = Environment.GetEnvironmentVariable(
+        "DACT_CLOUD_INTEGRATION_ADMIN_TOKEN");
+    if (!string.IsNullOrWhiteSpace(cloudIntegrationBaseUrl) &&
+        !string.IsNullOrWhiteSpace(cloudIntegrationAdminToken))
+    {
+        await ValidateLiveCloudIntegrationAsync(
+            testRoot,
+            new Uri(cloudIntegrationBaseUrl),
+            cloudIntegrationAdminToken);
+    }
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -6306,6 +6323,14 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         pluginConfigurationDirectory,
         "RainbowMage.OverlayPlugin.config.json.backup",
         "old local backup must never enter the cloud backup");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-account.dat",
+        "old-computer-protected-account");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-device.dat",
+        "old-computer-device");
 
     var service = new PortableConfigurationBackupService();
     Assert(
@@ -6369,6 +6394,14 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         pluginConfigurationDirectory,
         Path.Combine("logs", "ffxiv", "Network_private.log"),
         "local log remains local");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-account.dat",
+        "new-computer-protected-account");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-device.dat",
+        "new-computer-device");
 
     var preview = await service.PreviewRestoreAsync(
         encryptedArchive,
@@ -6456,7 +6489,13 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         await File.ReadAllTextAsync(Path.Combine(
             pluginConfigurationDirectory,
             "RainbowMage.OverlayPlugin.config.json.backup")) ==
-        "old local backup must never enter the cloud backup",
+        "old local backup must never enter the cloud backup" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "cloud-account.dat")) == "new-computer-protected-account" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "cloud-device.dat")) == "new-computer-device",
         "Encrypted restore did not apply the cloud snapshot while preserving local paths and exclusions.");
 
     var rollbackOfRollback = Path.Combine(archiveDirectory, "before-manual-rollback.dactcloud");
@@ -12507,6 +12546,378 @@ static void ValidateNetworkLogSessionRotation(string testRoot)
             sessionStartedAt.AddSeconds(2),
             TimeSpan.Zero) is not null,
         "Network log rotation did not recover after the previous writer released the file.");
+}
+
+static void ValidateCloudKeyEnvelopeAndCredentialProtection(string testRoot)
+{
+    var encryption = new PortableConfigurationEncryptionService();
+    var envelopeService = new CloudKeyEnvelopeService();
+    var recoveryKey = encryption.GenerateRecoveryKey();
+    var envelope = envelopeService.Create(recoveryKey, "a-correct-password");
+    Assert(
+        envelope.Format == CloudKeyEnvelopeService.EnvelopeFormat &&
+        envelope.Iterations == CloudKeyEnvelopeService.PasswordIterations &&
+        envelopeService.Open(envelope, "a-correct-password") == recoveryKey,
+        "Cloud password envelope did not round-trip the account data key.");
+    try
+    {
+        _ = envelopeService.Open(envelope, "a-wrong-password");
+        throw new InvalidOperationException("Cloud key envelope accepted a wrong password.");
+    }
+    catch (CryptographicException)
+    {
+        // A wrong password must fail authentication before yielding any account key.
+    }
+
+    var credentialPath = Path.Combine(testRoot, "cloud-security", "account.dat");
+    var store = new CloudCredentialStore(credentialPath);
+    var credentials = new CloudStoredCredentials(
+        "cloud_user",
+        "secret-session-token",
+        DateTimeOffset.UtcNow.AddDays(10),
+        recoveryKey);
+    store.Save(credentials);
+    Assert(store.Load() == credentials, "DPAPI cloud credentials did not round-trip.");
+    var protectedBytes = File.ReadAllBytes(credentialPath);
+    Assert(
+        protectedBytes.AsSpan().IndexOf("secret-session-token"u8) < 0 &&
+        protectedBytes.AsSpan().IndexOf("dact1_"u8) < 0,
+        "Cloud credential file exposed a session token or recovery key in plaintext.");
+
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-machine"));
+    paths.EnsureCreated();
+    var identity = new CloudMachineIdentity(paths.CloudDeviceFile);
+    var firstDeviceId = identity.GetDeviceId();
+    var secondDeviceId = identity.GetDeviceId();
+    Assert(
+        firstDeviceId == secondDeviceId &&
+        Regex.IsMatch(firstDeviceId, "^dact-device-v1_[A-Za-z0-9_-]{43}$"),
+        "Cloud machine identifier was unstable or exposed an invalid shape.");
+}
+
+static async Task ValidateCloudApiContractAsync(string testRoot)
+{
+    var backupBytes = "DACTE2E1\u0001encrypted-test-payload"u8.ToArray();
+    var backupHash = Convert.ToHexString(SHA256.HashData(backupBytes)).ToLowerInvariant();
+    var createdAt = DateTimeOffset.UtcNow;
+    var envelope = new CloudKeyEnvelope(
+        CloudKeyEnvelopeService.EnvelopeFormat,
+        Convert.ToBase64String(new byte[32]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        CloudKeyEnvelopeService.PasswordIterations,
+        Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        Convert.ToBase64String(new byte[12]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        Convert.ToBase64String(new byte[32]).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/register", StringComparison.Ordinal))
+        {
+            var json = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            Assert(
+                json.Contains("\"activationKey\":\"DACT-TEST\"", StringComparison.Ordinal) &&
+                json.Contains("\"keyEnvelope\"", StringComparison.Ordinal),
+                "Cloud registration request omitted its activation key or password envelope.");
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                token = "session-token",
+                tokenType = "Bearer",
+                expiresAt = createdAt.AddDays(30),
+                user = new { id = "user-id", username = "cloud_user" },
+                keyEnvelope = envelope,
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal) && request.Method == HttpMethod.Get)
+        {
+            Assert(
+                request.Headers.Authorization?.Parameter == "session-token",
+                "Cloud backup list omitted its bearer token.");
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                backups = new[]
+                {
+                    new { id = "backup-id", createdAt, sizeBytes = backupBytes.Length, sha256 = backupHash },
+                },
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal) && request.Method == HttpMethod.Post)
+        {
+            var uploaded = request.Content!.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+            Assert(uploaded.SequenceEqual(backupBytes), "Cloud upload changed encrypted bytes.");
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                id = "backup-id",
+                createdAt,
+                sizeBytes = backupBytes.Length,
+                sha256 = backupHash,
+            });
+        }
+        if (path.EndsWith("/backups/backup-id", StringComparison.Ordinal))
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(backupBytes),
+            };
+            response.Content.Headers.ContentLength = backupBytes.Length;
+            response.Headers.TryAddWithoutValidation("X-Content-SHA256", backupHash);
+            return response;
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new { error = "not_found", message = "missing" });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var authentication = await api.RegisterAsync(
+        "cloud_user",
+        "a-correct-password",
+        "DACT-TEST",
+        $"dact-device-v1_{new string('A', 43)}",
+        envelope,
+        CancellationToken.None);
+    Assert(
+        authentication.User.Username == "cloud_user" && authentication.KeyEnvelope == envelope,
+        "Cloud authentication response lost account or envelope fields.");
+
+    var versions = await api.ListBackupsAsync("session-token", CancellationToken.None);
+    Assert(versions.Count == 1 && versions[0].Id == "backup-id", "Cloud versions were not parsed.");
+    var uploadPath = Path.Combine(testRoot, "cloud-api-upload.dactcloud");
+    File.WriteAllBytes(uploadPath, backupBytes);
+    var uploadedVersion = await api.UploadBackupAsync(
+        "session-token",
+        uploadPath,
+        CancellationToken.None);
+    Assert(uploadedVersion.Sha256 == backupHash, "Cloud upload response was not parsed.");
+    var downloadPath = Path.Combine(testRoot, "cloud-api-download.dactcloud");
+    await api.DownloadBackupAsync(
+        "session-token",
+        versions[0],
+        downloadPath,
+        CancellationToken.None);
+    Assert(
+        File.ReadAllBytes(downloadPath).SequenceEqual(backupBytes),
+        "Cloud download failed authenticated size/hash verification.");
+}
+
+static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(string testRoot)
+{
+    var createdAt = DateTimeOffset.UtcNow;
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/register", StringComparison.Ordinal))
+        {
+            using var registration = JsonDocument.Parse(
+                request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            var envelope = registration.RootElement.GetProperty("keyEnvelope").Clone();
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                token = "registration-token",
+                tokenType = "Bearer",
+                expiresAt = createdAt.AddDays(30),
+                user = new { id = "registration-user-id", username = "registration_user" },
+                keyEnvelope = envelope,
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(
+                HttpStatusCode.ServiceUnavailable,
+                new { error = "temporarily_unavailable", message = "temporary list failure" });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new { error = "not_found", message = "missing" });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-registration-refresh-failure"));
+    paths.EnsureCreated();
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(paths.CloudCredentialFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+
+    await service.RegisterAsync(
+        "registration_user",
+        "registration-password",
+        "DACT-TEST",
+        CancellationToken.None);
+
+    var snapshot = service.Snapshot;
+    Assert(
+        snapshot.IsSignedIn &&
+        snapshot.StatusIsError &&
+        snapshot.RecoveryKeyToSave?.StartsWith("dact1_", StringComparison.Ordinal) == true &&
+        File.Exists(paths.CloudCredentialFile),
+        "A transient version-list failure hid the committed registration or its recovery key.");
+}
+
+static HttpResponseMessage JsonResponse(HttpStatusCode status, object value)
+    => new(status)
+    {
+        Content = JsonContent.Create(value),
+    };
+
+static async Task ValidateLiveCloudIntegrationAsync(
+    string testRoot,
+    Uri baseAddress,
+    string adminToken)
+{
+    using var adminClient = new HttpClient { BaseAddress = baseAddress };
+    adminClient.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", adminToken);
+    using var activationResponse = await adminClient.PostAsJsonAsync(
+        "api/v1/admin/activation-keys",
+        new { name = "C# 真实联调", note = "隔离临时数据库" });
+    activationResponse.EnsureSuccessStatusCode();
+    using var activationJson = JsonDocument.Parse(
+        await activationResponse.Content.ReadAsStringAsync());
+    var activationKey = activationJson.RootElement.GetProperty("activationKey").GetString()
+                        ?? throw new InvalidDataException("Integration activation key was empty.");
+
+    var username = $"integration_{Guid.NewGuid():N}"[..32];
+    const string password = "integration-password";
+    var deviceId = $"dact-device-v1_{new string('I', 43)}";
+    var backupService = new PortableConfigurationBackupService();
+    var envelopeService = new CloudKeyEnvelopeService();
+    var recoveryKey = backupService.GenerateRecoveryKey();
+    var envelope = envelopeService.Create(recoveryKey, password);
+    using var clientHttp = new HttpClient { BaseAddress = baseAddress };
+    using var api = new CloudApiClient(clientHttp);
+    var registered = await api.RegisterAsync(
+        username,
+        password,
+        activationKey,
+        deviceId,
+        envelope,
+        CancellationToken.None);
+    Assert(
+        registered.KeyEnvelope is not null &&
+        envelopeService.Open(registered.KeyEnvelope, password) == recoveryKey,
+        "Real HTTP registration did not preserve the password-wrapped account key.");
+
+    var integrationRoot = Path.Combine(testRoot, "live-cloud-integration");
+    var configurationRoot = Path.Combine(integrationRoot, "pluginConfigs");
+    var pluginConfigurationDirectory = Path.Combine(configurationRoot, "DalamudActCompat");
+    var archiveDirectory = Path.Combine(integrationRoot, "archives");
+    Directory.CreateDirectory(pluginConfigurationDirectory);
+    Directory.CreateDirectory(archiveDirectory);
+    var mainConfigurationPath = Path.Combine(configurationRoot, "DalamudActCompat.json");
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        new JObject
+        {
+            ["Version"] = 16,
+            ["LogDirectory"] = @"C:\remote\logs",
+            ["ActPluginDirectory"] = @"C:\remote\plugins",
+            ["CloudMarker"] = "remote",
+        }.ToString(Newtonsoft.Json.Formatting.Indented));
+    var triggerPath = Path.Combine(
+        pluginConfigurationDirectory,
+        "Config",
+        "Triggernometry.config.xml");
+    Directory.CreateDirectory(Path.GetDirectoryName(triggerPath)!);
+    await File.WriteAllTextAsync(triggerPath, "<triggers>remote</triggers>");
+    var encryptedArchive = Path.Combine(archiveDirectory, "upload.dactcloud");
+    await backupService.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        encryptedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    await api.UploadBackupAsync(
+        registered.Token,
+        encryptedArchive,
+        CancellationToken.None);
+
+    var loggedIn = await api.LoginAsync(
+        username,
+        password,
+        deviceId,
+        CancellationToken.None);
+    Assert(
+        loggedIn.KeyEnvelope is not null &&
+        envelopeService.Open(loggedIn.KeyEnvelope, password) == recoveryKey,
+        "Real HTTP login could not recover the account data key.");
+    var versions = await api.ListBackupsAsync(loggedIn.Token, CancellationToken.None);
+    Assert(versions.Count == 1, "Real HTTP cloud version list did not contain the upload.");
+    var downloadedArchive = Path.Combine(archiveDirectory, "download.dactcloud");
+    await api.DownloadBackupAsync(
+        loggedIn.Token,
+        versions[0],
+        downloadedArchive,
+        CancellationToken.None);
+
+    const string localLogDirectory = @"D:\local\logs";
+    const string localPluginDirectory = @"D:\local\plugins";
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        new JObject
+        {
+            ["Version"] = 16,
+            ["LogDirectory"] = localLogDirectory,
+            ["ActPluginDirectory"] = localPluginDirectory,
+            ["CloudMarker"] = "local",
+        }.ToString(Newtonsoft.Json.Formatting.Indented));
+    var preview = await backupService.PreviewRestoreAsync(
+        downloadedArchive,
+        pluginConfigurationDirectory,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(preview.ChangedFiles >= 1, "Real HTTP restore preview found no changed files.");
+    var rollback = Path.Combine(archiveDirectory, "rollback.dactcloud");
+    await backupService.RestoreEncryptedAsync(
+        downloadedArchive,
+        pluginConfigurationDirectory,
+        rollback,
+        recoveryKey,
+        CancellationToken.None);
+    var restored = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        restored["CloudMarker"]?.Value<string>() == "remote" &&
+        restored["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        restored["ActPluginDirectory"]?.Value<string>() == localPluginDirectory,
+        "Real HTTP restore did not apply cloud data while preserving machine-local paths.");
+    await backupService.RestoreEncryptedAsync(
+        rollback,
+        pluginConfigurationDirectory,
+        Path.Combine(archiveDirectory, "rollback-of-rollback.dactcloud"),
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath))["CloudMarker"]?
+            .Value<string>() == "local",
+        "Real HTTP restore rollback did not recover the local configuration.");
+
+    using var resetCodeResponse = await adminClient.PostAsJsonAsync(
+        $"api/v1/admin/users/{Uri.EscapeDataString(registered.User.Id)}/password-reset-codes",
+        new { });
+    resetCodeResponse.EnsureSuccessStatusCode();
+    using var resetCodeJson = JsonDocument.Parse(
+        await resetCodeResponse.Content.ReadAsStringAsync());
+    var resetCode = resetCodeJson.RootElement.GetProperty("resetCode").GetString()
+                    ?? throw new InvalidDataException("Integration reset code was empty.");
+    const string newPassword = "integration-new-password";
+    var reset = await api.ResetPasswordAsync(
+        username,
+        resetCode,
+        newPassword,
+        deviceId,
+        envelopeService.Create(recoveryKey, newPassword),
+        CancellationToken.None);
+    Assert(
+        reset.KeyEnvelope is not null &&
+        envelopeService.Open(reset.KeyEnvelope, newPassword) == recoveryKey,
+        "Real HTTP password reset changed or lost the account data key.");
+    try
+    {
+        _ = await api.LoginAsync(username, password, deviceId, CancellationToken.None);
+        throw new InvalidOperationException("Old password remained valid after real HTTP reset.");
+    }
+    catch (CloudApiException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+    {
+        // The server invalidates the old password and sessions after reset.
+    }
+    _ = await api.LoginAsync(username, newPassword, deviceId, CancellationToken.None);
 }
 
 public sealed class GenericActPluginFixture : IActPluginV1

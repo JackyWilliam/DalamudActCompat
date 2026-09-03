@@ -14,6 +14,7 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Diagnostics;
+using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
@@ -76,6 +77,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
+    private readonly CloudClientService cloudClient;
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
     private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
@@ -84,6 +86,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CancellationTokenSource bundledUpdateCancellation = new();
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
     private readonly CancellationTokenSource cactbotOperationCancellation = new();
+    private readonly CancellationTokenSource cloudOperationCancellation = new();
     private readonly object cactbotTaskLock = new();
     private readonly object cactbotStatusLock = new();
     private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
@@ -209,6 +212,7 @@ public sealed class Plugin : IDalamudPlugin
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         paths.EnsureCreated();
+        cloudClient = new CloudClientService(paths);
         var configuredLogDirectory = string.IsNullOrWhiteSpace(configuration.LogDirectory)
             ? paths.CombatLogDirectory
             : configuration.LogDirectory;
@@ -634,7 +638,31 @@ public sealed class Plugin : IDalamudPlugin
             DeleteHtmlOverlay,
             StartFactoryReset,
             parserEngine.ResetCurrentEncounter,
-            name => _ = actRuntime.ApplyOverlayWindowSettings(name));
+            name => _ = actRuntime.ApplyOverlayWindowSettings(name),
+            new CloudUiBridge(
+                () => cloudClient.Snapshot,
+                request => StartCloudOperation(token => cloudClient.RegisterAsync(
+                    request.Username,
+                    request.Password,
+                    request.ActivationKey,
+                    token)),
+                request => StartCloudOperation(token => cloudClient.LoginAsync(
+                    request.Username,
+                    request.Password,
+                    token)),
+                request => StartCloudOperation(token => cloudClient.ResetPasswordAsync(
+                    request.Username,
+                    request.ResetCode,
+                    request.NewPassword,
+                    request.RecoveryKey,
+                    token)),
+                () => StartCloudOperation(cloudClient.LogoutAsync),
+                () => StartCloudOperation(cloudClient.RefreshBackupsAsync),
+                StartCloudUpload,
+                backupId => StartCloudOperation(
+                    token => cloudClient.PreviewRestoreAsync(backupId, token)),
+                StartCloudRestore,
+                StartCloudRollback));
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(
             text,
             GetHostResourceStatus,
@@ -688,6 +716,7 @@ public sealed class Plugin : IDalamudPlugin
 
         lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
         lifecycle.Start();
+        StartCloudOperation(cloudClient.InitializeAsync);
         StartBundledCactbotInitialization();
         var initialBundledActResourceAttempt = CancellationTokenSource.CreateLinkedTokenSource(
             bundledUpdateCancellation.Token);
@@ -714,6 +743,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         bundledUpdateCancellation.Cancel();
+        cloudOperationCancellation.Cancel();
         BeginCactbotShutdown();
         BeginBackgroundOperationShutdown();
         fflogsEstimateService.BeginShutdown();
@@ -1780,6 +1810,248 @@ public sealed class Plugin : IDalamudPlugin
 
     private Task<string> StartFactoryReset()
         => factoryResetOperations.Start();
+
+    private void StartCloudOperation(Func<CancellationToken, Task> operation)
+    {
+        StartBackgroundOperation(async () =>
+        {
+            try
+            {
+                await operation(cloudOperationCancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cloudOperationCancellation.IsCancellationRequested)
+            {
+                // Plugin unload cancels network work before disposing the HTTP client.
+            }
+            catch (Exception ex)
+            {
+                cloudClient.ReportExternalFailure(ex);
+                logger.Error(ex, "Cloud account operation failed.");
+            }
+        });
+    }
+
+    private void StartCloudUpload()
+        => StartCloudOperation(token => RunCloudFileOperationAsync(
+            operationToken => cloudClient.UploadAsync(paths.ConfigDirectory, operationToken),
+            keepStoppedAfterSuccess: false,
+            token));
+
+    private void StartCloudRestore(string backupId)
+        => StartCloudOperation(token => RunCloudFileOperationAsync(
+            operationToken => cloudClient.RestoreAsync(backupId, operationToken),
+            keepStoppedAfterSuccess: true,
+            token));
+
+    private void StartCloudRollback()
+        => StartCloudOperation(token => RunCloudFileOperationAsync(
+            cloudClient.RollbackAsync,
+            keepStoppedAfterSuccess: true,
+            token));
+
+    private async Task RunCloudFileOperationAsync(
+        Func<CancellationToken, Task<bool>> operation,
+        bool keepStoppedAfterSuccess,
+        CancellationToken shutdownToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        // Finish all one-shot startup writers before taking the file-operation locks;
+        // otherwise an early restore could be overwritten after this method releases them.
+        await lifecycle.WaitForStartupAsync(timeout.Token).ConfigureAwait(false);
+        await bundledActPluginInitializationTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        await independentHostStartupTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        var cactbotGateAcquired = false;
+        var hostTopologyAcquired = false;
+        try
+        {
+            await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+            cactbotGateAcquired = true;
+            await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+            hostTopologyAcquired = true;
+            var parserWasRunning = parserEngine.Status.State == ParserState.Running;
+            var sharedWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var matchaWasRunning = matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var genericWasRunning = genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var completed = false;
+            var runtimeQuiesceStarted = false;
+            var runtimeRecoveryAttempted = false;
+            try
+            {
+                // A consistent account snapshot requires every parser and ACT extension writer
+                // to release its files before export or transactional replacement starts.
+                if (!TrySaveConfiguration())
+                {
+                    throw new IOException("无法保存当前 DACT 主配置，云端操作已取消。");
+                }
+                runtimeQuiesceStarted = true;
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                if (matchaWasRunning)
+                {
+                    await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (genericWasRunning)
+                {
+                    await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (sharedWasRunning)
+                {
+                    await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (parserWasRunning)
+                {
+                    await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (!TrySaveConfiguration())
+                {
+                    throw new IOException("停止运行组件后仍无法保存 DACT 主配置，云端操作已取消。");
+                }
+
+                completed = await operation(timeout.Token).ConfigureAwait(false);
+                if (keepStoppedAfterSuccess && completed)
+                {
+                    try
+                    {
+                        ApplyRestoredConfigurationToMemory();
+                    }
+                    catch (Exception applyFailure)
+                    {
+                        // Plugin unload always saves the live configuration object. If the
+                        // restored JSON cannot replace that object, roll the files back now
+                        // so unload cannot overwrite a partially accepted cloud restore.
+                        using var rollbackTimeout =
+                            CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                        rollbackTimeout.CancelAfter(TimeSpan.FromMinutes(1));
+                        var rolledBack = await cloudClient.RollbackAsync(rollbackTimeout.Token)
+                            .ConfigureAwait(false);
+                        if (!rolledBack)
+                        {
+                            throw new AggregateException(
+                                "Cloud files were restored but could not be loaded or rolled back.",
+                                applyFailure);
+                        }
+                        ApplyRestoredConfigurationToMemory();
+                        completed = false;
+                        throw new InvalidDataException(
+                            "Restored configuration could not be loaded; the original files were recovered.",
+                            applyFailure);
+                    }
+                }
+                if (!keepStoppedAfterSuccess || !completed)
+                {
+                    runtimeRecoveryAttempted = true;
+                    await RestoreCloudOperationRuntimeWithFreshDeadlineAsync(
+                            parserWasRunning,
+                            sharedWasRunning,
+                            matchaWasRunning,
+                            genericWasRunning,
+                            shutdownToken)
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (Exception operationFailure)
+            {
+                if (!completed &&
+                    runtimeQuiesceStarted &&
+                    !runtimeRecoveryAttempted &&
+                    !shutdownToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await RestoreCloudOperationRuntimeWithFreshDeadlineAsync(
+                                parserWasRunning,
+                                sharedWasRunning,
+                                matchaWasRunning,
+                                genericWasRunning,
+                                shutdownToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception recoveryFailure)
+                    {
+                        throw new AggregateException(
+                            "Cloud file operation failed and the previous runtime could not be restored.",
+                            operationFailure,
+                            recoveryFailure);
+                    }
+                }
+                throw;
+            }
+        }
+        finally
+        {
+            if (hostTopologyAcquired)
+            {
+                hostTopologyLock.Release();
+            }
+            if (cactbotGateAcquired)
+            {
+                cactbotFileOperationGate.Release();
+            }
+        }
+    }
+
+    private async Task RestoreCloudOperationRuntimeWithFreshDeadlineAsync(
+        bool parserWasRunning,
+        bool sharedWasRunning,
+        bool matchaWasRunning,
+        bool genericWasRunning,
+        CancellationToken shutdownToken)
+    {
+        using var recoveryTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+        // File/network work owns its own deadline. Recovery needs a fresh window so an
+        // operation timeout cannot prevent the components it stopped from restarting.
+        recoveryTimeout.CancelAfter(TimeSpan.FromMinutes(1));
+        await RestoreCloudOperationRuntimeAsync(
+                parserWasRunning,
+                sharedWasRunning,
+                matchaWasRunning,
+                genericWasRunning,
+                recoveryTimeout.Token)
+            .ConfigureAwait(false);
+    }
+
+    private async Task RestoreCloudOperationRuntimeAsync(
+        bool parserWasRunning,
+        bool sharedWasRunning,
+        bool matchaWasRunning,
+        bool genericWasRunning,
+        CancellationToken cancellationToken)
+    {
+        if (sharedWasRunning)
+        {
+            await hostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+            await hostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (parserWasRunning)
+        {
+            await parserEngine.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (matchaWasRunning && sharedWasRunning)
+        {
+            await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true)
+                .ConfigureAwait(false);
+        }
+        if (genericWasRunning)
+        {
+            await StartGenericHostAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyRestoredConfigurationToMemory()
+    {
+        var configurationRoot = Path.GetDirectoryName(paths.ConfigDirectory)
+                                ?? throw new InvalidOperationException(
+                                    "DACT configuration directory has no parent directory.");
+        var configurationPath = Path.Combine(configurationRoot, "DalamudActCompat.json");
+        var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+                           File.ReadAllText(configurationPath))
+                       ?? throw new InvalidDataException(
+                           "Restored DACT configuration JSON is empty.");
+        restored.ApplyMigrations();
+        configuration.RestoreFrom(restored);
+    }
 
     private async Task<string> FactoryResetCoreAsync(CancellationToken shutdownToken)
     {
@@ -3572,6 +3844,8 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);
+        cloudClient.Dispose();
+        cloudOperationCancellation.Dispose();
 
         // A reset owns configuration files until its rollback/commit finishes. Waiting here
         // keeps those operations inside the plugin lifetime instead of abandoning them.

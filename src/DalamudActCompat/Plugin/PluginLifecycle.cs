@@ -71,6 +71,14 @@ internal sealed class PluginLifecycle : IAsyncDisposable
         }
     }
 
+    public Task WaitForStartupAsync(CancellationToken cancellationToken)
+    {
+        lock (syncRoot)
+        {
+            return startupTask.WaitAsync(cancellationToken);
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
         BeginShutdown();

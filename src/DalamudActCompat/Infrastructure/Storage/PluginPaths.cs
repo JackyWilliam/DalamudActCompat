@@ -28,6 +28,12 @@ public sealed class PluginPaths
             ConfigDirectory,
             "bundled-plugin-updates");
         ResourcePackCacheDirectory = Path.Combine(ConfigDirectory, "resource-packs");
+        CloudCredentialFile = Path.Combine(ConfigDirectory, "cloud-account.dat");
+        CloudDeviceFile = Path.Combine(ConfigDirectory, "cloud-device.dat");
+        CloudRollbackDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DalamudActCompat",
+            "CloudRollbacks");
     }
 
     public string ConfigDirectory { get; }
@@ -56,6 +62,12 @@ public sealed class PluginPaths
 
     public string ResourcePackCacheDirectory { get; }
 
+    public string CloudCredentialFile { get; }
+
+    public string CloudDeviceFile { get; }
+
+    public string CloudRollbackDirectory { get; }
+
     public void SetActPluginDirectory(string directory)
         => ActPluginDirectory = Path.GetFullPath(directory);
 
@@ -72,5 +84,6 @@ public sealed class PluginPaths
         Directory.CreateDirectory(PluginBackupDirectory);
         Directory.CreateDirectory(BundledPluginUpdateCacheDirectory);
         Directory.CreateDirectory(ResourcePackCacheDirectory);
+        Directory.CreateDirectory(CloudRollbackDirectory);
     }
 }
