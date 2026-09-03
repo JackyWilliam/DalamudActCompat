@@ -176,6 +176,7 @@ public sealed class ControlCenterWindow : Window
     private string cloudRecoveryKey = string.Empty;
     private string cloudInviteeContact = string.Empty;
     private bool cloudRememberLogin = true;
+    private CloudPasswordResetMethod cloudPasswordResetMethod;
     private string? selectedCloudBackupId;
     private string? cloudPreviewRequestedBackupId;
     private bool confirmCloudRestore;
@@ -2326,7 +2327,9 @@ public sealed class ControlCenterWindow : Window
                 text.Get("使用一次性激活码完成注册并绑定本机。", "Register with a one-time activation key and bind this PC.")),
             CloudAuthenticationPage.ResetPassword => (
                 text.Get("重设账号密码", "Reset account password"),
-                text.Get("使用管理员重置码和恢复密钥保护原有云配置。", "Use an administrator reset code and recovery key to protect existing cloud data.")),
+                text.Get(
+                    "使用注册时保存的恢复密钥可自行改密；没有恢复密钥时再联系管理员。",
+                    "Use the recovery key saved at registration to reset the password yourself, or contact an administrator for help.")),
             _ => (
                 text.Get("欢迎回来", "Welcome back"),
                 text.Get("输入账号和密码，继续使用 DACT。", "Enter your username and password to continue.")),
@@ -2444,12 +2447,28 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawCloudPasswordResetForm(bool busy, bool hasLocalRecoveryKey)
     {
-        DrawAuthenticationInput(
-            text.Get("管理员密码重置码", "Administrator reset code"),
-            text.Get("输入管理员提供的一次性重置码", "Enter the one-time code from an administrator"),
-            "cloud-reset-code",
-            ref cloudResetCode,
-            96);
+        var resetMethods = new[]
+        {
+            text.Get("恢复密钥自助改密", "Reset with recovery key"),
+            text.Get("管理员协助", "Administrator help"),
+        };
+        var selectedResetMethod = BrandedWindowChrome.DrawNavigationRail(
+            "cloud-password-reset-method",
+            resetMethods,
+            (int)cloudPasswordResetMethod,
+            height: 32);
+        cloudPasswordResetMethod = (CloudPasswordResetMethod)selectedResetMethod;
+        ImGui.Spacing();
+
+        if (cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode)
+        {
+            DrawAuthenticationInput(
+                text.Get("管理员一次性重置码（必填）", "Administrator one-time reset code (required)"),
+                text.Get("输入管理员提供的一次性重置码", "Enter the one-time code from an administrator"),
+                "cloud-reset-code",
+                ref cloudResetCode,
+                96);
+        }
         DrawAuthenticationInput(
             text.Get("新密码", "New password"),
             text.Get("至少 10 位", "At least 10 characters"),
@@ -2464,29 +2483,39 @@ public sealed class ControlCenterWindow : Window
             ref cloudPasswordConfirmation,
             128,
             ImGuiInputTextFlags.Password);
-        DrawAuthenticationInput(
-            text.Get("恢复密钥", "Recovery key"),
-            hasLocalRecoveryKey
-                ? text.Get("本机已保存，可留空", "Saved on this PC; may be left blank")
-                : text.Get("输入注册时保存的 dact1_ 密钥", "Enter the dact1_ key saved at registration"),
-            "cloud-recovery-key",
-            ref cloudRecoveryKey,
-            96,
-            ImGuiInputTextFlags.Password);
-        DrawAuthenticationMutedText(hasLocalRecoveryKey
-            ? text.Get(
-                "本机已保存账号密钥；恢复密钥可留空。",
-                "This PC has the account key, so the recovery key can remain empty.")
-            : text.Get(
-                "必须输入注册时保存的 dact1_ 恢复密钥，服务器无法代为找回。",
-                "Enter the dact1_ recovery key saved during registration; the server cannot recover it."));
+        if (hasLocalRecoveryKey)
+        {
+            DrawAuthenticationMutedText(text.Get(
+                "已检测到本机保存的恢复密钥，将自动用于改密和解锁原有云备份。",
+                "The saved recovery key on this PC will reset the password and unlock existing cloud backups."));
+        }
+        else
+        {
+            DrawAuthenticationInput(
+                text.Get("恢复密钥（必填）", "Recovery key (required)"),
+                text.Get("输入注册时保存的 dact1_ 密钥", "Enter the dact1_ key saved at registration"),
+                "cloud-recovery-key",
+                ref cloudRecoveryKey,
+                96,
+                ImGuiInputTextFlags.Password);
+            DrawAuthenticationMutedText(text.Get(
+                cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey
+                    ? "恢复密钥会验证账号归属，并在改密后继续解锁原有云备份。"
+                    : "管理员重置码授权改密；恢复密钥用于继续解锁原有云备份。",
+                cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey
+                    ? "The recovery key verifies account ownership and keeps existing cloud backups readable."
+                    : "The administrator code authorizes the reset; the recovery key keeps existing cloud backups readable."));
+        }
 
         var passwordsMatch = cloudPassword.Length >= 10 &&
                              cloudPassword == cloudPasswordConfirmation;
+        var resetCredentialIsValid =
+            cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey ||
+            !string.IsNullOrWhiteSpace(cloudResetCode);
         DrawAuthenticationPersistenceOption();
         if (DrawAuthenticationPrimaryButton(
                 text.Get("确认重置密码", "Reset password"),
-                !busy && passwordsMatch &&
+                !busy && passwordsMatch && resetCredentialIsValid &&
                 (hasLocalRecoveryKey || !string.IsNullOrWhiteSpace(cloudRecoveryKey))))
         {
             cloud.ResetPassword(new CloudPasswordResetRequest(
@@ -2494,7 +2523,8 @@ public sealed class ControlCenterWindow : Window
                 cloudResetCode,
                 cloudPassword,
                 cloudRecoveryKey,
-                cloudRememberLogin));
+                cloudRememberLogin,
+                cloudPasswordResetMethod));
             ClearCloudSecrets();
         }
     }
@@ -2648,7 +2678,9 @@ public sealed class ControlCenterWindow : Window
     private void DrawAuthenticationPersistenceOption()
     {
         ImGui.Spacing();
-        ImGui.Checkbox(text.Get("自动登录", "Sign in automatically"), ref cloudRememberLogin);
+        ImGui.Checkbox(
+            text.Get("记住登录状态（下次自动登录）", "Remember sign-in (auto-login next time)"),
+            ref cloudRememberLogin);
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip(text.Get(
@@ -2760,9 +2792,20 @@ public sealed class ControlCenterWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.TextColored(Gold, text.Get("云端版本", "Cloud versions"));
+        var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
+        if (ImGui.Checkbox(
+                text.Get("自动同步配置", "Automatically sync configuration"),
+                ref autoCloudSyncEnabled))
+        {
+            configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
+            saveConfiguration();
+        }
         ImGui.TextDisabled(text.Get(
-            "最多保留最近 2 个密文版本。上传会短暂停止解析器与扩展，完成后自动恢复。",
-            "The latest 2 encrypted versions are retained. Upload briefly stops parsers and extensions, then restores them."));
+            "配置停止变化 2 分钟后自动上传，每天再检查一次；战斗中会延后，内容没变不新增版本。",
+            "Uploads after configuration is quiet for 2 minutes and checks daily; combat defers it, and unchanged content creates no version."));
+        ImGui.TextDisabled(text.Get(
+            "最多保留最近 2 个密文版本。手动上传会短暂停止解析器与扩展，完成后自动恢复。",
+            "The latest 2 encrypted versions are retained. Manual upload briefly stops parsers and extensions, then restores them."));
         if (!snapshot.IsBusy && ImGui.Button(text.Get("上传当前配置", "Upload current configuration")))
         {
             cloud.Upload();
@@ -2909,13 +2952,10 @@ public sealed class ControlCenterWindow : Window
         }
 
         if (ImGui.CollapsingHeader(text.Get(
-                "使用管理员重置码修改密码",
-                "Change password with an administrator reset code")))
+                "修改密码",
+                "Change password")))
         {
             cloudUsername = snapshot.Username ?? string.Empty;
-            ImGui.Checkbox(
-                text.Get("重置后自动登录", "Sign in automatically after reset"),
-                ref cloudRememberLogin);
             DrawCloudPasswordResetForm(snapshot.IsBusy, hasLocalRecoveryKey: true);
         }
     }

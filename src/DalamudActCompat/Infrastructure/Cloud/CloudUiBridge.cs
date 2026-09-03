@@ -12,12 +12,19 @@ internal sealed record CloudLoginRequest(
     string RecoveryKey,
     bool RememberLogin);
 
+internal enum CloudPasswordResetMethod
+{
+    RecoveryKey,
+    AdministratorCode,
+}
+
 internal sealed record CloudPasswordResetRequest(
     string Username,
     string ResetCode,
     string NewPassword,
     string RecoveryKey,
-    bool RememberLogin);
+    bool RememberLogin,
+    CloudPasswordResetMethod Method);
 
 public sealed class CloudUiBridge
 {

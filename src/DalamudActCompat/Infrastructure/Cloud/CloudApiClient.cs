@@ -20,7 +20,8 @@ internal sealed record CloudBackupVersion(
     string Id,
     DateTimeOffset CreatedAt,
     long SizeBytes,
-    string Sha256);
+    string Sha256,
+    string? ContentId = null);
 
 internal sealed record CloudAccessStatus(
     bool Banned,
@@ -30,6 +31,8 @@ internal sealed record CloudAccessStatus(
     DateTimeOffset? BannedAt,
     DateTimeOffset? BanExpiresAt,
     string? BanReason);
+
+internal sealed record RecoveryVerifierResponse(bool RecoveryEnabled);
 
 internal sealed record CloudInvitation(
     string Id,
@@ -117,11 +120,20 @@ internal sealed class CloudApiClient : IDisposable
         string activationKey,
         string deviceId,
         CloudKeyEnvelope keyEnvelope,
+        string recoveryVerifier,
         CancellationToken cancellationToken)
         => SendJsonAsync<CloudAuthenticationResponse>(
             HttpMethod.Post,
             "api/v1/auth/register",
-            new { username, password, activationKey, deviceId, keyEnvelope },
+            new
+            {
+                username,
+                password,
+                activationKey,
+                deviceId,
+                keyEnvelope,
+                recoveryVerifier,
+            },
             null,
             cancellationToken);
 
@@ -151,6 +163,20 @@ internal sealed class CloudApiClient : IDisposable
             null,
             cancellationToken);
 
+    public Task<CloudAuthenticationResponse> ResetPasswordWithRecoveryAsync(
+        string username,
+        string recoveryVerifier,
+        string newPassword,
+        string deviceId,
+        CloudKeyEnvelope keyEnvelope,
+        CancellationToken cancellationToken)
+        => SendJsonAsync<CloudAuthenticationResponse>(
+            HttpMethod.Post,
+            "api/v1/auth/reset-password-with-recovery",
+            new { username, recoveryVerifier, newPassword, deviceId, keyEnvelope },
+            null,
+            cancellationToken);
+
     public async Task ValidateSessionAsync(string token, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Get, "api/v1/auth/me", token);
@@ -177,6 +203,17 @@ internal sealed class CloudApiClient : IDisposable
             HttpMethod.Put,
             "api/v1/auth/key-envelope",
             new { keyEnvelope },
+            token,
+            cancellationToken);
+
+    public Task UpdateRecoveryVerifierAsync(
+        string token,
+        string recoveryVerifier,
+        CancellationToken cancellationToken)
+        => SendJsonAsync<RecoveryVerifierResponse>(
+            HttpMethod.Put,
+            "api/v1/auth/recovery-verifier",
+            new { recoveryVerifier },
             token,
             cancellationToken);
 
@@ -269,6 +306,7 @@ internal sealed class CloudApiClient : IDisposable
     public async Task<CloudBackupVersion> UploadBackupAsync(
         string token,
         string path,
+        string contentId,
         CancellationToken cancellationToken)
     {
         await using var input = new FileStream(
@@ -286,6 +324,7 @@ internal sealed class CloudApiClient : IDisposable
         content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         content.Headers.ContentLength = input.Length;
         using var request = CreateRequest(HttpMethod.Post, "api/v1/backups", token);
+        request.Headers.Add("X-DACT-Content-Id", contentId);
         request.Content = content;
         using var response = await httpClient.SendAsync(request, cancellationToken)
             .ConfigureAwait(false);

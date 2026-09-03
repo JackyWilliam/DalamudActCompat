@@ -4442,6 +4442,7 @@ static void ValidateControlCenterPresentation()
         !ttsPromptConfiguration.SuppressFoxTtsProPrompt &&
         ttsPromptConfiguration.EnableParsing &&
         ttsPromptConfiguration.AutoStartParser &&
+        ttsPromptConfiguration.AutoCloudSyncEnabled &&
         ttsPromptConfiguration.DisabledActPluginIds.Contains("silverdasher"),
         "Factory reset does not restore the FoxTTS prompt, SilverDasher disabled state, or independent parser startup defaults.");
 
@@ -4510,6 +4511,13 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("account-authentication-navigation", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawAuthenticationGate(cloudSnapshot);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("private void DrawAccountSettings()", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("记住登录状态（下次自动登录）", StringComparison.Ordinal) &&
+        Regex.Matches(controlCenterSource, "ref cloudRememberLogin\\);").Count == 1 &&
+        !controlCenterSource.Contains("重置后自动登录", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("恢复密钥自助改密", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("管理员一次性重置码（必填）", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("恢复密钥（必填）", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("将自动用于改密和解锁原有云备份", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
@@ -4520,6 +4528,14 @@ static void ValidateControlCenterPresentation()
         !controlCenterSource.Contains("最多保留最近 10 个密文版本", StringComparison.Ordinal) &&
         controlCenterSource.Contains("The latest 2 encrypted versions are retained", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("The latest 10 encrypted versions are retained", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("自动同步配置", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("配置停止变化 2 分钟后自动上传", StringComparison.Ordinal) &&
+        configurationSource.Contains("AutoCloudSyncEnabled { get; set; } = true", StringComparison.Ordinal) &&
+        pluginSource.Contains("CreateCloudConfigurationWatcher", StringComparison.Ordinal) &&
+        pluginSource.Contains("TryStartCloudAutoSync(now);", StringComparison.Ordinal) &&
+        pluginSource.Contains("cloudMainConfigurationSaveHealthy", StringComparison.Ordinal) &&
+        pluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
+        pluginSource.Contains("AutoUploadIfChangedAsync", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
@@ -4527,7 +4543,7 @@ static void ValidateControlCenterPresentation()
             parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
-        "The branded login gate, Settings & Account page, two-version cloud limit, guarded recovery action, diagnostic copy, or upload-log shortcut is missing from the control center.");
+        "The login gate, reset form, account page, automatic cloud sync, two-version limit, recovery guard, diagnostic copy, or upload-log shortcut is missing.");
     Assert(
         controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
         controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
@@ -6428,15 +6444,33 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         encryptedArchive,
         recoveryKey,
         CancellationToken.None);
+    var duplicateArchive = Path.Combine(archiveDirectory, "cloud-duplicate.dactcloud");
+    var duplicateExport = await service.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        duplicateArchive,
+        recoveryKey,
+        CancellationToken.None);
     var encryptedBytes = await File.ReadAllBytesAsync(encryptedArchive);
     Assert(
         exported.ScopeCount == 8 &&
         exported.FileCount == 8 &&
         exported.UncompressedBytes > 0 &&
         exported.EncryptedBytes == encryptedBytes.Length &&
+        Regex.IsMatch(exported.ContentId, "^[A-Za-z0-9_-]{43}$") &&
+        duplicateExport.ContentId == exported.ContentId &&
+        !File.ReadAllBytes(duplicateArchive).SequenceEqual(encryptedBytes) &&
         !encryptedBytes.AsSpan().StartsWith("PK"u8) &&
         encryptedBytes.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(cloudSecret)) < 0,
-        "The cloud backup was not encrypted before it became uploadable.");
+        "The cloud backup encryption or deterministic content identity was invalid.");
+    Assert(
+        service.IsIncludedPath(pluginConfigurationDirectory, mainConfigurationPath) &&
+        service.IsIncludedPath(
+            pluginConfigurationDirectory,
+            Path.Combine(pluginConfigurationDirectory, "cactbot_user", "raidboss.js")) &&
+        !service.IsIncludedPath(
+            pluginConfigurationDirectory,
+            Path.Combine(pluginConfigurationDirectory, "logs", "ffxiv", "Network.log")),
+        "Automatic cloud synchronization watched files outside its portable whitelist.");
 
     const string localLogDirectory = @"E:\new-computer\network-logs";
     const string localPluginDirectory = @"E:\new-computer\act-plugins";
@@ -6484,6 +6518,15 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         pluginConfigurationDirectory,
         "cloud-device.dat",
         "new-computer-device");
+    var changedArchive = Path.Combine(archiveDirectory, "cloud-changed.dactcloud");
+    var changedExport = await service.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        changedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        changedExport.ContentId != exported.ContentId,
+        "Cloud content identity did not change after portable configuration changed.");
 
     var preview = await service.PreviewRestoreAsync(
         encryptedArchive,
@@ -12662,11 +12705,15 @@ static void ValidateCloudKeyEnvelopeAndCredentialProtection(string testRoot)
     var envelopeService = new CloudKeyEnvelopeService();
     var recoveryKey = encryption.GenerateRecoveryKey();
     var envelope = envelopeService.Create(recoveryKey, "a-correct-password");
+    var recoveryVerifier = envelopeService.CreateRecoveryVerifier(recoveryKey);
     Assert(
         envelope.Format == CloudKeyEnvelopeService.EnvelopeFormat &&
         envelope.Iterations == CloudKeyEnvelopeService.PasswordIterations &&
-        envelopeService.Open(envelope, "a-correct-password") == recoveryKey,
-        "Cloud password envelope did not round-trip the account data key.");
+        envelopeService.Open(envelope, "a-correct-password") == recoveryKey &&
+        Regex.IsMatch(recoveryVerifier, "^[A-Za-z0-9_-]{43}$") &&
+        recoveryVerifier == envelopeService.CreateRecoveryVerifier(recoveryKey) &&
+        recoveryVerifier != envelope.KeyId,
+        "Cloud password envelope or domain-separated recovery verifier is invalid.");
     try
     {
         _ = envelopeService.Open(envelope, "a-wrong-password");
@@ -12753,8 +12800,9 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
             var json = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
             Assert(
                 json.Contains("\"activationKey\":\"DACT-TEST\"", StringComparison.Ordinal) &&
-                json.Contains("\"keyEnvelope\"", StringComparison.Ordinal),
-                "Cloud registration request omitted its activation key or password envelope.");
+                json.Contains("\"keyEnvelope\"", StringComparison.Ordinal) &&
+                json.Contains("\"recoveryVerifier\"", StringComparison.Ordinal),
+                "Cloud registration request omitted its activation key, password envelope, or recovery verifier.");
             return JsonResponse(HttpStatusCode.Created, new
             {
                 token = "session-token",
@@ -12763,6 +12811,14 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
                 user = new { id = "user-id", username = "cloud_user" },
                 keyEnvelope = envelope,
             });
+        }
+        if (path.EndsWith("/auth/recovery-verifier", StringComparison.Ordinal))
+        {
+            Assert(
+                request.Method == HttpMethod.Put &&
+                request.Headers.Authorization?.Parameter == "session-token",
+                "Recovery verifier enrollment omitted its session authorization.");
+            return JsonResponse(HttpStatusCode.OK, new { recoveryEnabled = true });
         }
         if (path.EndsWith("/auth/access-status", StringComparison.Ordinal))
         {
@@ -12852,20 +12908,31 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
             {
                 backups = new[]
                 {
-                    new { id = "backup-id", createdAt, sizeBytes = backupBytes.Length, sha256 = backupHash },
+                    new
+                    {
+                        id = "backup-id",
+                        createdAt,
+                        sizeBytes = backupBytes.Length,
+                        sha256 = backupHash,
+                        contentId = new string('C', 43),
+                    },
                 },
             });
         }
         if (path.EndsWith("/backups", StringComparison.Ordinal) && request.Method == HttpMethod.Post)
         {
             var uploaded = request.Content!.ReadAsByteArrayAsync().GetAwaiter().GetResult();
-            Assert(uploaded.SequenceEqual(backupBytes), "Cloud upload changed encrypted bytes.");
+            Assert(
+                uploaded.SequenceEqual(backupBytes) &&
+                request.Headers.GetValues("X-DACT-Content-Id").Single() == new string('C', 43),
+                "Cloud upload changed encrypted bytes or omitted its content identity.");
             return JsonResponse(HttpStatusCode.Created, new
             {
                 id = "backup-id",
                 createdAt,
                 sizeBytes = backupBytes.Length,
                 sha256 = backupHash,
+                contentId = new string('C', 43),
             });
         }
         if (path.EndsWith("/backups/backup-id", StringComparison.Ordinal))
@@ -12888,6 +12955,7 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
         "DACT-TEST",
         $"dact-device-v1_{new string('A', 43)}",
         envelope,
+        new string('V', 43),
         CancellationToken.None);
     Assert(
         authentication.User.Username == "cloud_user" && authentication.KeyEnvelope == envelope,
@@ -12898,6 +12966,10 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
         access.Banned && access.BanType == "account" && access.BanReason == "contract-test",
         "Cloud access status lost the server-provided ban details.");
     await api.UpdateKeyEnvelopeAsync("session-token", envelope, CancellationToken.None);
+    await api.UpdateRecoveryVerifierAsync(
+        "session-token",
+        new string('V', 43),
+        CancellationToken.None);
     CloudBanNotice? liveBan = null;
     await api.ListenForBanEventsAsync(
         "session-token",
@@ -12932,6 +13004,7 @@ static async Task ValidateCloudApiContractAsync(string testRoot)
     var uploadedVersion = await api.UploadBackupAsync(
         "session-token",
         uploadPath,
+        new string('C', 43),
         CancellationToken.None);
     Assert(uploadedVersion.Sha256 == backupHash, "Cloud upload response was not parsed.");
     var downloadPath = Path.Combine(testRoot, "cloud-api-download.dactcloud");
@@ -13356,6 +13429,7 @@ static async Task ValidateLiveCloudIntegrationAsync(
     var envelopeService = new CloudKeyEnvelopeService();
     var recoveryKey = backupService.GenerateRecoveryKey();
     var envelope = envelopeService.Create(recoveryKey, password);
+    var recoveryVerifier = envelopeService.CreateRecoveryVerifier(recoveryKey);
     using var clientHttp = new HttpClient { BaseAddress = baseAddress };
     using var api = new CloudApiClient(clientHttp);
     var registered = await api.RegisterAsync(
@@ -13364,6 +13438,7 @@ static async Task ValidateLiveCloudIntegrationAsync(
         activationKey,
         deviceId,
         envelope,
+        recoveryVerifier,
         CancellationToken.None);
     Assert(
         registered.KeyEnvelope is not null &&
@@ -13393,7 +13468,7 @@ static async Task ValidateLiveCloudIntegrationAsync(
     Directory.CreateDirectory(Path.GetDirectoryName(triggerPath)!);
     await File.WriteAllTextAsync(triggerPath, "<triggers>remote</triggers>");
     var encryptedArchive = Path.Combine(archiveDirectory, "upload.dactcloud");
-    await backupService.ExportEncryptedAsync(
+    var exported = await backupService.ExportEncryptedAsync(
         pluginConfigurationDirectory,
         encryptedArchive,
         recoveryKey,
@@ -13401,6 +13476,7 @@ static async Task ValidateLiveCloudIntegrationAsync(
     await api.UploadBackupAsync(
         registered.Token,
         encryptedArchive,
+        exported.ContentId,
         CancellationToken.None);
 
     var loggedIn = await api.LoginAsync(
@@ -13462,18 +13538,10 @@ static async Task ValidateLiveCloudIntegrationAsync(
             .Value<string>() == "local",
         "Real HTTP restore rollback did not recover the local configuration.");
 
-    using var resetCodeResponse = await adminClient.PostAsJsonAsync(
-        $"api/v1/admin/users/{Uri.EscapeDataString(registered.User.Id)}/password-reset-codes",
-        new { });
-    resetCodeResponse.EnsureSuccessStatusCode();
-    using var resetCodeJson = JsonDocument.Parse(
-        await resetCodeResponse.Content.ReadAsStringAsync());
-    var resetCode = resetCodeJson.RootElement.GetProperty("resetCode").GetString()
-                    ?? throw new InvalidDataException("Integration reset code was empty.");
     const string newPassword = "integration-new-password";
-    var reset = await api.ResetPasswordAsync(
+    var reset = await api.ResetPasswordWithRecoveryAsync(
         username,
-        resetCode,
+        recoveryVerifier,
         newPassword,
         deviceId,
         envelopeService.Create(recoveryKey, newPassword),

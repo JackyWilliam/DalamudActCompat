@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -77,16 +78,54 @@ internal sealed class PortableConfigurationBackupService
                     recoveryKey,
                     cancellationToken)
                 .ConfigureAwait(false);
+            var contentId = CreateContentId(recoveryKey, exported.ContentFingerprint);
             return new PortableConfigurationBackupExportResult(
                 destination,
                 exported.ScopeCount,
                 exported.FileCount,
                 exported.UncompressedBytes,
-                new FileInfo(destination).Length);
+                new FileInfo(destination).Length,
+                contentId);
         }
         finally
         {
             TryDeleteDirectory(operationRoot);
+        }
+    }
+
+    public bool IsIncludedPath(string pluginConfigurationDirectory, string path)
+    {
+        var layout = ResolveLayout(pluginConfigurationDirectory);
+        var fullPath = Path.GetFullPath(path);
+        var relative = Path.GetRelativePath(layout.ConfigurationRoot, fullPath)
+            .Replace('\\', '/');
+        if (relative.StartsWith("../", StringComparison.Ordinal) ||
+            Path.IsPathRooted(relative))
+        {
+            return false;
+        }
+        return PortableScopes.Any(scope =>
+            relative.Equals(scope, StringComparison.OrdinalIgnoreCase) ||
+            scope.Equals("DalamudActCompat/cactbot_user", StringComparison.OrdinalIgnoreCase) &&
+            relative.StartsWith(scope + "/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string CreateContentId(string recoveryKey, string contentFingerprint)
+    {
+        var accountKey = PortableConfigurationEncryptionService.ParseRecoveryKey(recoveryKey);
+        try
+        {
+            using var hmac = new HMACSHA256(accountKey);
+            // Keying the stable fingerprint lets the server detect equality without
+            // learning a reusable hash of the user's plaintext configuration.
+            var fingerprint = Encoding.ASCII.GetBytes(
+                $"dact-cloud-content-v1\0{contentFingerprint}");
+            return PortableConfigurationEncryptionService.ToBase64Url(
+                hmac.ComputeHash(fingerprint));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(accountKey);
         }
     }
 
@@ -589,7 +628,8 @@ internal sealed record PortableConfigurationBackupExportResult(
     int ScopeCount,
     int FileCount,
     long UncompressedBytes,
-    long EncryptedBytes);
+    long EncryptedBytes,
+    string ContentId);
 
 internal sealed record PortableConfigurationBackupRestoreResult(
     string ArchivePath,

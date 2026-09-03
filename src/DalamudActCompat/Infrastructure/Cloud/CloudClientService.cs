@@ -168,13 +168,22 @@ internal sealed class CloudClientService : IDisposable
                 return;
             }
             await apiClient.ValidateSessionAsync(current.Token, token).ConfigureAwait(false);
+            var recoveryWarning = await TryEnableRecoveryResetAsync(current, token)
+                .ConfigureAwait(false);
             StartSessionMonitor(current);
             var backups = await apiClient.ListBackupsAsync(current.Token, token)
                 .ConfigureAwait(false);
             var invitations = await apiClient.ListInvitationsAsync(current.Token, token)
                 .ConfigureAwait(false);
             LiftBanAfterServerConfirmation();
-            SetSignedIn(current, backups, invitations, "云账号已连接。", false);
+            SetSignedIn(
+                current,
+                backups,
+                invitations,
+                recoveryWarning is null
+                    ? "云账号已连接。"
+                    : $"云账号已连接，但{recoveryWarning}。",
+                recoveryWarning is not null);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -188,12 +197,14 @@ internal sealed class CloudClientService : IDisposable
         {
             var recoveryKey = backupService.GenerateRecoveryKey();
             var envelope = envelopeService.Create(recoveryKey, password);
+            var recoveryVerifier = envelopeService.CreateRecoveryVerifier(recoveryKey);
             var response = await apiClient.RegisterAsync(
                     username.Trim(),
                     password,
                     activationKey.Trim(),
                     machineIdentity.GetDeviceId(),
                     envelope,
+                    recoveryVerifier,
                     token)
                 .ConfigureAwait(false);
             ValidateReturnedEnvelope(response, password, recoveryKey);
@@ -268,23 +279,31 @@ internal sealed class CloudClientService : IDisposable
                         token)
                     .ConfigureAwait(false);
             }
+            var recoveryWarning = await TryEnableRecoveryResetAsync(
+                    response.Token,
+                    effectiveRecoveryKey,
+                    token)
+                .ConfigureAwait(false);
             var authentication = SaveAuthentication(
                 response,
                 effectiveRecoveryKey,
                 rememberLogin);
             var saved = authentication.Credentials;
             LiftBanAfterServerConfirmation(response.WasBanRevoked);
-            var loginMessage = authentication.PersistenceWarning is null
+            var loginWarning = CombineWarnings(
+                authentication.PersistenceWarning,
+                recoveryWarning);
+            var loginMessage = loginWarning is null
                 ? "登录成功。请选择版本后预览或恢复。"
-                : $"登录成功，但{authentication.PersistenceWarning}。";
+                : $"登录成功，但{loginWarning}。";
             SetSignedIn(
                 saved,
                 Array.Empty<CloudBackupVersion>(),
                 null,
-                authentication.PersistenceWarning is null
+                loginWarning is null
                     ? "登录成功，正在读取云端版本…"
                     : loginMessage,
-                authentication.PersistenceWarning is not null);
+                loginWarning is not null);
             StartSessionMonitor(saved);
             var backups = await apiClient.ListBackupsAsync(saved.Token, token)
                 .ConfigureAwait(false);
@@ -295,7 +314,7 @@ internal sealed class CloudClientService : IDisposable
                 backups,
                 invitations,
                 loginMessage,
-                authentication.PersistenceWarning is not null);
+                loginWarning is not null);
         }, cancellationToken);
 
     public Task ResetPasswordAsync(
@@ -304,19 +323,30 @@ internal sealed class CloudClientService : IDisposable
         string newPassword,
         string recoveryKey,
         bool rememberLogin,
+        CloudPasswordResetMethod method,
         CancellationToken cancellationToken)
         => RunExclusiveAsync("正在重置密码…", async token =>
         {
             var effectiveRecoveryKey = ResolveRecoveryKey(username, recoveryKey);
             var envelope = envelopeService.Create(effectiveRecoveryKey, newPassword);
-            var response = await apiClient.ResetPasswordAsync(
-                    username.Trim(),
-                    resetCode.Trim(),
-                    newPassword,
-                    machineIdentity.GetDeviceId(),
-                    envelope,
-                    token)
-                .ConfigureAwait(false);
+            var deviceId = machineIdentity.GetDeviceId();
+            var response = method == CloudPasswordResetMethod.RecoveryKey
+                ? await apiClient.ResetPasswordWithRecoveryAsync(
+                        username.Trim(),
+                        envelopeService.CreateRecoveryVerifier(effectiveRecoveryKey),
+                        newPassword,
+                        deviceId,
+                        envelope,
+                        token)
+                    .ConfigureAwait(false)
+                : await apiClient.ResetPasswordAsync(
+                        username.Trim(),
+                        resetCode.Trim(),
+                        newPassword,
+                        deviceId,
+                        envelope,
+                        token)
+                    .ConfigureAwait(false);
             ValidateReturnedEnvelope(response, newPassword, effectiveRecoveryKey);
             var authentication = SaveAuthentication(
                 response,
@@ -421,19 +451,59 @@ internal sealed class CloudClientService : IDisposable
     public Task<bool> UploadAsync(
         string pluginConfigurationDirectory,
         CancellationToken cancellationToken)
-        => RunExclusiveWithResultAsync("正在加密并上传配置…", async token =>
+        => UploadCoreAsync(
+            pluginConfigurationDirectory,
+            skipIfUnchanged: false,
+            "正在加密并上传配置…",
+            cancellationToken);
+
+    public Task<bool> AutoUploadIfChangedAsync(
+        string pluginConfigurationDirectory,
+        CancellationToken cancellationToken)
+        => UploadCoreAsync(
+            pluginConfigurationDirectory,
+            skipIfUnchanged: true,
+            "正在自动同步配置…",
+            cancellationToken);
+
+    public bool IsPortableConfigurationPath(string path)
+        => backupService.IsIncludedPath(paths.ConfigDirectory, path);
+
+    private Task<bool> UploadCoreAsync(
+        string pluginConfigurationDirectory,
+        bool skipIfUnchanged,
+        string busyMessage,
+        CancellationToken cancellationToken)
+        => RunExclusiveWithResultAsync(busyMessage, async token =>
         {
             var current = RequireCredentials();
             var temporary = CreateTemporaryCloudPath();
             try
             {
-                await backupService.ExportEncryptedAsync(
+                var exported = await backupService.ExportEncryptedAsync(
                         pluginConfigurationDirectory,
                         temporary,
                         current.RecoveryKey,
                         token)
                     .ConfigureAwait(false);
-                var uploaded = await apiClient.UploadBackupAsync(current.Token, temporary, token)
+                var currentBackups = Snapshot.Backups;
+                if (skipIfUnchanged &&
+                    currentBackups.FirstOrDefault()?.ContentId is { } latestContentId &&
+                    latestContentId.Equals(exported.ContentId, StringComparison.Ordinal))
+                {
+                    SetSignedIn(
+                        current,
+                        currentBackups,
+                        Snapshot.Invitations,
+                        "自动同步检查完成：配置没有变化。",
+                        false);
+                    return false;
+                }
+                var uploaded = await apiClient.UploadBackupAsync(
+                        current.Token,
+                        temporary,
+                        exported.ContentId,
+                        token)
                     .ConfigureAwait(false);
                 var backups = await apiClient.ListBackupsAsync(current.Token, token)
                     .ConfigureAwait(false);
@@ -668,6 +738,44 @@ internal sealed class CloudClientService : IDisposable
             return;
         }
         SetFailure(exception.GetBaseException().Message, true);
+    }
+
+    private Task<string?> TryEnableRecoveryResetAsync(
+        CloudStoredCredentials current,
+        CancellationToken cancellationToken)
+        => TryEnableRecoveryResetAsync(
+            current.Token,
+            current.RecoveryKey,
+            cancellationToken);
+
+    private async Task<string?> TryEnableRecoveryResetAsync(
+        string token,
+        string recoveryKey,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await apiClient.UpdateRecoveryVerifierAsync(
+                    token,
+                    envelopeService.CreateRecoveryVerifier(recoveryKey),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Login already succeeded remotely. A verifier-enrollment failure should
+            // disable only self-service recovery, not hide the usable account session.
+            return $"恢复密钥自助改密暂未启用：{ex.GetBaseException().Message}";
+        }
+    }
+
+    private static string? CombineWarnings(params string?[] warnings)
+    {
+        var message = string.Join(
+            "；",
+            warnings.Where(static warning => !string.IsNullOrWhiteSpace(warning)));
+        return message.Length == 0 ? null : message;
     }
 
     private (CloudStoredCredentials Credentials, string? PersistenceWarning) SaveAuthentication(

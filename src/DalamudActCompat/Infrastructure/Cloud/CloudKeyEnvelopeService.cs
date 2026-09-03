@@ -16,6 +16,7 @@ internal sealed record CloudKeyEnvelope(
 internal sealed class CloudKeyEnvelopeService
 {
     internal const string EnvelopeFormat = "dact-cloud-key-envelope-v1";
+    private const string RecoveryVerifierContext = "dact-password-recovery-verifier-v1";
     internal const int PasswordIterations = 310_000;
     private const int KeySize = 32;
     private const int SaltSize = 16;
@@ -110,6 +111,23 @@ internal sealed class CloudKeyEnvelopeService
             CryptographicOperations.ZeroMemory(accountKey);
             CryptographicOperations.ZeroMemory(wrappingKey);
             CryptographicOperations.ZeroMemory(ciphertext);
+        }
+    }
+
+    public string CreateRecoveryVerifier(string recoveryKey)
+    {
+        var accountKey = PortableConfigurationEncryptionService.ParseRecoveryKey(recoveryKey);
+        try
+        {
+            using var hmac = new HMACSHA256(accountKey);
+            // Domain separation prevents the verifier from being reused as either
+            // the cloud decryption key or the public account-key identifier.
+            var verifier = hmac.ComputeHash(Encoding.UTF8.GetBytes(RecoveryVerifierContext));
+            return PortableConfigurationEncryptionService.ToBase64Url(verifier);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(accountKey);
         }
     }
 

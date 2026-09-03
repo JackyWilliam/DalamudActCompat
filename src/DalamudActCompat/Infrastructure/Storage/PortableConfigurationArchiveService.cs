@@ -106,7 +106,8 @@ internal sealed class PortableConfigurationArchiveService
                 destination,
                 snapshots.Length,
                 fileRecords.Count,
-                totalBytes);
+                totalBytes,
+                ComputeContentFingerprint(snapshots, fileRecords));
         }
         catch
         {
@@ -600,6 +601,32 @@ internal sealed class PortableConfigurationArchiveService
         };
     }
 
+    private static string ComputeContentFingerprint(
+        IReadOnlyList<ScopeSnapshot> scopes,
+        IReadOnlyList<ArchiveFile> files)
+    {
+        // Archive creation time and encryption randomness are intentionally excluded,
+        // otherwise an unchanged configuration would consume another server version.
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                FormatVersion = CurrentFormatVersion,
+                Scopes = scopes.Select(static scope => new
+                {
+                    scope.RelativePath,
+                    scope.Kind,
+                }),
+                Files = files.Select(static file => new
+                {
+                    file.RelativePath,
+                    file.Length,
+                    file.Sha256,
+                }),
+            },
+            JsonOptions);
+        return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
+    }
+
     private static async Task<string> ComputeSha256Async(
         string path,
         CancellationToken cancellationToken)
@@ -924,7 +951,8 @@ internal sealed record PortableConfigurationExportResult(
     string ArchivePath,
     int ScopeCount,
     int FileCount,
-    long UncompressedBytes);
+    long UncompressedBytes,
+    string ContentFingerprint);
 
 internal sealed record PortableConfigurationRestoreResult(
     string ArchivePath,
