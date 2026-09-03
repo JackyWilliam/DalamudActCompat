@@ -104,8 +104,12 @@ internal sealed class CloudBanNoticeWindow : Window
                 logoTexture,
                 text.Get("账号安全", "Account security"),
                 lifted
-                    ? text.Get("账号已解封", "Account unbanned")
-                    : text.Get("访问已禁用", "Access disabled"),
+                    ? IsDeviceBan(current)
+                        ? text.Get("账号与机器已解封", "Account and devices unbanned")
+                        : text.Get("账号已解封", "Account unbanned")
+                    : IsDeviceBan(current)
+                        ? text.Get("账号与机器访问已禁用", "Account and device access disabled")
+                        : text.Get("账号访问已禁用", "Account access disabled"),
                 lifted ? IceBlue : Red,
                 ControlCenterWindow.FormatVersionLabel(
                     typeof(CloudBanNoticeWindow).Assembly.GetName().Version),
@@ -144,7 +148,11 @@ internal sealed class CloudBanNoticeWindow : Window
 
     private void DrawBannedContent(CloudBanNotice current)
     {
-        ImGui.TextColored(Red, text.Get("您的账号已经被封禁", "Your account has been banned"));
+        ImGui.TextColored(Red, IsDeviceBan(current)
+            ? text.Get(
+                "您的账号及关联机器已经被封禁",
+                "Your account and associated devices have been banned")
+            : text.Get("您的账号已经被封禁", "Your account has been banned"));
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get(
             $"封禁时间：{current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
@@ -171,11 +179,19 @@ internal sealed class CloudBanNoticeWindow : Window
 
     private void DrawLiftedContent(CloudBanNotice? current)
     {
-        ImGui.TextColored(IceBlue, text.Get("您的账号已经解除封禁", "Your account is no longer banned"));
+        ImGui.TextColored(IceBlue, IsDeviceBan(current)
+            ? text.Get(
+                "您的账号及关联机器已经解除封禁",
+                "Your account and associated devices are no longer banned")
+            : text.Get("您的账号已经解除封禁", "Your account is no longer banned"));
         ImGui.Separator();
-        ImGui.TextWrapped(text.Get(
-            "服务器已确认该账号的封禁已经解除。",
-            "The server confirmed that this account is no longer banned."));
+        ImGui.TextWrapped(IsDeviceBan(current)
+            ? text.Get(
+                "服务器已确认本次机器码封禁及其附带的账号封禁已经解除。",
+                "The server confirmed that this device ban and its linked account ban were lifted.")
+            : text.Get(
+                "服务器已确认该账号的封禁已经解除。",
+                "The server confirmed that this account is no longer banned."));
         if (current is not null)
         {
             ImGui.TextDisabled(text.Get(
@@ -204,6 +220,9 @@ internal sealed class CloudBanNoticeWindow : Window
             ("unknown", false) => "Local ban marker",
             _ => "Account ban",
         };
+
+    private static bool IsDeviceBan(CloudBanNotice? current)
+        => string.Equals(current?.BanType, "device", StringComparison.Ordinal);
 
     private static void PushTheme()
     {

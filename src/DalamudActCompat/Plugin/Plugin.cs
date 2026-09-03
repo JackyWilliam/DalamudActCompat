@@ -1095,7 +1095,9 @@ public sealed class Plugin : IDalamudPlugin
             cloudBanNoticeWindow.Show(notice, lifted: false);
             services.NotificationManager.AddNotification(new()
             {
-                Title = "DACT 已被禁用",
+                Title = string.Equals(notice.BanType, "device", StringComparison.Ordinal)
+                    ? "DACT 账号与关联机器已禁用"
+                    : "DACT 已被禁用",
                 Content = BuildCloudBanSummary(notice),
                 Type = NotificationType.Error,
             });

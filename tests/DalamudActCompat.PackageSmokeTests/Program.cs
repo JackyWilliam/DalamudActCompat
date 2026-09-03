@@ -4843,6 +4843,8 @@ static void ValidateControlCenterPresentation()
         cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavFocus", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("text.Get(\"确认\", \"Confirm\")", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("账号已解封", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("您的账号及关联机器已经被封禁", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("附带的账号封禁已经解除", StringComparison.Ordinal) &&
         !cloudBanNoticeSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
         !cloudBanNoticeSource.Contains("OpenPopup", StringComparison.Ordinal) &&
         !cloudBanNoticeSource.Contains("OverlayEditShield", StringComparison.Ordinal),

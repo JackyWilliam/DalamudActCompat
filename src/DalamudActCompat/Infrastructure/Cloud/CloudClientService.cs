@@ -1151,7 +1151,10 @@ internal sealed class CloudClientService : IDisposable
 
     private static string FormatBanMessage(CloudBanNotice notice)
     {
-        var message = $"您的账号已经被封禁（封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}）";
+        var subject = string.Equals(notice.BanType, "device", StringComparison.Ordinal)
+            ? "您的账号及关联机器已经被封禁"
+            : "您的账号已经被封禁";
+        var message = $"{subject}（封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}）";
         return string.IsNullOrWhiteSpace(notice.BanReason)
             ? message
             : $"{message} 封禁原因：{notice.BanReason}";
