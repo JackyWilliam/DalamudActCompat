@@ -1,4 +1,5 @@
 using Dalamud.Game.Command;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.ImGuiNotification;
@@ -14,6 +15,7 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Diagnostics;
+using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Ipc;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Processes;
@@ -26,6 +28,7 @@ using DalamudActCompat.Quality;
 using DalamudActCompat.Protocol;
 using DalamudActCompat.UI;
 using System.Threading.Channels;
+using System.Numerics;
 using NativeGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 using NativeFramework = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework;
 
@@ -36,6 +39,7 @@ public sealed class Plugin : IDalamudPlugin
     private const string CommandName = "/actcompat";
     private const uint MatchaWorldChangedIconId = 61835;
     private const uint MatchaDutyEnteredIconId = 61832;
+    private static readonly TimeSpan CloudAutoSyncRetryDelay = TimeSpan.FromMinutes(10);
 
     internal static bool IsDutyPartyWiped(
         bool boundByDuty,
@@ -54,6 +58,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
     private readonly IParserEngine parserEngine;
+    private readonly IinactAdapter parserAdapter;
     private readonly SelfHostedActRuntime actRuntime;
     private readonly EncounterService encounterService;
     private readonly PluginLifecycle lifecycle;
@@ -74,8 +79,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly LauncherWindow launcherWindow;
     private readonly CoreResourceDownloadWindow coreResourceDownloadWindow;
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
+    private readonly CloudBanNoticeWindow cloudBanNoticeWindow;
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
+    private readonly CloudClientService cloudClient;
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
     private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
@@ -84,6 +91,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CancellationTokenSource bundledUpdateCancellation = new();
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
     private readonly CancellationTokenSource cactbotOperationCancellation = new();
+    private readonly CancellationTokenSource cloudOperationCancellation = new();
     private readonly object cactbotTaskLock = new();
     private readonly object cactbotStatusLock = new();
     private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
@@ -118,8 +126,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CancellationTokenSource hostCommandCancellation = new();
     private readonly Task hostCommandWorker;
     private readonly CancellationTokenSource independentHostStartupCancellation = new();
-    private readonly Task independentHostStartupTask;
-    private readonly Task bundledActPluginInitializationTask;
+    private Task independentHostStartupTask = Task.CompletedTask;
+    private Task bundledActPluginInitializationTask = Task.CompletedTask;
+    private bool bundledActResourcesAvailableAtStartup;
+    private bool hostResourcesAvailableAtStartup;
     private readonly object resourcePackOperationLock = new();
     private CancellationTokenSource? bundledActResourceAttemptCancellation;
     private CancellationTokenSource? hostResourceAttemptCancellation;
@@ -144,6 +154,26 @@ public sealed class Plugin : IDalamudPlugin
     private DateTimeOffset nextForegroundCheckAt;
     private bool htmlOverlaySuppressionApplied;
     private SimplifiedWindowSnapshot? simplifiedWindowSnapshot;
+    private readonly object cloudBanLock = new();
+    private CloudBanNotice? enforcedCloudBan;
+    private Task cloudBanEnforcementTask = Task.CompletedTask;
+    private TaskCompletionSource<bool>? cloudBanParserStopCompletion;
+    private int cloudBanParserStopPending;
+    private int cloudAccessBlocked;
+    private int cloudBanLifted;
+    private int pluginInitialized;
+    private int pluginDisposing;
+    private readonly object cloudRuntimeCancellationLock = new();
+    private readonly SemaphoreSlim cloudRuntimeTransitionGate = new(1, 1);
+    private CancellationTokenSource? cloudRuntimeCancellation;
+    private int observedCloudAuthenticationState = -1;
+    private int cloudRuntimeAuthorized;
+    private bool cloudRuntimeInitialized;
+    private Task cloudRuntimeTransitionTask = Task.CompletedTask;
+    private int bundledAutoUpdateCheckStarted;
+    private long cloudAutoSyncDueUtcTicks;
+    private int cloudAutoSyncRunning;
+    private int cloudStartupSyncRequested;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -209,6 +239,8 @@ public sealed class Plugin : IDalamudPlugin
         logger = new PluginLogger(log);
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         paths.EnsureCreated();
+        cloudClient = new CloudClientService(paths);
+        enforcedCloudBan = cloudClient.ActiveBan;
         var configuredLogDirectory = string.IsNullOrWhiteSpace(configuration.LogDirectory)
             ? paths.CombatLogDirectory
             : configuration.LogDirectory;
@@ -245,6 +277,7 @@ public sealed class Plugin : IDalamudPlugin
             "host",
             "host",
             out var packagedHostDirectory);
+        hostResourcesAvailableAtStartup = hasPackagedHostResources;
         bundledActResourceStatus = hasBundledActPluginResources
             ? ResourcePackOperationStatus.Ready()
             : ResourcePackOperationStatus.Downloading();
@@ -270,6 +303,7 @@ public sealed class Plugin : IDalamudPlugin
                 hasBundledActPluginResources = false;
             }
         }
+        bundledActResourcesAvailableAtStartup = hasBundledActPluginResources;
         bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
             paths.BundledPluginUpdateCacheDirectory);
         stateStore = new EncounterStateStore();
@@ -353,9 +387,6 @@ public sealed class Plugin : IDalamudPlugin
             paths.FflogsCacheFile,
             logger,
             () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese);
-        fflogsEstimateService.NotifyTerritoryChanged(
-            clientState.TerritoryType,
-            zoneNameLocalizer.Localize(clientState.TerritoryType, string.Empty));
         actRuntime = new SelfHostedActRuntime(
             pluginInterface,
             log,
@@ -405,7 +436,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.NetworkSent += OnNetworkSentForMatchaHost;
         actRuntime.EncounterChanged += OnEncounterChangedForHost;
         framework.Update += OnFrameworkUpdateForHost;
-        parserEngine = new ParserEngine(new IinactAdapter(
+        parserAdapter = new IinactAdapter(
             actRuntime,
             logger,
             stateStore,
@@ -416,7 +447,8 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
-            fflogsEstimateService.CaptureAvailableEstimates));
+            fflogsEstimateService.CaptureAvailableEstimates);
+        parserEngine = new ParserEngine(parserAdapter);
         var meterService = new MeterService(stateStore, configuration.Meter);
 
         _ = new OverlayManager(new OverlayEventBus());
@@ -634,12 +666,44 @@ public sealed class Plugin : IDalamudPlugin
             DeleteHtmlOverlay,
             StartFactoryReset,
             parserEngine.ResetCurrentEncounter,
-            name => _ = actRuntime.ApplyOverlayWindowSettings(name));
+            name => _ = actRuntime.ApplyOverlayWindowSettings(name),
+            new CloudUiBridge(
+                () => cloudClient.Snapshot,
+                request => StartCloudOperation(token => cloudClient.RegisterAsync(
+                    request.Username,
+                    request.Password,
+                    request.ActivationKey,
+                    request.RememberLogin,
+                    token)),
+                request => StartCloudOperation(token => cloudClient.LoginAsync(
+                    request.Username,
+                    request.Password,
+                    request.RecoveryKey,
+                    request.RememberLogin,
+                    token)),
+                request => StartCloudOperation(token => cloudClient.ResetPasswordAsync(
+                    request.Username,
+                    request.ResetCode,
+                    request.NewPassword,
+                    request.RecoveryKey,
+                    request.RememberLogin,
+                    request.Method,
+                    token)),
+                () => StartCloudOperation(cloudClient.LogoutAsync),
+                () => StartCloudOperation(cloudClient.RefreshBackupsAsync),
+                inviteeContact => StartCloudOperation(
+                    token => cloudClient.CreateInvitationAsync(inviteeContact, token)),
+                StartCloudUpload,
+                backupId => StartCloudOperation(
+                    token => cloudClient.PreviewRestoreAsync(backupId, token)),
+                StartCloudRestore,
+                StartCloudRollback));
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(
             text,
             GetHostResourceStatus,
             StartHostResourceDownload,
             CancelHostResourceDownload);
+        cloudBanNoticeWindow = new CloudBanNoticeWindow(text, logoTexture);
         launcherWindow = new LauncherWindow(
             configuration,
             launcherTexture,
@@ -669,14 +733,9 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
         windowSystem.AddWindow(coreResourceDownloadWindow);
+        windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
-        thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
-
-        if (configuration.SimplifiedModeEnabled)
-        {
-            ApplySimplifiedWindowVisibility();
-        }
-        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+        RestrictWindowsToAuthenticationGate(openGate: true);
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -686,39 +745,49 @@ public sealed class Plugin : IDalamudPlugin
             HelpMessage = "Open Control Center. Args: on, off, meter, simple [on|off], cactbot, overlay [template], history, logs, status, sample, clear, host, stop, install <dll-or-zip>, factory-reset.",
         });
 
-        lifecycle = new PluginLifecycle(parserEngine, encounterService, paths, configuration, logger);
-        lifecycle.Start();
-        StartBundledCactbotInitialization();
-        var initialBundledActResourceAttempt = CancellationTokenSource.CreateLinkedTokenSource(
-            bundledUpdateCancellation.Token);
-        bundledActResourceAttemptCancellation = initialBundledActResourceAttempt;
-        bundledActPluginInitializationTask = Task.Run(
-            () => InitializeBundledActPluginResourcesAsync(
-                hasBundledActPluginResources,
-                initialBundledActResourceAttempt,
-                initialBundledActResourceAttempt.Token),
-            CancellationToken.None);
-        var initialHostResourceAttempt = CancellationTokenSource.CreateLinkedTokenSource(
-            independentHostStartupCancellation.Token);
-        hostResourceAttemptCancellation = initialHostResourceAttempt;
-        independentHostStartupTask = Task.Run(
-            () => InitializeHostResourcesAndStartAsync(
-                hasPackagedHostResources,
-                initialHostResourceAttempt,
-                initialHostResourceAttempt.Token),
-            CancellationToken.None);
+        lifecycle = new PluginLifecycle(
+            parserEngine,
+            encounterService,
+            paths,
+            configuration,
+            logger,
+            canStartParser: IsDactAccessAllowed);
+        cloudClient.BanReceived += OnCloudBanReceived;
+        cloudClient.BanLifted += OnCloudBanLifted;
+        // Framework updates were subscribed before parser consumers to preserve frame
+        // ordering. They may run during construction, so expose UI state only now.
+        Volatile.Write(ref pluginInitialized, 1);
+        if (enforcedCloudBan is { } startupBan)
+        {
+            OnCloudBanReceived(startupBan);
+            // The marker monitor starts with the cloud client and can confirm an unban
+            // while this comparatively large constructor is still wiring its subscribers.
+            if (cloudClient.ActiveBan is null)
+            {
+                OnCloudBanLifted(startupBan);
+            }
+        }
+        else
+        {
+            StartInitialResourcePreparation();
+            StartCloudOperation(cloudClient.InitializeAsync);
+        }
     }
 
     public string Name => "Dalamud ACT Compat";
 
     public void Dispose()
     {
+        Interlocked.Exchange(ref pluginDisposing, 1);
+        AbandonPendingCloudBanParserStop();
         bundledUpdateCancellation.Cancel();
+        cloudOperationCancellation.Cancel();
         BeginCactbotShutdown();
         BeginBackgroundOperationShutdown();
         fflogsEstimateService.BeginShutdown();
         factoryResetOperations.BeginShutdown();
         lifecycle.BeginShutdown();
+        CancelCloudRuntimeSession();
         independentHostStartupCancellation.Cancel();
         bundledPluginUpdateChecker.Dispose();
 
@@ -748,6 +817,8 @@ public sealed class Plugin : IDalamudPlugin
         services.PluginInterface.UiBuilder.Draw -= Draw;
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         services.PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
+        cloudClient.BanReceived -= OnCloudBanReceived;
+        cloudClient.BanLifted -= OnCloudBanLifted;
         pictoActOverlay.Dispose();
         settingsWindow.Detach();
         advancedSettingsWindow.Detach();
@@ -771,6 +842,19 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        if (Volatile.Read(ref cloudAccessBlocked) != 0)
+        {
+            windowSystem.Draw();
+            return;
+        }
+        if (!cloudClient.Snapshot.IsSignedIn)
+        {
+            // Authentication can be revoked by a network callback between Framework frames.
+            // Close every functional window before this same UI frame is rendered.
+            RestrictWindowsToAuthenticationGate(openGate: false);
+            windowSystem.Draw();
+            return;
+        }
         if (!configuration.SimplifiedModeEnabled)
         {
             pictoActOverlay.Draw();
@@ -784,6 +868,7 @@ public sealed class Plugin : IDalamudPlugin
                                          launcherWindow.IsOpen ||
                                          thirdPartyPluginNoticeWindow.IsOpen ||
                                          coreResourceDownloadWindow.IsOpen ||
+                                         cloudBanNoticeWindow.IsOpen ||
                                          encounterWindow.IsOpen ||
                                          simplifiedHomeWindow.IsOpen ||
                                          meterStyleEditorWindow.IsOpen;
@@ -794,8 +879,436 @@ public sealed class Plugin : IDalamudPlugin
         fileDialogManager.Draw();
     }
 
+    private bool IsDactAccessAllowed()
+        => Volatile.Read(ref cloudAccessBlocked) == 0 &&
+           Volatile.Read(ref cloudRuntimeAuthorized) != 0;
+
+    private void SynchronizeCloudAuthenticationState()
+    {
+        var authenticated = cloudClient.Snapshot is { IsSignedIn: true, ActiveBan: null } &&
+                            Volatile.Read(ref cloudAccessBlocked) == 0;
+        var nextState = authenticated ? 1 : 0;
+        if (Interlocked.Exchange(ref observedCloudAuthenticationState, nextState) == nextState)
+        {
+            return;
+        }
+
+        Volatile.Write(ref cloudRuntimeAuthorized, nextState);
+        if (authenticated)
+        {
+            ScheduleCloudStartupSync(DateTimeOffset.UtcNow);
+            RestoreWindowsAfterAuthenticationGate();
+        }
+        else
+        {
+            CancelCloudRuntimeSession();
+            RestrictWindowsToAuthenticationGate(openGate: true);
+        }
+        cloudRuntimeTransitionTask =
+            StartBackgroundOperation(ReconcileCloudRuntimeAsync) ?? Task.CompletedTask;
+    }
+
+    private async Task ReconcileCloudRuntimeAsync()
+    {
+        await cloudRuntimeTransitionGate.WaitAsync(independentHostStartupCancellation.Token)
+            .ConfigureAwait(false);
+        try
+        {
+            if (!IsDactAccessAllowed())
+            {
+                await StopDactComponentsAsync("Cloud authentication gate").ConfigureAwait(false);
+                return;
+            }
+
+            await StartAuthenticatedDactRuntimeAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (independentHostStartupCancellation.IsCancellationRequested)
+        {
+            // Plugin shutdown owns the final component stop and disposal sequence.
+        }
+        finally
+        {
+            cloudRuntimeTransitionGate.Release();
+        }
+    }
+
+    private async Task StartAuthenticatedDactRuntimeAsync()
+    {
+        var sessionToken = BeginCloudRuntimeSession();
+        var firstStart = !cloudRuntimeInitialized;
+        if (firstStart)
+        {
+            cloudRuntimeInitialized = true;
+            lifecycle.Start();
+            StartBundledCactbotInitialization();
+        }
+
+        await lifecycle.WaitForStartupAsync(sessionToken).ConfigureAwait(false);
+        if (!firstStart && configuration.EnableParsing && configuration.AutoStartParser)
+        {
+            await parserEngine.StartAsync(sessionToken).ConfigureAwait(false);
+        }
+        await Task.WhenAll(
+                bundledActPluginInitializationTask.WaitAsync(sessionToken),
+                independentHostStartupTask.WaitAsync(sessionToken))
+            .ConfigureAwait(false);
+        if (GetHostResourceStatus().State == ResourcePackOperationState.Ready)
+        {
+            await StartIndependentHostAsync(sessionToken).ConfigureAwait(false);
+        }
+    }
+
+    private void StartInitialResourcePreparation()
+    {
+        // Resource acquisition is intentionally outside the account gate. These tasks only
+        // prepare verified files; authenticated runtime startup is owned separately above.
+        var bundledAttempt = CancellationTokenSource.CreateLinkedTokenSource(
+            bundledUpdateCancellation.Token);
+        bundledActResourceAttemptCancellation = bundledAttempt;
+        bundledActPluginInitializationTask = Task.Run(
+            () => InitializeBundledActPluginResourcesAsync(
+                bundledActResourcesAvailableAtStartup,
+                bundledAttempt,
+                bundledAttempt.Token),
+            CancellationToken.None);
+
+        var hostAttempt = CancellationTokenSource.CreateLinkedTokenSource(
+            independentHostStartupCancellation.Token);
+        hostResourceAttemptCancellation = hostAttempt;
+        independentHostStartupTask = Task.Run(
+            () => InitializeHostResourcesAsync(
+                hostResourcesAvailableAtStartup,
+                hostAttempt,
+                hostAttempt.Token),
+            CancellationToken.None);
+    }
+
+    private CancellationToken BeginCloudRuntimeSession()
+    {
+        lock (cloudRuntimeCancellationLock)
+        {
+            cloudRuntimeCancellation?.Dispose();
+            cloudRuntimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                independentHostStartupCancellation.Token);
+            return cloudRuntimeCancellation.Token;
+        }
+    }
+
+    private void CancelCloudRuntimeSession()
+    {
+        lock (cloudRuntimeCancellationLock)
+        {
+            cloudRuntimeCancellation?.Cancel();
+        }
+    }
+
+    private void RestrictWindowsToAuthenticationGate(bool openGate)
+    {
+        pictoActOverlay.Clear();
+        meterWindow.IsOpen = false;
+        horizontalMeterWindow.IsOpen = false;
+        roleSplitDamageWindow.IsOpen = false;
+        roleSplitHealerWindow.IsOpen = false;
+        advancedSettingsWindow.IsOpen = false;
+        statusWindow.IsOpen = false;
+        helpWindow.IsOpen = false;
+        launcherWindow.IsOpen = false;
+        thirdPartyPluginNoticeWindow.IsOpen = false;
+        encounterWindow.IsOpen = false;
+        meterStyleEditorWindow.IsOpen = false;
+        simplifiedHomeWindow.IsOpen = false;
+        if (openGate)
+        {
+            settingsWindow.LocateAnimated();
+        }
+    }
+
+    private void RestoreWindowsAfterAuthenticationGate()
+    {
+        fflogsEstimateService.NotifyTerritoryChanged(
+            services.ClientState.TerritoryType,
+            zoneNameLocalizer.Localize(services.ClientState.TerritoryType, string.Empty));
+        meterWindow.IsOpen = configuration.Meter.IsVisible;
+        horizontalMeterWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitDamageWindow.IsOpen = configuration.Meter.IsVisible;
+        roleSplitHealerWindow.IsOpen = configuration.Meter.IsVisible;
+        launcherWindow.IsOpen = true;
+        thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
+        TryStartAutomaticBundledPluginUpdateCheck();
+        if (configuration.SimplifiedModeEnabled)
+        {
+            ApplySimplifiedWindowVisibility();
+        }
+        UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
+    }
+
+    private void TryStartAutomaticBundledPluginUpdateCheck()
+    {
+        if (configuration.AutoCheckBundledPluginUpdates &&
+            GetBundledActResourceStatus().State == ResourcePackOperationState.Ready &&
+            Interlocked.Exchange(ref bundledAutoUpdateCheckStarted, 1) == 0)
+        {
+            StartBundledPluginUpdateCheck(openWindow: false);
+        }
+    }
+
+    private void OnCloudBanReceived(CloudBanNotice notice)
+    {
+        lock (cloudBanLock)
+        {
+            enforcedCloudBan = notice;
+            Volatile.Write(ref cloudBanLifted, 0);
+            if (Interlocked.Exchange(ref cloudAccessBlocked, 1) == 0)
+            {
+                // Every startup/restart source is made permanently inert for this plugin
+                // lifetime before the asynchronous process stops begin.
+                Volatile.Write(ref cloudRuntimeAuthorized, 0);
+                Volatile.Write(ref observedCloudAuthenticationState, 0);
+                CancelCloudRuntimeSession();
+                bundledUpdateCancellation.Cancel();
+                cloudOperationCancellation.Cancel();
+                independentHostStartupCancellation.Cancel();
+                BeginCactbotShutdown();
+                BeginBackgroundOperationShutdown();
+                fflogsEstimateService.BeginShutdown();
+                factoryResetOperations.BeginShutdown();
+                lifecycle.BeginShutdown();
+                hostCommandCancellation.Cancel();
+                Volatile.Write(ref silverDasherEventsEnabled, 0);
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                cloudBanEnforcementTask = Task.Run(StopDactForCloudBanAsync, CancellationToken.None);
+            }
+        }
+
+        _ = services.Framework.RunOnFrameworkThread(() =>
+        {
+            pictoActOverlay.Clear();
+            meterWindow.IsOpen = false;
+            horizontalMeterWindow.IsOpen = false;
+            roleSplitDamageWindow.IsOpen = false;
+            roleSplitHealerWindow.IsOpen = false;
+            settingsWindow.IsOpen = false;
+            advancedSettingsWindow.IsOpen = false;
+            statusWindow.IsOpen = false;
+            helpWindow.IsOpen = false;
+            launcherWindow.IsOpen = false;
+            thirdPartyPluginNoticeWindow.IsOpen = false;
+            encounterWindow.IsOpen = false;
+            meterStyleEditorWindow.IsOpen = false;
+            simplifiedHomeWindow.IsOpen = false;
+            coreResourceDownloadWindow.IsOpen = false;
+            cloudBanNoticeWindow.Show(notice, lifted: false);
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = string.Equals(notice.BanType, "device", StringComparison.Ordinal)
+                    ? "DACT 账号与关联机器已禁用"
+                    : "DACT 已被禁用",
+                Content = BuildCloudBanSummary(notice),
+                Type = NotificationType.Error,
+            });
+        });
+    }
+
+    private void OnCloudBanLifted(CloudBanNotice? liftedNotice)
+    {
+        CloudBanNotice? notice = liftedNotice;
+        var requiresRestart = Volatile.Read(ref cloudAccessBlocked) != 0;
+        lock (cloudBanLock)
+        {
+            notice ??= enforcedCloudBan;
+            if (Interlocked.Exchange(ref cloudBanLifted, 1) != 0)
+            {
+                return;
+            }
+        }
+
+        _ = services.Framework.RunOnFrameworkThread(() =>
+        {
+            cloudBanNoticeWindow.Show(
+                notice,
+                lifted: true,
+                requiresRestart: requiresRestart);
+            services.NotificationManager.AddNotification(new()
+            {
+                Title = "DACT 封禁已解除",
+                Content = requiresRestart
+                    ? "请重启游戏或重载 DACT，然后重新登录以恢复功能。"
+                    : "服务器已确认解封，本次登录已经生效。",
+            });
+        });
+    }
+
+    private async Task StopDactForCloudBanAsync()
+    {
+        var initialParserStop = RequestCloudBanParserStopAsync();
+        await StopDactHostsAsync("Cloud ban").ConfigureAwait(false);
+        await initialParserStop.ConfigureAwait(false);
+
+        try
+        {
+            // Cancellation is cooperative. Join every known startup and mutation owner,
+            // then stop once more so a task already past its cancellation check cannot
+            // resurrect a parser or Host after the first enforcement pass.
+            await Task.WhenAll(
+                    ShutdownBackgroundOperationsAsync(),
+                    ShutdownCactbotOperationsAsync(),
+                    factoryResetOperations.WaitForCompletionAsync(),
+                    lifecycle.WaitForStartupAsync(CancellationToken.None),
+                    bundledActPluginInitializationTask,
+                    independentHostStartupTask)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex.GetBaseException(), "Cloud ban could not join every in-flight DACT operation cleanly.");
+        }
+
+        await RequestCloudBanParserStopAsync().ConfigureAwait(false);
+        await StopDactHostsAsync("Cloud ban").ConfigureAwait(false);
+    }
+
+    private async Task StopDactComponentsAsync(string reason)
+    {
+        Volatile.Write(ref silverDasherEventsEnabled, 0);
+        Volatile.Write(ref matchaEventsEnabled, 0);
+        actRuntime.SetNetworkSentCaptureEnabled(false);
+        await StopDactComponentAsync(reason, "parser", parserEngine.StopAsync)
+            .ConfigureAwait(false);
+
+        await StopDactHostsAsync(reason).ConfigureAwait(false);
+    }
+
+    private async Task StopDactHostsAsync(string reason)
+    {
+        var lockAcquired = false;
+        try
+        {
+            using var lockTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await hostTopologyLock.WaitAsync(lockTimeout.Token).ConfigureAwait(false);
+            lockAcquired = true;
+            await StopDactComponentAsync(reason, "generic Host", genericHostSupervisor.StopAsync)
+                .ConfigureAwait(false);
+            await StopDactComponentAsync(reason, "Matcha Host", matchaHostSupervisor.StopAsync)
+                .ConfigureAwait(false);
+            await StopDactComponentAsync(reason, "shared Host", hostSupervisor.StopAsync)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, $"{reason} could not acquire the ACT Host topology lock.");
+        }
+        finally
+        {
+            if (lockAcquired)
+            {
+                hostTopologyLock.Release();
+            }
+        }
+    }
+
+    private Task RequestCloudBanParserStopAsync()
+    {
+        lock (cloudBanLock)
+        {
+            if (Volatile.Read(ref pluginDisposing) != 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            cloudBanParserStopCompletion = completion;
+            Volatile.Write(ref cloudBanParserStopPending, 1);
+            return completion.Task;
+        }
+    }
+
+    private void TryStopParserForCloudBanOnFrameworkThread()
+    {
+        if (Volatile.Read(ref cloudBanParserStopPending) == 0)
+        {
+            return;
+        }
+
+        TaskCompletionSource<bool>? completion;
+        lock (cloudBanLock)
+        {
+            completion = cloudBanParserStopCompletion;
+        }
+        if (completion is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!parserAdapter.TryStopForAccessRevocation())
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref cloudBanParserStopPending, 0);
+            completion.TrySetResult(true);
+            logger.Information("Cloud ban stopped the in-process parser on the framework thread.");
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Exchange(ref cloudBanParserStopPending, 0);
+            completion.TrySetResult(false);
+            logger.Error(ex, "Cloud ban could not stop the in-process parser safely.");
+        }
+    }
+
+    private void AbandonPendingCloudBanParserStop()
+    {
+        TaskCompletionSource<bool>? completion;
+        lock (cloudBanLock)
+        {
+            Interlocked.Exchange(ref cloudBanParserStopPending, 0);
+            completion = cloudBanParserStopCompletion;
+            cloudBanParserStopCompletion = null;
+        }
+
+        // Normal plugin disposal already owns parser teardown. Releasing this waiter avoids
+        // deadlocking unload while the framework update callback is being detached.
+        completion?.TrySetResult(false);
+    }
+
+    private async Task StopDactComponentAsync(
+        string reason,
+        string component,
+        Func<CancellationToken, Task> stop)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await stop(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Continue through every component so one broken extension cannot keep the
+            // parser or another managed Host alive after access has been revoked.
+            logger.Error(ex, $"{reason} could not stop {component} cleanly.");
+        }
+    }
+
+    private static string BuildCloudBanSummary(CloudBanNotice notice)
+        => string.IsNullOrWhiteSpace(notice.BanReason)
+            ? $"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"
+            : $"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}；原因：{notice.BanReason}";
+
     private void OpenConfigUi()
     {
+        if (Volatile.Read(ref cloudAccessBlocked) != 0)
+        {
+            return;
+        }
+        if (!cloudClient.Snapshot.IsSignedIn)
+        {
+            settingsWindow.LocateAnimated();
+            return;
+        }
         if (GetHostResourceStatus().State == ResourcePackOperationState.Unavailable)
         {
             coreResourceDownloadWindow.Open();
@@ -952,6 +1465,17 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string arguments)
     {
+        if (Volatile.Read(ref cloudAccessBlocked) != 0)
+        {
+            logger.Warning("DACT command ignored because cloud access is banned.");
+            return;
+        }
+        if (!cloudClient.Snapshot.IsSignedIn)
+        {
+            settingsWindow.LocateAnimated();
+            logger.Warning("DACT command ignored until cloud authentication succeeds.");
+            return;
+        }
         var trimmedArguments = arguments.Trim();
         var separator = trimmedArguments.IndexOf(' ');
         var verb = (separator < 0 ? trimmedArguments : trimmedArguments[..separator]).ToLowerInvariant();
@@ -1015,7 +1539,15 @@ public sealed class Plugin : IDalamudPlugin
                     try
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                        if (!IsDactAccessAllowed())
+                        {
+                            return;
+                        }
                         await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                        if (!IsDactAccessAllowed())
+                        {
+                            return;
+                        }
                         await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -1086,6 +1618,11 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (Exception ex)
         {
+            if (Volatile.Read(ref pluginDisposing) == 0)
+            {
+                cloudClient.ReportExternalFailure(new IOException(
+                    $"无法保存当前 DACT 主配置；自动云同步已暂停。请修复写盘问题后重新保存：{ex.GetBaseException().Message}"));
+            }
             logger.Error(ex, "Failed to save plugin configuration.");
             return false;
         }
@@ -1199,7 +1736,7 @@ public sealed class Plugin : IDalamudPlugin
             Volatile.Write(ref hostResourceStatus, ResourcePackOperationStatus.Downloading());
         }
 
-        StartBackgroundOperation(() => InitializeHostResourcesAndStartAsync(
+        StartBackgroundOperation(() => InitializeHostResourcesAsync(
             cachedResourcesAvailable: false,
             attempt,
             attempt.Token));
@@ -1235,11 +1772,17 @@ public sealed class Plugin : IDalamudPlugin
             logger.Information(
                 $"Bundled ACT plugin resource pack is available under {directory}.");
             await services.Framework.RunOnFrameworkThread(
-                    thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending)
+                    () =>
+                    {
+                        if (IsDactAccessAllowed())
+                        {
+                            thirdPartyPluginNoticeWindow.OpenRequiredAfterPluginUpdateWhenPending();
+                        }
+                    })
                 .ConfigureAwait(false);
-            if (configuration.AutoCheckBundledPluginUpdates)
+            if (IsDactAccessAllowed())
             {
-                StartBundledPluginUpdateCheck(openWindow: false);
+                TryStartAutomaticBundledPluginUpdateCheck();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1273,20 +1816,13 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private async Task InitializeHostResourcesAndStartAsync(
+    private async Task InitializeHostResourcesAsync(
         bool cachedResourcesAvailable,
         CancellationTokenSource attempt,
         CancellationToken cancellationToken)
     {
         try
         {
-            if (cachedResourcesAvailable)
-            {
-                // A verified previous cache should keep installed extensions available immediately;
-                // resolving the current pack continues in the background for the next Host restart.
-                await StartIndependentHostAsync(cancellationToken).ConfigureAwait(false);
-            }
-
             var progress = cachedResourcesAvailable
                 ? null
                 : new Progress<ResourcePackDownloadProgress>(value =>
@@ -1301,10 +1837,6 @@ public sealed class Plugin : IDalamudPlugin
             matchaHostSupervisor.SetPackagedHostDirectory(directory);
             genericHostSupervisor.SetPackagedHostDirectory(directory);
             UpdateHostResourceStatus(attempt, ResourcePackOperationStatus.Ready());
-            if (!cachedResourcesAvailable)
-            {
-                await StartIndependentHostAsync(cancellationToken).ConfigureAwait(false);
-            }
             await services.Framework.RunOnFrameworkThread(
                     () => coreResourceDownloadWindow.IsOpen = false)
                 .ConfigureAwait(false);
@@ -1702,18 +2234,29 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void StartBackgroundOperation(Func<Task> operation)
+    private Task? StartBackgroundOperation(Func<Task> operation)
     {
         lock (backgroundOperationLock)
         {
             if (backgroundOperationShutdownStarted)
             {
-                return;
+                return null;
             }
 
             // Retain every task until unload. Removing completed tasks via a continuation
             // would itself create unowned plugin code that could race the ALC teardown.
-            backgroundOperations.Add(Task.Run(operation, CancellationToken.None));
+            var task = Task.Run(async () =>
+            {
+                // A queued task may not begin executing until after a live ban has closed
+                // the public UI; re-check at execution time as well as at registration time.
+                if (Volatile.Read(ref cloudAccessBlocked) != 0)
+                {
+                    return;
+                }
+                await operation().ConfigureAwait(false);
+            }, CancellationToken.None);
+            backgroundOperations.Add(task);
+            return task;
         }
     }
 
@@ -1781,6 +2324,347 @@ public sealed class Plugin : IDalamudPlugin
     private Task<string> StartFactoryReset()
         => factoryResetOperations.Start();
 
+    private void StartCloudOperation(Func<CancellationToken, Task> operation)
+    {
+        StartBackgroundOperation(async () =>
+        {
+            try
+            {
+                await operation(cloudOperationCancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cloudOperationCancellation.IsCancellationRequested)
+            {
+                // Plugin unload cancels network work before disposing the HTTP client.
+            }
+            catch (Exception ex)
+            {
+                cloudClient.ReportExternalFailure(ex);
+                logger.Error(ex, "Cloud account operation failed.");
+            }
+        });
+    }
+
+    private void StartCloudUpload()
+        => StartCloudOperation(token => RunCloudFileOperationAsync(
+            async operationToken =>
+            {
+                var uploaded = await cloudClient.UploadAsync(
+                        paths.ConfigDirectory,
+                        operationToken)
+                    .ConfigureAwait(false);
+                if (uploaded)
+                {
+                    Interlocked.Exchange(ref cloudAutoSyncDueUtcTicks, 0);
+                }
+                return uploaded;
+            },
+            keepStoppedAfterSuccess: false,
+            token));
+
+    private void ScheduleCloudStartupSync(DateTimeOffset now)
+    {
+        if (Volatile.Read(ref pluginDisposing) != 0 ||
+            Interlocked.Exchange(ref cloudStartupSyncRequested, 1) != 0)
+        {
+            return;
+        }
+
+        // One content-deduplicated check per game process captures the previous session's
+        // final files without delaying shutdown or reacting to every file-system event.
+        Interlocked.Exchange(
+            ref cloudAutoSyncDueUtcTicks,
+            now.UtcDateTime.Ticks);
+    }
+
+    private void TryStartCloudAutoSync(DateTimeOffset now)
+    {
+        if (!configuration.AutoCloudSyncEnabled)
+        {
+            return;
+        }
+
+        var nowTicks = now.UtcDateTime.Ticks;
+        var dueTicks = Volatile.Read(ref cloudAutoSyncDueUtcTicks);
+        if (dueTicks == 0 || dueTicks > nowTicks)
+        {
+            return;
+        }
+        if (cloudClient.Snapshot.IsBusy ||
+            services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
+            !cloudRuntimeTransitionTask.IsCompletedSuccessfully ||
+            Interlocked.CompareExchange(ref cloudAutoSyncRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        // Refuse to upload an older on-disk main configuration. A failed save is surfaced
+        // in the cloud page and retried later, while DACT keeps its current runtime state.
+        if (!TrySaveConfiguration())
+        {
+            Interlocked.Exchange(
+                ref cloudAutoSyncDueUtcTicks,
+                now.Add(CloudAutoSyncRetryDelay).UtcDateTime.Ticks);
+            Interlocked.Exchange(ref cloudAutoSyncRunning, 0);
+            return;
+        }
+        Interlocked.Exchange(ref cloudAutoSyncDueUtcTicks, 0);
+        // The startup check is content-deduplicated. A manual upload remains available when
+        // the user needs a fresh snapshot during the same game session.
+        StartCloudOperation(async token =>
+        {
+            try
+            {
+                await cloudClient.AutoUploadIfChangedAsync(paths.ConfigDirectory, token)
+                    .ConfigureAwait(false);
+                if (cloudClient.Snapshot is { IsSignedIn: true, StatusIsError: true })
+                {
+                    Interlocked.Exchange(
+                        ref cloudAutoSyncDueUtcTicks,
+                        DateTimeOffset.UtcNow.Add(CloudAutoSyncRetryDelay).UtcDateTime.Ticks);
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref cloudAutoSyncRunning, 0);
+            }
+        });
+    }
+
+    private void StartCloudRestore(string backupId)
+        => StartCloudOperation(token => RunCloudFileOperationAsync(
+            operationToken => cloudClient.RestoreAsync(backupId, operationToken),
+            keepStoppedAfterSuccess: true,
+            token));
+
+    private void StartCloudRollback()
+        => StartCloudOperation(token => RunCloudFileOperationAsync(
+            cloudClient.RollbackAsync,
+            keepStoppedAfterSuccess: true,
+            token));
+
+    private async Task RunCloudFileOperationAsync(
+        Func<CancellationToken, Task<bool>> operation,
+        bool keepStoppedAfterSuccess,
+        CancellationToken shutdownToken)
+    {
+        if (!IsDactAccessAllowed())
+        {
+            throw new InvalidOperationException("请先登录 DACT 账号。");
+        }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        await cloudRuntimeTransitionTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        // Finish all one-shot startup writers before taking the file-operation locks;
+        // otherwise an early restore could be overwritten after this method releases them.
+        await lifecycle.WaitForStartupAsync(timeout.Token).ConfigureAwait(false);
+        await bundledActPluginInitializationTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        await independentHostStartupTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        var cactbotGateAcquired = false;
+        var hostTopologyAcquired = false;
+        try
+        {
+            await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+            cactbotGateAcquired = true;
+            await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+            hostTopologyAcquired = true;
+            var parserWasRunning = parserEngine.Status.State == ParserState.Running;
+            var sharedWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var matchaWasRunning = matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var genericWasRunning = genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var completed = false;
+            var runtimeQuiesceStarted = false;
+            var runtimeRecoveryAttempted = false;
+            try
+            {
+                // A consistent account snapshot requires every parser and ACT extension writer
+                // to release its files before export or transactional replacement starts.
+                if (!TrySaveConfiguration())
+                {
+                    throw new IOException("无法保存当前 DACT 主配置，云端操作已取消。");
+                }
+                runtimeQuiesceStarted = true;
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                if (matchaWasRunning)
+                {
+                    await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (genericWasRunning)
+                {
+                    await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (sharedWasRunning)
+                {
+                    await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (parserWasRunning)
+                {
+                    await parserEngine.StopAsync(timeout.Token).ConfigureAwait(false);
+                }
+                if (!TrySaveConfiguration())
+                {
+                    throw new IOException("停止运行组件后仍无法保存 DACT 主配置，云端操作已取消。");
+                }
+
+                completed = await operation(timeout.Token).ConfigureAwait(false);
+                if (keepStoppedAfterSuccess && completed)
+                {
+                    try
+                    {
+                        ApplyRestoredConfigurationToMemory();
+                    }
+                    catch (Exception applyFailure)
+                    {
+                        // Plugin unload always saves the live configuration object. If the
+                        // restored JSON cannot replace that object, roll the files back now
+                        // so unload cannot overwrite a partially accepted cloud restore.
+                        using var rollbackTimeout =
+                            CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                        rollbackTimeout.CancelAfter(TimeSpan.FromMinutes(1));
+                        var rolledBack = await cloudClient.RollbackAsync(rollbackTimeout.Token)
+                            .ConfigureAwait(false);
+                        if (!rolledBack)
+                        {
+                            throw new AggregateException(
+                                "Cloud files were restored but could not be loaded or rolled back.",
+                                applyFailure);
+                        }
+                        ApplyRestoredConfigurationToMemory();
+                        completed = false;
+                        throw new InvalidDataException(
+                            "Restored configuration could not be loaded; the original files were recovered.",
+                            applyFailure);
+                    }
+                }
+                if (!keepStoppedAfterSuccess || !completed)
+                {
+                    runtimeRecoveryAttempted = true;
+                    await RestoreCloudOperationRuntimeWithFreshDeadlineAsync(
+                            parserWasRunning,
+                            sharedWasRunning,
+                            matchaWasRunning,
+                            genericWasRunning,
+                            shutdownToken)
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (Exception operationFailure)
+            {
+                if (!completed &&
+                    runtimeQuiesceStarted &&
+                    !runtimeRecoveryAttempted &&
+                    !shutdownToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await RestoreCloudOperationRuntimeWithFreshDeadlineAsync(
+                                parserWasRunning,
+                                sharedWasRunning,
+                                matchaWasRunning,
+                                genericWasRunning,
+                                shutdownToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception recoveryFailure)
+                    {
+                        throw new AggregateException(
+                            "Cloud file operation failed and the previous runtime could not be restored.",
+                            operationFailure,
+                            recoveryFailure);
+                    }
+                }
+                throw;
+            }
+        }
+        finally
+        {
+            if (hostTopologyAcquired)
+            {
+                hostTopologyLock.Release();
+            }
+            if (cactbotGateAcquired)
+            {
+                cactbotFileOperationGate.Release();
+            }
+        }
+    }
+
+    private async Task RestoreCloudOperationRuntimeWithFreshDeadlineAsync(
+        bool parserWasRunning,
+        bool sharedWasRunning,
+        bool matchaWasRunning,
+        bool genericWasRunning,
+        CancellationToken shutdownToken)
+    {
+        using var recoveryTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+        // File/network work owns its own deadline. Recovery needs a fresh window so an
+        // operation timeout cannot prevent the components it stopped from restarting.
+        recoveryTimeout.CancelAfter(TimeSpan.FromMinutes(1));
+        await RestoreCloudOperationRuntimeAsync(
+                parserWasRunning,
+                sharedWasRunning,
+                matchaWasRunning,
+                genericWasRunning,
+                recoveryTimeout.Token)
+            .ConfigureAwait(false);
+    }
+
+    private async Task RestoreCloudOperationRuntimeAsync(
+        bool parserWasRunning,
+        bool sharedWasRunning,
+        bool matchaWasRunning,
+        bool genericWasRunning,
+        CancellationToken cancellationToken)
+    {
+        if (!IsDactAccessAllowed())
+        {
+            // A ban can arrive while a cloud snapshot owns the topology lock. Its
+            // finally path must never restart components after enforcement began.
+            return;
+        }
+        if (sharedWasRunning)
+        {
+            if (!IsDactAccessAllowed())
+            {
+                return;
+            }
+            await hostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+            await hostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (parserWasRunning)
+        {
+            if (!IsDactAccessAllowed())
+            {
+                return;
+            }
+            await parserEngine.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (matchaWasRunning && sharedWasRunning)
+        {
+            await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true)
+                .ConfigureAwait(false);
+        }
+        if (genericWasRunning)
+        {
+            await StartGenericHostAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyRestoredConfigurationToMemory()
+    {
+        var configurationRoot = Path.GetDirectoryName(paths.ConfigDirectory)
+                                ?? throw new InvalidOperationException(
+                                    "DACT configuration directory has no parent directory.");
+        var configurationPath = Path.Combine(configurationRoot, "DalamudActCompat.json");
+        var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<PluginConfiguration>(
+                           File.ReadAllText(configurationPath))
+                       ?? throw new InvalidDataException(
+                           "Restored DACT configuration JSON is empty.");
+        restored.ApplyMigrations();
+        configuration.RestoreFrom(restored);
+    }
+
     private async Task<string> FactoryResetCoreAsync(CancellationToken shutdownToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
@@ -1818,7 +2702,8 @@ public sealed class Plugin : IDalamudPlugin
             catch (Exception resetFailure)
             {
                 var restoreFailures = new List<Exception>();
-                if (hostWasRunning && !shutdownToken.IsCancellationRequested)
+                if (hostWasRunning && !shutdownToken.IsCancellationRequested &&
+                    IsDactAccessAllowed())
                 {
                     try
                     {
@@ -1833,7 +2718,8 @@ public sealed class Plugin : IDalamudPlugin
                 }
                 if (matchaWasRunning &&
                     hostSupervisor.Snapshot.State == HostSupervisorState.Running &&
-                    !shutdownToken.IsCancellationRequested)
+                    !shutdownToken.IsCancellationRequested &&
+                    IsDactAccessAllowed())
                 {
                     try
                     {
@@ -2100,7 +2986,11 @@ public sealed class Plugin : IDalamudPlugin
                         await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
                     }
 
-                    await genericHostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                    if (!IsDactAccessAllowed())
+                    {
+                        return;
+                    }
                     await genericHostSupervisor.WaitForPluginStartupAsync(timeout.Token)
                         .ConfigureAwait(false);
                     var initStage = await genericHostSupervisor.WaitForPluginStageAsync(
@@ -2287,7 +3177,8 @@ public sealed class Plugin : IDalamudPlugin
                         },
                         hostSupervisor.StartAsync,
                         parserEngine.StartAsync,
-                        () => !bundledUpdateCancellation.IsCancellationRequested,
+                        () => !bundledUpdateCancellation.IsCancellationRequested &&
+                              IsDactAccessAllowed(),
                         timeout.Token,
                         TimeSpan.FromSeconds(20))
                     .ConfigureAwait(false);
@@ -2746,6 +3637,10 @@ public sealed class Plugin : IDalamudPlugin
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (!IsDactAccessAllowed())
+                {
+                    return;
+                }
                 await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
                 var status = parserEngine.Status;
                 reportResult(
@@ -3037,9 +3932,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StartIndependentHostAsync(CancellationToken cancellationToken)
     {
-        if (configuration.SimplifiedModeEnabled)
+        if (configuration.SimplifiedModeEnabled || !IsDactAccessAllowed())
         {
-            logger.Information("ACT plugin Host startup skipped because simplified mode is enabled.");
+            logger.Information("ACT plugin Host startup skipped because DACT is not allowed to start services.");
             return;
         }
 
@@ -3048,7 +3943,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             await hostTopologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             lockAcquired = true;
-            if (configuration.SimplifiedModeEnabled)
+            if (configuration.SimplifiedModeEnabled || !IsDactAccessAllowed())
             {
                 return;
             }
@@ -3083,6 +3978,12 @@ public sealed class Plugin : IDalamudPlugin
         CancellationToken cancellationToken,
         bool throwOnFailure = false)
     {
+        if (!IsDactAccessAllowed())
+        {
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            return;
+        }
         if (!IsMatchaConfiguredToRun())
         {
             Volatile.Write(ref matchaEventsEnabled, 0);
@@ -3098,6 +3999,12 @@ public sealed class Plugin : IDalamudPlugin
         {
             Volatile.Write(ref matchaEventsEnabled, 1);
             actRuntime.SetNetworkSentCaptureEnabled(true);
+            if (!IsDactAccessAllowed())
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                return;
+            }
             await matchaHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
             await matchaHostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
             logger.Information(
@@ -3119,6 +4026,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StartGenericHostAsync(CancellationToken cancellationToken)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         if (!IsGenericHostConfiguredToRun())
         {
             if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
@@ -3144,6 +4055,10 @@ public sealed class Plugin : IDalamudPlugin
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
                 await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                if (!IsDactAccessAllowed())
+                {
+                    return;
+                }
                 await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -3168,6 +4083,10 @@ public sealed class Plugin : IDalamudPlugin
                 Volatile.Write(ref matchaEventsEnabled, 0);
                 actRuntime.SetNetworkSentCaptureEnabled(false);
                 await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                if (!IsDactAccessAllowed())
+                {
+                    return;
+                }
                 if (hostSupervisor.Snapshot.State != HostSupervisorState.Running)
                 {
                     logger.Warning(
@@ -3234,7 +4153,10 @@ public sealed class Plugin : IDalamudPlugin
                     }
                     finally
                     {
-                        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                        if (IsDactAccessAllowed())
+                        {
+                            await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
+                        }
                     }
 
                     logger.Information(
@@ -3261,7 +4183,8 @@ public sealed class Plugin : IDalamudPlugin
                     activeGeneric = activeGenericPermissionFingerprint;
                 }
 
-                if (!string.Equals(
+                if (IsDactAccessAllowed() &&
+                    !string.Equals(
                         activeHost,
                         BuildPermissionFingerprint(desiredHost),
                         StringComparison.Ordinal) &&
@@ -3571,7 +4494,15 @@ public sealed class Plugin : IDalamudPlugin
             logger.Error(ex, "ACT Host command broker failed during shutdown.");
         }
 
+        Task banTask;
+        lock (cloudBanLock)
+        {
+            banTask = cloudBanEnforcementTask;
+        }
+        await banTask.ConfigureAwait(false);
         await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);
+        cloudClient.Dispose();
+        cloudOperationCancellation.Dispose();
 
         // A reset owns configuration files until its rollback/commit finishes. Waiting here
         // keeps those operations inside the plugin lifetime instead of abandoning them.
@@ -3603,6 +4534,12 @@ public sealed class Plugin : IDalamudPlugin
         {
             resourcePackManager.Dispose();
             hostTopologyLock.Release();
+            lock (cloudRuntimeCancellationLock)
+            {
+                cloudRuntimeCancellation?.Dispose();
+                cloudRuntimeCancellation = null;
+            }
+            cloudRuntimeTransitionGate.Dispose();
         }
     }
 
@@ -3612,6 +4549,10 @@ public sealed class Plugin : IDalamudPlugin
         string actLine,
         bool isImport)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         if (!isImport)
         {
             fflogsEstimateService.ObserveLogLine(actLine);
@@ -3622,6 +4563,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnZoneChangedForHost(uint territoryId, string zoneName)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         // Trigger repositories are territory-scoped; delayed or indefinite PictoACT VFX from
         // the old territory can never be valid after a zone transition.
         pictoActOverlay.Clear();
@@ -3637,6 +4582,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnNetworkReceivedForHost(string connection, long epoch, byte[] message)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         _ = hostSupervisor.PublishSilverDasherNetwork(connection, epoch, message);
         if (Volatile.Read(ref matchaEventsEnabled) == 1)
         {
@@ -3649,6 +4598,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnNetworkSentForMatchaHost(string connection, long epoch, byte[] message)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         if (Volatile.Read(ref matchaEventsEnabled) == 1)
         {
             _ = matchaHostSupervisor.PublishMatchaNetworkSent(connection, epoch, message);
@@ -3657,10 +4610,18 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnMatchaLogLineRequested(object? sender, HostMatchaLogLine logLine)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         try
         {
             _ = services.Framework.RunOnFrameworkThread(() =>
             {
+                if (!IsDactAccessAllowed())
+                {
+                    return;
+                }
                 if (!actRuntime.InjectExternalPluginLogLine(logLine.Line))
                 {
                     logger.Warning(
@@ -3676,6 +4637,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnMatchaTtsRequested(object? sender, HostTtsRequest request)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         if (!hostSupervisor.RequestTts(request.Text, "matcha"))
         {
             logger.Warning(
@@ -3685,6 +4650,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnGenericTtsRequested(object? sender, HostTtsRequest request)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         if (!hostSupervisor.RequestTts(request.Text, request.Source))
         {
             logger.Warning(
@@ -3696,12 +4665,20 @@ public sealed class Plugin : IDalamudPlugin
         object? sender,
         HostMatchaNotification notification)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         try
         {
             _ = services.Framework.RunOnFrameworkThread(() =>
             {
                 try
                 {
+                    if (!IsDactAccessAllowed())
+                    {
+                        return;
+                    }
                     var gameNotification = new Notification
                     {
                         Title = "抹茶 / Cafe.Matcha",
@@ -3731,16 +4708,34 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         hostSupervisor.PublishEncounter(finished);
         genericHostSupervisor.PublishEncounter(finished);
     }
 
     private void OnFrameworkUpdateForHost(IFramework _)
     {
+        if (Volatile.Read(ref pluginInitialized) == 0)
+        {
+            // The subscription order is intentional, but a construction-time frame must
+            // not touch windows that have not yet been assigned.
+            return;
+        }
+
+        SynchronizeCloudAuthenticationState();
+        TryStopParserForCloudBanOnFrameworkThread();
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         // This handler is registered before both parser consumers, so they observe one
         // coherent mode snapshot for the entire Framework frame.
         encounterModeStateProvider.Update();
         var now = DateTimeOffset.UtcNow;
+        TryStartCloudAutoSync(now);
         UpdateHtmlOverlaySuppression(now);
         ApplyPendingPostNamazuHeading(now);
         // The shared Host carries timing-sensitive legacy actions, so ordinary pressure waits
@@ -3849,6 +4844,10 @@ public sealed class Plugin : IDalamudPlugin
         object? sender,
         HostMemoryProtectionEventArgs args)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         if (args.Snapshot.State is HostMemoryProtectionState.Normal or
             HostMemoryProtectionState.Disabled)
         {
@@ -3859,6 +4858,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             _ = services.Framework.RunOnFrameworkThread(() =>
             {
+                if (!IsDactAccessAllowed())
+                {
+                    return;
+                }
                 var snapshot = args.Snapshot;
                 if (snapshot.State != HostMemoryProtectionState.Ignored)
                 {
@@ -3901,7 +4904,12 @@ public sealed class Plugin : IDalamudPlugin
     private void OnPostNamazuHeadingRequested(
         object? sender,
         HostPostNamazuHeading heading)
-        => Interlocked.Exchange(ref pendingPostNamazuHeading, heading);
+    {
+        if (IsDactAccessAllowed())
+        {
+            Interlocked.Exchange(ref pendingPostNamazuHeading, heading);
+        }
+    }
 
     private unsafe void ApplyPendingPostNamazuHeading(DateTimeOffset now)
     {
@@ -3933,6 +4941,15 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnHostCommandRequested(object? sender, HostCommandInvocation invocation)
     {
+        if (!IsDactAccessAllowed())
+        {
+            hostSupervisor.ReplyCommand(
+                invocation.CorrelationId,
+                false,
+                "banned",
+                "DACT access is banned.");
+            return;
+        }
         if (configuration.SimplifiedModeEnabled)
         {
             hostSupervisor.ReplyCommand(
@@ -3962,12 +4979,20 @@ public sealed class Plugin : IDalamudPlugin
         object? sender,
         HostSilverDasherNotification notification)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         try
         {
             _ = services.Framework.RunOnFrameworkThread(() =>
             {
                 try
                 {
+                    if (!IsDactAccessAllowed())
+                    {
+                        return;
+                    }
                     services.NotificationManager.AddNotification(new Notification
                     {
                         Title = "银山雀儿 / SilverDasher",
@@ -4012,6 +5037,15 @@ public sealed class Plugin : IDalamudPlugin
     {
         try
         {
+            if (!IsDactAccessAllowed())
+            {
+                hostSupervisor.ReplyCommand(
+                    invocation.CorrelationId,
+                    false,
+                    "banned",
+                    "DACT access is banned.");
+                return;
+            }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(2));
             string? resultDetail = null;
@@ -4347,6 +5381,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task ApplyGameRegionChangeAsync(GameRegionSelection requestedSelection)
     {
+        if (!IsDactAccessAllowed())
+        {
+            return;
+        }
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         var parserWasActive = parserEngine.Status.State is
             ParserState.Running or
@@ -4354,12 +5392,20 @@ public sealed class Plugin : IDalamudPlugin
             ParserState.Faulted;
         if (parserWasActive)
         {
+            if (!IsDactAccessAllowed())
+            {
+                return;
+            }
             await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
         }
 
         await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
         try
         {
+            if (!IsDactAccessAllowed())
+            {
+                return;
+            }
             var sharedWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
             var matchaWasRunning = matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
             var genericWasRunning = genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
@@ -4379,6 +5425,10 @@ public sealed class Plugin : IDalamudPlugin
             if (sharedWasRunning)
             {
                 await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                if (!IsDactAccessAllowed())
+                {
+                    return;
+                }
                 await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
                 await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
             }

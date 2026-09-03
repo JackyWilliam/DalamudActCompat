@@ -1,12 +1,14 @@
 using System.IO.Compression;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -23,6 +25,7 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Diagnostics;
+using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -122,6 +125,28 @@ try
     await ValidateEncounterRetentionAsync(testRoot);
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
+    await ValidatePortableConfigurationArchiveAsync(testRoot);
+    await ValidateEncryptedConfigurationBackupAsync(testRoot);
+    await ValidateRealConfigurationBackupFixtureAsync(testRoot);
+    ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
+    await ValidateCloudApiContractAsync(testRoot);
+    await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
+    await ValidateFirstLoginReportsServerUnbanAsync(testRoot);
+    await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
+    await ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(testRoot);
+    await ValidateCloudBanResponseEnforcesMarkerAsync(testRoot);
+    var cloudIntegrationBaseUrl = Environment.GetEnvironmentVariable(
+        "DACT_CLOUD_INTEGRATION_BASE_URL");
+    var cloudIntegrationAdminToken = Environment.GetEnvironmentVariable(
+        "DACT_CLOUD_INTEGRATION_ADMIN_TOKEN");
+    if (!string.IsNullOrWhiteSpace(cloudIntegrationBaseUrl) &&
+        !string.IsNullOrWhiteSpace(cloudIntegrationAdminToken))
+    {
+        await ValidateLiveCloudIntegrationAsync(
+            testRoot,
+            new Uri(cloudIntegrationBaseUrl),
+            cloudIntegrationAdminToken);
+    }
 
     var packagePath = Path.Combine(testRoot, "valid.zip");
     await CreatePackageAsync(packagePath, "example.plugin", "1.0.0");
@@ -4418,6 +4443,7 @@ static void ValidateControlCenterPresentation()
         !ttsPromptConfiguration.SuppressFoxTtsProPrompt &&
         ttsPromptConfiguration.EnableParsing &&
         ttsPromptConfiguration.AutoStartParser &&
+        ttsPromptConfiguration.AutoCloudSyncEnabled &&
         ttsPromptConfiguration.DisabledActPluginIds.Contains("silverdasher"),
         "Factory reset does not restore the FoxTTS prompt, SilverDasher disabled state, or independent parser startup defaults.");
 
@@ -4455,8 +4481,12 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat", "UI", "SettingsWindow.cs"));
     var pluginSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "Plugin.cs"));
+    var parserAdapterSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "Parser", "IinactAdapter.cs"));
     var coreResourceWindowSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "UI", "CoreResourceDownloadWindow.cs"));
+    var cloudBanNoticeSource = File.ReadAllText(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "UI", "CloudBanNoticeWindow.cs"));
     var configurationSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Plugin", "PluginConfiguration.cs"));
     var hostSupervisorSource = File.ReadAllText(Path.Combine(
@@ -4474,13 +4504,52 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat.Host", "WindowsNotificationCenter.cs"));
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置\", \"Settings\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置&账号\", \"Settings & Account\"))", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-gate", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-hero", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("stackAuthenticationLayout", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("account-authentication-navigation", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawAuthenticationGate(cloudSnapshot);", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("private void DrawAccountSettings()", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("记住登录状态（下次自动登录）", StringComparison.Ordinal) &&
+        Regex.Matches(controlCenterSource, "ref cloudRememberLogin\\);").Count == 1 &&
+        !controlCenterSource.Contains("重置后自动登录", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("恢复密钥自助改密", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("管理员一次性重置码（必填）", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("恢复密钥（必填）", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("将自动用于改密和解锁原有云备份", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawCombatLogDirectorySettings();", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"当前路径\", \"Current path\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"更改目录...\", \"Change directory...\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("最多保留最近 2 个不同内容的密文版本", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("最多保留最近 10 个密文版本", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("Up to 2 encrypted versions with different content are retained", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("The latest 10 encrypted versions are retained", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("打开游戏后自动同步配置", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("每次打开游戏并登录后自动检查一次", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("配置没变化就不上传", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("最终更改会在下次打开游戏后同步", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("cloud-summary-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("cloud-backup-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("cloud-invitation-support-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("CloudQuickPopupId", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("statusAction: () => cloudQuickPopupRequested = true", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("查看云同步状态", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("支持不会解除封禁、跳过风控或改变功能权限", StringComparison.Ordinal) &&
+        !controlCenterSource.Contains("客户端只上传不可逆的 SHA-256 设备指纹", StringComparison.Ordinal) &&
+        configurationSource.Contains("AutoCloudSyncEnabled { get; set; } = true", StringComparison.Ordinal) &&
+        pluginSource.Contains("ScheduleCloudStartupSync(DateTimeOffset.UtcNow)", StringComparison.Ordinal) &&
+        pluginSource.Contains("cloudStartupSyncRequested", StringComparison.Ordinal) &&
+        !pluginSource.Contains("FileSystemWatcher", StringComparison.Ordinal) &&
+        pluginSource.Contains("TryStartCloudAutoSync(now);", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!TrySaveConfiguration())", StringComparison.Ordinal) &&
+        pluginSource.Contains("ConditionFlag.InCombat", StringComparison.Ordinal) &&
+        pluginSource.Contains("AutoUploadIfChangedAsync", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复出厂设置...", StringComparison.Ordinal) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
@@ -4488,7 +4557,7 @@ static void ValidateControlCenterPresentation()
             parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
-        "The home/settings labels, guarded recovery action, diagnostic copy, or upload-log shortcut are missing from the control center.");
+        "The login gate, reset form, account page, automatic cloud sync, two-version limit, recovery guard, diagnostic copy, or upload-log shortcut is missing.");
     Assert(
         controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
         controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
@@ -4542,6 +4611,24 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("overview-general-card", StringComparison.Ordinal) &&
         controlCenterSource.Contains("关闭运行状态", StringComparison.Ordinal),
         "The fixed navigation, gold overview cards, or runtime-status toggle is missing.");
+    var hostResourceMethodStart = pluginSource.IndexOf(
+        "private async Task InitializeHostResourcesAsync",
+        StringComparison.Ordinal);
+    var resourceResolverMethodStart = pluginSource.IndexOf(
+        "private async Task<string> ResolveResourcePackWithTimeoutAsync",
+        hostResourceMethodStart,
+        StringComparison.Ordinal);
+    var hostResourceMethod = pluginSource[hostResourceMethodStart..resourceResolverMethodStart];
+    var constructorSourceForAuthentication = pluginSource[..pluginSource.IndexOf(
+        "public string Name",
+        StringComparison.Ordinal)];
+    Assert(
+        constructorSourceForAuthentication.Contains("StartInitialResourcePreparation();", StringComparison.Ordinal) &&
+        !constructorSourceForAuthentication.Contains("lifecycle.Start();", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!cloudClient.Snapshot.IsSignedIn)", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!IsDactAccessAllowed())", StringComparison.Ordinal) &&
+        !hostResourceMethod.Contains("StartIndependentHostAsync", StringComparison.Ordinal),
+        "Authentication no longer gates DACT runtime startup, or core resource download still starts a Host before login.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
@@ -4663,10 +4750,10 @@ static void ValidateControlCenterPresentation()
         "public string Name",
         StringComparison.Ordinal);
     var pluginConstructor = pluginSource[..pluginConstructorEnd];
-    var lifecycleStartForCactbot = pluginConstructor.IndexOf(
+    var lifecycleStartForCactbot = pluginSource.IndexOf(
         "lifecycle.Start();",
         StringComparison.Ordinal);
-    var cactbotInitializationStart = pluginConstructor.IndexOf(
+    var cactbotInitializationStart = pluginSource.IndexOf(
         "StartBundledCactbotInitialization",
         StringComparison.Ordinal);
     Assert(
@@ -4747,6 +4834,51 @@ static void ValidateControlCenterPresentation()
             "public async Task<bool> RestartAsync",
             StringComparison.Ordinal),
         "ACT permissions are not saved before the final Host refresh, or FoxTTS Pro is not written between Host stop and start.");
+
+    var cloudBanStopIndex = pluginSource.IndexOf(
+        "private async Task StopDactForCloudBanAsync()",
+        StringComparison.Ordinal);
+    var ordinaryStopIndex = pluginSource.IndexOf(
+        "private async Task StopDactComponentsAsync",
+        cloudBanStopIndex,
+        StringComparison.Ordinal);
+    var cloudBanStopMethod = pluginSource[cloudBanStopIndex..ordinaryStopIndex];
+    var startupBanIndex = constructorSourceForAuthentication.IndexOf(
+        "OnCloudBanReceived(startupBan);",
+        StringComparison.Ordinal);
+    var cloudInitializeIndex = constructorSourceForAuthentication.IndexOf(
+        "StartCloudOperation(cloudClient.InitializeAsync);",
+        StringComparison.Ordinal);
+    Assert(
+        cloudBanStopMethod.Contains("RequestCloudBanParserStopAsync()", StringComparison.Ordinal) &&
+        cloudBanStopMethod.Contains("StopDactHostsAsync", StringComparison.Ordinal) &&
+        !cloudBanStopMethod.Contains("parserEngine.StopAsync", StringComparison.Ordinal) &&
+        pluginSource.Contains(
+            "TryStopParserForCloudBanOnFrameworkThread();",
+            StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("framework.IsInFrameworkUpdateThread", StringComparison.Ordinal) &&
+        parserAdapterSource.Contains("lifecycleLock.Wait(0)", StringComparison.Ordinal),
+        "Live-ban enforcement can still unload game hooks from the cloud SSE worker instead of a framework frame.");
+    Assert(
+        pluginSource.Contains("Volatile.Read(ref pluginInitialized) == 0", StringComparison.Ordinal) &&
+        constructorSourceForAuthentication.Contains("Volatile.Write(ref pluginInitialized, 1);", StringComparison.Ordinal) &&
+        startupBanIndex >= 0 &&
+        cloudInitializeIndex > startupBanIndex &&
+        constructorSourceForAuthentication.Contains("if (cloudClient.ActiveBan is null)", StringComparison.Ordinal) &&
+        pluginSource.Contains("cloudBanNoticeWindow.Show(notice, lifted: false);", StringComparison.Ordinal) &&
+        pluginSource.Contains("requiresRestart: requiresRestart", StringComparison.Ordinal) &&
+        pluginSource.Contains("本次登录已经生效", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavInputs", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavFocus", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("text.Get(\"确认\", \"Confirm\")", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("账号已解封", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("您的账号及关联机器已经被封禁", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("附带的账号封禁已经解除", StringComparison.Ordinal) &&
+        !cloudBanNoticeSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
+        !cloudBanNoticeSource.Contains("OpenPopup", StringComparison.Ordinal) &&
+        !cloudBanNoticeSource.Contains("OverlayEditShield", StringComparison.Ordinal),
+        "Ban/unban notification is modal, unbranded, dismisses game input, or can lose a construction-time server unban.");
 
     var configurationPathPattern = new Regex(
         @"configuration(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
@@ -5967,6 +6099,770 @@ static async Task ValidateFflogsCacheWritersAsync(string testRoot)
     }
 }
 
+static async Task ValidatePortableConfigurationArchiveAsync(string testRoot)
+{
+    var configurationRoot = Path.Combine(testRoot, "portable-configuration-source");
+    var archiveDirectory = Path.Combine(testRoot, "portable-configuration-archives");
+    Directory.CreateDirectory(configurationRoot);
+    Directory.CreateDirectory(archiveDirectory);
+
+    async Task WriteConfigurationFileAsync(string relativePath, string contents)
+    {
+        var path = Path.Combine(configurationRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, contents);
+    }
+
+    const string dactScope = "DalamudActCompat.json";
+    var triggerScope = Path.Combine("plugin-configs", "Triggernometry");
+    var matchaScope = Path.Combine("plugin-configs", "Matcha");
+    var absentScope = Path.Combine("plugin-configs", "AbsentPlugin");
+    string[] portableScopes = [dactScope, triggerScope, matchaScope, absentScope];
+
+    await WriteConfigurationFileAsync(dactScope, "{\"meter\":\"cloud\"}");
+    await WriteConfigurationFileAsync(
+        Path.Combine(triggerScope, "config.xml"),
+        "<triggers>cloud</triggers>");
+    await WriteConfigurationFileAsync(
+        Path.Combine(matchaScope, "profiles", "default.json"),
+        "{\"profile\":\"cloud\"}");
+    await WriteConfigurationFileAsync(
+        Path.Combine("logs", "ffxiv", "Network_test.log"),
+        "private combat log");
+    await WriteConfigurationFileAsync(
+        Path.Combine("host", "DalamudActCompat.Host.exe"),
+        "machine-specific binary");
+    await WriteConfigurationFileAsync(
+        Path.Combine("webview2", "Cookies"),
+        "machine-specific cookie");
+
+    var service = new PortableConfigurationArchiveService();
+    var exportedArchive = Path.Combine(archiveDirectory, "cloud-snapshot.dactbackup");
+    var export = await service.ExportAsync(
+        configurationRoot,
+        exportedArchive,
+        portableScopes,
+        CancellationToken.None);
+    Assert(
+        export.ScopeCount == 4 &&
+        export.FileCount == 3 &&
+        export.UncompressedBytes > 0 &&
+        File.Exists(exportedArchive),
+        "Portable configuration export did not capture the declared DACT/plugin scopes.");
+
+    using (var archive = ZipFile.OpenRead(exportedArchive))
+    {
+        var entryNames = archive.Entries
+            .Select(static entry => entry.FullName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var manifestEntry = archive.GetEntry("manifest.json")
+                            ?? throw new InvalidOperationException(
+                                "Portable configuration archive has no manifest.");
+        using var manifestReader = new StreamReader(manifestEntry.Open());
+        var manifestText = await manifestReader.ReadToEndAsync();
+        Assert(
+            entryNames.SetEquals(
+            [
+                "manifest.json",
+                "payload/DalamudActCompat.json",
+                "payload/plugin-configs/Matcha/profiles/default.json",
+                "payload/plugin-configs/Triggernometry/config.xml",
+            ]) &&
+            !manifestText.Contains(configurationRoot, StringComparison.OrdinalIgnoreCase) &&
+            !manifestText.Contains("logs", StringComparison.OrdinalIgnoreCase) &&
+            !manifestText.Contains("host", StringComparison.OrdinalIgnoreCase) &&
+            !manifestText.Contains("webview2", StringComparison.OrdinalIgnoreCase),
+            "Portable configuration export leaked excluded machine data or absolute paths.");
+    }
+
+    // Simulate a different computer with defaults, changed plugin settings, and
+    // files that should disappear when a declared scope is replaced exactly.
+    await WriteConfigurationFileAsync(dactScope, "{\"meter\":\"local\"}");
+    await WriteConfigurationFileAsync(
+        Path.Combine(triggerScope, "config.xml"),
+        "<triggers>local</triggers>");
+    await WriteConfigurationFileAsync(
+        Path.Combine(triggerScope, "local-only.xml"),
+        "<local />");
+    Directory.Delete(Path.Combine(configurationRoot, matchaScope), recursive: true);
+    await WriteConfigurationFileAsync(
+        Path.Combine(absentScope, "local.json"),
+        "{\"local\":true}");
+    await WriteConfigurationFileAsync(
+        Path.Combine("logs", "ffxiv", "Network_test.log"),
+        "local combat log");
+
+    var rollbackArchive = Path.Combine(archiveDirectory, "before-cloud-restore.dactbackup");
+    var restored = await service.RestoreAsync(
+        exportedArchive,
+        configurationRoot,
+        rollbackArchive,
+        CancellationToken.None);
+    Assert(
+        restored.ScopeCount == 4 &&
+        restored.FileCount == 3 &&
+        File.Exists(rollbackArchive) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"cloud\"}" &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, triggerScope, "config.xml")) ==
+        "<triggers>cloud</triggers>" &&
+        !File.Exists(Path.Combine(configurationRoot, triggerScope, "local-only.xml")) &&
+        await File.ReadAllTextAsync(
+            Path.Combine(configurationRoot, matchaScope, "profiles", "default.json")) ==
+        "{\"profile\":\"cloud\"}" &&
+        !Directory.Exists(Path.Combine(configurationRoot, absentScope)) &&
+        await File.ReadAllTextAsync(
+            Path.Combine(configurationRoot, "logs", "ffxiv", "Network_test.log")) ==
+        "local combat log",
+        "Portable configuration restore did not replace only the declared scopes.");
+
+    var undoRollbackArchive = Path.Combine(archiveDirectory, "before-manual-undo.dactbackup");
+    await service.RestoreAsync(
+        rollbackArchive,
+        configurationRoot,
+        undoRollbackArchive,
+        CancellationToken.None);
+    Assert(
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"local\"}" &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, triggerScope, "config.xml")) ==
+        "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(configurationRoot, triggerScope, "local-only.xml")) &&
+        !Directory.Exists(Path.Combine(configurationRoot, matchaScope)) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, absentScope, "local.json")) ==
+        "{\"local\":true}" &&
+        await File.ReadAllTextAsync(
+            Path.Combine(configurationRoot, "logs", "ffxiv", "Network_test.log")) ==
+        "local combat log",
+        "The rollback snapshot could not restore the exact pre-cloud local state.");
+
+    var failingService = new PortableConfigurationArchiveService
+    {
+        BeforeScopeCommit = (index, _) =>
+        {
+            if (index == 2)
+            {
+                throw new IOException("simulated cloud restore commit failure");
+            }
+        },
+    };
+    var failureRollbackArchive = Path.Combine(
+        archiveDirectory,
+        "before-failed-restore.dactbackup");
+    var restoreFailed = false;
+    try
+    {
+        await failingService.RestoreAsync(
+            exportedArchive,
+            configurationRoot,
+            failureRollbackArchive,
+            CancellationToken.None);
+    }
+    catch (IOException ex) when (ex.Message == "simulated cloud restore commit failure")
+    {
+        restoreFailed = true;
+    }
+
+    Assert(
+        restoreFailed &&
+        File.Exists(failureRollbackArchive) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"local\"}" &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, triggerScope, "config.xml")) ==
+        "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(configurationRoot, triggerScope, "local-only.xml")) &&
+        !Directory.Exists(Path.Combine(configurationRoot, matchaScope)) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, absentScope, "local.json")) ==
+        "{\"local\":true}",
+        "A mid-commit cloud restore failure did not roll every changed scope back.");
+
+    var tamperedArchive = Path.Combine(archiveDirectory, "tampered-payload.dactbackup");
+    File.Copy(exportedArchive, tamperedArchive);
+    using (var archive = ZipFile.Open(tamperedArchive, ZipArchiveMode.Update))
+    {
+        const string triggerEntryName =
+            "payload/plugin-configs/Triggernometry/config.xml";
+        archive.GetEntry(triggerEntryName)?.Delete();
+        var tamperedEntry = archive.CreateEntry(triggerEntryName);
+        await using var tamperedWriter = new StreamWriter(tamperedEntry.Open());
+        // The replacement has the same byte length, so integrity must depend on
+        // the manifest hash rather than an incidental ZIP length mismatch.
+        await tamperedWriter.WriteAsync("<triggers>evil!</triggers>");
+    }
+
+    var tamperedRejected = false;
+    var tamperedRollback = Path.Combine(archiveDirectory, "tampered-rollback.dactbackup");
+    try
+    {
+        await service.RestoreAsync(
+            tamperedArchive,
+            configurationRoot,
+            tamperedRollback,
+            CancellationToken.None);
+    }
+    catch (InvalidDataException)
+    {
+        tamperedRejected = true;
+    }
+    Assert(
+        tamperedRejected &&
+        !File.Exists(tamperedRollback) &&
+        await File.ReadAllTextAsync(Path.Combine(configurationRoot, dactScope)) ==
+        "{\"meter\":\"local\"}",
+        "Portable configuration restore accepted a payload with a forged manifest hash.");
+
+    var maliciousArchive = Path.Combine(archiveDirectory, "path-traversal.dactbackup");
+    using (var archive = ZipFile.Open(maliciousArchive, ZipArchiveMode.Create))
+    {
+        var manifestEntry = archive.CreateEntry("manifest.json");
+        await using var manifestWriter = new StreamWriter(manifestEntry.Open());
+        await manifestWriter.WriteAsync(
+            """
+            {
+              "formatVersion": 1,
+              "createdAtUtc": "2026-09-02T00:00:00+00:00",
+              "scopes": [
+                { "relativePath": "../escaped.json", "kind": "File" }
+              ],
+              "files": [
+                {
+                  "relativePath": "../escaped.json",
+                  "length": 1,
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                }
+              ]
+            }
+            """);
+    }
+
+    var traversalRejected = false;
+    var maliciousRollback = Path.Combine(archiveDirectory, "malicious-rollback.dactbackup");
+    try
+    {
+        await service.RestoreAsync(
+            maliciousArchive,
+            configurationRoot,
+            maliciousRollback,
+            CancellationToken.None);
+    }
+    catch (InvalidDataException)
+    {
+        traversalRejected = true;
+    }
+    Assert(
+        traversalRejected &&
+        !File.Exists(Path.Combine(testRoot, "escaped.json")) &&
+        !File.Exists(maliciousRollback),
+        "Portable configuration restore accepted a path traversal or mutated state before validation.");
+}
+
+static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
+{
+    var fixtureRoot = Path.Combine(testRoot, "encrypted-configuration-backup");
+    var configurationRoot = Path.Combine(fixtureRoot, "pluginConfigs");
+    var pluginConfigurationDirectory = Path.Combine(configurationRoot, "DalamudActCompat");
+    var archiveDirectory = Path.Combine(fixtureRoot, "archives");
+    Directory.CreateDirectory(pluginConfigurationDirectory);
+    Directory.CreateDirectory(archiveDirectory);
+
+    static async Task WriteFileAsync(string root, string relativePath, string contents)
+    {
+        var path = Path.Combine(root, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, contents);
+    }
+
+    const string cloudSecret = "cloud-fflogs-secret-for-encryption-test";
+    var mainConfigurationPath = Path.Combine(configurationRoot, "DalamudActCompat.json");
+    var cloudConfiguration = new JObject
+    {
+        ["Version"] = 16,
+        ["LogDirectory"] = @"D:\old-computer\network-logs",
+        ["ActPluginDirectory"] = @"D:\old-computer\act-plugins",
+        ["HistoryLimit"] = 73,
+        ["CloudMarker"] = "cloud",
+        ["Fflogs"] = new JObject
+        {
+            ["Enabled"] = true,
+            ["ClientId"] = "cloud-client",
+            ["ClientSecret"] = cloudSecret,
+        },
+        ["ActPluginPermissions"] = new JObject
+        {
+            ["triggernometry"] = new JObject { ["HighRiskScript"] = true },
+        },
+    };
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        cloudConfiguration.ToString(Newtonsoft.Json.Formatting.Indented));
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "RainbowMage.OverlayPlugin.config.json",
+        "{\"overlay\":\"cloud\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "Triggernometry.config.xml"),
+        "<triggers>cloud</triggers>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "Cafe.Matcha.config"),
+        "{\"matcha\":\"cloud\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "PostNamazu.config.xml"),
+        "<postnamazu>cloud</postnamazu>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "ACT.FoxTTS.config.xml"),
+        "<foxtts>cloud</foxtts>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("SilverDasher", "config.json"),
+        "{\"silverdasher\":\"cloud\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("cactbot_user", "raidboss", "data", "user.js"),
+        "export const cloud = true;");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("logs", "ffxiv", "Network_private.log"),
+        "cloud log must never enter the backup");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("host", "machine.dll"),
+        "machine binary must never enter the backup");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "RainbowMage.OverlayPlugin.config.json.backup",
+        "old local backup must never enter the cloud backup");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-account.dat",
+        "old-computer-protected-account");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-device.dat",
+        "old-computer-device");
+
+    var service = new PortableConfigurationBackupService();
+    Assert(
+        service.IncludedPaths.Count == 8 &&
+        service.IncludedPaths.Contains(
+            "DalamudActCompat/SilverDasher/config.json",
+            StringComparer.OrdinalIgnoreCase),
+        "The encrypted backup whitelist does not contain the agreed DACT/plugin scopes.");
+    var recoveryKey = service.GenerateRecoveryKey();
+    var encryptedArchive = Path.Combine(archiveDirectory, "cloud.dactcloud");
+    var exported = await service.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        encryptedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    var duplicateArchive = Path.Combine(archiveDirectory, "cloud-duplicate.dactcloud");
+    var duplicateExport = await service.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        duplicateArchive,
+        recoveryKey,
+        CancellationToken.None);
+    var encryptedBytes = await File.ReadAllBytesAsync(encryptedArchive);
+    Assert(
+        exported.ScopeCount == 8 &&
+        exported.FileCount == 8 &&
+        exported.UncompressedBytes > 0 &&
+        exported.EncryptedBytes == encryptedBytes.Length &&
+        Regex.IsMatch(exported.ContentId, "^[A-Za-z0-9_-]{43}$") &&
+        duplicateExport.ContentId == exported.ContentId &&
+        !File.ReadAllBytes(duplicateArchive).SequenceEqual(encryptedBytes) &&
+        !encryptedBytes.AsSpan().StartsWith("PK"u8) &&
+        encryptedBytes.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(cloudSecret)) < 0,
+        "The cloud backup encryption or deterministic content identity was invalid.");
+    Assert(
+        service.IsIncludedPath(pluginConfigurationDirectory, mainConfigurationPath) &&
+        service.IsIncludedPath(
+            pluginConfigurationDirectory,
+            Path.Combine(pluginConfigurationDirectory, "cactbot_user", "raidboss.js")) &&
+        !service.IsIncludedPath(
+            pluginConfigurationDirectory,
+            Path.Combine(pluginConfigurationDirectory, "logs", "ffxiv", "Network.log")),
+        "Automatic cloud synchronization watched files outside its portable whitelist.");
+
+    const string localLogDirectory = @"E:\new-computer\network-logs";
+    const string localPluginDirectory = @"E:\new-computer\act-plugins";
+    var localConfiguration = new JObject
+    {
+        ["Version"] = 16,
+        ["LogDirectory"] = localLogDirectory,
+        ["ActPluginDirectory"] = localPluginDirectory,
+        ["HistoryLimit"] = 12,
+        ["CloudMarker"] = "local",
+        ["Fflogs"] = new JObject
+        {
+            ["ClientId"] = "local-client",
+            ["ClientSecret"] = "local-secret",
+        },
+    };
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        localConfiguration.ToString(Newtonsoft.Json.Formatting.Indented));
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "Triggernometry.config.xml"),
+        "<triggers>local</triggers>");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("Config", "local-only.xml"),
+        "<local />");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("cactbot_user", "local-only.js"),
+        "export const localOnly = true;");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("SilverDasher", "config.json"),
+        "{\"silverdasher\":\"local\"}");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        Path.Combine("logs", "ffxiv", "Network_private.log"),
+        "local log remains local");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-account.dat",
+        "new-computer-protected-account");
+    await WriteFileAsync(
+        pluginConfigurationDirectory,
+        "cloud-device.dat",
+        "new-computer-device");
+    var changedArchive = Path.Combine(archiveDirectory, "cloud-changed.dactcloud");
+    var changedExport = await service.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        changedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        changedExport.ContentId != exported.ContentId,
+        "Cloud content identity did not change after portable configuration changed.");
+
+    var preview = await service.PreviewRestoreAsync(
+        encryptedArchive,
+        pluginConfigurationDirectory,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        preview.FileCount == 8 &&
+        preview.ChangedFiles >= 3 &&
+        preview.RemovedFiles >= 1 &&
+        preview.Scopes.Count == 8,
+        "Encrypted backup preview did not report the pending exact-scope changes.");
+
+    var wrongKeyRejected = false;
+    try
+    {
+        await service.PreviewRestoreAsync(
+            encryptedArchive,
+            pluginConfigurationDirectory,
+            service.GenerateRecoveryKey(),
+            CancellationToken.None);
+    }
+    catch (CryptographicException)
+    {
+        wrongKeyRejected = true;
+    }
+    Assert(
+        wrongKeyRejected &&
+        JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath))["CloudMarker"]?.Value<string>() ==
+        "local",
+        "A wrong recovery key was accepted or changed live configuration during preview.");
+
+    var tamperedArchive = Path.Combine(archiveDirectory, "tampered.dactcloud");
+    File.Copy(encryptedArchive, tamperedArchive);
+    var tamperedBytes = await File.ReadAllBytesAsync(tamperedArchive);
+    tamperedBytes[^1] ^= 0x5A;
+    await File.WriteAllBytesAsync(tamperedArchive, tamperedBytes);
+    var tamperRejected = false;
+    try
+    {
+        await service.PreviewRestoreAsync(
+            tamperedArchive,
+            pluginConfigurationDirectory,
+            recoveryKey,
+            CancellationToken.None);
+    }
+    catch (CryptographicException)
+    {
+        tamperRejected = true;
+    }
+    Assert(
+        tamperRejected,
+        "Authenticated client-side encryption accepted a modified cloud payload.");
+
+    var encryptedRollback = Path.Combine(archiveDirectory, "before-cloud-restore.dactcloud");
+    var restored = await service.RestoreEncryptedAsync(
+        encryptedArchive,
+        pluginConfigurationDirectory,
+        encryptedRollback,
+        recoveryKey,
+        CancellationToken.None);
+    var restoredConfiguration = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        restored.ScopeCount == 8 &&
+        restored.FileCount == 8 &&
+        File.Exists(encryptedRollback) &&
+        !File.ReadAllBytes(encryptedRollback).AsSpan().StartsWith("PK"u8) &&
+        restoredConfiguration["CloudMarker"]?.Value<string>() == "cloud" &&
+        restoredConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        restoredConfiguration["ActPluginDirectory"]?.Value<string>() == localPluginDirectory &&
+        restoredConfiguration["Fflogs"]?["ClientSecret"]?.Value<string>() == cloudSecret &&
+        restoredConfiguration["ActPluginPermissions"]?["triggernometry"]?["HighRiskScript"]?
+            .Value<bool>() == true &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "Config",
+            "Triggernometry.config.xml")) == "<triggers>cloud</triggers>" &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "Config", "local-only.xml")) &&
+        !File.Exists(Path.Combine(pluginConfigurationDirectory, "cactbot_user", "local-only.js")) &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "logs",
+            "ffxiv",
+            "Network_private.log")) == "local log remains local" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "RainbowMage.OverlayPlugin.config.json.backup")) ==
+        "old local backup must never enter the cloud backup" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "cloud-account.dat")) == "new-computer-protected-account" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "cloud-device.dat")) == "new-computer-device",
+        "Encrypted restore did not apply the cloud snapshot while preserving local paths and exclusions.");
+
+    var rollbackOfRollback = Path.Combine(archiveDirectory, "before-manual-rollback.dactcloud");
+    await service.RestoreEncryptedAsync(
+        encryptedRollback,
+        pluginConfigurationDirectory,
+        rollbackOfRollback,
+        recoveryKey,
+        CancellationToken.None);
+    var rolledBackConfiguration = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        rolledBackConfiguration["CloudMarker"]?.Value<string>() == "local" &&
+        rolledBackConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "Config",
+            "Triggernometry.config.xml")) == "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "Config", "local-only.xml")) &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "cactbot_user", "local-only.js")),
+        "The encrypted pre-restore snapshot could not roll back the full local state.");
+
+    var failingArchiveService = new PortableConfigurationArchiveService
+    {
+        BeforeScopeCommit = (index, _) =>
+        {
+            if (index == 3)
+            {
+                throw new IOException("simulated encrypted restore failure");
+            }
+        },
+    };
+    var failingService = new PortableConfigurationBackupService(
+        failingArchiveService,
+        new PortableConfigurationEncryptionService());
+    var failureRollback = Path.Combine(archiveDirectory, "before-failed-restore.dactcloud");
+    var restoreFailed = false;
+    try
+    {
+        await failingService.RestoreEncryptedAsync(
+            encryptedArchive,
+            pluginConfigurationDirectory,
+            failureRollback,
+            recoveryKey,
+            CancellationToken.None);
+    }
+    catch (IOException ex) when (ex.Message == "simulated encrypted restore failure")
+    {
+        restoreFailed = true;
+    }
+    var afterFailureConfiguration = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        restoreFailed &&
+        File.Exists(failureRollback) &&
+        afterFailureConfiguration["CloudMarker"]?.Value<string>() == "local" &&
+        await File.ReadAllTextAsync(Path.Combine(
+            pluginConfigurationDirectory,
+            "Config",
+            "Triggernometry.config.xml")) == "<triggers>local</triggers>" &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "Config", "local-only.xml")) &&
+        File.Exists(Path.Combine(pluginConfigurationDirectory, "cactbot_user", "local-only.js")),
+        "A failed encrypted restore did not automatically return every committed scope to its prior state.");
+}
+
+static async Task ValidateRealConfigurationBackupFixtureAsync(string testRoot)
+{
+    var sourcePluginConfigurationDirectory =
+        Environment.GetEnvironmentVariable("DACT_REAL_CONFIGURATION_DIRECTORY");
+    if (string.IsNullOrWhiteSpace(sourcePluginConfigurationDirectory))
+    {
+        return;
+    }
+
+    var sourceDirectory = Path.GetFullPath(sourcePluginConfigurationDirectory);
+    var sourceRoot = Path.GetDirectoryName(sourceDirectory)
+                     ?? throw new InvalidOperationException(
+                         "Real DACT configuration fixture has no parent directory.");
+    var service = new PortableConfigurationBackupService();
+    var sourceFilesBefore = CaptureIncludedFileHashes(sourceRoot, service.IncludedPaths);
+    var fixtureRoot = Path.Combine(testRoot, "real-configuration-backup-fixture");
+    var targetRoot = Path.Combine(fixtureRoot, "pluginConfigs");
+    var targetDirectory = Path.Combine(targetRoot, "DalamudActCompat");
+    var archiveDirectory = Path.Combine(fixtureRoot, "archives");
+    Directory.CreateDirectory(targetDirectory);
+    Directory.CreateDirectory(archiveDirectory);
+
+    foreach (var relativePath in service.IncludedPaths)
+    {
+        CopyFixtureEntry(
+            Path.Combine(sourceRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)),
+            Path.Combine(targetRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    var targetMainConfiguration = Path.Combine(targetRoot, "DalamudActCompat.json");
+    var originalConfiguration = JObject.Parse(await File.ReadAllTextAsync(targetMainConfiguration));
+    var originalHistoryLimit = originalConfiguration["HistoryLimit"]?.Value<int>() ?? 20;
+    var localLogDirectory = Path.Combine(targetDirectory, "logs", "ffxiv");
+    var localPluginDirectory = Path.Combine(targetDirectory, "act-plugins-custom");
+    originalConfiguration["HistoryLimit"] = originalHistoryLimit + 1;
+    originalConfiguration["LogDirectory"] = localLogDirectory;
+    originalConfiguration["ActPluginDirectory"] = localPluginDirectory;
+    await File.WriteAllTextAsync(
+        targetMainConfiguration,
+        originalConfiguration.ToString(Newtonsoft.Json.Formatting.Indented));
+
+    var changedPluginFile = service.IncludedPaths
+        .Select(path => Path.Combine(targetRoot, path.Replace('/', Path.DirectorySeparatorChar)))
+        .Where(path => !path.Equals(targetMainConfiguration, StringComparison.OrdinalIgnoreCase))
+        .FirstOrDefault(File.Exists);
+    byte[]? changedPluginBytes = null;
+    if (changedPluginFile is not null)
+    {
+        changedPluginBytes = await File.ReadAllBytesAsync(changedPluginFile);
+        await using var append = new FileStream(changedPluginFile, FileMode.Append, FileAccess.Write);
+        await append.WriteAsync("\n"u8.ToArray());
+    }
+
+    var recoveryKey = service.GenerateRecoveryKey();
+    var encryptedArchive = Path.Combine(archiveDirectory, "real-copy.dactcloud");
+    await service.ExportEncryptedAsync(
+        sourceDirectory,
+        encryptedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    var preview = await service.PreviewRestoreAsync(
+        encryptedArchive,
+        targetDirectory,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        preview.ChangedFiles >= 1,
+        "The real configuration copy did not expose the intentional restore difference.");
+
+    var rollback = Path.Combine(archiveDirectory, "real-copy-rollback.dactcloud");
+    await service.RestoreEncryptedAsync(
+        encryptedArchive,
+        targetDirectory,
+        rollback,
+        recoveryKey,
+        CancellationToken.None);
+    var restoredConfiguration = JObject.Parse(await File.ReadAllTextAsync(targetMainConfiguration));
+    Assert(
+        restoredConfiguration["HistoryLimit"]?.Value<int>() == originalHistoryLimit &&
+        restoredConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        restoredConfiguration["ActPluginDirectory"]?.Value<string>() == localPluginDirectory &&
+        File.Exists(rollback),
+        "The real configuration copy did not restore portable data or preserve new-machine paths.");
+    if (changedPluginFile is not null && changedPluginBytes is not null)
+    {
+        var sourcePluginFile = Path.Combine(
+            sourceRoot,
+            Path.GetRelativePath(targetRoot, changedPluginFile));
+        var restoredPluginHash = SHA256.HashData(
+            await File.ReadAllBytesAsync(changedPluginFile));
+        var sourcePluginHash = SHA256.HashData(
+            await File.ReadAllBytesAsync(sourcePluginFile));
+        Assert(
+            restoredPluginHash.AsSpan().SequenceEqual(sourcePluginHash),
+            "The real third-party plugin configuration copy was not restored byte-for-byte.");
+    }
+
+    var rollbackOfRollback = Path.Combine(archiveDirectory, "real-copy-rollback-undo.dactcloud");
+    await service.RestoreEncryptedAsync(
+        rollback,
+        targetDirectory,
+        rollbackOfRollback,
+        recoveryKey,
+        CancellationToken.None);
+    var rolledBackConfiguration = JObject.Parse(await File.ReadAllTextAsync(targetMainConfiguration));
+    Assert(
+        rolledBackConfiguration["HistoryLimit"]?.Value<int>() == originalHistoryLimit + 1 &&
+        sourceFilesBefore.OrderBy(static pair => pair.Key).SequenceEqual(
+            CaptureIncludedFileHashes(sourceRoot, service.IncludedPaths)
+                .OrderBy(static pair => pair.Key)),
+        "The real configuration rollback failed or the read-only source fixture was modified.");
+
+    static Dictionary<string, string> CaptureIncludedFileHashes(
+        string root,
+        IReadOnlyList<string> includedPaths)
+    {
+        var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var relativePath in includedPaths)
+        {
+            var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(path))
+            {
+                hashes[relativePath] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+            }
+            else if (Directory.Exists(path))
+            {
+                foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    var fileRelativePath = Path.GetRelativePath(root, file)
+                        .Replace(Path.DirectorySeparatorChar, '/');
+                    hashes[fileRelativePath] = Convert.ToHexString(
+                        SHA256.HashData(File.ReadAllBytes(file)));
+                }
+            }
+        }
+        return hashes;
+    }
+
+    static void CopyFixtureEntry(string source, string destination)
+    {
+        if (File.Exists(source))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination);
+            return;
+        }
+        if (!Directory.Exists(source))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+}
+
 static async Task ValidateFactoryResetRollbackAsync(string testRoot)
 {
     var configRoot = Path.Combine(testRoot, "factory-reset-rollback");
@@ -6569,6 +7465,32 @@ static async Task ValidatePluginLifecycleShutdownAsync(string testRoot)
 
     await parser.DisposeAsync();
     await encounterService.DisposeAsync();
+
+    var lockedRoot = Path.Combine(testRoot, "plugin-lifecycle-authentication-gate");
+    var lockedPaths = new PluginPaths(lockedRoot);
+    var lockedParser = new TestParserEngine(ParserState.Stopped);
+    var lockedEncounterService = new EncounterService(
+        new EncounterRepository(new JsonFileStore(), lockedPaths),
+        new EncounterStateStore(),
+        configuration,
+        logger,
+        lockedPaths);
+    var lockedLifecycle = new PluginLifecycle(
+        lockedParser,
+        lockedEncounterService,
+        lockedPaths,
+        configuration,
+        logger,
+        TimeSpan.Zero,
+        canStartParser: () => false);
+    lockedLifecycle.Start();
+    await lockedLifecycle.WaitForStartupAsync(CancellationToken.None);
+    Assert(
+        lockedParser.StartCount == 0,
+        "Plugin lifecycle started the parser while the account gate was locked.");
+    await lockedLifecycle.DisposeAsync();
+    await lockedParser.DisposeAsync();
+    await lockedEncounterService.DisposeAsync();
 }
 
 static void ValidatePluginUnloadOwnership()
@@ -9154,6 +10076,9 @@ static void ValidateHtmlOverlayDefaults()
             StringComparison.Ordinal) &&
         brandedChromeSource.Contains("const float helpCloseGap = 3;", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("actionButtonSize + helpCloseGap", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("statusWidth", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("statusAction();", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("##status-{id}", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
@@ -9164,6 +10089,12 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
         helpWindowSource.Contains("help-search-card", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.Dummy(new Vector2(0, 8))", StringComparison.Ordinal) &&
+        Regex.IsMatch(
+            helpWindowSource,
+            "\"help-search-card\",\\s*new Vector2\\(-1, 58\\),\\s*false") &&
+        !helpWindowSource.Contains(
+            "ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f))",
+            StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.Button(\"Search\"", StringComparison.Ordinal) &&
         helpWindowSource.Contains("searchDraft", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("text.Get(\"清除\", \"Clear\")", StringComparison.Ordinal) &&
@@ -9284,6 +10215,26 @@ static void ValidateHtmlOverlayDefaults()
         !HelpWindow.MatchesSearch("FFLogs 上传", "FFLogs 本地预估") &&
         !HelpWindow.MatchesSearch("   ", "任意内容"),
         "Help search no longer supports case-insensitive multi-keyword matching or empty-query handling.");
+    var launcherPositionAtLargeSize = LauncherWindow.ResolveViewportPosition(
+        new Vector2(21, 22),
+        Vector2.Zero,
+        new Vector2(1920, 1080),
+        68);
+    var launcherPositionAtSmallSize = LauncherWindow.ResolveViewportPosition(
+        new Vector2(21, 22),
+        Vector2.Zero,
+        new Vector2(1280, 720),
+        68);
+    var launcherPositionInDesktopViewport = LauncherWindow.ResolveViewportPosition(
+        new Vector2(21, 22),
+        new Vector2(400, 300),
+        new Vector2(1280, 720),
+        68);
+    Assert(
+        launcherPositionAtLargeSize == new Vector2(21, 22) &&
+        launcherPositionAtSmallSize == launcherPositionAtLargeSize &&
+        launcherPositionInDesktopViewport == new Vector2(421, 322),
+        "The quick button no longer preserves viewport-relative coordinates when the game window changes size or desktop position.");
     Assert(
         controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
         controlCenterSource.Contains(
@@ -11789,6 +12740,869 @@ static void ValidateNetworkLogSessionRotation(string testRoot)
             sessionStartedAt.AddSeconds(2),
             TimeSpan.Zero) is not null,
         "Network log rotation did not recover after the previous writer released the file.");
+}
+
+static void ValidateCloudKeyEnvelopeAndCredentialProtection(string testRoot)
+{
+    var encryption = new PortableConfigurationEncryptionService();
+    var envelopeService = new CloudKeyEnvelopeService();
+    var recoveryKey = encryption.GenerateRecoveryKey();
+    var envelope = envelopeService.Create(recoveryKey, "a-correct-password");
+    var recoveryVerifier = envelopeService.CreateRecoveryVerifier(recoveryKey);
+    Assert(
+        envelope.Format == CloudKeyEnvelopeService.EnvelopeFormat &&
+        envelope.Iterations == CloudKeyEnvelopeService.PasswordIterations &&
+        envelopeService.Open(envelope, "a-correct-password") == recoveryKey &&
+        Regex.IsMatch(recoveryVerifier, "^[A-Za-z0-9_-]{43}$") &&
+        recoveryVerifier == envelopeService.CreateRecoveryVerifier(recoveryKey) &&
+        recoveryVerifier != envelope.KeyId,
+        "Cloud password envelope or domain-separated recovery verifier is invalid.");
+    try
+    {
+        _ = envelopeService.Open(envelope, "a-wrong-password");
+        throw new InvalidOperationException("Cloud key envelope accepted a wrong password.");
+    }
+    catch (CryptographicException)
+    {
+        // A wrong password must fail authentication before yielding any account key.
+    }
+
+    var credentialPath = Path.Combine(testRoot, "cloud-security", "account.dat");
+    var store = new CloudCredentialStore(credentialPath);
+    var credentials = new CloudStoredCredentials(
+        "cloud_user",
+        "secret-session-token",
+        DateTimeOffset.UtcNow.AddDays(10),
+        recoveryKey);
+    store.Save(credentials);
+    Assert(store.Load() == credentials, "DPAPI cloud credentials did not round-trip.");
+    var protectedBytes = File.ReadAllBytes(credentialPath);
+    Assert(
+        protectedBytes.AsSpan().IndexOf("secret-session-token"u8) < 0 &&
+        protectedBytes.AsSpan().IndexOf("dact1_"u8) < 0,
+        "Cloud credential file exposed a session token or recovery key in plaintext.");
+
+    var recoveryOnly = credentials with
+    {
+        Token = string.Empty,
+        ExpiresAt = DateTimeOffset.MinValue,
+    };
+    store.Save(recoveryOnly);
+    Assert(
+        store.Load() == recoveryOnly,
+        "Cloud credential store rejected the recovery-only state needed after session revocation.");
+
+    var banPath = Path.Combine(testRoot, "cloud-security", "ban.dat");
+    var banStore = new CloudBanStore(banPath);
+    var notice = new CloudBanNotice(
+        "account_banned",
+        "account",
+        DateTimeOffset.UtcNow,
+        null,
+        "private-test-reason");
+    banStore.Save(notice);
+    Assert(banStore.Load() == notice, "DPAPI cloud ban marker did not round-trip.");
+    Assert(
+        File.ReadAllBytes(banPath).AsSpan().IndexOf("private-test-reason"u8) < 0,
+        "Cloud ban marker exposed its server-provided reason in plaintext.");
+    File.Delete(banPath);
+    banStore.EnsurePresent(notice);
+    Assert(
+        File.Exists(banPath) && banStore.Load() == notice,
+        "Deleted cloud ban marker was not restored from the in-memory ban state.");
+
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-machine"));
+    paths.EnsureCreated();
+    var identity = new CloudMachineIdentity(paths.CloudDeviceFile);
+    var firstDeviceId = identity.GetDeviceId();
+    var secondDeviceId = identity.GetDeviceId();
+    Assert(
+        firstDeviceId == secondDeviceId &&
+        Regex.IsMatch(firstDeviceId, "^dact-device-v1_[A-Za-z0-9_-]{43}$"),
+        "Cloud machine identifier was unstable or exposed an invalid shape.");
+}
+
+static async Task ValidateCloudApiContractAsync(string testRoot)
+{
+    var backupBytes = "DACTE2E1\u0001encrypted-test-payload"u8.ToArray();
+    var backupHash = Convert.ToHexString(SHA256.HashData(backupBytes)).ToLowerInvariant();
+    var createdAt = DateTimeOffset.UtcNow;
+    var envelope = new CloudKeyEnvelope(
+        CloudKeyEnvelopeService.EnvelopeFormat,
+        Convert.ToBase64String(new byte[32]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        CloudKeyEnvelopeService.PasswordIterations,
+        Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        Convert.ToBase64String(new byte[12]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+        Convert.ToBase64String(new byte[32]).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/register", StringComparison.Ordinal))
+        {
+            var json = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            Assert(
+                json.Contains("\"activationKey\":\"DACT-TEST\"", StringComparison.Ordinal) &&
+                json.Contains("\"keyEnvelope\"", StringComparison.Ordinal) &&
+                json.Contains("\"recoveryVerifier\"", StringComparison.Ordinal),
+                "Cloud registration request omitted its activation key, password envelope, or recovery verifier.");
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                token = "session-token",
+                tokenType = "Bearer",
+                expiresAt = createdAt.AddDays(30),
+                user = new { id = "user-id", username = "cloud_user" },
+                keyEnvelope = envelope,
+            });
+        }
+        if (path.EndsWith("/auth/recovery-verifier", StringComparison.Ordinal))
+        {
+            Assert(
+                request.Method == HttpMethod.Put &&
+                request.Headers.Authorization?.Parameter == "session-token",
+                "Recovery verifier enrollment omitted its session authorization.");
+            return JsonResponse(HttpStatusCode.OK, new { recoveryEnabled = true });
+        }
+        if (path.EndsWith("/auth/access-status", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                banned = true,
+                sessionActive = false,
+                wasBanRevoked = false,
+                banType = "account",
+                bannedAt = createdAt,
+                banExpiresAt = (DateTimeOffset?)null,
+                banReason = "contract-test",
+            });
+        }
+        if (path.EndsWith("/auth/key-envelope", StringComparison.Ordinal) &&
+            request.Method == HttpMethod.Put)
+        {
+            return JsonResponse(HttpStatusCode.OK, new { keyEnvelope = envelope });
+        }
+        if (path.EndsWith("/auth/events", StringComparison.Ordinal))
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                code = "account_banned",
+                banType = "account",
+                bannedAt = createdAt,
+                banExpiresAt = (DateTimeOffset?)null,
+                banReason = "contract-test",
+            });
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent($"event: ban\ndata: {json}\n\n"),
+            };
+            response.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+            return response;
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal) &&
+            request.Method == HttpMethod.Get)
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 1,
+                remaining = 2,
+                invitations = new[]
+                {
+                    new
+                    {
+                        id = "invite-id",
+                        codeHint = "DACT-…TEST",
+                        name = "好友邀请",
+                        inviteeContact = "好友游戏ID",
+                        status = "available",
+                        createdAt,
+                        expiresAt = (DateTimeOffset?)null,
+                        usedAt = (DateTimeOffset?)null,
+                    },
+                },
+            });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal) &&
+            request.Method == HttpMethod.Post)
+        {
+            var requestBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var requestJson = JsonDocument.Parse(requestBody);
+            Assert(
+                requestJson.RootElement.GetProperty("inviteeContact").GetString() == "好友QQ12345",
+                "Cloud invitation creation omitted the invitee game or QQ identifier.");
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                id = "invite-id-2",
+                activationKey = "DACT-FRIEND-KEY",
+                codeHint = "DACT-…-KEY",
+                name = "好友邀请",
+                inviteeContact = "好友QQ12345",
+                status = "unused",
+                createdAt,
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal) && request.Method == HttpMethod.Get)
+        {
+            Assert(
+                request.Headers.Authorization?.Parameter == "session-token",
+                "Cloud backup list omitted its bearer token.");
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                backups = new[]
+                {
+                    new
+                    {
+                        id = "backup-id",
+                        createdAt,
+                        sizeBytes = backupBytes.Length,
+                        sha256 = backupHash,
+                        contentId = new string('C', 43),
+                    },
+                },
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal) && request.Method == HttpMethod.Post)
+        {
+            var uploaded = request.Content!.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+            Assert(
+                uploaded.SequenceEqual(backupBytes) &&
+                request.Headers.GetValues("X-DACT-Content-Id").Single() == new string('C', 43),
+                "Cloud upload changed encrypted bytes or omitted its content identity.");
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                id = "backup-id",
+                createdAt,
+                sizeBytes = backupBytes.Length,
+                sha256 = backupHash,
+                contentId = new string('C', 43),
+            });
+        }
+        if (path.EndsWith("/backups/backup-id", StringComparison.Ordinal))
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(backupBytes),
+            };
+            response.Content.Headers.ContentLength = backupBytes.Length;
+            response.Headers.TryAddWithoutValidation("X-Content-SHA256", backupHash);
+            return response;
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new { error = "not_found", message = "missing" });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var authentication = await api.RegisterAsync(
+        "cloud_user",
+        "a-correct-password",
+        "DACT-TEST",
+        $"dact-device-v1_{new string('A', 43)}",
+        envelope,
+        new string('V', 43),
+        CancellationToken.None);
+    Assert(
+        authentication.User.Username == "cloud_user" && authentication.KeyEnvelope == envelope,
+        "Cloud authentication response lost account or envelope fields.");
+
+    var access = await api.GetAccessStatusAsync("session-token", CancellationToken.None);
+    Assert(
+        access.Banned && access.BanType == "account" && access.BanReason == "contract-test",
+        "Cloud access status lost the server-provided ban details.");
+    await api.UpdateKeyEnvelopeAsync("session-token", envelope, CancellationToken.None);
+    await api.UpdateRecoveryVerifierAsync(
+        "session-token",
+        new string('V', 43),
+        CancellationToken.None);
+    CloudBanNotice? liveBan = null;
+    await api.ListenForBanEventsAsync(
+        "session-token",
+        notice =>
+        {
+            liveBan = notice;
+            return Task.CompletedTask;
+        },
+        CancellationToken.None);
+    Assert(
+        liveBan is { Code: "account_banned", BanReason: "contract-test" },
+        "Cloud event stream did not deliver the live ban notice.");
+
+    var invitations = await api.ListInvitationsAsync("session-token", CancellationToken.None);
+    Assert(
+        invitations.Quota == 3 && invitations.Remaining == 2 &&
+        invitations.Invitations.Single().Status == "available",
+        "Cloud invitation quota or history was not parsed.");
+    var invitation = await api.CreateInvitationAsync(
+        "session-token",
+        "好友QQ12345",
+        CancellationToken.None);
+    Assert(
+        invitation.ActivationKey == "DACT-FRIEND-KEY" &&
+        invitation.InviteeContact == "好友QQ12345",
+        "Cloud invitation creation did not preserve its invitee contact or expose its one-time activation key.");
+
+    var versions = await api.ListBackupsAsync("session-token", CancellationToken.None);
+    Assert(versions.Count == 1 && versions[0].Id == "backup-id", "Cloud versions were not parsed.");
+    var uploadPath = Path.Combine(testRoot, "cloud-api-upload.dactcloud");
+    File.WriteAllBytes(uploadPath, backupBytes);
+    var uploadedVersion = await api.UploadBackupAsync(
+        "session-token",
+        uploadPath,
+        new string('C', 43),
+        CancellationToken.None);
+    Assert(uploadedVersion.Sha256 == backupHash, "Cloud upload response was not parsed.");
+    var downloadPath = Path.Combine(testRoot, "cloud-api-download.dactcloud");
+    await api.DownloadBackupAsync(
+        "session-token",
+        versions[0],
+        downloadPath,
+        CancellationToken.None);
+    Assert(
+        File.ReadAllBytes(downloadPath).SequenceEqual(backupBytes),
+        "Cloud download failed authenticated size/hash verification.");
+}
+
+static async Task ValidateSavedCloudSessionRequiresServerValidationAsync(string testRoot)
+{
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-auto-login-gate"));
+    paths.EnsureCreated();
+    var credentialStore = new CloudCredentialStore(paths.CloudCredentialFile);
+    credentialStore.Save(new CloudStoredCredentials(
+        "saved_user",
+        "saved-session-token",
+        DateTimeOffset.UtcNow.AddDays(1),
+        new PortableConfigurationBackupService().GenerateRecoveryKey()));
+    using var logoutRequestStarted = new ManualResetEventSlim();
+    using var releaseLogout = new ManualResetEventSlim();
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/logout", StringComparison.Ordinal))
+        {
+            logoutRequestStarted.Set();
+            releaseLogout.Wait(TimeSpan.FromSeconds(5));
+            return JsonResponse(HttpStatusCode.NoContent, new { });
+        }
+        if (path.EndsWith("/auth/me", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { username = "saved_user" });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { backups = Array.Empty<object>() });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 0,
+                remaining = 3,
+                invitations = Array.Empty<object>(),
+            });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new
+        {
+            error = "not_found",
+            message = "missing",
+        });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    using var service = new CloudClientService(
+        paths,
+        api,
+        credentialStore,
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+
+    Assert(
+        !service.Snapshot.IsSignedIn && service.Snapshot.IsBusy &&
+        service.Snapshot.Username == "saved_user",
+        "A saved auto-login token unlocked DACT before server validation completed.");
+    await service.InitializeAsync(CancellationToken.None);
+    Assert(service.Snapshot.IsSignedIn, "A server-validated saved session did not unlock DACT.");
+
+    var logoutTask = Task.Run(() => service.LogoutAsync(CancellationToken.None));
+    Assert(
+        logoutRequestStarted.Wait(TimeSpan.FromSeconds(2)),
+        "Cloud logout did not reach the server request.");
+    Assert(
+        !service.Snapshot.IsSignedIn && !File.Exists(paths.CloudCredentialFile),
+        "Cloud logout waited for the server before revoking local DACT access.");
+    releaseLogout.Set();
+    await logoutTask;
+}
+
+static async Task ValidateFirstLoginReportsServerUnbanAsync(string testRoot)
+{
+    const string password = "unban-login-password";
+    var backupService = new PortableConfigurationBackupService();
+    var envelopeService = new CloudKeyEnvelopeService();
+    var recoveryKey = backupService.GenerateRecoveryKey();
+    var envelope = envelopeService.Create(recoveryKey, password);
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/login", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                token = "unban-login-token",
+                tokenType = "Bearer",
+                expiresAt = DateTimeOffset.UtcNow.AddDays(1),
+                user = new { id = "unban-user-id", username = "unban_user" },
+                keyEnvelope = envelope,
+                wasBanRevoked = true,
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { backups = Array.Empty<object>() });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 0,
+                remaining = 3,
+                invitations = Array.Empty<object>(),
+            });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new
+        {
+            error = "not_found",
+            message = "missing",
+        });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-first-login-unban"));
+    paths.EnsureCreated();
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(paths.CloudCredentialFile),
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        envelopeService,
+        backupService);
+    var notification = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    service.BanLifted += previousBan => notification.TrySetResult(previousBan is null);
+
+    await service.LoginAsync(
+        "unban_user",
+        password,
+        recoveryKey,
+        rememberLogin: false,
+        cancellationToken: CancellationToken.None);
+    Assert(
+        await notification.Task.WaitAsync(TimeSpan.FromSeconds(2)) &&
+        service.Snapshot.IsSignedIn,
+        "The first successful login after an administrator unban did not surface the server notice.");
+}
+
+static async Task ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(string testRoot)
+{
+    var createdAt = DateTimeOffset.UtcNow;
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/register", StringComparison.Ordinal))
+        {
+            using var registration = JsonDocument.Parse(
+                request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            var envelope = registration.RootElement.GetProperty("keyEnvelope").Clone();
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                token = "registration-token",
+                tokenType = "Bearer",
+                expiresAt = createdAt.AddDays(30),
+                user = new { id = "registration-user-id", username = "registration_user" },
+                keyEnvelope = envelope,
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(
+                HttpStatusCode.ServiceUnavailable,
+                new { error = "temporarily_unavailable", message = "temporary list failure" });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new { error = "not_found", message = "missing" });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-registration-refresh-failure"));
+    paths.EnsureCreated();
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(paths.CloudCredentialFile),
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+
+    await service.RegisterAsync(
+        "registration_user",
+        "registration-password",
+        "DACT-TEST",
+        rememberLogin: true,
+        cancellationToken: CancellationToken.None);
+
+    var snapshot = service.Snapshot;
+    Assert(
+        snapshot.IsSignedIn &&
+        snapshot.StatusIsError &&
+        snapshot.RecoveryKeyToSave?.StartsWith("dact1_", StringComparison.Ordinal) == true &&
+        File.Exists(paths.CloudCredentialFile),
+        "A transient version-list failure hid the committed registration or its recovery key.");
+
+    var optOutPaths = new PluginPaths(Path.Combine(
+        testRoot,
+        "cloud-registration-no-auto-login"));
+    optOutPaths.EnsureCreated();
+    using var optOutService = new CloudClientService(
+        optOutPaths,
+        api,
+        new CloudCredentialStore(optOutPaths.CloudCredentialFile),
+        new CloudBanStore(optOutPaths.CloudBanFile),
+        new CloudMachineIdentity(optOutPaths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    await optOutService.RegisterAsync(
+        "registration_user",
+        "registration-password",
+        "DACT-TEST",
+        rememberLogin: false,
+        cancellationToken: CancellationToken.None);
+    Assert(
+        optOutService.Snapshot.IsSignedIn && !File.Exists(optOutPaths.CloudCredentialFile),
+        "Disabling auto-login still persisted the cloud session on disk.");
+}
+
+static async Task ValidateCloudBanResponseEnforcesMarkerAsync(string testRoot)
+{
+    var bannedAt = DateTimeOffset.UtcNow;
+    var handler = new ScriptedHttpMessageHandler(request =>
+        request.RequestUri!.AbsolutePath.EndsWith("/auth/login", StringComparison.Ordinal)
+            ? JsonResponse(HttpStatusCode.Forbidden, new
+            {
+                error = "account_banned",
+                message = "您的账号已经被封禁。",
+                banType = "cascade",
+                bannedAt,
+                banExpiresAt = (DateTimeOffset?)null,
+                banReason = "resale-test",
+            })
+            : JsonResponse(HttpStatusCode.NotFound, new
+            {
+                error = "not_found",
+                message = "missing",
+            }));
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-ban-response"));
+    paths.EnsureCreated();
+    var banStore = new CloudBanStore(paths.CloudBanFile);
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(paths.CloudCredentialFile),
+        banStore,
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    var notification = new TaskCompletionSource<CloudBanNotice>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    service.BanReceived += notice => notification.TrySetResult(notice);
+
+    await service.LoginAsync(
+        "banned_user",
+        "banned-password",
+        string.Empty,
+        rememberLogin: true,
+        cancellationToken: CancellationToken.None);
+    var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    Assert(
+        received.BanType == "cascade" && received.BanReason == "resale-test" &&
+        service.Snapshot.ActiveBan == received && File.Exists(paths.CloudBanFile),
+        "A login-time ban did not switch the client into its persistent blocked state.");
+
+    File.Delete(paths.CloudBanFile);
+    var deadline = DateTime.UtcNow.AddSeconds(3);
+    while (!File.Exists(paths.CloudBanFile) && DateTime.UtcNow < deadline)
+    {
+        await Task.Delay(50);
+    }
+    Assert(
+        File.Exists(paths.CloudBanFile) && banStore.Load() == received,
+        "The running client did not restore a deleted cloud ban marker.");
+
+    var corruptPaths = new PluginPaths(Path.Combine(testRoot, "cloud-corrupt-ban-marker"));
+    corruptPaths.EnsureCreated();
+    File.WriteAllBytes(corruptPaths.CloudBanFile, "not-a-valid-dpapi-marker"u8.ToArray());
+    using var corruptMarkerService = new CloudClientService(
+        corruptPaths,
+        api,
+        new CloudCredentialStore(corruptPaths.CloudCredentialFile),
+        new CloudBanStore(corruptPaths.CloudBanFile),
+        new CloudMachineIdentity(corruptPaths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    Assert(
+        corruptMarkerService.ActiveBan?.BanType == "unknown",
+        "A present but damaged cloud ban marker incorrectly failed open.");
+
+    var directoryMarkerPaths = new PluginPaths(
+        Path.Combine(testRoot, "cloud-directory-ban-marker"));
+    directoryMarkerPaths.EnsureCreated();
+    Directory.CreateDirectory(directoryMarkerPaths.CloudBanFile);
+    using var directoryMarkerService = new CloudClientService(
+        directoryMarkerPaths,
+        api,
+        new CloudCredentialStore(directoryMarkerPaths.CloudCredentialFile),
+        new CloudBanStore(directoryMarkerPaths.CloudBanFile),
+        new CloudMachineIdentity(directoryMarkerPaths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+    Assert(
+        directoryMarkerService.ActiveBan?.BanType == "unknown",
+        "Replacing the cloud ban marker with a directory incorrectly failed open.");
+}
+
+static async Task ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(
+    string testRoot)
+{
+    var createdAt = DateTimeOffset.UtcNow;
+    var handler = new ScriptedHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.EndsWith("/auth/register", StringComparison.Ordinal))
+        {
+            using var registration = JsonDocument.Parse(
+                request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return JsonResponse(HttpStatusCode.Created, new
+            {
+                token = "committed-registration-token",
+                tokenType = "Bearer",
+                expiresAt = createdAt.AddDays(30),
+                user = new { id = "committed-user-id", username = "committed_user" },
+                keyEnvelope = registration.RootElement.GetProperty("keyEnvelope").Clone(),
+            });
+        }
+        if (path.EndsWith("/backups", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new { backups = Array.Empty<object>() });
+        }
+        if (path.EndsWith("/invitations", StringComparison.Ordinal))
+        {
+            return JsonResponse(HttpStatusCode.OK, new
+            {
+                quota = 3,
+                used = 0,
+                remaining = 3,
+                invitations = Array.Empty<object>(),
+            });
+        }
+        return JsonResponse(HttpStatusCode.NotFound, new
+        {
+            error = "not_found",
+            message = "missing",
+        });
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://cloud.test/") };
+    using var api = new CloudApiClient(httpClient);
+    var paths = new PluginPaths(Path.Combine(testRoot, "cloud-credential-write-failure"));
+    paths.EnsureCreated();
+    var directoryInPlaceOfCredentialFile = Path.Combine(paths.ConfigDirectory, "account-directory");
+    Directory.CreateDirectory(directoryInPlaceOfCredentialFile);
+    using var service = new CloudClientService(
+        paths,
+        api,
+        new CloudCredentialStore(directoryInPlaceOfCredentialFile),
+        new CloudBanStore(paths.CloudBanFile),
+        new CloudMachineIdentity(paths.CloudDeviceFile),
+        new CloudKeyEnvelopeService(),
+        new PortableConfigurationBackupService());
+
+    await service.RegisterAsync(
+        "committed_user",
+        "registration-password",
+        "DACT-TEST",
+        rememberLogin: true,
+        cancellationToken: CancellationToken.None);
+    Assert(
+        service.Snapshot.IsSignedIn && service.Snapshot.StatusIsError &&
+        service.Snapshot.StatusMessage.Contains("自动登录状态未能保存", StringComparison.Ordinal) &&
+        service.Snapshot.RecoveryKeyToSave?.StartsWith("dact1_", StringComparison.Ordinal) == true,
+        "A local credential write failure hid a remotely committed registration or recovery key.");
+}
+
+static HttpResponseMessage JsonResponse(HttpStatusCode status, object value)
+    => new(status)
+    {
+        Content = JsonContent.Create(value),
+    };
+
+static async Task ValidateLiveCloudIntegrationAsync(
+    string testRoot,
+    Uri baseAddress,
+    string adminToken)
+{
+    using var adminClient = new HttpClient { BaseAddress = baseAddress };
+    adminClient.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", adminToken);
+    using var activationResponse = await adminClient.PostAsJsonAsync(
+        "api/v1/admin/activation-keys",
+        new { name = "C# 真实联调", note = "隔离临时数据库" });
+    activationResponse.EnsureSuccessStatusCode();
+    using var activationJson = JsonDocument.Parse(
+        await activationResponse.Content.ReadAsStringAsync());
+    var activationKey = activationJson.RootElement.GetProperty("activationKey").GetString()
+                        ?? throw new InvalidDataException("Integration activation key was empty.");
+
+    var username = $"integration_{Guid.NewGuid():N}"[..32];
+    const string password = "integration-password";
+    var deviceId = $"dact-device-v1_{new string('I', 43)}";
+    var backupService = new PortableConfigurationBackupService();
+    var envelopeService = new CloudKeyEnvelopeService();
+    var recoveryKey = backupService.GenerateRecoveryKey();
+    var envelope = envelopeService.Create(recoveryKey, password);
+    var recoveryVerifier = envelopeService.CreateRecoveryVerifier(recoveryKey);
+    using var clientHttp = new HttpClient { BaseAddress = baseAddress };
+    using var api = new CloudApiClient(clientHttp);
+    var registered = await api.RegisterAsync(
+        username,
+        password,
+        activationKey,
+        deviceId,
+        envelope,
+        recoveryVerifier,
+        CancellationToken.None);
+    Assert(
+        registered.KeyEnvelope is not null &&
+        envelopeService.Open(registered.KeyEnvelope, password) == recoveryKey,
+        "Real HTTP registration did not preserve the password-wrapped account key.");
+
+    var integrationRoot = Path.Combine(testRoot, "live-cloud-integration");
+    var configurationRoot = Path.Combine(integrationRoot, "pluginConfigs");
+    var pluginConfigurationDirectory = Path.Combine(configurationRoot, "DalamudActCompat");
+    var archiveDirectory = Path.Combine(integrationRoot, "archives");
+    Directory.CreateDirectory(pluginConfigurationDirectory);
+    Directory.CreateDirectory(archiveDirectory);
+    var mainConfigurationPath = Path.Combine(configurationRoot, "DalamudActCompat.json");
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        new JObject
+        {
+            ["Version"] = 16,
+            ["LogDirectory"] = @"C:\remote\logs",
+            ["ActPluginDirectory"] = @"C:\remote\plugins",
+            ["CloudMarker"] = "remote",
+        }.ToString(Newtonsoft.Json.Formatting.Indented));
+    var triggerPath = Path.Combine(
+        pluginConfigurationDirectory,
+        "Config",
+        "Triggernometry.config.xml");
+    Directory.CreateDirectory(Path.GetDirectoryName(triggerPath)!);
+    await File.WriteAllTextAsync(triggerPath, "<triggers>remote</triggers>");
+    var encryptedArchive = Path.Combine(archiveDirectory, "upload.dactcloud");
+    var exported = await backupService.ExportEncryptedAsync(
+        pluginConfigurationDirectory,
+        encryptedArchive,
+        recoveryKey,
+        CancellationToken.None);
+    await api.UploadBackupAsync(
+        registered.Token,
+        encryptedArchive,
+        exported.ContentId,
+        CancellationToken.None);
+
+    var loggedIn = await api.LoginAsync(
+        username,
+        password,
+        deviceId,
+        CancellationToken.None);
+    Assert(
+        loggedIn.KeyEnvelope is not null &&
+        envelopeService.Open(loggedIn.KeyEnvelope, password) == recoveryKey,
+        "Real HTTP login could not recover the account data key.");
+    var versions = await api.ListBackupsAsync(loggedIn.Token, CancellationToken.None);
+    Assert(versions.Count == 1, "Real HTTP cloud version list did not contain the upload.");
+    var downloadedArchive = Path.Combine(archiveDirectory, "download.dactcloud");
+    await api.DownloadBackupAsync(
+        loggedIn.Token,
+        versions[0],
+        downloadedArchive,
+        CancellationToken.None);
+
+    const string localLogDirectory = @"D:\local\logs";
+    const string localPluginDirectory = @"D:\local\plugins";
+    await File.WriteAllTextAsync(
+        mainConfigurationPath,
+        new JObject
+        {
+            ["Version"] = 16,
+            ["LogDirectory"] = localLogDirectory,
+            ["ActPluginDirectory"] = localPluginDirectory,
+            ["CloudMarker"] = "local",
+        }.ToString(Newtonsoft.Json.Formatting.Indented));
+    var preview = await backupService.PreviewRestoreAsync(
+        downloadedArchive,
+        pluginConfigurationDirectory,
+        recoveryKey,
+        CancellationToken.None);
+    Assert(preview.ChangedFiles >= 1, "Real HTTP restore preview found no changed files.");
+    var rollback = Path.Combine(archiveDirectory, "rollback.dactcloud");
+    await backupService.RestoreEncryptedAsync(
+        downloadedArchive,
+        pluginConfigurationDirectory,
+        rollback,
+        recoveryKey,
+        CancellationToken.None);
+    var restored = JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath));
+    Assert(
+        restored["CloudMarker"]?.Value<string>() == "remote" &&
+        restored["LogDirectory"]?.Value<string>() == localLogDirectory &&
+        restored["ActPluginDirectory"]?.Value<string>() == localPluginDirectory,
+        "Real HTTP restore did not apply cloud data while preserving machine-local paths.");
+    await backupService.RestoreEncryptedAsync(
+        rollback,
+        pluginConfigurationDirectory,
+        Path.Combine(archiveDirectory, "rollback-of-rollback.dactcloud"),
+        recoveryKey,
+        CancellationToken.None);
+    Assert(
+        JObject.Parse(await File.ReadAllTextAsync(mainConfigurationPath))["CloudMarker"]?
+            .Value<string>() == "local",
+        "Real HTTP restore rollback did not recover the local configuration.");
+
+    const string newPassword = "integration-new-password";
+    var reset = await api.ResetPasswordWithRecoveryAsync(
+        username,
+        recoveryVerifier,
+        newPassword,
+        deviceId,
+        envelopeService.Create(recoveryKey, newPassword),
+        CancellationToken.None);
+    Assert(
+        reset.KeyEnvelope is not null &&
+        envelopeService.Open(reset.KeyEnvelope, newPassword) == recoveryKey,
+        "Real HTTP password reset changed or lost the account data key.");
+    try
+    {
+        _ = await api.LoginAsync(username, password, deviceId, CancellationToken.None);
+        throw new InvalidOperationException("Old password remained valid after real HTTP reset.");
+    }
+    catch (CloudApiException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+    {
+        // The server invalidates the old password and sessions after reset.
+    }
+    _ = await api.LoginAsync(username, newPassword, deviceId, CancellationToken.None);
 }
 
 public sealed class GenericActPluginFixture : IActPluginV1

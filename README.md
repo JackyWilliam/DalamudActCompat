@@ -20,6 +20,7 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
 | 自行导入扩展 | 对 DLL/ZIP 做静态预检，确认权限后在通用 Host 中加载兼容的 ACT 插件 |
+| 账号与云同步 | 使用激活码注册、可选自动登录、生成最多 3 个好友邀请码，并端到端加密备份配置 |
 | 故障隔离与诊断 | 分开查看解析器、共享 Host、抹茶 Host 和通用 Host，按组件停止或重启 |
 
 它不承诺兼容所有 ACT 插件。依赖旧版 .NET Framework、注入、任意内存读写、特殊 ACT 界面或未实现接口的扩展，可能无法运行。
@@ -74,6 +75,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 | 战斗统计 | 在三个互斥模板间切换；设置 8/24 人模式、DPS/HPS 排序、独立统计槽位、透明度和 FFLogs 估算 |
 | 悬浮窗 | 安装 Cactbot；管理文字提醒、时间轴和自定义 HTML 悬浮窗；设置游戏失焦时隐藏网页悬浮窗 |
 | 扩展 | 启停扩展；打开扩展配置；检查来源与更新；导入 DLL/ZIP；分配权限 |
+| 云同步 | 注册或登录账号；选择是否自动登录；管理好友邀请码；上传、预览、恢复或回滚端到端加密配置 |
 | 设置 | 自动检测或手动选择国服/国际服；重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |
 
 “游戏区域”默认读取游戏 Framework 的原生客户端区域值：国服客户端使用国服网络协议，国际服客户端使用国际服网络协议；不根据 Dalamud 语言或安装路径判断，因此国际服中文语言包不会被误判。无法读取游戏区域时暂按国际服处理，并可手动覆盖；切换后插件会刷新正在运行的解析器与扩展 Host，而动作名和日志语言仍跟随游戏客户端。FFLogs 区间估算会同步使用国服 CN 分区或国际服最新全球分区。
@@ -156,6 +158,7 @@ FFXIV / Dalamud 进程
 └─ Dalamud ACT Compat
    ├─ FFXIV_ACT_Plugin + OverlayPlugin
    ├─ 控制中心、战斗统计、历史与悬浮窗
+   ├─ 账号、邀请和本机加密的云配置同步
    └─ 有界 IPC
       ├─ 共享 Host：Triggernometry / PostNamazu / FoxTTS / SilverDasher
       ├─ 抹茶 Host：Cafe.Matcha

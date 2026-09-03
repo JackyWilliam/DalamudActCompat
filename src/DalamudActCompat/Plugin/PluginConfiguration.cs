@@ -23,6 +23,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public bool AutoCheckBundledPluginUpdates { get; set; } = true;
 
+    public bool AutoCloudSyncEnabled { get; set; } = true;
+
     public bool SuppressFoxTtsProPrompt { get; set; }
 
     public int HistoryLimit { get; set; } = 20;
@@ -300,6 +302,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         DebugMode = false;
         EnableFflogsParityRecorder = false;
         AutoCheckBundledPluginUpdates = true;
+        AutoCloudSyncEnabled = true;
         SuppressFoxTtsProPrompt = false;
         HistoryLimit = 20;
         LogDirectory = defaultLogDirectory;
@@ -340,6 +343,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         DebugMode = snapshot.DebugMode;
         EnableFflogsParityRecorder = snapshot.EnableFflogsParityRecorder;
         AutoCheckBundledPluginUpdates = snapshot.AutoCheckBundledPluginUpdates;
+        AutoCloudSyncEnabled = snapshot.AutoCloudSyncEnabled;
         SuppressFoxTtsProPrompt = snapshot.SuppressFoxTtsProPrompt;
         HistoryLimit = snapshot.HistoryLimit;
         LogDirectory = snapshot.LogDirectory;

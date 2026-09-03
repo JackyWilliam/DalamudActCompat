@@ -24,7 +24,11 @@ internal static class BrandedWindowChrome
         string id,
         bool showCloseButton = true,
         Action? helpAction = null,
-        string? helpTooltip = null)
+        string? helpTooltip = null,
+        Action? statusAction = null,
+        string? statusLabel = null,
+        Vector4? statusColor = null,
+        string? statusTooltip = null)
     {
         const float height = 40;
         const float actionButtonSize = 28;
@@ -71,9 +75,20 @@ internal static class BrandedWindowChrome
             centerLabel);
 
         var helpWidth = helpAction is null ? 0 : actionButtonSize;
+        var statusWidth = statusAction is null || string.IsNullOrWhiteSpace(statusLabel)
+            ? 0
+            : ImGui.CalcTextSize(statusLabel).X + 18;
+        const float statusHelpGap = 5;
+        var statusTrailingGap = statusWidth > 0 && (helpWidth > 0 || showCloseButton)
+            ? statusHelpGap
+            : 0;
+        // Measure the optional status pill as part of the trailing controls so the
+        // version label and draggable region can never cover an interactive button.
         var trailingWidth = (showCloseButton ? actionButtonSize : 0) +
                             helpWidth +
-                            (showCloseButton && helpAction is not null ? helpCloseGap : 0);
+                            (showCloseButton && helpAction is not null ? helpCloseGap : 0) +
+                            statusWidth +
+                            statusTrailingGap;
         var versionSize = ImGui.CalcTextSize(versionLabel);
         drawList.AddText(
             new Vector2(
@@ -92,6 +107,32 @@ internal static class BrandedWindowChrome
 
         var closeRequested = false;
         var actionButtonOffsetY = (height - actionButtonSize) * 0.5f;
+        if (statusWidth > 0 && statusAction is not null)
+        {
+            ImGui.SetCursorPos(new Vector2(
+                start.X + availableWidth -
+                (showCloseButton ? actionButtonSize : 0) -
+                helpWidth -
+                (showCloseButton && helpWidth > 0 ? helpCloseGap : 0) -
+                statusTrailingGap -
+                statusWidth,
+                start.Y + actionButtonOffsetY));
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.055f, 0.12f, 0.16f, 0.88f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.12f, 0.29f, 0.38f, 0.96f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.16f, 0.39f, 0.50f, 1));
+            ImGui.PushStyleColor(ImGuiCol.Text, statusColor ?? NavigationText);
+            if (ImGui.Button(
+                    $"{statusLabel}##status-{id}",
+                    new Vector2(statusWidth, actionButtonSize)))
+            {
+                statusAction();
+            }
+            ImGui.PopStyleColor(4);
+            if (!string.IsNullOrWhiteSpace(statusTooltip) && ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(statusTooltip);
+            }
+        }
         if (helpAction is not null)
         {
             ImGui.SetCursorPos(new Vector2(

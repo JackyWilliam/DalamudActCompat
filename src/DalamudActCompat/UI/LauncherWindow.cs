@@ -58,11 +58,14 @@ public sealed class LauncherWindow : Window
     {
         var buttonSize = GetButtonSize();
         var buttonDimensions = new Vector2(buttonSize, buttonSize);
-        var position = ClampPosition(new Vector2(
-            configuration.LauncherPositionX,
-            configuration.LauncherPositionY), buttonSize);
-        configuration.LauncherPositionX = position.X;
-        configuration.LauncherPositionY = position.Y;
+        var viewport = ImGui.GetMainViewport();
+        var position = ResolveViewportPosition(
+            new Vector2(
+                configuration.LauncherPositionX,
+                configuration.LauncherPositionY),
+            viewport.Pos,
+            viewport.Size,
+            buttonSize);
         Position = position;
         PositionCondition = ImGuiCond.Always;
         Size = buttonDimensions;
@@ -118,10 +121,14 @@ public sealed class LauncherWindow : Window
 
         if (isDragging && ImGui.IsMouseDown(ImGuiMouseButton.Middle))
         {
-            var position = ClampPosition(ImGui.GetMousePos() - dragOffset, buttonSize);
-            configuration.LauncherPositionX = position.X;
-            configuration.LauncherPositionY = position.Y;
-            ImGui.SetWindowPos(position, ImGuiCond.Always);
+            var viewport = ImGui.GetMainViewport();
+            var relativePosition = ClampPosition(
+                ImGui.GetMousePos() - dragOffset - viewport.Pos,
+                viewport.Size,
+                buttonSize);
+            configuration.LauncherPositionX = relativePosition.X;
+            configuration.LauncherPositionY = relativePosition.Y;
+            ImGui.SetWindowPos(viewport.Pos + relativePosition, ImGuiCond.Always);
         }
 
         if (isDragging && ImGui.IsMouseReleased(ImGuiMouseButton.Middle))
@@ -153,16 +160,29 @@ public sealed class LauncherWindow : Window
         return configuration.LauncherButtonSize;
     }
 
-    private static Vector2 ClampPosition(Vector2 position, float buttonSize)
+    internal static Vector2 ResolveViewportPosition(
+        Vector2 relativePosition,
+        Vector2 viewportPosition,
+        Vector2 viewportSize,
+        float buttonSize)
     {
-        var displaySize = ImGui.GetIO().DisplaySize;
-        if (displaySize.X <= buttonSize || displaySize.Y <= buttonSize)
+        // Persist viewport-relative coordinates so moving or resizing the game window does
+        // not reinterpret the same saved values as desktop-space coordinates.
+        return viewportPosition + ClampPosition(relativePosition, viewportSize, buttonSize);
+    }
+
+    private static Vector2 ClampPosition(
+        Vector2 position,
+        Vector2 viewportSize,
+        float buttonSize)
+    {
+        if (viewportSize.X <= buttonSize || viewportSize.Y <= buttonSize)
         {
             return position;
         }
 
-        var maxX = Math.Max(0, displaySize.X - buttonSize);
-        var maxY = Math.Max(0, displaySize.Y - buttonSize);
+        var maxX = Math.Max(0, viewportSize.X - buttonSize);
+        var maxY = Math.Max(0, viewportSize.Y - buttonSize);
         return new Vector2(
             Math.Clamp(position.X, 0, maxX),
             Math.Clamp(position.Y, 0, maxY));

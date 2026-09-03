@@ -20,6 +20,7 @@ The project is currently released and validated primarily on **Windows with XIVL
 | Cactbot / HTML overlays | Install Cactbot resources and create, resize, lock, or click through in-game overlays |
 | Common ACT extensions | Use Triggernometry, PostNamazu, ACT.FoxTTS, SilverDasher, and Cafe.Matcha |
 | Imported extensions | Preflight DLL/ZIP packages and load compatible ACT plugins in a generic Host after permission review |
+| Accounts and cloud sync | Register with an activation key, optionally sign in automatically, create up to three friend invitations, and back up configuration with end-to-end encryption |
 | Isolation and diagnostics | Inspect the parser, shared Host, Matcha Host, and generic Host separately, then stop or restart only the failing component |
 
 DACT does not promise compatibility with every ACT plugin. Extensions that depend on old .NET Framework behavior, injection, arbitrary memory access, specialized ACT UI, or unimplemented APIs may not work.
@@ -74,6 +75,7 @@ The help button in the top-right corner opens the complete in-game guide. It sup
 | Combat Meter | Select one of three mutually exclusive templates; customize the 8-player classic table, use fixed job/name + DPS/HPS rows for 24 players, and configure opacity or FFLogs where supported |
 | Overlays | Install Cactbot, manage alerts, timelines, and custom HTML overlays, and hide web overlays when the game is unfocused |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
+| Cloud Sync | Register or sign in, choose automatic sign-in, manage friend invitations, and upload, preview, restore, or roll back end-to-end encrypted configuration |
 | Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
 
 Game region defaults to the native client-region value exposed by the game's Framework: the China client uses the China packet family and the international client uses Global. Dalamud language and installation paths are not used, so a Chinese language pack on the international client remains Global. If the game region cannot be read, DACT defaults to Global and allows a manual override. Changing the setting refreshes the running parser and extension Hosts without changing client-language action names or log parsing. The FFLogs estimate follows the same setting, using the CN partition for China and the latest worldwide partition for Global.
@@ -156,6 +158,7 @@ FFXIV / Dalamud process
 └─ Dalamud ACT Compat
    ├─ FFXIV_ACT_Plugin + OverlayPlugin
    ├─ Control Center, Combat Meter, history, and overlays
+   ├─ accounts, invitations, and locally encrypted cloud configuration sync
    └─ bounded IPC
       ├─ Shared Host: Triggernometry / PostNamazu / FoxTTS / SilverDasher
       ├─ Matcha Host: Cafe.Matcha
