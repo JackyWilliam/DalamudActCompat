@@ -47,7 +47,7 @@ Starting with 0.3.10.0, Dalamud installs an approximately 18 MiB core package, t
 
 Registering a DACT account requires a one-time activation key. Join QQ group **1098561701** or the [Discord server](https://discord.gg/HpQZErSPc), then contact the group or server owner to request one.
 
-> An activation key expires after use. Do not post a received key in an Issue or any other public location. In `0.4.0.1`, the in-game help button in the top-right corner is available only after sign-in; use this README during initial registration until that limitation is fixed in a later version.
+> An activation key expires after use. Do not post a received key in an Issue or any other public location.
 
 ### 4. Complete first-time setup
 

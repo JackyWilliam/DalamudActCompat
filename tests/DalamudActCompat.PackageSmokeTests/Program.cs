@@ -10168,7 +10168,10 @@ static void ValidateHtmlOverlayDefaults()
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
         "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
     Assert(
-        controlCenterSource.Contains("helpAction: openHelp", StringComparison.Ordinal) &&
+        controlCenterSource.Contains(
+            "var helpAction = cloudSnapshot.IsSignedIn ? openHelp : null;",
+            StringComparison.Ordinal) &&
+        controlCenterSource.Contains("helpAction: helpAction", StringComparison.Ordinal) &&
         controlCenterSource.Contains("helpTooltip: text.Get(\"帮助\", \"Help\")", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("DrawHelpEntry", StringComparison.Ordinal) &&
@@ -10294,7 +10297,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("版权声明", StringComparison.Ordinal) &&
         helpWindowSource.Contains("Copyright © 2026 DalamudActCompat contributors.", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("BeginPopupModal", StringComparison.Ordinal),
-        "The help entry, macro command reference, copy action, or branded help document regressed.");
+        "The signed-in help entry, macro command reference, copy action, or branded help document regressed.");
     Assert(
         macroPluginSource.Contains("parserEngine.ResetCurrentEncounter", StringComparison.Ordinal) &&
         !macroPluginSource.Contains("stateStore.ResetCurrent", StringComparison.Ordinal) &&

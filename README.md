@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 注册 DACT 账号需要一次性激活码。请加入 QQ 群 **1098561701**，或加入 [Discord 服务器](https://discord.gg/HpQZErSPc)，联系群主或频道主获取。
 
-> 激活码使用后即失效，请勿把收到的激活码发布到 Issue 或其他公开位置。`0.4.0.1` 的右上角游戏内帮助需要登录后才能打开；首次注册时请先参考本 README，这个限制将在后续版本修复。
+> 激活码使用后即失效，请勿把收到的激活码发布到 Issue 或其他公开位置。
 
 ### 4. 完成首次启动
 
