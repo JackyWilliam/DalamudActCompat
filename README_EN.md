@@ -8,6 +8,8 @@
 
 Dalamud ACT Compat (DACT) combines `FFXIV_ACT_Plugin`, `OverlayPlugin`, and an in-game UI in one Dalamud plugin. Traditional ACT extensions such as Triggernometry, PostNamazu, and FoxTTS run in separate Host processes. If an extension hangs, you can restart its Host instead of immediately restarting the game.
 
+> **DACT is a free project.** Neither the plugin nor its one-time activation keys are sold. Do not buy or resell them; report anyone charging for DACT or its keys through [Issues](https://github.com/JackyWilliam/DalamudActCompat/issues), the QQ group, or Discord.
+
 The project is currently released and validated primarily on **Windows with XIVLauncherCN and Dalamud API 15**. It is not an official project of Square Enix, Dalamud, ACT, FFLogs, or any bundled third-party extension.
 
 ## What you can do with it
