@@ -3,6 +3,7 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using FFXIV_ACT_Plugin.Logfile;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
@@ -278,14 +279,62 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public bool InjectExternalPluginLogLine(string line)
     {
-        if (!IsParserRunning || string.IsNullOrWhiteSpace(line))
+        if (!IsParserRunning ||
+            !TryParseExternalPluginLogLine(
+                line,
+                out var messageType,
+                out var timestamp,
+                out var payload))
         {
             return false;
         }
 
-        // Host-generated ACT lines must re-enter the game-side ACT event pipeline so
-        // OverlayPlugin subscribers see the same LogLine events as native ACT overlays.
-        ActGlobals.oFormActMain.ParseRawLogLine(false, DateTime.Now, line);
+        var logOutput = ActGlobals.oFormActMain.FfxivPlugin?._dataCollection?._logOutput;
+        if (logOutput is null)
+        {
+            return false;
+        }
+
+        // Re-enter through the native writer so OverlayPlugin still receives the event while
+        // upload logs get the same ordering and checksum suffix as parser-generated lines.
+        logOutput.WriteLine(messageType, timestamp, payload);
+        return true;
+    }
+
+    private static bool TryParseExternalPluginLogLine(
+        string line,
+        out LogMessageType messageType,
+        out DateTime timestamp,
+        out string payload)
+    {
+        messageType = default;
+        timestamp = default;
+        payload = string.Empty;
+
+        var typeSeparator = line.IndexOf('|');
+        var timestampSeparator = typeSeparator < 0 ? -1 : line.IndexOf('|', typeSeparator + 1);
+        if (typeSeparator <= 0 ||
+            timestampSeparator <= typeSeparator + 1 ||
+            timestampSeparator == line.Length - 1 ||
+            line.IndexOfAny(['\r', '\n']) >= 0 ||
+            !int.TryParse(
+                line.AsSpan(0, typeSeparator),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var messageTypeValue) ||
+            messageTypeValue < 0 ||
+            !DateTimeOffset.TryParse(
+                line.AsSpan(typeSeparator + 1, timestampSeparator - typeSeparator - 1),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces,
+                out var timestampValue))
+        {
+            return false;
+        }
+
+        messageType = (LogMessageType)messageTypeValue;
+        timestamp = timestampValue.LocalDateTime;
+        payload = line[(timestampSeparator + 1)..];
         return true;
     }
 
@@ -3038,11 +3087,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private CombatantHitCounts GetDamageHitCounts(CombatantData combatant)
     {
-        var allDamage = combatant.Items.TryGetValue(
-                CombatantData.DamageTypeDataOutgoingDamage,
-                out var outgoingDamage)
-            ? outgoingDamage.Items.Values.MaxBy(static attack => attack.Hits)
-            : null;
+        var allDamage = GetAllOutgoingDamage(combatant);
         if (allDamage is null)
         {
             return new CombatantHitCounts(
@@ -3059,7 +3104,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             counter = new DamageHitCounter(allDamage);
         }
 
-        for (var index = counter.ProcessedSwings; index < allDamage.Items.Count; index++)
+        var itemCount = allDamage.Items.Count;
+        for (var index = counter.ProcessedSwings; index < itemCount; index++)
         {
             var swing = allDamage.Items[index];
             var isDirectHit = swing.Tags.TryGetValue("DirectHit", out var directHit) &&
@@ -3074,7 +3120,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
         }
 
-        counter.ProcessedSwings = allDamage.Items.Count;
+        counter.ProcessedSwings = itemCount;
         damageHitCounters[combatant.Name] = counter;
 
         return new CombatantHitCounts(
@@ -3088,17 +3134,71 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         // AllOut also contains outgoing healing. Restricting the aggregate here keeps a
         // healer's largest cure out of the damage column and binds the action to this combatant.
-        var allDamage = combatant.Items.TryGetValue(
-                CombatantData.DamageTypeDataOutgoingDamage,
-                out var outgoingDamage)
-            ? outgoingDamage.Items.Values.MaxBy(static attack => attack.Hits)
-            : null;
-        var swing = allDamage?.Items
-            .Where(static item => (long)item.Damage > 0)
-            .MaxBy(static item => (long)item.Damage);
+        var allDamage = GetAllOutgoingDamage(combatant);
+        MasterSwing? swing = null;
+        var highestDamage = 0L;
+        var itemCount = allDamage?.Items.Count ?? 0;
+        for (var index = 0; index < itemCount; index++)
+        {
+            // NotACT appends swings on its parser worker. Indexing the captured prefix avoids
+            // List's versioned enumerator throwing while a live snapshot is published.
+            var candidate = allDamage!.Items[index];
+            var candidateDamage = (long)candidate.Damage;
+            if (candidateDamage <= highestDamage)
+            {
+                continue;
+            }
+
+            swing = candidate;
+            highestDamage = candidateDamage;
+        }
+
         return swing is null
             ? new HighestDamageHit(string.Empty, 0)
-            : new HighestDamageHit(swing.AttackType ?? string.Empty, (long)swing.Damage);
+            : new HighestDamageHit(swing.AttackType ?? string.Empty, highestDamage);
+    }
+
+    private static AttackType? GetAllOutgoingDamage(CombatantData combatant)
+    {
+        if (!combatant.Items.TryGetValue(
+                CombatantData.DamageTypeDataOutgoingDamage,
+                out var outgoingDamage))
+        {
+            return null;
+        }
+
+        // NotACT normally keeps this aggregate under "All". Localized forks may rename it,
+        // so fall back to an index-based scan without a versioned enumerator while parsing.
+        if (outgoingDamage.Items.TryGetValue("All", out var aggregate))
+        {
+            return aggregate;
+        }
+
+        AttackType? largest = null;
+        var largestCount = -1;
+        var itemCount = outgoingDamage.Items.Count;
+        for (var index = 0; index < itemCount; index++)
+        {
+            AttackType candidate;
+            try
+            {
+                candidate = outgoingDamage.Items.Values[index];
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                break;
+            }
+
+            if (candidate.Items.Count <= largestCount)
+            {
+                continue;
+            }
+
+            largest = candidate;
+            largestCount = candidate.Items.Count;
+        }
+
+        return largest;
     }
 
     internal readonly record struct HighestDamageHit(string Action, long Amount);

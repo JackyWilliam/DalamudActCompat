@@ -57,6 +57,7 @@ try
     ValidateActCustomTriggerCompatibility();
     ValidateSynchronousActInvocation();
     ValidatePostNamazuRawLogCompatibility();
+    ValidateExternalPluginLogLineFormat();
     ValidatePostNamazuOverlayHandlerResponse();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
@@ -1028,6 +1029,32 @@ static void ValidatePictoActOverlayCommands()
         commands[4] is { Tag: null, Regex: null, Remove: true, Shape: null },
         "Game-side PictoACT base-shape, Auto-tag, delay, or remove parsing failed.");
 
+    var hint = TriggernometryNativeBridgeService.ParseHint("(2 + 1.2) * 2\n分散");
+    var warning = TriggernometryNativeBridgeService.ParseHint("-1\n分摊");
+    var timedLockOn = TriggernometryNativeBridgeService.ParseLockOn(
+        "305419896, loc05sp_05af, 4.5");
+    var gameManagedLockOn = TriggernometryNativeBridgeService.ParseLockOn(
+        "0x12345678, m5fa_count5s_x");
+    Assert(
+        hint is { Text: "分散", DurationIn100Milliseconds: 64 } &&
+        warning is { Text: "分摊", DurationIn100Milliseconds: 0 } &&
+        timedLockOn.TargetAddress == (nint)0x12345678 &&
+        timedLockOn.VfxName == "loc05sp_05af" &&
+        timedLockOn.Duration == TimeSpan.FromSeconds(4.5) &&
+        gameManagedLockOn.Duration is null,
+        "Triggernometry Hint/LockOn game-side payload compatibility failed.");
+    try
+    {
+        _ = TriggernometryNativeBridgeService.ParseLockOn(
+            "0x12345678, ../outside, 4.5");
+        throw new InvalidOperationException(
+            "Triggernometry LockOn accepted a VFX path outside its fixed directory.");
+    }
+    catch (InvalidDataException)
+    {
+        // Native resource paths are intentionally stricter than ordinary trigger text.
+    }
+
     var typedRemovals = PictoActOverlayService.Parse(
         "Action: Remove\nType: StaticVfx\nTag: STATIC\n---\n" +
         "Action: Remove\nType: Actor\nTag: ACTOR");
@@ -1066,14 +1093,34 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         overlay.ShapeCount == 4,
         "PictoACT shapes sharing one selector tag did not coexist.");
+    overlay.Apply("Action: Remove");
+    var spreadBatch = string.Join(
+        "\n---\n",
+        Enumerable.Range(0, 8).Select(index =>
+            $"Omen: m0532om_don01x\nTag: U7b11a_散摊\nt: 4.5\n" +
+            $"Pos: {90 + index}, {100 + index}\nScale: 1"));
+    overlay.Apply(spreadBatch);
+    Assert(
+        overlay.ShapeCount == 8,
+        "U7b P1 spread lost circles that intentionally share one selector tag.");
+    overlay.Apply("Action: Remove\nTag: U7b11a_散摊");
+    var stackBatch = string.Join(
+        "\n---\n",
+        Enumerable.Range(0, 2).Select(index =>
+            $"Omen: m0532om_don01x\nTag: U7b11a_散摊\nt: 4.5\n" +
+            $"Pos: {98 + index * 4}, 100\nScale: 1"));
+    overlay.Apply(stackBatch);
+    Assert(
+        overlay.ShapeCount == 2,
+        "U7b P1 stack lost one of its same-tag circles.");
     overlay.Apply("Action: Remove\nType: ActorVfx\nRegex: .*" );
     Assert(
-        overlay.ShapeCount == 4,
+        overlay.ShapeCount == 2,
         "PictoACT ActorVfx-only removal unexpectedly removed brokered static shapes.");
     overlay.Apply("Action: Remove\nRegex: ^Auto$");
     Assert(
         overlay.ShapeCount == 2,
-        "PictoACT Regex removal did not remove all matching Auto-tag shapes.");
+        "PictoACT Regex removal unexpectedly changed nonmatching U7b shapes.");
     overlay.Apply("Action: Remove");
     Assert(
         overlay.ShapeCount == 0,
@@ -4625,10 +4672,19 @@ static void ValidateControlCenterPresentation()
     Assert(
         constructorSourceForAuthentication.Contains("StartInitialResourcePreparation();", StringComparison.Ordinal) &&
         !constructorSourceForAuthentication.Contains("lifecycle.Start();", StringComparison.Ordinal) &&
+        constructorSourceForAuthentication.Contains(
+            "private int observedCloudAuthenticationState;",
+            StringComparison.Ordinal) &&
+        constructorSourceForAuthentication.Contains(
+            "RestrictWindowsToAuthenticationGate(openGate: false);",
+            StringComparison.Ordinal) &&
+        !constructorSourceForAuthentication.Contains(
+            "RestrictWindowsToAuthenticationGate(openGate: true);",
+            StringComparison.Ordinal) &&
         pluginSource.Contains("if (!cloudClient.Snapshot.IsSignedIn)", StringComparison.Ordinal) &&
         pluginSource.Contains("if (!IsDactAccessAllowed())", StringComparison.Ordinal) &&
         !hostResourceMethod.Contains("StartIndependentHostAsync", StringComparison.Ordinal),
-        "Authentication no longer gates DACT runtime startup, or core resource download still starts a Host before login.");
+        "Authentication no longer starts silently, gates DACT runtime startup, or keeps core resource download from starting a Host before login.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
@@ -4990,6 +5046,55 @@ static void ValidatePostNamazuRawLogCompatibility()
     Assert(
         method is not null && method.ReturnType == typeof(void),
         "The ACT three-argument ParseRawLogLine ABI required by PostNamazu is missing.");
+}
+
+static void ValidateExternalPluginLogLineFormat()
+{
+    var method = typeof(SelfHostedActRuntime).GetMethod(
+        "TryParseExternalPluginLogLine",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException(
+            "The external plugin log-line parser was not found.");
+    const string timestampText = "2026-09-03T20:50:53.5243638+08:00";
+    const string payload = "0|Matcha#26.8.12.1622#chs-Test|{\"ok\":true}";
+    var arguments = new object?[]
+    {
+        $"00|{timestampText}|{payload}",
+        null,
+        null,
+        null,
+    };
+    var parsed = (bool)(method.Invoke(null, arguments) ?? false);
+    Assert(
+        parsed &&
+        Convert.ToInt32(arguments[1], System.Globalization.CultureInfo.InvariantCulture) == 0 &&
+        arguments[2] is DateTime timestamp &&
+        timestamp == DateTimeOffset.Parse(
+            timestampText,
+            System.Globalization.CultureInfo.InvariantCulture).LocalDateTime &&
+        string.Equals(arguments[3] as string, payload, StringComparison.Ordinal),
+        "A valid Matcha line no longer separates into ACT type, timestamp, and payload.");
+
+    var malformedArguments = new object?[]
+    {
+        "00|not-a-timestamp|0|Matcha#Test|{}",
+        null,
+        null,
+        null,
+    };
+    Assert(
+        !(bool)(method.Invoke(null, malformedArguments) ?? true),
+        "A malformed external plugin line can still enter the ACT log writer.");
+
+    var source = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    Assert(
+        source.Contains("logOutput.WriteLine(messageType, timestamp, payload);", StringComparison.Ordinal) &&
+        !source.Contains("ParseRawLogLine(false, DateTime.Now, line);", StringComparison.Ordinal),
+        "Host-generated lines bypass the native checksummed ACT log writer.");
 }
 
 static void ValidatePostNamazuOverlayHandlerResponse()

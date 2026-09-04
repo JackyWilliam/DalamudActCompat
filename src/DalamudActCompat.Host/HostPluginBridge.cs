@@ -995,6 +995,15 @@ public static class HostPluginBridge
     public static void SendPostNamazuPictoAct(string payload)
         => SendPostNamazuSemanticAction("postnamazu.pictoact", payload);
 
+    public static void SendPostNamazuHint(string payload)
+        => SendPostNamazuNativeSemanticAction("postnamazu.hint", payload);
+
+    public static void SendPostNamazuWarning(string payload)
+        => SendPostNamazuNativeSemanticAction("postnamazu.warn", payload);
+
+    public static void SendPostNamazuLockOn(string payload)
+        => SendPostNamazuNativeSemanticAction("postnamazu.lockon", payload);
+
     public static string ExtractPictoActActorRemovalCommands(string payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -1251,6 +1260,14 @@ public static class HostPluginBridge
             throw new InvalidOperationException(
                 $"PostNamazu semantic broker queue rejected '{action}'.");
         }
+    }
+
+    private static void SendPostNamazuNativeSemanticAction(string action, string payload)
+    {
+        // These callbacks use FFXIV UI/VFX functions rather than ordinary slash commands.
+        // Preserve the legacy capability split before crossing the game-side IPC boundary.
+        Demand("postnamazu", "NativeGameMemory");
+        SendPostNamazuSemanticAction(action, payload);
     }
 
     private static string PatchTriggernometryTriggerSegment(

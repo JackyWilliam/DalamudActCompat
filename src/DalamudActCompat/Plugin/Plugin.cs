@@ -112,6 +112,7 @@ public sealed class Plugin : IDalamudPlugin
     private int silverDasherEventsEnabled;
     private int matchaEventsEnabled;
     private readonly PictoActOverlayService pictoActOverlay;
+    private readonly TriggernometryNativeBridgeService triggernometryNativeBridge;
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
     private readonly IPlayerState playerState;
@@ -166,7 +167,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly object cloudRuntimeCancellationLock = new();
     private readonly SemaphoreSlim cloudRuntimeTransitionGate = new(1, 1);
     private CancellationTokenSource? cloudRuntimeCancellation;
-    private int observedCloudAuthenticationState = -1;
+    // Cached authentication is restored asynchronously. Treat the initial signed-out
+    // snapshot as already observed so normal game startup does not look like a logout.
+    private int observedCloudAuthenticationState;
     private int cloudRuntimeAuthorized;
     private bool cloudRuntimeInitialized;
     private Task cloudRuntimeTransitionTask = Task.CompletedTask;
@@ -217,6 +220,11 @@ public sealed class Plugin : IDalamudPlugin
             gameInteropProvider,
             log,
             objectTable);
+        triggernometryNativeBridge = new TriggernometryNativeBridgeService(
+            sigScanner,
+            gameInteropProvider,
+            objectTable,
+            log);
         var localDeathWhilePartyContinues = () =>
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious] &&
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
@@ -735,7 +743,9 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(coreResourceDownloadWindow);
         windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
-        RestrictWindowsToAuthenticationGate(openGate: true);
+        // Authentication still gates every functional window, but a cold game start must
+        // stay silent until the user explicitly opens DACT or a real logout is observed.
+        RestrictWindowsToAuthenticationGate(openGate: false);
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -819,6 +829,7 @@ public sealed class Plugin : IDalamudPlugin
         services.PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
         cloudClient.BanReceived -= OnCloudBanReceived;
         cloudClient.BanLifted -= OnCloudBanLifted;
+        triggernometryNativeBridge.Dispose();
         pictoActOverlay.Dispose();
         settingsWindow.Detach();
         advancedSettingsWindow.Detach();
@@ -842,6 +853,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        triggernometryNativeBridge.Update(DateTimeOffset.UtcNow);
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
             windowSystem.Draw();
@@ -1004,6 +1016,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void RestrictWindowsToAuthenticationGate(bool openGate)
     {
+        triggernometryNativeBridge.Clear();
         pictoActOverlay.Clear();
         meterWindow.IsOpen = false;
         horizontalMeterWindow.IsOpen = false;
@@ -1083,6 +1096,7 @@ public sealed class Plugin : IDalamudPlugin
 
         _ = services.Framework.RunOnFrameworkThread(() =>
         {
+            triggernometryNativeBridge.Clear();
             pictoActOverlay.Clear();
             meterWindow.IsOpen = false;
             horizontalMeterWindow.IsOpen = false;
@@ -1380,6 +1394,7 @@ public sealed class Plugin : IDalamudPlugin
         if (enabled)
         {
             ApplySimplifiedWindowVisibility();
+            triggernometryNativeBridge.Clear();
             pictoActOverlay.Clear();
             Volatile.Write(ref silverDasherEventsEnabled, 0);
             Volatile.Write(ref matchaEventsEnabled, 0);
@@ -4569,6 +4584,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         // Trigger repositories are territory-scoped; delayed or indefinite PictoACT VFX from
         // the old territory can never be valid after a zone transition.
+        triggernometryNativeBridge.Clear();
         pictoActOverlay.Clear();
         var localizedZoneName = zoneNameLocalizer.Localize(territoryId, zoneName);
         fflogsEstimateService.NotifyTerritoryChanged(
@@ -4625,7 +4641,7 @@ public sealed class Plugin : IDalamudPlugin
                 if (!actRuntime.InjectExternalPluginLogLine(logLine.Line))
                 {
                     logger.Warning(
-                        "Matcha produced an overlay log line while the game-side ACT parser was stopped.");
+                        "Matcha produced a malformed overlay log line, or the game-side ACT parser was stopped.");
                 }
             });
         }
@@ -5138,6 +5154,9 @@ public sealed class Plugin : IDalamudPlugin
                 case "postnamazu.mark":
                 case "postnamazu.place":
                 case "postnamazu.pictoact":
+                case "postnamazu.hint":
+                case "postnamazu.warn":
+                case "postnamazu.lockon":
                 case "postnamazu.preset":
                 case "postnamazu.sendkey":
                     if (!string.Equals(
@@ -5159,7 +5178,7 @@ public sealed class Plugin : IDalamudPlugin
 
                     if (!invocation.Request.Arguments.TryGetValue("payload", out var payload))
                     {
-                        throw new InvalidDataException("PostNamazu marking payload is missing.");
+                        throw new InvalidDataException("PostNamazu semantic payload is missing.");
                     }
 
                     if (invocation.Request.Command == "postnamazu.mark")
@@ -5193,6 +5212,39 @@ public sealed class Plugin : IDalamudPlugin
                                 // reject it before it can touch an overlay being disposed.
                                 timeout.Token.ThrowIfCancellationRequested();
                                 pictoActOverlay.Apply(payload);
+                            })
+                            .WaitAsync(timeout.Token)
+                            .ConfigureAwait(false);
+                    }
+                    else if (invocation.Request.Command is
+                             "postnamazu.hint" or
+                             "postnamazu.warn" or
+                             "postnamazu.lockon")
+                    {
+                        if (!configuration.IsActCapabilityAllowed(
+                                "postnamazu",
+                                ActCapability.NativeGameMemory))
+                        {
+                            throw new UnauthorizedAccessException(
+                                "PostNamazu native game-memory capability is denied.");
+                        }
+
+                        await services.Framework
+                            .RunOnFrameworkThread(() =>
+                            {
+                                // A request may time out while waiting for the next game frame.
+                                // Never execute its native pointer after the Host has abandoned it.
+                                timeout.Token.ThrowIfCancellationRequested();
+                                if (invocation.Request.Command == "postnamazu.lockon")
+                                {
+                                    triggernometryNativeBridge.CreateLockOn(payload);
+                                }
+                                else
+                                {
+                                    triggernometryNativeBridge.ShowGimmickHint(
+                                        payload,
+                                        invocation.Request.Command == "postnamazu.hint");
+                                }
                             })
                             .WaitAsync(timeout.Token)
                             .ConfigureAwait(false);
