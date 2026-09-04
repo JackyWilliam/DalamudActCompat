@@ -8,6 +8,8 @@
 
 Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和游戏内界面整合进一个 Dalamud 插件。Triggernometry、鲶鱼精、FoxTTS 等传统 ACT 扩展运行在独立 Host 进程中；某个扩展卡死时，可以只重启对应 Host，不必立刻重启游戏。
 
+> **DACT 是免费项目。** 插件和一次性激活码均不收费，请勿购买或转售；如果有人借 DACT 或激活码收费，请通过 [Issues](https://github.com/JackyWilliam/DalamudActCompat/issues)、QQ 群或 Discord 联系维护者。
+
 目前主要在 **Windows、XIVLauncherCN、Dalamud API 15** 环境中发布和验证。它不是 Square Enix、Dalamud、ACT、FFLogs 或所捆绑第三方扩展的官方项目。
 
 ## 你可以用它做什么
@@ -41,7 +43,13 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 0.3.10.0 起，Dalamud 先安装约 18 MiB 的核心包，插件再按缺失项获取 Host、Cactbot 和随包扩展资源；已验证的同版本缓存不会重复下载。下载中断可续传，更新失败时会保留上一份已验证资源。不要手动解压分包到插件目录。
 
-### 3. 完成首次启动
+### 3. 获取一次性激活码
+
+注册 DACT 账号需要一次性激活码。请加入 QQ 群 **1098561701**，或加入 [Discord 服务器](https://discord.gg/HpQZErSPc)，联系群主或频道主获取。
+
+> 激活码使用后即失效，请勿把收到的激活码发布到 Issue 或其他公开位置。`0.4.0.1` 的右上角游戏内帮助需要登录后才能打开；首次注册时请先参考本 README，这个限制将在后续版本修复。
+
+### 4. 完成首次启动
 
 1. 阅读首次弹出的第三方扩展声明，核对作者、来源、版本、权限和 SHA-256，再决定是否安装及授权。
 2. 输入 `/actcompat` 打开控制中心。

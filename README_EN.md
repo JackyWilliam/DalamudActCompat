@@ -8,6 +8,8 @@
 
 Dalamud ACT Compat (DACT) combines `FFXIV_ACT_Plugin`, `OverlayPlugin`, and an in-game UI in one Dalamud plugin. Traditional ACT extensions such as Triggernometry, PostNamazu, and FoxTTS run in separate Host processes. If an extension hangs, you can restart its Host instead of immediately restarting the game.
 
+> **DACT is a free project.** Neither the plugin nor its one-time activation keys are sold. Do not buy or resell them; report anyone charging for DACT or its keys through [Issues](https://github.com/JackyWilliam/DalamudActCompat/issues), the QQ group, or Discord.
+
 The project is currently released and validated primarily on **Windows with XIVLauncherCN and Dalamud API 15**. It is not an official project of Square Enix, Dalamud, ACT, FFLogs, or any bundled third-party extension.
 
 ## What you can do with it
@@ -41,7 +43,13 @@ Enter `/xlplugins`, search for **Dalamud ACT Compat**, and select Install.
 
 Starting with 0.3.10.0, Dalamud installs an approximately 18 MiB core package, then the plugin fetches only missing Host, Cactbot, and bundled-extension resources. Verified same-version caches are reused; interrupted downloads resume, and a failed update retains the previous verified resources. Do not manually extract resource packs into the plugin directory.
 
-### 3. Complete first-time setup
+### 3. Obtain a one-time activation key
+
+Registering a DACT account requires a one-time activation key. Join QQ group **1098561701** or the [Discord server](https://discord.gg/HpQZErSPc), then contact the group or server owner to request one.
+
+> An activation key expires after use. Do not post a received key in an Issue or any other public location. In `0.4.0.1`, the in-game help button in the top-right corner is available only after sign-in; use this README during initial registration until that limitation is fixed in a later version.
+
+### 4. Complete first-time setup
 
 1. Read the third-party extension notice. Check each author, source, version, permission set, and SHA-256 before deciding whether to install and authorize it.
 2. Enter `/actcompat` to open the Control Center.
