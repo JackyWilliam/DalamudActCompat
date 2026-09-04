@@ -1029,6 +1029,32 @@ static void ValidatePictoActOverlayCommands()
         commands[4] is { Tag: null, Regex: null, Remove: true, Shape: null },
         "Game-side PictoACT base-shape, Auto-tag, delay, or remove parsing failed.");
 
+    var hint = TriggernometryNativeBridgeService.ParseHint("(2 + 1.2) * 2\n分散");
+    var warning = TriggernometryNativeBridgeService.ParseHint("-1\n分摊");
+    var timedLockOn = TriggernometryNativeBridgeService.ParseLockOn(
+        "305419896, loc05sp_05af, 4.5");
+    var gameManagedLockOn = TriggernometryNativeBridgeService.ParseLockOn(
+        "0x12345678, m5fa_count5s_x");
+    Assert(
+        hint is { Text: "分散", DurationIn100Milliseconds: 64 } &&
+        warning is { Text: "分摊", DurationIn100Milliseconds: 0 } &&
+        timedLockOn.TargetAddress == (nint)0x12345678 &&
+        timedLockOn.VfxName == "loc05sp_05af" &&
+        timedLockOn.Duration == TimeSpan.FromSeconds(4.5) &&
+        gameManagedLockOn.Duration is null,
+        "Triggernometry Hint/LockOn game-side payload compatibility failed.");
+    try
+    {
+        _ = TriggernometryNativeBridgeService.ParseLockOn(
+            "0x12345678, ../outside, 4.5");
+        throw new InvalidOperationException(
+            "Triggernometry LockOn accepted a VFX path outside its fixed directory.");
+    }
+    catch (InvalidDataException)
+    {
+        // Native resource paths are intentionally stricter than ordinary trigger text.
+    }
+
     var typedRemovals = PictoActOverlayService.Parse(
         "Action: Remove\nType: StaticVfx\nTag: STATIC\n---\n" +
         "Action: Remove\nType: Actor\nTag: ACTOR");
@@ -1067,14 +1093,34 @@ static void ValidatePictoActOverlayCommands()
     Assert(
         overlay.ShapeCount == 4,
         "PictoACT shapes sharing one selector tag did not coexist.");
+    overlay.Apply("Action: Remove");
+    var spreadBatch = string.Join(
+        "\n---\n",
+        Enumerable.Range(0, 8).Select(index =>
+            $"Omen: m0532om_don01x\nTag: U7b11a_散摊\nt: 4.5\n" +
+            $"Pos: {90 + index}, {100 + index}\nScale: 1"));
+    overlay.Apply(spreadBatch);
+    Assert(
+        overlay.ShapeCount == 8,
+        "U7b P1 spread lost circles that intentionally share one selector tag.");
+    overlay.Apply("Action: Remove\nTag: U7b11a_散摊");
+    var stackBatch = string.Join(
+        "\n---\n",
+        Enumerable.Range(0, 2).Select(index =>
+            $"Omen: m0532om_don01x\nTag: U7b11a_散摊\nt: 4.5\n" +
+            $"Pos: {98 + index * 4}, 100\nScale: 1"));
+    overlay.Apply(stackBatch);
+    Assert(
+        overlay.ShapeCount == 2,
+        "U7b P1 stack lost one of its same-tag circles.");
     overlay.Apply("Action: Remove\nType: ActorVfx\nRegex: .*" );
     Assert(
-        overlay.ShapeCount == 4,
+        overlay.ShapeCount == 2,
         "PictoACT ActorVfx-only removal unexpectedly removed brokered static shapes.");
     overlay.Apply("Action: Remove\nRegex: ^Auto$");
     Assert(
         overlay.ShapeCount == 2,
-        "PictoACT Regex removal did not remove all matching Auto-tag shapes.");
+        "PictoACT Regex removal unexpectedly changed nonmatching U7b shapes.");
     overlay.Apply("Action: Remove");
     Assert(
         overlay.ShapeCount == 0,

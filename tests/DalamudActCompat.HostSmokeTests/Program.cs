@@ -857,6 +857,15 @@ void ValidateTriggernometryAndPostNamazuPermissionGates()
     AssertThrows<UnauthorizedAccessException>(
         () => HostPluginBridge.SendPostNamazuSetHeading((IntPtr)0x12345678, 1.25f),
         "PostNamazu requested a player heading without NativeGameMemory permission.");
+    AssertThrows<UnauthorizedAccessException>(
+        () => HostPluginBridge.SendPostNamazuHint("3\nSpread"),
+        "Triggernometry requested a native Hint without NativeGameMemory permission.");
+    AssertThrows<UnauthorizedAccessException>(
+        () => HostPluginBridge.SendPostNamazuWarning("3\nStack"),
+        "Triggernometry requested a native Warn without NativeGameMemory permission.");
+    AssertThrows<UnauthorizedAccessException>(
+        () => HostPluginBridge.SendPostNamazuLockOn("0x12345678, loc05sp_05af, 4.5"),
+        "Triggernometry requested a native LockOn without NativeGameMemory permission.");
 
     var configureSender = bridgeType.GetMethod(
                               "Configure",
@@ -926,6 +935,29 @@ void ValidateTriggernometryAndPostNamazuPermissionGates()
             new HostPermissionSnapshot(
                 new Dictionary<string, IReadOnlyList<string>>
                 {
+                    ["postnamazu"] = ["GameCommand", "NativeGameMemory"],
+                },
+                ["postnamazu"]),
+        ]);
+    ValidateNativeSemanticRequest(
+        "postnamazu.hint",
+        "3\nSpread",
+        HostPluginBridge.SendPostNamazuHint);
+    ValidateNativeSemanticRequest(
+        "postnamazu.warn",
+        "3\nStack",
+        HostPluginBridge.SendPostNamazuWarning);
+    ValidateNativeSemanticRequest(
+        "postnamazu.lockon",
+        "0x12345678, loc05sp_05af, 4.5",
+        HostPluginBridge.SendPostNamazuLockOn);
+
+    configurePermissions.Invoke(
+        null,
+        [
+            new HostPermissionSnapshot(
+                new Dictionary<string, IReadOnlyList<string>>
+                {
                     ["triggernometry"] = ["NetworkRequest", "HighRiskScript"],
                     ["postnamazu"] = ["GameCommand"],
                 },
@@ -935,6 +967,25 @@ void ValidateTriggernometryAndPostNamazuPermissionGates()
         HostPluginBridge.IsTriggernometryNetworkAllowed() &&
         HostPluginBridge.IsTriggernometryHighRiskScriptAllowed(),
         "Triggernometry explicit network or high-risk script permission was not honored.");
+
+    void ValidateNativeSemanticRequest(
+        string expectedAction,
+        string expectedPayload,
+        Action<string> send)
+    {
+        capturedType = null;
+        capturedPriority = null;
+        capturedPayload = null;
+        send(expectedPayload);
+        Assert(
+            capturedType == HostMessageTypes.CommandRequest &&
+            capturedPriority == HostMessagePriority.Critical &&
+            capturedPayload is HostCommandRequest request &&
+            request.PluginId == "postnamazu" &&
+            request.Command == expectedAction &&
+            request.Arguments.GetValueOrDefault("payload") == expectedPayload,
+            $"Triggernometry native callback '{expectedAction}' did not use the guarded semantic broker.");
+    }
 }
 
 void ValidateTriggernometryU6bCompatibilityPatch()
@@ -2733,6 +2784,20 @@ void ValidateTriggernometryLaunchProcessPatch()
             method.Parameters.Count == 2 &&
             method.Parameters[0].ParameterType.FullName == typeof(IntPtr).FullName &&
             method.Parameters[1].ParameterType.MetadataType == MetadataType.Single);
+    var gimmickHintModule = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName ==
+            "Triggernometry.PluginBridges.BridgeNamazu.Modules.ShowTextGimmickHintModule");
+    var hintCallback = gimmickHintModule.Methods.Single(method =>
+        method.Name == "CbHint" && method.Parameters.Count == 1);
+    var warningCallback = gimmickHintModule.Methods.Single(method =>
+        method.Name == "CbWarn" && method.Parameters.Count == 1);
+    var lockOnCallback = definition.MainModule.Types
+        .SelectMany(EnumerateCecilTypes)
+        .Single(type => type.FullName ==
+            "Triggernometry.PluginBridges.BridgeNamazu.Modules.VfxModule")
+        .Methods
+        .Single(method => method.Name == "CbLockOn" && method.Parameters.Count == 1);
     Assert(
         CountCalls(
             exportUnserialize,
@@ -2742,8 +2807,23 @@ void ValidateTriggernometryLaunchProcessPatch()
             entitySetHeading,
             typeof(HostPluginBridge).FullName!,
             nameof(HostPluginBridge.SendPostNamazuSetHeading)) == 1 &&
-        entitySetHeading.Body.Instructions.Count == 4,
-        "Triggernometry did not route U6b repository import and local-player heading through the guarded compatibility bridge.");
+        entitySetHeading.Body.Instructions.Count == 4 &&
+        CountCalls(
+            hintCallback,
+            typeof(HostPluginBridge).FullName!,
+            nameof(HostPluginBridge.SendPostNamazuHint)) == 1 &&
+        CountCalls(
+            warningCallback,
+            typeof(HostPluginBridge).FullName!,
+            nameof(HostPluginBridge.SendPostNamazuWarning)) == 1 &&
+        CountCalls(
+            lockOnCallback,
+            typeof(HostPluginBridge).FullName!,
+            nameof(HostPluginBridge.SendPostNamazuLockOn)) == 1 &&
+        hintCallback.Body.Instructions.Count == 3 &&
+        warningCallback.Body.Instructions.Count == 3 &&
+        lockOnCallback.Body.Instructions.Count == 3,
+        "Triggernometry did not route U6b import, heading, Hint, Warn, and LockOn through the guarded compatibility bridge.");
 
     var launchMethod = definition.MainModule.Types
         .SelectMany(EnumerateCecilTypes)

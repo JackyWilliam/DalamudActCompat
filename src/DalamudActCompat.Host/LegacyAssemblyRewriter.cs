@@ -1837,6 +1837,12 @@ public static class LegacyAssemblyRewriter
             bridgeType.GetMethod(nameof(HostPluginBridge.IsTriggernometryHighRiskScriptAllowed))!);
         var pictoAct = module.ImportReference(
             bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuPictoAct))!);
+        var hint = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuHint))!);
+        var warning = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuWarning))!);
+        var lockOn = module.ImportReference(
+            bridgeType.GetMethod(nameof(HostPluginBridge.SendPostNamazuLockOn))!);
         var extractPictoActActorRemovals = module.ImportReference(
             bridgeType.GetMethod(
                 nameof(HostPluginBridge.ExtractPictoActActorRemovalCommands))!);
@@ -1946,6 +1952,44 @@ public static class LegacyAssemblyRewriter
             pictoActCallback,
             pictoAct,
             extractPictoActActorRemovals);
+
+        var gimmickHintModule = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.Modules.ShowTextGimmickHintModule");
+        ReplaceWithBridge(
+            gimmickHintModule.Methods.Single(method =>
+                method.Name == "CbHint" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.String),
+            hint,
+            loadInstance: false,
+            loadParameters: true);
+        ReplaceWithBridge(
+            gimmickHintModule.Methods.Single(method =>
+                method.Name == "CbWarn" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.String),
+            warning,
+            loadInstance: false,
+            loadParameters: true);
+
+        var lockOnCallback = module.Types
+            .SelectMany(EnumerateTypes)
+            .Single(type => type.FullName ==
+                "Triggernometry.PluginBridges.BridgeNamazu.Modules.VfxModule")
+            .Methods
+            .Single(method =>
+                method.Name == "CbLockOn" &&
+                method.Parameters.Count == 1 &&
+                method.Parameters[0].ParameterType.MetadataType == MetadataType.String);
+        // The isolated Host cannot own FFXIV pointers. Keep Triggernometry's evaluated callback
+        // payload, then resolve and execute the native operation inside the game process.
+        ReplaceWithBridge(
+            lockOnCallback,
+            lockOn,
+            loadInstance: false,
+            loadParameters: true);
 
         var entitySetHeading = module.Types
             .SelectMany(EnumerateTypes)

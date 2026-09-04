@@ -19,6 +19,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<PictoActOverlayCommand> pendingCommands = [];
     private readonly List<nint> pendingNativeRemovals = [];
+    private long clearGeneration;
     private long shapeSequence;
     private DateTimeOffset nextDynamicRefreshAt;
 
@@ -54,9 +55,18 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
     internal void Apply(string payload)
     {
-        foreach (var command in Parse(payload, ResolveEntityPosition))
+        var generation = Volatile.Read(ref clearGeneration);
+        var commands = Parse(payload, ResolveEntityPosition);
+        lock (syncRoot)
         {
-            lock (syncRoot)
+            if (generation != clearGeneration)
+            {
+                return;
+            }
+
+            // One PictoACT payload is a drawing transaction. Keeping the whole batch under
+            // one lock prevents a zone/auth clear from leaving only part of an 8-circle set.
+            foreach (var command in commands)
             {
                 if (command.ExecuteAt > DateTimeOffset.UtcNow)
                 {
@@ -168,6 +178,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         lock (syncRoot)
         {
+            Interlocked.Increment(ref clearGeneration);
             ClearLocked();
             // Zone notifications can arrive on the parser thread. Draw drains these handles
             // on Dalamud's framework thread, where calling the client VFX remover is safe.
@@ -2450,7 +2461,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         try
         {
-            return checked((float)new NumericExpressionParser(value).Parse());
+            return checked((float)EvaluateNumericExpression(value));
         }
         catch (Exception ex) when (ex is FormatException or OverflowException)
         {
@@ -2459,6 +2470,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 ex);
         }
     }
+
+    internal static double EvaluateNumericExpression(string value)
+        => new NumericExpressionParser(value).Parse();
 
     private sealed class NumericExpressionParser(string text)
     {
