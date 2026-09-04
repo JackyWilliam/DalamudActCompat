@@ -57,6 +57,7 @@ try
     ValidateActCustomTriggerCompatibility();
     ValidateSynchronousActInvocation();
     ValidatePostNamazuRawLogCompatibility();
+    ValidateExternalPluginLogLineFormat();
     ValidatePostNamazuOverlayHandlerResponse();
     ValidateActTtsDispatch();
     ValidateFoxTtsBridge();
@@ -4625,10 +4626,19 @@ static void ValidateControlCenterPresentation()
     Assert(
         constructorSourceForAuthentication.Contains("StartInitialResourcePreparation();", StringComparison.Ordinal) &&
         !constructorSourceForAuthentication.Contains("lifecycle.Start();", StringComparison.Ordinal) &&
+        constructorSourceForAuthentication.Contains(
+            "private int observedCloudAuthenticationState;",
+            StringComparison.Ordinal) &&
+        constructorSourceForAuthentication.Contains(
+            "RestrictWindowsToAuthenticationGate(openGate: false);",
+            StringComparison.Ordinal) &&
+        !constructorSourceForAuthentication.Contains(
+            "RestrictWindowsToAuthenticationGate(openGate: true);",
+            StringComparison.Ordinal) &&
         pluginSource.Contains("if (!cloudClient.Snapshot.IsSignedIn)", StringComparison.Ordinal) &&
         pluginSource.Contains("if (!IsDactAccessAllowed())", StringComparison.Ordinal) &&
         !hostResourceMethod.Contains("StartIndependentHostAsync", StringComparison.Ordinal),
-        "Authentication no longer gates DACT runtime startup, or core resource download still starts a Host before login.");
+        "Authentication no longer starts silently, gates DACT runtime startup, or keeps core resource download from starting a Host before login.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
@@ -4990,6 +5000,55 @@ static void ValidatePostNamazuRawLogCompatibility()
     Assert(
         method is not null && method.ReturnType == typeof(void),
         "The ACT three-argument ParseRawLogLine ABI required by PostNamazu is missing.");
+}
+
+static void ValidateExternalPluginLogLineFormat()
+{
+    var method = typeof(SelfHostedActRuntime).GetMethod(
+        "TryParseExternalPluginLogLine",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException(
+            "The external plugin log-line parser was not found.");
+    const string timestampText = "2026-09-03T20:50:53.5243638+08:00";
+    const string payload = "0|Matcha#26.8.12.1622#chs-Test|{\"ok\":true}";
+    var arguments = new object?[]
+    {
+        $"00|{timestampText}|{payload}",
+        null,
+        null,
+        null,
+    };
+    var parsed = (bool)(method.Invoke(null, arguments) ?? false);
+    Assert(
+        parsed &&
+        Convert.ToInt32(arguments[1], System.Globalization.CultureInfo.InvariantCulture) == 0 &&
+        arguments[2] is DateTime timestamp &&
+        timestamp == DateTimeOffset.Parse(
+            timestampText,
+            System.Globalization.CultureInfo.InvariantCulture).LocalDateTime &&
+        string.Equals(arguments[3] as string, payload, StringComparison.Ordinal),
+        "A valid Matcha line no longer separates into ACT type, timestamp, and payload.");
+
+    var malformedArguments = new object?[]
+    {
+        "00|not-a-timestamp|0|Matcha#Test|{}",
+        null,
+        null,
+        null,
+    };
+    Assert(
+        !(bool)(method.Invoke(null, malformedArguments) ?? true),
+        "A malformed external plugin line can still enter the ACT log writer.");
+
+    var source = File.ReadAllText(Path.Combine(
+        FindProjectRoot(),
+        "src",
+        "DalamudActCompat.ActRuntime",
+        "SelfHostedActRuntime.cs"));
+    Assert(
+        source.Contains("logOutput.WriteLine(messageType, timestamp, payload);", StringComparison.Ordinal) &&
+        !source.Contains("ParseRawLogLine(false, DateTime.Now, line);", StringComparison.Ordinal),
+        "Host-generated lines bypass the native checksummed ACT log writer.");
 }
 
 static void ValidatePostNamazuOverlayHandlerResponse()

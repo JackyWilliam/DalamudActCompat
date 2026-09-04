@@ -166,7 +166,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly object cloudRuntimeCancellationLock = new();
     private readonly SemaphoreSlim cloudRuntimeTransitionGate = new(1, 1);
     private CancellationTokenSource? cloudRuntimeCancellation;
-    private int observedCloudAuthenticationState = -1;
+    // Cached authentication is restored asynchronously. Treat the initial signed-out
+    // snapshot as already observed so normal game startup does not look like a logout.
+    private int observedCloudAuthenticationState;
     private int cloudRuntimeAuthorized;
     private bool cloudRuntimeInitialized;
     private Task cloudRuntimeTransitionTask = Task.CompletedTask;
@@ -735,7 +737,9 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(coreResourceDownloadWindow);
         windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
-        RestrictWindowsToAuthenticationGate(openGate: true);
+        // Authentication still gates every functional window, but a cold game start must
+        // stay silent until the user explicitly opens DACT or a real logout is observed.
+        RestrictWindowsToAuthenticationGate(openGate: false);
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -4625,7 +4629,7 @@ public sealed class Plugin : IDalamudPlugin
                 if (!actRuntime.InjectExternalPluginLogLine(logLine.Line))
                 {
                     logger.Warning(
-                        "Matcha produced an overlay log line while the game-side ACT parser was stopped.");
+                        "Matcha produced a malformed overlay log line, or the game-side ACT parser was stopped.");
                 }
             });
         }

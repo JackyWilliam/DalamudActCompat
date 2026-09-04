@@ -3,6 +3,7 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using FFXIV_ACT_Plugin.Logfile;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
@@ -278,14 +279,62 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public bool InjectExternalPluginLogLine(string line)
     {
-        if (!IsParserRunning || string.IsNullOrWhiteSpace(line))
+        if (!IsParserRunning ||
+            !TryParseExternalPluginLogLine(
+                line,
+                out var messageType,
+                out var timestamp,
+                out var payload))
         {
             return false;
         }
 
-        // Host-generated ACT lines must re-enter the game-side ACT event pipeline so
-        // OverlayPlugin subscribers see the same LogLine events as native ACT overlays.
-        ActGlobals.oFormActMain.ParseRawLogLine(false, DateTime.Now, line);
+        var logOutput = ActGlobals.oFormActMain.FfxivPlugin?._dataCollection?._logOutput;
+        if (logOutput is null)
+        {
+            return false;
+        }
+
+        // Re-enter through the native writer so OverlayPlugin still receives the event while
+        // upload logs get the same ordering and checksum suffix as parser-generated lines.
+        logOutput.WriteLine(messageType, timestamp, payload);
+        return true;
+    }
+
+    private static bool TryParseExternalPluginLogLine(
+        string line,
+        out LogMessageType messageType,
+        out DateTime timestamp,
+        out string payload)
+    {
+        messageType = default;
+        timestamp = default;
+        payload = string.Empty;
+
+        var typeSeparator = line.IndexOf('|');
+        var timestampSeparator = typeSeparator < 0 ? -1 : line.IndexOf('|', typeSeparator + 1);
+        if (typeSeparator <= 0 ||
+            timestampSeparator <= typeSeparator + 1 ||
+            timestampSeparator == line.Length - 1 ||
+            line.IndexOfAny(['\r', '\n']) >= 0 ||
+            !int.TryParse(
+                line.AsSpan(0, typeSeparator),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var messageTypeValue) ||
+            messageTypeValue < 0 ||
+            !DateTimeOffset.TryParse(
+                line.AsSpan(typeSeparator + 1, timestampSeparator - typeSeparator - 1),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces,
+                out var timestampValue))
+        {
+            return false;
+        }
+
+        messageType = (LogMessageType)messageTypeValue;
+        timestamp = timestampValue.LocalDateTime;
+        payload = line[(timestampSeparator + 1)..];
         return true;
     }
 
