@@ -551,6 +551,9 @@ public sealed class ControlCenterWindow : Window
             ? IceBlue
             : new Vector4(0.70f, 0.72f, 0.76f, 1);
         var (cloudStatusLabel, cloudStatusColor) = ResolveCloudStatus(cloudSnapshot);
+        // The guide documents authenticated runtime controls, so hiding its entry before
+        // sign-in avoids presenting a button that the authentication gate cannot open.
+        var helpAction = cloudSnapshot.IsSignedIn ? openHelp : null;
         if (BrandedWindowChrome.Draw(
                 logoTexture,
                 text.Get("主页", "Home"),
@@ -558,7 +561,7 @@ public sealed class ControlCenterWindow : Window
                 stateColor,
                 VersionLabel,
                 "control-center",
-                helpAction: openHelp,
+                helpAction: helpAction,
                 helpTooltip: text.Get("帮助", "Help"),
                 statusAction: () => cloudQuickPopupRequested = true,
                 statusLabel: $"● {cloudStatusLabel}",
