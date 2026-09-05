@@ -29,6 +29,7 @@ public sealed class HelpWindow : Window
     private static readonly Vector4 Warning = new(0.96f, 0.36f, 0.34f, 1);
 
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly ISharedImmediateTexture logoTexture;
     private readonly PluginLogger logger;
     private readonly Action openRuntimeStatus;
@@ -69,6 +70,7 @@ public sealed class HelpWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
@@ -96,6 +98,7 @@ public sealed class HelpWindow : Window
         try
         {
             if (BrandedWindowChrome.Draw(
+                    headerDrag,
                     logoTexture,
                     text.Get("使用帮助", "Help"),
                     text.Get("使用文档", "User guide"),

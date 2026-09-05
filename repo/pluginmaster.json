@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.4.0.2",
+    "AssemblyVersion":  "0.4.0.3",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.2/DalamudActCompat-core.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.3/DalamudActCompat-core.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.2/DalamudActCompat-core.zip",
-    "LastUpdate":  1788534347835,
-    "Changelog":  "v0.4.0.2 未登录时不再显示无效的帮助入口，并补充免费声明与一次性激活码获取说明。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.3/DalamudActCompat-core.zip",
+    "LastUpdate":  1788581052608,
+    "Changelog":  "v0.4.0.3 修复主窗口及各榜单拖动时顶部与内容脱节；FFLogs 预估新增失败退避、鉴权暂停和清晰错误提示，刷新失败保留旧缓存；修正云同步状态悬浮窗圆角。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

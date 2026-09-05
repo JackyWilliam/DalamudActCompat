@@ -26,6 +26,7 @@ public sealed class RoleSplitMeterWindow : Window
     private readonly MeterService meterService;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly MeterWindow classicRenderer;
     private readonly Action saveConfiguration;
     private readonly RoleSplitGroup group;
@@ -117,6 +118,7 @@ public sealed class RoleSplitMeterWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow(!Profile.IsLocked && Profile.ShowHeader && !locateOnNextDraw);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(
@@ -255,10 +257,9 @@ public sealed class RoleSplitMeterWindow : Window
             ? text.Get("治疗", "Healer")
             : text.Get("D / T", "D / T");
         ImGui.InvisibleButton("role-split-drag", size);
-        if (!embeddedPreview && !toggleHovered && !Profile.IsLocked && ImGui.IsItemActive() &&
-            ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        if (!embeddedPreview)
         {
-            ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
+            headerDrag.HandleItem(enabled: !Profile.IsLocked, allowStart: !toggleHovered);
         }
         if (!embeddedPreview && toggleHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {

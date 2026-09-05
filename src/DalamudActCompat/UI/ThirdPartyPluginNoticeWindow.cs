@@ -39,6 +39,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private readonly Action<FoxTtsProChoice> completeSetup;
     private readonly PluginLogger logger;
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly ISharedImmediateTexture logoTexture;
     private IReadOnlyList<BundledActPluginDescriptor> disclosures = [];
     private IReadOnlyList<BundledActPluginDescriptor> pending = [];
@@ -90,6 +91,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
@@ -122,6 +124,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 ? text.Get($"待确认 {pending.Count} 项", $"{pending.Count} pending")
                 : text.Get("声明已确认", "Notices acknowledged");
             if (BrandedWindowChrome.Draw(
+                    headerDrag,
                     logoTexture,
                     text.Get("三方扩展", "Third-party extensions"),
                     noticeState,
