@@ -78,6 +78,7 @@ public sealed class ControlCenterWindow : Window
     private const string CloudQuickPopupId = "云同步状态###DalamudActCompatCloudQuickStatus";
 
     private readonly PluginConfiguration configuration;
+    private readonly WindowDragController headerDrag = new();
     private readonly IParserEngine parserEngine;
     private readonly PluginLogger logger;
     private readonly UiText text;
@@ -361,6 +362,7 @@ public sealed class ControlCenterWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow(!locateOnNextDraw);
         if (locateOnNextDraw)
         {
             var viewport = ImGui.GetMainViewport();
@@ -555,6 +557,7 @@ public sealed class ControlCenterWindow : Window
         // sign-in avoids presenting a button that the authentication gate cannot open.
         var helpAction = cloudSnapshot.IsSignedIn ? openHelp : null;
         if (BrandedWindowChrome.Draw(
+                headerDrag,
                 logoTexture,
                 text.Get("主页", "Home"),
                 stateLabel,

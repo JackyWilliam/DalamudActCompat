@@ -14,6 +14,7 @@ internal sealed class CloudBanNoticeWindow : Window
     private static readonly Vector4 Red = new(0.96f, 0.42f, 0.38f, 1);
 
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly ISharedImmediateTexture logoTexture;
     private CloudBanNotice? notice;
     private bool lifted;
@@ -57,6 +58,7 @@ internal sealed class CloudBanNoticeWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow(!locateOnNextDraw);
         if (locateOnNextDraw)
         {
             var viewport = ImGui.GetMainViewport();
@@ -101,6 +103,7 @@ internal sealed class CloudBanNoticeWindow : Window
         try
         {
             BrandedWindowChrome.Draw(
+                headerDrag,
                 logoTexture,
                 text.Get("账号安全", "Account security"),
                 lifted

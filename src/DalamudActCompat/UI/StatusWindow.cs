@@ -19,6 +19,7 @@ public sealed class StatusWindow : Window
 
     private readonly IParserEngine parserEngine;
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly ISharedImmediateTexture logoTexture;
     private readonly Func<HostSupervisorSnapshot> getHostSnapshot;
     private readonly Func<HostSupervisorSnapshot> getMatchaHostSnapshot;
@@ -78,6 +79,7 @@ public sealed class StatusWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
@@ -109,6 +111,7 @@ public sealed class StatusWindow : Window
                 ? IceBlue
                 : new Vector4(0.70f, 0.72f, 0.76f, 1);
             if (BrandedWindowChrome.Draw(
+                    headerDrag,
                     logoTexture,
                     text.Get("运行状态", "Runtime status"),
                     stateLabel,

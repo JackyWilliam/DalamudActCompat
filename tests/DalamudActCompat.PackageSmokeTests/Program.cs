@@ -101,6 +101,7 @@ try
     ValidateMeterRows();
     ValidateMeterLayout();
     ValidateIndependentMeterWindows();
+    ValidateWindowDragContinuity();
     ValidatePictoActOverlayCommands();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
@@ -4380,6 +4381,67 @@ static Encounter CreateDutySegment(
     {
         TerritoryId = 777,
     };
+
+static void ValidateWindowDragContinuity()
+{
+    var drag = new WindowDragController();
+    var otherWindow = new WindowDragController();
+    var origin = new Vector2(100, 200);
+    var grab = new Vector2(130, 215);
+    drag.ObserveHandle(10, grab, origin, clicked: true, active: true);
+    var moved = drag.ResolvePosition(11, new Vector2(390, 180), mouseDown: true, enabled: true);
+    Assert(moved == new Vector2(360, 165),
+        "A fast diagonal drag must retain its grab offset without smoothing or losing movement.");
+    Assert(otherWindow.ResolvePosition(11, new Vector2(390, 180), true, true) is null,
+        "Dragging one window must not move another window or its editor preview.");
+    drag.ObserveHandle(11, new Vector2(390, 180), moved!.Value, clicked: false, active: true);
+    Assert(drag.ResolvePosition(12, new Vector2(125, 220), true, true) == new Vector2(95, 205),
+        "Reversing direction must follow the current cursor without accumulating position error.");
+    Assert(drag.ResolvePosition(12, grab, mouseDown: false, enabled: true) is null &&
+           drag.ResolvePosition(12, grab, mouseDown: true, enabled: true) is null,
+        "Releasing the mouse must end the drag until a new header click.");
+
+    drag.ObserveHandle(20, grab, origin, clicked: true, active: true);
+    Assert(drag.ResolvePosition(21, grab, mouseDown: true, enabled: false) is null &&
+           drag.ResolvePosition(21, grab, mouseDown: true, enabled: true) is null,
+        "Locking or explicitly locating the window must cancel an existing drag.");
+    drag.ObserveHandle(30, grab, origin, clicked: true, active: true);
+    Assert(drag.ResolvePosition(32, grab, true, true) is null,
+        "A hidden or closed window must not resume a stale drag when shown again.");
+    drag.ObserveHandle(40, grab, origin, clicked: false, active: true);
+    Assert(drag.ResolvePosition(41, grab, true, true) is null,
+        "A header control excluded from drag activation must not start dragging while held.");
+    drag.ObserveHandle(50, grab, origin, clicked: true, active: true);
+    drag.ObserveHandle(50, grab, origin, clicked: false, active: false);
+    Assert(drag.ResolvePosition(51, grab, true, true) is null,
+        "Losing the active header must release its drag capture.");
+    drag.ObserveHandle(60, grab, origin, clicked: true, active: true);
+    drag.Cancel();
+    Assert(drag.ResolvePosition(61, grab, true, true) is null,
+        "Collapsing or expanding a window must release its old grab point.");
+
+    // These windows must set position before Begin builds the background and clip
+    // rectangles; correct mouse math alone cannot prevent mixed-frame vertices.
+    var projectRoot = FindProjectRoot();
+    foreach (var relativePath in new[]
+    {
+        "UI/ControlCenterWindow.cs", "UI/HelpWindow.cs", "UI/StatusWindow.cs",
+        "UI/ThirdPartyPluginNoticeWindow.cs", "UI/CloudBanNoticeWindow.cs",
+        "Encounters/EncounterWindow.cs", "Meter/MeterStyleEditorWindow.cs",
+        "Meter/MeterWindow.cs", "Meter/HorizontalMeterWindow.cs", "Meter/RoleSplitMeterWindow.cs",
+    })
+    {
+        var source = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", relativePath));
+        var preDraw = source[source.IndexOf("public override void PreDraw()", StringComparison.Ordinal)..];
+        preDraw = preDraw[..preDraw.IndexOf("public override void PostDraw()", StringComparison.Ordinal)];
+        Assert(preDraw.Contains("headerDrag.PrepareNextWindow(", StringComparison.Ordinal) &&
+               !source.Contains("ImGui.SetWindowPos(", StringComparison.Ordinal),
+            $"{relativePath} must apply dragging before rendering rather than moving mid-frame.");
+    }
+    var chrome = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "BrandedWindowChrome.cs"));
+    Assert(!chrome.Contains("ImGui.SetWindowPos(", StringComparison.Ordinal),
+        "Shared branded headers must not move a window after submitting header vertices.");
+}
 
 static void ValidateControlCenterPresentation()
 {

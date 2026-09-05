@@ -16,6 +16,7 @@ internal static class BrandedWindowChrome
     private static readonly Dictionary<string, float> NavigationIndicatorPositions = new(StringComparer.Ordinal);
 
     public static bool Draw(
+        WindowDragController drag,
         ISharedImmediateTexture logoTexture,
         string sectionLabel,
         string centerLabel,
@@ -100,10 +101,7 @@ internal static class BrandedWindowChrome
         ImGui.InvisibleButton(
             $"branded-window-drag-handle##{id}",
             new Vector2(Math.Max(1, availableWidth - trailingWidth), height));
-        if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
-        {
-            ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
-        }
+        drag.HandleItem();
 
         var closeRequested = false;
         var actionButtonOffsetY = (height - actionButtonSize) * 0.5f;

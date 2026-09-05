@@ -31,6 +31,7 @@ public sealed class EncounterWindow : Window
     private readonly PluginPaths paths;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly JobIconTextureSet jobIcons;
     private readonly ISharedImmediateTexture logoTexture;
     private readonly Func<uint?, string, string> localizeZoneName;
@@ -90,6 +91,7 @@ public sealed class EncounterWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
@@ -118,6 +120,7 @@ public sealed class EncounterWindow : Window
                 ? text.Get("近期战斗", "Recent encounters")
                 : text.Get("日志文件", "Log files");
             if (BrandedWindowChrome.Draw(
+                    headerDrag,
                     logoTexture,
                     text.Get("战斗记录", "Combat History"),
                     pageLabel,

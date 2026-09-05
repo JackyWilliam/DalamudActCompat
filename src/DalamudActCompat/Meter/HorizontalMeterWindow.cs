@@ -15,6 +15,7 @@ public sealed class HorizontalMeterWindow : Window
     private readonly MeterService meterService;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly JobIconTextureSet jobIcons;
     private readonly Action saveConfiguration;
     private float scrollOffset;
@@ -71,6 +72,7 @@ public sealed class HorizontalMeterWindow : Window
 
     public override void PreDraw()
     {
+        var canDrag = !Profile.IsLocked && !locateOnNextDraw;
         var viewport = ImGui.GetMainViewport();
         if (locateOnNextDraw)
         {
@@ -88,6 +90,7 @@ public sealed class HorizontalMeterWindow : Window
                 ImGuiCond.FirstUseEver);
         }
 
+        headerDrag.PrepareNextWindow(canDrag);
         Flags = ImGuiWindowFlags.NoTitleBar |
                 ImGuiWindowFlags.NoCollapse |
                 ImGuiWindowFlags.NoScrollbar |
@@ -192,10 +195,9 @@ public sealed class HorizontalMeterWindow : Window
         var dragWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - (dragStart.X - start.X));
         ImGui.SetCursorScreenPos(dragStart);
         ImGui.InvisibleButton("horizontal-meter-drag", new Vector2(dragWidth, lineHeight));
-        if (!embeddedPreview && !Profile.IsLocked && ImGui.IsItemActive() &&
-            ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        if (!embeddedPreview)
         {
-            ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
+            headerDrag.HandleItem(enabled: !Profile.IsLocked);
         }
 
         ImGui.GetWindowDrawList().AddText(

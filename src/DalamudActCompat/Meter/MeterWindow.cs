@@ -56,12 +56,11 @@ public sealed class MeterWindow : Window
     private readonly Func<uint?, string, string> localizeZoneName;
     private readonly Action saveConfiguration;
     private bool isHeightAnimationActive;
-    private bool isDragging;
+    private readonly WindowDragController headerDrag = new();
     private bool observedCompactMode;
     private float heightAnimationElapsedSeconds;
     private float heightAnimationStart;
     private float heightAnimationTarget;
-    private Vector2 dragOffset;
     private bool locateOnNextDraw;
     private long locatePreviewExpiresAt;
 
@@ -125,6 +124,7 @@ public sealed class MeterWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow(!configuration.Meter.IsLocked && !locateOnNextDraw);
         if (locateOnNextDraw)
         {
             var viewport = ImGui.GetMainViewport();
@@ -566,26 +566,7 @@ public sealed class MeterWindow : Window
 
     private void HandleHeaderDrag(MeterSettings settings, bool allowStart = true)
     {
-        if (settings.IsLocked)
-        {
-            return;
-        }
-
-        if (allowStart && ImGui.IsItemClicked(ImGuiMouseButton.Left))
-        {
-            isDragging = true;
-            dragOffset = ImGui.GetMousePos() - ImGui.GetWindowPos();
-        }
-
-        if (isDragging && ImGui.IsMouseDown(ImGuiMouseButton.Left))
-        {
-            ImGui.SetWindowPos(ImGui.GetMousePos() - dragOffset, ImGuiCond.Always);
-        }
-
-        if (isDragging && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
-        {
-            isDragging = false;
-        }
+        headerDrag.HandleItem(enabled: !settings.IsLocked, allowStart: allowStart);
     }
 
     private static bool CanInteractWithCompactToggle(MeterSettings settings)
@@ -637,7 +618,7 @@ public sealed class MeterWindow : Window
             settings.CompactMode = true;
             observedCompactMode = true;
         }
-        isDragging = false;
+        headerDrag.Cancel();
         saveConfiguration();
     }
 

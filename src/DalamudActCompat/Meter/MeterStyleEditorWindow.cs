@@ -26,6 +26,7 @@ public sealed class MeterStyleEditorWindow : Window
     private readonly Encounter previewEncounter;
     private readonly IReadOnlyList<CombatantRow> previewRows;
     private readonly UiText text;
+    private readonly WindowDragController headerDrag = new();
     private readonly Action saveConfiguration;
     private MeterWindowKind selectedKind;
     private RoleSplitGroup selectedRoleSplitGroup;
@@ -97,6 +98,7 @@ public sealed class MeterStyleEditorWindow : Window
 
     public override void PreDraw()
     {
+        headerDrag.PrepareNextWindow();
         // Only the three workspace panels may scroll. The outer editor uses the
         // remaining height explicitly, so an outer scrollbar is always visual noise.
         Flags = ImGuiWindowFlags.NoTitleBar |
@@ -131,6 +133,7 @@ public sealed class MeterStyleEditorWindow : Window
             "Combat Meter Layout Editor###DalamudActCompatMeterStyleEditor");
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "--";
         if (BrandedWindowChrome.Draw(
+                headerDrag,
                 logoTexture,
                 text.Get("布局编辑器", "Layout editor"),
                 KindLabel(selectedKind),
