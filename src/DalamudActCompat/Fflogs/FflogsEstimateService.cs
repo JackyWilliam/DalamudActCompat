@@ -1043,6 +1043,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         var stage = "token endpoint";
         try
         {
+            // A semaphore release can win against a queued waiter's cancellation
+            // callback during shutdown. Recheck the token after admission as well.
+            cancellationToken.ThrowIfCancellationRequested();
             // Check again after acquiring the gate: other jobs may have been queued
             // before the first failure, disabling the feature, or a credential edit.
             var settings = GetSettingsSnapshot();
@@ -1060,6 +1063,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 JsonSerializer.Serialize(new { query, variables }),
                 Encoding.UTF8,
                 "application/json");
+            cancellationToken.ThrowIfCancellationRequested();
             using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
@@ -1132,6 +1136,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             ["grant_type"] = "client_credentials",
         });
+        cancellationToken.ThrowIfCancellationRequested();
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)

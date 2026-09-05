@@ -23,7 +23,10 @@ internal static class FflogsRequestSmokeTests
         await ValidateCredentialRaceAsync(testRoot, disable: true, oldSuccess: true);
         await ValidateCacheAndBearerRecoveryAsync(testRoot);
         await ValidateRankingPageFailureAsync(testRoot);
-        await ValidateShutdownAsync(testRoot);
+        // Repeat cancellation admission races; a single scheduler ordering hid this
+        // boundary locally before it was caught on the hosted Windows runner.
+        for (var iteration = 0; iteration < 32; iteration++)
+            await ValidateShutdownAsync(testRoot);
         Console.WriteLine("FFLogs request protection smoke tests passed (offline HTTP + virtual time).");
     }
 
@@ -322,7 +325,8 @@ internal static class FflogsRequestSmokeTests
         fixture.Service.CaptureAvailableEstimates(PartyEncounter());
         await fixture.Service.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Check(fixture.Handler.Total == 1 && fixture.Log.WarningCount == 0 && fixture.Log.ErrorCount == 0,
-            "Shutdown cancellation became a retry failure or sent queued requests.");
+            $"Shutdown cancellation became a retry failure or sent queued requests: requests={fixture.Handler.Total}, " +
+            $"warnings={fixture.Log.WarningCount}, errors={fixture.Log.ErrorCount}.");
     }
 
     private static FflogsSettings Settings() => new() { Enabled = true, ClientId = "synthetic-client", ClientSecret = SecretSentinel };
