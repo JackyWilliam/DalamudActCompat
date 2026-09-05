@@ -3,7 +3,7 @@
     "Author":  "raynording",
     "Name":  "Dalamud ACT Compat",
     "InternalName":  "DalamudActCompat",
-    "AssemblyVersion":  "0.4.0.2",
+    "AssemblyVersion":  "0.4.0.3",
     "TestingAssemblyVersion":  null,
     "Description":  "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
     "Punchline":  "In-game ACT-compatible parsing platform foundation.",
@@ -13,11 +13,11 @@
     "CanUnloadAsync":  true,
     "IsHide":  false,
     "IsTestingExclusive":  false,
-    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.2/DalamudActCompat-core.zip",
+    "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.3/DalamudActCompat-core.zip",
     "DownloadLinkTesting":  null,
-    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.2/DalamudActCompat-core.zip",
-    "LastUpdate":  1788534347835,
-    "Changelog":  "v0.4.0.2 未登录时不再显示无效的帮助入口，并补充免费声明与一次性激活码获取说明。",
+    "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.3/DalamudActCompat-core.zip",
+    "LastUpdate":  1788577104207,
+    "Changelog":  "v0.4.0.3 修复主窗口及共用顶部栏、经典/横版/D/T/H 榜单拖动时顶部与内容脱节；保留按钮、锁定和编辑预览行为，避免关闭重开后继续跟随鼠标。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]
