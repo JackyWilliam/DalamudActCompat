@@ -132,6 +132,7 @@ try
     await ValidateEncryptedConfigurationBackupAsync(testRoot);
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
+    await CloudOperationGuardSmokeTests.RunAsync(FindProjectRoot());
     await ValidateCloudApiContractAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
     await ValidateFirstLoginReportsServerUnbanAsync(testRoot);

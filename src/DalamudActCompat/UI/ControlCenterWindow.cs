@@ -3008,7 +3008,10 @@ public sealed class ControlCenterWindow : Window
                 "Up to 2 encrypted versions with different content are retained; unchanged settings use no extra slot."));
 
             ImGui.BeginDisabled(snapshot.IsBusy);
-            if (ImGui.Button(text.Get("上传当前配置", "Upload current configuration"), new Vector2(152, 34)))
+            var uploadLabel = snapshot.IsBusy
+                ? text.Get("处理中…", "Working…")
+                : text.Get("上传当前配置", "Upload current configuration");
+            if (ImGui.Button($"{uploadLabel}###CloudUploadCurrent", new Vector2(152, 34)))
             {
                 cloud.Upload();
             }

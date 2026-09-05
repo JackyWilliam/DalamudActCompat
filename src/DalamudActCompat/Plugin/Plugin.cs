@@ -83,6 +83,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly CloudClientService cloudClient;
+    private readonly CloudOperationGuard cloudOperationGuard = new();
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
     private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
@@ -676,7 +677,7 @@ public sealed class Plugin : IDalamudPlugin
             parserEngine.ResetCurrentEncounter,
             name => _ = actRuntime.ApplyOverlayWindowSettings(name),
             new CloudUiBridge(
-                () => cloudClient.Snapshot,
+                () => cloudOperationGuard.GetUiSnapshot(cloudClient.Snapshot),
                 request => StartCloudOperation(token => cloudClient.RegisterAsync(
                     request.Username,
                     request.Password,
@@ -2249,7 +2250,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private Task? StartBackgroundOperation(Func<Task> operation)
+    private Task? StartBackgroundOperation(Func<Task> operation, Action? onCompleted = null)
     {
         lock (backgroundOperationLock)
         {
@@ -2262,13 +2263,22 @@ public sealed class Plugin : IDalamudPlugin
             // would itself create unowned plugin code that could race the ALC teardown.
             var task = Task.Run(async () =>
             {
-                // A queued task may not begin executing until after a live ban has closed
-                // the public UI; re-check at execution time as well as at registration time.
-                if (Volatile.Read(ref cloudAccessBlocked) != 0)
+                try
                 {
-                    return;
+                    // A queued task may not begin executing until after a live ban has closed
+                    // the public UI; re-check at execution time as well as at registration time.
+                    if (Volatile.Read(ref cloudAccessBlocked) != 0)
+                    {
+                        return;
+                    }
+                    await operation().ConfigureAwait(false);
                 }
-                await operation().ConfigureAwait(false);
+                finally
+                {
+                    // Release admission inside the tracked task, including skipped work;
+                    // no detached continuation may survive the plugin's unload join.
+                    onCompleted?.Invoke();
+                }
             }, CancellationToken.None);
             backgroundOperations.Add(task);
             return task;
@@ -2339,9 +2349,9 @@ public sealed class Plugin : IDalamudPlugin
     private Task<string> StartFactoryReset()
         => factoryResetOperations.Start();
 
-    private void StartCloudOperation(Func<CancellationToken, Task> operation)
+    private bool StartCloudOperation(Func<CancellationToken, Task> operation)
     {
-        StartBackgroundOperation(async () =>
+        return cloudOperationGuard.TryStart(StartBackgroundOperation, async () =>
         {
             try
             {
@@ -2404,7 +2414,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             return;
         }
-        if (cloudClient.Snapshot.IsBusy ||
+        if (cloudOperationGuard.IsBusy || cloudClient.Snapshot.IsBusy ||
             services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
             !cloudRuntimeTransitionTask.IsCompletedSuccessfully ||
             Interlocked.CompareExchange(ref cloudAutoSyncRunning, 1, 0) != 0)
@@ -2425,7 +2435,7 @@ public sealed class Plugin : IDalamudPlugin
         Interlocked.Exchange(ref cloudAutoSyncDueUtcTicks, 0);
         // The startup check is content-deduplicated. A manual upload remains available when
         // the user needs a fresh snapshot during the same game session.
-        StartCloudOperation(async token =>
+        if (!StartCloudOperation(async token =>
         {
             try
             {
@@ -2442,7 +2452,13 @@ public sealed class Plugin : IDalamudPlugin
             {
                 Interlocked.Exchange(ref cloudAutoSyncRunning, 0);
             }
-        });
+        }))
+        {
+            // A manual click can win admission after the earlier check. Preserve
+            // this one-shot request instead of leaving auto-sync permanently busy.
+            Interlocked.CompareExchange(ref cloudAutoSyncDueUtcTicks, dueTicks, 0);
+            Interlocked.Exchange(ref cloudAutoSyncRunning, 0);
+        }
     }
 
     private void StartCloudRestore(string backupId)
