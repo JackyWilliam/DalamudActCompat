@@ -59,6 +59,14 @@ jobs:
             -p:DebugSymbols=false `
             "-p:DalamudLibPath=$dalamud"
 
+      - name: Verify scanner resource lifetime
+        shell: pwsh
+        run: |
+          dotnet build tests/DalamudActCompat.ScannerSmokeTests/DalamudActCompat.ScannerSmokeTests.csproj --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Scanner smoke build failed." }
+          & "tests/DalamudActCompat.ScannerSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.ScannerSmokeTests.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Scanner resource lifetime regression." }
+
       - name: Collect plugin artifact
         shell: pwsh
         env:

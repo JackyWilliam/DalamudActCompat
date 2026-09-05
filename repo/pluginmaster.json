@@ -16,8 +16,8 @@
     "DownloadLinkInstall":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.4/DalamudActCompat-core.zip",
     "DownloadLinkTesting":  null,
     "DownloadLinkUpdate":  "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.4/DalamudActCompat-core.zip",
-    "LastUpdate":  1788585374085,
-    "Changelog":  "v0.4.0.4 为云同步操作增加全流程忙碌保护，准备、停机、上传和恢复期间拒绝重复点击，避免重复排队；注册页补充免费激活码获取说明、QQ 群号复制及 Discord 入口。",
+    "LastUpdate":  1788586503622,
+    "Changelog":  "v0.4.0.4 修复解析器初始化时系统句柄重复释放及扫描副本未及时清理的问题；云同步准备、停机、上传和恢复期间增加全流程忙碌保护，拒绝重复点击；注册页补充免费激活码获取说明、QQ 群号复制及 Discord 入口。建议更新后完整重启游戏。",
     "IconUrl":  "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

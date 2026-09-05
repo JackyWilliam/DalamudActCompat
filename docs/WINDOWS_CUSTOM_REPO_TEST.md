@@ -48,6 +48,14 @@ dotnet restore DalamudActCompat.slnx
 dotnet build DalamudActCompat.slnx -c Release
 ```
 
+Run the scanner resource-lifetime regression in its isolated process before packaging:
+
+```powershell
+& .\tests\DalamudActCompat.ScannerSmokeTests\bin\Release\net10.0-windows\DalamudActCompat.ScannerSmokeTests.exe
+```
+
+This checks that unrelated event handles survive repeated scanner initialization and garbage collection, that scanner results still refer to the live module, and that failed image opens/mappings release their resources. Build CI and the Release workflow also run this check. When updating from a version with the old handle-lifetime bug, fully restart the game; plugin reload alone cannot repair already-invalid process handles.
+
 After the build succeeds, run the Release workflow. It validates the package, uploads all resource packs to a draft first, uploads the core last, and only then publishes the release:
 
 ```powershell
