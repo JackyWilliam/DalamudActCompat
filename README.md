@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-[最新版本](https://github.com/JackyWilliam/DalamudActCompat/releases/latest) · [第三方扩展兼容说明](docs/third-party-compatibility.md) · [问题反馈](https://github.com/JackyWilliam/DalamudActCompat/issues)
+[官方网站](https://dact.localhost2019.com/) · [最新版本](https://github.com/JackyWilliam/DalamudActCompat/releases/latest) · [第三方扩展兼容说明](docs/third-party-compatibility.md) · [问题反馈](https://github.com/JackyWilliam/DalamudActCompat/issues)
 
 **在 FFXIV 的 Dalamud 中直接使用战斗统计、Cactbot 悬浮窗和常见 ACT 扩展，不需要另外启动 ACT。**
 
