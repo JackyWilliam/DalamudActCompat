@@ -120,6 +120,7 @@ try
     ValidateFflogsCurrentEncounterTable();
     ValidateFflogsConcurrencyBoundaries();
     await ValidateFflogsCacheWritersAsync(testRoot);
+    await FflogsRequestSmokeTests.RunAsync(testRoot);
     await ValidateBundledPluginInstallLifecycleAsync();
     await ValidatePluginLifecycleShutdownAsync(testRoot);
     ValidatePluginUnloadOwnership();

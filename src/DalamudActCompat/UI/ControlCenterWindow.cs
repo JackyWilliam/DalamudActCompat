@@ -3863,17 +3863,12 @@ public sealed class ControlCenterWindow : Window
 
             var status = fflogsEstimateService.Status;
             ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
-            var statusDetail = status.State is
-                FflogsEstimateState.Error or
-                FflogsEstimateState.InactiveContent
-                ? status.Message
-                : string.Empty;
-            var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 2.4f;
+            var statusDetail = FflogsStatusDetail(status);
+            var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 4.4f;
             if (ImGui.BeginChild(
                     "fflogs-status-detail",
                     new Vector2(-1, statusDetailHeight),
-                    false,
-                    ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+                    false))
             {
                 if (!string.IsNullOrWhiteSpace(statusDetail))
                 {
@@ -3959,14 +3954,43 @@ public sealed class ControlCenterWindow : Window
         FflogsEstimateState.Ready => text.Get("状态：估算数据已就绪", "Status: estimate data ready"),
         FflogsEstimateState.InactiveContent => text.Get("状态：当前副本没有活跃榜单", "Status: no active ranking for this duty"),
         FflogsEstimateState.Error => text.Get("状态：连接失败", "Status: connection failed"),
+        FflogsEstimateState.RequestsPaused => text.Get("状态：自动请求已暂停", "Status: automatic requests paused"),
+        FflogsEstimateState.RetryWaiting => text.Get("状态：等待重试", "Status: waiting to retry"),
         _ => state.ToString(),
     };
+
+    private string FflogsStatusDetail(FflogsEstimateStatus status)
+    {
+        var reason = status.FailureKind switch
+        {
+            FflogsFailureKind.CredentialsRejected => text.Get("API 凭据被拒绝，请检查 Client ID / Secret。", "API credentials rejected; check Client ID / Secret."),
+            FflogsFailureKind.AccessDenied => text.Get("服务拒绝访问，请检查 API Client 权限或网络限制。", "Access denied; check API client permissions or network restrictions."),
+            FflogsFailureKind.RateLimited => text.Get("请求受到限流。", "Requests are rate limited."),
+            FflogsFailureKind.ServerError => text.Get("FFLogs 服务暂时异常。", "FFLogs is temporarily unavailable."),
+            FflogsFailureKind.Timeout => text.Get("连接 FFLogs 超时。", "The FFLogs request timed out."),
+            FflogsFailureKind.Network => text.Get("无法通过网络连接 FFLogs。", "Could not connect to FFLogs over the network."),
+            FflogsFailureKind.InvalidResponse => text.Get("FFLogs 未返回可用的响应或榜单数据。", "FFLogs did not return usable response/ranking data."),
+            _ => string.Empty,
+        };
+        if (status.FailureKind is null)
+            return status.State is FflogsEstimateState.Error or FflogsEstimateState.InactiveContent
+                ? status.Message : string.Empty;
+
+        var retry = status.RetryAt is { } retryAt
+            ? text.Get($"下次请求不早于 {retryAt.ToLocalTime():MM-dd HH:mm:ss}。", $"Next request no earlier than {retryAt.ToLocalTime():MM-dd HH:mm:ss}.")
+            : string.Empty;
+        var action = status.State == FflogsEstimateState.RequestsPaused
+            ? text.Get("修正配置后或点击“测试并刷新”重试。", "Correct the settings or click Test and refresh to retry.")
+            : text.Get("后续需要数据时自动重试；手动刷新不会跳过等待。", "Retries automatically when data is needed; manual refresh does not bypass the wait.");
+        return $"{reason}\n{status.Message}\n{retry}{action}\n" +
+               text.Get("已有估算缓存仍保留。", "Existing estimate cache is retained.");
+    }
 
     private static Vector4 FflogsStatusColor(FflogsEstimateState state) => state switch
     {
         FflogsEstimateState.Ready => IceBlue,
-        FflogsEstimateState.Error => new Vector4(0.93f, 0.38f, 0.36f, 1),
-        FflogsEstimateState.InactiveContent => Gold,
+        FflogsEstimateState.Error or FflogsEstimateState.RequestsPaused => new Vector4(0.93f, 0.38f, 0.36f, 1),
+        FflogsEstimateState.InactiveContent or FflogsEstimateState.RetryWaiting => Gold,
         _ => new Vector4(0.70f, 0.72f, 0.76f, 1),
     };
 

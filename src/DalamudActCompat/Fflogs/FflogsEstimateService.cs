@@ -17,9 +17,15 @@ public enum FflogsEstimateState
     Ready,
     InactiveContent,
     Error,
+    RequestsPaused,
+    RetryWaiting,
 }
 
-public sealed record FflogsEstimateStatus(FflogsEstimateState State, string Message);
+public sealed record FflogsEstimateStatus(FflogsEstimateState State, string Message)
+{
+    public FflogsFailureKind? FailureKind { get; init; }
+    public DateTimeOffset? RetryAt { get; init; }
+}
 
 public sealed record FflogsActiveEncounter(
     uint TerritoryId,
@@ -66,10 +72,9 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     private readonly Func<bool> useChineseRankings;
     private readonly string cachePath;
     private readonly PluginLogger logger;
-    private readonly HttpClient httpClient = new()
-    {
-        Timeout = TimeSpan.FromSeconds(20),
-    };
+    private readonly HttpClient httpClient;
+    private readonly TimeProvider timeProvider;
+    private readonly FflogsRequestGuard requestGuard;
     private readonly SemaphoreSlim apiGate = new(1, 1);
     private readonly SemaphoreSlim cacheWriteGate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
@@ -100,10 +105,26 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         string cachePath,
         PluginLogger logger,
         Func<bool>? useChineseRankings = null)
+        : this(getSettings, cachePath, logger,
+            new HttpClient { Timeout = TimeSpan.FromSeconds(20) }, TimeProvider.System, useChineseRankings)
+    {
+    }
+
+    // Inject transport/time only for deterministic offline failure/recovery tests.
+    internal FflogsEstimateService(
+        Func<FflogsSettings> getSettings,
+        string cachePath,
+        PluginLogger logger,
+        HttpClient httpClient,
+        TimeProvider timeProvider,
+        Func<bool>? useChineseRankings = null)
     {
         this.getSettings = getSettings;
         this.cachePath = cachePath;
         this.logger = logger;
+        this.httpClient = httpClient;
+        this.timeProvider = timeProvider;
+        requestGuard = new FflogsRequestGuard(timeProvider);
         this.useChineseRankings = useChineseRankings ?? (static () => true);
         LoadCache();
         CanUseApi(GetSettingsSnapshot());
@@ -113,6 +134,10 @@ public sealed class FflogsEstimateService : IAsyncDisposable
     {
         get
         {
+            var settings = GetSettingsSnapshot();
+            requestGuard.Synchronize(settings);
+            if (HasApiAccess(settings) && requestGuard.Failure is { } failure)
+                return failure;
             lock (statusLock)
             {
                 return status;
@@ -385,6 +410,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     public void RequestRefresh(Encounter? encounter)
     {
+        requestGuard.RequestManualRetry();
         var settings = GetSettingsSnapshot();
         if (!CanUseApi(settings))
         {
@@ -399,7 +425,6 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
         encounter = encounter.FflogsRankingEncounter ?? encounter;
 
-        var activeEncounter = ActiveEncounter;
         var specNames = ResolveFflogsSpecs(encounter);
         if (specNames.Count == 0)
         {
@@ -407,22 +432,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             return;
         }
 
-        if (activeEncounter is not null)
-        {
-            var scope = GetRankingScope();
-            lock (cacheLock)
-            {
-                foreach (var specName in specNames)
-                {
-                    curves.Remove(CurveKey(
-                        scope,
-                        activeEncounter.EncounterId,
-                        activeEncounter.Difficulty,
-                        specName));
-                }
-            }
-        }
-
+        // Keep the old curves visible until a complete replacement has been fetched.
         foreach (var specName in specNames)
         {
             QueueCurveLoad(specName);
@@ -460,31 +470,27 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     public void NotifyCredentialsChanged()
     {
+        requestGuard.Synchronize(GetSettingsSnapshot());
+        ClearAccessToken();
+
+        var settings = GetSettingsSnapshot();
+        if (CanUseApi(settings))
+        {
+            if (ActiveEncounter is null)
+                SetInactiveContentStatus();
+            else
+                SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
+        }
+    }
+
+    private void ClearAccessToken()
+    {
         lock (tokenLock)
         {
             accessToken = string.Empty;
             accessTokenExpiresAt = default;
             tokenClientId = string.Empty;
             tokenClientSecret = string.Empty;
-        }
-
-        var settings = GetSettingsSnapshot();
-        if (settings.Enabled &&
-            !string.IsNullOrWhiteSpace(settings.ClientId) &&
-            !string.IsNullOrWhiteSpace(settings.ClientSecret))
-        {
-            if (ActiveEncounter is null)
-            {
-                SetInactiveContentStatus();
-            }
-            else
-            {
-                SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
-            }
-        }
-        else
-        {
-            CanUseApi(settings);
         }
     }
 
@@ -558,6 +564,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     private bool CanUseApi(FflogsSettings settings)
     {
+        var generation = requestGuard.Synchronize(settings);
         if (!settings.Enabled)
         {
             SetStatus(FflogsEstimateState.Disabled, "FFLogs estimation is disabled.");
@@ -574,7 +581,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             SetStatus(FflogsEstimateState.Idle, "FFLogs credentials are ready to be tested.");
         }
-        return true;
+        return requestGuard.CanRequest(generation);
     }
 
     private static bool HasApiAccess(FflogsSettings settings)
@@ -637,7 +644,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     private void QueueCurveLoad(string specName)
     {
-        if (string.IsNullOrWhiteSpace(specName))
+        var settings = GetSettingsSnapshot();
+        if (string.IsNullOrWhiteSpace(specName) || !CanUseApi(settings))
         {
             return;
         }
@@ -650,9 +658,10 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
 
         var encounterId = activeEncounter.EncounterId;
+        var generation = requestGuard.Synchronize(settings);
         var difficulty = activeEncounter.Difficulty;
         var scope = GetRankingScope();
-        var loadKey = CurveKey(scope, encounterId, difficulty, specName);
+        var loadKey = $"{generation}:{CurveKey(scope, encounterId, difficulty, specName)}";
         if (!loading.TryAdd(loadKey, 0))
         {
             return;
@@ -663,18 +672,21 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             try
             {
-                await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
+                await EnsureCatalogAsync(generation, cancellationToken).ConfigureAwait(false);
                 var curve = await BuildCurveAsync(
                     scope,
                     encounterId,
                     difficulty,
                     specName,
+                    generation,
                     cancellationToken).ConfigureAwait(false);
+                requestGuard.Check(generation);
                 lock (cacheLock)
                 {
                     curves[CurveKey(scope, encounterId, difficulty, specName)] = curve;
                 }
                 await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
+                RecordRequestSuccess(generation);
                 var currentEncounter = ActiveEncounter;
                 if (scope == GetRankingScope() &&
                     currentEncounter?.EncounterId == encounterId &&
@@ -692,20 +704,13 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {
             }
+            catch (FflogsRequestSuppressedException)
+            {
+                // A sibling request already reported this failure, or credentials changed.
+            }
             catch (Exception ex)
             {
-                logger.Error(ex, "FFLogs public-ranking estimate refresh failed.");
-                var currentEncounter = ActiveEncounter;
-                if (scope == GetRankingScope() &&
-                    currentEncounter?.EncounterId == encounterId &&
-                    currentEncounter.Difficulty == difficulty)
-                {
-                    SetStatus(FflogsEstimateState.Error, ex.Message);
-                }
-                else if (currentEncounter is null)
-                {
-                    SetInactiveContentStatus();
-                }
+                RecordRequestFailure(generation, FflogsRequestException.FromException(ex, "ranking data"));
             }
             finally
             {
@@ -722,7 +727,12 @@ public sealed class FflogsEstimateService : IAsyncDisposable
 
     private void QueueCatalogLoad(bool forceRefresh)
     {
-        if (!loading.TryAdd("catalog", 0))
+        var settings = GetSettingsSnapshot();
+        if (!CanUseApi(settings))
+            return;
+        var generation = requestGuard.Synchronize(settings);
+        var loadKey = $"catalog:{generation}";
+        if (!loading.TryAdd(loadKey, 0))
         {
             return;
         }
@@ -732,14 +742,8 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         {
             try
             {
-                if (forceRefresh)
-                {
-                    lock (cacheLock)
-                    {
-                        catalogFetchedAt = default;
-                    }
-                }
-                await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
+                if (await EnsureCatalogAsync(generation, cancellationToken, forceRefresh).ConfigureAwait(false))
+                    RecordRequestSuccess(generation);
                 var activeEncounter = ActiveEncounter;
                 if (activeEncounter is null)
                 {
@@ -756,28 +760,31 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {
             }
+            catch (FflogsRequestSuppressedException)
+            {
+            }
             catch (Exception ex)
             {
-                logger.Error(ex, "FFLogs encounter catalog refresh failed.");
-                SetStatus(FflogsEstimateState.Error, ex.Message);
+                RecordRequestFailure(generation, FflogsRequestException.FromException(ex, "encounter catalog"));
             }
             finally
             {
-                loading.TryRemove("catalog", out _);
+                loading.TryRemove(loadKey, out _);
             }
         }))
         {
-            loading.TryRemove("catalog", out _);
+            loading.TryRemove(loadKey, out _);
         }
     }
 
-    private async Task EnsureCatalogAsync(CancellationToken cancellationToken)
+    private async Task<bool> EnsureCatalogAsync(long generation, CancellationToken cancellationToken, bool forceRefresh = false)
     {
+        requestGuard.Check(generation);
         lock (cacheLock)
         {
-            if (encounters.Count > 0 && !IsExpired(catalogFetchedAt, 24))
+            if (!forceRefresh && encounters.Count > 0 && !IsExpired(catalogFetchedAt, 24))
             {
-                return;
+                return false;
             }
         }
 
@@ -796,6 +803,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         using var document = await QueryAsync(
             query,
             new { zoneId = CurrentFflogsEncounterTable.ZoneId },
+            generation,
             cancellationToken).ConfigureAwait(false);
         var result = new List<FflogsEncounterCatalogEntry>();
         var zone = document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("zone");
@@ -833,12 +841,14 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             throw new InvalidOperationException("FFLogs returned no encounters for the current ranking tier.");
         }
 
+        requestGuard.Check(generation);
         lock (cacheLock)
         {
             encounters = result;
             catalogFetchedAt = DateTimeOffset.UtcNow;
         }
         await SaveCacheAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     private async Task<FflogsCurveCacheEntry> BuildCurveAsync(
@@ -846,6 +856,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         int encounterId,
         int difficulty,
         string specName,
+        long generation,
         CancellationToken cancellationToken)
     {
         if (!CurrentFflogsEncounterTable.IsSupportedRanking(encounterId, difficulty))
@@ -877,6 +888,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 difficulty,
                 specName,
                 page,
+                generation,
                 cancellationToken).ConfigureAwait(false);
             pages[page] = fetched;
             return fetched;
@@ -968,6 +980,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         int difficulty,
         string specName,
         int page,
+        long generation,
         CancellationToken cancellationToken)
     {
         const string query = """
@@ -1005,6 +1018,7 @@ public sealed class FflogsEstimateService : IAsyncDisposable
                 partition = scope.Partition,
                 metric = CurrentFflogsEncounterTable.RankingMetric,
             },
+            generation,
             cancellationToken).ConfigureAwait(false);
         var encounter = document.RootElement.GetProperty("data").GetProperty("worldData").GetProperty("encounter");
         if (encounter.ValueKind == JsonValueKind.Null)
@@ -1023,12 +1037,23 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             amounts);
     }
 
-    private async Task<JsonDocument> QueryAsync(string query, object variables, CancellationToken cancellationToken)
+    private async Task<JsonDocument> QueryAsync(string query, object variables, long generation, CancellationToken cancellationToken)
     {
         await apiGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var stage = "token endpoint";
         try
         {
-            var token = await GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            // Check again after acquiring the gate: other jobs may have been queued
+            // before the first failure, disabling the feature, or a credential edit.
+            var settings = GetSettingsSnapshot();
+            requestGuard.Synchronize(settings);
+            requestGuard.Check(generation);
+            if (!HasApiAccess(settings))
+                throw new FflogsRequestSuppressedException();
+            var token = await GetAccessTokenAsync(settings, generation, cancellationToken).ConfigureAwait(false);
+            requestGuard.Synchronize(GetSettingsSnapshot());
+            requestGuard.Check(generation);
+            stage = "ranking API";
             using var request = new HttpRequestMessage(HttpMethod.Post, GraphQlEndpoint);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Content = new StringContent(
@@ -1039,29 +1064,47 @@ public sealed class FflogsEstimateService : IAsyncDisposable
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new InvalidOperationException($"FFLogs API returned HTTP {(int)response.StatusCode}.");
+                // A revoked/expired bearer token is retried with a fresh token after
+                // backoff, not misreported as an invalid Client Secret.
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                    ClearAccessToken();
+                throw FflogsRequestException.FromResponse(response, body, false, timeProvider.GetUtcNow());
             }
 
             var document = JsonDocument.Parse(body);
-            if (document.RootElement.TryGetProperty("errors", out var errors))
+            try
             {
-                var message = "Unknown GraphQL error.";
-                foreach (var error in errors.EnumerateArray())
+                if (document.RootElement.TryGetProperty("errors", out var errors) &&
+                    errors.ValueKind != JsonValueKind.Null &&
+                    !(errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() == 0))
                 {
-                    if (error.ValueKind == JsonValueKind.Object &&
-                        error.TryGetProperty("message", out var errorMessage) &&
-                        !string.IsNullOrWhiteSpace(errorMessage.GetString()))
-                    {
-                        message = errorMessage.GetString()!;
-                        break;
-                    }
+                    throw new FflogsRequestException(FflogsFailureKind.InvalidResponse,
+                        "FFLogs ranking API: HTTP 200 with GraphQL errors.");
                 }
-                document.Dispose();
-                throw new InvalidOperationException($"FFLogs API error: {message}");
+                requestGuard.Check(generation);
+                await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+                return document;
             }
-
-            await Task.Delay(150, cancellationToken).ConfigureAwait(false);
-            return document;
+            catch
+            {
+                document.Dispose();
+                throw;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (FflogsRequestSuppressedException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Publish the failure before releasing apiGate. Worker catch blocks must
+            // not log it again or let queued requests bypass the new cooldown.
+            RecordRequestFailure(generation, FflogsRequestException.FromException(ex, stage));
+            throw new FflogsRequestSuppressedException();
         }
         finally
         {
@@ -1069,13 +1112,12 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         }
     }
 
-    private async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
+    private async Task<string> GetAccessTokenAsync(FflogsSettings settings, long generation, CancellationToken cancellationToken)
     {
-        var settings = GetSettingsSnapshot();
         lock (tokenLock)
         {
             if (!string.IsNullOrWhiteSpace(accessToken) &&
-                accessTokenExpiresAt > DateTimeOffset.UtcNow.AddMinutes(1) &&
+                accessTokenExpiresAt > timeProvider.GetUtcNow().AddMinutes(1) &&
                 string.Equals(tokenClientId, settings.ClientId, StringComparison.Ordinal) &&
                 string.Equals(tokenClientSecret, settings.ClientSecret, StringComparison.Ordinal))
             {
@@ -1094,23 +1136,46 @@ public sealed class FflogsEstimateService : IAsyncDisposable
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException("FFLogs API authentication failed. Check the client ID and secret.");
+            throw FflogsRequestException.FromResponse(response, body, true, timeProvider.GetUtcNow());
         }
 
         using var tokenDocument = JsonDocument.Parse(body);
-        var newAccessToken = tokenDocument.RootElement.GetProperty("access_token").GetString()
-            ?? throw new InvalidOperationException("FFLogs did not return an access token.");
+        var newAccessToken = tokenDocument.RootElement.GetProperty("access_token").GetString();
+        if (string.IsNullOrWhiteSpace(newAccessToken))
+            throw new FflogsRequestException(FflogsFailureKind.InvalidResponse, "FFLogs token endpoint: missing access token.");
         var expiresIn = tokenDocument.RootElement.TryGetProperty("expires_in", out var expires)
             ? expires.GetInt32()
             : 3600;
         lock (tokenLock)
         {
+            requestGuard.Synchronize(GetSettingsSnapshot());
+            requestGuard.Check(generation);
             accessToken = newAccessToken;
-            accessTokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expiresIn);
+            accessTokenExpiresAt = timeProvider.GetUtcNow().AddSeconds(Math.Clamp(expiresIn, 0, 86400));
             tokenClientId = settings.ClientId;
             tokenClientSecret = settings.ClientSecret;
         }
         return newAccessToken;
+    }
+
+    private void RecordRequestFailure(long generation, FflogsRequestException failure)
+    {
+        // Synchronizing also discards a late failure from credentials replaced while
+        // the HTTP request was in flight (including configuration imports).
+        requestGuard.Synchronize(GetSettingsSnapshot());
+        if (requestGuard.RecordFailure(generation, failure))
+            logger.Warning($"{failure.Message} Automatic FFLogs requests are " +
+                (requestGuard.Failure?.State == FflogsEstimateState.RequestsPaused
+                    ? "paused; update credentials or use Test and refresh."
+                    : $"backing off until {requestGuard.Failure?.RetryAt:O}."));
+    }
+
+    private void RecordRequestSuccess(long generation)
+    {
+        requestGuard.Synchronize(GetSettingsSnapshot());
+        requestGuard.Check(generation);
+        if (requestGuard.RecordSuccess(generation))
+            logger.Information("FFLogs requests recovered; ranking data refreshed successfully.");
     }
 
     private void LoadCache()
