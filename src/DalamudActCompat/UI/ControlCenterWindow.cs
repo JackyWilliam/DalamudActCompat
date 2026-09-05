@@ -2280,7 +2280,8 @@ public sealed class ControlCenterWindow : Window
                 parentPosition.Y + 48),
             ImGuiCond.Appearing);
         ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9);
+        // BeginPopup uses PopupRounding; WindowRounding only affects normal windows.
+        ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
         ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
         ImGui.PushStyleColor(ImGuiCol.Border, Gold);

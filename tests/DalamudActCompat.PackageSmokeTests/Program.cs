@@ -4612,6 +4612,16 @@ static void ValidateControlCenterPresentation()
         projectRoot, "src", "DalamudActCompat.Host", "SilverDasherWindowsNotifier.cs"));
     var notificationCenterSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat.Host", "WindowsNotificationCenter.cs"));
+    var cloudPopupSource = controlCenterSource[
+        controlCenterSource.IndexOf("private void DrawCloudQuickPopup(", StringComparison.Ordinal)..
+        controlCenterSource.IndexOf("private static void DrawCloudQuickRow(", StringComparison.Ordinal)];
+    var popupRoundingIndex = cloudPopupSource.IndexOf(
+        "ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);", StringComparison.Ordinal);
+    Assert(
+        popupRoundingIndex >= 0 && popupRoundingIndex < cloudPopupSource.IndexOf("ImGui.BeginPopup(", StringComparison.Ordinal) &&
+        !cloudPopupSource.Contains("ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
+        Regex.Matches(cloudPopupSource, @"ImGui\.PopStyleVar\(2\);").Count == 2,
+        "The cloud status popup lost its local popup rounding or balanced open/closed style restoration.");
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置&账号\", \"Settings & Account\"))", StringComparison.Ordinal) &&
