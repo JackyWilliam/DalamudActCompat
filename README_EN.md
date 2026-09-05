@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-[Latest release](https://github.com/JackyWilliam/DalamudActCompat/releases/latest) · [Third-party compatibility](docs/third-party-compatibility.md) · [Report an issue](https://github.com/JackyWilliam/DalamudActCompat/issues)
+[Website (中文)](https://dact.localhost2019.com/) · [Latest release](https://github.com/JackyWilliam/DalamudActCompat/releases/latest) · [Third-party compatibility](docs/third-party-compatibility.md) · [Report an issue](https://github.com/JackyWilliam/DalamudActCompat/issues)
 
 **Use an in-game combat meter, Cactbot overlays, and common ACT extensions directly in FFXIV through Dalamud—without running ACT separately.**
 
