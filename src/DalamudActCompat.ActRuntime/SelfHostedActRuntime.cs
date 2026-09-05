@@ -684,6 +684,11 @@ public sealed class SelfHostedActRuntime : IDisposable
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
 
+    public string? ActiveLogDirectory
+        => actGlobalsInitialized && ActGlobals.oFormActMain?.ActiveLogFilePath is { } path
+            ? Path.GetDirectoryName(path)
+            : null;
+
     public void StartParser(string logDirectory)
     {
         if (IsParserRunning)

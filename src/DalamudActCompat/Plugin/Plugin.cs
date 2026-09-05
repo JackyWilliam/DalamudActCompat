@@ -178,6 +178,7 @@ public sealed class Plugin : IDalamudPlugin
     private long cloudAutoSyncDueUtcTicks;
     private int cloudAutoSyncRunning;
     private int cloudStartupSyncRequested;
+    private int combatLogDirectoryChangeInProgress;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -3575,14 +3576,18 @@ public sealed class Plugin : IDalamudPlugin
 
     private string OpenCombatLogDirectory()
     {
-        var directory = ResolveCombatLogDirectory();
+        var directory = ResolveActiveCombatLogDirectory();
         Directory.CreateDirectory(directory);
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory)
         {
             UseShellExecute = true,
         });
+        logger.Information($"Opened FFLogs log directory '{directory}' (saved directory: '{ResolveCombatLogDirectory()}').");
         return directory;
     }
+
+    private string ResolveActiveCombatLogDirectory()
+        => parserEngine.ActiveLogDirectory ?? ResolveCombatLogDirectory();
 
     private string ResolveCombatLogDirectory()
         => string.IsNullOrWhiteSpace(configuration.LogDirectory)
@@ -3607,12 +3612,31 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ApplyCombatLogDirectory(string requestedDirectory, Action<bool, string> reportResult)
     {
+        // Keep ownership through restart completion so older requests cannot report over a newer selection.
+        if (Interlocked.CompareExchange(ref combatLogDirectoryChangeInProgress, 1, 0) != 0)
+        {
+            reportResult(false, text.Get("日志目录正在切换，请稍后重试。", "The log directory is changing; please try again shortly."));
+            return;
+        }
+        var handedOff = false;
+        try
+        {
+            handedOff = ApplyCombatLogDirectoryCore(requestedDirectory, reportResult);
+        }
+        finally
+        {
+            if (!handedOff) Interlocked.Exchange(ref combatLogDirectoryChangeInProgress, 0);
+        }
+    }
+
+    private bool ApplyCombatLogDirectoryCore(string requestedDirectory, Action<bool, string> reportResult)
+    {
         if (!TryPrepareCombatLogDirectory(requestedDirectory, out var normalizedDirectory, out var error))
         {
             reportResult(
                 false,
                 $"{text.Get("目录不可用：", "Directory unavailable: ")}{error}");
-            return;
+            return false;
         }
 
         var previousDirectory = ResolveCombatLogDirectory();
@@ -3621,10 +3645,13 @@ public sealed class Plugin : IDalamudPlugin
             normalizedDirectory,
             StringComparison.OrdinalIgnoreCase);
         var parserWasFaulted = parserEngine.Status.State == ParserState.Faulted;
-        if (!pathChanged && !parserWasFaulted)
+        var activeDirectory = parserEngine.ActiveLogDirectory;
+        var activeDirectoryDiffers = activeDirectory is not null &&
+            !string.Equals(activeDirectory, normalizedDirectory, StringComparison.OrdinalIgnoreCase);
+        if (!pathChanged && !parserWasFaulted && !activeDirectoryDiffers)
         {
             reportResult(true, text.Get("当前已经使用这个目录。", "This directory is already in use."));
-            return;
+            return false;
         }
 
         if (pathChanged)
@@ -3636,7 +3663,7 @@ public sealed class Plugin : IDalamudPlugin
                 reportResult(
                     false,
                     text.Get("保存目录失败，仍使用原目录。", "Could not save the directory; the previous directory is still in use."));
-                return;
+                return false;
             }
 
             // Existing logs belong to the user and may still be needed for an upload, so a
@@ -3657,19 +3684,24 @@ public sealed class Plugin : IDalamudPlugin
                 text.Get(
                     "目录已保存，将在下次启动解析器时生效。",
                     "Directory saved; it will take effect the next time the parser starts."));
-            return;
+            return false;
         }
 
         reportResult(
             true,
             text.Get("目录已保存，正在重启解析器。", "Directory saved; restarting the parser."));
-        StartBackgroundOperation(async () =>
+        var restartEntered = false;
+        var operation = StartBackgroundOperation(async () =>
         {
+            restartEntered = true;
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
                 if (!IsDactAccessAllowed())
                 {
+                    reportResult(false, text.Get(
+                        "目录已保存，但当前无权启动解析器；尚未切换写入目录。",
+                        "Directory saved, but parser access is unavailable; the active writer has not switched."));
                     return;
                 }
                 await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
@@ -3688,10 +3720,25 @@ public sealed class Plugin : IDalamudPlugin
                 reportResult(
                     false,
                     text.Get(
-                        "目录已保存，但解析器重启失败。",
-                        "Directory saved, but the parser restart failed."));
+                        "目录已保存，但解析器重启失败；可重新选择同一目录重试。打开日志仍以实际写入目录为准。",
+                        "Directory saved, but restart failed; select the same directory to retry. Open logs uses the active writer directory."));
             }
+        }, onCompleted: () =>
+        {
+            try
+            {
+                if (!restartEntered)
+                    reportResult(false, text.Get("目录已保存，但解析器重启被取消。", "Directory saved, but parser restart was cancelled."));
+            }
+            finally { Interlocked.Exchange(ref combatLogDirectoryChangeInProgress, 0); }
         });
+        if (operation is null)
+        {
+            reportResult(false, text.Get("目录已保存，但插件正在退出，未重启解析器。", "Directory saved, but the plugin is shutting down; parser restart was not started."));
+            return false;
+        }
+        // The tracked task owns admission until success, failure, or a skipped restart.
+        return true;
     }
 
     private static bool TryPrepareCombatLogDirectory(

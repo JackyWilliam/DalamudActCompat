@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--statistics-only", StringComparer.Ordinal))
+    {
+        NotActStatisticsSmokeTests.Run();
+        return 0;
+    }
     ValidateSettingsSerializerMemberTypes();
     ValidateGameRegionSelection();
     ValidateActPluginDataCompatibility();
@@ -72,6 +77,7 @@ try
     ValidateMatchaPermissionIsolation();
     await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
+    NotActStatisticsSmokeTests.Run();
     ValidateActCallbackCircuitBreaker();
     ValidateReflectionActLoggerOverloads();
     ValidateFfxivEntityDeltaBuilder();
@@ -79,6 +85,7 @@ try
     ValidateCombatEventScoping();
     FallbackCombatEventSmokeTests.Run();
     ValidateEncounterModePolicy();
+    EncounterTargetReentrySmokeTests.Run();
     ValidateParserFrameworkStateOwnership();
     ValidateRaidDpsEstimator();
     ValidateFflogsParityReplay(testRoot);
@@ -104,6 +111,7 @@ try
     ValidateIndependentMeterWindows();
     ValidateWindowDragContinuity();
     ValidatePictoActOverlayCommands();
+    PictoCleanupScopeSmokeTests.Run();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
     ValidateDutyWipeTracking();
@@ -115,6 +123,7 @@ try
     ValidateInstalledPluginVersionDisplay(testRoot);
     ValidateDiagnosticReport(testRoot);
     ValidateCombatLogDirectoryConfiguration(testRoot);
+    await CombatLogLifecycleSmokeTests.RunAsync();
     ValidateNetworkLogSessionRotation(testRoot);
     ValidateFflogsEstimateCurve();
     await ValidateFflogsPersistenceAsync(testRoot);

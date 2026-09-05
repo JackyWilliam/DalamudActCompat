@@ -19,6 +19,7 @@ internal sealed class EncounterDurationTracker
     private readonly List<BufferedRawLine> preEncounterRawLines = [];
     private readonly Dictionary<string, TargetTimeline> targets =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<TargetTimeline> retiredTargetLifetimes = [];
     private readonly Dictionary<string, ActivitySpan> actorActivity =
         new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset encounterStart;
@@ -35,6 +36,7 @@ internal sealed class EncounterDurationTracker
         {
             pendingActions.Clear();
             targets.Clear();
+            retiredTargetLifetimes.Clear();
             actorActivity.Clear();
             partyActorIds.Clear();
             UpdatePartyActorsUnsafe(identities);
@@ -73,6 +75,7 @@ internal sealed class EncounterDurationTracker
             pendingActions.Clear();
             preEncounterRawLines.Clear();
             targets.Clear();
+            retiredTargetLifetimes.Clear();
             actorActivity.Clear();
             encounterStart = default;
             firstConfirmedDamage = default;
@@ -178,7 +181,7 @@ internal sealed class EncounterDurationTracker
                 .Where(interval => interval.Start <= timestamp && timestamp < interval.End)
                 .ToArray();
             return intervals.Length > 0 && intervals.All(interval =>
-                !IsTargetableAtUnsafe(targets[interval.TargetKey], interval, timestamp));
+                !IsTargetableAtUnsafe(interval.Target, interval, timestamp));
         }
     }
 
@@ -463,7 +466,7 @@ internal sealed class EncounterDurationTracker
         }
         if (!targets.TryGetValue(key, out var target))
         {
-            target = new TargetTimeline(key);
+            target = new TargetTimeline();
             targets.Add(key, target);
         }
         var previous = target.Targetability.Count == 0 || target.Targetability[^1].Targetable;
@@ -495,7 +498,7 @@ internal sealed class EncounterDurationTracker
         var targetKey = ActorKey(targetId, targetName);
         if (!targets.TryGetValue(targetKey, out var target))
         {
-            target = new TargetTimeline(targetKey);
+            target = new TargetTimeline();
             targets.Add(targetKey, target);
         }
         var presenceStart = timestamp;
@@ -544,9 +547,12 @@ internal sealed class EncounterDurationTracker
         DateTimeOffset rangeEnd)
     {
         var intervals = BuildMembershipIntervalsUnsafe(rangeEnd);
+        // Remove/death is also a boundary when no separate targetability packet was emitted.
         var points = intervals
             .SelectMany(static interval => new[] { interval.Start, interval.End })
-            .Concat(targets.Values.SelectMany(static target =>
+            .Concat(intervals.Where(static interval => interval.NaturalExit is not null)
+                .Select(static interval => interval.NaturalExit!.Value))
+            .Concat(targets.Values.Concat(retiredTargetLifetimes).SelectMany(static target =>
                 target.Targetability.Select(static change => change.Timestamp)))
             .Append(rangeStart)
             .Append(rangeEnd)
@@ -567,7 +573,7 @@ internal sealed class EncounterDurationTracker
                 .Where(interval => interval.Start <= start && start < interval.End)
                 .ToArray();
             if (active.Length > 0 && active.All(interval =>
-                    !IsTargetableAtUnsafe(targets[interval.TargetKey], interval, start)))
+                    !IsTargetableAtUnsafe(interval.Target, interval, start)))
             {
                 downtime += (end - start).TotalSeconds;
             }
@@ -578,10 +584,10 @@ internal sealed class EncounterDurationTracker
     private IReadOnlyList<TargetMembershipInterval> BuildMembershipIntervalsUnsafe(
         DateTimeOffset rangeEnd)
     {
-        var candidates = targets.Values
+        var candidates = targets.Values.Concat(retiredTargetLifetimes)
             .Where(static target => target.MembershipStart != default)
             .Select(target => new TargetMembershipCandidate(
-                target.Key,
+                target,
                 target.MembershipStart,
                 ResolveNaturalExitUnsafe(target, rangeEnd)))
             .ToArray();
@@ -592,7 +598,7 @@ internal sealed class EncounterDurationTracker
             if (candidate.NaturalExit is DateTimeOffset exit)
             {
                 var phaseHasSurvivor = candidates.Any(other =>
-                    !string.Equals(other.TargetKey, candidate.TargetKey, StringComparison.OrdinalIgnoreCase) &&
+                    !ReferenceEquals(other.Target, candidate.Target) &&
                     other.Start <= exit &&
                     (other.NaturalExit is null || other.NaturalExit > exit));
                 if (phaseHasSurvivor)
@@ -613,7 +619,7 @@ internal sealed class EncounterDurationTracker
             if (end > candidate.Start)
             {
                 result.Add(new TargetMembershipInterval(
-                    candidate.TargetKey,
+                    candidate.Target,
                     candidate.Start,
                     end,
                     candidate.NaturalExit));
@@ -669,6 +675,16 @@ internal sealed class EncounterDurationTracker
         if (string.IsNullOrWhiteSpace(key))
         {
             return;
+        }
+        if (targets.TryGetValue(key, out var target) &&
+            (target.RemovedAt is { } removed && removed <= timestamp ||
+             target.DefeatedAt is { } defeated && defeated <= timestamp))
+        {
+            // Entity IDs can return during the same encounter. Keep the old lifetime for
+            // historical downtime, but never apply its departure/death to the new spawn.
+            retiredTargetLifetimes.Add(target);
+            targets[key] = new TargetTimeline();
+            actors[key] = new ActorPresence(timestamp);
         }
         if (!actors.TryGetValue(key, out var actor) || actor.RemovedAt is not null)
         {
@@ -740,9 +756,8 @@ internal sealed class EncounterDurationTracker
         public DateTimeOffset? RemovedAt { get; set; }
     }
 
-    private sealed class TargetTimeline(string key)
+    private sealed class TargetTimeline
     {
-        public string Key { get; } = key;
         public DateTimeOffset MembershipStart { get; set; }
         public DateTimeOffset LastDamage { get; set; }
         public DateTimeOffset? DefeatedAt { get; set; }
@@ -763,12 +778,12 @@ internal sealed class EncounterDurationTracker
         bool Targetable);
 
     private readonly record struct TargetMembershipCandidate(
-        string TargetKey,
+        TargetTimeline Target,
         DateTimeOffset Start,
         DateTimeOffset? NaturalExit);
 
     private readonly record struct TargetMembershipInterval(
-        string TargetKey,
+        TargetTimeline Target,
         DateTimeOffset Start,
         DateTimeOffset End,
         DateTimeOffset? NaturalExit);
