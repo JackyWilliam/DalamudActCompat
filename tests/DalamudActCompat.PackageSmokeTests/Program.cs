@@ -77,6 +77,7 @@ try
     ValidateFfxivEntityDeltaBuilder();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
+    FallbackCombatEventSmokeTests.Run();
     ValidateEncounterModePolicy();
     ValidateParserFrameworkStateOwnership();
     ValidateRaidDpsEstimator();
