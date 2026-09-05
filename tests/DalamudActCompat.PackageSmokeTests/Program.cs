@@ -133,6 +133,7 @@ try
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
     await CloudOperationGuardSmokeTests.RunAsync(FindProjectRoot());
+    ValidateCloudActivationKeyHelp();
     await ValidateCloudApiContractAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
     await ValidateFirstLoginReportsServerUnbanAsync(testRoot);
@@ -12922,6 +12923,30 @@ static void ValidateNetworkLogSessionRotation(string testRoot)
             sessionStartedAt.AddSeconds(2),
             TimeSpan.Zero) is not null,
         "Network log rotation did not recover after the previous writer released the file.");
+}
+
+static void ValidateCloudActivationKeyHelp()
+{
+    var projectRoot = FindProjectRoot();
+    var ui = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var registration = ui[ui.IndexOf("private void DrawCloudRegistrationForm(", StringComparison.Ordinal)..
+        ui.IndexOf("private void DrawCloudActivationKeyHelp(", StringComparison.Ordinal)];
+    var help = ui[ui.IndexOf("private void DrawCloudActivationKeyHelp(", StringComparison.Ordinal)..
+        ui.IndexOf("private void DrawCloudPasswordResetForm(", StringComparison.Ordinal)];
+    Assert(registration.Contains("DrawCloudActivationKeyHelp();", StringComparison.Ordinal) &&
+           help.Contains("DACT 和激活码均免费", StringComparison.Ordinal) &&
+           help.Contains("DACT and activation keys are free", StringComparison.Ordinal) &&
+           help.Contains("ImGui.SetClipboardText(ActivationQqGroup)", StringComparison.Ordinal) &&
+           help.Contains("OpenUrl(ActivationDiscordUrl)", StringComparison.Ordinal) &&
+           help.Contains("availableWidth >= buttonsWidth", StringComparison.Ordinal) &&
+           !help.Contains("CollapsingHeader", StringComparison.Ordinal),
+        "Registration lost visible free-key instructions, contact actions, or narrow-width layout.");
+    var readme = File.ReadAllText(Path.Combine(projectRoot, "README.md"));
+    Assert(ui.Contains("ActivationQqGroup = \"1098561701\"", StringComparison.Ordinal) &&
+           ui.Contains("ActivationDiscordUrl = \"https://discord.gg/HpQZErSPc\"", StringComparison.Ordinal) &&
+           readme.Contains("1098561701", StringComparison.Ordinal) &&
+           readme.Contains("https://discord.gg/HpQZErSPc", StringComparison.Ordinal),
+        "Registration contact channels differ from the documented free activation-key channels.");
 }
 
 static void ValidateCloudKeyEnvelopeAndCredentialProtection(string testRoot)
