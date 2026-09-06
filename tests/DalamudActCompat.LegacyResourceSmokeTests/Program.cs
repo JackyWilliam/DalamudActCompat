@@ -654,8 +654,11 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
             if (payload.Contains("3758096384", StringComparison.Ordinal) ||
                 payload.Contains("0xE0000000", StringComparison.OrdinalIgnoreCase))
             {
-                var clear = PostNamazuSemanticActions.ParseMark(
-                    payload.Replace("${type}", "attack1", StringComparison.Ordinal));
+                var clearPayload = payload.Replace("${type}", "attack1", StringComparison.Ordinal);
+                // Full online exports also contain runtime-only variables. This
+                // compile audit has no encounter context with which to expand them.
+                if (clearPayload.Contains("${", StringComparison.Ordinal)) continue;
+                var clear = PostNamazuSemanticActions.ParseMark(clearPayload);
                 if (clear.ActorId != PostNamazuSemanticActions.ClearActorId)
                 {
                     throw new InvalidOperationException(
@@ -671,6 +674,7 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
         var resolved = payload
             .Replace("0x${_me.id}", "0x10021EE7", StringComparison.Ordinal)
             .Replace("${type}", "attack1", StringComparison.Ordinal);
+        if (resolved.Contains("${", StringComparison.Ordinal)) continue;
         var mark = PostNamazuSemanticActions.ParseMark(resolved);
         if (mark.ActorId != 0x10021EE7)
         {
@@ -689,6 +693,8 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
             "Triggernometry export XML does not contain any ExecuteScript actions.");
     }
 
+    var compiledScripts = 0;
+    var dynamicScripts = 0;
     foreach (var action in scriptActions)
     {
         var triggerName = (action.ParentNode?.ParentNode as XmlElement)
@@ -700,11 +706,20 @@ static void AssertTriggernometryExportScriptsCompile(Assembly implementation, st
                 $"Triggernometry trigger '{triggerName}' has an empty ExecuteScript action.");
         }
 
+        // ActionExecuteScript expands Triggernometry expressions before compiling.
+        // Never fabricate encounter variables or run those scripts in an offline audit.
+        if (source.Contains("${", StringComparison.Ordinal))
+        {
+            dynamicScripts++;
+            continue;
+        }
         AssertTriggernometryScriptCompiles(
             implementation,
             source,
             $"Triggernometry export script '{triggerName}'");
+        compiledScripts++;
     }
+    Console.WriteLine($"Export imported; {compiledScripts} static scripts compiled, {dynamicScripts} dynamic scripts require runtime expansion (none executed).");
 }
 
 static void AssertTriggernometryScriptCompiles(

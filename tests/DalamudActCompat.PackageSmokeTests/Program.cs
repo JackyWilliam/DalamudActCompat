@@ -112,6 +112,7 @@ try
     ValidateWindowDragContinuity();
     ValidatePictoActOverlayCommands();
     PictoCleanupScopeSmokeTests.Run();
+    PictoOnlineResourceSmokeTests.Run();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
     ValidateDutyWipeTracking();
