@@ -129,6 +129,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private bool transitionStateDirty;
     private bool chatEncounterDirty;
     private bool chatEncounterPublished;
+    private bool chatEncounterObservedInCombat;
     private readonly ChineseCombatChatContext chatParser;
     private readonly IReadOnlySet<string> limitBreakActionNames;
     private string chatEnemy = string.Empty;
@@ -682,6 +683,11 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public IINACT.FfxivActPluginWrapper Parser
         => parser ?? throw new InvalidOperationException("FFXIV_ACT_Plugin is not running.");
+
+    public string? ActiveLogDirectory
+        => actGlobalsInitialized && ActGlobals.oFormActMain?.ActiveLogFilePath is { } path
+            ? Path.GetDirectoryName(path)
+            : null;
 
     public void StartParser(string logDirectory)
     {
@@ -2068,6 +2074,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             var gameState = encounterModeSnapshot();
             chatEncounterMode = gameState.Mode;
             chatEncounterTerritoryId = gameState.TerritoryId;
+            chatEncounterObservedInCombat = gameState.InCombat;
             chatEncounterStart = now;
         }
 
@@ -2124,6 +2131,9 @@ public sealed class SelfHostedActRuntime : IDisposable
             now - item.ObservedAt > TimeSpan.FromSeconds(3));
 
     private void OnFrameworkUpdate(IFramework _)
+        => UpdateFrameworkState(null);
+
+    internal void UpdateFrameworkState(DateTimeOffset? frameTime)
     {
         var identities = playerIdentities();
         var gameState = encounterModeSnapshot();
@@ -2142,9 +2152,12 @@ public sealed class SelfHostedActRuntime : IDisposable
         var endingAtModeBoundary = false;
         lock (encounterSync)
         {
-            var now = DateTimeOffset.Now;
+            // Production samples time after acquiring the encounter lock; replay tests
+            // supply a frame time so grace boundaries do not depend on machine speed.
+            var now = frameTime ?? DateTimeOffset.Now;
             if (chatEncounterId != Guid.Empty && chatLastDamage != default)
             {
+                chatEncounterObservedInCombat |= inCombat;
                 if (chatEncounterDirty &&
                     now - chatEncounterStart >= TimeSpan.FromMilliseconds(250))
                 {
@@ -2164,9 +2177,15 @@ public sealed class SelfHostedActRuntime : IDisposable
                     chatEncounterDirty = false;
                 }
 
+                // Damage callbacks can precede the framework's combat flag. Until this
+                // fallback has observed combat, false means "not yet" as well as "ended".
+                // Reuse the inactivity grace for party-only damage that never sets our
+                // local flag, without delaying exits after combat has been confirmed.
                 if (activeEncounter is null &&
                     !inCombat &&
-                    !localDeathWhilePartyContinues())
+                    !localDeathWhilePartyContinues() &&
+                    (chatEncounterObservedInCombat ||
+                     now - chatLastDamage >= OpenWorldEncounterEndPolicy.InactivityGrace))
                 {
                     completedChatEncounter = CreateChatEncounterSnapshot(
                         finished: true,
@@ -3305,6 +3324,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         chatLastDamage = default;
         chatEncounterDirty = false;
         chatEncounterPublished = false;
+        chatEncounterObservedInCombat = false;
         chatDamageTotals.Clear();
         chatDamageHitTotals.Clear();
         chatCriticalHitTotals.Clear();

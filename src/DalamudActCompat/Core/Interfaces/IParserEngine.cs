@@ -8,6 +8,9 @@ public interface IParserEngine : IAsyncDisposable
 
     ParserStatus Status { get; }
 
+    // A pending/failed restart can leave saved settings ahead of the currently open writer.
+    string? ActiveLogDirectory => null;
+
     Task StartAsync(CancellationToken cancellationToken);
 
     Task StopAsync(CancellationToken cancellationToken);

@@ -1,0 +1,278 @@
+[
+  {
+    "Name": "M11 moon 0",
+    "Payloads": [
+      "Omen: gl_sircle_6005at1\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nScale: 60, 60, 1",
+      "Omen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h}\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/2\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 0.5, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} - π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "0.0",
+      "${t}": "8.8"
+    },
+    "Shapes": 5,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 4
+  },
+  {
+    "Name": "M11 sword 0",
+    "Payloads": [
+      "Omen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h}\r\nScale: 5, 40, 1\r\n---\r\nOmen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h} + π/2\r\nScale: 5, 40, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "0.0",
+      "${t}": "8.8"
+    },
+    "Shapes": 2
+  },
+  {
+    "Name": "M11 moon 1",
+    "Payloads": [
+      "Omen: gl_sircle_6005at1\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nScale: 60, 60, 1",
+      "Omen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h}\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/2\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 0.5, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} - π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "1.5707963267948966",
+      "${t}": "8.8"
+    },
+    "Shapes": 5,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 4
+  },
+  {
+    "Name": "M11 sword 1",
+    "Payloads": [
+      "Omen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h}\r\nScale: 5, 40, 1\r\n---\r\nOmen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h} + π/2\r\nScale: 5, 40, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "1.5707963267948966",
+      "${t}": "8.8"
+    },
+    "Shapes": 2
+  },
+  {
+    "Name": "M11 moon 2",
+    "Payloads": [
+      "Omen: gl_sircle_6005at1\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nScale: 60, 60, 1",
+      "Omen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h}\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/2\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 0.5, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} - π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "3.141592653589793",
+      "${t}": "8.8"
+    },
+    "Shapes": 5,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 4
+  },
+  {
+    "Name": "M11 sword 2",
+    "Payloads": [
+      "Omen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h}\r\nScale: 5, 40, 1\r\n---\r\nOmen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h} + π/2\r\nScale: 5, 40, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "3.141592653589793",
+      "${t}": "8.8"
+    },
+    "Shapes": 2
+  },
+  {
+    "Name": "M11 moon 3",
+    "Payloads": [
+      "Omen: gl_sircle_6005at1\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nScale: 60, 60, 1",
+      "Omen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h}\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/2\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 0.3, 1, 0.5, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} + π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1\r\n---\r\nOmen: m131om_setu0f\r\nTag: MBs_兵器_镰\r\nt: ${t}\r\nO: ${x}, ${y}, 0\r\nθ: ${h} - π/4\r\nPos: 0, 4.5\r\nScale: 0.05, 9, 0.01\r\nColor: 1, 0.3, 0.3, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "4.71238898038469",
+      "${t}": "8.8"
+    },
+    "Shapes": 5,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 4
+  },
+  {
+    "Name": "M11 sword 3",
+    "Payloads": [
+      "Omen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h}\r\nScale: 5, 40, 1\r\n---\r\nOmen: Rect2\r\nTag: MBs_兵器_剑\r\nt: ${t}\r\nPos: ${x}, ${y}, 0\r\nAngle: ${h} + π/2\r\nScale: 5, 40, 1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100",
+      "${h}": "4.71238898038469",
+      "${t}": "8.8"
+    },
+    "Shapes": 2
+  },
+  {
+    "Name": "M12 wind fan 45 group 0 left 0",
+    "Payloads": [
+      "Omen: Fan45\r\n// 45.2°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\nPos: -14 + 3√2, 3√2\r\nAngle: 100.13°\r\nScale: 40, 40 * 0.995, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "0",
+      "${b组内踩左塔}": "0"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan045_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 wind fan 30 group 0 left 0",
+    "Payloads": [
+      "Omen: Fan30\r\n// 35°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\n// 塔的中心靠前一点，使扇形外侧尽量贴合安全范围\r\nPos: -17.79, 4.18\r\nAngle: 97.5°\r\nScale: 50, 50*0.85, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "0",
+      "${b组内踩左塔}": "0"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan030_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 blue safe area group 0 north 0",
+    "Payloads": [
+      "Omen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: 6, 6\r\nAngle: π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 0.3 : 2 }\r\n---\r\nOmen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: -6, 6\r\nAngle: -π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 2 : 0.3 }\r\n"
+    ],
+    "Variables": {
+      "${b1北打左右}": "0",
+      "${if: ${v:myIdx_isG1} ? 0.3 : 2 }": "2",
+      "${if: ${v:myIdx_isG1} ? 2 : 0.3 }": "0.3"
+    },
+    "Shapes": 2,
+    "Asset": "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
+    "AssetCount": 2
+  },
+  {
+    "Name": "M12 wind fan 45 group 0 left 1",
+    "Payloads": [
+      "Omen: Fan45\r\n// 45.2°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\nPos: -14 + 3√2, 3√2\r\nAngle: 100.13°\r\nScale: 40, 40 * 0.995, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "0",
+      "${b组内踩左塔}": "1"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan045_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 wind fan 30 group 0 left 1",
+    "Payloads": [
+      "Omen: Fan30\r\n// 35°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\n// 塔的中心靠前一点，使扇形外侧尽量贴合安全范围\r\nPos: -17.79, 4.18\r\nAngle: 97.5°\r\nScale: 50, 50*0.85, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "0",
+      "${b组内踩左塔}": "1"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan030_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 blue safe area group 0 north 1",
+    "Payloads": [
+      "Omen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: 6, 6\r\nAngle: π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 0.3 : 2 }\r\n---\r\nOmen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: -6, 6\r\nAngle: -π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 2 : 0.3 }\r\n"
+    ],
+    "Variables": {
+      "${b1北打左右}": "1",
+      "${if: ${v:myIdx_isG1} ? 0.3 : 2 }": "2",
+      "${if: ${v:myIdx_isG1} ? 2 : 0.3 }": "0.3"
+    },
+    "Shapes": 2,
+    "Asset": "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
+    "AssetCount": 2
+  },
+  {
+    "Name": "M12 wind fan 45 group 1 left 0",
+    "Payloads": [
+      "Omen: Fan45\r\n// 45.2°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\nPos: -14 + 3√2, 3√2\r\nAngle: 100.13°\r\nScale: 40, 40 * 0.995, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "1",
+      "${b组内踩左塔}": "0"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan045_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 wind fan 30 group 1 left 0",
+    "Payloads": [
+      "Omen: Fan30\r\n// 35°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\n// 塔的中心靠前一点，使扇形外侧尽量贴合安全范围\r\nPos: -17.79, 4.18\r\nAngle: 97.5°\r\nScale: 50, 50*0.85, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "1",
+      "${b组内踩左塔}": "0"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan030_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 blue safe area group 1 north 0",
+    "Payloads": [
+      "Omen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: 6, 6\r\nAngle: π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 0.3 : 2 }\r\n---\r\nOmen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: -6, 6\r\nAngle: -π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 2 : 0.3 }\r\n"
+    ],
+    "Variables": {
+      "${b1北打左右}": "0",
+      "${if: ${v:myIdx_isG1} ? 0.3 : 2 }": "0.3",
+      "${if: ${v:myIdx_isG1} ? 2 : 0.3 }": "2"
+    },
+    "Shapes": 2,
+    "Asset": "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
+    "AssetCount": 2
+  },
+  {
+    "Name": "M12 wind fan 45 group 1 left 1",
+    "Payloads": [
+      "Omen: Fan45\r\n// 45.2°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\nPos: -14 + 3√2, 3√2\r\nAngle: 100.13°\r\nScale: 40, 40 * 0.995, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "1",
+      "${b组内踩左塔}": "1"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan045_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 wind fan 30 group 1 left 1",
+    "Payloads": [
+      "Omen: Fan30\r\n// 35°\r\nTag: MCs_塔_风\r\nt: 13\r\nO: 100, 100\r\nθ: ${!v:myIdx_isG1} ? π : 0\r\n+Y: !0${b组内踩左塔}\r\n// 塔的中心靠前一点，使扇形外侧尽量贴合安全范围\r\nPos: -17.79, 4.18\r\nAngle: 97.5°\r\nScale: 50, 50*0.85, 1\r\nColor: 0.3, 1.5, 1.5, 1"
+    ],
+    "Variables": {
+      "${!v:myIdx_isG1}": "1",
+      "${b组内踩左塔}": "1"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/gl_fan030_1bf.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "M12 blue safe area group 1 north 1",
+    "Payloads": [
+      "Omen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: 6, 6\r\nAngle: π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 0.3 : 2 }\r\n---\r\nOmen: z6r1_b4_ibox_01k1\r\nTag: MCs_四运_蓝初始安全区\r\nt: 9.3\r\nO: 100, 100\r\nPos: -6, 6\r\nAngle: -π/4\r\n+Y: ${b1北打左右}\r\nScale: 6√2, 12√2, 1\r\nColor: 0, 1, 5, ${if: ${v:myIdx_isG1} ? 2 : 0.3 }\r\n"
+    ],
+    "Variables": {
+      "${b1北打左右}": "1",
+      "${if: ${v:myIdx_isG1} ? 0.3 : 2 }": "0.3",
+      "${if: ${v:myIdx_isG1} ? 2 : 0.3 }": "2"
+    },
+    "Shapes": 2,
+    "Asset": "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
+    "AssetCount": 2
+  }
+]

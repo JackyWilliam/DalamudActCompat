@@ -71,6 +71,7 @@ public sealed class IinactAdapter : IParserEngine
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
+    public string? ActiveLogDirectory => actRuntime.ActiveLogDirectory;
 
     public ParserStatus Status
     {

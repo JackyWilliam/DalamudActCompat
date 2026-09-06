@@ -76,6 +76,8 @@ public sealed class ControlCenterWindow : Window
         "第三方插件导入失败###DalamudActCompatPluginInstallFailure";
     private const string ResetEncounterPopupId = "重置当前战斗###DalamudActCompatResetEncounter";
     private const string CloudQuickPopupId = "云同步状态###DalamudActCompatCloudQuickStatus";
+    private const string ActivationQqGroup = "1098561701";
+    private const string ActivationDiscordUrl = "https://discord.gg/HpQZErSPc";
 
     private readonly PluginConfiguration configuration;
     private readonly WindowDragController headerDrag = new();
@@ -2543,6 +2545,7 @@ public sealed class ControlCenterWindow : Window
             "cloud-activation-key",
             ref cloudActivationKey,
             96);
+        DrawCloudActivationKeyHelp();
         var passwordsMatch = cloudPassword.Length >= 10 &&
                              cloudPassword == cloudPasswordConfirmation;
         DrawAuthenticationPersistenceOption();
@@ -2566,6 +2569,43 @@ public sealed class ControlCenterWindow : Window
         DrawAuthenticationMutedText(text.Get(
             "注册必须同时提供用户名、密码和有效的一次性激活码。",
             "Registration requires a username, password, and valid one-time activation key."));
+    }
+
+    private void DrawCloudActivationKeyHelp()
+    {
+        // New users cannot reach the signed-in help page; keep the free-key
+        // channels visible beside registration instead of behind another tab.
+        DrawAuthenticationMutedText(text.Get(
+            "DACT 和激活码均免费，请勿购买或转售。",
+            "DACT and activation keys are free. Do not buy or resell them."));
+        DrawAuthenticationMutedText(text.Get(
+            $"加入 QQ 群 {ActivationQqGroup} 或 Discord，联系群主或频道主获取激活码。",
+            $"Join QQ group {ActivationQqGroup} or Discord and contact the group/server owner for an activation key."));
+
+        var qqLabel = text.Get("复制 QQ 群号", "Copy QQ group");
+        var discordLabel = text.Get("打开 Discord", "Open Discord");
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        var buttonsWidth = ImGui.CalcTextSize(qqLabel).X + ImGui.CalcTextSize(discordLabel).X +
+                           ImGui.GetStyle().FramePadding.X * 4 + ImGui.GetStyle().ItemSpacing.X;
+        if (ImGui.Button(qqLabel))
+        {
+            ImGui.SetClipboardText(ActivationQqGroup);
+        }
+        // At narrow widths or large font scales, stack the buttons inside the
+        // existing scrollable authentication card instead of overflowing it.
+        if (availableWidth >= buttonsWidth)
+        {
+            ImGui.SameLine();
+        }
+        if (ImGui.Button(discordLabel))
+        {
+            OpenUrl(ActivationDiscordUrl);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(ActivationDiscordUrl);
+        }
+        ImGui.Spacing();
     }
 
     private void DrawCloudPasswordResetForm(bool busy, bool hasLocalRecoveryKey)
@@ -3008,7 +3048,10 @@ public sealed class ControlCenterWindow : Window
                 "Up to 2 encrypted versions with different content are retained; unchanged settings use no extra slot."));
 
             ImGui.BeginDisabled(snapshot.IsBusy);
-            if (ImGui.Button(text.Get("上传当前配置", "Upload current configuration"), new Vector2(152, 34)))
+            var uploadLabel = snapshot.IsBusy
+                ? text.Get("处理中…", "Working…")
+                : text.Get("上传当前配置", "Upload current configuration");
+            if (ImGui.Button($"{uploadLabel}###CloudUploadCurrent", new Vector2(152, 34)))
             {
                 cloud.Upload();
             }

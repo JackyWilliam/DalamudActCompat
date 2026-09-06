@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only callback data is exercised; no attached scripts, TTS, or game expressions are executed. -->
+<Triggers>
+<Trigger Enabled="true" Id="6ed81328-dd40-48a7-a393-1190a75615ab" Name="22 手动 PictoACT 上游无 Tag 兼容（基础形状与延迟）" Source="None">
+        <Actions>
+          <Action OrderNumber="1" ActionType="Placeholder" DescriptionOverride="True" Description="此项保留无 Tag 兼容测试；四个图形的延迟加持续时间均为 6 秒，依靠自身寿命结束，不发送全局 Remove，避免清除其他触发器绘图。" />
+          <Action OrderNumber="2" ActionType="NamedCallback" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#xD;&#xA;t: 6&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Scale: 3&#xD;&#xA;---&#xD;&#xA;Omen: Rect&#xD;&#xA;Delay: 0.5&#xD;&#xA;t: 5.5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Angle: ${_me.h}&#xD;&#xA;Scale: 2.5, 12, 1&#xD;&#xA;Color: 0.2, 1, 0.3, 0.75&#xD;&#xA;---&#xD;&#xA;Omen: Rect2&#xD;&#xA;Delay: 1&#xD;&#xA;t: 5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Angle: ${_me.h} + π/2&#xD;&#xA;Scale: 1.5, 8, 1&#xD;&#xA;Color: 0.25, 0.6, 1, 0.75&#xD;&#xA;---&#xD;&#xA;Omen: Fan90&#xD;&#xA;Delay: 1.5&#xD;&#xA;t: 4.5&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;Angle: ${_me.h}&#xD;&#xA;Scale: 10&#xD;&#xA;Color: 1, 0.35, 0.2, 0.75" />
+          <Action OrderNumber="3" ActionType="UseTTS" Asynchronous="False" UseTTSTextExpression="无标签绘图已开始，四种图形将分批出现" />
+          <Action OrderNumber="4" ActionType="Placeholder" DescriptionOverride="True" Description="不发送无选择条件的全局 Remove；本项图形到期后自动消失。" />
+          <Action OrderNumber="5" ActionType="UseTTS" ExecutionDelayExpression="6100" Asynchronous="False" UseTTSTextExpression="无标签绘图已自然结束，未清理其他图形" />
+        </Actions>
+      </Trigger>
+<Trigger Enabled="true" Id="ff949e0f-9b75-441b-bc93-d52ac967577b" Name="24 手动 PictoACT ExaFlare、Modify 与分类移除" Source="None">
+        <Actions>
+          <Action OrderNumber="1" ActionType="NamedCallback" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Action: ExaFlare&#xD;&#xA;Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_TEST24_EXA&#xD;&#xA;n: 5&#xD;&#xA;n0: 0&#xD;&#xA;dt: 0.55&#xD;&#xA;Delay0: 0.2&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;dPos: 2, 0, 0&#xD;&#xA;t: 2.5&#xD;&#xA;Scale: 2.5&#xD;&#xA;Color: 1, 0.35, 0.1, 0.8&#xD;&#xA;---&#xD;&#xA;Action: 地火&#xD;&#xA;Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_TEST24_GROUND_FIRE_ALIAS&#xD;&#xA;n: 3&#xD;&#xA;dt: 0.7&#xD;&#xA;Pos: ${_me.Pos}&#xD;&#xA;dPos: -2, 0, 0&#xD;&#xA;Time: 2.5&#xD;&#xA;Scale: 1.8&#xD;&#xA;Color: 1, 0.8, 0.15, 0.8&#xD;&#xA;---&#xD;&#xA;Omen: Circle&#xD;&#xA;Tag: ACTCOMPAT_TEST24_MODIFY&#xD;&#xA;Center: ${_me.Pos}&#xD;&#xA;Dir8: 0&#xD;&#xA;Pos: 0, 0, 0&#xD;&#xA;Scale: 8, 8, 1&#xD;&#xA;t: 7&#xD;&#xA;Color: 0.2, 0.8, 1, 0.8" />
+          <Action OrderNumber="2" ActionType="NamedCallback" ExecutionDelayExpression="1800" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Modify&#xD;&#xA;Tag: ACTCOMPAT_TEST24_MODIFY&#xD;&#xA;Scale: 12, 12, 1&#xD;&#xA;Color: 0.8, 0.2, 1, 0.8" />
+          <Action OrderNumber="3" ActionType="NamedCallback" ExecutionDelayExpression="3000" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Change&#xD;&#xA;Tag: ACTCOMPAT_TEST24_MODIFY&#xD;&#xA;ScaleCyl: 6, 1&#xD;&#xA;Color: 0.2, 1, 0.4, 0.8" />
+          <Action OrderNumber="4" ActionType="NamedCallback" ExecutionDelayExpression="5000" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Regex: ^ACTCOMPAT_TEST24_(EXA|GROUND_FIRE_ALIAS|MODIFY)$&#xD;&#xA;Type: StaticVfx" />
+          <Action OrderNumber="5" ActionType="NamedCallback" ExecutionDelayExpression="5200" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Tag: ACTCOMPAT_TEST24_ACTOR_ONLY&#xD;&#xA;Type: ActorVfx" />
+          <Action OrderNumber="6" ActionType="NamedCallback" ExecutionDelayExpression="5400" Asynchronous="False" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#xD;&#xA;Regex: ^ACTCOMPAT_TEST24_(EXA|GROUND_FIRE_ALIAS|MODIFY|ACTOR_ONLY)$&#xD;&#xA;Type: All" />
+        </Actions>
+      </Trigger>
+</Triggers>

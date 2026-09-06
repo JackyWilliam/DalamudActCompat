@@ -15,6 +15,7 @@ public sealed class ParserEngine : IParserEngine
     public event EventHandler<ParserStatus>? StatusChanged;
 
     public ParserStatus Status => inner.Status;
+    public string? ActiveLogDirectory => inner.ActiveLogDirectory;
 
     public Task StartAsync(CancellationToken cancellationToken) => inner.StartAsync(cancellationToken);
 

@@ -2040,12 +2040,12 @@ internal sealed partial class PictoActOverlayService : IDisposable
     }
 
     private static bool ParseBoolean(string value, string name)
-        => value.Trim().ToLowerInvariant() switch
-        {
-            "true" or "1" => true,
-            "false" or "0" => false,
-            _ => throw new InvalidDataException($"PictoACT {name} is not a boolean."),
-        };
+    {
+        if (bool.TryParse(value.Trim(), out var literal)) return literal;
+        // Online resources leave expressions such as !00 and 0x08 & 0x8 for
+        // PictoACT to evaluate after Triggernometry has expanded its variables.
+        return !NumericExpressionParser.IsZero(ParseNumberExpression(value, name));
+    }
 
     private static (string VfxPath, PictoActShapeKind Kind, float FanRadians) ParseVfx(
         IReadOnlyDictionary<string, string> values)
@@ -2223,7 +2223,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
         string name,
         Func<string, Vector3?>? entityResolver = null)
     {
-        var normalized = value.Trim().Trim('<', '>', '(', ')', '[', ']');
+        var normalized = TrimCoordinateWrapper(value.Trim());
         if (!normalized.Contains(',') && entityResolver?.Invoke(normalized) is { } entityPosition)
         {
             return entityPosition;
@@ -2253,6 +2253,31 @@ internal sealed partial class PictoActOverlayService : IDisposable
         // Dalamud's world vector follows the client layout: X/Z are the ground plane and Y is height.
         var result = new Vector3(numbers[0], numbers.Length > 2 ? numbers[2] : 0, numbers[1]);
         return ValidateCoordinate(result, name);
+    }
+
+    private static string TrimCoordinateWrapper(string value)
+    {
+        // Strip only a wrapper around the entire vector. Trimming individual end
+        // characters corrupts coordinates like "0, (condition ? -11.35 : -4.63)".
+        while (value.Length >= 2)
+        {
+            var close = value[0] switch { '(' => ')', '[' => ']', '<' => '>', _ => '\0' };
+            if (close == '\0' || value[^1] != close) break;
+            if (value[0] == '(')
+            {
+                var depth = 0;
+                var wrapsAll = true;
+                for (var index = 0; index < value.Length - 1; index++)
+                {
+                    if (value[index] == '(') depth++;
+                    else if (value[index] == ')') depth--;
+                    if (depth == 0) { wrapsAll = false; break; }
+                }
+                if (!wrapsAll) break;
+            }
+            value = value[1..^1].Trim();
+        }
+        return value;
     }
 
     private static Vector3 ValidateCoordinate(Vector3 result, string name)
@@ -2459,9 +2484,16 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
     private static float ParseSingle(string value, string name)
     {
+        var result = (float)ParseNumberExpression(value, name);
+        if (!float.IsFinite(result)) throw new InvalidDataException($"PictoACT {name} is not finite.");
+        return result;
+    }
+
+    private static double ParseNumberExpression(string value, string name)
+    {
         try
         {
-            return checked((float)EvaluateNumericExpression(value));
+            return EvaluateNumericExpression(value);
         }
         catch (Exception ex) when (ex is FormatException or OverflowException)
         {
@@ -2476,7 +2508,10 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
     private sealed class NumericExpressionParser(string text)
     {
+        private const double Tolerance = 1e-9;
         private int position;
+
+        internal static bool IsZero(double value) => Math.Abs(value) < Tolerance;
 
         internal double Parse()
         {
@@ -2487,12 +2522,13 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 throw new FormatException($"Unexpected token at position {position}.");
             }
 
+            if (!double.IsFinite(result)) throw new FormatException("Number expression must be finite.");
             return result;
         }
 
         private double ParseConditional()
         {
-            var condition = ParseComparison();
+            var condition = ParseLogicalOr();
             SkipWhiteSpace();
             if (!Take('?'))
             {
@@ -2507,43 +2543,117 @@ internal sealed partial class PictoActOverlayService : IDisposable
             }
 
             var whenFalse = ParseConditional();
-            return condition != 0 ? whenTrue : whenFalse;
+            return !IsZero(condition) ? whenTrue : whenFalse;
+        }
+
+        private double ParseLogicalOr()
+        {
+            var result = ParseLogicalAnd();
+            while (true)
+            {
+                SkipWhiteSpace();
+                if (!TakeString("||")) return result;
+                var right = ParseLogicalAnd();
+                result = !IsZero(result) || !IsZero(right) ? 1 : 0;
+            }
+        }
+
+        private double ParseLogicalAnd()
+        {
+            var result = ParseBitwiseAnd();
+            while (true)
+            {
+                SkipWhiteSpace();
+                if (!TakeString("&&")) return result;
+                // Parse both operands even when the first decides the result, so
+                // malformed trailing input cannot bypass command validation.
+                var right = ParseBitwiseAnd();
+                result = !IsZero(result) && !IsZero(right) ? 1 : 0;
+            }
+        }
+
+        private double ParseBitwiseAnd()
+        {
+            var result = ParseComparison();
+            while (true)
+            {
+                SkipWhiteSpace();
+                if (text.AsSpan(position).StartsWith("&&") || !Take('&')) return result;
+                var right = ParseComparison();
+                result = Truncate(result) & Truncate(right);
+            }
+        }
+
+        private static long Truncate(double value)
+            => checked((long)(value + (value > 0 ? Tolerance : -Tolerance)));
+
+        private readonly record struct ComparisonOperand(double? Number, string Text)
+        {
+            internal double RequireNumber()
+                => Number ?? throw new FormatException($"Unknown number name '{Text}'.");
+        }
+
+        private ComparisonOperand ParseComparisonOperand()
+        {
+            SkipWhiteSpace();
+            var start = position;
+            if (char.IsLetter(Current))
+            {
+                var identifier = ParseIdentifier();
+                SkipWhiteSpace();
+                if (Current != '(' && identifier.ToLowerInvariant() is not ("pi" or "π" or "true" or "false"))
+                    return new(null, identifier);
+                position = start;
+            }
+            var number = ParseExpression();
+            if (!double.IsFinite(number)) throw new FormatException("Number expression must be finite.");
+            var raw = text[start..position].Trim();
+            // Upstream '==' compares strings (including leading zeroes), whereas
+            // '=' compares numbers with tolerance. Arithmetic results are canonical.
+            return new(number, double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+                ? raw : number.ToString("R", CultureInfo.InvariantCulture));
         }
 
         private double ParseComparison()
         {
-            var result = ParseExpression();
+            var left = ParseComparisonOperand();
             while (true)
             {
                 SkipWhiteSpace();
+                double result;
                 if (TakeString("<="))
                 {
-                    result = result <= ParseExpression() ? 1 : 0;
+                    result = left.RequireNumber() <= ParseComparisonOperand().RequireNumber() + Tolerance ? 1 : 0;
                 }
                 else if (TakeString(">="))
                 {
-                    result = result >= ParseExpression() ? 1 : 0;
+                    result = left.RequireNumber() + Tolerance >= ParseComparisonOperand().RequireNumber() ? 1 : 0;
                 }
-                else if (TakeString("==") || Take('='))
+                else if (TakeString("=="))
                 {
-                    result = Math.Abs(result - ParseExpression()) < 1e-9 ? 1 : 0;
+                    result = left.Text == ParseComparisonOperand().Text ? 1 : 0;
+                }
+                else if (Take('='))
+                {
+                    result = IsZero(left.RequireNumber() - ParseComparisonOperand().RequireNumber()) ? 1 : 0;
                 }
                 else if (TakeString("!="))
                 {
-                    result = Math.Abs(result - ParseExpression()) >= 1e-9 ? 1 : 0;
+                    result = !IsZero(left.RequireNumber() - ParseComparisonOperand().RequireNumber()) ? 1 : 0;
                 }
                 else if (Take('<'))
                 {
-                    result = result < ParseExpression() ? 1 : 0;
+                    result = left.RequireNumber() + Tolerance < ParseComparisonOperand().RequireNumber() ? 1 : 0;
                 }
                 else if (Take('>'))
                 {
-                    result = result > ParseExpression() ? 1 : 0;
+                    result = left.RequireNumber() > ParseComparisonOperand().RequireNumber() + Tolerance ? 1 : 0;
                 }
                 else
                 {
-                    return result;
+                    return left.RequireNumber();
                 }
+                left = new(result, result.ToString("R", CultureInfo.InvariantCulture));
             }
         }
 
@@ -2618,12 +2728,14 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
             if (Take('!'))
             {
-                return ParseUnary() == 0 ? 1 : 0;
+                return IsZero(ParseUnary()) ? 1 : 0;
             }
 
             if (Take('√'))
             {
-                return Math.Sqrt(ParseUnary());
+                var result = Math.Sqrt(ParseUnary());
+                if (!double.IsFinite(result)) throw new FormatException("Square root must be finite.");
+                return result;
             }
 
             return ParsePower();
@@ -2644,7 +2756,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             double result;
             if (Take('('))
             {
-                result = ParseExpression();
+                result = ParseConditional();
                 SkipWhiteSpace();
                 if (!Take(')'))
                 {
@@ -2683,6 +2795,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 result *= Math.PI / 180;
             }
 
+            if (!double.IsFinite(result)) throw new FormatException("Number expression must be finite.");
             return result;
         }
 
@@ -2722,6 +2835,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 ("sin", 1) => Math.Sin(arguments[0]),
                 ("cos", 1) => Math.Cos(arguments[0]),
                 ("tan", 1) => Math.Tan(arguments[0]),
+                ("asin", 1) or ("arcsin", 1) => Math.Asin(arguments[0]),
                 ("atan", 1) or ("arctan", 1) => Math.Atan(arguments[0]),
                 ("atan2", 2) or ("arctan2", 2) => Math.Atan2(arguments[0], arguments[1]),
                 ("min", 2) => Math.Min(arguments[0], arguments[1]),
@@ -2741,9 +2855,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 ("θ", 4) => Math.Atan2(
                     arguments[2] - arguments[0],
                     arguments[3] - arguments[1]),
-                ("roundir", 2) => PositiveModulo(
-                    Math.Round(arguments[0] / Math.Tau * arguments[1]),
-                    arguments[1]),
+                ("roundir", 2) => RadiansToDirection(arguments[0], arguments[1]),
                 _ => throw new FormatException(
                     $"Unknown function '{name}' with {arguments.Count} arguments."),
             };
@@ -2751,6 +2863,15 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         private static double PositiveModulo(double value, double divisor)
             => ((value % divisor) + divisor) % divisor;
+
+        private static double RadiansToDirection(double radians, double divisions)
+        {
+            // PictoACT directions start at north (-pi), with a half-step for
+            // negative division counts; a south-based index rotates safe spots.
+            var direction = (radians / Math.PI + 1) / 2 * Math.Abs(divisions);
+            if (divisions < 0) direction -= 0.5;
+            return Math.Round(PositiveModulo(direction + 0.5, Math.Abs(divisions)) - 0.5);
+        }
 
         private static double DirectionToRadians(double direction, double divisions)
         {
@@ -2769,6 +2890,15 @@ internal sealed partial class PictoActOverlayService : IDisposable
         {
             SkipWhiteSpace();
             var start = position;
+            if (TakeString("0x") || TakeString("0X"))
+            {
+                var hexStart = position;
+                while (position < text.Length && Uri.IsHexDigit(text[position])) position++;
+                if (hexStart == position || !long.TryParse(text.AsSpan(hexStart, position - hexStart),
+                        NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var integer))
+                    throw new FormatException($"Invalid hexadecimal number at position {start}.");
+                return integer;
+            }
             var hasExponent = false;
             while (position < text.Length)
             {

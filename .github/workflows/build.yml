@@ -53,6 +53,11 @@ jobs:
             --no-restore `
             "-p:DalamudLibPath=$dalamud"
 
+      - name: Run scanner resource smoke
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.ScannerSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.ScannerSmokeTests.exe"
+
       - name: Run Release Package smoke
         shell: pwsh
         run: |
