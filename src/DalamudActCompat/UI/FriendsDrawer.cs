@@ -42,12 +42,14 @@ internal sealed partial class FriendsUiManager
             var corners = outside ? ImDrawFlags.RoundCornersRight : ImDrawFlags.RoundCornersLeft;
             list.AddRectFilled(position, end, ImGui.GetColorU32(Navy), 10, corners);
             list.AddRect(position, end, ImGui.GetColorU32(new Vector4(.34f, .29f, .18f, .85f)), 10, corners);
-            // Fill over the shared one-pixel seam: this is a connected drawer,
-            // not a second framed window floating six pixels away from its owner.
-            var seam = outside ? position.X : end.X - 1;
-            list.AddRectFilled(new(seam, position.Y + 1), new(seam + 1, end.Y - 1), ImGui.GetColorU32(Navy));
             DrawDrawerCollapse(position, visibleWidth, layout.Size.Y, scale, outside);
-            ImGui.SetCursorPos(new(14 * scale, 12 * scale));
+            // Slide the complete content behind the owner's right divider. The
+            // outer window is only its visible clip, not a growing form layout.
+            var contentPosition = outside ? layout.Position - new Vector2(layout.Size.X - visibleWidth, 0) : position;
+            ImGui.SetCursorScreenPos(contentPosition + new Vector2(14 * scale, 12 * scale));
+            // Child backgrounds also move behind the seam, so constrain their
+            // inherited clip by one pixel to keep the owner's divider visible.
+            ImGui.PushClipRect(position + new Vector2(1, 0), end - new Vector2(1, 0), true);
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(2 * scale, 0));
             if (ImGui.BeginChild("drawer-content", new(layout.Size.X - 42 * scale, layout.Size.Y - 24 * scale), false))
             {
@@ -72,7 +74,11 @@ internal sealed partial class FriendsUiManager
                 ImGui.Spacing(); ImGui.Separator();
                 ImGui.TextDisabled("消息使用须知"); ImGui.TextWrapped(CloudChatPolicy.Notice);
             }
-            ImGui.EndChild(); ImGui.PopStyleVar();
+            ImGui.EndChild(); ImGui.PopStyleVar(); ImGui.PopClipRect();
+            // Preserve the main window's original right edge throughout both
+            // animation directions instead of painting the shared seam away.
+            var seam = outside ? position.X : end.X - 1;
+            list.AddRectFilled(new(seam, position.Y), new(seam + 1, end.Y), ImGui.GetColorU32(ImGuiCol.Border));
         }
         ImGui.End(); ImGui.PopStyleVar(4);
     }

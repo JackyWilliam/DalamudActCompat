@@ -243,7 +243,18 @@ internal static class FriendsUiSmokeTests
                 Check(ImGui.GetDrawData().TotalVtxCount > 0, "Native UI emitted no draw data.");
             }
             string Focus() => Marshal.PtrToStringUTF8((nint)context.NavWindow.Name) ?? "";
+            float DrawerWidth()
+            {
+                for (var i = 0; i < context.Windows.Size; i++)
+                {
+                    var w = context.Windows[i];
+                    if (Marshal.PtrToStringUTF8((nint)w.Name) == "##DACTFriendsDrawer" && w.Active) return w.Size.X;
+                }
+                return 0;
+            }
             Frame(true); ui.ToggleDrawer(); Frame(); Frame();
+            var openingWidth = DrawerWidth();
+            Check(openingWidth > 0 && openingWidth < 352, "Opening skipped the intermediate slide.");
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-opening.png"));
             for (var i = 0; i < 10; i++) Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
@@ -272,8 +283,13 @@ internal static class FriendsUiSmokeTests
             Check(context.OpenPopupStack.Size == 0, "Status popup did not close with Escape.");
             var fullLayout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, 1);
             Click(fullLayout.Position + new Vector2(fullLayout.Size.X - 12, fullLayout.Size.Y / 2));
+            var previousWidth = DrawerWidth();
+            for (var i = 0; i < 4; i++) { Frame(); Check(DrawerWidth() < previousWidth, "Closing slide was not continuous."); previousWidth = DrawerWidth(); }
+            Check(ui.AnyOpen, "Collapse skipped the closing animation.");
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-closing.png"));
             for (var i = 0; i < 12; i++) Frame();
             Check(!ui.AnyOpen, "Vertically centered collapse icon did not close the drawer.");
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-closed.png"));
             ui.ToggleDrawer(); for (var i = 0; i < 12; i++) Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
             typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
