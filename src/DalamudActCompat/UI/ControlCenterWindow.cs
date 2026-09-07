@@ -577,7 +577,7 @@ public sealed class ControlCenterWindow : Window
                 statusTooltip: text.Get("查看云同步状态", "View cloud sync status"),
                 friendsAction: cloudSnapshot.IsSignedIn && Friends is { } friends ? friends.ToggleDrawer : null,
                 onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
-                friendsUnread: Friends?.Snapshot.HasUnread ?? false))
+                friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false))
         {
             HideAnimated();
         }

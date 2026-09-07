@@ -151,7 +151,7 @@ internal static class BrandedWindowChrome
             drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
                 ImGui.GetColorU32(Vector4.One), Math.Max(0, onlineFriends).ToString());
             if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip($"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息或申请" : "")}");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip($"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}");
         }
         if (helpAction is not null)
         {
@@ -194,7 +194,8 @@ internal static class BrandedWindowChrome
         string id,
         IReadOnlyList<string> labels,
         int selectedIndex,
-        float height = 38)
+        float height = 38,
+        int notificationIndex = -1)
     {
         if (labels.Count == 0)
         {
@@ -266,6 +267,12 @@ internal static class BrandedWindowChrome
                     itemMin.Y + ((height - labelSize.Y) * 0.5f)),
                 ImGui.GetColorU32(index == selectedIndex ? NavigationAccent : NavigationText),
                 labels[index]);
+            if (index == notificationIndex)
+            {
+                var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+                drawList.AddCircleFilled(itemMin + new Vector2(segmentWidth - 6 * scale, 6 * scale), 3 * scale,
+                    ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
+            }
         }
 
         ImGui.SetCursorPos(new Vector2(localStart.X, localStart.Y + height));

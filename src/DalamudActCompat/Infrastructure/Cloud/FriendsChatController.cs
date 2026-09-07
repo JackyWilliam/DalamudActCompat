@@ -5,7 +5,10 @@ using System.Threading.Channels;
 namespace DalamudActCompat.Infrastructure.Cloud;
 
 internal sealed record FriendConversationView(CloudChatConversation Chat, CloudChatSendRequest? PendingSend, string SendStatus, bool Unread,
-    Guid? LastPreparedOperation = null);
+    Guid? LastPreparedOperation = null)
+{
+    public int UnreadCount { get; init; }
+}
 internal sealed record FriendsChatSnapshot(
     CloudFriendsSession Session, string State, string Status, bool Busy, CloudFriendList? Friends,
     CloudFriendLookup? Lookup, ImmutableDictionary<string, FriendConversationView> Conversations)
@@ -15,7 +18,9 @@ internal sealed record FriendsChatSnapshot(
     public static FriendsChatSnapshot Empty(CloudFriendsSession session) => new(session,
         session.IsSignedIn ? "loading" : "signed-out", session.IsSignedIn ? "正在连接好友服务…" : "登录后可使用好友功能。",
         false, null, null, ImmutableDictionary<string, FriendConversationView>.Empty);
-    public bool HasUnread => Conversations.Values.Any(c => c.Unread) || Friends?.Requests.Any(r => r.Direction == "incoming") == true;
+    public bool HasUnreadMessages => Conversations.Values.Any(c => c.Unread);
+    public bool HasIncomingRequests => Friends?.Requests.Any(r => r.Direction == "incoming") == true;
+    public bool HasUnread => HasUnreadMessages || HasIncomingRequests;
     public long LatestUnreadId => Conversations.Values.Where(c => c.Unread)
         .SelectMany(c => c.Chat.History.Concat(c.Chat.Pending)).Where(m => m.RecipientId == Friends?.User?.Id).Select(m => m.Id).DefaultIfEmpty().Max();
 }
@@ -237,9 +242,13 @@ internal sealed class FriendsChatController : IDisposable
         EnsureCurrent();
         // Snapshots replace retained content; no accumulating local transcript exists.
         var bounded = chat with { History = chat.History.OrderBy(m => m.Id).TakeLast(20).ToArray(), Pending = chat.Pending.OrderBy(m => m.Id).TakeLast(3).ToArray() };
-        var unread = bounded.History.Concat(bounded.Pending).Any(m => m.RecipientId == userId && m.Id > local.ReadThrough.GetValueOrDefault(chat.Id));
-        var value = new FriendConversationView(bounded, local.Outbox.GetValueOrDefault(chat.Id), status, unread,
-            snapshot.Conversations.GetValueOrDefault(chat.Id)?.LastPreparedOperation);
+        // ACK promotes pending messages into history; count unique received IDs
+        // beyond the existing read watermark, never deliveries or our own sends.
+        var unreadCount = bounded.History.Concat(bounded.Pending)
+            .Where(m => m.RecipientId == userId && m.Sender.UserId != userId && m.Id > local.ReadThrough.GetValueOrDefault(chat.Id))
+            .Select(m => m.Id).Distinct().Count();
+        var value = new FriendConversationView(bounded, local.Outbox.GetValueOrDefault(chat.Id), status, unreadCount > 0,
+            snapshot.Conversations.GetValueOrDefault(chat.Id)?.LastPreparedOperation) { UnreadCount = unreadCount };
         Publish(snapshot with { Conversations = snapshot.Conversations.SetItem(chat.Id, value) });
     }
     private async Task SaveAsync()

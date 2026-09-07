@@ -51,6 +51,12 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--friends-unread-only", StringComparer.Ordinal))
+    {
+        await FriendsUiSmokeTests.RunUnreadAsync();
+        await FriendsUiSmokeTests.RunNativeAsync(runNotifications: false);
+        return 0;
+    }
     if (args.Contains("--friends-production-only", StringComparer.Ordinal))
     {
         await CloudFriendsSmokeTests.ProductionAsync(testRoot);
