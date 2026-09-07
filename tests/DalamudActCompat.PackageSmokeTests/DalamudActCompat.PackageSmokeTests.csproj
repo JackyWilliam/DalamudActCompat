@@ -10,6 +10,7 @@
   <ItemGroup>
     <Content Include="Fixtures/PictoCleanupScopes.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/PictoOnline*.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures/U7bP1Drawings.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\DalamudActCompat\DalamudActCompat.csproj" />
     <Reference Include="Dalamud">
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>

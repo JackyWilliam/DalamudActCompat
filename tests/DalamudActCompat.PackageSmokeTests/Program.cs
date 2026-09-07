@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
+    {
+        UnnamedEntitySmokeTests.Run();
+        return 0;
+    }
     if (args.Contains("--friends-unread-only", StringComparer.Ordinal))
     {
         await FriendsUiSmokeTests.RunUnreadAsync();
@@ -108,6 +113,7 @@ try
     ValidateActCallbackCircuitBreaker();
     ValidateReflectionActLoggerOverloads();
     ValidateFfxivEntityDeltaBuilder();
+    UnnamedEntitySmokeTests.Run();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     FallbackCombatEventSmokeTests.Run();

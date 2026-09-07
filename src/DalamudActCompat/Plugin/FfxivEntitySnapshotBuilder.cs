@@ -28,12 +28,10 @@ internal static class FfxivEntitySnapshotBuilder
             }
 
             var combatant = MapCombatant(gameObject, partyTypes);
-            if (!string.IsNullOrWhiteSpace(combatant.Name))
-            {
-                // Dalamud can expose two object-table slots with the same Entity ID during an
-                // actor transition. The wire repository requires one current value per actor.
-                combatantsById[combatant.Id] = combatant;
-            }
+            // Scene objects may have no display name. Utils resolves their BaseId and position
+            // by Entity ID for U7b phase changes and half-room attacks, so keep them in the Host.
+            // Duplicate object-table slots during actor transitions still collapse to one value.
+            combatantsById[combatant.Id] = combatant;
         }
 
         return new HostFfxivEntitySnapshot(
