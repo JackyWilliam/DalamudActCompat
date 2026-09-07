@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Raynording.Accounts;
 using DalamudActCompat.Infrastructure.Storage;
 
 namespace DalamudActCompat.Infrastructure.Cloud;
@@ -63,7 +64,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             new CloudBanStore(paths.CloudBanFile),
             new CloudMachineIdentity(paths.CloudDeviceFile),
             new CloudKeyEnvelopeService(),
-            new PortableConfigurationBackupService())
+            new PortableConfigurationBackupService(),
+            new SharedAccountStore(SharedAccountStore.PathForPlugin(paths.ConfigDirectory)))
     {
     }
 
@@ -74,7 +76,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         CloudBanStore banStore,
         CloudMachineIdentity machineIdentity,
         CloudKeyEnvelopeService envelopeService,
-        PortableConfigurationBackupService backupService)
+        PortableConfigurationBackupService backupService,
+        SharedAccountStore? sharedAccountStore = null)
     {
         this.paths = paths;
         this.apiClient = apiClient;
@@ -83,6 +86,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         this.machineIdentity = machineIdentity;
         this.envelopeService = envelopeService;
         this.backupService = backupService;
+        this.sharedAccountStore = sharedAccountStore;
         storedAccount = TryLoadStoredAccount();
         persistCurrentAccount = storedAccount is not null;
         credentials = storedAccount is { } candidate && candidate.Token.Length > 0 &&
@@ -131,7 +135,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         }
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    private async Task InitializeLegacyAsync(CancellationToken cancellationToken)
     {
         var saved = storedAccount;
         if (saved is null || string.IsNullOrWhiteSpace(saved.Token))
@@ -709,13 +713,20 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         {
             return false;
         }
-        SetSnapshot(Snapshot with
+        try
         {
-            IsBusy = true,
-            StatusMessage = message,
-            StatusIsError = false,
-        });
-        return true;
+            // A revoked token may invalidate locally before the next shared-store poll.
+            // An explicit new login starts against the actual current shared revision.
+            operationSharedRevision = sharedAccountStore?.Read().Revision ?? sharedRevision;
+            SetSnapshot(Snapshot with
+            {
+                IsBusy = true,
+                StatusMessage = message,
+                StatusIsError = false,
+            });
+            return true;
+        }
+        catch { operationGate.Release(); throw; }
     }
 
     private void FinishOperation()
@@ -789,6 +800,12 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             response.Token,
             response.ExpiresAt,
             recoveryKey);
+        if (sharedAccountStore is not null)
+        {
+            var published = sharedAccountStore.Publish(operationSharedRevision,
+                ToSharedAccount(saved), rememberLogin);
+            Interlocked.Exchange(ref sharedRevision, published.Revision);
+        }
         string? persistenceWarning = null;
         var persisted = false;
         try
@@ -887,6 +904,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         Exception? cleanupFailure = null;
         try
         {
+            ClearSharedAccount(credentials);
             credentialStore.Clear();
         }
         catch (Exception ex)
@@ -916,6 +934,10 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
 
     private void InvalidateSessionPreservingRecoveryKey(string message, bool isError)
     {
+        // Revoke the matching shared token only: a late 401 must not erase a newer
+        // account published by RPets while this request was in flight.
+        try { ClearSharedAccount(credentials); }
+        catch (Exception ex) { message += $"（共用登录同步失败：{ex.GetBaseException().Message}）"; }
         CloudStoredCredentials? recovery;
         bool shouldPersist;
         lock (stateLock)
@@ -1282,6 +1304,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         string? recoveryKeyToSave = null,
         string? invitationKeyToShare = null)
     {
+        if (sharedAccountStore is not null && sharedAccountStore.Read().Revision != sharedRevision)
+            return;
         var rollbackPath = FindLatestRollbackPath();
         lock (stateLock)
         {

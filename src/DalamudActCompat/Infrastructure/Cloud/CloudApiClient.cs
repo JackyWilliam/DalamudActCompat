@@ -191,6 +191,18 @@ internal sealed partial class CloudApiClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task ValidateSharedSessionAsync(string token, string username, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Get, "api/v1/auth/me", token);
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
+        // Shared metadata is never authority for the account represented by a token.
+        if (!document.RootElement.TryGetProperty("user", out var user) ||
+            !user.TryGetProperty("username", out var name) || name.GetString() != username)
+            throw new CloudApiException(HttpStatusCode.Unauthorized, "account_mismatch", "共用账号与服务器不一致，请重新登录。");
+    }
+
     public Task<CloudAccessStatus> GetAccessStatusAsync(
         string token,
         CancellationToken cancellationToken)
