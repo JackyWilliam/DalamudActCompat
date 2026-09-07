@@ -66,7 +66,9 @@ internal sealed class CloudApiException(
     string? banType = null,
     DateTimeOffset? bannedAt = null,
     DateTimeOffset? banExpiresAt = null,
-    string? banReason = null) : Exception(message)
+    string? banReason = null,
+    long? nextSendSequence = null,
+    int? retryAfterSeconds = null) : Exception(message)
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
 
@@ -79,6 +81,10 @@ internal sealed class CloudApiException(
     public DateTimeOffset? BanExpiresAt { get; } = banExpiresAt;
 
     public string? BanReason { get; } = banReason;
+
+    public long? NextSendSequence { get; } = nextSendSequence;
+
+    public int? RetryAfterSeconds { get; } = retryAfterSeconds;
 
     public CloudBanNotice? ToBanNotice()
         => Code is "account_banned" or "device_banned" &&
@@ -93,7 +99,7 @@ internal sealed class CloudApiException(
             : null;
 }
 
-internal sealed class CloudApiClient : IDisposable
+internal sealed partial class CloudApiClient : IDisposable
 {
     internal static readonly Uri DefaultBaseAddress =
         new("https://admin.localhost2019.com/");
@@ -470,10 +476,17 @@ internal sealed class CloudApiClient : IDisposable
                 error.BanType,
                 error.BannedAt,
                 error.BanExpiresAt,
-                error.BanReason);
+                error.BanReason,
+                error.NextSendSequence,
+                error.RetryAfterSeconds);
         }
         catch (CloudApiException)
         {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation during error-body IO still belongs to the caller's lifetime.
             throw;
         }
         catch
@@ -517,5 +530,7 @@ internal sealed class CloudApiClient : IDisposable
         string? BanType,
         DateTimeOffset? BannedAt,
         DateTimeOffset? BanExpiresAt,
-        string? BanReason);
+        string? BanReason,
+        long? NextSendSequence,
+        int? RetryAfterSeconds);
 }

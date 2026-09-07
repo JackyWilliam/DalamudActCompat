@@ -2879,6 +2879,8 @@ public sealed class ControlCenterWindow : Window
         DrawCloudBackupCard(snapshot);
         ImGui.Spacing();
         DrawCloudInvitationAndSupportCard(snapshot);
+        ImGui.Spacing();
+        ImGui.TextWrapped(CloudChatPolicy.Notice);
     }
 
     private void DrawCloudSummaryCard(CloudClientSnapshot snapshot)

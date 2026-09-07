@@ -33,7 +33,7 @@ internal sealed record CloudClientSnapshot(
             null);
 }
 
-internal sealed class CloudClientService : IDisposable
+internal sealed partial class CloudClientService : IDisposable
 {
     private readonly object stateLock = new();
     private readonly SemaphoreSlim operationGate = new(1, 1);
@@ -1001,7 +1001,8 @@ internal sealed class CloudClientService : IDisposable
     {
         await Task.WhenAll(
                 RunEventMonitorAsync(current, cancellationToken),
-                RunHeartbeatMonitorAsync(current, cancellationToken))
+                RunHeartbeatMonitorAsync(current, cancellationToken),
+                RunFriendConnectionAsync(current, cancellationToken))
             .ConfigureAwait(false);
     }
 
@@ -1280,9 +1281,10 @@ internal sealed class CloudClientService : IDisposable
         var rollbackPath = FindLatestRollbackPath();
         lock (stateLock)
         {
-            // A response from an operation started before the live ban event must never
-            // resurrect the signed-in UI after access has already been revoked.
-            if (activeBan is not null)
+            // A stale backup/login refresh must not revive access revoked by a ban,
+            // heartbeat 401, logout, or a newer login while the response was in flight.
+            if (activeBan is not null || credentials is null ||
+                !string.Equals(credentials.Token, current.Token, StringComparison.Ordinal))
             {
                 return;
             }

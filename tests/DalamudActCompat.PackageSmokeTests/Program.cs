@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--friends-only", StringComparer.Ordinal))
+    {
+        await CloudFriendsSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--statistics-only", StringComparer.Ordinal))
     {
         NotActStatisticsSmokeTests.Run();
@@ -146,6 +151,7 @@ try
     await CloudOperationGuardSmokeTests.RunAsync(FindProjectRoot());
     ValidateCloudActivationKeyHelp();
     await ValidateCloudApiContractAsync(testRoot);
+    await CloudFriendsSmokeTests.RunAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
     await ValidateFirstLoginReportsServerUnbanAsync(testRoot);
     await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
