@@ -19,7 +19,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 Release ZIP expected by `pluginmaster.json`:
 
 ```text
-https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.0.4/DalamudActCompat-core.zip
+https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.1.0/DalamudActCompat-core.zip
 ```
 
 The raw URL will only work after `JackyWilliam/DalamudActCompatRepo` exists on GitHub and contains `pluginmaster.json` at the repository root. The install link will only work after the source repository has a matching release with the core ZIP, resource manifest, and all three referenced resource packs.
@@ -61,7 +61,7 @@ This checks that unrelated event handles survive repeated scanner initialization
 After the build succeeds, run the Release workflow. It validates the package, uploads all resource packs to a draft first, uploads the core last, and only then publishes the release:
 
 ```powershell
-gh workflow run Release -f tag=v0.4.0.4 --repo JackyWilliam/DalamudActCompat --ref main
+gh workflow run Release -f tag=v0.4.1.0 --repo JackyWilliam/DalamudActCompat --ref main
 ```
 
 Hosted Build CI compiles against public SDK 15 references and runs the Package, Host, Legacy Resource, and scanner suites. Formal packaging uses the local launcher references. If no Windows self-hosted runner is available, build the exact reviewed and merged main commit locally after CI passes, verify the dependency locks with the three `sync-*.ps1 -Check` commands in `release.yml`, and run the collector below. Create a draft release targeting that commit, upload the three resource packs first, then the manifest and core ZIP. Verify all five assets before publishing; download them anonymously afterward and compare SHA-256 hashes with the validated local files.
@@ -71,7 +71,7 @@ Hosted Build CI compiles against public SDK 15 references and runs the Package, 
 Update source metadata as part of the release changes:
 
 ```powershell
-./tools/update-pluginmaster.ps1 -Version 0.4.0.4 -Changelog "Describe the final user-visible changes."
+./tools/update-pluginmaster.ps1 -Version 0.4.1.0 -Changelog "Describe the final user-visible changes."
 ```
 
 After the matching public release and all its assets exist, run the distribution sync workflow (also scheduled automatically):
@@ -85,7 +85,7 @@ Verify the public raw index has the new version, API level, and working core dow
 Before uploading a release, always collect and validate the zip:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\collect-release.ps1 -ExpectedAssemblyVersion 0.4.0.4 -ExpectedDalamudApiLevel 15
+powershell -ExecutionPolicy Bypass -File .\tools\collect-release.ps1 -ExpectedAssemblyVersion 0.4.1.0 -ExpectedDalamudApiLevel 15
 ```
 
 If the script reports `AssemblyVersion`, `DalamudApiLevel`, or `host/DalamudActCompat.Host.exe` mismatch, run a clean rebuild before publishing:
@@ -114,4 +114,4 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 ## Current Expected Behavior
 
-Open `/actcompat` to check parser and extension status. The core package downloads its matching resource packs as needed; subsequent starts can reuse verified cached resources. Fully restart the game after updating to `0.4.0.4` so the parser handle fix takes effect.
+Open `/actcompat` to check parser and extension status. The core package downloads its matching resource packs as needed; subsequent starts can reuse verified cached resources. Fully restart the game after updating to `0.4.1.0` so the updated assemblies and Host resources take effect.
