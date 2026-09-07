@@ -64,12 +64,25 @@ internal sealed partial class FriendsUiManager
                 if (state.State != "ready") ImGui.TextWrapped(state.Status);
                 var count = state.Friends?.Requests.Count(r => r.Direction == "incoming") ?? 0;
                 friendSection = BrandedWindowChrome.DrawNavigationRail("friend-sections", ["好友", count > 0 ? $"申请 ({count})" : "申请", "添加"], friendSection, 30 * scale);
-                switch (friendSection)
+                // A one-column table gives every section the same content box,
+                // including full-width inputs/selectables; indentation alone leaves
+                // their right edge flush against the navigation container.
+                var contentPadding = Math.Max(3, 3 * scale);
+                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + contentPadding);
+                ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(contentPadding));
+                if (ImGui.BeginTable("friend-section-content", 1, ImGuiTableFlags.NoSavedSettings))
                 {
-                    case 0: DrawFriendRows(state, scale); break;
-                    case 1: DrawFriendRequests(state); break;
-                    case 2: DrawAddFriend(state); break;
+                    ImGui.TableNextRow(); ImGui.TableSetColumnIndex(0);
+                    ImGui.PushTextWrapPos(0);
+                    switch (friendSection)
+                    {
+                        case 0: DrawFriendRows(state, scale); break;
+                        case 1: DrawFriendRequests(state); break;
+                        case 2: DrawAddFriend(state); break;
+                    }
+                    ImGui.PopTextWrapPos(); ImGui.EndTable();
                 }
+                ImGui.PopStyleVar();
                 DrawRemoveConfirmation(state);
                 ImGui.Spacing(); ImGui.Separator();
                 ImGui.TextDisabled("消息使用须知"); ImGui.TextWrapped(CloudChatPolicy.Notice);
@@ -116,13 +129,22 @@ internal sealed partial class FriendsUiManager
         if (hovered) ImGui.SetTooltip("修改我的状态");
         // Keep the list compact. Draft text and privacy controls appear only
         // while explicitly editing this account's presence, not in the default list.
-        ImGui.SetNextWindowSize(new(292 * scale, 0), ImGuiCond.Always);
-        ImGui.SetNextWindowSizeConstraints(new(240 * scale, 0), ImGui.GetMainViewport().WorkSize - new Vector2(16));
+        var maximum = ImGui.GetMainViewport().WorkSize - new Vector2(16);
+        var popupWidth = Math.Min(292 * scale, maximum.X);
+        // Fix only width. Let ImGui fit the actual content height rather than
+        // repeatedly forcing a zero-height resize; retain scrolling at real overflow.
+        ImGui.SetNextWindowSizeConstraints(new(popupWidth, 0), new(popupWidth, maximum.Y));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12 * scale));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
         ImGui.PushStyleColor(ImGuiCol.Border, Gold);
-        if (ImGui.BeginPopup("my-presence-settings"))
+        if (ImGui.BeginPopup("my-presence-settings", ImGuiWindowFlags.AlwaysAutoResize))
         {
+            // Saving longer text can grow an already-open popup. ImGui chooses its
+            // initial position only once; keep the new size inside the work area.
+            var viewport = ImGui.GetMainViewport();
+            var minimumPosition = viewport.WorkPos + new Vector2(8);
+            var maximumPosition = Vector2.Max(minimumPosition, viewport.WorkPos + viewport.WorkSize - ImGui.GetWindowSize() - new Vector2(8));
+            ImGui.SetWindowPos(Vector2.Clamp(ImGui.GetWindowPos(), minimumPosition, maximumPosition));
             DrawPresenceEditor(state, scale);
             // Dalamud can leave keyboard navigation disabled while the game owns
             // movement input; an explicitly opened status popup still dismisses on Esc.
@@ -211,13 +233,30 @@ internal sealed partial class FriendsUiManager
         if (privacySaveUnconfirmed) ImGui.TextWrapped("关闭操作尚未确认；本机已暂停副本分享，请重试保存。");
         if (state.Busy && submittedSettings is not null) ImGui.TextDisabled("正在保存…");
         else if (state.State == "error") ImGui.TextWrapped(state.Status);
-        else if (!settingsDirty) ImGui.TextDisabled($"已保存：{StatusName(current.Status)}{(string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text)}");
+        else if (!settingsDirty)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(.60f, .68f, .75f, 1));
+            ImGui.TextWrapped($"已保存：{StatusName(current.Status)}{(string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text)}");
+            ImGui.PopStyleColor();
+        }
     }
 
     private void DrawFriendRows(FriendsChatSnapshot state, float scale)
     {
         foreach (var official in state.Conversations.Values.Where(c => c.Chat.Kind == "official"))
-            if (ImGui.Selectable($"DACT 官方通知{(official.Unread ? "  · 未读" : "")}##official-{official.Chat.Id}")) OpenChat(official.Chat.Id);
+        {
+            var start = ImGui.GetCursorScreenPos(); var width = ImGui.GetContentRegionAvail().X;
+            var message = FriendsMessagePreview.LastMessage(official.Chat, state.Friends?.User?.Id);
+            var hasMessage = message.Length > 0;
+            if (ImGui.Selectable("##official-" + official.Chat.Id, false, ImGuiSelectableFlags.None, new(width, (hasMessage ? 74 : 52) * scale))) OpenChat(official.Chat.Id);
+            var list = ImGui.GetWindowDrawList();
+            list.AddCircleFilled(start + new Vector2(6, 12) * scale, 3.5f * scale, ImGui.GetColorU32(Gold));
+            list.AddText(start + new Vector2(19, 1) * scale, ImGui.GetColorU32(Gold), "DACT 官方通知");
+            var preview = FriendsMessagePreview.Ellipsize(message, Math.Max(0, width - 29 * scale), s => ImGui.CalcTextSize(s).X);
+            if (hasMessage) list.AddText(start + new Vector2(19, 23) * scale, ImGui.GetColorU32(new Vector4(.75f, .80f, .85f, 1)), preview);
+            list.AddText(start + new Vector2(19, hasMessage ? 45 : 23) * scale, ImGui.GetColorU32(new Vector4(.57f, .65f, .73f, 1)), "官方通知 · 只读");
+            if (official.Unread) list.AddCircleFilled(start + new Vector2(width - 4 * scale, 12 * scale), 3 * scale, ImGui.GetColorU32(new Vector4(1, .35f, .35f, 1)));
+        }
         if (state.Friends?.Friends.Count == 0) ImGui.TextDisabled("还没有好友，去“添加”找一个账号吧。");
         foreach (var friend in (state.Friends?.Friends ?? []).OrderByDescending(f => f.Online).ThenBy(f => f.User.Username))
         {
@@ -226,8 +265,14 @@ internal sealed partial class FriendsUiManager
             var status = visible ? friend.Status == "offline" ? "online" : friend.Status : "offline";
             var statusText = StatusName(status) + (visible && !string.IsNullOrEmpty(friend.StatusText) ? " · " + friend.StatusText : "");
             var duty = visible ? friend.Duty?.Name : null;
-            var unread = friend.ConversationId is { } id && state.Conversations.GetValueOrDefault(id)?.Unread == true;
-            var rowHeight = (duty is null ? 53 : 74) * scale;
+            var view = friend.ConversationId is { } id ? state.Conversations.GetValueOrDefault(id) : null;
+            var preview = view is null ? "" : FriendsMessagePreview.LastMessage(view.Chat, state.Friends?.User?.Id);
+            var hasMessage = preview.Length > 0;
+            var unread = view?.Unread == true;
+            // Empty or not-yet-synced chats keep the friend visible, with no
+            // synthetic preview text or blank message row.
+            var statusY = hasMessage ? 45 : 23;
+            var rowHeight = (statusY + (duty is null ? 29 : 51)) * scale;
             var start = ImGui.GetCursorScreenPos(); var width = ImGui.GetContentRegionAvail().X;
             if (ImGui.Selectable("##friend-row", false, ImGuiSelectableFlags.None, new(width, rowHeight)) && friend.ConversationId is { } chat) OpenChat(chat);
             var hovered = ImGui.IsItemHovered();
@@ -237,11 +282,13 @@ internal sealed partial class FriendsUiManager
                 ImGui.EndPopup();
             }
             var list = ImGui.GetWindowDrawList();
+            string Fit(string value) => FriendsMessagePreview.Ellipsize(value, Math.Max(0, width - 29 * scale), s => ImGui.CalcTextSize(s).X);
             list.AddCircleFilled(start + new Vector2(6, 12) * scale, 3.5f * scale, ImGui.GetColorU32(StatusColor(status)));
             list.PushClipRect(start + new Vector2(18 * scale, 0), start + new Vector2(width - 10 * scale, rowHeight), true);
-            list.AddText(start + new Vector2(19, 1) * scale, ImGui.GetColorU32(Vector4.One), friend.User.Username);
-            list.AddText(start + new Vector2(19, 23) * scale, ImGui.GetColorU32(new Vector4(.57f, .65f, .73f, 1)), statusText);
-            if (duty is not null) list.AddText(start + new Vector2(19, 45) * scale, ImGui.GetColorU32(Blue), "正在进行：" + duty);
+            list.AddText(start + new Vector2(19, 1) * scale, ImGui.GetColorU32(Vector4.One), Fit(friend.User.Username));
+            if (hasMessage) list.AddText(start + new Vector2(19, 23) * scale, ImGui.GetColorU32(new Vector4(.75f, .80f, .85f, 1)), Fit(preview));
+            list.AddText(start + new Vector2(19, statusY) * scale, ImGui.GetColorU32(new Vector4(.57f, .65f, .73f, 1)), Fit(statusText));
+            if (duty is not null) list.AddText(start + new Vector2(19, statusY + 22) * scale, ImGui.GetColorU32(Blue), Fit("正在进行：" + duty));
             list.PopClipRect();
             if (unread) list.AddCircleFilled(start + new Vector2(width - 4 * scale, 12 * scale), 3 * scale, ImGui.GetColorU32(new Vector4(1, .35f, .35f, 1)));
             if (hovered) ImGui.SetTooltip(friend.User.Username + "\n" + statusText + (duty is null ? "" : "\n正在进行：" + duty));

@@ -31,6 +31,7 @@ internal static class FriendsUiSmokeTests
         await SwitchAndPreparationAsync();
         await LocalStateAsync(root);
         await PresenceAsync();
+        MessagePreviews();
         Layout();
         Console.WriteLine("Friends UI: bounded consumption, unread persistence, immutable retry, disk failures, account isolation and layout passed.");
     }
@@ -198,11 +199,39 @@ internal static class FriendsUiSmokeTests
     public static async Task RunNativeAsync()
     {
         var api = new Fake { VisualData = true, Self = new("native-self", "Raynor") }; var disk = new MemoryDisk();
+        // Local fixtures expose both directions and official/empty rows without
+        // creating users or delivering test messages to the live service.
+        api.AddIncoming(3, history: true);
+        api.Chat = api.Chat with { History = [api.Chat.History[0] with { Text = "今晚一起刷坐骑吗？我已经准备好了。" }], LatestMessageId = 1 };
+        var awayId = Guid.NewGuid().ToString(); var officialId = Guid.NewGuid().ToString();
+        var own = new CloudChatMessage(2, awayId, new("user", api.Self.Id, api.Self.Username), "away", 1, Guid.NewGuid(),
+            "好，等你回来再一起打。", null, "history", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        var official = own with { Id = 3, ConversationId = officialId, Sender = new("official", null, "DACT 官方"), RecipientId = api.Self.Id,
+            Text = "欢迎使用好友功能，祝你冒险愉快！" };
+        api.AdditionalChats.Add(new(awayId, "friend", 1, new("away", "远方的旅行者"), 1, 0, 2, [own], [], 2, CloudChatPolicy.Notice));
+        api.AdditionalChats.Add(new(officialId, "official", 1, new("official", "DACT 官方"), 1, 0, 3, [official], [], null, CloudChatPolicy.Notice));
         using var controller = new FriendsChatController(api, disk, TimeSpan.FromHours(1));
         using var ui = new FriendsUiManager(controller, () => { });
-        await Until(() => controller.Snapshot.Conversations.ContainsKey(api.Id), "native model");
+        await Until(() => controller.Snapshot.Conversations.Count == 3, "native model");
         NativeFrames(api, controller, ui);
         Console.WriteLine("Friends UI: real cimgui draw, viewport/scaling, explicit chat focus and combat notification focus passed (outside the game).");
+    }
+    private static void MessagePreviews()
+    {
+        var api = new Fake();
+        Check(FriendsMessagePreview.LastMessage(api.Chat, api.Self.Id) == "", "Empty chat created a synthetic message preview.");
+        CloudChatMessage Message(long id, bool own, string text, string state = "history") => new(id, api.Id,
+            new("user", own ? api.Self.Id : api.Peer.Id, own ? api.Self.Username : api.Peer.Username), own ? api.Peer.Id : api.Self.Id,
+            id, Guid.NewGuid(), text, null, state, DateTimeOffset.Now.AddSeconds(-id), null);
+        var chat = api.Chat with { History = [Message(9, false, "对方最后回复"), Message(2, false, "最早未读")], Pending = [Message(10, true, "我发的\n最后一条\t 消息", "pending")] };
+        Check(FriendsMessagePreview.LastMessage(chat, api.Self.Id) == "我：我发的 最后一条 消息", "Preview did not select the last message across both sides/history/pending.");
+        chat = chat with { History = chat.History.Append(chat.Pending[0] with { State = "history" }).ToArray(), Pending = [] };
+        Check(FriendsMessagePreview.LastMessage(chat, api.Self.Id) == "我：我发的 最后一条 消息", "Delivery promotion changed the last message preview.");
+        chat = chat with { History = chat.History.Append(Message(11, false, "新回复")).ToArray() };
+        Check(FriendsMessagePreview.LastMessage(chat, api.Self.Id) == "新回复", "Last incoming reply was lost after own send.");
+        float Width(string text) => System.Globalization.StringInfo.ParseCombiningCharacters(text).Length;
+        Check(FriendsMessagePreview.Ellipsize("🙂👨‍👩‍👧‍👦你好世界", 4, Width) == "🙂👨‍👩‍👧‍👦你…", "Ellipsis split a text element or exceeded the row.");
+        Check(FriendsMessagePreview.Ellipsize("短消息", 8, Width) == "短消息", "Short messages gained an unnecessary ellipsis.");
     }
     private static unsafe void NativeFrames(Fake api, FriendsChatController controller, FriendsUiManager ui)
     {
@@ -271,6 +300,8 @@ internal static class FriendsUiSmokeTests
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup.png"));
             var popup = context.NavWindow;
             Check((popup.Flags & ImGuiWindowFlags.Popup) != 0, "Explicit status edit did not focus its popup.");
+            Console.WriteLine($"Native status popup: size={popup.Size}, content={popup.ContentSize}, scrollbars={popup.ScrollbarX}/{popup.ScrollbarY}.");
+            Check(!popup.ScrollbarX && !popup.ScrollbarY, "Normal status popup has an unnecessary scrollbar.");
             Click(popup.Pos + new Vector2(45, 112));
             Click(popup.Pos + new Vector2(60, 188));
             io.AddInputCharacters("今晚刷坐骑"); Frame();
@@ -296,7 +327,8 @@ internal static class FriendsUiSmokeTests
             Frame(); Frame(); Check(Focus().Contains("DACTFriendChat"), "Explicit chat opening did not focus the chat.");
             Frame(true);
             api.AddIncoming(1, history: true); controller.Refresh();
-            Check(SpinWait.SpinUntil(() => controller.Snapshot.HasUnread, TimeSpan.FromSeconds(3)), "Native notification never reached model.");
+            Check(SpinWait.SpinUntil(() => controller.Snapshot.Conversations[api.Id].Chat.LatestMessageId == api.Chat.LatestMessageId,
+                TimeSpan.FromSeconds(3)), "Native notification never reached model.");
             Frame(); Check(Focus() == "isolated-game-input", "Combat arrival stole game input focus.");
             foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
             foreach (var surface in new[] { new Vector2(800, 600), new Vector2(1920, 1080) })
@@ -330,6 +362,20 @@ internal static class FriendsUiSmokeTests
                 Check(window.Pos.X >= 0 && window.Pos.Y >= 0 && window.Pos.X + window.Size.X <= io.DisplaySize.X && window.Pos.Y + window.Size.Y <= io.DisplaySize.Y,
                     "Status popup escaped the narrow viewport at scale " + scale);
                 if (output is not null && scale == 2) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup-scale2.png"));
+                if (scale == 2)
+                {
+                    Check(controller.UpdatePresence(api.Profile with { Text = new string('长', 80) }), "Overflow fixture did not enqueue.");
+                    Check(SpinWait.SpinUntil(() => !controller.Snapshot.Busy && controller.Snapshot.Friends?.PresenceSettings?.Text.Length == 80,
+                        TimeSpan.FromSeconds(3)), "Overflow fixture did not reach the account model.");
+                    for (var i = 0; i < 5; i++) Frame();
+                    Check(window.ScrollbarY && window.ScrollMax.Y > 0, "Real overflow lost its scrollbar at large text/small viewport.");
+                    Check(window.Pos.Y >= 8 && window.Pos.Y + window.Size.Y <= io.DisplaySize.Y - 8,
+                        "Saving longer text grew the open popup beyond the viewport.");
+                    io.AddMousePosEvent(window.Pos.X + 60, window.Pos.Y + 60); Frame();
+                    io.AddMouseWheelEvent(0, -20); for (var i = 0; i < 5; i++) Frame();
+                    Check(window.Scroll.Y > 0, "Real overflowing status content cannot be scrolled.");
+                    if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup-overflow.png"));
+                }
                 io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             }
             BubbleBounds(raster, output);
@@ -404,6 +450,7 @@ internal static class FriendsUiSmokeTests
         public readonly string Id = Guid.NewGuid().ToString();
         public CloudFriendsSession FriendsSession { get; private set; } = new(1, true, "isolated_a");
         public CloudChatConversation Chat;
+        public readonly List<CloudChatConversation> AdditionalChats = [];
         public readonly ConcurrentQueue<CloudChatSendRequest> Attempts = new();
         public bool FailSend, CommitThenFail, FailGet, FailPresence, DutySuppressed, VisualData;
         public CloudPresenceSettings Profile = CloudPresenceSettings.Default;
@@ -422,7 +469,7 @@ internal static class FriendsUiSmokeTests
         public Task<CloudFriendList> ListFriendsAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null)
         { Guard(expectedSession); return Task.FromResult(new CloudFriendList(VisualData ? [
             new("native-friend", "accepted", "", Peer, default, default, Id, true, "busy", "今晚刷坐骑", new(123, "阿卡狄亚零式登天斗技场 重量级3")),
-            new("native-away", "accepted", "", new("away", "远方的旅行者"), default, default, null, true, "away", "晚点回来"),
+            new("native-away", "accepted", "", new("away", "远方的旅行者"), default, default, AdditionalChats.FirstOrDefault(c => c.Peer?.Id == "away")?.Id, true, "away", "晚点回来"),
             new("native-offline", "accepted", "", new("offline", "星光下的猫"), default, default, null)] : [], VisualData ? 2 : 0, [], CloudChatPolicy.Notice, Self, Profile)); }
         public void SuppressFriendDuty(CloudFriendsSession expectedSession) { Guard(expectedSession); DutySuppressed = true; }
         public Task<CloudPresenceSettings> UpdateFriendPresenceSettingsAsync(CloudPresenceSettings settings, CancellationToken ct, CloudFriendsSession? expectedSession = null)
@@ -431,9 +478,10 @@ internal static class FriendsUiSmokeTests
             Profile = settings with { Revision = Profile.Revision + 1 }; DutySuppressed = false; return Task.FromResult(Profile);
         }
         public Task<CloudChatSync> SyncChatAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null)
-        { Guard(expectedSession); return Task.FromResult(new CloudChatSync([new(Id, Chat.Kind, Chat.Revision, Peer, Chat.History.Count, Chat.Pending.Count, Chat.LatestMessageId)], Chat.Pending, CloudChatPolicy.Notice, [])); }
+        { Guard(expectedSession); return Task.FromResult(new CloudChatSync(new[] { Chat }.Concat(AdditionalChats)
+            .Select(c => new CloudChatSummary(c.Id, c.Kind, c.Revision, c.Peer, c.History.Count, c.Pending.Count, c.LatestMessageId)).ToArray(), Chat.Pending, CloudChatPolicy.Notice, [])); }
         public async Task<CloudChatConversation> GetChatAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null)
-        { Guard(expectedSession); if (FailGet) throw new HttpRequestException("isolated preparation failure"); if (GetGate is { } gate) await gate(ct); return Chat; }
+        { Guard(expectedSession); if (FailGet) throw new HttpRequestException("isolated preparation failure"); if (GetGate is { } gate) await gate(ct); return id == Id ? Chat : AdditionalChats.Single(c => c.Id == id); }
         public Task<CloudChatConversation> AcknowledgeChatAsync(string id, IReadOnlyList<long> ids, CancellationToken ct, CloudFriendsSession? expectedSession = null)
         {
             Guard(expectedSession); BeforeAck?.Invoke(); Acks++;

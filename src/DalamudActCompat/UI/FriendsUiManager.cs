@@ -119,9 +119,10 @@ internal sealed partial class FriendsUiManager : IDisposable
                 ImGui.TextColored(official ? Gold : Blue, official ? "DACT 官方 · 只读通知" : title);
                 if (state.State != "ready") ImGui.TextWrapped(state.Status);
                 var contentWidth = ImGui.GetContentRegionAvail().X;
-                var noticeHeight = ImGui.CalcTextSize(CloudChatPolicy.Notice, false, contentWidth).Y + 18 * scale;
                 var statusHeight = string.IsNullOrEmpty(view.SendStatus) ? 0 : ImGui.CalcTextSize(view.SendStatus, false, contentWidth).Y;
-                var footer = noticeHeight + (official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight);
+                // The usage notice lives once in the friend drawer. Reclaim its
+                // former footer space here while keeping official/read-only identity.
+                var footer = official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight;
                 var historyHeight = Math.Max(90 * scale, ImGui.GetContentRegionAvail().Y - footer);
                 if (ImGui.BeginChild("messages", new Vector2(-1, historyHeight), false))
                 {
@@ -174,7 +175,6 @@ internal sealed partial class FriendsUiManager : IDisposable
                     ImGui.EndDisabled();
                     if (!string.IsNullOrEmpty(view.SendStatus)) ImGui.TextWrapped(view.SendStatus);
                 }
-                ImGui.Separator(); ImGui.TextWrapped(CloudChatPolicy.Notice);
             }
         }
         ImGui.End();
