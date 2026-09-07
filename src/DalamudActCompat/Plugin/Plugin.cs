@@ -85,6 +85,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CloudClientService cloudClient;
     private readonly FriendsChatController friendsController;
     private readonly FriendsUiManager friendsUi;
+    private readonly FriendsNotificationSound friendsNotificationSound;
     private readonly FriendDutySnapshotProvider friendDutyProvider;
     private long nextFriendDutyCheck;
     private readonly CloudOperationGuard cloudOperationGuard = new();
@@ -714,7 +715,11 @@ public sealed class Plugin : IDalamudPlugin
                     token => cloudClient.PreviewRestoreAsync(backupId, token)),
                 StartCloudRestore,
                 StartCloudRollback));
-        friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated);
+        friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
+        friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
+            playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
+            stopNotificationSound: friendsNotificationSound.Stop);
+        settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(
@@ -4591,6 +4596,7 @@ public sealed class Plugin : IDalamudPlugin
         await banTask.ConfigureAwait(false);
         await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);
         friendsUi.Dispose();
+        friendsNotificationSound.Dispose();
         friendsController.Dispose();
         cloudClient.Dispose();
         cloudOperationCancellation.Dispose();

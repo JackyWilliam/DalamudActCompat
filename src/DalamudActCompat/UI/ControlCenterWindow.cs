@@ -22,6 +22,8 @@ namespace DalamudActCompat.UI;
 
 public sealed class ControlCenterWindow : Window
 {
+    internal Action<int>? PreviewFriendNotificationSound { get; set; }
+
     private enum VisibilityTransition
     {
         Closed,
@@ -3442,6 +3444,8 @@ public sealed class ControlCenterWindow : Window
         }
 
         DrawHistoryLimitEditor();
+
+        changed |= FriendsNotificationSettings.Draw(configuration, text, PreviewFriendNotificationSound);
 
         ImGui.Spacing();
         ImGui.Separator();

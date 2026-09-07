@@ -39,6 +39,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public bool ShowLauncherButton { get; set; } = true;
 
+    // Display preferences belong to this installation, not the cloud presence profile.
+    public bool FriendNotificationsEnabled { get; set; } = true;
+    public bool FriendNotificationSoundEnabled { get; set; } = true;
+    public int FriendNotificationSound { get; set; }
+    public bool FriendNotificationsOnRight { get; set; }
+    public int FriendNotificationBackgroundTransparency { get; set; } = 25;
+
     public bool HideHtmlOverlaysWhenGameUnfocused { get; set; } = true;
 
     public bool SimplifiedModeEnabled { get; set; }

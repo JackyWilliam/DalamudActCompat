@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Infrastructure.Cloud;
+using DalamudActCompat.Plugin;
 
 namespace DalamudActCompat.UI;
 
@@ -23,6 +24,13 @@ internal sealed partial class FriendsUiManager : IDisposable
     private static readonly Vector4 Blue = ControlCenterWindow.IceBlue;
     private readonly FriendsChatController controller;
     private readonly Action openMain;
+    private readonly PluginConfiguration configuration;
+    private readonly Func<long> clock;
+    private readonly Action? playNotificationSound, stopNotificationSound;
+    private readonly FriendsIncomingNotifications incoming = new();
+    private uint lastNonNotificationFocus;
+    private long lastSoundAt = long.MinValue;
+    private bool notificationSoundWasEnabled = true;
     private readonly Dictionary<string, ChatWindow> windows = new(StringComparer.Ordinal);
     private CloudFriendsSession session;
     private Vector2 anchor, anchorSize;
@@ -34,13 +42,17 @@ internal sealed partial class FriendsUiManager : IDisposable
     private bool settingsDirty, shareSubmission, presenceChangedElsewhere, privacySaveUnconfirmed;
     private string search = "";
     private string? removeId, removeName;
-    private long notifiedMessage;
     private int notifiedRequests;
     private long toastUntil;
 
-    public FriendsUiManager(FriendsChatController controller, Action openMain)
+    public FriendsUiManager(FriendsChatController controller, Action openMain, PluginConfiguration? configuration = null,
+        Func<long>? clock = null, Action? playNotificationSound = null, Action? stopNotificationSound = null)
     {
         this.controller = controller; this.openMain = openMain;
+        this.configuration = configuration ?? new(); this.clock = clock ?? (() => Environment.TickCount64);
+        this.playNotificationSound = playNotificationSound; this.stopNotificationSound = stopNotificationSound;
+        // Recreating a view against an already-live controller is not a new arrival.
+        incoming.Update(controller.Snapshot, false, this.clock());
         // This live component owns the bounded message model even while its windows
         // are closed. Only its lifetime enables delivery acknowledgements.
         controller.AttachConsumer();
@@ -50,14 +62,20 @@ internal sealed partial class FriendsUiManager : IDisposable
     public void SetAnchor(Vector2 position, Vector2 size, float alpha = 1, uint windowId = 0)
     { anchor = position; anchorSize = size; anchorAlpha = alpha; anchorWindowId = windowId; }
     public void ToggleDrawer() { drawerOpen = !drawerOpen; if (drawerOpen) controller.Refresh(); }
-    public void Hide() { drawerOpen = false; drawerProgress = 0; friendSection = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; }
+    public void Hide() { drawerOpen = false; drawerProgress = 0; friendSection = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; incoming.ClearVisible(); stopNotificationSound?.Invoke(); }
     public void Draw(bool mainVisible, bool inCombat)
     {
         var state = Snapshot;
         if (session != state.Session)
         {
-            Hide(); session = state.Session; notifiedMessage = 0; notifiedRequests = 0; removeId = null;
+            Hide(); session = state.Session; notifiedRequests = 0; removeId = null; lastNonNotificationFocus = 0; lastSoundAt = long.MinValue;
         }
+        var now = clock();
+        var arrived = incoming.Update(state, configuration.FriendNotificationsEnabled, now);
+        if (notificationSoundWasEnabled && !configuration.FriendNotificationSoundEnabled) stopNotificationSound?.Invoke();
+        notificationSoundWasEnabled = configuration.FriendNotificationSoundEnabled;
+        if (arrived && configuration.FriendNotificationSoundEnabled && (lastSoundAt == long.MinValue || now - lastSoundAt >= 1200))
+        { playNotificationSound?.Invoke(); lastSoundAt = now; }
         if (!state.Session.IsSignedIn) return;
         if (state.Friends is { } friends)
         {
@@ -65,9 +83,8 @@ internal sealed partial class FriendsUiManager : IDisposable
             foreach (var id in windows.Keys.Where(id => !active.Contains(id)).ToArray()) windows.Remove(id);
         }
         var requests = state.Friends?.Requests.Count(r => r.Direction == "incoming") ?? 0;
-        if (state.LatestUnreadId > notifiedMessage || requests > notifiedRequests)
-            toastUntil = Environment.TickCount64 + (inCombat ? 4500 : 6500);
-        notifiedMessage = Math.Max(notifiedMessage, state.LatestUnreadId); notifiedRequests = requests;
+        if (requests > notifiedRequests) toastUntil = now + (inCombat ? 4500 : 6500);
+        notifiedRequests = requests;
         PushTheme();
         try
         {
@@ -75,7 +92,8 @@ internal sealed partial class FriendsUiManager : IDisposable
             if (drawerProgress > 0 && mainVisible) DrawDrawer(state);
             foreach (var pair in windows.ToArray())
                 if (pair.Value.Open) DrawChat(pair.Key, pair.Value, state);
-            if (state.HasUnread && Environment.TickCount64 < toastUntil) DrawToast(state, inCombat);
+            if (requests > 0 && now < toastUntil) DrawToast(state, inCombat);
+            DrawIncomingNotifications(state, now);
         }
         finally { PopTheme(); }
     }
@@ -217,8 +235,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (ImGui.Begin("##DACTFriendNotification", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoDecoration |
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav))
         {
-            var official = state.Conversations.Values.Any(c => c.Unread && c.Chat.Kind == "official");
-            if (ImGui.SmallButton(official ? "● DACT 官方通知 · 点击查看" : "● 好友消息 / 申请 · 点击查看"))
+            if (ImGui.SmallButton("● 新好友申请 · 点击查看"))
             { openMain(); drawerOpen = true; toastUntil = 0; }
         }
         ImGui.End();

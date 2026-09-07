@@ -10,6 +10,8 @@ internal sealed record FriendsChatSnapshot(
     CloudFriendsSession Session, string State, string Status, bool Busy, CloudFriendList? Friends,
     CloudFriendLookup? Lookup, ImmutableDictionary<string, FriendConversationView> Conversations)
 {
+    public bool InitialSyncComplete { get; init; }
+    public long NotificationBaseline { get; init; }
     public static FriendsChatSnapshot Empty(CloudFriendsSession session) => new(session,
         session.IsSignedIn ? "loading" : "signed-out", session.IsSignedIn ? "正在连接好友服务…" : "登录后可使用好友功能。",
         false, null, null, ImmutableDictionary<string, FriendConversationView>.Empty);
@@ -72,12 +74,18 @@ internal sealed class FriendsChatController : IDisposable
         return Enqueue(new(current, Kind.Presence, Presence: settings),
             !settings.ShareDuty || settings.Status == "invisible" ? () => api.SuppressFriendDuty(current) : null);
     }
-    public Guid? Send(string id, string text, string? quick = null)
+    public Guid? Send(string id, string text, string? quick = null, CloudFriendsSession? expectedSession = null)
     {
+        var current = api.FriendsSession;
+        if (expectedSession is { } expected && expected != current) return null;
         var operation = Guid.NewGuid();
-        return Enqueue(new(api.FriendsSession, Kind.Send, id, text, quick, Operation: operation)) ? operation : null;
+        return Enqueue(new(current, Kind.Send, id, text, quick, Operation: operation)) ? operation : null;
     }
-    public bool Retry(string id) => Enqueue(new(api.FriendsSession, Kind.Retry, id));
+    public bool Retry(string id, CloudFriendsSession? expectedSession = null, Guid? expectedOperation = null)
+    {
+        var current = api.FriendsSession;
+        return (expectedSession is null || expectedSession == current) && Enqueue(new(current, Kind.Retry, id, Operation: expectedOperation ?? default));
+    }
     public bool Discard(string id) => Enqueue(new(api.FriendsSession, Kind.Discard, id));
     public void MarkRead(string id, long through)
     {
@@ -199,6 +207,12 @@ internal sealed class FriendsChatController : IDisposable
                 }
             }
         }
+        // The friend list becomes ready before chat bootstrap finishes. Publish
+        // this barrier only after all retained history is loaded, so old/unread
+        // history and its ACKs cannot masquerade as fresh overlay notifications.
+        if (!snapshot.InitialSyncComplete)
+            Publish(snapshot with { InitialSyncComplete = true, NotificationBaseline = snapshot.Conversations.Values
+                .SelectMany(c => c.Chat.History.Concat(c.Chat.Pending)).Select(m => m.Id).DefaultIfEmpty().Max() });
     }
     private async Task ReceiveAsync(CloudChatConversation chat)
     {
@@ -296,6 +310,9 @@ internal sealed class FriendsChatController : IDisposable
             Publish(snapshot with { Conversations = snapshot.Conversations.SetItem(command.Id, view) });
         }
         if (!local.Outbox.TryGetValue(command.Id, out var pending)) return;
+        // A short-lived bubble must never retry a different operation prepared by
+        // the full chat window after the bubble's snapshot was read.
+        if (command.Kind == Kind.Retry && command.Operation != default && pending.OperationId != command.Operation) return;
         var attempted = false;
         var confirmed = false;
         try

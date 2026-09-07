@@ -11,7 +11,7 @@ using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.UI;
 
-internal static class FriendsUiSmokeTests
+internal static partial class FriendsUiSmokeTests
 {
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static async Task Until(Func<bool> check, string label)
@@ -32,6 +32,8 @@ internal static class FriendsUiSmokeTests
         await LocalStateAsync(root);
         await PresenceAsync();
         MessagePreviews();
+        NotificationModel();
+        NotificationAssetsAndPreferences();
         Layout();
         Console.WriteLine("Friends UI: bounded consumption, unread persistence, immutable retry, disk failures, account isolation and layout passed.");
     }
@@ -42,9 +44,12 @@ internal static class FriendsUiSmokeTests
         {
             await Until(() => controller.Snapshot.Friends is not null, "initial list");
             Check(api.Acks == 0 && controller.Snapshot.Conversations.Count == 0, "No consumer silently consumed offline messages.");
+            Check(!controller.Snapshot.InitialSyncComplete, "Chat bootstrap was marked complete by the friend list alone.");
             api.BeforeAck = () => Check(controller.Snapshot.Conversations[api.Id].Chat.Pending.Count == 3, "ACK preceded publishing to live UI model.");
             controller.AttachConsumer();
             await Until(() => api.Acks == 1 && controller.Snapshot.Conversations.GetValueOrDefault(api.Id)?.Chat.Pending.Count == 0, "delivery");
+            await Until(() => controller.Snapshot.InitialSyncComplete, "notification bootstrap barrier");
+            Check(controller.Snapshot.NotificationBaseline == 3, "Old offline messages escaped the notification baseline.");
             Check(controller.Snapshot.HasUnread && controller.Snapshot.Friends!.OnlineCount == 0, "Unread replaced the online count or delivery implied reading.");
             controller.MarkRead(api.Id, long.MaxValue);
             await Until(() => !controller.Snapshot.HasUnread, "mark read");
@@ -76,6 +81,9 @@ internal static class FriendsUiSmokeTests
             Check(controller.Send(api.Id, "double click") is null, "Concurrent send was accepted.");
             await Until(() => !controller.Snapshot.Busy && api.Attempts.Count == 1, "uncertain send");
             Check(controller.Snapshot.Conversations[api.Id].PendingSend?.OperationId == operation, "Uncertain send lost identity.");
+            controller.Retry(api.Id, api.FriendsSession, Guid.NewGuid());
+            await Until(() => !controller.Snapshot.Busy, "stale bubble retry");
+            Check(api.Attempts.Count == 1, "Stale bubble retried another pending operation.");
         }
         using (var restarted = new FriendsChatController(api, new FriendsLocalStateStore(directory), TimeSpan.FromHours(1)))
         {
@@ -128,6 +136,8 @@ internal static class FriendsUiSmokeTests
         api.GetGate = async ct => { entered.TrySetResult(); await release.Task.WaitAsync(ct); };
         controller.Send(api.Id, "old account command"); await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         api.SwitchAccount();
+        Check(controller.Send(api.Id, "stale bubble reply", expectedSession: new(1, true, "isolated_a")) is null &&
+            !controller.Retry(api.Id, new(1, true, "isolated_a")), "A stale bubble action crossed an account generation.");
         Check(controller.Snapshot.Conversations.IsEmpty && controller.Snapshot.Friends is null, "Stale snapshot exposed old account data.");
         release.TrySetResult();
         await Until(() => !controller.Snapshot.Busy && controller.Snapshot.Friends?.User?.Id == api.Self.Id, "new account");
@@ -379,6 +389,7 @@ internal static class FriendsUiSmokeTests
                 io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             }
             BubbleBounds(raster, output);
+            ui.Hide(); NotificationFrames(api, controller, raster, output);
         }
         finally { ImGui.DestroyContext(context); }
     }
