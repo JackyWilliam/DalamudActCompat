@@ -22,9 +22,9 @@ internal sealed record FriendsChatSnapshot(
 // commands and read immutable snapshots; they never await IO or call ImGui off-thread.
 internal sealed class FriendsChatController : IDisposable
 {
-    private enum Kind { Refresh, Lookup, Request, Accept, Decline, Remove, Send, Retry, Discard, Read }
+    private enum Kind { Refresh, Lookup, Request, Accept, Decline, Remove, Send, Retry, Discard, Read, Presence }
     private sealed record Command(CloudFriendsSession Session, Kind Kind, string Id = "", string Text = "", string? Quick = null, long ReadId = 0,
-        Guid Operation = default);
+        Guid Operation = default, CloudPresenceSettings? Presence = null);
     private readonly ICloudFriendsSession api;
     private readonly IFriendsLocalStateStore disk;
     private readonly Channel<Command> commands = Channel.CreateBounded<Command>(32);
@@ -63,6 +63,15 @@ internal sealed class FriendsChatController : IDisposable
     public bool Accept(string id) => Enqueue(new(api.FriendsSession, Kind.Accept, id));
     public bool Decline(string id) => Enqueue(new(api.FriendsSession, Kind.Decline, id));
     public bool Remove(string id) => Enqueue(new(api.FriendsSession, Kind.Remove, id));
+    public bool UpdatePresence(CloudPresenceSettings settings)
+    {
+        var current = api.FriendsSession;
+        // Stop collecting/uploading immediately while an off/invisible save is in
+        // flight. Suppress before publishing the command: a fast successful HTTP
+        // response must not race with a late suppression that never gets cleared.
+        return Enqueue(new(current, Kind.Presence, Presence: settings),
+            !settings.ShareDuty || settings.Status == "invisible" ? () => api.SuppressFriendDuty(current) : null);
+    }
     public Guid? Send(string id, string text, string? quick = null)
     {
         var operation = Guid.NewGuid();
@@ -80,11 +89,12 @@ internal sealed class FriendsChatController : IDisposable
             if (Enqueue(new(api.FriendsSession, Kind.Read, id, ReadId: through))) queuedReads[id] = through;
         }
     }
-    private bool Enqueue(Command command)
+    private bool Enqueue(Command command, Action? beforePublish = null)
     {
         if (shutdown.IsCancellationRequested || !command.Session.IsSignedIn) return false;
         var mutation = command.Kind is not Kind.Read and not Kind.Refresh;
         if (mutation && Interlocked.CompareExchange(ref busy, 1, 0) != 0) return false;
+        beforePublish?.Invoke();
         if (commands.Writer.TryWrite(command)) return true;
         if (mutation) Volatile.Write(ref busy, 0);
         return false;
@@ -231,6 +241,9 @@ internal sealed class FriendsChatController : IDisposable
         if (userId is null) { await PollAsync().ConfigureAwait(false); EnsureCurrent(); }
         switch (command.Kind)
         {
+            case Kind.Presence:
+                var saved = await Call(ct => api.UpdateFriendPresenceSettingsAsync(command.Presence!, ct, session)).ConfigureAwait(false);
+                Publish(snapshot with { Friends = snapshot.Friends! with { PresenceSettings = saved }, Status = "状态已保存。" }); break;
             case Kind.Lookup:
                 var lookup = await Call(ct => api.LookupFriendAsync(command.Text, ct, session)).ConfigureAwait(false);
                 Publish(snapshot with { Lookup = lookup, Status = lookup.User is null ? "未找到可添加的账号。" : "已找到账号。" }); break;

@@ -2,6 +2,55 @@ namespace DalamudActCompat.Infrastructure.Cloud;
 
 internal sealed partial class CloudClientService
 {
+    private CloudFriendsSession friendPresenceSession;
+    private CloudPresenceSettings? friendPresenceSettings;
+    private CloudDutyActivity? friendDutyActivity;
+    private bool friendDutySuppressed;
+
+    public CloudFriendsSession? FriendDutySharingSession
+    {
+        get { lock (stateLock) return FriendsSession == friendPresenceSession && FriendsSession.IsSignedIn &&
+            friendPresenceSettings is { ShareDuty: true, Status: not "invisible" } && !friendDutySuppressed ? friendPresenceSession : null; }
+    }
+    public void SetFriendDutyActivity(CloudFriendsSession expected, CloudDutyActivity? activity)
+    {
+        lock (stateLock)
+            if (FriendsSession == expected) friendDutyActivity = FriendDutySharingSession == expected ? activity : null;
+    }
+    public void SuppressFriendDuty(CloudFriendsSession expectedSession)
+    {
+        lock (stateLock)
+            if (FriendsSession == expectedSession)
+            {
+                // A privacy change may precede the first settings response for a
+                // new login. Associate suppression now so that response cannot reset it.
+                if (friendPresenceSession != expectedSession)
+                { friendPresenceSession = expectedSession; friendPresenceSettings = null; }
+                friendDutySuppressed = true; friendDutyActivity = null;
+            }
+    }
+    private void ApplyFriendPresenceSettings(CloudPresenceSettings? settings, CloudFriendsSession expected, bool confirmedSave = false)
+    {
+        lock (stateLock)
+        {
+            if (settings is null || FriendsSession != expected) return;
+            if (friendPresenceSession != expected)
+            { friendPresenceSession = expected; friendPresenceSettings = null; friendDutyActivity = null; friendDutySuppressed = false; }
+            if (friendPresenceSettings is { } old && old.Revision > settings.Revision) return;
+            friendPresenceSettings = settings;
+            if (!settings.ShareDuty || settings.Status == "invisible") friendDutyActivity = null;
+            if (confirmedSave) friendDutySuppressed = false;
+        }
+    }
+    private CloudPresenceHeartbeat? FriendHeartbeat(CloudFriendsSession expected)
+    {
+        lock (stateLock)
+        {
+            if (FriendsSession != expected || !expected.IsSignedIn) return null;
+            return new(friendPresenceSession == expected ? friendPresenceSettings?.Revision ?? 0 : 0,
+                FriendDutySharingSession == expected ? friendDutyActivity : null);
+        }
+    }
     public CloudFriendsSession FriendsSession
     {
         get
@@ -11,8 +60,21 @@ internal sealed partial class CloudClientService
         }
     }
 
-    public Task<CloudFriendList> ListFriendsAsync(CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
-        => WithFriendSessionAsync(apiClient.ListFriendsAsync, cancellationToken, expectedSession);
+    public async Task<CloudFriendList> ListFriendsAsync(CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
+    {
+        var expected = expectedSession ?? FriendsSession;
+        var result = await WithFriendSessionAsync(apiClient.ListFriendsAsync, cancellationToken, expected).ConfigureAwait(false);
+        ApplyFriendPresenceSettings(result.PresenceSettings, expected);
+        return result;
+    }
+    public async Task<CloudPresenceSettings> UpdateFriendPresenceSettingsAsync(CloudPresenceSettings settings, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
+    {
+        var expected = expectedSession ?? FriendsSession;
+        if (!settings.ShareDuty || settings.Status == "invisible") SuppressFriendDuty(expected);
+        var result = await WithFriendSessionAsync((token, ct) => apiClient.UpdateFriendPresenceSettingsAsync(token, settings, ct), cancellationToken, expected).ConfigureAwait(false);
+        ApplyFriendPresenceSettings(result, expected, confirmedSave: true);
+        return result;
+    }
 
     public Task<CloudFriendLookup> LookupFriendAsync(string username, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
         => WithFriendSessionAsync((token, ct) => apiClient.LookupFriendAsync(token, username, ct), cancellationToken, expectedSession);
@@ -72,7 +134,21 @@ internal sealed partial class CloudClientService
 
     private async Task RunFriendConnectionAsync(CloudStoredCredentials current, CancellationToken cancellationToken)
     {
-        try { await CloudFriendConnection.RunAsync(apiClient, current.Token, cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            CloudFriendsSession expected;
+            lock (stateLock)
+            {
+                if (!IsCurrentSession(current)) return;
+                // Auto-login starts revocation monitoring after token validation
+                // but before its final UI snapshot. Bind the stable generation to
+                // its signed-in state; activity stays null until that state is real,
+                // while the initial heartbeat can still detect a revoked token.
+                expected = FriendsSession with { IsSignedIn = true };
+            }
+            await CloudFriendConnection.RunAsync(apiClient, current.Token, cancellationToken,
+                presence: () => FriendHeartbeat(expected), received: value => ApplyFriendPresenceSettings(value.Settings, expected)).ConfigureAwait(false);
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (CloudApiException ex) { HandleFriendSessionFailure(current, ex); }
     }

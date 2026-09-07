@@ -12,16 +12,23 @@ internal static class CloudChatPolicy
 internal sealed record CloudFriendRelation(
     string Id, string State, string Direction, CloudApiUser User,
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string? ConversationId,
-    bool Online = false);
+    bool Online = false, string Status = "offline", string StatusText = "", CloudDutyActivity? Duty = null);
 
 internal sealed record CloudFriendList(
     IReadOnlyList<CloudFriendRelation> Friends, int OnlineCount,
-    IReadOnlyList<CloudFriendRelation> Requests, string PolicyNotice, CloudApiUser? User = null);
+    IReadOnlyList<CloudFriendRelation> Requests, string PolicyNotice, CloudApiUser? User = null, CloudPresenceSettings? PresenceSettings = null);
+
+internal sealed record CloudPresenceSettings(string Status, string Text, bool ShareDuty, long Revision)
+{
+    public static CloudPresenceSettings Default { get; } = new("online", "", false, 0);
+}
+internal sealed record CloudDutyActivity(uint Id, string Name);
+internal sealed record CloudPresenceHeartbeat(long ProfileRevision, CloudDutyActivity? Duty);
 
 internal sealed record CloudFriendLookup(CloudApiUser? User, string Relationship);
 internal sealed record CloudFriendRemoval(string Status);
 internal sealed record CloudFriendPresence(
-    bool Online, int OnlineConnectionCount, int HeartbeatIntervalSeconds, DateTimeOffset? ExpiresAt);
+    bool Online, int OnlineConnectionCount, int HeartbeatIntervalSeconds, DateTimeOffset? ExpiresAt, CloudPresenceSettings? Settings = null);
 internal sealed record CloudChatSender(string Kind, string? UserId, string Name)
 {
     // Only the authenticated server assigns this discriminator; names are not identity.
@@ -76,9 +83,12 @@ internal sealed partial class CloudApiClient
     public Task<CloudFriendRemoval> RemoveFriendAsync(string token, string relationId, CancellationToken cancellationToken)
         => SendJsonAsync<CloudFriendRemoval>(HttpMethod.Delete, $"api/v1/friends/{Uri.EscapeDataString(relationId)}", new { }, token, cancellationToken);
 
-    public Task<CloudFriendPresence> SetFriendPresenceAsync(string token, Guid clientId, bool online, CancellationToken cancellationToken)
+    public Task<CloudPresenceSettings> UpdateFriendPresenceSettingsAsync(string token, CloudPresenceSettings settings, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudPresenceSettings>(HttpMethod.Put, "api/v1/friends/presence/settings", settings, token, cancellationToken);
+
+    public Task<CloudFriendPresence> SetFriendPresenceAsync(string token, Guid clientId, bool online, CancellationToken cancellationToken, CloudPresenceHeartbeat? activity = null)
         => SendJsonAsync<CloudFriendPresence>(online ? HttpMethod.Put : HttpMethod.Delete,
-            "api/v1/friends/presence", new { clientId }, token, cancellationToken);
+            "api/v1/friends/presence", activity is null ? new { clientId } : (object)new { clientId, activity.ProfileRevision, activity.Duty }, token, cancellationToken);
 
     public Task<CloudChatSync> SyncChatAsync(string token, CancellationToken cancellationToken)
         => SendJsonAsync<CloudChatSync>(HttpMethod.Get, "api/v1/chat/sync", null, token, cancellationToken);

@@ -4,7 +4,7 @@ using DalamudActCompat.Infrastructure.Cloud;
 
 namespace DalamudActCompat.UI;
 
-internal sealed class FriendsUiManager : IDisposable
+internal sealed partial class FriendsUiManager : IDisposable
 {
     private sealed class ChatWindow
     {
@@ -26,7 +26,11 @@ internal sealed class FriendsUiManager : IDisposable
     private readonly Dictionary<string, ChatWindow> windows = new(StringComparer.Ordinal);
     private CloudFriendsSession session;
     private Vector2 anchor, anchorSize;
+    private uint anchorWindowId;
     private bool drawerOpen;
+    private float drawerProgress, anchorAlpha = 1;
+    private CloudPresenceSettings? editingSettings, submittedSettings;
+    private bool settingsDirty, shareSubmission, presenceChangedElsewhere, privacySaveUnconfirmed;
     private string search = "";
     private string? removeId, removeName;
     private long notifiedMessage;
@@ -41,10 +45,11 @@ internal sealed class FriendsUiManager : IDisposable
         controller.AttachConsumer();
     }
     public FriendsChatSnapshot Snapshot => controller.Snapshot;
-    public bool AnyOpen => drawerOpen || windows.Values.Any(w => w.Open);
-    public void SetAnchor(Vector2 position, Vector2 size) { anchor = position; anchorSize = size; }
+    public bool AnyOpen => drawerOpen || drawerProgress > 0 || windows.Values.Any(w => w.Open);
+    public void SetAnchor(Vector2 position, Vector2 size, float alpha = 1, uint windowId = 0)
+    { anchor = position; anchorSize = size; anchorAlpha = alpha; anchorWindowId = windowId; }
     public void ToggleDrawer() { drawerOpen = !drawerOpen; if (drawerOpen) controller.Refresh(); }
-    public void Hide() { drawerOpen = false; windows.Clear(); search = ""; toastUntil = 0; }
+    public void Hide() { drawerOpen = false; drawerProgress = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; }
     public void Draw(bool mainVisible, bool inCombat)
     {
         var state = Snapshot;
@@ -65,7 +70,8 @@ internal sealed class FriendsUiManager : IDisposable
         PushTheme();
         try
         {
-            if (drawerOpen && mainVisible) DrawDrawer(state);
+            drawerProgress = Math.Clamp(drawerProgress + (drawerOpen ? 1 : -1) * ImGui.GetIO().DeltaTime / .16f, 0, 1);
+            if (drawerProgress > 0 && mainVisible) DrawDrawer(state);
             foreach (var pair in windows.ToArray())
                 if (pair.Value.Open) DrawChat(pair.Key, pair.Value, state);
             if (state.HasUnread && Environment.TickCount64 < toastUntil) DrawToast(state, inCombat);
@@ -76,82 +82,6 @@ internal sealed class FriendsUiManager : IDisposable
     {
         if (!windows.TryGetValue(id, out var window)) windows[id] = window = new();
         window.Open = true; window.Focus = true;
-    }
-    private void DrawDrawer(FriendsChatSnapshot state)
-    {
-        var viewport = ImGui.GetMainViewport();
-        var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
-        var layout = FriendsWindowLayout.Drawer(anchor, anchorSize, viewport.WorkPos, viewport.WorkSize, scale);
-        ImGui.SetNextWindowPos(layout.Position, ImGuiCond.Always);
-        ImGui.SetNextWindowSize(layout.Size, ImGuiCond.Always);
-        if (ImGui.Begin("好友###DACTFriendsDrawer", ref drawerOpen,
-            ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing))
-        {
-            ImGui.TextColored(Blue, $"{state.Friends?.OnlineCount ?? 0} 位好友在线");
-            ImGui.SameLine();
-            if (ImGui.SmallButton("刷新")) controller.Refresh();
-            ImGui.TextWrapped(state.Status);
-            ImGui.Separator();
-            ImGui.TextUnformatted("添加好友");
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint("##friend-username", "输入完整账号名", ref search, 32);
-            ImGui.BeginDisabled(state.Busy || string.IsNullOrWhiteSpace(search));
-            if (ImGui.Button("查找账号", new Vector2(-1, 0))) controller.Lookup(search);
-            ImGui.EndDisabled();
-            if (state.Lookup?.User is { } found)
-            {
-                ImGui.TextWrapped(found.Username);
-                ImGui.BeginDisabled(state.Busy || state.Lookup.Relationship is "friend" or "outgoing");
-                if (ImGui.Button(state.Lookup.Relationship == "incoming" ? "同意互加" : state.Lookup.Relationship == "friend" ? "已经是好友" : state.Lookup.Relationship == "outgoing" ? "申请已发出" : "发送好友申请")) controller.Request(found.Username);
-                ImGui.EndDisabled();
-            }
-            ImGui.Separator();
-            foreach (var official in state.Conversations.Values.Where(c => c.Chat.Kind == "official"))
-                if (ImGui.Selectable($"DACT 官方通知{(official.Unread ? "  ● 未读" : "")}##official-{official.Chat.Id}")) OpenChat(official.Chat.Id);
-            ImGui.TextUnformatted("好友列表");
-            if (state.Friends?.Friends.Count == 0) ImGui.TextDisabled("还没有好友，先添加一个账号吧。");
-            foreach (var friend in (state.Friends?.Friends ?? []).OrderByDescending(f => f.Online).ThenBy(f => f.User.Username))
-            {
-                var unread = friend.ConversationId is { } id && state.Conversations.GetValueOrDefault(id)?.Unread == true;
-                ImGui.PushID(friend.Id);
-                ImGui.TextColored(friend.Online ? new Vector4(.4f, .85f, .58f, 1) : new Vector4(.55f, .6f, .66f, 1), friend.Online ? "●" : "○");
-                ImGui.SameLine();
-                if (ImGui.Selectable($"{friend.User.Username}{(unread ? "  ● 未读" : "")}") && friend.ConversationId is { } conversation) OpenChat(conversation);
-                if (ImGui.BeginPopupContextItem("friend-options"))
-                {
-                    if (ImGui.MenuItem("解除好友关系…")) { removeId = friend.Id; removeName = friend.User.Username; }
-                    ImGui.EndPopup();
-                }
-                ImGui.PopID();
-            }
-            ImGui.Separator();
-            ImGui.TextUnformatted("好友申请");
-            foreach (var request in state.Friends?.Requests ?? [])
-            {
-                ImGui.PushID(request.Id);
-                ImGui.TextWrapped($"{request.User.Username} · {(request.Direction == "incoming" ? "希望添加你" : "等待对方确认")}");
-                if (request.Direction == "incoming")
-                {
-                    ImGui.BeginDisabled(state.Busy);
-                    if (ImGui.SmallButton("接受")) controller.Accept(request.Id);
-                    ImGui.SameLine(); if (ImGui.SmallButton("拒绝")) controller.Decline(request.Id);
-                    ImGui.EndDisabled();
-                }
-                ImGui.PopID();
-            }
-            if (removeId is not null) ImGui.OpenPopup("解除好友确认");
-            if (ImGui.BeginPopup("解除好友确认"))
-            {
-                ImGui.TextWrapped($"解除与 {removeName} 的好友关系后，双方会话和保留消息将被删除。");
-                ImGui.BeginDisabled(state.Busy);
-                if (ImGui.Button("确认解除")) { controller.Remove(removeId!); removeId = null; ImGui.CloseCurrentPopup(); }
-                ImGui.EndDisabled(); ImGui.SameLine();
-                if (ImGui.Button("取消")) { removeId = null; ImGui.CloseCurrentPopup(); }
-                ImGui.EndPopup();
-            }
-            ImGui.Separator(); ImGui.TextWrapped(CloudChatPolicy.Notice);
-        }
-        ImGui.End();
     }
     private void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
     {
@@ -251,21 +181,32 @@ internal sealed class FriendsUiManager : IDisposable
     private static void DrawBubble(CloudChatMessage message, bool own)
     {
         var available = ImGui.GetContentRegionAvail().X;
-        var width = Math.Max(100, available * .85f);
-        var bodyHeight = ImGui.CalcTextSize(message.Text, false, width - 20).Y;
+        var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        var padding = Math.Max(3, 10 * scale);
+        var vertical = 8 * scale;
+        var width = Math.Min(available, Math.Max(100 * scale, available * .85f));
+        var textWidth = Math.Max(1, width - padding * 2);
+        var author = message.Sender.IsOfficial ? "DACT 官方" : message.Sender.Name;
+        var timestamp = $"{message.CreatedAt.ToLocalTime():MM-dd HH:mm}{(message.State == "pending" ? " · 待上线接收" : "")}";
+        var authorHeight = ImGui.CalcTextSize(author, false, textWidth).Y;
+        var bodyHeight = ImGui.CalcTextSize(message.Text, false, textWidth).Y;
+        var timeHeight = ImGui.CalcTextSize(timestamp, false, textWidth).Y;
         var start = ImGui.GetCursorScreenPos() + new Vector2(own ? Math.Max(0, available - width) : 0, 0);
-        var height = bodyHeight + ImGui.GetTextLineHeightWithSpacing() * 2 + 18;
+        var gap = 5 * scale;
+        var height = authorHeight + bodyHeight + timeHeight + vertical * 2 + gap * 2;
         var background = own ? new Vector4(.09f, .23f, .31f, 1) : new Vector4(.09f, .115f, .15f, 1);
         ImGui.GetWindowDrawList().AddRectFilled(start, start + new Vector2(width, height), ImGui.GetColorU32(background), 8);
         if (message.Sender.IsOfficial) ImGui.GetWindowDrawList().AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(Gold), 8);
-        var original = ImGui.GetCursorPos();
-        ImGui.SetCursorScreenPos(start + new Vector2(10, 7));
-        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + width - 20);
-        ImGui.TextColored(message.Sender.IsOfficial ? Gold : Blue, message.Sender.IsOfficial ? "DACT 官方" : message.Sender.Name);
-        ImGui.TextUnformatted(message.Text);
-        ImGui.TextDisabled($"{message.CreatedAt.ToLocalTime():MM-dd HH:mm}{(message.State == "pending" ? " · 待上线接收" : "")}");
-        ImGui.PopTextWrapPos();
-        ImGui.SetCursorPos(original); ImGui.Dummy(new Vector2(available, height + 8));
+        // ImGui resets the next item's X to the window indent after Text(). Draw
+        // all three blocks from explicit padded origins so every wrapped line stays inside.
+        var list = ImGui.GetWindowDrawList(); var font = ImGui.GetFont(); var fontSize = ImGui.GetFontSize();
+        var origin = start + new Vector2(padding, vertical);
+        list.AddText(font, fontSize, origin, ImGui.GetColorU32(message.Sender.IsOfficial ? Gold : Blue), author, textWidth);
+        origin.Y += authorHeight + gap;
+        list.AddText(font, fontSize, origin, ImGui.GetColorU32(Vector4.One), message.Text, textWidth);
+        origin.Y += bodyHeight + gap;
+        list.AddText(font, fontSize, origin, ImGui.GetColorU32(new Vector4(.62f, .69f, .75f, 1)), timestamp, textWidth);
+        ImGui.Dummy(new Vector2(available, height + 8 * scale));
     }
     private void DrawToast(FriendsChatSnapshot state, bool inCombat)
     {

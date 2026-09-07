@@ -85,6 +85,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CloudClientService cloudClient;
     private readonly FriendsChatController friendsController;
     private readonly FriendsUiManager friendsUi;
+    private readonly FriendDutySnapshotProvider friendDutyProvider;
+    private long nextFriendDutyCheck;
     private readonly CloudOperationGuard cloudOperationGuard = new();
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
@@ -713,6 +715,7 @@ public sealed class Plugin : IDalamudPlugin
                 StartCloudRestore,
                 StartCloudRollback));
         friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated);
+        friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(
             text,
@@ -4815,6 +4818,12 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         SynchronizeCloudAuthenticationState();
+        if (Environment.TickCount64 >= nextFriendDutyCheck)
+        {
+            nextFriendDutyCheck = Environment.TickCount64 + 500;
+            if (cloudClient.FriendDutySharingSession is { } sharingSession)
+                cloudClient.SetFriendDutyActivity(sharingSession, friendDutyProvider.Read(services.ClientState, services.Condition));
+        }
         TryStopParserForCloudBanOnFrameworkThread();
         if (!IsDactAccessAllowed())
         {

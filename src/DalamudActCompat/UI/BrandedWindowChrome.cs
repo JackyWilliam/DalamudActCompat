@@ -147,11 +147,7 @@ internal static class BrandedWindowChrome
             if (ImGui.InvisibleButton($"friends-{id}", new Vector2(friendsWidth, actionButtonSize))) friendsAction();
             drawList.AddRectFilled(buttonStart, buttonStart + new Vector2(friendsWidth, actionButtonSize),
                 ImGui.GetColorU32(ImGui.IsItemHovered() ? NavigationHover : new Vector4(0.055f, 0.12f, 0.16f, 0.88f)), 5);
-            var ink = ImGui.GetColorU32(NavigationAccent);
-            drawList.AddCircleFilled(buttonStart + new Vector2(11, 9), 3.2f, ink);
-            drawList.AddCircleFilled(buttonStart + new Vector2(19, 11), 2.7f, ink);
-            drawList.AddLine(buttonStart + new Vector2(7, 19), buttonStart + new Vector2(15, 19), ink, 5);
-            drawList.AddLine(buttonStart + new Vector2(17, 20), buttonStart + new Vector2(23, 20), ink, 4);
+            FriendsGlyph.Draw(drawList, buttonStart + new Vector2(4, 3), 21, ImGui.GetColorU32(NavigationAccent));
             drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
                 ImGui.GetColorU32(Vector4.One), Math.Max(0, onlineFriends).ToString());
             if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));

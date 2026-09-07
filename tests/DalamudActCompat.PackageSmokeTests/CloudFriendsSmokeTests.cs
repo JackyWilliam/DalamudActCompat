@@ -11,6 +11,7 @@ internal static class CloudFriendsSmokeTests
     {
         await ErrorsAsync();
         await ConnectionAsync();
+        await PresenceSessionAsync(root);
         foreach (var mode in new[] { "online", "old-server", "network-failure" }) await SessionAsync(root, mode);
         await RevocationDuringInitializationAsync(root);
         if (Environment.GetEnvironmentVariable("DACT_FRIENDS_FIXTURE") is { Length: > 0 } fixture)
@@ -138,6 +139,71 @@ internal static class CloudFriendsSmokeTests
         Check(!service.Snapshot.IsSignedIn, "Friends cleanup revived a signed-out account.");
     }
 
+    private static async Task PresenceSessionAsync(string root)
+    {
+        var paths = new PluginPaths(Path.Combine(root, "friends-presence-session")); paths.EnsureCreated();
+        var credentials = new CloudCredentialStore(paths.CloudCredentialFile);
+        credentials.Save(new CloudStoredCredentials("isolated", "presence-token", DateTimeOffset.UtcNow.AddDays(1),
+            new PortableConfigurationBackupService().GenerateRecoveryKey()));
+        var profile = new CloudPresenceSettings("online", "", true, 1); var failSave = false;
+        var uploaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var http = new HttpClient(new Handler(async (request, ct) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/friends/presence/settings"))
+            {
+                if (failSave) throw new HttpRequestException("isolated uncertain privacy response");
+                profile = (await request.Content!.ReadFromJsonAsync<CloudPresenceSettings>(cancellationToken: ct))! with { Revision = profile.Revision + 1 };
+                return Json(profile);
+            }
+            if (path.EndsWith("/friends/presence"))
+            {
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                if (request.Method == HttpMethod.Put)
+                {
+                    var hasDuty = body.RootElement.TryGetProperty("duty", out var duty) && duty.ValueKind == JsonValueKind.Object;
+                    if (hasDuty) uploaded.TrySetResult();
+                    else if (uploaded.Task.IsCompleted) cleared.TrySetResult();
+                }
+                // No settings on the initial legacy-shaped heartbeat: exercise a
+                // privacy click before the first profile response for this login.
+                return Json(new { online = true, onlineConnectionCount = 1, heartbeatIntervalSeconds = 25 });
+            }
+            if (path.EndsWith("/friends")) return Json(new CloudFriendList([], 0, [], CloudChatPolicy.Notice, new("self", "isolated"), profile));
+            if (path.EndsWith("/auth/me") || path.EndsWith("/auth/logout")) return Json(new { });
+            if (path.EndsWith("/backups")) return Json(new { backups = Array.Empty<object>() });
+            if (path.EndsWith("/invitations")) return Json(new { quota = 3, used = 0, remaining = 3, invitations = Array.Empty<object>() });
+            return Json(new { error = "not_found", message = "isolated" }, HttpStatusCode.NotFound);
+        })) { BaseAddress = new Uri("https://isolated.test/") };
+        using var api = new CloudApiClient(http);
+        using var service = new CloudClientService(paths, api, credentials, new CloudBanStore(paths.CloudBanFile),
+            new CloudMachineIdentity(paths.CloudDeviceFile), new CloudKeyEnvelopeService(), new PortableConfigurationBackupService());
+        await service.InitializeAsync(default); var session = service.FriendsSession;
+        Check(service.FriendDutySharingSession is null, "Duty collection started before account opt-in was read.");
+        service.SuppressFriendDuty(session); await service.ListFriendsAsync(default, session);
+        Check(service.FriendDutySharingSession is null, "First delayed settings response undid local privacy suppression.");
+        await service.UpdateFriendPresenceSettingsAsync(profile, default, session);
+        Check(service.FriendDutySharingSession == session, "Confirmed opt-in did not enable duty sampling.");
+        service.SetFriendDutyActivity(session, new(123, "隔离副本"));
+        await uploaded.Task.WaitAsync(TimeSpan.FromSeconds(4));
+        failSave = true;
+        try { await service.UpdateFriendPresenceSettingsAsync(profile with { ShareDuty = false }, default, session); throw new Exception("Expected failed privacy save."); }
+        catch (HttpRequestException) { }
+        service.SetFriendDutyActivity(session, new(124, "must not upload"));
+        await service.ListFriendsAsync(default, session);
+        Check(service.FriendDutySharingSession is null, "Failed save or stale list resumed activity sharing.");
+        await cleared.Task.WaitAsync(TimeSpan.FromSeconds(4));
+        failSave = false;
+        profile = await service.UpdateFriendPresenceSettingsAsync(profile with { ShareDuty = false }, default, session);
+        Check(service.FriendDutySharingSession is null, "Confirmed off enabled collection.");
+        await service.LogoutAsync(default);
+        service.SetFriendDutyActivity(session, new(123, "old login"));
+        Check(service.FriendDutySharingSession is null, "Previous login revived duty activity.");
+        try { await service.UpdateFriendPresenceSettingsAsync(profile with { ShareDuty = true }, default, session); throw new Exception("Old login edited preferences."); }
+        catch (InvalidOperationException) { }
+    }
+
     private static async Task LiveAsync(Fixture f)
     {
         // The private service harness provides isolated ephemeral accounts only.
@@ -173,6 +239,20 @@ internal static class CloudFriendsSmokeTests
         await api.SetFriendPresenceAsync(a, leaseA, true, default);
         await api.SetFriendPresenceAsync(b, leaseB, true, default);
         Check((await api.ListFriendsAsync(a, default)).OnlineCount == 1, "Heartbeat did not affect friend count.");
+        var profile = (await api.ListFriendsAsync(b, default)).PresenceSettings!;
+        Check(profile == CloudPresenceSettings.Default, "New account duty sharing was not off by default.");
+        profile = await api.UpdateFriendPresenceSettingsAsync(b, profile with { Status = "busy", Text = "今晚刷坐骑", ShareDuty = true }, default);
+        var duty = new CloudDutyActivity(123, "隔离测试副本");
+        await api.SetFriendPresenceAsync(b, leaseB, true, default, new(profile.Revision, duty));
+        var shown = (await api.ListFriendsAsync(a, default)).Friends.Single();
+        Check(shown.Status == "busy" && shown.StatusText == "今晚刷坐骑" && shown.Duty == duty, "New presence payload failed across real C# HTTP.");
+        var oldRevision = profile.Revision;
+        profile = await api.UpdateFriendPresenceSettingsAsync(b, profile with { ShareDuty = false }, default);
+        await api.SetFriendPresenceAsync(b, leaseB, true, default, new(oldRevision, duty));
+        Check((await api.ListFriendsAsync(a, default)).Friends.Single().Duty is null, "Late activity restored revoked sharing.");
+        profile = await api.UpdateFriendPresenceSettingsAsync(b, profile with { Status = "invisible" }, default);
+        Check((await api.ListFriendsAsync(a, default)).OnlineCount == 0, "Invisible friend counted online.");
+        await api.UpdateFriendPresenceSettingsAsync(b, profile with { Status = "online", Text = "" }, default);
         for (var i = 0; i < 24; i++)
         {
             var token = i % 2 == 0 ? a : b;

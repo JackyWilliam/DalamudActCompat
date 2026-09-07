@@ -10,11 +10,13 @@ internal static class FriendsWindowLayout
 
     public static (Vector2 Position, Vector2 Size) Drawer(Vector2 anchor, Vector2 anchorSize, Vector2 viewport, Vector2 viewportSize, float scale)
     {
-        var size = Vector2.Min(new Vector2(340 * scale, Math.Max(350 * scale, anchorSize.Y - 48)), viewportSize - new Vector2(16));
-        var right = anchor.X + anchorSize.X + 6;
-        // Prefer an attached side panel; at the viewport edge it fits inside the
-        // main window instead of becoming unreachable beyond the game surface.
-        var x = right + size.X <= viewport.X + viewportSize.X - 8 ? right : anchor.X + anchorSize.X - size.X;
-        return (Clamp(new Vector2(x, anchor.Y + 44), size, viewport, viewportSize), size);
+        var top = Math.Clamp(anchor.Y + 48, viewport.Y + 8, viewport.Y + viewportSize.Y - 128);
+        var size = Vector2.Min(new Vector2(352 * scale, Math.Max(120, anchor.Y + anchorSize.Y - top - 1)), viewportSize - new Vector2(16));
+        var edge = anchor.X + anchorSize.X - 1;
+        // The seam touches the main window exactly. When the screen edge leaves
+        // no room, reveal inward below its header so the entry stays reachable.
+        var outside = edge + size.X <= viewport.X + viewportSize.X - 8;
+        var x = outside ? edge : edge - size.X;
+        return (Clamp(new Vector2(x, top), size, viewport, viewportSize), size);
     }
 }

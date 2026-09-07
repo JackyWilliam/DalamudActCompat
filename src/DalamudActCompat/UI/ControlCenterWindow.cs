@@ -428,7 +428,7 @@ public sealed class ControlCenterWindow : Window
         try
         {
             var cloudSnapshot = cloud.GetSnapshot();
-            Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize());
+            Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), ImGui.GetStyle().Alpha, ImGuiP.GetCurrentWindow().ID);
             DrawWindowChrome(cloudSnapshot);
             DrawCloudQuickPopup(cloudSnapshot);
             if (!cloudSnapshot.IsSignedIn)
@@ -574,7 +574,7 @@ public sealed class ControlCenterWindow : Window
                 statusColor: cloudStatusColor,
                 statusTooltip: text.Get("查看云同步状态", "View cloud sync status"),
                 friendsAction: cloudSnapshot.IsSignedIn && Friends is { } friends ? friends.ToggleDrawer : null,
-                onlineFriends: Friends?.Snapshot.Friends?.OnlineCount ?? 0,
+                onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
                 friendsUnread: Friends?.Snapshot.HasUnread ?? false))
         {
             HideAnimated();

@@ -30,6 +30,7 @@ internal static class FriendsUiSmokeTests
         await SaveFailureAsync();
         await SwitchAndPreparationAsync();
         await LocalStateAsync(root);
+        await PresenceAsync();
         Layout();
         Console.WriteLine("Friends UI: bounded consumption, unread persistence, immutable retry, disk failures, account isolation and layout passed.");
     }
@@ -171,9 +172,32 @@ internal static class FriendsUiSmokeTests
                 "Drawer escaped the viewport at scaling/edge.");
         }
     }
+    private static async Task PresenceAsync()
+    {
+        var api = new Fake(); using var controller = new FriendsChatController(api, new MemoryDisk(), TimeSpan.FromHours(1));
+        controller.AttachConsumer(); await Until(() => controller.Snapshot.Friends?.PresenceSettings is not null, "presence ready");
+        Check(controller.UpdatePresence(api.Profile with { Status = "busy", Text = "今晚刷坐骑", ShareDuty = true }), "Presence command rejected.");
+        await Until(() => !controller.Snapshot.Busy && controller.Snapshot.Friends?.PresenceSettings?.ShareDuty == true, "presence saved");
+        Check(controller.Snapshot.Friends!.PresenceSettings!.Text == "今晚刷坐骑", "Custom status was lost.");
+        api.FailPresence = true;
+        Check(controller.UpdatePresence(api.Profile with { ShareDuty = false }), "Privacy command rejected.");
+        Check(api.DutySuppressed, "Privacy disabled only after HTTP instead of immediately.");
+        await Until(() => !controller.Snapshot.Busy && controller.Snapshot.State == "error", "presence failure");
+        Check(api.DutySuppressed && api.Profile.ShareDuty, "Uncertain privacy update re-enabled local reporting or claimed server success.");
+        api.SwitchAccount(); controller.Refresh();
+        await Until(() => controller.Snapshot.Friends?.User?.Id == api.Self.Id, "presence new account");
+        Check(controller.Snapshot.Friends!.PresenceSettings == CloudPresenceSettings.Default, "Account switch exposed another profile.");
+        var first = new CloudDutyActivity(1, "普通难度"); var second = new CloudDutyActivity(2, "零式难度");
+        var duties = new Dictionary<uint, (uint Territory, CloudDutyActivity Duty)> { [1] = (50, first), [2] = (50, second) };
+        Check(FriendDutySnapshotProvider.Resolve(true, true, false, 50, 2, duties) == second, "Same-territory duty variant was guessed.");
+        foreach (var state in new[] { (false, true, false, 50u, 2u), (true, false, false, 50u, 2u), (true, true, true, 50u, 2u),
+            (true, true, false, 51u, 2u), (true, true, false, 50u, 0u) })
+            Check(FriendDutySnapshotProvider.Resolve(state.Item1, state.Item2, state.Item3, state.Item4, state.Item5, duties) is null,
+                "Logout/loading/field/unknown content exposed a duty.");
+    }
     public static async Task RunNativeAsync()
     {
-        var api = new Fake(); var disk = new MemoryDisk();
+        var api = new Fake { VisualData = true, Self = new("native-self", "Raynor") }; var disk = new MemoryDisk();
         using var controller = new FriendsChatController(api, disk, TimeSpan.FromHours(1));
         using var ui = new FriendsUiManager(controller, () => { });
         await Until(() => controller.Snapshot.Conversations.ContainsKey(api.Id), "native model");
@@ -191,9 +215,14 @@ internal static class FriendsUiSmokeTests
         {
             var io = ImGui.GetIO(); io.IniFilename = null; io.LogFilename = null;
             io.DisplaySize = new(1920, 1080); io.DeltaTime = 1f / 60;
-            io.Fonts.AddFontFromFileTTF(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "msyh.ttc"), 17, default, io.Fonts.GetGlyphRangesChineseSimplifiedCommon());
+            // The common Chinese preset omits some product words and U+25CF.
+            // Include the real font's CJK/punctuation/symbol ranges for evidence.
+            ushort* ranges = stackalloc ushort[] { 0x20, 0xff, 0x2000, 0x30ff, 0x31f0, 0x31ff, 0x4e00, 0x9fff, 0xff00, 0xffef, 0 };
+            io.Fonts.AddFontFromFileTTF(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "msyh.ttc"), 17, default, ranges);
             Check(io.Fonts.Build(), "Native test font atlas failed.");
-            ui.SetAnchor(new(50, 50), new(640, 600));
+            var raster = new NativeUiRasterizer(io.Fonts);
+            var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
+            var anchor = new Vector2(60, 120); var mainSize = new Vector2(920, 720);
             var drag = new WindowDragController(); var texture = new EmptyTexture();
             void Frame(bool focusGame = false)
             {
@@ -201,16 +230,23 @@ internal static class FriendsUiSmokeTests
                 ImGui.SetNextWindowPos(new(10, 10)); ImGui.SetNextWindowSize(new(500, 80));
                 if (focusGame) ImGui.SetNextWindowFocus();
                 ImGui.Begin("isolated-game-input"); ImGui.TextUnformatted("game controls"); ImGui.End();
-                ImGui.SetNextWindowPos(new(50, 100)); ImGui.SetNextWindowSize(new(Math.Min(920, io.DisplaySize.X - 60), 110));
-                ImGui.Begin("isolated-dact-header", ImGuiWindowFlags.NoFocusOnAppearing);
+                ImGui.SetNextWindowPos(anchor); ImGui.SetNextWindowSize(mainSize);
+                ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(.045f, .064f, .09f, .98f));
+                ImGui.Begin("isolated-dact-header", ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoDecoration);
+                ui.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), 1, ImGuiP.GetCurrentWindow().ID);
                 BrandedWindowChrome.Draw(drag, texture, "主页", "运行中", Vector4.One, "0.4.0.4", "friend-native",
-                    helpAction: () => { }, statusAction: () => { }, statusLabel: "● 云同步", friendsAction: () => ui.ToggleDrawer(), onlineFriends: 200, friendsUnread: true);
-                ImGui.End();
+                    helpAction: () => { }, statusAction: () => { }, statusLabel: "● 云同步", friendsAction: () => ui.ToggleDrawer(), onlineFriends: 2, friendsUnread: true);
+                ImGui.SetCursorPos(new(28, 110)); ImGui.TextColored(new Vector4(.42f, .78f, .96f, 1), "DACT · 原生界面验证");
+                ImGui.SetCursorPos(new(28, 146)); ImGui.TextUnformatted("主窗口占位内容；右侧好友抽屉、图标和聊天使用实际插件代码绘制。");
+                ImGui.End(); ImGui.PopStyleColor();
                 ui.Draw(true, true); ImGui.Render();
                 Check(ImGui.GetDrawData().TotalVtxCount > 0, "Native UI emitted no draw data.");
             }
             string Focus() => Marshal.PtrToStringUTF8((nint)context.NavWindow.Name) ?? "";
             Frame(true); ui.ToggleDrawer(); Frame(); Frame();
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-opening.png"));
+            for (var i = 0; i < 10; i++) Frame();
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
             Check(Focus() == "isolated-game-input", "Opening a no-focus drawer stole game focus.");
             typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
             Frame(); Frame(); Check(Focus().Contains("DACTFriendChat"), "Explicit chat opening did not focus the chat.");
@@ -222,18 +258,59 @@ internal static class FriendsUiSmokeTests
             foreach (var surface in new[] { new Vector2(800, 600), new Vector2(1920, 1080) })
             {
                 io.FontGlobalScale = scale; io.DisplaySize = surface;
-                ui.SetAnchor(surface - new Vector2(660, 460), new(640, 450));
-                Frame(); Frame();
+                anchor = surface - new Vector2(660, 560); mainSize = new(640, 550);
+                for (var i = 0; i < 12; i++) Frame();
+                var drawerFound = false;
                 for (var i = 0; i < context.Windows.Size; i++)
                 {
                     var window = context.Windows[i]; var name = Marshal.PtrToStringUTF8((nint)window.Name) ?? "";
-                    if (!name.Contains("###DACTFriendsDrawer") && !name.Contains("###DACTFriendChat-")) continue;
+                    if (!name.Contains("##DACTFriendsDrawer") && !name.Contains("###DACTFriendChat-")) continue;
+                    if (name == "##DACTFriendsDrawer") drawerFound = true;
                     Check(window.Pos.X >= 0 && window.Pos.Y >= 0 && window.Pos.X + window.Size.X <= surface.X && window.Pos.Y + window.Size.Y <= surface.Y,
                         "Native friend window escaped viewport: " + name);
                 }
+                Check(drawerFound, "Native drawer disappeared during scale/viewport checks.");
+                if (output is not null && scale == 1 && surface.X == 800)
+                    raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-edge-with-chat.png"));
             }
+            BubbleBounds(raster, output);
         }
         finally { ImGui.DestroyContext(context); }
+    }
+    private static void BubbleBounds(NativeUiRasterizer raster, string? output)
+    {
+        var method = typeof(FriendsUiManager).GetMethod("DrawBubble", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var io = ImGui.GetIO(); io.DisplaySize = new(1440, 1500);
+        foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
+        {
+            io.FontGlobalScale = scale;
+            ImGui.NewFrame(); ImGui.SetNextWindowPos(new(30, 30)); ImGui.SetNextWindowSize(new(680, 1400));
+            ImGui.Begin("原生聊天气泡内边距验证", ImGuiWindowFlags.NoSavedSettings);
+            foreach (var kind in new[] { "peer", "own", "official" })
+            {
+                var message = new CloudChatMessage(1, "native", new(kind == "official" ? "official" : "user", "user", "旅行者 · 多行消息"), "peer", 1, Guid.NewGuid(),
+                    "今晚刷坐骑，这是一条会自动换行的中文消息，用于验证每一行文字与气泡左右边缘都有足够距离。\nSecond line with a long unbroken URL: https://example.test/abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789", null, "history", DateTimeOffset.Now, null);
+                var list = ImGui.GetWindowDrawList(); var before = list.VtxBuffer.Size;
+                method.Invoke(null, [message, kind == "own"]);
+                var after = list.VtxBuffer.Size;
+                var textColors = new[] { ImGui.GetColorU32(Vector4.One), ImGui.GetColorU32(new Vector4(.42f, .78f, .96f, 1)), ImGui.GetColorU32(new Vector4(.62f, .69f, .75f, 1)) };
+                // Actual emitted ink vertices must remain inside the emitted bubble
+                // geometry. This catches cursor/word-wrap regressions, not only a constant.
+                var background = ImGui.GetColorU32(kind == "own" ? new Vector4(.09f, .23f, .31f, 1) : new Vector4(.09f, .115f, .15f, 1));
+                var left = float.MaxValue; var right = float.MinValue;
+                for (var i = before; i < after; i++)
+                    if (list.VtxBuffer[i].Col == background) { left = Math.Min(left, list.VtxBuffer[i].Pos.X); right = Math.Max(right, list.VtxBuffer[i].Pos.X); }
+                var count = 0;
+                for (var i = before; i < after; i++)
+                {
+                    var v = list.VtxBuffer[i]; if (!textColors.Contains(v.Col)) continue; count++;
+                    Check(v.Pos.X >= left + 3 && v.Pos.X <= right - 3, $"{kind} text exceeded 3px padding at scale {scale}: {v.Pos.X} in {left}..{right}");
+                }
+                Check(count > 0, "Bubble padding test saw no actual text vertices.");
+            }
+            ImGui.End(); ImGui.Render();
+            if (output is not null && scale == 1) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-bubble-padding.png"));
+        }
     }
     private sealed class EmptyTexture : ISharedImmediateTexture, IDalamudTextureWrap
     {
@@ -269,11 +346,12 @@ internal static class FriendsUiSmokeTests
         public CloudFriendsSession FriendsSession { get; private set; } = new(1, true, "isolated_a");
         public CloudChatConversation Chat;
         public readonly ConcurrentQueue<CloudChatSendRequest> Attempts = new();
-        public bool FailSend, CommitThenFail, FailGet;
+        public bool FailSend, CommitThenFail, FailGet, FailPresence, DutySuppressed, VisualData;
+        public CloudPresenceSettings Profile = CloudPresenceSettings.Default;
         public Func<CancellationToken, Task>? GetGate; public Action? BeforeAck;
         public int Acks; private long nextMessage;
         public Fake() => Chat = new(Id, "friend", 0, Peer, 0, 0, 0, [], [], 1, CloudChatPolicy.Notice);
-        public void SwitchAccount() { Self = new(Guid.NewGuid().ToString(), "isolated_c"); FriendsSession = new(2, true, Self.Username); GetGate = null; }
+        public void SwitchAccount() { Self = new(Guid.NewGuid().ToString(), "isolated_c"); FriendsSession = new(2, true, Self.Username); GetGate = null; Profile = CloudPresenceSettings.Default; }
         public void AddIncoming(int count, bool history = false)
         {
             var messages = Enumerable.Range(0, count).Select(_ => new CloudChatMessage(++nextMessage, Id, new("user", Peer.Id, Peer.Username),
@@ -283,7 +361,16 @@ internal static class FriendsUiSmokeTests
         }
         private void Guard(CloudFriendsSession? expected) => Check(expected == FriendsSession, "Controller omitted expected account generation.");
         public Task<CloudFriendList> ListFriendsAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null)
-        { Guard(expectedSession); return Task.FromResult(new CloudFriendList([], 0, [], CloudChatPolicy.Notice, Self)); }
+        { Guard(expectedSession); return Task.FromResult(new CloudFriendList(VisualData ? [
+            new("native-friend", "accepted", "", Peer, default, default, Id, true, "busy", "今晚刷坐骑", new(123, "阿卡狄亚零式登天斗技场 重量级3")),
+            new("native-away", "accepted", "", new("away", "远方的旅行者"), default, default, null, true, "away", "晚点回来"),
+            new("native-offline", "accepted", "", new("offline", "星光下的猫"), default, default, null)] : [], VisualData ? 2 : 0, [], CloudChatPolicy.Notice, Self, Profile)); }
+        public void SuppressFriendDuty(CloudFriendsSession expectedSession) { Guard(expectedSession); DutySuppressed = true; }
+        public Task<CloudPresenceSettings> UpdateFriendPresenceSettingsAsync(CloudPresenceSettings settings, CancellationToken ct, CloudFriendsSession? expectedSession = null)
+        {
+            Guard(expectedSession); if (FailPresence) throw new HttpRequestException("isolated uncertain privacy save");
+            Profile = settings with { Revision = Profile.Revision + 1 }; DutySuppressed = false; return Task.FromResult(Profile);
+        }
         public Task<CloudChatSync> SyncChatAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null)
         { Guard(expectedSession); return Task.FromResult(new CloudChatSync([new(Id, Chat.Kind, Chat.Revision, Peer, Chat.History.Count, Chat.Pending.Count, Chat.LatestMessageId)], Chat.Pending, CloudChatPolicy.Notice, [])); }
         public async Task<CloudChatConversation> GetChatAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null)
