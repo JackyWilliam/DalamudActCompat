@@ -27,12 +27,13 @@ var mapEffectProbe = string.Equals(
     focusedProbe,
     "--probe-triggernometry-mapeffect",
     StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe ? args[1..] : args;
+var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringComparison.Ordinal);
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing or --probe-triggernometry-mapeffect " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect or --probe-triggernometry-u7b " +
         "with the three-path form for a focused probe.");
 }
 
@@ -76,6 +77,12 @@ if (mapEffectProbe)
     }
 
     await ValidateTriggernometryMapEffectProbeAsync();
+    return;
+}
+
+if (u7bProbe)
+{
+    await ValidateTriggernometryU7bProbeAsync();
     return;
 }
 
@@ -127,6 +134,7 @@ if (File.Exists(matchaPackage))
 if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
+    await ValidateTriggernometryU7bProbeAsync();
 }
 await ValidatePostNamazuQueueShutdownLifecycleAsync();
 var completion =
@@ -2441,6 +2449,182 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
             Console.Error.WriteLine(
                 $"Entity timing Host output:{Environment.NewLine}{output}" +
                 $"{Environment.NewLine}Entity timing Host errors:{Environment.NewLine}{error}");
+            throw;
+        }
+        finally
+        {
+            if (!host.HasExited)
+            {
+                host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+}
+
+async Task ValidateTriggernometryU7bProbeAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    var configurationPath = Path.Combine(configRoot!, "Config", "Triggernometry.config.xml");
+    var configuration = XDocument.Load(configurationPath);
+    var root = configuration.Root!.Element("Root")!;
+    root.RemoveNodes();
+    var fixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "U7bP1.xml"));
+    var folder = new XElement(fixture.Root!.Element("ExportedFolder")!);
+    folder.Name = "Folder";
+    // Speech is an observation sink in this offline test. Keep every original match, condition,
+    // variable and PictoACT action, but never send the fixture's speech to a user's speakers.
+    foreach (var speech in folder.Descendants("Action").Where(x => (string?)x.Attribute("ActionType") == "UseTTS"))
+    {
+        speech.SetAttributeValue("ActionType", "LogMessage");
+        speech.SetAttributeValue("LogMessageText", "DACT_U7B_SPEECH:" + (string?)speech.Attribute("UseTTSTextExpression"));
+        speech.SetAttributeValue("LogProcess", "False");
+        speech.SetAttributeValue("LogProcessACT", "False");
+    }
+    root.Add(new XElement("Folders", folder));
+    // The real repository requires /e cfg first. Seed an empty persisted dictionary so
+    // its .get(..., default) calls exercise the author's default settings.
+    configuration.Root!.Add(XElement.Parse("""
+        <PersistentVariables><Scalar /><List /><Table /><Dict><Item><Key><string>U7b_cfg</string></Key>
+        <Value><VariableDictionary LastChanger="U7b offline fixture"><Items /></VariableDictionary></Value>
+        </Item></Dict></PersistentVariables>
+        """));
+    root.Add(XElement.Parse("""
+        <Triggers><Trigger Enabled="true" Id="2b051a79-49f5-4cee-8381-c33032639d15" Name="Synthetic party setup" RegularExpression="^DACT_U7B_RESET$">
+        <Actions>
+        <Action OrderNumber="1" ActionType="Variable" Asynchronous="False" VariableOp="UnsetRegexUniversal" VariableName="^U7b" />
+        <Action OrderNumber="2" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="myIdx" VariableExpression="1" />
+        <Action OrderNumber="3" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="myIdx_isTH" VariableExpression="1" />
+        </Actions></Trigger>
+        <Trigger Enabled="true" Id="bcac2255-2521-452d-a1e0-72f06b6456c5" Name="Inspect probe prerequisites" RegularExpression="^DACT_U7B_INSPECT$"><Actions>
+        <Action ActionType="NamedCallback" NamedCallbackName="PictoACT" NamedCallbackParam="DACT_U7B_DIAG phase=${v:U7b_phase}, ice=${v:U7b11a_b真冰}, fire=${v:U7b11a_b真火}, raw=${v:U7b11a_b散raw}, party=${v:myIdx}, cfg=${epd:U7b_cfg}" />
+        </Actions></Trigger></Triggers>
+        """));
+    configuration.Save(configurationPath);
+    var (host, pipe, session) = await StartConnectedHostAsync(loadPlugins: true, faultInjection: true);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            var sequence = 1L;
+            async Task SendAsync<T>(string type, HostMessagePriority priority, T payload, string? correlation = null)
+                => await HostFrameCodec.WriteAsync(pipe.Writer,
+                    HostEnvelope.Create(session, sequence++, type, priority, payload, correlation), CancellationToken.None);
+            await SendAsync(HostMessageTypes.Hello, HostMessagePriority.Control,
+                new HostHello("u7b-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion]));
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            await SendAsync(HostMessageTypes.Permissions, HostMessagePriority.Control,
+                new HostPermissionSnapshot(new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["triggernometry"] = ["ReadCombatLogs", "ReadLocalConfiguration"],
+                    ["postnamazu"] = ["ReadCombatLogs", "ReadLocalConfiguration", "GameCommand"],
+                }, ["triggernometry", "postnamazu"]));
+            await SendAsync(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical,
+                new HostZoneEvent(1363, "Dancing Mad (Ultimate)", DateTimeOffset.UtcNow));
+            var ready = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90).WaitAsync(TimeSpan.FromSeconds(30));
+            Assert(ready.Payload.Deserialize<HostHealth>()?.State == "plugins.ready", "U7b Host did not load both real plugins.");
+
+            async Task LineAsync(string line)
+            {
+                await SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data,
+                    new[] { new HostLogEvent(DateTimeOffset.UtcNow, line, false, line) });
+                // Upstream dispatches sibling triggers asynchronously; let each prerequisite
+                // settle before advancing this deterministic event-content regression.
+                await Task.Delay(100);
+            }
+
+            async Task<List<string>> DrawingsAsync(int expected)
+            {
+                var result = new List<string>();
+                var until = DateTimeOffset.UtcNow.AddSeconds(expected == 0 ? 1 : 5);
+                while (DateTimeOffset.UtcNow < until)
+                {
+                    var remaining = until - DateTimeOffset.UtcNow;
+                    if (remaining <= TimeSpan.Zero) break;
+                    using var cancellation = new CancellationTokenSource(remaining);
+                    HostEnvelope? envelope;
+                    try { envelope = await HostFrameCodec.ReadAsync(pipe.Reader, cancellation.Token); }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { break; }
+                    if (envelope is null) throw new EndOfStreamException("U7b Host closed its pipe.");
+                    if (envelope.Type != HostMessageTypes.CommandRequest) continue;
+                    var request = envelope.Payload.Deserialize<HostCommandRequest>()!;
+                    Assert(request.Command == "postnamazu.pictoact", "Unexpected U7b probe action: " + request.Command);
+                    var payload = request.Arguments["payload"];
+                    if (payload.StartsWith("DACT_U7B_DIAG", StringComparison.Ordinal)) Console.WriteLine(payload);
+                    else result.Add(payload);
+                    await SendAsync(HostMessageTypes.CommandResult, HostMessagePriority.Control,
+                        new HostCommandResult(true, "completed", "offline-u7b"), envelope.CorrelationId);
+                    if (result.Count >= expected) until = DateTimeOffset.UtcNow.AddMilliseconds(400);
+                }
+                Assert(result.Count == expected, $"U7b expected {expected} PictoACT commands, got {result.Count}.");
+                return result;
+            }
+
+            var playerSnapshot = CreateTestFfxivSnapshot();
+            var template = playerSnapshot.Combatants[0];
+            var statue = template with { Id = 0x4001895C, Name = "", Type = 7, BNpcNameId = 0, BNpcId = 2015156, PosX = 100, PosY = 0, PosZ = 100, Heading = 0 };
+            var left = statue with { Id = 0x40018959, BNpcId = 2015164, PosX = 92, PosY = 15, PosZ = 27 };
+            var right = left with { Id = 0x4001895A, BNpcId = 2015165, PosX = 108 };
+            var observed = new Dictionary<string, List<string>>();
+            foreach (var includeUnnamed in new[] { false, true })
+            {
+                var prefix = includeUnnamed ? "retained" : "filtered";
+                await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
+                    playerSnapshot with
+                    {
+                        TerritoryId = 1363, Timestamp = DateTimeOffset.UtcNow,
+                        Combatants = includeUnnamed ? [.. playerSnapshot.Combatants, statue, left, right] : playerSnapshot.Combatants,
+                    });
+                await Task.Delay(200);
+                foreach (var actor in new[] { "40018959", "4001895A" })
+                {
+                    await LineAsync($"[21:40:07.677] 273 111:{actor}:019D:40:80:0:0:");
+                    var drawings = await DrawingsAsync(includeUnnamed ? 1 : 0);
+                    if (includeUnnamed)
+                        Assert(drawings[0].Contains("Tag: U7b12_半场刀") && drawings[0].Contains("Omen: Fan180") &&
+                            drawings[0].Contains(actor == "40018959" ? "Angle: 1 ?" : "Angle: 0 ?"), "U7b half-room payload changed.");
+                    observed[$"{prefix}-{actor}"] = drawings;
+                    await Task.Delay(1100);
+                }
+                foreach (var spread in new[] { true, false })
+                {
+                    await LineAsync("DACT_U7B_RESET");
+                    await LineAsync("[21:38:41.638] 273 111:4001895C:019D:1:2:0:0:");
+                    await LineAsync("[21:38:42.000] 263 107:4001895C:BA98:100:100:0:0:");
+                    await LineAsync("[21:38:43.000] 27 1B:4001895C::0:0:02A2:");
+                    await LineAsync($"[21:38:44.000] 27 1B:10001234::0:0:{(spread ? "007F" : "0080") }:");
+                    await LineAsync("DACT_U7B_INSPECT");
+                    // The original resource emits the eight/two circles plus one personal arrow.
+                    var drawings = await DrawingsAsync(includeUnnamed ? (spread ? 9 : 3) : 0);
+                    if (includeUnnamed)
+                    {
+                        var circles = drawings.Count(x => x.Contains("Tag: U7b11a_散摊\r\n"));
+                        Assert(circles == (spread ? 8 : 2), $"U7b {(spread ? "spread" : "stack")} emitted {circles} circles.");
+                    }
+                    observed[$"{prefix}-{(spread ? "spread" : "stack")}"] = drawings;
+                    await Task.Delay(1100);
+                }
+            }
+            var output = Environment.GetEnvironmentVariable("ACTCOMPAT_U7B_PROBE_OUTPUT");
+            if (!string.IsNullOrWhiteSpace(output))
+                await File.WriteAllTextAsync(output, JsonSerializer.Serialize(observed, new JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine("U7b original Utils/phase/8-circle/2-circle/left/right chain: filtered objects silent; retained unnamed objects passed.");
+            await SendAsync(HostMessageTypes.Shutdown, HostMessagePriority.Control,
+                new HostHealth("stopping", "U7b probe", DateTimeOffset.UtcNow));
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch
+        {
+            if (!host.HasExited)
+            {
+                host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            var (output, error) = ReadProcessLog(host);
+            Console.Error.WriteLine($"U7b Host output:\n{output}\nU7b Host errors:\n{error}");
             throw;
         }
         finally

@@ -83,6 +83,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly CloudClientService cloudClient;
+    private readonly FriendsChatController friendsController;
+    private readonly FriendsUiManager friendsUi;
+    private readonly FriendsNotificationSound friendsNotificationSound;
+    private readonly FriendDutySnapshotProvider friendDutyProvider;
+    private long nextFriendDutyCheck;
     private readonly CloudOperationGuard cloudOperationGuard = new();
     private readonly ActPluginPackageInstaller packageInstaller;
     private readonly BundledActPluginManager bundledPluginManager;
@@ -250,6 +255,8 @@ public sealed class Plugin : IDalamudPlugin
         paths = new PluginPaths(pluginInterface, configuration.ActPluginDirectory);
         paths.EnsureCreated();
         cloudClient = new CloudClientService(paths);
+        friendsController = new FriendsChatController(cloudClient,
+            new FriendsLocalStateStore(Path.Combine(paths.ConfigDirectory, "friends-state")));
         enforcedCloudBan = cloudClient.ActiveBan;
         var configuredLogDirectory = string.IsNullOrWhiteSpace(configuration.LogDirectory)
             ? paths.CombatLogDirectory
@@ -708,6 +715,13 @@ public sealed class Plugin : IDalamudPlugin
                     token => cloudClient.PreviewRestoreAsync(backupId, token)),
                 StartCloudRestore,
                 StartCloudRollback));
+        friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
+        friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
+            playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
+            stopNotificationSound: friendsNotificationSound.Stop);
+        settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
+        friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
+        settingsWindow.Friends = friendsUi;
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(
             text,
             GetHostResourceStatus,
@@ -885,11 +899,12 @@ public sealed class Plugin : IDalamudPlugin
                                          cloudBanNoticeWindow.IsOpen ||
                                          encounterWindow.IsOpen ||
                                          simplifiedHomeWindow.IsOpen ||
-                                         meterStyleEditorWindow.IsOpen;
+                                         meterStyleEditorWindow.IsOpen || friendsUi.AnyOpen;
         OverlayEditShield.Draw(
             actRuntime.HasVisibleEditingOverlay,
             hasVisibleManagementWindow);
         windowSystem.Draw();
+        friendsUi.Draw(settingsWindow.IsOpen, services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
         fileDialogManager.Draw();
     }
 
@@ -1018,6 +1033,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void RestrictWindowsToAuthenticationGate(bool openGate)
     {
+        friendsUi.Hide();
         triggernometryNativeBridge.Clear();
         pictoActOverlay.Clear();
         meterWindow.IsOpen = false;
@@ -4579,6 +4595,9 @@ public sealed class Plugin : IDalamudPlugin
         }
         await banTask.ConfigureAwait(false);
         await ShutdownBackgroundOperationsAsync().ConfigureAwait(false);
+        friendsUi.Dispose();
+        friendsNotificationSound.Dispose();
+        friendsController.Dispose();
         cloudClient.Dispose();
         cloudOperationCancellation.Dispose();
 
@@ -4805,6 +4824,12 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         SynchronizeCloudAuthenticationState();
+        if (Environment.TickCount64 >= nextFriendDutyCheck)
+        {
+            nextFriendDutyCheck = Environment.TickCount64 + 500;
+            if (cloudClient.FriendDutySharingSession is { } sharingSession)
+                cloudClient.SetFriendDutyActivity(sharingSession, friendDutyProvider.Read(services.ClientState, services.Condition));
+        }
         TryStopParserForCloudBanOnFrameworkThread();
         if (!IsDactAccessAllowed())
         {

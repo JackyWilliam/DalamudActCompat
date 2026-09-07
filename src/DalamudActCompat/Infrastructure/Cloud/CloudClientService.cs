@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Raynording.Accounts;
 using DalamudActCompat.Infrastructure.Storage;
 
 namespace DalamudActCompat.Infrastructure.Cloud;
@@ -33,7 +34,7 @@ internal sealed record CloudClientSnapshot(
             null);
 }
 
-internal sealed class CloudClientService : IDisposable
+internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSession
 {
     private readonly object stateLock = new();
     private readonly SemaphoreSlim operationGate = new(1, 1);
@@ -50,6 +51,7 @@ internal sealed class CloudClientService : IDisposable
     private CancellationTokenSource? sessionMonitorCancellation;
     private CloudStoredCredentials? storedAccount;
     private CloudStoredCredentials? credentials;
+    private long friendsSessionGeneration;
     private CloudBanNotice? activeBan;
     private bool persistCurrentAccount;
     private CloudClientSnapshot snapshot;
@@ -62,7 +64,8 @@ internal sealed class CloudClientService : IDisposable
             new CloudBanStore(paths.CloudBanFile),
             new CloudMachineIdentity(paths.CloudDeviceFile),
             new CloudKeyEnvelopeService(),
-            new PortableConfigurationBackupService())
+            new PortableConfigurationBackupService(),
+            new SharedAccountStore(SharedAccountStore.PathForPlugin(paths.ConfigDirectory)))
     {
     }
 
@@ -73,7 +76,8 @@ internal sealed class CloudClientService : IDisposable
         CloudBanStore banStore,
         CloudMachineIdentity machineIdentity,
         CloudKeyEnvelopeService envelopeService,
-        PortableConfigurationBackupService backupService)
+        PortableConfigurationBackupService backupService,
+        SharedAccountStore? sharedAccountStore = null)
     {
         this.paths = paths;
         this.apiClient = apiClient;
@@ -82,6 +86,7 @@ internal sealed class CloudClientService : IDisposable
         this.machineIdentity = machineIdentity;
         this.envelopeService = envelopeService;
         this.backupService = backupService;
+        this.sharedAccountStore = sharedAccountStore;
         storedAccount = TryLoadStoredAccount();
         persistCurrentAccount = storedAccount is not null;
         credentials = storedAccount is { } candidate && candidate.Token.Length > 0 &&
@@ -130,7 +135,7 @@ internal sealed class CloudClientService : IDisposable
         }
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    private async Task InitializeLegacyAsync(CancellationToken cancellationToken)
     {
         var saved = storedAccount;
         if (saved is null || string.IsNullOrWhiteSpace(saved.Token))
@@ -708,13 +713,20 @@ internal sealed class CloudClientService : IDisposable
         {
             return false;
         }
-        SetSnapshot(Snapshot with
+        try
         {
-            IsBusy = true,
-            StatusMessage = message,
-            StatusIsError = false,
-        });
-        return true;
+            // A revoked token may invalidate locally before the next shared-store poll.
+            // An explicit new login starts against the actual current shared revision.
+            operationSharedRevision = sharedAccountStore?.Read().Revision ?? sharedRevision;
+            SetSnapshot(Snapshot with
+            {
+                IsBusy = true,
+                StatusMessage = message,
+                StatusIsError = false,
+            });
+            return true;
+        }
+        catch { operationGate.Release(); throw; }
     }
 
     private void FinishOperation()
@@ -788,6 +800,12 @@ internal sealed class CloudClientService : IDisposable
             response.Token,
             response.ExpiresAt,
             recoveryKey);
+        if (sharedAccountStore is not null)
+        {
+            var published = sharedAccountStore.Publish(operationSharedRevision,
+                ToSharedAccount(saved), rememberLogin);
+            Interlocked.Exchange(ref sharedRevision, published.Revision);
+        }
         string? persistenceWarning = null;
         var persisted = false;
         try
@@ -814,6 +832,7 @@ internal sealed class CloudClientService : IDisposable
         lock (stateLock)
         {
             credentials = saved;
+            friendsSessionGeneration++;
             storedAccount = persisted ? saved : null;
             persistCurrentAccount = persisted;
         }
@@ -885,6 +904,7 @@ internal sealed class CloudClientService : IDisposable
         Exception? cleanupFailure = null;
         try
         {
+            ClearSharedAccount(credentials);
             credentialStore.Clear();
         }
         catch (Exception ex)
@@ -894,6 +914,7 @@ internal sealed class CloudClientService : IDisposable
         lock (stateLock)
         {
             credentials = null;
+            friendsSessionGeneration++;
             storedAccount = null;
             persistCurrentAccount = false;
             snapshot = CloudClientSnapshot.SignedOut(message) with
@@ -913,6 +934,10 @@ internal sealed class CloudClientService : IDisposable
 
     private void InvalidateSessionPreservingRecoveryKey(string message, bool isError)
     {
+        // Revoke the matching shared token only: a late 401 must not erase a newer
+        // account published by RPets while this request was in flight.
+        try { ClearSharedAccount(credentials); }
+        catch (Exception ex) { message += $"（共用登录同步失败：{ex.GetBaseException().Message}）"; }
         CloudStoredCredentials? recovery;
         bool shouldPersist;
         lock (stateLock)
@@ -920,6 +945,7 @@ internal sealed class CloudClientService : IDisposable
             recovery = credentials ?? storedAccount;
             shouldPersist = persistCurrentAccount;
             credentials = null;
+            friendsSessionGeneration++;
             if (recovery is not null && shouldPersist)
             {
                 storedAccount = recovery with
@@ -1001,7 +1027,8 @@ internal sealed class CloudClientService : IDisposable
     {
         await Task.WhenAll(
                 RunEventMonitorAsync(current, cancellationToken),
-                RunHeartbeatMonitorAsync(current, cancellationToken))
+                RunHeartbeatMonitorAsync(current, cancellationToken),
+                RunFriendConnectionAsync(current, cancellationToken))
             .ConfigureAwait(false);
     }
 
@@ -1277,12 +1304,15 @@ internal sealed class CloudClientService : IDisposable
         string? recoveryKeyToSave = null,
         string? invitationKeyToShare = null)
     {
+        if (sharedAccountStore is not null && sharedAccountStore.Read().Revision != sharedRevision)
+            return;
         var rollbackPath = FindLatestRollbackPath();
         lock (stateLock)
         {
-            // A response from an operation started before the live ban event must never
-            // resurrect the signed-in UI after access has already been revoked.
-            if (activeBan is not null)
+            // A stale backup/login refresh must not revive access revoked by a ban,
+            // heartbeat 401, logout, or a newer login while the response was in flight.
+            if (activeBan is not null || credentials is null ||
+                !string.Equals(credentials.Token, current.Token, StringComparison.Ordinal))
             {
                 return;
             }

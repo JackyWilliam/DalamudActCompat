@@ -23,6 +23,8 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
 | 自行导入扩展 | 对 DLL/ZIP 做静态预检，确认权限后在通用 Host 中加载兼容的 ACT 插件 |
 | 账号与云同步 | 使用激活码注册、可选自动登录、生成最多 3 个好友邀请码，并端到端加密备份配置 |
+| 好友与聊天 | 添加好友、查看在线状态、收发消息及离线来信；支持未读提醒、来信气泡、快捷回复和四种提示音 |
+| RPets 共用登录 | 与独立安装的 RPets 同步登录、切换账号和退出状态 |
 | 故障隔离与诊断 | 分开查看解析器、共享 Host、抹茶 Host 和通用 Host，按组件停止或重启 |
 
 它不承诺兼容所有 ACT 插件。依赖旧版 .NET Framework、注入、任意内存读写、特殊 ACT 界面或未实现接口的扩展，可能无法运行。
@@ -58,6 +60,8 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 5. 需要 Cactbot、Triggernometry、鲶鱼精或其他扩展时，再到“悬浮窗”和“扩展”页配置。
 
 控制中心右上角有完整的游戏内帮助，支持中英文关键词搜索和宏指令复制。
+
+0.4.1.0 起，登录后点击主窗口云状态右侧的好友图标，即可查找账号、处理好友申请和打开聊天。状态弹窗可设置在线状态及是否分享当前副本；来信提醒设置支持独立开关气泡和声音、调整位置与背景透明度、选择及试听四种提示音。每对好友双方合计保留最近 20 条历史和最新 3 条离线待收消息。这里的好友申请与注册用的邀请码是两个独立功能。
 
 > “打开 FFLogs 上传日志”只会打开本地 Network 日志目录并复制路径，不会自动上传。诊断日志用于排错，不能代替战斗日志。
 

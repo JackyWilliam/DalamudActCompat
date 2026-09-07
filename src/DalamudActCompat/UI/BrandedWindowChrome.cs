@@ -29,7 +29,10 @@ internal static class BrandedWindowChrome
         Action? statusAction = null,
         string? statusLabel = null,
         Vector4? statusColor = null,
-        string? statusTooltip = null)
+        string? statusTooltip = null,
+        Action? friendsAction = null,
+        int onlineFriends = 0,
+        bool friendsUnread = false)
     {
         const float height = 40;
         const float actionButtonSize = 28;
@@ -67,15 +70,9 @@ internal static class BrandedWindowChrome
             ImGui.GetColorU32(new Vector4(0.68f, 0.72f, 0.77f, 1)),
             sectionLabel);
 
-        var centerSize = ImGui.CalcTextSize(centerLabel);
-        drawList.AddText(
-            new Vector2(
-                screenStart.X + ((availableWidth - centerSize.X) * 0.5f),
-                textTop),
-            ImGui.GetColorU32(centerColor),
-            centerLabel);
-
         var helpWidth = helpAction is null ? 0 : actionButtonSize;
+        var friendsWidth = friendsAction is null ? 0 : ImGui.CalcTextSize(Math.Max(0, onlineFriends).ToString()).X + 34;
+        var friendsGap = friendsWidth > 0 ? 5 : 0;
         var statusWidth = statusAction is null || string.IsNullOrWhiteSpace(statusLabel)
             ? 0
             : ImGui.CalcTextSize(statusLabel).X + 18;
@@ -89,8 +86,16 @@ internal static class BrandedWindowChrome
                             helpWidth +
                             (showCloseButton && helpAction is not null ? helpCloseGap : 0) +
                             statusWidth +
-                            statusTrailingGap;
+                            statusTrailingGap + friendsWidth + friendsGap;
         var versionSize = ImGui.CalcTextSize(versionLabel);
+        var centerSize = ImGui.CalcTextSize(centerLabel);
+        var centerLeft = screenStart.X + ((availableWidth - centerSize.X) * 0.5f);
+        var versionLeft = screenStart.X + availableWidth - trailingWidth - versionSize.X - 12;
+        // On narrow/scaled windows preserve clickable controls and omit the optional
+        // middle status instead of drawing it over the version or friend button.
+        if (centerLeft > titleLeft + ImGui.CalcTextSize(title).X + ImGui.CalcTextSize(sectionLabel).X + 24 &&
+            centerLeft + centerSize.X < versionLeft - 8)
+            drawList.AddText(new Vector2(centerLeft, textTop), ImGui.GetColorU32(centerColor), centerLabel);
         drawList.AddText(
             new Vector2(
                 screenStart.X + availableWidth - trailingWidth - versionSize.X - 12,
@@ -113,6 +118,7 @@ internal static class BrandedWindowChrome
                 helpWidth -
                 (showCloseButton && helpWidth > 0 ? helpCloseGap : 0) -
                 statusTrailingGap -
+                friendsWidth - friendsGap -
                 statusWidth,
                 start.Y + actionButtonOffsetY));
             ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.055f, 0.12f, 0.16f, 0.88f));
@@ -130,6 +136,22 @@ internal static class BrandedWindowChrome
             {
                 ImGui.SetTooltip(statusTooltip);
             }
+        }
+        if (friendsAction is not null)
+        {
+            ImGui.SetCursorPos(new Vector2(start.X + availableWidth -
+                (showCloseButton ? actionButtonSize : 0) - helpWidth -
+                (showCloseButton && helpWidth > 0 ? helpCloseGap : 0) - friendsWidth - statusTrailingGap,
+                start.Y + actionButtonOffsetY));
+            var buttonStart = ImGui.GetCursorScreenPos();
+            if (ImGui.InvisibleButton($"friends-{id}", new Vector2(friendsWidth, actionButtonSize))) friendsAction();
+            drawList.AddRectFilled(buttonStart, buttonStart + new Vector2(friendsWidth, actionButtonSize),
+                ImGui.GetColorU32(ImGui.IsItemHovered() ? NavigationHover : new Vector4(0.055f, 0.12f, 0.16f, 0.88f)), 5);
+            FriendsGlyph.Draw(drawList, buttonStart + new Vector2(4, 3), 21, ImGui.GetColorU32(NavigationAccent));
+            drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
+                ImGui.GetColorU32(Vector4.One), Math.Max(0, onlineFriends).ToString());
+            if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip($"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}");
         }
         if (helpAction is not null)
         {
@@ -172,7 +194,8 @@ internal static class BrandedWindowChrome
         string id,
         IReadOnlyList<string> labels,
         int selectedIndex,
-        float height = 38)
+        float height = 38,
+        int notificationIndex = -1)
     {
         if (labels.Count == 0)
         {
@@ -244,6 +267,12 @@ internal static class BrandedWindowChrome
                     itemMin.Y + ((height - labelSize.Y) * 0.5f)),
                 ImGui.GetColorU32(index == selectedIndex ? NavigationAccent : NavigationText),
                 labels[index]);
+            if (index == notificationIndex)
+            {
+                var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+                drawList.AddCircleFilled(itemMin + new Vector2(segmentWidth - 6 * scale, 6 * scale), 3 * scale,
+                    ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
+            }
         }
 
         ImGui.SetCursorPos(new Vector2(localStart.X, localStart.Y + height));

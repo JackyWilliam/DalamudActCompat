@@ -1,0 +1,28 @@
+{
+  "filtered-40018959": [],
+  "filtered-4001895A": [],
+  "filtered-spread": [],
+  "filtered-stack": [],
+  "retained-40018959": [
+    "Tag: U7b12_\u534A\u573A\u5200\r\nOmen: Fan180\r\nt: 5\r\nPos: 100, 100\r\nAngle: 1 ? -\u03C0/2 : \u03C0/2\r\nScale: 20"
+  ],
+  "retained-4001895A": [
+    "Tag: U7b12_\u534A\u573A\u5200\r\nOmen: Fan180\r\nt: 5\r\nPos: 100, 100\r\nAngle: 0 ? -\u03C0/2 : \u03C0/2\r\nScale: 20"
+  ],
+  "retained-spread": [
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nPos: -1, -6.5, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 1, 1, 2, 5",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nPos: -1, -14, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nPos: -6.5, -1, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nPos: -9, -9, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2",
+    "Tag: U7b11a_\u6563\u644A_\u6307\u5411\r\nOmen: m131om_setu0f\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nTarget: -1, -6.5\r\nScale: 0.2, _d, 0.2\r\nColor: 1, 1, 2, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 1\r\nPos: -6.5, -1, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 1\r\nPos: -1, -6.5, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 1\r\nPos: -1, -14, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 1\r\nPos: -9, -9, 0.1\r\nScaleCyl: 1 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2"
+  ],
+  "retained-stack": [
+    "Tag: U7b11a_\u6563\u644A_\u6307\u5411\r\nOmen: m131om_setu0f\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nTarget: -5, -5\r\nScale: 0.2, _d, 0.2\r\nColor: 1, 1, 2, 2",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 3\r\nPos: -5, -5, 0.1\r\nScaleCyl: 0 ? 1 : 4, 30\r\nColor: 1, 1, 2, 5",
+    "Tag: U7b11a_\u6563\u644A\r\nOmen: m0532om_don01x\r\nt: 5.1\r\nO: 100, 100, 0\r\nDir4: 1\r\nPos: -5, -5, 0.1\r\nScaleCyl: 0 ? 1 : 4, 30\r\nColor: 3, 0.7, 0.4, 2"
+  ]
+}

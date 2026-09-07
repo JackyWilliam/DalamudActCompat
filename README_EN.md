@@ -23,6 +23,8 @@ The project is currently released and validated primarily on **Windows with XIVL
 | Common ACT extensions | Use Triggernometry, PostNamazu, ACT.FoxTTS, SilverDasher, and Cafe.Matcha |
 | Imported extensions | Preflight DLL/ZIP packages and load compatible ACT plugins in a generic Host after permission review |
 | Accounts and cloud sync | Register with an activation key, optionally sign in automatically, create up to three friend invitations, and back up configuration with end-to-end encryption |
+| Friends and chat | Add friends, view presence, exchange messages and receive offline messages, with unread indicators, incoming bubbles, quick replies, and four notification sounds |
+| Shared RPets sign-in | Synchronize sign-in, account switching, and sign-out with the separately installed RPets plugin |
 | Isolation and diagnostics | Inspect the parser, shared Host, Matcha Host, and generic Host separately, then stop or restart only the failing component |
 
 DACT does not promise compatibility with every ACT plugin. Extensions that depend on old .NET Framework behavior, injection, arbitrary memory access, specialized ACT UI, or unimplemented APIs may not work.
@@ -58,6 +60,8 @@ Registering a DACT account requires a one-time activation key. Join QQ group **1
 5. Configure Cactbot, Triggernometry, PostNamazu, or other optional extensions from the Overlays and Extensions pages only when needed.
 
 The help button in the top-right corner opens the complete in-game guide. It supports Chinese and English keyword search and lets you copy commands.
+
+Starting with 0.4.1.0, sign in and select the friends icon beside the cloud status to find accounts, handle friend requests, and open chats. The status popup controls presence and optional duty sharing. Notification settings provide independent bubble and sound switches, position and background opacity controls, and four sounds with previews. Each pair of friends retains the latest 20 history messages and latest three pending offline messages across both participants. Friend requests are separate from registration invitation codes.
 
 > Open FFLogs upload logs only opens the local Network log directory and copies its path. It does not upload automatically. Diagnostic logs are for troubleshooting and do not replace combat logs.
 

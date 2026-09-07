@@ -22,6 +22,8 @@ namespace DalamudActCompat.UI;
 
 public sealed class ControlCenterWindow : Window
 {
+    internal Action<int>? PreviewFriendNotificationSound { get; set; }
+
     private enum VisibilityTransition
     {
         Closed,
@@ -55,11 +57,11 @@ public sealed class ControlCenterWindow : Window
 
     private sealed record CombatLogDirectoryFeedback(string Message, bool IsError);
 
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
+    internal static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
     private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
     private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    internal static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
+    internal static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
     private static readonly Vector4 AuthenticationHeroBackground = new(0.045f, 0.075f, 0.105f, 1);
     private static readonly Vector4 AuthenticationCardBackground = new(0.055f, 0.070f, 0.095f, 1);
     private static readonly Vector4 AuthenticationBorder = new(0.25f, 0.48f, 0.60f, 0.62f);
@@ -428,6 +430,7 @@ public sealed class ControlCenterWindow : Window
         try
         {
             var cloudSnapshot = cloud.GetSnapshot();
+            Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), ImGui.GetStyle().Alpha, ImGuiP.GetCurrentWindow().ID);
             DrawWindowChrome(cloudSnapshot);
             DrawCloudQuickPopup(cloudSnapshot);
             if (!cloudSnapshot.IsSignedIn)
@@ -571,11 +574,16 @@ public sealed class ControlCenterWindow : Window
                 statusAction: () => cloudQuickPopupRequested = true,
                 statusLabel: $"● {cloudStatusLabel}",
                 statusColor: cloudStatusColor,
-                statusTooltip: text.Get("查看云同步状态", "View cloud sync status")))
+                statusTooltip: text.Get("查看云同步状态", "View cloud sync status"),
+                friendsAction: cloudSnapshot.IsSignedIn && Friends is { } friends ? friends.ToggleDrawer : null,
+                onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
+                friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false))
         {
             HideAnimated();
         }
     }
+
+    internal FriendsUiManager? Friends { get; set; }
 
     private void DrawPageTabs()
     {
@@ -3437,6 +3445,8 @@ public sealed class ControlCenterWindow : Window
 
         DrawHistoryLimitEditor();
 
+        changed |= FriendsNotificationSettings.Draw(configuration, text, PreviewFriendNotificationSound);
+
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -4060,7 +4070,7 @@ public sealed class ControlCenterWindow : Window
         _ => text.Get("显示原始 ID", "Show original names"),
     };
 
-    private static void PushTheme()
+    internal static void PushTheme()
     {
         ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
         ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
@@ -4078,7 +4088,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));
     }
 
-    private static void PopTheme()
+    internal static void PopTheme()
     {
         ImGui.PopStyleVar(3);
         ImGui.PopStyleColor(11);

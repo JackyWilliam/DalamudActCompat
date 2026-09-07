@@ -7,6 +7,7 @@
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="Fixtures/U7bP1.xml" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\DalamudActCompat.Protocol\DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="..\..\src\DalamudActCompat.Host\DalamudActCompat.Host.csproj" />
     <Reference Include="FFXIV_ACT_Plugin.Common">
