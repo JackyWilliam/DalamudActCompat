@@ -126,6 +126,9 @@ internal static class CloudFriendsSmokeTests
         await service.InitializeAsync(default);
         await presence.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Check(service.Snapshot.IsSignedIn, $"{mode} heartbeat failure invalidated login.");
+        try { await service.ListFriendsAsync(default, service.FriendsSession with { Generation = -1 }); throw new Exception("Stale UI command captured current credentials."); }
+        catch (OperationCanceledException) { }
+        Check(friendReads == 0, "Rejected generation reached HTTP.");
         var read = service.ListFriendsAsync(default);
         await service.LogoutAsync(default);
         pending.SetResult(Json(new { friends = Array.Empty<object>(), requests = Array.Empty<object>(), onlineCount = 0, policyNotice = CloudChatPolicy.Notice }));
@@ -185,6 +188,7 @@ internal static class CloudFriendsSmokeTests
         await ApiErrorAsync(() => api.SendChatAsync(a, f.OfficialId, new(1, Guid.NewGuid(), "forbidden"), default), "official_sender_required");
         await api.SetFriendPresenceAsync(b, leaseB, false, default);
         Check((await api.ListFriendsAsync(a, default)).OnlineCount == 0, "Disconnect did not clear online state.");
+        await LiveControllersAsync(api, f, id);
         await api.RemoveFriendAsync(a, request.Id, default);
         await ApiErrorAsync(() => api.GetChatAsync(b, id, default), "conversation_not_found");
         var declined = await api.RequestFriendAsync(c, f.B.Username, default);
@@ -226,8 +230,109 @@ internal static class CloudFriendsSmokeTests
     }
 
     private sealed record Account(string Id, string Username, string Token);
+    private sealed record ProductionKeys(string BaseUrl, string UsernameA, string UsernameB, string ActivationA, string ActivationB);
+    public static async Task ProductionAsync(string root)
+    {
+        // This path is opt-in and needs two newly generated, expiring QA activation
+        // keys. No existing account credentials or recipients are accepted.
+        var path = Environment.GetEnvironmentVariable("DACT_FRIENDS_QA_KEYS") ?? throw new Exception("Explicit QA key manifest required.");
+        var keys = JsonSerializer.Deserialize<ProductionKeys>(await File.ReadAllTextAsync(path), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Check(keys.BaseUrl == "https://admin.localhost2019.com/" && keys.UsernameA.StartsWith("dactqa_") && keys.UsernameB.StartsWith("dactqa_") && keys.UsernameA != keys.UsernameB,
+            "Production smoke restricted to the configured host and isolated QA accounts.");
+        using var http = new HttpClient { BaseAddress = new Uri(keys.BaseUrl), Timeout = TimeSpan.FromSeconds(20) };
+        using var api = new CloudApiClient(http);
+        var backup = new PortableConfigurationBackupService(); var envelope = new CloudKeyEnvelopeService();
+        var recovery = backup.GenerateRecoveryKey(); var password = "isolated-" + Guid.NewGuid().ToString("N");
+        var device = "dact-device-v1_" + Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var a = await api.RegisterAsync(keys.UsernameA, password, keys.ActivationA, device, envelope.Create(recovery, password), envelope.CreateRecoveryVerifier(recovery), default);
+        var b = await api.RegisterAsync(keys.UsernameB, password, keys.ActivationB, device, envelope.Create(recovery, password), envelope.CreateRecoveryVerifier(recovery), default);
+        try
+        {
+            var login = await api.LoginAsync(keys.UsernameA, password, device, default);
+            Check(envelope.Open(login.KeyEnvelope!, password) == recovery, "Production login lost encrypted recovery key.");
+            var configRoot = Path.Combine(root, "production-qa", "pluginConfigs");
+            var config = Path.Combine(configRoot, "DalamudActCompat"); Directory.CreateDirectory(config);
+            await File.WriteAllTextAsync(Path.Combine(configRoot, "DalamudActCompat.json"), "{\"Version\":16,\"CloudMarker\":\"isolated friends deployment QA\"}");
+            var file = Path.Combine(root, "qa.dactcloud");
+            var exported = await backup.ExportEncryptedAsync(config, file, recovery, default);
+            var uploaded = await api.UploadBackupAsync(login.Token, file, exported.ContentId, default);
+            var downloaded = Path.Combine(root, "qa-downloaded.dactcloud");
+            await api.DownloadBackupAsync(login.Token, uploaded, downloaded, default);
+            var uploadedBytes = await File.ReadAllBytesAsync(file);
+            var downloadedBytes = await File.ReadAllBytesAsync(downloaded);
+            Check(uploadedBytes.SequenceEqual(downloadedBytes), "Production encrypted backup bytes changed.");
+            Check((await backup.PreviewRestoreAsync(downloaded, config, recovery, default)).FileCount == 1, "Production encrypted backup could not decrypt.");
+            var relation = await api.RequestFriendAsync(a.Token, keys.UsernameB, default);
+            var accepted = await api.AcceptFriendAsync(b.Token, relation.Id, default); var id = accepted.ConversationId!;
+            for (var i = 1; i <= 4; i++) await api.SendChatAsync(a.Token, id, new(i, Guid.NewGuid(), "isolated QA " + i), default);
+            var waiting = await api.GetChatAsync(b.Token, id, default);
+            Check(waiting.Pending.Count == 3 && waiting.Pending.First().Text.EndsWith("2"), "Production offline pruning failed.");
+            var acknowledged = await api.AcknowledgeChatAsync(b.Token, id, waiting.Pending.Select(m => m.Id).ToArray(), default);
+            Check(acknowledged.Pending.Count == 0 && acknowledged.History.Count == 3, "Production ACK failed.");
+            var lease = Guid.NewGuid(); await api.SetFriendPresenceAsync(b.Token, lease, true, default);
+            Check((await api.ListFriendsAsync(a.Token, default)).OnlineCount == 1, "Production online count failed.");
+            var request = new CloudChatSendRequest(5, Guid.NewGuid(), QuickMessageId: CloudChatPolicy.WhenFinished);
+            var sent = await api.SendChatAsync(a.Token, id, request, default);
+            var retry = await api.SendChatAsync(a.Token, id, request, default);
+            Check(sent.Message.Text == "你什么时候结束" && retry.Duplicate && retry.Message.Id == sent.Message.Id, "Production quick/retry contract failed.");
+            await api.SetFriendPresenceAsync(b.Token, lease, false, default);
+            await api.RemoveFriendAsync(a.Token, relation.Id, default);
+            await api.LogoutAsync(login.Token, default);
+            Console.WriteLine("Production QA passed: isolated registration/login/key envelope, encrypted backup upload/download/decrypt, friends, offline3 pruning, ACK, online count, quick send and immutable retry.");
+        }
+        finally { await api.LogoutAsync(a.Token, default); await api.LogoutAsync(b.Token, default); }
+    }
     private sealed record Fixture(string BaseUrl, Account A, Account B, Account C, string OfficialId);
     private sealed record LegacyFixture(string BaseUrl, string ActivationKey);
+
+    private static async Task LiveControllersAsync(CloudApiClient api, Fixture f, string id)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dact-friends-controller-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var a = new FriendsChatController(new RemoteSession(api, f.A), new FriendsLocalStateStore(Path.Combine(root, "a")), TimeSpan.FromMilliseconds(50));
+            using var b = new FriendsChatController(new RemoteSession(api, f.B), new FriendsLocalStateStore(Path.Combine(root, "b")), TimeSpan.FromMilliseconds(50));
+            a.AttachConsumer();
+            async Task Until(Func<bool> check)
+            {
+                using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (!check()) await Task.Delay(10, limit.Token);
+            }
+            await Until(() => a.Snapshot.Conversations.ContainsKey(id) && b.Snapshot.Friends is not null);
+            Check(a.Snapshot.Friends!.User?.Id == f.A.Id && b.Snapshot.Friends!.User?.Id == f.B.Id, "Controller account identities differ from authenticated users.");
+            var op = a.Send(id, "", CloudChatPolicy.InviteNext);
+            await Until(() => !a.Snapshot.Busy && a.Snapshot.Conversations[id].PendingSend is null && a.Snapshot.Conversations[id].Chat.Pending.Any(m => m.OperationId == op));
+            var waiting = await api.GetChatAsync(f.B.Token, id, default);
+            Check(waiting.Pending.Single().Text == "下把邀我" && b.Snapshot.Conversations.Count == 0, "No-consumer delivery was swallowed.");
+            b.AttachConsumer();
+            await Until(() => b.Snapshot.Conversations.TryGetValue(id, out var view) && view.Chat.Pending.Count == 0 && view.Chat.History.Any(m => m.OperationId == op));
+            Check(b.Snapshot.Conversations[id].Unread && b.Snapshot.Conversations[id].Chat.History.Count == 20, "Controller lost unread state or 20-history cap after ACK.");
+            b.MarkRead(id, long.MaxValue); await Until(() => !b.Snapshot.Conversations[id].Unread);
+            var official = a.Snapshot.Conversations[f.OfficialId];
+            Check(official.Chat.Kind == "official" && official.Chat.NextSendSequence is null && official.Chat.History.Single().Sender.IsOfficial, "Controller official identity not readonly.");
+            a.Send(f.OfficialId, "cannot reply"); await Until(() => !a.Snapshot.Busy);
+            Check((await api.GetChatAsync(f.A.Token, f.OfficialId, default)).History.Count == 1, "UI controller allowed reply to official.");
+            Console.WriteLine("Cloud friends: two real account UI controllers, consumer timing, quick messages, unread and official readonly passed.");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private sealed class RemoteSession(CloudApiClient api, Account account) : ICloudFriendsSession
+    {
+        public CloudFriendsSession FriendsSession => new(1, true, account.Username);
+        private Task<T> Run<T>(CloudFriendsSession? expected, Func<Task<T>> call)
+        { Check(expected == FriendsSession, "Remote UI omitted its account generation."); return call(); }
+        public Task<CloudFriendList> ListFriendsAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.ListFriendsAsync(account.Token, ct));
+        public Task<CloudFriendLookup> LookupFriendAsync(string name, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.LookupFriendAsync(account.Token, name, ct));
+        public Task<CloudFriendRelation> RequestFriendAsync(string name, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.RequestFriendAsync(account.Token, name, ct));
+        public Task<CloudFriendRelation> AcceptFriendAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.AcceptFriendAsync(account.Token, id, ct));
+        public Task<CloudFriendRelation> DeclineFriendAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.DeclineFriendAsync(account.Token, id, ct));
+        public Task<CloudFriendRemoval> RemoveFriendAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.RemoveFriendAsync(account.Token, id, ct));
+        public Task<CloudChatSync> SyncChatAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.SyncChatAsync(account.Token, ct));
+        public Task<CloudChatConversation> GetChatAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.GetChatAsync(account.Token, id, ct));
+        public Task<CloudChatSendResult> SendChatAsync(string id, CloudChatSendRequest message, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.SendChatAsync(account.Token, id, message, ct));
+        public Task<CloudChatConversation> AcknowledgeChatAsync(string id, IReadOnlyList<long> ids, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.AcknowledgeChatAsync(account.Token, id, ids, ct));
+    }
 
     private static async Task LegacyAsync(string root, LegacyFixture f)
     {

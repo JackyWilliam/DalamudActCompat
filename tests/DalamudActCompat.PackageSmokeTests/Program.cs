@@ -51,9 +51,25 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--friends-production-only", StringComparer.Ordinal))
+    {
+        await CloudFriendsSmokeTests.ProductionAsync(testRoot);
+        return 0;
+    }
+    if (args.Contains("--friends-native-only", StringComparer.Ordinal))
+    {
+        await FriendsUiSmokeTests.RunNativeAsync();
+        return 0;
+    }
+    if (args.Contains("--friends-ui-only", StringComparer.Ordinal))
+    {
+        await FriendsUiSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--friends-only", StringComparer.Ordinal))
     {
         await CloudFriendsSmokeTests.RunAsync(testRoot);
+        await FriendsUiSmokeTests.RunAsync(testRoot);
         return 0;
     }
     if (args.Contains("--statistics-only", StringComparer.Ordinal))
@@ -152,6 +168,7 @@ try
     ValidateCloudActivationKeyHelp();
     await ValidateCloudApiContractAsync(testRoot);
     await CloudFriendsSmokeTests.RunAsync(testRoot);
+    await FriendsUiSmokeTests.RunAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);
     await ValidateFirstLoginReportsServerUnbanAsync(testRoot);
     await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);

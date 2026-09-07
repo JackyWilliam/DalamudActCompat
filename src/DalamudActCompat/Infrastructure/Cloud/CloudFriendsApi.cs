@@ -16,7 +16,7 @@ internal sealed record CloudFriendRelation(
 
 internal sealed record CloudFriendList(
     IReadOnlyList<CloudFriendRelation> Friends, int OnlineCount,
-    IReadOnlyList<CloudFriendRelation> Requests, string PolicyNotice);
+    IReadOnlyList<CloudFriendRelation> Requests, string PolicyNotice, CloudApiUser? User = null);
 
 internal sealed record CloudFriendLookup(CloudApiUser? User, string Relationship);
 internal sealed record CloudFriendRemoval(string Status);

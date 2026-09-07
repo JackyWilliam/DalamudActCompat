@@ -4,6 +4,7 @@
     <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,6 +13,10 @@
     <ProjectReference Include="..\..\src\DalamudActCompat\DalamudActCompat.csproj" />
     <Reference Include="Dalamud">
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Dalamud.Bindings.ImGui">
+      <HintPath>$(DalamudLibPath)Dalamud.Bindings.ImGui.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json">

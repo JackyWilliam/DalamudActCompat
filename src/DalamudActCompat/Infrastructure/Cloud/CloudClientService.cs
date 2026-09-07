@@ -33,7 +33,7 @@ internal sealed record CloudClientSnapshot(
             null);
 }
 
-internal sealed partial class CloudClientService : IDisposable
+internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSession
 {
     private readonly object stateLock = new();
     private readonly SemaphoreSlim operationGate = new(1, 1);
@@ -50,6 +50,7 @@ internal sealed partial class CloudClientService : IDisposable
     private CancellationTokenSource? sessionMonitorCancellation;
     private CloudStoredCredentials? storedAccount;
     private CloudStoredCredentials? credentials;
+    private long friendsSessionGeneration;
     private CloudBanNotice? activeBan;
     private bool persistCurrentAccount;
     private CloudClientSnapshot snapshot;
@@ -814,6 +815,7 @@ internal sealed partial class CloudClientService : IDisposable
         lock (stateLock)
         {
             credentials = saved;
+            friendsSessionGeneration++;
             storedAccount = persisted ? saved : null;
             persistCurrentAccount = persisted;
         }
@@ -894,6 +896,7 @@ internal sealed partial class CloudClientService : IDisposable
         lock (stateLock)
         {
             credentials = null;
+            friendsSessionGeneration++;
             storedAccount = null;
             persistCurrentAccount = false;
             snapshot = CloudClientSnapshot.SignedOut(message) with
@@ -920,6 +923,7 @@ internal sealed partial class CloudClientService : IDisposable
             recovery = credentials ?? storedAccount;
             shouldPersist = persistCurrentAccount;
             credentials = null;
+            friendsSessionGeneration++;
             if (recovery is not null && shouldPersist)
             {
                 storedAccount = recovery with

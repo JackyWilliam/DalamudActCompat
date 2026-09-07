@@ -428,6 +428,7 @@ public sealed class ControlCenterWindow : Window
         try
         {
             var cloudSnapshot = cloud.GetSnapshot();
+            Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize());
             DrawWindowChrome(cloudSnapshot);
             DrawCloudQuickPopup(cloudSnapshot);
             if (!cloudSnapshot.IsSignedIn)
@@ -571,11 +572,16 @@ public sealed class ControlCenterWindow : Window
                 statusAction: () => cloudQuickPopupRequested = true,
                 statusLabel: $"● {cloudStatusLabel}",
                 statusColor: cloudStatusColor,
-                statusTooltip: text.Get("查看云同步状态", "View cloud sync status")))
+                statusTooltip: text.Get("查看云同步状态", "View cloud sync status"),
+                friendsAction: cloudSnapshot.IsSignedIn && Friends is { } friends ? friends.ToggleDrawer : null,
+                onlineFriends: Friends?.Snapshot.Friends?.OnlineCount ?? 0,
+                friendsUnread: Friends?.Snapshot.HasUnread ?? false))
         {
             HideAnimated();
         }
     }
+
+    internal FriendsUiManager? Friends { get; set; }
 
     private void DrawPageTabs()
     {
