@@ -18,9 +18,9 @@ internal sealed partial class FriendsUiManager : IDisposable
         public Vector2 Position;
         public Vector2 Size = new(400, 460);
     }
-    private static readonly Vector4 Navy = new(.045f, .064f, .09f, .98f);
-    private static readonly Vector4 Gold = new(.86f, .73f, .44f, 1);
-    private static readonly Vector4 Blue = new(.42f, .78f, .96f, 1);
+    private static readonly Vector4 Navy = ControlCenterWindow.Navy;
+    private static readonly Vector4 Gold = ControlCenterWindow.Gold;
+    private static readonly Vector4 Blue = ControlCenterWindow.IceBlue;
     private readonly FriendsChatController controller;
     private readonly Action openMain;
     private readonly Dictionary<string, ChatWindow> windows = new(StringComparer.Ordinal);
@@ -28,6 +28,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     private Vector2 anchor, anchorSize;
     private uint anchorWindowId;
     private bool drawerOpen;
+    private int friendSection;
     private float drawerProgress, anchorAlpha = 1;
     private CloudPresenceSettings? editingSettings, submittedSettings;
     private bool settingsDirty, shareSubmission, presenceChangedElsewhere, privacySaveUnconfirmed;
@@ -49,7 +50,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     public void SetAnchor(Vector2 position, Vector2 size, float alpha = 1, uint windowId = 0)
     { anchor = position; anchorSize = size; anchorAlpha = alpha; anchorWindowId = windowId; }
     public void ToggleDrawer() { drawerOpen = !drawerOpen; if (drawerOpen) controller.Refresh(); }
-    public void Hide() { drawerOpen = false; drawerProgress = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; }
+    public void Hide() { drawerOpen = false; drawerProgress = 0; friendSection = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; }
     public void Draw(bool mainVisible, bool inCombat)
     {
         var state = Snapshot;
@@ -224,10 +225,12 @@ internal sealed partial class FriendsUiManager : IDisposable
     }
     private static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy); ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(.45f, .39f, .25f, .8f));
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.1f, .23f, .31f, 1)); ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(.16f, .34f, .43f, 1));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9); ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
+        // Share the owner's exact input/button/spacing theme rather than grow a
+        // second palette that drifts from cloud sync and the rest of DACT.
+        ControlCenterWindow.PushTheme();
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy); ImGui.PushStyleColor(ImGuiCol.PopupBg, Navy);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9); ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
     }
-    private static void PopTheme() { ImGui.PopStyleVar(2); ImGui.PopStyleColor(4); }
+    private static void PopTheme() { ImGui.PopStyleVar(2); ImGui.PopStyleColor(2); ControlCenterWindow.PopTheme(); }
     public void Dispose() { controller.DetachConsumer(); Hide(); }
 }

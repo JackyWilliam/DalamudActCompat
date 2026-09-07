@@ -46,28 +46,27 @@ internal sealed partial class FriendsUiManager
             // not a second framed window floating six pixels away from its owner.
             var seam = outside ? position.X : end.X - 1;
             list.AddRectFilled(new(seam, position.Y + 1), new(seam + 1, end.Y - 1), ImGui.GetColorU32(Navy));
+            DrawDrawerCollapse(position, visibleWidth, layout.Size.Y, scale, outside);
             ImGui.SetCursorPos(new(14 * scale, 12 * scale));
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(2 * scale, 0));
-            if (ImGui.BeginChild("drawer-content", new(layout.Size.X - 28 * scale, layout.Size.Y - 24 * scale), false))
+            if (ImGui.BeginChild("drawer-content", new(layout.Size.X - 42 * scale, layout.Size.Y - 24 * scale), false))
             {
                 var start = ImGui.GetCursorScreenPos();
                 FriendsGlyph.Draw(ImGui.GetWindowDrawList(), start, 23 * scale, ImGui.GetColorU32(Blue));
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 31 * scale);
                 ImGui.TextColored(Blue, "好友"); ImGui.SameLine();
                 ImGui.TextDisabled($"{(state.State == "ready" ? state.Friends?.OnlineCount ?? 0 : 0)} 人在线");
-                ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - 48 * scale);
-                if (ImGui.SmallButton("收起")) drawerOpen = false;
                 ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
-                DrawOwnPresence(state);
+                DrawOwnPresenceMenu(state, scale);
                 ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
                 if (state.State != "ready") ImGui.TextWrapped(state.Status);
-                if (ImGui.BeginTabBar("friend-sections"))
+                var count = state.Friends?.Requests.Count(r => r.Direction == "incoming") ?? 0;
+                friendSection = BrandedWindowChrome.DrawNavigationRail("friend-sections", ["好友", count > 0 ? $"申请 ({count})" : "申请", "添加"], friendSection, 30 * scale);
+                switch (friendSection)
                 {
-                    if (ImGui.BeginTabItem("好友")) { DrawFriendRows(state, scale); ImGui.EndTabItem(); }
-                    var count = state.Friends?.Requests.Count(r => r.Direction == "incoming") ?? 0;
-                    if (ImGui.BeginTabItem($"申请{(count > 0 ? $" ({count})" : "")}")) { DrawFriendRequests(state); ImGui.EndTabItem(); }
-                    if (ImGui.BeginTabItem("添加")) { DrawAddFriend(state); ImGui.EndTabItem(); }
-                    ImGui.EndTabBar();
+                    case 0: DrawFriendRows(state, scale); break;
+                    case 1: DrawFriendRequests(state); break;
+                    case 2: DrawAddFriend(state); break;
                 }
                 DrawRemoveConfirmation(state);
                 ImGui.Spacing(); ImGui.Separator();
@@ -76,6 +75,55 @@ internal sealed partial class FriendsUiManager
             ImGui.EndChild(); ImGui.PopStyleVar();
         }
         ImGui.End(); ImGui.PopStyleVar(4);
+    }
+
+    private void DrawDrawerCollapse(Vector2 position, float width, float height, float scale, bool outside)
+    {
+        var size = new Vector2(24, 52) * scale;
+        var start = position + new Vector2(width - size.X, Math.Max(0, (height - size.Y) / 2));
+        ImGui.SetCursorScreenPos(start);
+        if (ImGui.InvisibleButton("collapse-friends", size)) drawerOpen = false;
+        var hovered = ImGui.IsItemHovered();
+        var list = ImGui.GetWindowDrawList();
+        list.AddRectFilled(start, start + size, ImGui.GetColorU32(hovered ? new Vector4(.11f, .25f, .32f, .9f) : new Vector4(.07f, .12f, .16f, .85f)), 6 * scale);
+        var center = start + size / 2;
+        var direction = outside ? 1 : -1;
+        list.AddLine(center + new Vector2(2 * direction, -5) * scale, center + new Vector2(-3 * direction, 0) * scale, ImGui.GetColorU32(Blue), 1.6f * scale);
+        list.AddLine(center + new Vector2(-3 * direction, 0) * scale, center + new Vector2(2 * direction, 5) * scale, ImGui.GetColorU32(Blue), 1.6f * scale);
+        if (hovered) ImGui.SetTooltip("收起好友列表");
+    }
+
+    private void DrawOwnPresenceMenu(FriendsChatSnapshot state, float scale)
+    {
+        var current = state.Friends?.PresenceSettings;
+        var status = current?.Status ?? "offline";
+        var start = ImGui.GetCursorScreenPos(); var width = ImGui.GetContentRegionAvail().X;
+        if (ImGui.InvisibleButton("my-presence-menu", new(width, 53 * scale))) ImGui.OpenPopup("my-presence-settings");
+        var hovered = ImGui.IsItemHovered(); var list = ImGui.GetWindowDrawList();
+        if (hovered) list.AddRectFilled(start - new Vector2(3 * scale), start + new Vector2(width, 51 * scale), ImGui.GetColorU32(new Vector4(.08f, .15f, .20f, 1)), 6);
+        list.AddCircleFilled(start + new Vector2(7, 13) * scale, 4.5f * scale, ImGui.GetColorU32(StatusColor(status)));
+        list.PushClipRect(start + new Vector2(21 * scale, 0), start + new Vector2(width, 53 * scale), true);
+        list.AddText(start + new Vector2(22, 2) * scale, ImGui.GetColorU32(Vector4.One), state.Friends?.User?.Username ?? "我的账号");
+        var detail = current is null ? "正在读取状态…" : StatusName(status) + (string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text);
+        list.AddText(start + new Vector2(22, 26) * scale, ImGui.GetColorU32(new Vector4(.60f, .68f, .75f, 1)), detail);
+        list.PopClipRect();
+        if (hovered) ImGui.SetTooltip("修改我的状态");
+        // Keep the list compact. Draft text and privacy controls appear only
+        // while explicitly editing this account's presence, not in the default list.
+        ImGui.SetNextWindowSize(new(292 * scale, 0), ImGuiCond.Always);
+        ImGui.SetNextWindowSizeConstraints(new(240 * scale, 0), ImGui.GetMainViewport().WorkSize - new Vector2(16));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12 * scale));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
+        if (ImGui.BeginPopup("my-presence-settings"))
+        {
+            DrawPresenceEditor(state, scale);
+            // Dalamud can leave keyboard navigation disabled while the game owns
+            // movement input; an explicitly opened status popup still dismisses on Esc.
+            if (ImGui.IsKeyPressed(ImGuiKey.Escape)) ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+        }
+        ImGui.PopStyleColor(); ImGui.PopStyleVar(2);
     }
 
     private void PlaceDrawerAboveOwner()
@@ -96,7 +144,7 @@ internal sealed partial class FriendsUiManager
         }
     }
 
-    private void DrawOwnPresence(FriendsChatSnapshot state)
+    private void DrawPresenceEditor(FriendsChatSnapshot state, float scale)
     {
         var current = state.Friends?.PresenceSettings;
         if (current is null) { ImGui.TextDisabled("正在读取我的状态…"); return; }
@@ -120,16 +168,19 @@ internal sealed partial class FriendsUiManager
             editingSettings = editingSettings with { Revision = current.Revision, ShareDuty = current.ShareDuty };
             presenceChangedElsewhere = true;
         }
-        ImGui.TextUnformatted(state.Friends!.User?.Username ?? "我的状态");
-        var index = Math.Max(0, Array.IndexOf(StatusValues, editingSettings.Status));
+        ImGui.TextUnformatted("修改状态");
         ImGui.BeginDisabled(state.Busy);
-        ImGui.SetNextItemWidth(96 * Math.Max(.75f, ImGui.GetFontSize() / 17f));
-        if (ImGui.Combo("##my-status", ref index, StatusLabels, StatusLabels.Length))
-        { editingSettings = editingSettings with { Status = StatusValues[index] }; settingsDirty = true; }
-        ImGui.SameLine(); ImGui.TextDisabled("我的在线状态");
+        for (var index = 0; index < StatusValues.Length; index++)
+        {
+            var start = ImGui.GetCursorScreenPos();
+            if (ImGui.Selectable("    " + StatusLabels[index] + "##status-" + index, editingSettings.Status == StatusValues[index], ImGuiSelectableFlags.DontClosePopups, new(0, 25 * scale)))
+            { editingSettings = editingSettings with { Status = StatusValues[index] }; settingsDirty = true; }
+            ImGui.GetWindowDrawList().AddCircleFilled(start + new Vector2(7, 10) * scale, 4 * scale, ImGui.GetColorU32(StatusColor(StatusValues[index])));
+        }
+        ImGui.Spacing();
         var text = editingSettings.Text;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##my-status-text", "写一句话，例如：今晚刷坐骑", ref text, 320))
+        if (ImGui.InputTextWithHint("##my-status-text", "加一句话，例如：今晚刷坐骑", ref text, 320))
         { editingSettings = editingSettings with { Text = text }; settingsDirty = true; }
         var textLength = text.EnumerateRunes().Count();
         if (textLength > 80) ImGui.TextColored(Gold, $"状态文字最多 80 字（当前 {textLength} 字）");

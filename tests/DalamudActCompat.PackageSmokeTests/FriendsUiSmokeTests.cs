@@ -231,7 +231,7 @@ internal static class FriendsUiSmokeTests
                 if (focusGame) ImGui.SetNextWindowFocus();
                 ImGui.Begin("isolated-game-input"); ImGui.TextUnformatted("game controls"); ImGui.End();
                 ImGui.SetNextWindowPos(anchor); ImGui.SetNextWindowSize(mainSize);
-                ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(.045f, .064f, .09f, .98f));
+                ImGui.PushStyleColor(ImGuiCol.WindowBg, ControlCenterWindow.Navy);
                 ImGui.Begin("isolated-dact-header", ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoDecoration);
                 ui.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), 1, ImGuiP.GetCurrentWindow().ID);
                 BrandedWindowChrome.Draw(drag, texture, "主页", "运行中", Vector4.One, "0.4.0.4", "friend-native",
@@ -248,6 +248,34 @@ internal static class FriendsUiSmokeTests
             for (var i = 0; i < 10; i++) Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
             Check(Focus() == "isolated-game-input", "Opening a no-focus drawer stole game focus.");
+            void Click(Vector2 point)
+            {
+                io.AddMousePosEvent(point.X, point.Y); Frame();
+                io.AddMouseButtonEvent(0, true); Frame(); io.AddMouseButtonEvent(0, false); Frame(); Frame();
+            }
+            // Exercise the real hit targets in this off-screen cimgui context.
+            // No clicks or keystrokes are sent to Windows or the user's game.
+            Click(anchor + new Vector2(mainSize.X + 40, 122));
+            Check(context.OpenPopupStack.Size > 0, "Status circle/name did not open the settings popup.");
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup.png"));
+            var popup = context.NavWindow;
+            Check((popup.Flags & ImGuiWindowFlags.Popup) != 0, "Explicit status edit did not focus its popup.");
+            Click(popup.Pos + new Vector2(45, 112));
+            Click(popup.Pos + new Vector2(60, 188));
+            io.AddInputCharacters("今晚刷坐骑"); Frame();
+            Click(popup.Pos + new Vector2(40, 219));
+            Check(SpinWait.SpinUntil(() => controller.Snapshot.Friends?.PresenceSettings is { Status: "busy", Text: "今晚刷坐骑" } && !controller.Snapshot.Busy,
+                TimeSpan.FromSeconds(3)), "Popup preset/text/save did not reach the account model.");
+            Frame();
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup-saved.png"));
+            io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+            Check(context.OpenPopupStack.Size == 0, "Status popup did not close with Escape.");
+            var fullLayout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, 1);
+            Click(fullLayout.Position + new Vector2(fullLayout.Size.X - 12, fullLayout.Size.Y / 2));
+            for (var i = 0; i < 12; i++) Frame();
+            Check(!ui.AnyOpen, "Vertically centered collapse icon did not close the drawer.");
+            ui.ToggleDrawer(); for (var i = 0; i < 12; i++) Frame();
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
             typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
             Frame(); Frame(); Check(Focus().Contains("DACTFriendChat"), "Explicit chat opening did not focus the chat.");
             Frame(true);
@@ -272,6 +300,21 @@ internal static class FriendsUiSmokeTests
                 Check(drawerFound, "Native drawer disappeared during scale/viewport checks.");
                 if (output is not null && scale == 1 && surface.X == 800)
                     raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-edge-with-chat.png"));
+            }
+            ui.Hide(); ui.ToggleDrawer();
+            foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
+            {
+                io.FontGlobalScale = scale; io.DisplaySize = new(800, 600);
+                anchor = new(140, 40); mainSize = new(640, 550);
+                for (var i = 0; i < 12; i++) Frame();
+                var layout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, scale);
+                Click(layout.Position + new Vector2(40 * scale, 54 * scale + 20));
+                Check(context.OpenPopupStack.Size > 0, "Status target was unreachable at scale " + scale);
+                var window = context.NavWindow;
+                Check(window.Pos.X >= 0 && window.Pos.Y >= 0 && window.Pos.X + window.Size.X <= io.DisplaySize.X && window.Pos.Y + window.Size.Y <= io.DisplaySize.Y,
+                    "Status popup escaped the narrow viewport at scale " + scale);
+                if (output is not null && scale == 2) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup-scale2.png"));
+                io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             }
             BubbleBounds(raster, output);
         }
