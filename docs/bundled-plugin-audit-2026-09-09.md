@@ -48,6 +48,9 @@ This is IINACT 2.10.3.7 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.0
 ## 验证边界
 
 对相关源码与上游差异进行本地审查，并运行解析/包、真实 DLL Host、Legacy Resource 和 Scanner 回归。Host 检查使用本轮实际加载的改写 DLL 路径，避免共享缓存中较新的资源转换 DLL 导致误报。
+
+国际服额外使用项目 CI 的[官方参考程序集](https://goatcorp.github.io/dalamud-distrib/stg/latest.zip)进行独立构建：Dalamud `15.0.3.4+cc568d5616baeb3c32e13acecd9171881a122501`，下载 ZIP SHA-256 为 `2343ab848def4f749a8b7ecf9a139e82f38801a8f631f6b55caf748c768aab4c`。官方 stable/staging 版本元数据当时均为 15.0.3.4。补充回归验证四个国际服原生客户端语言码 × 五种显示语言（包含中文）均选择 Global 7.56 配置，并调用实际 Unscrambler DLL，将合成 ActorCast/ActionEffect 报文还原为已知技能 ID、伤害字段且不改写其他字节。国际服使用官方密钥表 RVA `0x2312040`；国服继续动态扫描。本机未配置可用的国际服客户端，未声称国际服游戏内实测。
+
 用户更新后，本机国服游戏文件为 `2026.09.01.0000.0000`，客户端 SHA-256 为 `64e07db25f0b72f9bc2dbd6ff7fb3725095ab251d928dd70bf98b0a8cebc6893`。只读 PE 检查确认 ZoneDown 签名恰有 3 个匹配，PacketDispatcher 虚表签名唯一匹配，顺着 OnReceivePacket 找到国服密钥表 RVA `0x230DD10`、大小 `772` 字节，满足本次配置条件。VFX 相关签名唯一匹配，SDK 字段布局仍为 `0x38/0x50/0x60/0x70/0x260`。使用刚更新的卫月/FFXIVClientStructs 构建通过。
 
 以上是磁盘二进制与离线回归验证，不等同于游戏内实测。原生绘图、实际提示音、真实日志上传及缺少上游值的可选事件仍需后续验收。

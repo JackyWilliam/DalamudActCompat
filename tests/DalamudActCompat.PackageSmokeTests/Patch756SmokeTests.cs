@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
 using System.Reflection;
+using DalamudActCompat.Plugin;
+using DalamudActCompat.Protocol;
 using IINACT.Network;
 using Machina.FFXIV;
 using Machina.FFXIV.Headers.Opcodes;
@@ -69,6 +72,7 @@ internal static class Patch756SmokeTests
         var previousRegion = OpcodeManager.Instance.GameRegion;
         try
         {
+            ValidateInternationalPath(version, bundledPolicy);
             foreach (var region in new[] { GameRegion.Global, GameRegion.Chinese, GameRegion.Korean })
             {
                 OpcodeManager.Instance.SetRegion(region);
@@ -81,6 +85,55 @@ internal static class Patch756SmokeTests
             OpcodeManager.Instance.SetRegion(previousRegion);
         }
         Console.WriteLine("7.56 official resources, CN runtime keys, region/opcode alignment and fallback boundaries passed.");
+    }
+
+    private static void ValidateInternationalPath(string version, MethodInfo bundledPolicy)
+    {
+        foreach (var languageName in new[] { "Japanese", "English", "German", "French", "ChineseSimplified" })
+        {
+            var language = Enum.TryParse<Dalamud.Game.ClientLanguage>(languageName, out var parsed)
+                ? parsed : Dalamud.Game.ClientLanguage.English;
+            for (byte nativeCode = 0; nativeCode < 4; nativeCode++)
+            {
+                var selection = GameRegionResolver.Resolve(GameRegionMode.Auto, languageName, nativeCode);
+                IINACT.FfxivActPluginWrapper.ConfigureRegion(language,
+                    selection.EffectiveRegion == HostGameRegion.Chinese);
+                Require(OpcodeManager.Instance.GameRegion == GameRegion.Global &&
+                        bundledPolicy.Invoke(null, [OpcodeManager.Instance.GameRegion, version]) is true,
+                    "An international client, including translated clients, missed the Global 7.56 profile.");
+            }
+        }
+
+        var unscrambler = UnscramblerFactory.ForGameVersion(version);
+        var keys = new byte[] { 7, 11, 19 };
+        var table = Enumerable.Range(0, 193).Select(index => 0x1234 + index * 17).ToArray();
+        // Encode known fields independently in synthetic IPC packets. Compare the whole
+        // decoded packet so opcode selection, table indexing and collateral writes are checked.
+        foreach (var (opcode, fieldOffset) in new[] { ((ushort)0x10A, 20), ((ushort)0x2EC, 24) })
+        {
+            var expectedPacket = Enumerable.Repeat((byte)0xA5, 128).ToArray();
+            BinaryPrimitives.WriteUInt16LittleEndian(expectedPacket.AsSpan(2), opcode);
+            BinaryPrimitives.WriteUInt32LittleEndian(expectedPacket.AsSpan(fieldOffset), 0x123456);
+            if (opcode == 0x2EC)
+                for (var index = 0; index < 8; index++)
+                    BinaryPrimitives.WriteUInt16LittleEndian(expectedPacket.AsSpan(64 + index * 8), (ushort)(1234 + index * 2395));
+
+            var encoded = (byte[])expectedPacket.Clone();
+            var baseKey = keys[opcode % 3];
+            var opcodeKey = table[(opcode + baseKey) % table.Length];
+            BinaryPrimitives.WriteUInt32LittleEndian(encoded.AsSpan(fieldOffset), 0x123456U + baseKey);
+            if (opcode == 0x2EC)
+                for (var index = 0; index < 8; index++)
+                {
+                    var field = encoded.AsSpan(64 + index * 8);
+                    BinaryPrimitives.WriteUInt16LittleEndian(field,
+                        (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(field) ^ (ushort)(baseKey + opcodeKey)));
+                }
+            unscrambler.Unscramble(encoded, keys[0], keys[1], keys[2], table);
+            Require(encoded.AsSpan().SequenceEqual(expectedPacket),
+                $"Global 7.56 opcode {opcode:X} did not restore the skill/damage fields exactly.");
+        }
+        Console.WriteLine("Global 7.56: native-language/translation routing and synthetic ActorCast/ActionEffect decoding passed.");
     }
 
     private static void Require(bool condition, string message)
