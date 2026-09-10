@@ -47,6 +47,7 @@ var triggernometryAssembly = effectiveArgs.Length == 2
         ? null
         : Path.Combine(pluginRoot, "triggernometry", "Triggernometry.dll");
 var postNamazuSmokePort = 0;
+string? patchedTriggernometryAssemblyPath = null;
 if (!File.Exists(hostExecutable))
 {
     throw new FileNotFoundException("ACT Host executable was not found.", hostExecutable);
@@ -1051,7 +1052,41 @@ void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
     try
     {
         _ = LegacyAssemblyRewriter.LoadTriggernometry(assemblyPath, loadContext);
+        patchedTriggernometryAssemblyPath = loadContext.Assemblies
+            .Single(assembly => assembly.GetName().Name == "TriggernometryPlugin").Location;
         ValidateTriggernometryLaunchProcessPatch();
+        var implementation = loadContext.Assemblies.Single(assembly => assembly.GetName().Name == "TriggernometryPlugin");
+        var transcriber = implementation.GetType("Triggernometry.FFXIV.LogTranscribe.LogTranscriber");
+        if (transcriber is not null)
+        {
+            var generation = transcriber.GetField("_generation", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var seen = (IDictionary)transcriber.GetField("CombatantSeenUntil", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+            var realPluginType = implementation.GetType("Triggernometry.Core.RealPlugin", throwOnError: true)!;
+            // Exercise subscription ownership and the internal cache reset without starting
+            // a second plugin, audio engine, or endpoint in this test process.
+            var owner = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(realPluginType);
+            var callbackMethod = realPluginType.GetMethod("ZoneChangeDelegate")!;
+            var callback = (Action<uint, string>)callbackMethod.CreateDelegate(typeof(Action<uint, string>), owner);
+            var publish = typeof(HostPluginBridge).GetMethod("PublishTriggernometryZoneChange", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var before = (int)generation.GetValue(null)!;
+            seen["40000001"] = DateTime.UtcNow.AddMinutes(1);
+            HostPluginBridge.SubscribeTriggernometryZoneChanges(callback);
+            try
+            {
+                publish.Invoke(null, [1U, "ACTCOMPAT_CACHE_RESET"]);
+                Assert((int)generation.GetValue(null)! == unchecked(before + 1) && seen.Count == 0,
+                    "Triggernometry 2.2 retained log-derived entities across a Host zone change.");
+            }
+            finally
+            {
+                // Event removal creates a fresh delegate; it must still remove the owner.
+                HostPluginBridge.UnsubscribeTriggernometryZoneChanges(
+                    callbackMethod.CreateDelegate(typeof(Action<uint, string>), owner));
+            }
+            publish.Invoke(null, [2U, "ACTCOMPAT_AFTER_UNSUBSCRIBE"]);
+            Assert((int)generation.GetValue(null)! == unchecked(before + 1),
+                "Triggernometry 2.2 continued receiving zone changes after unsubscribe.");
+        }
     }
     finally
     {
@@ -1519,8 +1554,8 @@ async Task ValidateLegacyPluginsLoadOutOfProcessAsync()
                                 ?? throw new InvalidDataException(
                                     "Triggernometry persisted configuration has no root element.");
             Assert(
-                persistedRoot.GetAttribute("PreviousNotifiedPluginVersion") == "2.1.2.2" &&
-                persistedRoot.GetAttribute("PluginVersion") == "2.1.2.2",
+                persistedRoot.GetAttribute("PreviousNotifiedPluginVersion") == FileVersionInfo.GetVersionInfo(triggernometryAssembly!).FileVersion &&
+                persistedRoot.GetAttribute("PluginVersion") == FileVersionInfo.GetVersionInfo(triggernometryAssembly!).FileVersion,
                 "Triggernometry did not persist its acknowledged version state during startup.");
             var hasFoxTts = File.Exists(Path.Combine(
                 pluginRoot!,
@@ -2889,18 +2924,10 @@ async Task ValidateTriggernometryMapEffectProbeAsync()
 
 void ValidateTriggernometryLaunchProcessPatch()
 {
-    var patchDirectory = Path.Combine(
-        Path.GetTempPath(),
-        "DalamudActCompat",
-        "triggernometry");
-    var patchedAssembly = new DirectoryInfo(patchDirectory)
-                              .EnumerateFiles("TriggernometryPlugin-*.dll")
-                              .OrderByDescending(file => file.LastWriteTimeUtc)
-                              .FirstOrDefault()
-                          ?? throw new FileNotFoundException(
-                              "No patched Triggernometry implementation was produced.",
-                              patchDirectory);
-    using var definition = AssemblyDefinition.ReadAssembly(patchedAssembly.FullName);
+    // Resource-only conversion tests share this cache but intentionally omit Host patches.
+    // Inspect the exact implementation loaded in this run, never whichever file is newest.
+    using var definition = AssemblyDefinition.ReadAssembly(patchedTriggernometryAssemblyPath
+        ?? throw new InvalidOperationException("No Triggernometry implementation was loaded by this test."));
     var repositoryType = definition.MainModule.Types
         .SelectMany(EnumerateCecilTypes)
         .Single(type => type.FullName == "Triggernometry.Core.Repository");
@@ -3291,44 +3318,37 @@ void ValidateMatchaAssemblyContract(string packagePath)
                                 throwOnError: true)!
                             ?? throw new TypeLoadException(
                                 "Cafe.Matcha.Constant.OpcodeStorage");
-        var globalOpcodes = opcodeStorage.GetField(
-                                "Global",
-                                BindingFlags.Public | BindingFlags.Static)!
-                                .GetValue(null) as IDictionary
-                            ?? throw new InvalidDataException(
-                                "Matcha Global opcode storage is not a dictionary.");
         var expectedGlobalOpcodes = new Dictionary<ushort, string>
         {
-            [0x0096] = "ActorControl",
-            [0x037C] = "ActorControlSelf",
-            [0x027D] = "CEDirector",
-            [0x012E] = "CompanyAirshipStatus",
-            [0x03AF] = "CompanySubmersibleStatus",
-            [0x0197] = "ContentFinderNotifyPop",
-            [0x02C7] = "ResumeEventScene32",
-            [0x01A5] = "EventPlay",
-            [0x0278] = "EventStart",
-            [0x0097] = "Examine",
-            [0x0161] = "InitZone",
-            [0x0104] = "InventoryTransaction",
-            [0x0204] = "ItemInfo",
-            [0x0190] = "MarketBoardItemListing",
-            [0x022F] = "MarketBoardItemListingCount",
-            [0x017B] = "MarketBoardItemListingHistory",
-            [0x835B] = "MarketBoardRequestItemListingInfo",
-            [0x00E9] = "NpcSpawn",
-            [0x00A6] = "PlayerSetup",
-            [0x032D] = "PlayerSpawn",
-            [0x01A2] = "SubmarineStatusList",
+            [0x038C] = "ActorControl",
+            [0x0258] = "ActorControlSelf",
+            [0x0393] = "CEDirector",
+            [0x02F8] = "CompanyAirshipStatus",
+            [0x0222] = "CompanySubmersibleStatus",
+            [0x0080] = "ContentFinderNotifyPop",
+            [0x0335] = "ResumeEventScene32",
+            [0x01F1] = "EventPlay",
+            [0x00F2] = "EventStart",
+            [0x0069] = "Examine",
+            [0x03A1] = "InitZone",
+            [0x024E] = "InventoryTransaction",
+            [0x0073] = "ItemInfo",
+            [0x027B] = "MarketBoardItemListing",
+            [0x0324] = "MarketBoardItemListingCount",
+            [0x02FE] = "MarketBoardItemListingHistory",
+            [0x825D] = "MarketBoardRequestItemListingInfo",
+            [0x01C4] = "NpcSpawn",
+            [0x01DD] = "PlayerSetup",
+            [0x03B2] = "PlayerSpawn",
+            [0x01A9] = "SubmarineStatusList",
         };
-        Assert(
-            globalOpcodes.Count == expectedGlobalOpcodes.Count &&
-            expectedGlobalOpcodes.All(pair =>
-                string.Equals(
-                    globalOpcodes[pair.Key]?.ToString(),
-                    pair.Value,
-                    StringComparison.Ordinal)),
-            "Matcha Global opcode storage was not normalized to the verified 7.55h2 table.");
+        foreach (var region in new[] { "Global", "China" })
+        {
+            var actual = (IDictionary)opcodeStorage.GetField(region, BindingFlags.Public | BindingFlags.Static)!.GetValue(null)!;
+            Assert(actual.Count == expectedGlobalOpcodes.Count && expectedGlobalOpcodes.All(pair =>
+                string.Equals(actual[pair.Key]?.ToString(), pair.Value, StringComparison.Ordinal)),
+                $"Matcha {region} opcode storage was not normalized to the verified 7.56 table.");
+        }
 
         var bridge = loadedAssembly.GetType(
                          "Cafe.Matcha.Utils.DactBridge",
@@ -3813,14 +3833,14 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         .Children<JObject>()
         .ToDictionary(item => item.Value<string>("name")!, StringComparer.Ordinal);
     Assert(
-        normalizedOpcodePayload.Value<string>("version") == "20260830" &&
-        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x028D" &&
-        normalizedOpcodes["InitZone"].Value<string>("global") == "0x0161" &&
-        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x00E9" &&
+        normalizedOpcodePayload.Value<string>("version") == "20260909" &&
+        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x03A1" &&
+        normalizedOpcodes["InitZone"].Value<string>("global") == "0x03A1" &&
+        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0xF009" &&
         normalizedOpcodes["FateInfo"].Value<string>("global") == "0xF009" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x035D" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x037C",
-        "SilverDasher opcode data was not normalized to Chinese 7.55h / Global 7.55h2.");
+        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x0258" &&
+        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x0258",
+        "SilverDasher opcode data was not normalized to Chinese / Global 7.56.");
     var judge = rewrittenCore
                        .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
                        .GetMethod(

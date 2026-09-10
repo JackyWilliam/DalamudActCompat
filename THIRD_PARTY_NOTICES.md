@@ -41,7 +41,7 @@ and verification; the notice does not open them. SilverDasher is installed
 disabled and is loaded only after the user explicitly enables it. Cafe.Matcha
 is enabled after installation and starts last in its own dedicated Host process.
 
-- Triggernometry CN Maintained Edition 2.1.2.2
+- Triggernometry CN Maintained Edition 2.2.0.1
   - Original author/copyright holder: Paissa Heavy Industries
   - Current CN maintainer and distributor: MnFeN
   - Project/source: <https://github.com/MnFeN/Triggernometry>

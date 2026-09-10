@@ -137,8 +137,9 @@ try
     }
     ValidateParserDependencyVersions();
     ValidateUnscramblerSupportPolicy();
+    Patch756SmokeTests.Run();
     ValidatePluginRepositoryMetadata();
-    ValidateChinese755hOpcodes();
+    Validate756Opcodes();
     ValidateMeterRows();
     ValidateMeterLayout();
     ValidateIndependentMeterWindows();
@@ -5115,45 +5116,49 @@ static void ValidateInstalledPluginVersionDisplay(string testRoot)
         "The Extensions page did not prefer the actual DLL version while retaining manifest metadata.");
 }
 
-static void ValidateChinese755hOpcodes()
+static void Validate756Opcodes()
 {
-    OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
-    var opcodes = OpcodeManager.Instance.CurrentOpcodes;
+    // Assert the published 7.56 values independently of runtime resource selection.
     var expected = new Dictionary<string, ushort>
     {
-        ["Ability1"] = 0x0296,
-        ["Ability8"] = 0x0164,
-        ["Ability16"] = 0x01B1,
-        ["Ability24"] = 0x039B,
-        ["Ability32"] = 0x0372,
-        ["ActorCast"] = 0x018C,
-        ["EffectResult"] = 0x02F5,
-        ["EffectResultBasic"] = 0x03A3,
-        ["ActorControl"] = 0x01DA,
-        ["ActorControlSelf"] = 0x035D,
-        ["ActorControlTarget"] = 0x013C,
-        ["StatusEffectList"] = 0x01F1,
-        ["StatusEffectList2"] = 0x009B,
-        ["StatusEffectList3"] = 0x0153,
-        ["BossStatusEffectList"] = 0x0320,
-        ["StatusEffectListForay3"] = 0x00DC,
-        ["PlayerSpawn"] = 0x0398,
-        ["NpcSpawn"] = 0x006F,
-        ["NpcSpawn2"] = 0x0287,
-        ["ActorMove"] = 0x038D,
-        ["ActorSetPos"] = 0x03DF,
-        ["ActorGauge"] = 0x0221,
-        ["PresetWaymark"] = 0x0149,
-        ["Waymark"] = 0x0171,
-        ["SystemLogMessage"] = 0x01E7,
+        ["StatusEffectList"] = 0x0248,
+        ["StatusEffectList2"] = 0x00B5,
+        ["StatusEffectList3"] = 0x020D,
+        ["BossStatusEffectList"] = 0x02E1,
+        ["StatusEffectListForay3"] = 0x0162,
+        ["Ability1"] = 0x02EC,
+        ["Ability8"] = 0x00FD,
+        ["Ability16"] = 0x0357,
+        ["Ability24"] = 0x00B4,
+        ["Ability32"] = 0x014E,
+        ["ActorCast"] = 0x010A,
+        ["EffectResult"] = 0x01B0,
+        ["EffectResultBasic"] = 0x02F4,
+        ["ActorControl"] = 0x038C,
+        ["ActorControlSelf"] = 0x0258,
+        ["ActorControlTarget"] = 0x024F,
+        ["UpdateHpMpTp"] = 0x0390,
+        ["PlayerSpawn"] = 0x03B2,
+        ["NpcSpawn"] = 0x01C4,
+        ["NpcSpawn2"] = 0x026A,
+        ["ActorMove"] = 0x0334,
+        ["ActorSetPos"] = 0x03A2,
+        ["ActorGauge"] = 0x028B,
+        ["PresetWaymark"] = 0x008D,
+        ["Waymark"] = 0x00E9,
+        ["SystemLogMessage"] = 0x03BE,
     };
-
-    foreach (var pair in expected)
+    foreach (var region in new[] { GameRegion.Chinese, GameRegion.Global, GameRegion.Korean })
     {
-        Assert(
-            opcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
-            $"Chinese 7.55h opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+        OpcodeManager.Instance.SetRegion(region);
+        foreach (var pair in expected)
+        {
+            Assert(
+                OpcodeManager.Instance.CurrentOpcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
+                $"{region} 7.56 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+        }
     }
+    OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
 }
 
 static void ValidatePostNamazuRawLogCompatibility()
@@ -5265,11 +5270,11 @@ static void ValidatePostNamazuOverlayHandlerResponse()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 6),
-        "IINACT is not at 2.10.3.6.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 7),
+        "IINACT is not at 2.10.3.7.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 105, 0),
-        "OverlayPlugin Core is not at 0.19.105.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 107, 0),
+        "OverlayPlugin Core is not at 0.19.107.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -5279,17 +5284,17 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.55.2.0",
+        "7.56.0.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
-        "3.0.2.8",
+        "3.0.3.0",
         "FFXIV_ACT_Plugin");
     var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
     Assert(
         FetchDependencies.LogFormatIdentity.Matches(
             logfileAssemblyPath,
-            new Version(2, 10, 3, 6)),
+            new Version(2, 10, 3, 7)),
         $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
@@ -5306,26 +5311,29 @@ static void ValidateParserDependencyVersions()
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
         });
-    var chinese755h = document.RootElement
-        .GetProperty("Chinese")
-        .GetProperty("2026.08.05.0000.0000");
-    var global755h2 = document.RootElement
-        .GetProperty("Global")
-        .GetProperty("2026.08.11.0000.0000");
-    Assert(
-        chinese755h.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 188 &&
-        chinese755h.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 979 &&
-        chinese755h.GetProperty("Countdown").GetProperty("opcode").GetInt32() == 802 &&
-        chinese755h.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 909 &&
-        chinese755h.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 991,
-        "OverlayPlugin Chinese 7.55h opcodes are stale.");
-    Assert(
-        global755h2.GetProperty("MapEffect").GetProperty("opcode").GetInt32() == 135 &&
-        global755h2.GetProperty("RSVData").GetProperty("opcode").GetInt32() == 273 &&
-        global755h2.GetProperty("Countdown").GetProperty("opcode").GetInt32() == 120 &&
-        global755h2.GetProperty("ActorMove").GetProperty("opcode").GetInt32() == 572 &&
-        global755h2.GetProperty("ActorSetPos").GetProperty("opcode").GetInt32() == 301,
-        "OverlayPlugin Global 7.55h2 opcodes are stale.");
+    foreach (var region in new[] { "Chinese", "Global", "Korean" })
+    {
+        var opcodes = document.RootElement.GetProperty(region).GetProperty("2026.09.01.0000.0000");
+        var expected = new Dictionary<string, int>
+        {
+            ["MapEffect"] = 177, ["MapEffect4"] = 579, ["MapEffect8"] = 133,
+            ["MapEffect12"] = 210, ["CEDirector"] = 915, ["RSVData"] = 819,
+            ["NpcYell"] = 202, ["BattleTalk2"] = 341, ["Countdown"] = 542,
+            ["CountdownCancel"] = 286, ["ActorMove"] = 820, ["ActorSetPos"] = 930,
+        };
+        Assert(expected.All(pair => opcodes.GetProperty(pair.Key).GetProperty("opcode").GetInt32() == pair.Value),
+            $"OverlayPlugin {region} 7.56 opcodes are stale.");
+    }
+
+    // Read the final runtime DLL and execute its formatter: a patched IL template alone
+    // cannot prove which parser version the FFLogs header will actually report.
+    var logfileAssembly = Assembly.LoadFrom(logfileAssemblyPath);
+    var logFormatType = logfileAssembly.GetType("FFXIV_ACT_Plugin.Logfile.LogFormat", throwOnError: true)!;
+    var formatVersion = logFormatType.GetMethod("FormatVersion", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
+    var header = (string)formatVersion.Invoke(Activator.CreateInstance(logFormatType, nonPublic: true), null)!;
+    Assert(header == "This is IINACT 2.10.3.7 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.0",
+        $"The actual FFLogs version header is stale: {header}");
+    Console.WriteLine($"Verified FFLogs version header: {header}");
 }
 
 static void ValidateSilverDasherPermissionIsolation()
@@ -5617,30 +5625,7 @@ static void ValidateUnscramblerSupportPolicy()
             opcode == pair.Value),
         "Global 7.55h2 runtime constants are incomplete or do not use the discovered key table.");
 
-    var unscramblerToMachina = new Dictionary<string, string>
-    {
-        ["PlayerSpawn"] = "PlayerSpawn",
-        ["NpcSpawn"] = "NpcSpawn",
-        ["NpcSpawn2"] = "NpcSpawn2",
-        ["ActionEffect01"] = "Ability1",
-        ["ActionEffect08"] = "Ability8",
-        ["ActionEffect16"] = "Ability16",
-        ["ActionEffect24"] = "Ability24",
-        ["ActionEffect32"] = "Ability32",
-        ["StatusEffectList"] = "StatusEffectList",
-        ["StatusEffectList3"] = "StatusEffectList3",
-        ["ActorControl"] = "ActorControl",
-        ["ActorCast"] = "ActorCast",
-    };
-    OpcodeManager.Instance.SetRegion(GameRegion.Global);
-    var global755h2MachinaOpcodes = OpcodeManager.Instance.CurrentOpcodes;
-    foreach (var pair in unscramblerToMachina)
-    {
-        Assert(
-            global755h2RuntimeConstants.ObfuscatedOpcodes[pair.Key] ==
-            global755h2MachinaOpcodes[pair.Value],
-            $"Unscrambler opcode {pair.Key} does not match Global Machina {pair.Value}.");
-    }
+
     Assert(
         InvokeGlobalRuntime(
             globalRuntimePolicy!,
@@ -5684,14 +5669,6 @@ static void ValidateUnscramblerSupportPolicy()
             opcode == pair.Value),
         "Chinese 7.55h runtime constants reused a Global memory offset or lost official opcodes.");
 
-    OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
-    var chineseOpcodes = OpcodeManager.Instance.CurrentOpcodes;
-    foreach (var pair in unscramblerToMachina)
-    {
-        Assert(
-            chineseRuntimeConstants.ObfuscatedOpcodes[pair.Key] == chineseOpcodes[pair.Value],
-            $"Unscrambler opcode {pair.Key} does not match Chinese Machina {pair.Value}.");
-    }
     Assert(
         !InvokeBundled(bundledPolicy!, GameRegion.Chinese, chinese755h),
         "Chinese 7.55h incorrectly reuses the Global key-table address.");

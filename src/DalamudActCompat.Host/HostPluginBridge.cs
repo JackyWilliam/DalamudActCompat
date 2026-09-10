@@ -251,10 +251,11 @@ public static class HostPluginBridge
         var replacements = new Dictionary<string, (string Chinese, string Global)>(
             StringComparer.Ordinal)
         {
-            ["InitZone"] = ("0x028D", "0x0161"),
-            // Global FateInfo is a synthetic FFXIV_ACT_Plugin packet, not a zone opcode.
-            ["FateInfo"] = ("0x00E9", "0xF009"),
-            ["ActorControlSelf"] = ("0x035D", "0x037C"),
+            ["InitZone"] = ("0x03A1", "0x03A1"),
+            // No verified 7.56 FateInfo opcode is published. Keep the existing out-of-band
+            // placeholder for both regions; the old CN 0x00E9 now identifies Waymark.
+            ["FateInfo"] = ("0xF009", "0xF009"),
+            ["ActorControlSelf"] = ("0x0258", "0x0258"),
         };
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in data.OfType<JObject>())
@@ -276,7 +277,7 @@ public static class HostPluginBridge
             return payload;
         }
 
-        root["version"] = "20260830";
+        root["version"] = "20260909";
         return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 
@@ -1620,6 +1621,11 @@ public static class HostPluginBridge
     public static void SubscribeTriggernometryZoneChanges(object plugin)
     {
         ArgumentNullException.ThrowIfNull(plugin);
+        // Triggernometry 2.2 passes its bound ZoneChanged handler instead of RealPlugin.
+        // Store the owner weakly as before so a newly-created unsubscribe delegate matches.
+        plugin = plugin is Delegate callback
+            ? callback.Target ?? throw new ArgumentException("The Triggernometry zone handler must have an owner.", nameof(plugin))
+            : plugin;
         lock (TriggerZoneListenerLock)
         {
             triggerZoneListener = new WeakReference<object>(plugin);
@@ -1629,6 +1635,9 @@ public static class HostPluginBridge
     public static void UnsubscribeTriggernometryZoneChanges(object plugin)
     {
         ArgumentNullException.ThrowIfNull(plugin);
+        plugin = plugin is Delegate callback
+            ? callback.Target ?? throw new ArgumentException("The Triggernometry zone handler must have an owner.", nameof(plugin))
+            : plugin;
         lock (TriggerZoneListenerLock)
         {
             if (triggerZoneListener?.TryGetTarget(out var current) == true &&
@@ -1657,6 +1666,12 @@ public static class HostPluginBridge
         try
         {
             var pluginType = plugin.GetType();
+            // 2.2 normally resets its log-derived entity cache when OnLogLineRead notices
+            // a zone change. This adapter advances currentZone first, so preserve that reset.
+            pluginType.Assembly.GetType("Triggernometry.FFXIV.LogTranscribe.LogTranscriber")
+                ?.GetMethod("Reset", System.Reflection.BindingFlags.Public |
+                                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                ?.Invoke(null, [false]);
             pluginType.GetField(
                     "currentZone",
                     System.Reflection.BindingFlags.Instance |

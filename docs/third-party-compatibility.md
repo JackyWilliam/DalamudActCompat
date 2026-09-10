@@ -1,20 +1,24 @@
 # 第三方 ACT 扩展兼容说明
 
-核对日期：2026-08-30。
+核对日期：2026-09-10；0.4.1.1 已通过本机国服验收，正式发布状态以 GitHub Release 为准。详细来源见
+[7.56 依赖审计](bundled-plugin-audit-2026-09-09.md)。
 
-国服与国际服当前同步在 7.55 版本进度；区域网络操作码仍按各客户端实际值分别维护。
-解析链已更新到 IINACT 2.10.3.6、OverlayPlugin Core 0.19.105、
-Machina 7.55h2、Unscrambler.XIV 7.55.2 和 FFXIV_ACT_Plugin 3.0.2.8。
-国服 `2026.08.05.0000.0000` 使用 Unscrambler 7.55.2 的完整操作码定义，并从正在运行的
+7.56 的国服、国际服和韩服操作码已按上游分别核对。解析链已更新到
+IINACT 2.10.3.7、OverlayPlugin Core 0.19.107、Machina 7.56、
+Unscrambler.XIV 7.56.0 和 FFXIV_ACT_Plugin 3.0.3.0。
+国服 `2026.09.01.0000.0000` 使用 Unscrambler 7.56.0 的完整操作码定义，并从正在运行的
 国服客户端动态定位地区专用密钥表，不复用国际服固定内存地址。未来游戏版本未被正式支持时，
 插件会明确提示兜底解析不保证 FF Logs 排名有效，不再静默生成看似安全的上传日志。
 
-Triggernometry 中文维护版 2.1.2.2、ACT.FoxTTS 3.3.1.189、PostNamazu
+Triggernometry 中文维护版 2.2.0.1、ACT.FoxTTS 3.3.1.189、PostNamazu
 1.3.6.6、SilverDasher 0.6.0.4 和 Cafe.Matcha 26.8.12.1622 随本插件发布。
 首次安装，以及随包或在线 DLL 的版本/哈希实际变化后，
 游戏内会弹出告知窗口，展示 DLL 作者、当前维护者、版本、许可证、项目网址、
 源码网址、DLL 实际下载网址和 SHA-256；窗口不会自动打开网页，未确认时不会加载
-这些 DLL。上述信息仅说明组件来源，不代表原作者或维护者与本项目存在合作、
+这些 DLL。Triggernometry 2.2 的区域事件接口已接入 Host，保留旧版方法接口；抹茶
+和银山雀儿在加载时使用 7.56 的国服/国际服映射，未确认的 FateInfo 与
+WorldVisitQueue 不使用过期操作码。Cactbot 官方包仍为 0.37.5，7.56 新数据尚在
+上游源码中；不将其描述为已经随正式包分发。上述信息仅说明组件来源，不代表原作者或维护者与本项目存在合作、
 认可或联系。单纯升级 DalamudActCompat 不再重复告知；权限确认也只在尚无明确决定的
 能力出现时显示。插件每次启动还会检查公开上游：Triggernometry 使用公开提供的
 DLL/汉化文件地址，FoxTTS 和 PostNamazu 使用 GitHub 最新 Release；发现文件版本
