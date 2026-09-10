@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--administrator-only", StringComparer.Ordinal))
+    {
+        await AdministratorSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
     {
         UnnamedEntitySmokeTests.Run();
@@ -180,6 +185,7 @@ try
     await CloudOperationGuardSmokeTests.RunAsync(FindProjectRoot());
     ValidateCloudActivationKeyHelp();
     await ValidateCloudApiContractAsync(testRoot);
+    await AdministratorSmokeTests.RunAsync(testRoot);
     await CloudFriendsSmokeTests.RunAsync(testRoot);
     await FriendsUiSmokeTests.RunAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);

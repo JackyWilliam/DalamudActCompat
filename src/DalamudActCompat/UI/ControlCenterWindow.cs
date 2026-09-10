@@ -3209,9 +3209,11 @@ public sealed class ControlCenterWindow : Window
             {
                 ImGui.TextColored(
                     IceBlue,
-                    text.Get(
-                        $"已使用 {invitations.Used}/{invitations.Quota} · 剩余 {invitations.Remaining}",
-                        $"{invitations.Used}/{invitations.Quota} used · {invitations.Remaining} remaining"));
+                    invitations.IsAdmin
+                        ? text.Get($"管理员 · 无限生成 · 已生成 {invitations.Used} 个", $"Administrator · Unlimited · {invitations.Used} created")
+                        : text.Get(
+                            $"已使用 {invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} · 剩余 {invitations.Remaining}",
+                            $"{invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} used · {invitations.Remaining} remaining"));
                 DrawAuthenticationMutedText(text.Get(
                     "每个激活码只能使用一次。请填写受邀好友的游戏 ID 或 QQ ID，方便后续核对。",
                     "Each activation key can be used once. Enter the friend's game ID or QQ ID for later verification."));
@@ -3225,7 +3227,7 @@ public sealed class ControlCenterWindow : Window
                 var inviteeContactValid = normalizedInviteeContact.Length is >= 2 and <= 80;
                 ImGui.BeginDisabled(
                     snapshot.IsBusy ||
-                    invitations.Remaining <= 0 ||
+                    !invitations.CanGenerate ||
                     !inviteeContactValid);
                 if (ImGui.Button(text.Get("生成好友激活码", "Create friend activation key")))
                 {
