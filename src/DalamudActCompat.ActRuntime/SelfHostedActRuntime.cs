@@ -370,6 +370,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             }
 
             cactbotOverlay.SetTemporarilyHidden(htmlOverlaysSuppressed);
+            cactbotOverlay.SetCombatState(frameworkInCombat);
             cactbotOverlay.Show();
             CloseConflictingRaidbossWindows(name);
             return true;
@@ -471,6 +472,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             window.Navigate(pageUri);
         }
         window.SetTemporarilyHidden(htmlOverlaysSuppressed);
+        window.SetCombatState(frameworkInCombat);
         window.Show();
         if (customOverlay &&
             (created || settings.ConnectionState is OverlayConnectionState.None or
@@ -2138,7 +2140,14 @@ public sealed class SelfHostedActRuntime : IDisposable
         var identities = playerIdentities();
         var gameState = encounterModeSnapshot();
         var inCombat = gameState.InCombat;
+        var combatChanged = frameworkInCombat != inCombat;
+        // Publish first so a concurrently opened overlay also receives the new state.
         frameworkInCombat = inCombat;
+        if (combatChanged)
+        {
+            cactbotOverlay?.SetCombatState(inCombat);
+            foreach (var window in htmlOverlays.Values) window.SetCombatState(inCombat);
+        }
         gameStateProvider.Update(
             identities,
             localPlayerPose(),

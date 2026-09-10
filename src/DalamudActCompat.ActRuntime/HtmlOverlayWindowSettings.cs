@@ -31,6 +31,8 @@ public sealed class HtmlOverlayWindowSettings
 
     public bool IsLocked { get; set; } = true;
 
+    public bool AutoHideOutOfCombat { get; set; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     [Newtonsoft.Json.JsonIgnore]
     public bool IsEditing { get; private set; }
@@ -108,6 +110,7 @@ public sealed class HtmlOverlayWindowSettings
         IsEditing = false;
         IsClickThrough = true;
         IsLocked = true;
+        AutoHideOutOfCombat = false;
         ZoomFactor = 1.0f;
         DisplayName = string.Empty;
         SourceUrl = string.Empty;

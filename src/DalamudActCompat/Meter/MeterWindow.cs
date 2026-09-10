@@ -1634,18 +1634,19 @@ public sealed class MeterWindow : Window
 
         void DrawHighestDamageColumn(MeterColumn column)
         {
+            var compact = column.Slot?.UseCompactHighestDamage ?? true;
             var color = new Vector4(0.94f, 0.68f, 0.48f, 1);
             if (row.HighestDamage <= 0 || string.IsNullOrWhiteSpace(row.HighestDamageAction))
             {
                 DrawColumn(
-                    FormatHighestDamage(row),
+                    FormatHighestDamage(row, compact),
                     column,
                     color,
                     MeterSlotAlignment.Center);
                 return;
             }
 
-            var amount = FormatCompactNumber(row.HighestDamage);
+            var amount = FormatHighestDamageAmount(row.HighestDamage, compact);
             var amountWidth = ImGui.CalcTextSize(amount).X;
             var gap = ImGui.CalcTextSize(" ").X;
             var maximumActionWidth = Math.Max(
@@ -1818,12 +1819,15 @@ public sealed class MeterWindow : Window
             _ => value.ToString("N0"),
         };
 
-    internal static string FormatHighestDamage(CombatantRow row)
+    internal static string FormatHighestDamageAmount(long value, bool compact)
+        => compact ? FormatCompactNumber(value) : value.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+
+    internal static string FormatHighestDamage(CombatantRow row, bool compact = true)
         => row.HighestDamage <= 0
             ? "--"
             : string.IsNullOrWhiteSpace(row.HighestDamageAction)
-                ? FormatCompactNumber(row.HighestDamage)
-                : $"{row.HighestDamageAction} {FormatCompactNumber(row.HighestDamage)}";
+                ? FormatHighestDamageAmount(row.HighestDamage, compact)
+                : $"{row.HighestDamageAction} {FormatHighestDamageAmount(row.HighestDamage, compact)}";
 
     private static void DrawBoldText(
         ImDrawListPtr drawList,

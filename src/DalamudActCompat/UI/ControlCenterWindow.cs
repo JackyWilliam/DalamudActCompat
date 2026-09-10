@@ -3646,6 +3646,8 @@ public sealed class ControlCenterWindow : Window
         changed |= Checkbox(text.Get("鼠标穿透", "Click-through"), settings.IsClickThrough, settings.SetClickThrough);
         ImGui.SameLine();
         changed |= Checkbox(text.Get("锁定", "Locked"), settings.IsLocked, settings.SetLocked);
+        changed |= Checkbox(text.Get("脱战隐藏", "Hide out of combat"), settings.AutoHideOutOfCombat,
+            value => settings.AutoHideOutOfCombat = value);
         changed |= SliderFloat(text.Get("页面缩放", "Page zoom"), settings.ZoomFactor, 0.5f, 2, value => settings.ZoomFactor = value);
         ImGui.TextDisabled(settings.IsEditing
             ? text.Get(

@@ -356,10 +356,15 @@ public sealed class MeterSlotDefinition
 
     public bool Visible { get; set; } = true;
 
+    // Keep old layouts compact by default; each slot owns its format so D/T,
+    // healing and other templates can be customized independently.
+    public bool UseCompactHighestDamage { get; set; } = true;
+
     public MeterSlotDefinition Clone()
         => new(Metric, Column, Row, ColumnSpan, RowSpan, Alignment)
         {
             Visible = Visible,
+            UseCompactHighestDamage = UseCompactHighestDamage,
         };
 
     internal bool Normalize(HashSet<string> usedIds)
