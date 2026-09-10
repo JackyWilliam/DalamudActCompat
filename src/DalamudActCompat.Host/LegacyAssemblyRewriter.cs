@@ -148,11 +148,11 @@ public static class LegacyAssemblyRewriter
             writable: false);
         var assembly = loadContext.LoadFromStream(assemblyImage);
         ApplyMatchaUpstreamSecrets(assembly, secrets);
-        ApplyMatchaGlobal755Hotfix2Opcodes(assembly);
+        ApplyMatcha756Opcodes(assembly);
         return assembly;
     }
 
-    private static void ApplyMatchaGlobal755Hotfix2Opcodes(Assembly assembly)
+    private static void ApplyMatcha756Opcodes(Assembly assembly)
     {
         var storageType = assembly.GetType(
                               "Cafe.Matcha.Constant.OpcodeStorage",
@@ -164,44 +164,46 @@ public static class LegacyAssemblyRewriter
                              throwOnError: true)!
                          ?? throw new TypeLoadException(
                              "Matcha opcode enum is missing.");
-        var globalField = storageType.GetField(
-                              "Global",
-                              BindingFlags.Public | BindingFlags.Static)
-                          ?? throw new MissingFieldException(storageType.FullName, "Global");
-        var global = globalField.GetValue(null) as IDictionary
-                     ?? throw new InvalidDataException(
-                         "Matcha Global opcode storage has an unexpected shape.");
         var verified = new Dictionary<ushort, string>
         {
-            [0x0096] = "ActorControl",
-            [0x037C] = "ActorControlSelf",
-            [0x027D] = "CEDirector",
-            [0x012E] = "CompanyAirshipStatus",
-            [0x03AF] = "CompanySubmersibleStatus",
-            [0x0197] = "ContentFinderNotifyPop",
-            [0x02C7] = "ResumeEventScene32",
-            [0x01A5] = "EventPlay",
-            [0x0278] = "EventStart",
-            [0x0097] = "Examine",
-            [0x0161] = "InitZone",
-            [0x0104] = "InventoryTransaction",
-            [0x0204] = "ItemInfo",
-            [0x0190] = "MarketBoardItemListing",
-            [0x022F] = "MarketBoardItemListingCount",
-            [0x017B] = "MarketBoardItemListingHistory",
-            [0x835B] = "MarketBoardRequestItemListingInfo",
-            [0x00E9] = "NpcSpawn",
-            [0x00A6] = "PlayerSetup",
-            [0x032D] = "PlayerSpawn",
-            [0x01A2] = "SubmarineStatusList",
+            [0x038C] = "ActorControl",
+            [0x0258] = "ActorControlSelf",
+            [0x0393] = "CEDirector",
+            [0x02F8] = "CompanyAirshipStatus",
+            [0x0222] = "CompanySubmersibleStatus",
+            [0x0080] = "ContentFinderNotifyPop",
+            [0x0335] = "ResumeEventScene32",
+            [0x01F1] = "EventPlay",
+            [0x00F2] = "EventStart",
+            [0x0069] = "Examine",
+            [0x03A1] = "InitZone",
+            [0x024E] = "InventoryTransaction",
+            [0x0073] = "ItemInfo",
+            [0x027B] = "MarketBoardItemListing",
+            [0x0324] = "MarketBoardItemListingCount",
+            [0x02FE] = "MarketBoardItemListingHistory",
+            [0x825D] = "MarketBoardRequestItemListingInfo",
+            [0x01C4] = "NpcSpawn",
+            [0x01DD] = "PlayerSetup",
+            [0x03B2] = "PlayerSpawn",
+            [0x01A9] = "SubmarineStatusList",
         };
 
-        // FateInfo and WorldVisitQueue are not published in the verified 7.55h2 table.
+        // FFXIVOpcodes 040fafa publishes matching CN/Global 7.56 tables. The bundled
+        // Matcha tables predate this patch; update both without changing its public ABI.
+        // FateInfo and WorldVisitQueue are not published in the verified 7.56 table.
         // Omitting them is safer than retaining stale keys that now identify other packets.
-        global.Clear();
-        foreach (var (opcode, name) in verified)
+        foreach (var region in new[] { "Global", "China" })
         {
-            global.Add(opcode, Enum.Parse(opcodeType, name));
+            var field = storageType.GetField(region, BindingFlags.Public | BindingFlags.Static)
+                        ?? throw new MissingFieldException(storageType.FullName, region);
+            var opcodes = field.GetValue(null) as IDictionary
+                          ?? throw new InvalidDataException($"Matcha {region} opcode storage has an unexpected shape.");
+            opcodes.Clear();
+            foreach (var (opcode, name) in verified)
+            {
+                opcodes.Add(opcode, Enum.Parse(opcodeType, name));
+            }
         }
     }
 
@@ -1891,10 +1893,12 @@ public static class LegacyAssemblyRewriter
         var ffxivBridge = module.Types
             .SelectMany(EnumerateTypes)
             .Single(type => type.FullName == "Triggernometry.PluginBridges.BridgeFFXIV");
+        // 2.2 moved the RealPlugin argument to an Action callback's Target. Keep the
+        // same Host zone adapter for both ABIs, including already-installed 2.1 builds.
         var subscribeZoneMethod = ffxivBridge.Methods.Single(method =>
-            method.Name == "SubscribeToZoneChanged" && method.Parameters.Count == 1);
+            method.Name is "SubscribeToZoneChanged" or "add_ZoneChanged" && method.Parameters.Count == 1);
         var unsubscribeNetworkMethod = ffxivBridge.Methods.Single(method =>
-            method.Name == "UnsubscribeFromNetworkEvents" && method.Parameters.Count == 1);
+            method.Name is "UnsubscribeFromNetworkEvents" or "remove_ZoneChanged" && method.Parameters.Count == 1);
         ReplaceWithBridge(
             subscribeZoneMethod,
             subscribeZoneChanges,
