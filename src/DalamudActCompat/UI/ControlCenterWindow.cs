@@ -79,7 +79,7 @@ public sealed class ControlCenterWindow : Window
     private const string ResetEncounterPopupId = "重置当前战斗###DalamudActCompatResetEncounter";
     private const string CloudQuickPopupId = "云同步状态###DalamudActCompatCloudQuickStatus";
     private const string ActivationQqGroup = "1098561701";
-    private const string ActivationDiscordUrl = "https://discord.gg/HpQZErSPc";
+    private const string ActivationDiscordUrl = "https://discord.gg/mZHFwXe7Gk";
 
     private readonly PluginConfiguration configuration;
     private readonly WindowDragController headerDrag = new();

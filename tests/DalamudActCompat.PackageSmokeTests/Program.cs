@@ -12978,9 +12978,9 @@ static void ValidateCloudActivationKeyHelp()
         "Registration lost visible free-key instructions, contact actions, or narrow-width layout.");
     var readme = File.ReadAllText(Path.Combine(projectRoot, "README.md"));
     Assert(ui.Contains("ActivationQqGroup = \"1098561701\"", StringComparison.Ordinal) &&
-           ui.Contains("ActivationDiscordUrl = \"https://discord.gg/HpQZErSPc\"", StringComparison.Ordinal) &&
+           ui.Contains("ActivationDiscordUrl = \"https://discord.gg/mZHFwXe7Gk\"", StringComparison.Ordinal) &&
            readme.Contains("1098561701", StringComparison.Ordinal) &&
-           readme.Contains("https://discord.gg/HpQZErSPc", StringComparison.Ordinal),
+           readme.Contains("https://discord.gg/mZHFwXe7Gk", StringComparison.Ordinal),
         "Registration contact channels differ from the documented free activation-key channels.");
 }
 
