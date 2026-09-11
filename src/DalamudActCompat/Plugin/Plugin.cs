@@ -80,6 +80,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CoreResourceDownloadWindow coreResourceDownloadWindow;
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
     private readonly CloudBanNoticeWindow cloudBanNoticeWindow;
+    private readonly CloudAdministratorNotice cloudAdministratorNotice;
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly CloudClientService cloudClient;
@@ -476,6 +477,7 @@ public sealed class Plugin : IDalamudPlugin
             "Assets");
         var logoTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-logo.jpg"));
+        var administratorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "Player26_Icon.png"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
         var jobIcons = new JobIconTextureSet(
@@ -718,7 +720,8 @@ public sealed class Plugin : IDalamudPlugin
         friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
         friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
             playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
-            stopNotificationSound: friendsNotificationSound.Stop);
+            stopNotificationSound: friendsNotificationSound.Stop,
+            administratorIcon: administratorIcon);
         settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
@@ -728,6 +731,8 @@ public sealed class Plugin : IDalamudPlugin
             StartHostResourceDownload,
             CancelHostResourceDownload);
         cloudBanNoticeWindow = new CloudBanNoticeWindow(text, logoTexture);
+        cloudAdministratorNotice = new CloudAdministratorNotice(text, administratorIcon, (username, grantId) =>
+            StartCloudOperation(token => cloudClient.AcknowledgeAdministratorAsync(username, grantId, token)));
         launcherWindow = new LauncherWindow(
             configuration,
             launcherTexture,
@@ -869,6 +874,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        cloudAdministratorNotice.Update(cloudClient.Snapshot);
         triggernometryNativeBridge.Update(DateTimeOffset.UtcNow);
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
@@ -897,6 +903,7 @@ public sealed class Plugin : IDalamudPlugin
                                          thirdPartyPluginNoticeWindow.IsOpen ||
                                          coreResourceDownloadWindow.IsOpen ||
                                          cloudBanNoticeWindow.IsOpen ||
+                                         cloudAdministratorNotice.IsOpen ||
                                          encounterWindow.IsOpen ||
                                          simplifiedHomeWindow.IsOpen ||
                                          meterStyleEditorWindow.IsOpen || friendsUi.AnyOpen;
@@ -906,6 +913,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.Draw();
         friendsUi.Draw(settingsWindow.IsOpen, services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
         fileDialogManager.Draw();
+        cloudAdministratorNotice.Draw(cloudClient.Snapshot);
     }
 
     private bool IsDactAccessAllowed()

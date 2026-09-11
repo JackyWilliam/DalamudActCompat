@@ -412,6 +412,9 @@ public sealed class HorizontalMeterWindow : Window
     {
         var drawList = ImGui.GetWindowDrawList();
         var displayName = MeterSlotPresentation.DisplayName(row, encounter, configuration.Meter, text);
+        // Older custom layouts may keep action and amount in separate slots.
+        // A single max-hit column includes both so its number-format setting is visible.
+        var includeHighestDamageAmount = !placements.Any(placement => placement.Slot.Metric == MeterSlotMetric.HighestDamage);
         const float slotRowHeight = 26;
         foreach (var placement in placements)
         {
@@ -443,7 +446,8 @@ public sealed class HorizontalMeterWindow : Window
                     break;
                 default:
                     var label = MeterSlotPresentation.Label(placement.Slot.Metric, text);
-                    var value = MeterSlotPresentation.Value(placement.Slot.Metric, row, displayName);
+                    var value = MeterSlotPresentation.Value(placement.Slot.Metric, row, displayName,
+                        placement.Slot.UseCompactHighestDamage, includeHighestDamageAmount);
                     var labelWidth = Math.Min(slotWidth * 0.47f, ImGui.CalcTextSize(label).X + 6);
                     drawList.AddText(
                         slotStart + new Vector2(0, 3),

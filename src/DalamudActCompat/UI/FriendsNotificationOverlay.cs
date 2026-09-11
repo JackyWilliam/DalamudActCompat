@@ -72,7 +72,9 @@ internal sealed partial class FriendsUiManager
                 var author = entry.Message.Sender.IsOfficial ? "DACT 官方通知" : entry.Message.Sender.Name;
                 author = FriendsMessagePreview.Ellipsize(author, textWidth, s => ImGui.CalcTextSize(s).X);
                 var origin = bodyPosition + new Vector2(padding);
-                list.AddText(origin, ImGui.GetColorU32(entry.Message.Sender.IsOfficial ? Gold : Blue), author);
+                AdministratorBadge.DrawName(administratorIcon, author,
+                    !entry.Message.Sender.IsOfficial && state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.IsAdmin == true,
+                    origin, textWidth, entry.Message.Sender.IsOfficial ? Gold : Blue);
                 origin.Y += lineHeight + gap;
                 list.AddText(ImGui.GetFont(), ImGui.GetFontSize(), origin, ImGui.GetColorU32(Vector4.One), layout.Body, textWidth);
                 if (FriendsIncomingNotifications.Replies(entry.Message).Count > 0)

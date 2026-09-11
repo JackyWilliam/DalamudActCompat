@@ -905,6 +905,22 @@ public sealed class MeterStyleEditorWindow : Window
                     "Enable this slot before using it for ranking."));
             }
         }
+
+        if (slot.Metric == MeterSlotMetric.HighestDamage ||
+            (slot.Metric == MeterSlotMetric.HighestDamageAction &&
+             (selectedKind != MeterWindowKind.Horizontal || !slots.Any(candidate =>
+                 candidate.Visible && candidate.Metric == MeterSlotMetric.HighestDamage))))
+        {
+            ImGui.TextUnformatted(text.Get("伤害数字格式", "Damage number format"));
+            ImGui.SetNextItemWidth(-1);
+            var format = slot.UseCompactHighestDamage ? 0 : 1;
+            if (ImGui.Combo("##highest-damage-format", ref format,
+                    [text.Get("缩写（K / M）", "Compact (K / M)"), text.Get("完整数字", "Full number")], 2))
+            {
+                slot.UseCompactHighestDamage = format == 0;
+                changed = true;
+            }
+        }
         if (!canUseSelectedSlot && slot.Metric == MeterSlotMetric.Fflogs)
         {
             ImGui.TextWrapped(text.Get(

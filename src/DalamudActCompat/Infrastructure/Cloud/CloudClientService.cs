@@ -18,7 +18,8 @@ internal sealed record CloudClientSnapshot(
     CloudInvitationSummary? Invitations = null,
     string? InvitationKeyToShare = null,
     CloudBanNotice? ActiveBan = null,
-    bool HasSavedRecoveryKey = false)
+    bool HasSavedRecoveryKey = false,
+    CloudAdministratorStatus? Administrator = null)
 {
     public static CloudClientSnapshot SignedOut(string message = "请登录或注册账号。")
         => new(
@@ -55,6 +56,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
     private CloudBanNotice? activeBan;
     private bool persistCurrentAccount;
     private CloudClientSnapshot snapshot;
+    private long administratorStateVersion;
 
     public CloudClientService(PluginPaths paths)
         : this(
@@ -452,6 +454,36 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 false,
                 invitationKeyToShare: created.ActivationKey);
         }, cancellationToken);
+
+    public Task AcknowledgeAdministratorAsync(string username, string grantId, CancellationToken cancellationToken)
+        => RunExclusiveAsync("正在确认管理员通知…", async token =>
+        {
+            var current = RequireCredentials();
+            // A confirmation belongs to the displayed account and grant, even if
+            // shared login changed while the UI callback was waiting for the gate.
+            if (current.Username != username || Snapshot.Administrator?.AdminGrantId != grantId) return;
+            var status = await apiClient.AcknowledgeAdministratorAsync(current.Token, grantId, token).ConfigureAwait(false);
+            ApplyAdministratorStatus(current, status);
+            if (IsCurrentSession(current))
+                SetSnapshot(Snapshot with { StatusMessage = "管理员通知已确认。", StatusIsError = false });
+        }, cancellationToken);
+
+    private void ApplyAdministratorStatus(CloudStoredCredentials current, CloudAdministratorStatus status, long? expectedVersion = null)
+    {
+        if (sharedAccountStore is not null && sharedAccountStore.Read().Revision != sharedRevision) return;
+        lock (stateLock)
+        {
+            if (credentials?.Token != current.Token || !snapshot.IsSignedIn || activeBan is not null) return;
+            if (expectedVersion is { } version && version != administratorStateVersion) return;
+            administratorStateVersion++;
+            snapshot = snapshot with { Administrator = status,
+                Invitations = snapshot.Invitations is { } invitations ? invitations with
+                {
+                    IsAdmin = status.IsAdmin, AdminGrantId = status.AdminGrantId,
+                    AdminNoticePending = status.AdminNoticePending,
+                } : null };
+        }
+    }
 
     public Task<bool> UploadAsync(
         string pluginConfigurationDirectory,
@@ -1092,10 +1124,13 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+            // A slow heartbeat must not block logout or foreground operations.
+            // Ignore its role response if a newer operation already updated it.
+            var roleVersion = Interlocked.Read(ref administratorStateVersion);
             try
             {
-                await apiClient.ValidateSessionAsync(current.Token, cancellationToken)
-                    .ConfigureAwait(false);
+                var status = await apiClient.GetAdministratorStatusAsync(current.Token, cancellationToken).ConfigureAwait(false);
+                ApplyAdministratorStatus(current, status, roleVersion);
             }
             catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
             {
@@ -1316,6 +1351,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             {
                 return;
             }
+            administratorStateVersion++;
             snapshot = new CloudClientSnapshot(
                 true,
                 true,
@@ -1330,7 +1366,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 invitations,
                 invitationKeyToShare,
                 null,
-                storedAccount is not null);
+                storedAccount is not null,
+                invitations?.Administrator ?? (snapshot.Username == current.Username ? snapshot.Administrator : null));
         }
     }
 

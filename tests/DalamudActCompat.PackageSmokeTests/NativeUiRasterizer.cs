@@ -9,6 +9,8 @@ using Dalamud.Bindings.ImGui;
 internal sealed class NativeUiRasterizer
 {
     private readonly Dictionary<ulong, (byte[] Pixels, int Width, int Height)> textures = new();
+    public void AddTexture(ImTextureID id, byte[] pixels, int width, int height)
+        => textures.Add(id.Handle, (pixels, width, height));
     public unsafe NativeUiRasterizer(ImFontAtlasPtr atlas)
     {
         for (var i = 0; i < atlas.Textures.Size; i++)

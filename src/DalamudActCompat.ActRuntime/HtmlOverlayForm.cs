@@ -517,6 +517,11 @@ internal sealed class HtmlOverlayForm : IDisposable
     private volatile bool visible;
     private volatile bool desiredVisible;
     private volatile bool temporarilyHidden;
+    private volatile bool inCombat;
+
+    // Editing must remain visible even between battles; foreground suppression still wins.
+    private bool EffectiveHidden
+        => temporarilyHidden || (settings is { AutoHideOutOfCombat: true, IsEditing: false } && !inCombat);
     private bool disposing;
     private bool applyingSettings;
     private bool loaderAcquired;
@@ -690,7 +695,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             form.BeginInvoke(async () =>
             {
-                if (temporarilyHidden)
+                if (EffectiveHidden)
                 {
                     form.Hide();
                     visible = false;
@@ -733,6 +738,18 @@ internal sealed class HtmlOverlayForm : IDisposable
     public void SetTemporarilyHidden(bool hidden)
     {
         temporarilyHidden = hidden;
+        RefreshTemporaryVisibility();
+    }
+
+    public void SetCombatState(bool value)
+    {
+        if (inCombat == value) return;
+        inCombat = value;
+        RefreshTemporaryVisibility();
+    }
+
+    private void RefreshTemporaryVisibility()
+    {
         var targetForm = form;
         if (targetForm is null || targetForm.IsDisposed)
         {
@@ -743,7 +760,9 @@ internal sealed class HtmlOverlayForm : IDisposable
         {
             targetForm.BeginInvoke(() =>
             {
-                if (hidden)
+                // Read the latest state on the owning UI thread. Rapid combat,
+                // focus and edit changes must not replay a stale queued value.
+                if (EffectiveHidden)
                 {
                     StopEditMonitor();
                     inputProxy?.Hide();
@@ -753,7 +772,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                     return;
                 }
 
-                // Temporary suppression never changes the desired visibility saved in JSON.
+                // Temporary suppression preserves logical open state and startup preferences.
                 if (desiredVisible)
                 {
                     targetForm.Show();
@@ -896,6 +915,7 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
 
         form.BeginInvoke(ApplyOverlaySettings);
+        RefreshTemporaryVisibility();
     }
 
     private void Run()
@@ -938,7 +958,7 @@ internal sealed class HtmlOverlayForm : IDisposable
             form.SizeChanged += OnOverlayBoundsChanged;
             form.Shown += async (_, _) =>
             {
-                visible = !temporarilyHidden;
+                visible = !EffectiveHidden;
                 if (settings is not null)
                 {
                     settings.IsVisible = true;
@@ -954,7 +974,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                     ApplyOverlaySettings();
                 }
 
-                if (temporarilyHidden)
+                if (EffectiveHidden)
                 {
                     form.Hide();
                 }

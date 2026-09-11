@@ -51,6 +51,16 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--display-options-only", StringComparer.Ordinal))
+    {
+        await DisplayOptionsSmokeTests.RunAsync();
+        return 0;
+    }
+    if (args.Contains("--administrator-only", StringComparer.Ordinal))
+    {
+        await AdministratorSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
     {
         UnnamedEntitySmokeTests.Run();
@@ -128,6 +138,7 @@ try
     ValidateOverlayInitialStateEvents();
     await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
+    await DisplayOptionsSmokeTests.RunAsync();
     if (string.Equals(
             Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),
             "1",
@@ -180,6 +191,7 @@ try
     await CloudOperationGuardSmokeTests.RunAsync(FindProjectRoot());
     ValidateCloudActivationKeyHelp();
     await ValidateCloudApiContractAsync(testRoot);
+    await AdministratorSmokeTests.RunAsync(testRoot);
     await CloudFriendsSmokeTests.RunAsync(testRoot);
     await FriendsUiSmokeTests.RunAsync(testRoot);
     await ValidateSavedCloudSessionRequiresServerValidationAsync(testRoot);

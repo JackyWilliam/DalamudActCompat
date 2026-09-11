@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace DalamudActCompat.Infrastructure.Cloud;
 
-internal sealed record CloudApiUser(string Id, string Username);
+internal sealed record CloudApiUser(string Id, string Username, bool IsAdmin = false);
 
 internal sealed record CloudAuthenticationResponse(
     string Token,
@@ -48,7 +48,20 @@ internal sealed record CloudInvitationSummary(
     int Quota,
     int Used,
     int Remaining,
-    IReadOnlyList<CloudInvitation> Invitations);
+    IReadOnlyList<CloudInvitation> Invitations,
+    bool IsAdmin = false,
+    string? AdminGrantId = null,
+    bool AdminNoticePending = false,
+    int? QuotaUsed = null)
+{
+    public CloudAdministratorStatus Administrator => new(IsAdmin, AdminGrantId, AdminNoticePending);
+    public bool CanGenerate => IsAdmin || Remaining > 0;
+}
+
+internal sealed record CloudAdministratorStatus(
+    bool IsAdmin = false,
+    string? AdminGrantId = null,
+    bool AdminNoticePending = false);
 
 internal sealed record CloudCreatedInvitation(
     string Id,
@@ -190,6 +203,21 @@ internal sealed partial class CloudApiClient : IDisposable
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
+
+    public async Task<CloudAdministratorStatus> GetAdministratorStatusAsync(string token, CancellationToken cancellationToken)
+    {
+        var response = await SendJsonAsync<SessionAdministratorResponse>(
+            HttpMethod.Get, "api/v1/auth/me", null, token, cancellationToken).ConfigureAwait(false);
+        // Older servers have no role field; absence must never grant permission.
+        return response.Administrator ?? new();
+    }
+
+    private sealed record SessionAdministratorResponse(CloudAdministratorStatus? Administrator = null);
+
+    public Task<CloudAdministratorStatus> AcknowledgeAdministratorAsync(
+        string token, string adminGrantId, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudAdministratorStatus>(HttpMethod.Post,
+            "api/v1/auth/administrator-notice/ack", new { adminGrantId }, token, cancellationToken);
 
     public async Task ValidateSharedSessionAsync(string token, string username, CancellationToken cancellationToken)
     {

@@ -37,7 +37,9 @@ internal static class MeterSlotPresentation
     public static string Value(
         MeterSlotMetric metric,
         CombatantRow row,
-        string displayName)
+        string displayName,
+        bool useCompactHighestDamage = true,
+        bool includeHighestDamageAmount = false)
         => metric switch
         {
             MeterSlotMetric.Rank => row.Rank?.ToString() ?? "--",
@@ -53,10 +55,11 @@ internal static class MeterSlotPresentation
             MeterSlotMetric.DamagePercent => $"{row.DamagePercent:N1}%",
             MeterSlotMetric.TotalDamage => MeterWindow.FormatCompactNumber(row.TotalDamage),
             MeterSlotMetric.TotalHealing => MeterWindow.FormatCompactNumber(row.TotalHealing),
+            MeterSlotMetric.HighestDamageAction when includeHighestDamageAmount => MeterWindow.FormatHighestDamage(row, useCompactHighestDamage),
             MeterSlotMetric.HighestDamageAction => string.IsNullOrWhiteSpace(row.HighestDamageAction)
                 ? "--"
                 : row.HighestDamageAction,
-            MeterSlotMetric.HighestDamage => MeterWindow.FormatCompactNumber(row.HighestDamage),
+            MeterSlotMetric.HighestDamage => MeterWindow.FormatHighestDamageAmount(row.HighestDamage, useCompactHighestDamage),
             MeterSlotMetric.Deaths => row.Deaths.ToString(),
             MeterSlotMetric.CriticalHitPercent => FormatPercent(row.CriticalHitPercent),
             MeterSlotMetric.DirectHitPercent => FormatPercent(row.DirectHitPercent),
