@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 ### 3. 获取一次性激活码
 
-注册 DACT 账号需要一次性激活码。请加入 QQ 群 **1098561701**，或加入 [Discord 服务器](https://discord.gg/HpQZErSPc)，联系群主或频道主获取。
+注册 DACT 账号需要一次性激活码。请加入 QQ 群 **1098561701**，或加入 [Discord 服务器](https://discord.gg/mZHFwXe7Gk)，联系群主或频道主获取。
 
 > 激活码使用后即失效，请勿把收到的激活码发布到 Issue 或其他公开位置。
 
