@@ -79,11 +79,14 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
+          # Nested vendor projects are outside the solution and otherwise fall back to Debug,
+          # which can reuse dependency-check binaries containing local PDB paths.
           dotnet build DalamudActCompat.slnx `
             --configuration Release `
             --no-restore `
             -p:DebugType=none `
             -p:DebugSymbols=false `
+            -p:ShouldUnsetParentConfigurationAndPlatform=false `
             "-p:DalamudLibPath=$env:DalamudLibPath"
 
       - name: Verify scanner resource lifetime
@@ -127,7 +130,10 @@ jobs:
         with:
           name: dact-release-${{ inputs.tag }}-${{ github.run_id }}
           path: |
-            artifacts/release/*.zip
+            artifacts/release/DalamudActCompat-core.zip
+            artifacts/release/host-*.zip
+            artifacts/release/cactbot-*.zip
+            artifacts/release/act-plugins-*.zip
             artifacts/release/resource-packs.json
           if-no-files-found: error
           retention-days: 7
