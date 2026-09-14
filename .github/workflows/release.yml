@@ -4,27 +4,65 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.0.1"
+        description: "Release tag matching the assembly version, for example v0.4.2.0"
         required: true
-        default: "v0.1.0.1"
+      dry_run:
+        description: "Build, test and upload workflow artifacts without publishing a Release"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dact-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: [self-hosted, Windows]
+    runs-on: [self-hosted, Windows, X64, dact-release]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
+
+      - name: Verify release environment
+        env:
+          TAG_NAME: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG_NAME -notmatch '^v\d+\.\d+\.\d+(\.\d+)?$') {
+            throw "Release tag must be v followed by three or four numeric parts."
+          }
+          Get-Command gh -ErrorAction Stop | Out-Null
+          $candidates = @(
+            (Join-Path $env:APPDATA "XIVLauncherCN/addon/Hooks/dev"),
+            (Join-Path $env:APPDATA "XIVLauncher/addon/Hooks/dev")
+          )
+          $dalamud = $candidates |
+            Where-Object { Test-Path (Join-Path $_ "Dalamud.dll") } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($dalamud)) {
+            throw "Dalamud development files were not found for the runner account."
+          }
+          # Restore and every build must resolve the same real launcher assemblies.
+          $dalamud = $dalamud.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+          "DalamudLibPath=$dalamud" >> $env:GITHUB_ENV
+          # Existing manual WebView2 references concatenate NuGetPackageRoot directly.
+          $packages = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $env:USERPROFILE ".nuget/packages" }
+          "NUGET_PACKAGES=$($packages.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar)" >> $env:GITHUB_ENV
+          Write-Host "Using Dalamud references: $dalamud"
 
       - name: Verify bundled dependency versions
         shell: pwsh
@@ -41,31 +79,31 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          $candidates = @(
-            (Join-Path $env:APPDATA "XIVLauncherCN/addon/Hooks/dev"),
-            (Join-Path $env:APPDATA "XIVLauncher/addon/Hooks/dev")
-          )
-          $dalamud = $candidates |
-            Where-Object { Test-Path (Join-Path $_ "Dalamud.dll") } |
-            Select-Object -First 1
-          if ([string]::IsNullOrWhiteSpace($dalamud)) {
-            throw "Dalamud development files were not found."
-          }
-          $dalamud = $dalamud.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
-          dotnet build src/DalamudActCompat/DalamudActCompat.csproj `
+          dotnet build DalamudActCompat.slnx `
             --configuration Release `
             --no-restore `
             -p:DebugType=none `
             -p:DebugSymbols=false `
-            "-p:DalamudLibPath=$dalamud"
+            "-p:DalamudLibPath=$env:DalamudLibPath"
 
       - name: Verify scanner resource lifetime
         shell: pwsh
         run: |
-          dotnet build tests/DalamudActCompat.ScannerSmokeTests/DalamudActCompat.ScannerSmokeTests.csproj --configuration Release --no-restore
-          if ($LASTEXITCODE -ne 0) { throw "Scanner smoke build failed." }
           & "tests/DalamudActCompat.ScannerSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.ScannerSmokeTests.exe"
           if ($LASTEXITCODE -ne 0) { throw "Scanner resource lifetime regression." }
+
+      - name: Verify release package and ACT extensions
+        run: |
+          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.PackageSmokeTests.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Release package smoke failed." }
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "vendor/BundledActPlugins/triggernometry/Triggernometry.dll"
+          if ($LASTEXITCODE -ne 0) { throw "Host smoke failed." }
+          & "tests/DalamudActCompat.LegacyResourceSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.LegacyResourceSmokeTests.exe" `
+            "vendor/BundledActPlugins/triggernometry/Triggernometry.dll" `
+            "vendor/BundledActPlugins/postnamazu/PostNamazu.dll"
+          if ($LASTEXITCODE -ne 0) { throw "Legacy resource smoke failed." }
 
       - name: Collect plugin artifact
         shell: pwsh
@@ -84,7 +122,18 @@ jobs:
             -OutputDirectory artifacts/release `
             -ExpectedAssemblyVersion $assemblyVersion
 
+      - name: Save verified release artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dact-release-${{ inputs.tag }}-${{ github.run_id }}
+          path: |
+            artifacts/release/*.zip
+            artifacts/release/resource-packs.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload verified resource packs before core
+        if: ${{ !inputs.dry_run }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,11 +148,25 @@ jobs:
           if ($resourcePacks.Count -ne 3) {
             throw "Expected exactly three verified resource packs, found $($resourcePacks.Count)."
           }
+          # An existing tag must identify the exact source that passed this run.
+          git show-ref --verify --quiet "refs/tags/$env:TAG_NAME"
+          if ($LASTEXITCODE -eq 0) {
+            $tagCommit = git rev-list -n 1 $env:TAG_NAME
+            if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $env:GITHUB_SHA) {
+              throw "Release tag does not point to the verified workflow commit."
+            }
+          } elseif ($LASTEXITCODE -ne 1) {
+            throw "Could not inspect the release tag."
+          }
           gh release create $env:TAG_NAME @resourcePacks `
+            --target $env:GITHUB_SHA `
             --title $env:TAG_NAME `
             --generate-notes `
             --draft
+          if ($LASTEXITCODE -ne 0) { throw "Draft release creation failed." }
           gh release upload $env:TAG_NAME `
             artifacts/release/resource-packs.json `
             artifacts/release/DalamudActCompat-core.zip
+          if ($LASTEXITCODE -ne 0) { throw "Core upload failed; the release remains a draft." }
           gh release edit $env:TAG_NAME --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed." }
