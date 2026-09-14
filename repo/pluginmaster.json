@@ -16,7 +16,7 @@
     "DownloadLinkTesting": null,
     "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.3.0/DalamudActCompat-core.zip",
     "LastUpdate": 1789375151494,
-    "Changelog": "v0.4.3.0 增加用户手动导入扩展的共享 Host 兼容适配，修复旧版界面资源与依赖识别。更新后请完整重启游戏。",
+    "Changelog": "v0.4.3.0 新增用户手动导入仿生石（Simulant）的兼容适配，完善初始化、防火墙和实体查询；手动安装扩展增加授权提示与垃圾桶移除按钮。更新后请完整重启游戏，退出游戏前先关闭仿生石防火墙。",
     "CanUnloadAsync": true,
     "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
   }
