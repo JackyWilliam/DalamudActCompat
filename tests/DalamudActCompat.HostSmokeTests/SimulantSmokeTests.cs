@@ -116,6 +116,7 @@ internal static class SimulantSmokeTests
             entities = ((IEnumerable)tn.GetMethod("GetEntityPtrs")!.Invoke(null, null)!).Cast<object>().ToArray();
             Assert(entities.Length == 1 && (IntPtr)entities[0] == new IntPtr(305419896),
                 "Simulant did not receive the entity address from DACT through real Triggernometry.");
+            ValidateImmediateEntityLookup(assembly, tn, namazu);
 
             // No process subscription is registered against the facade. Unloading must still
             // run the rest of upstream Dispose without a null DataSubscription exception.
@@ -196,6 +197,44 @@ internal static class SimulantSmokeTests
         }));
     }
 
+    private static void ValidateImmediateEntityLookup(Assembly assembly, Type tn, Type namazu)
+    {
+        var manager = assembly.GetType("Simulant.Game.FFCS.Client.Game.Object.GameObjectManager")!;
+        var instance = manager.GetProperty("InstancePtr")!;
+        var pluginProperty = namazu.GetProperty("Plugin")!;
+        var originalInstance = instance.GetValue(null);
+        var originalPlugin = pluginProperty.GetValue(null);
+        var fixture = new SimulantEntityMemoryFixture();
+        var plugin = Activator.CreateInstance(assembly.GetType("Simulant.ACT.NamazuPlugin")!,
+            [new SimulantNamazuEntityFixture(fixture)])!;
+        try
+        {
+            pluginProperty.SetValue(null, plugin);
+            instance.SetValue(null, new IntPtr(0x10000));
+            IntPtr[] Read() => ((IEnumerable)tn.GetMethod("GetEntityPtrs")!.Invoke(null, null)!)
+                .Cast<IntPtr>().ToArray();
+            fixture.SetPointer(0, 0x234000);
+            Assert(Read().SequenceEqual(new[] { new IntPtr(0x234000) }),
+                "Initialized Simulant still used the older Host combatant snapshot.");
+            // Simulate a synchronous spawn without publishing a new Host snapshot. This
+            // traverses the real rewritten iterator and upstream GameObjectPtrs reader.
+            fixture.SetPointer(449, 0x345000);
+            Assert(Read().SequenceEqual(new[] { new IntPtr(0x234000), new IntPtr(0x345000) }),
+                "A newly spawned EObj must be visible before the next IPC snapshot.");
+            var reads = fixture.Reads;
+            SetPermissions(0);
+            Throws(() => Read(), "授权");
+            Assert(fixture.Reads == reads, "Denied native access still read the game object table.");
+            Console.WriteLine("PASS: immediate EObj lookup through the upstream table before Host snapshot refresh; revoked permission blocks reads.");
+        }
+        finally
+        {
+            instance.SetValue(null, originalInstance);
+            pluginProperty.SetValue(null, originalPlugin);
+            SetPermissions(7);
+        }
+    }
+
     private static void SetPermissions(int mask)
     {
         var postNamazu = new List<string>();
@@ -221,4 +260,27 @@ internal static class SimulantSmokeTests
     {
         if (!condition) throw new InvalidOperationException(message);
     }
+}
+
+// Public fixture types let the upstream dynamic wrapper bind its real read path.
+// Their only memory is a managed byte array; no game process is opened by this test.
+public sealed class SimulantEntityMemoryFixture
+{
+    private readonly byte[] pointers = new byte[819 * 8];
+    public int Reads { get; private set; }
+    public void SetPointer(int index, long address) => BitConverter.TryWriteBytes(pointers.AsSpan(index * 8, 8), address);
+    public byte[] ReadBytes(IntPtr address, int count)
+    {
+        if (address != new IntPtr(0x10020) || count != pointers.Length)
+            throw new InvalidOperationException("Unexpected upstream object table read.");
+        Reads++;
+        return (byte[])pointers.Clone();
+    }
+}
+
+public sealed class SimulantNamazuEntityFixture(SimulantEntityMemoryFixture memory)
+{
+    private readonly object PluginUi = new();
+    public object Ui => PluginUi;
+    public SimulantEntityMemoryFixture Memory => memory;
 }

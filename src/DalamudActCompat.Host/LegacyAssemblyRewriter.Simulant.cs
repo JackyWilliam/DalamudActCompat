@@ -129,6 +129,16 @@ public static partial class LegacyAssemblyRewriter
                      Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantSimulationCompatibility).GetMethod(nameof(SimulantSimulationCompatibility.TraceLoad))!)),
                  }) enterIl.InsertBefore(enterFirst, instruction);
 
+        var entityPointers = module.GetType("Simulant.ACT.TriggernometryInterop").Methods
+            .Single(method => method.Name == "GetEntityPtrs");
+        foreach (var instruction in entityPointers.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToArray())
+        {
+            instruction.OpCode = OpCodes.Call;
+            instruction.Operand = module.ImportReference(typeof(SimulantEntityCompatibility)
+                .GetMethod(nameof(SimulantEntityCompatibility.UseLiveEntityPointers))!);
+            entityPointers.Body.GetILProcessor().InsertAfter(instruction, Instruction.Create(OpCodes.Ret));
+        }
+
         using var output = new MemoryStream();
         definition.Write(output);
         output.Position = 0;
