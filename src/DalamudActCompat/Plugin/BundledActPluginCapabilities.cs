@@ -46,6 +46,11 @@ internal static class BundledActPluginCapabilities
         ActCapability.WriteFiles,
     ];
 
+    public static IReadOnlyList<ActCapability> Simulant { get; } =
+    [
+        ActCapability.NativeGameMemory,
+    ];
+
     public static IReadOnlyList<(string PluginId, IReadOnlyList<ActCapability> Capabilities)> All { get; } =
     [
         ("act.foxtts", FoxTts),

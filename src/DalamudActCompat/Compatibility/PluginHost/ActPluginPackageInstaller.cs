@@ -25,6 +25,7 @@ public sealed partial class ActPluginPackageInstaller
         new("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
         new("silverdasher", "银山雀儿 / SilverDasher", "SilverDasher.dll", "SilverDasher.Loader.Loader"),
         new("matcha", "抹茶 / Cafe.Matcha", "Cafe.Matcha.dll", "Cafe.Matcha.MatchaInit"),
+        new("simulant", "仿生石 / Simulant", "Simulant.dll", "Simulant.PluginMain"),
     ];
 
     public ActPluginPackageInstaller(PluginPaths paths)
@@ -40,7 +41,8 @@ public sealed partial class ActPluginPackageInstaller
 
     public async Task<InstalledActPlugin> InstallAsync(
         string packagePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool userInitiated = false)
     {
         var fullPackagePath = Path.GetFullPath(packagePath);
         if (!File.Exists(fullPackagePath))
@@ -84,6 +86,8 @@ public sealed partial class ActPluginPackageInstaller
             CreateManifestWhenMissing(stagingDirectory);
             var manifest = await ReadManifestAsync(stagingDirectory, cancellationToken).ConfigureAwait(false);
             ValidateManifest(manifest, stagingDirectory);
+            // Provenance comes from the import entry point, never a package's own claim.
+            manifest.UserInstalled = userInitiated;
             if (!IsSpecializedPluginId(manifest.Id))
             {
                 var entryAssembly = Path.Combine(stagingDirectory, manifest.EntryAssembly);
@@ -94,12 +98,12 @@ public sealed partial class ActPluginPackageInstaller
                     .OrderBy(static capability => capability)
                     .Select(static capability => capability.ToString())
                     .ToArray();
-                await File.WriteAllTextAsync(
-                        Path.Combine(stagingDirectory, ActPluginManifest.FileName),
-                        JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }),
-                        cancellationToken)
-                    .ConfigureAwait(false);
             }
+            await File.WriteAllTextAsync(
+                    Path.Combine(stagingDirectory, ActPluginManifest.FileName),
+                    JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }),
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             installDirectory = Path.Combine(paths.ActPluginDirectory, manifest.Id);
             if (Directory.Exists(installDirectory))
@@ -266,6 +270,14 @@ public sealed partial class ActPluginPackageInstaller
         }
     }
 
+    public static bool RequiresManualAuthorization(ActPluginManifest manifest)
+        => manifest.UserInstalled || !IsSpecializedPluginId(manifest.Id);
+
+    public static bool IsUserManaged(ActPluginManifest manifest)
+        // Simulant and generic plugins were always manual imports, including manifests
+        // created before provenance was recorded. Bundled extensions retain their workflow.
+        => RequiresManualAuthorization(manifest) || manifest.Id.Equals("simulant", StringComparison.OrdinalIgnoreCase);
+
     public static IReadOnlyList<ActCapability> GetRequestedCapabilities(
         ActPluginManifest manifest)
         => (manifest.RequestedCapabilities ?? [])
@@ -356,6 +368,7 @@ public sealed partial class ActPluginPackageInstaller
                 HostApiVersion = 1,
                 EntryAssembly = relativeAssembly,
                 EntryType = known.EntryType,
+                RequestedCapabilities = known.Id == "simulant" ? ["NativeGameMemory"] : [],
             };
             File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions
             {

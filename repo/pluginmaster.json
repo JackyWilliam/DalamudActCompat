@@ -1,23 +1,23 @@
 [
-{
-  "Author": "raynording",
-  "Name": "Dalamud ACT Compat",
-  "InternalName": "DalamudActCompat",
-  "AssemblyVersion": "0.4.2.0",
-  "TestingAssemblyVersion": null,
-  "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
-  "Punchline": "In-game ACT-compatible parsing platform foundation.",
-  "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
-  "ApplicableVersion": "any",
-  "DalamudApiLevel": 15,
-  "IsHide": false,
-  "IsTestingExclusive": false,
-  "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.2.0/DalamudActCompat-core.zip",
-  "DownloadLinkTesting": null,
-  "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.2.0/DalamudActCompat-core.zip",
-  "LastUpdate": 1789147903126,
-  "Changelog": "v0.4.2.0 新增管理员无限生成激活码、晋升动效通知和好友管理员标志；最高伤害支持缩写/完整数字切换；HTML悬浮窗支持按窗口脱战隐藏。更新后请完整重启游戏。",
-  "CanUnloadAsync": true,
-  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
-}
+  {
+    "Author": "raynording",
+    "Name": "Dalamud ACT Compat",
+    "InternalName": "DalamudActCompat",
+    "AssemblyVersion": "0.4.3.0",
+    "TestingAssemblyVersion": null,
+    "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
+    "Punchline": "In-game ACT-compatible parsing platform foundation.",
+    "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
+    "ApplicableVersion": "any",
+    "DalamudApiLevel": 15,
+    "IsHide": false,
+    "IsTestingExclusive": false,
+    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.3.0/DalamudActCompat-core.zip",
+    "DownloadLinkTesting": null,
+    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.3.0/DalamudActCompat-core.zip",
+    "LastUpdate": 1789375151494,
+    "Changelog": "v0.4.3.0 新增用户手动导入仿生石（Simulant）的兼容适配，完善初始化、防火墙和实体查询；手动安装扩展增加授权提示与垃圾桶移除按钮。更新后请完整重启游戏，退出游戏前先关闭仿生石防火墙。",
+    "CanUnloadAsync": true,
+    "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
+  }
 ]

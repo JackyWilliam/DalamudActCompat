@@ -147,8 +147,7 @@ public sealed class SettingsWindow : Window
 
         foreach (var plugin in installedPlugins)
         {
-            var isGeneric = !ActPluginPackageInstaller.IsSpecializedPluginId(
-                plugin.Manifest.Id);
+            var isGeneric = ActPluginPackageInstaller.RequiresManualAuthorization(plugin.Manifest);
             var enabled = plugin.Enabled &&
                           (!isGeneric || configuration.TrustedGenericActPluginIds.Contains(
                               plugin.Manifest.Id));
@@ -338,6 +337,12 @@ public sealed class SettingsWindow : Window
         permissionsChanged |= DrawPluginPermissions(
             "silverdasher",
             BundledActPluginCapabilities.SilverDasher);
+        if (installedPlugins.Any(plugin => plugin.Manifest.Id == "simulant"))
+        {
+            permissionsChanged |= DrawPluginPermissions(
+                "simulant",
+                BundledActPluginCapabilities.Simulant);
+        }
         permissionsChanged |= DrawPluginPermissions(
             "matcha",
             BundledActPluginCapabilities.Matcha);
@@ -504,6 +509,7 @@ public sealed class SettingsWindow : Window
             "postnamazu" => text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
             "silverdasher" => text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
             "matcha" => text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
+            "simulant" => text.Get("仿生石 / Simulant", "Simulant"),
             _ => pluginId,
         };
         if (!ImGui.TreeNode($"{displayName}##permissions-{pluginId}"))

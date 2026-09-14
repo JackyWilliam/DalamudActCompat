@@ -18,6 +18,12 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Newtonsoft.Json.Linq;
 
+if (args.Length == 3 && args[0] == "--simulant")
+{
+    SimulantSmokeTests.RunOriginal(args[1], args[2]);
+    return;
+}
+
 var focusedProbe = args.Length == 4 ? args[0] : null;
 var entityTimingProbe = string.Equals(
     focusedProbe,
@@ -100,6 +106,7 @@ await ValidateBlockedReaderRemainsOutOfProcessAsync();
 await ValidateGenericPluginLoadsOnlyAfterConsentAsync();
 ValidateLargePostNamazuCopyReturnsQuickly();
 ValidatePostNamazuNativeProcessPermissionGate();
+SimulantSmokeTests.RunGuards();
 ValidatePostNamazuMarkPayloadNormalization();
 ValidatePictoActActorRemovalExtraction();
 ValidatePostNamazuQueueBreakAllCompatibility();

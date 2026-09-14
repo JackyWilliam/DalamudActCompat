@@ -53,7 +53,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         genericOnly = this.allowedPluginIds.Count > 0 && this.allowedPluginIds.All(
             static id => id is not (
                 "cactbotself" or "postnamazu" or "act.foxtts" or
-                "triggernometry" or "silverdasher" or "matcha"));
+                "triggernometry" or "silverdasher" or "matcha" or "simulant"));
         if (matchaOnly)
         {
             SetStage("matcha", "ACT Host", "pending", "Waiting for the dedicated ACT UI host.");
@@ -1045,7 +1045,9 @@ internal sealed class LegacyPluginHandle : IDisposable
                             ? LegacyAssemblyRewriter.LoadSilverDasher(assemblyPath, loadContext)
                             : id == "matcha"
                                 ? LegacyAssemblyRewriter.LoadMatcha(assemblyPath, loadContext)
-                            : loadContext.LoadFromAssemblyPath(assemblyPath);
+                                : id == "simulant"
+                                    ? LegacyAssemblyRewriter.LoadSimulant(assemblyPath, loadContext)
+                                    : loadContext.LoadFromAssemblyPath(assemblyPath);
                 var entryType = assembly.GetType(entryTypeName, throwOnError: true)!;
                 instance = Activator.CreateInstance(entryType)
                            ?? throw new InvalidOperationException($"Could not create {entryTypeName}.");
@@ -1446,7 +1448,10 @@ internal sealed class LegacyPluginHandle : IDisposable
             Console.Error.WriteLine($"Legacy plugin '{Id}' could not queue DeInit: {ex}");
         }
 
-        if (!uiThread.Join(TimeSpan.FromMilliseconds(250)))
+        // Simulant restores its game hooks through PostNamazu during DeInit. Give that
+        // cleanup a bounded window before the shared runtime unloads its dependency.
+        var unloadTimeout = Id == "simulant" ? TimeSpan.FromSeconds(5) : TimeSpan.FromMilliseconds(250);
+        if (!uiThread.Join(unloadTimeout))
         {
             Console.Error.WriteLine(
                 $"Legacy plugin '{Id}' UI thread is hung; Host process termination will contain it.");

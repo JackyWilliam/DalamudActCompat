@@ -117,6 +117,7 @@ try
     await ValidateSilverDasherNotificationIpcAsync();
     await ValidatePostNamazuHeadingIpcAsync();
     ValidateMatchaPermissionIsolation();
+    await SimulantPackageSmokeTests.RunAsync(testRoot);
     await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
     NotActStatisticsSmokeTests.Run();
@@ -1937,10 +1938,18 @@ static void ValidateHostMemoryProtectionPolicy()
         "Ignoring automatic recovery for the current Host session was not respected.");
 }
 
+static FormActMain CreateUninitializedActMain()
+{
+    var form = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(FormActMain));
+    // These queue-only fixtures skip the WinForms constructor and own no native resources.
+    // Running Control's finalizer against them can crash the test process during GC.
+    GC.SuppressFinalize(form);
+    return form;
+}
+
 static void ValidateBoundedNotActQueues()
 {
-    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-        typeof(FormActMain));
+    var actMain = CreateUninitializedActMain();
     typeof(FormActMain).GetField(
             "<PluginLog>k__BackingField",
             BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -2018,8 +2027,7 @@ static void ValidateActCustomTriggerCompatibility()
 
 static void ValidateSynchronousActInvocation()
 {
-    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-        typeof(FormActMain));
+    var actMain = CreateUninitializedActMain();
     actMain.InvokeSynchronously = true;
     var calls = 0;
     var result = actMain.Invoke((Func<int>)(() => ++calls));
@@ -2032,8 +2040,7 @@ static void ValidateSynchronousActInvocation()
 
 static void ValidateActCallbackCircuitBreaker()
 {
-    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-        typeof(FormActMain));
+    var actMain = CreateUninitializedActMain();
     typeof(FormActMain).GetField(
             "<PluginLog>k__BackingField",
             BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -11666,8 +11673,7 @@ static Task<string> ExecuteBrowserScriptAsync(Control webView, string script)
 
 static void ValidateActTtsDispatch()
 {
-    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-        typeof(FormActMain));
+    var actMain = CreateUninitializedActMain();
     string? spoken = null;
     actMain.PlayTtsMethod = message => spoken = message;
     actMain.TTS("FoxTTS bridge");
@@ -11679,8 +11685,7 @@ static void ValidateActTtsDispatch()
 static void ValidateFoxTtsBridge()
 {
     var previousActMain = ActGlobals.oFormActMain;
-    var actMain = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-        typeof(FormActMain));
+    var actMain = CreateUninitializedActMain();
     var restored = false;
     actMain.PlayTtsMethod = _ => restored = true;
     ActGlobals.oFormActMain = actMain;
