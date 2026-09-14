@@ -34,7 +34,7 @@ using NativeFramework = FFXIVClientStructs.FFXIV.Client.System.Framework.Framewo
 
 namespace DalamudActCompat.Plugin;
 
-public sealed partial class Plugin : IDalamudPlugin
+public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/actcompat";
     private const uint MatchaWorldChangedIconId = 61835;
@@ -723,8 +723,6 @@ public sealed partial class Plugin : IDalamudPlugin
             stopNotificationSound: friendsNotificationSound.Stop,
             administratorIcon: administratorIcon);
         settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
-        settingsWindow.InstallSimulant = DownloadSimulant;
-        settingsWindow.IsSimulantDownloading = () => Volatile.Read(ref simulantDownloadActive) != 0;
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(

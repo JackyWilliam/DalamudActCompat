@@ -310,7 +310,6 @@ public sealed class SettingsWindow : Window
         DrawCompatibilityTarget("PostNamazu", text.Get("鲶鱼精邮差；完整保留 7 个动作模块、15 个命令别名、HTTP、Triggernometry 与 OverlayPlugin 集成。启用完整权限后，原版进程附加、签名扫描和原生调用也会恢复。", "PostNamazu retains all 7 action modules, 15 command aliases, HTTP, Triggernometry, and OverlayPlugin integration. With full permissions enabled, the original process attachment, signature scanning, and native calls are also restored."), "https://github.com/Natsukage/PostNamazu");
         DrawCompatibilityTarget("ACT.FoxTTS", text.Get("中文 TTS；安装/基础加载，音频后端需实测。", "Chinese TTS; install/basic load, audio backends require testing."), "https://github.com/Noisyfox/ACT.FoxTTS");
         DrawCompatibilityTarget("Triggernometry 中文维护版", text.Get("支持 DLL 与汉化 XML、全部 29 种动作，以及日志/网络/区域/战斗/TTS/实体接口；其内置 BridgeNamazu 高级模块在鲶鱼精完整权限下使用原版原生运行时。", "Supports the DLL and translation XML, all 29 action types, and log/network/zone/combat/TTS/entity APIs. Its built-in advanced BridgeNamazu modules use the original native runtime when PostNamazu has full permissions."), "https://github.com/MnFeN/Triggernometry");
-        DrawCompatibilityTarget("仿生石 / Simulant", text.Get("本地机制模拟；请从控制中心的扩展页下载和管理。依赖 PostNamazu、MnFeN Triggernometry 及原生内存权限。", "Local mechanic simulation; download and manage it in Control Center > Extensions. Requires PostNamazu, MnFeN Triggernometry, and native memory permissions."), SimulantDownload.SourceUrl);
         ImGui.BulletText(text.Get("银山雀儿 / SilverDasher（共享 Host 最后加载）", "SilverDasher (loaded last in the shared Host)"));
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get(
@@ -339,9 +338,12 @@ public sealed class SettingsWindow : Window
         permissionsChanged |= DrawPluginPermissions(
             "silverdasher",
             BundledActPluginCapabilities.SilverDasher);
-        permissionsChanged |= DrawPluginPermissions(
-            "simulant",
-            BundledActPluginCapabilities.Simulant);
+        if (installedPlugins.Any(plugin => plugin.Manifest.Id == "simulant"))
+        {
+            permissionsChanged |= DrawPluginPermissions(
+                "simulant",
+                BundledActPluginCapabilities.Simulant);
+        }
         permissionsChanged |= DrawPluginPermissions(
             "matcha",
             BundledActPluginCapabilities.Matcha);

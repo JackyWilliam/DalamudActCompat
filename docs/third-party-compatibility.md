@@ -1,6 +1,6 @@
 # 第三方 ACT 扩展兼容说明
 
-2026-09-14 新增可选 [Simulant（仿生石）接入](simulant-compatibility.md)：专用下载、启停、配置与权限入口，原版 v0.0.4.2 在共享 Host 中随 PostNamazu、Triggernometry 运行。已覆盖离线加载与接口验证；上游标注 7.55，7.56 游戏模拟尚需实机验收。
+2026-09-14 新增 [Simulant 手动导入兼容适配](simulant-compatibility.md)：DACT 仅适配用户自行提供的原版 DLL；未安装时隐藏，不提供下载或随包分发。共享 Host 离线联调与本机国服 7.56 的 64 组静态签名检查通过，实际游戏模拟待验收。
 
 核对日期：2026-09-10；0.4.1.1 已通过本机国服验收，正式发布状态以 GitHub Release 为准。详细来源见
 [7.56 依赖审计](bundled-plugin-audit-2026-09-09.md)。

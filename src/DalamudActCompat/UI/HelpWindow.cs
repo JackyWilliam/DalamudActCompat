@@ -624,9 +624,6 @@ public sealed class HelpWindow : Window
                 "银山雀儿：默认关闭，启用后提供其原有通知与网络功能；抹茶使用单独的专属 Host。",
                 "SilverDasher is disabled by default and retains its original notification/network features when enabled. Matcha runs in a separate dedicated Host."));
             DrawBullet(text.Get(
-                "Simulant（仿生石）：在扩展页单独下载原版 DLL，用于本地机制模拟。与鲶鱼精和 MnFeN Triggernometry 同在共享 Host；初始化需单独授权原生内存，地址扫描失败时保持关闭。",
-                "Simulant is an optional upstream download for local mechanic simulation. It shares the Host with PostNamazu and MnFeN Triggernometry, requires its own native memory grant, and remains disabled if signature scanning fails."));
-            DrawBullet(text.Get(
                 "Triggernometry、鲶鱼精、FoxTTS 和银山雀儿共用“共享 ACT Host”；普通自行导入扩展使用“通用 Host”。",
                 "Triggernometry, PostNamazu, FoxTTS, and SilverDasher share the Shared ACT Host. Ordinary imported extensions use the Generic Host."));
         });

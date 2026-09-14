@@ -23,8 +23,6 @@ namespace DalamudActCompat.UI;
 public sealed class ControlCenterWindow : Window
 {
     internal Action<int>? PreviewFriendNotificationSound { get; set; }
-    internal Action? InstallSimulant { get; set; }
-    internal Func<bool>? IsSimulantDownloading { get; set; }
 
     private enum VisibilityTransition
     {
@@ -1682,10 +1680,13 @@ public sealed class ControlCenterWindow : Window
             "matcha",
             text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
             BundledActPluginCapabilities.Matcha);
-        hostConfigurationChanged |= DrawPluginPermissions(
-            "simulant",
-            text.Get("仿生石 / Simulant", "Simulant"),
-            BundledActPluginCapabilities.Simulant);
+        if (installedPlugins.Any(plugin => plugin.Manifest.Id == "simulant"))
+        {
+            hostConfigurationChanged |= DrawPluginPermissions(
+                "simulant",
+                text.Get("仿生石 / Simulant", "Simulant"),
+                BundledActPluginCapabilities.Simulant);
+        }
         changed |= hostConfigurationChanged;
         return changed;
     }
@@ -2063,6 +2064,11 @@ public sealed class ControlCenterWindow : Window
         var installed = plugins.FirstOrDefault(plugin => plugin.Manifest.Id == "simulant");
         var changed = false;
         enabledChanged = false;
+        // Simulant is user-supplied; expose management only after a manual import.
+        if (installed is null)
+        {
+            return false;
+        }
         ImGui.PushID("extension-simulant");
         if (installed is not null)
         {
@@ -2083,28 +2089,6 @@ public sealed class ControlCenterWindow : Window
                     openPluginConfiguration("simulant");
                 }
             }
-        }
-        else
-        {
-            ImGui.TextUnformatted(text.Get("仿生石 / Simulant", "Simulant"));
-        }
-
-        ImGui.SameLine();
-        var downloading = IsSimulantDownloading?.Invoke() == true;
-        ImGui.BeginDisabled(downloading);
-        if (ImGui.SmallButton(downloading
-                ? text.Get("下载中…", "Downloading…")
-                : installed is null
-                    ? text.Get($"下载并安装 v{SimulantDownload.Version}", $"Download and install v{SimulantDownload.Version}")
-                    : text.Get($"重装 v{SimulantDownload.Version}", $"Reinstall v{SimulantDownload.Version}")))
-        {
-            InstallSimulant?.Invoke();
-        }
-        ImGui.EndDisabled();
-        ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("上游项目", "Upstream project")))
-        {
-            Dalamud.Utility.Util.OpenLink(SimulantDownload.SourceUrl);
         }
         ImGui.TextDisabled(text.Get(
             "本地机制模拟；与 PostNamazu、Triggernometry 一起运行。",
