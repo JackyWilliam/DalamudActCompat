@@ -21,6 +21,7 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 | 战斗历史 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志 |
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
+| Simulant（仿生石） | 独立下载与管理原版 v0.0.4.2；与 PostNamazu、Triggernometry 联动，游戏模拟需按[兼容说明](docs/simulant-compatibility.md)实机验证 |
 | 自行导入扩展 | 对 DLL/ZIP 做静态预检，确认权限后在通用 Host 中加载兼容的 ACT 插件 |
 | 账号与云同步 | 使用激活码注册、可选自动登录、生成最多 3 个好友邀请码，并端到端加密备份配置 |
 | 好友与聊天 | 添加好友、查看在线状态、收发消息及离线来信；支持未读提醒、来信气泡、快捷回复和四种提示音 |

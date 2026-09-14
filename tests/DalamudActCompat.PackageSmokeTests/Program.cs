@@ -117,6 +117,7 @@ try
     await ValidateSilverDasherNotificationIpcAsync();
     await ValidatePostNamazuHeadingIpcAsync();
     ValidateMatchaPermissionIsolation();
+    await SimulantPackageSmokeTests.RunAsync(testRoot);
     await ValidateMatchaTypedIpcAsync();
     ValidateBoundedNotActQueues();
     NotActStatisticsSmokeTests.Run();

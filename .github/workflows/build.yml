@@ -58,6 +58,18 @@ jobs:
         run: |
           & "tests/DalamudActCompat.ScannerSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.ScannerSmokeTests.exe"
 
+      - name: Download pinned Simulant fixture
+        shell: pwsh
+        run: |
+          $fixtureDirectory = Join-Path $env:RUNNER_TEMP "simulant-fixture"
+          New-Item -ItemType Directory -Path $fixtureDirectory -Force | Out-Null
+          $fixture = Join-Path $fixtureDirectory "Simulant.dll"
+          Invoke-WebRequest -Uri "https://github.com/MnFeN/Simulant/releases/download/v0.0.4.2/Simulant.dll" -OutFile $fixture
+          if ((Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash -ne "12F31A446D6F137A7D0B39939F9E0361240D9209AC3677624FF95431C2578467") {
+            throw "Simulant fixture hash mismatch."
+          }
+          "ACTCOMPAT_SIMULANT_DLL=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Run Release Package smoke
         shell: pwsh
         run: |
@@ -69,6 +81,12 @@ jobs:
           & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
             "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins/triggernometry/Triggernometry.dll"
+
+      - name: Run original Simulant compatibility smoke
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+            --simulant "$env:ACTCOMPAT_SIMULANT_DLL" "vendor/BundledActPlugins"
 
       - name: Run Legacy Resource smoke
         shell: pwsh

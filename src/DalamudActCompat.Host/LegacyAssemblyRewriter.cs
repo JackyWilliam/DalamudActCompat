@@ -23,7 +23,7 @@ using System.Resources.Extensions;
 
 namespace DalamudActCompat.Host;
 
-public static class LegacyAssemblyRewriter
+public static partial class LegacyAssemblyRewriter
 {
     private const string MatchaUpstreamFileName = "Cafe.Matcha.Upstream.dll";
     private const string MatchaUpstreamSha256 =
@@ -1695,6 +1695,18 @@ public static class LegacyAssemblyRewriter
     {
         using var definition = AssemblyDefinition.ReadAssembly(implementation);
         var module = definition.MainModule;
+        ConvertLegacyFormResources(module);
+        PatchLegacyJavaScriptSerializer(module);
+        PatchTriggernometryCompatibility(module);
+        ValidateTriggernometryPublicSurface(module);
+        var patched = new MemoryStream();
+        definition.Write(patched);
+        patched.Position = 0;
+        return patched;
+    }
+
+    private static void ConvertLegacyFormResources(ModuleDefinition module)
+    {
         var resources = module.Resources
             .OfType<EmbeddedResource>()
             .Where(resource => resource.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
@@ -1730,13 +1742,6 @@ public static class LegacyAssemblyRewriter
         }
 
         RedirectResourceManagerCalls(module);
-        PatchLegacyJavaScriptSerializer(module);
-        PatchTriggernometryCompatibility(module);
-        ValidateTriggernometryPublicSurface(module);
-        var patched = new MemoryStream();
-        definition.Write(patched);
-        patched.Position = 0;
-        return patched;
     }
 
     private static void PatchLegacyJavaScriptSerializer(ModuleDefinition module)

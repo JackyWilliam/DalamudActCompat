@@ -715,6 +715,9 @@ public static class HostPluginBridge
         => IsAllowed("postnamazu", "GameCommand") &&
            IsAllowed("postnamazu", "NativeGameMemory");
 
+    public static bool IsSimulantNativeRuntimeAllowed()
+        => IsAllowed("simulant", "NativeGameMemory") && IsPostNamazuNativeRuntimeAllowed();
+
     internal static void ApplyFfxivEntitySnapshot(HostFfxivEntitySnapshot snapshot)
         => FfxivRepositoryInstance.Apply(snapshot);
 

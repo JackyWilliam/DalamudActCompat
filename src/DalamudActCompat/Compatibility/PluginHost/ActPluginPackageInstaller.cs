@@ -25,6 +25,7 @@ public sealed partial class ActPluginPackageInstaller
         new("triggernometry", "Triggernometry", "Triggernometry.dll", "TriggernometryProxy.ProxyPlugin"),
         new("silverdasher", "银山雀儿 / SilverDasher", "SilverDasher.dll", "SilverDasher.Loader.Loader"),
         new("matcha", "抹茶 / Cafe.Matcha", "Cafe.Matcha.dll", "Cafe.Matcha.MatchaInit"),
+        new("simulant", "仿生石 / Simulant", "Simulant.dll", "Simulant.PluginMain"),
     ];
 
     public ActPluginPackageInstaller(PluginPaths paths)
@@ -356,6 +357,7 @@ public sealed partial class ActPluginPackageInstaller
                 HostApiVersion = 1,
                 EntryAssembly = relativeAssembly,
                 EntryType = known.EntryType,
+                RequestedCapabilities = known.Id == "simulant" ? ["NativeGameMemory"] : [],
             };
             File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions
             {

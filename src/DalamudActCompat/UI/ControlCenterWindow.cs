@@ -23,6 +23,8 @@ namespace DalamudActCompat.UI;
 public sealed class ControlCenterWindow : Window
 {
     internal Action<int>? PreviewFriendNotificationSound { get; set; }
+    internal Action? InstallSimulant { get; set; }
+    internal Func<bool>? IsSimulantDownloading { get; set; }
 
     private enum VisibilityTransition
     {
@@ -1605,6 +1607,8 @@ public sealed class ControlCenterWindow : Window
             .Where(plugin => !ActPluginPackageInstaller.IsSpecializedPluginId(
                 plugin.Manifest.Id))
             .ToArray();
+        changed |= DrawSimulantEntry(installedPlugins, out extensionChanged);
+        hostConfigurationChanged |= extensionChanged;
         if (genericPlugins.Length > 0)
         {
             ImGui.Spacing();
@@ -1678,6 +1682,10 @@ public sealed class ControlCenterWindow : Window
             "matcha",
             text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
             BundledActPluginCapabilities.Matcha);
+        hostConfigurationChanged |= DrawPluginPermissions(
+            "simulant",
+            text.Get("仿生石 / Simulant", "Simulant"),
+            BundledActPluginCapabilities.Simulant);
         changed |= hostConfigurationChanged;
         return changed;
     }
@@ -2046,6 +2054,74 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.EndPopup();
+    }
+
+    private bool DrawSimulantEntry(
+        IReadOnlyList<InstalledActPlugin> plugins,
+        out bool enabledChanged)
+    {
+        var installed = plugins.FirstOrDefault(plugin => plugin.Manifest.Id == "simulant");
+        var changed = false;
+        enabledChanged = false;
+        ImGui.PushID("extension-simulant");
+        if (installed is not null)
+        {
+            var enabled = installed.Enabled;
+            if (ImGui.Checkbox(text.Get("仿生石 / Simulant", "Simulant"), ref enabled))
+            {
+                if (enabled) configuration.DisabledActPluginIds.Remove("simulant");
+                else configuration.DisabledActPluginIds.Add("simulant");
+                changed = enabledChanged = true;
+            }
+            ImGui.SameLine();
+            DrawInstalledVersion(installed);
+            if (enabled)
+            {
+                ImGui.SameLine();
+                if (ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+                {
+                    openPluginConfiguration("simulant");
+                }
+            }
+        }
+        else
+        {
+            ImGui.TextUnformatted(text.Get("仿生石 / Simulant", "Simulant"));
+        }
+
+        ImGui.SameLine();
+        var downloading = IsSimulantDownloading?.Invoke() == true;
+        ImGui.BeginDisabled(downloading);
+        if (ImGui.SmallButton(downloading
+                ? text.Get("下载中…", "Downloading…")
+                : installed is null
+                    ? text.Get($"下载并安装 v{SimulantDownload.Version}", $"Download and install v{SimulantDownload.Version}")
+                    : text.Get($"重装 v{SimulantDownload.Version}", $"Reinstall v{SimulantDownload.Version}")))
+        {
+            InstallSimulant?.Invoke();
+        }
+        ImGui.EndDisabled();
+        ImGui.SameLine();
+        if (ImGui.SmallButton(text.Get("上游项目", "Upstream project")))
+        {
+            Dalamud.Utility.Util.OpenLink(SimulantDownload.SourceUrl);
+        }
+        ImGui.TextDisabled(text.Get(
+            "本地机制模拟；与 PostNamazu、Triggernometry 一起运行。",
+            "Local mechanic simulation; runs alongside PostNamazu and Triggernometry."));
+        var missing = new[] { "postnamazu", "triggernometry" }
+            .Where(id => !plugins.Any(plugin => plugin.Manifest.Id == id && plugin.Enabled)).ToArray();
+        if (missing.Length > 0)
+        {
+            ImGui.TextWrapped(text.Get(
+                $"请先安装并启用：{string.Join(", ", missing)}。",
+                $"Install and enable first: {string.Join(", ", missing)}."));
+        }
+        ImGui.TextWrapped(text.Get(
+            "初始化需要 Simulant 原生内存权限，以及 PostNamazu 游戏命令和原生内存权限。上游 v0.0.4.2 标注支持 7.55；当前游戏版本需以实际扫描结果和实机验证为准。",
+            "Initialization requires Simulant native memory access and PostNamazu game-command/native-memory access. Upstream v0.0.4.2 targets 7.55; other game builds require signature checks and in-game verification."));
+        ImGui.PopID();
+        return changed;
     }
 
     private bool DrawExtensionEntry(
