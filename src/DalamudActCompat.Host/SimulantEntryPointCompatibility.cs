@@ -39,8 +39,8 @@ internal static class SimulantEntryPointCompatibility
                 file.Position = 0;
                 var headers = new byte[headerSize];
                 file.ReadExactly(headers);
-                if (!headers.AsSpan().SequenceEqual(ReadMemory(module.BaseAddress, headerSize)))
-                    throw new InvalidDataException("运行中的游戏与磁盘 PE 头不一致。");
+                if (header.Magic != PEMagic.PE32Plus) throw new InvalidDataException("游戏不是 x64 映像。");
+                ValidateImageHeaders(headers, ReadMemory(module.BaseAddress, headerSize), module.BaseAddress);
                 var section = pe.PEHeaders.SectionHeaders.Single(s => s.Name == ".text");
                 var code = pe.GetSectionData(section.VirtualAddress).GetContent().ToArray();
                 var offsets = patterns.Select(pattern => FindUniqueOffset(code, pattern)).Distinct().ToArray();
@@ -68,6 +68,21 @@ internal static class SimulantEntryPointCompatibility
         byte[] bytes = plugin.Memory.ReadBytes(address, count);
         if (bytes.Length != count) throw new IOException("未能完整读取游戏函数。");
         return bytes;
+    }
+
+    internal static void ValidateImageHeaders(ReadOnlySpan<byte> disk, ReadOnlySpan<byte> live, IntPtr moduleBase)
+    {
+        if (disk.Length < 64 || disk.Length != live.Length) throw new InvalidDataException("游戏 PE 头长度不一致。");
+        var imageBaseOffset = checked(BinaryPrimitives.ReadInt32LittleEndian(disk[0x3C..]) + 48);
+        if (imageBaseOffset < 64 || imageBaseOffset > disk.Length - 8) throw new InvalidDataException("游戏 PE 基址字段无效。");
+        var diskBase = BinaryPrimitives.ReadInt64LittleEndian(disk[imageBaseOffset..]);
+        var liveBase = BinaryPrimitives.ReadInt64LittleEndian(live[imageBaseOffset..]);
+        // The live loader can record its ASLR address in ImageBase. Accept only that
+        // observed module address (or the original preference); every other byte must match.
+        if ((liveBase != diskBase && liveBase != moduleBase.ToInt64()) ||
+            !disk[..imageBaseOffset].SequenceEqual(live[..imageBaseOffset]) ||
+            !disk[(imageBaseOffset + 8)..].SequenceEqual(live[(imageBaseOffset + 8)..]))
+            throw new InvalidDataException("运行中的游戏与磁盘 PE 头不一致。");
     }
 
     internal static int FindUniqueOffset(ReadOnlySpan<byte> code, string pattern)
@@ -111,6 +126,13 @@ internal static class SimulantEntryPointCompatibility
         else if (entry.Length >= 14 && entry[0] == 0xFF && entry[1] == 0x25)
         {
             var slot = checked(address.ToInt64() + 6 + BinaryPrimitives.ReadInt32LittleEndian(entry[2..6]));
+            destination = BinaryPrimitives.ReadInt64LittleEndian(read(new IntPtr(slot), 8));
+        }
+        else if (entry.Length >= 7 && entry[0] == 0xFF && entry[1] == 0x24 && entry[2] == 0x25)
+        {
+            // Dalamud's live x64 hook uses a SIB absolute disp32 pointer slot. It is
+            // neither RIP-relative FF25 nor an inline target address.
+            var slot = BinaryPrimitives.ReadInt32LittleEndian(entry[3..7]);
             destination = BinaryPrimitives.ReadInt64LittleEndian(read(new IntPtr(slot), 8));
         }
         else throw new InvalidDataException("不支持的函数入口修改，模拟保持关闭。");

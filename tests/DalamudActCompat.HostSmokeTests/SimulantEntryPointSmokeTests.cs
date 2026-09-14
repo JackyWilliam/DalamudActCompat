@@ -7,6 +7,18 @@ internal static class SimulantEntryPointSmokeTests
 {
     internal static void Run()
     {
+        var header = new byte[256];
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(0x3C), 128);
+        BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(176), 0x140000000);
+        var liveHeader = header.ToArray();
+        var moduleBase = new IntPtr(0x7FF603240000);
+        BinaryPrimitives.WriteInt64LittleEndian(liveHeader.AsSpan(176), moduleBase.ToInt64());
+        SimulantEntryPointCompatibility.ValidateImageHeaders(header, liveHeader, moduleBase);
+        liveHeader[100] = 1;
+        Reject(() => SimulantEntryPointCompatibility.ValidateImageHeaders(header, liveHeader, moduleBase));
+        liveHeader[100] = 0;
+        BinaryPrimitives.WriteInt64LittleEndian(liveHeader.AsSpan(176), moduleBase.ToInt64() + 1);
+        Reject(() => SimulantEntryPointCompatibility.ValidateImageHeaders(header, liveHeader, moduleBase));
         var original = Enumerable.Range(0, 64).Select(i => (byte)i).ToArray();
         var address = new IntPtr(0x100000);
         const long destination = 0x200000;
@@ -16,6 +28,7 @@ internal static class SimulantEntryPointSmokeTests
             if (pointer.ToInt64() >= address.ToInt64() && pointer.ToInt64() + count <= address.ToInt64() + live.Length)
                 return live.AsSpan((int)(pointer.ToInt64() - address.ToInt64()), count).ToArray();
             if (pointer.ToInt64() == destination && count == 1) return [0xC3];
+            if (pointer.ToInt64() == 0x3FF00788 && count == 8) return BitConverter.GetBytes(destination);
             throw new IOException("Unreadable fixture address.");
         }
         SimulantEntryPointCompatibility.ValidateEntry(original, live, address, Read);
@@ -26,6 +39,9 @@ internal static class SimulantEntryPointSmokeTests
         live[0] = 0xFF; live[1] = 0x25;
         live.AsSpan(2, 4).Clear();
         BinaryPrimitives.WriteInt64LittleEndian(live.AsSpan(6), destination);
+        ValidateJump();
+        live = original.ToArray();
+        new byte[] { 0xFF, 0x24, 0x25, 0x88, 0x07, 0xF0, 0x3F }.CopyTo(live, 0);
         ValidateJump();
         live[20] ^= 0xFF;
         Reject(() => SimulantEntryPointCompatibility.ValidateEntry(original, live, address, Read));
