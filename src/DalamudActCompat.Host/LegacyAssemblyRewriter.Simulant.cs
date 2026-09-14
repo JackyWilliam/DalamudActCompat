@@ -100,6 +100,35 @@ public static partial class LegacyAssemblyRewriter
         enableIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.EnableFirewall))!));
         enableIl.Emit(OpCodes.Ret);
 
+        // A selected preset alone used to start a session even back in the real inn.
+        // Check both the completed simulated-zone state and the live territory first.
+        var presetControl = module.GetType("Simulant.UI.PresetControl");
+        var start = presetControl.Methods.Single(method => method.Name == "btnStart_Click");
+        var startIl = start.Body.GetILProcessor();
+        var first = start.Body.Instructions[0];
+        foreach (var instruction in new[]
+                 {
+                     Instruction.Create(OpCodes.Ldarg_0),
+                     Instruction.Create(OpCodes.Ldfld, presetControl.Fields.Single(field => field.Name == "_host")),
+                     Instruction.Create(OpCodes.Ldarg_0),
+                     Instruction.Create(OpCodes.Ldfld, presetControl.Fields.Single(field => field.Name == "_preset")),
+                     Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantSimulationCompatibility).GetMethod(nameof(SimulantSimulationCompatibility.CanStart))!)),
+                     Instruction.Create(OpCodes.Brtrue, first),
+                     Instruction.Create(OpCodes.Ret),
+                 }) startIl.InsertBefore(first, instruction);
+
+        var zone = module.GetType("Simulant.Core.Zone.ZoneService");
+        var enter = zone.Methods.Single(method => method.Name == "TryEnterTerritory");
+        var enterIl = enter.Body.GetILProcessor();
+        var enterFirst = enter.Body.Instructions[0];
+        foreach (var instruction in new[]
+                 {
+                     Instruction.Create(OpCodes.Ldarg_0),
+                     Instruction.Create(OpCodes.Ldfld, zone.Fields.Single(field => field.Name == "_host")),
+                     Instruction.Create(OpCodes.Ldarg_1),
+                     Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantSimulationCompatibility).GetMethod(nameof(SimulantSimulationCompatibility.TraceLoad))!)),
+                 }) enterIl.InsertBefore(enterFirst, instruction);
+
         using var output = new MemoryStream();
         definition.Write(output);
         output.Position = 0;

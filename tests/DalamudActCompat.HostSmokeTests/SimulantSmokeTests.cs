@@ -20,6 +20,16 @@ internal static class SimulantSmokeTests
 
     private static void RunGuardCases()
     {
+        Assert(SimulantSimulationCompatibility.GetStartError(true, true, false, true, 1122, 1122) is null,
+            "A loaded, matching simulation territory must remain startable.");
+        Assert(SimulantSimulationCompatibility.GetStartError(true, true, false, false, 1122, 177)!.Contains("加载区域"),
+            "Starting back in the real inn must explain the missing zone load.");
+        Assert(SimulantSimulationCompatibility.GetStartError(true, true, true, true, 1122, 1122)!.Contains("正在加载"),
+            "Starting before the phase is ready must be rejected.");
+        Assert(SimulantSimulationCompatibility.GetStartError(true, true, false, true, 1122, 177)!.Contains("不一致"),
+            "A stale zone-loaded flag must not start the wrong territory.");
+        Assert(SimulantSimulationCompatibility.GetStartError(true, false, false, true, 1122, 1122)!.Contains("防火墙"),
+            "A loaded map without the firewall must not start simulation.");
         for (var mask = 0; mask < 8; mask++)
         {
             SetPermissions(mask);
@@ -176,6 +186,12 @@ internal static class SimulantSmokeTests
             var presets = phases.Items.Cast<object>().Where(item => item.ToString()!.StartsWith("[模拟]", StringComparison.Ordinal)).ToArray();
             Assert(presets.Length >= 2, "Known territory did not populate its simulation presets.");
             foreach (var preset in presets) phases.SelectedItem = preset;
+            var presetControl = (System.Windows.Forms.Control)ui.GetType().GetField("presetControl", fields)!.GetValue(ui)!;
+            // Exercise the rewritten real click handler, not only the helper: browsing a
+            // preset before initialization must not create a session or invoke native code.
+            presetControl.GetType().GetMethod("btnStart_Click", fields)!.Invoke(presetControl, [null, EventArgs.Empty]);
+            Assert(presetControl.GetType().GetField("_session", fields)!.GetValue(presetControl) is null,
+                "Original start handler created a session despite missing readiness.");
             Console.WriteLine($"PASS: Simulant map names, preset-only filter, search, and {presets.Length} selectable presets for 1122.");
         }));
     }
