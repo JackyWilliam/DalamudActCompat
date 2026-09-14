@@ -2,11 +2,13 @@ using System.Buffers.Binary;
 using System.Reflection.PortableExecutable;
 using DalamudActCompat.Host;
 using Mono.Cecil;
+using System.Runtime.InteropServices;
 
 internal static class SimulantEntryPointSmokeTests
 {
     internal static void Run()
     {
+        RunNativeHookChain();
         var header = new byte[256];
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(0x3C), 128);
         BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(176), 0x140000000);
@@ -63,6 +65,67 @@ internal static class SimulantEntryPointSmokeTests
             if (jump.Length != 14 || jump[0] != 0xFF || jump[1] != 0x25 ||
                 BinaryPrimitives.ReadInt64LittleEndian(jump.AsSpan(6)) != destination || !live.SequenceEqual(backup))
                 throw new InvalidOperationException("Relocated hook changed its target or restoration backup.");
+        }
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NativeSend(IntPtr context, IntPtr packet);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool VirtualFree(IntPtr address, nuint size, uint type);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FlushInstructionCache(IntPtr process, IntPtr address, nuint size);
+
+    private static void RunNativeHookChain()
+    {
+        // Execute only a synthetic function in this test process. The old 15-byte patch
+        // corrupts the +10 continuation; the near jump must preserve a real call/return.
+        var memory = SimulantNearMemory.Allocate(new IntPtr(-1), new IntPtr(0x140000000), 4096);
+        var slot = IntPtr.Zero;
+        try
+        {
+            slot = SimulantNearMemory.Allocate(new IntPtr(-1), new IntPtr(0x10000), 4096);
+            var entry = memory + 0x100;
+            var existingHook = memory + 0x200;
+            var trampoline = memory + 0x300;
+            var cave = memory + 0x400;
+            var packet = memory + 0x500;
+            byte[] prologue = [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x4C, 0x89, 0x64, 0x24, 0x18];
+            byte[] function = [.. prologue, 0xB8, 42, 0, 0, 0, 0xC3];
+            void Write(IntPtr at, byte[] bytes)
+            {
+                Marshal.Copy(bytes, 0, at, bytes.Length);
+                if (!FlushInstructionCache(new IntPtr(-1), at, (nuint)bytes.Length)) throw new InvalidOperationException("Fixture instruction cache flush failed.");
+            }
+            byte[] Read(IntPtr at, int length) { var bytes = new byte[length]; Marshal.Copy(at, bytes, 0, length); return bytes; }
+            Write(entry, function);
+            Write(existingHook, SimulantNearMemory.CreateEntryPatch(existingHook, trampoline));
+            Write(trampoline, [.. prologue[..10], .. SimulantNearMemory.CreateEntryPatch(trampoline + 10, entry + 10)]);
+            Marshal.WriteIntPtr(slot, existingHook);
+            Write(entry, [0xFF, 0x24, 0x25, .. BitConverter.GetBytes(checked((int)slot.ToInt64())), 0x90, 0x90, 0x90]);
+            var backup = Read(entry, 15);
+            var relocated = SimulantEntryPointCompatibility.RelocateJump(backup, entry, Read);
+            // Same heartbeat predicate and block/pass paths as the upstream cave.
+            Write(cave, [0x66, 0x81, 0x3A, 0x10, 0x02, 0x75, (byte)relocated.Length, .. relocated, 0x31, 0xC0, 0xC3]);
+            var send = Marshal.GetDelegateForFunctionPointer<NativeSend>(entry);
+            Marshal.WriteInt16(packet, 0x210);
+            if (send(IntPtr.Zero, packet) != 42) throw new InvalidOperationException("Original hook fixture failed.");
+            Write(entry, SimulantNearMemory.CreateEntryPatch(entry, cave));
+            if (!Read(entry + 5, 10).SequenceEqual(backup[5..])) throw new InvalidOperationException("Existing trampoline continuation was overwritten.");
+            if (send(IntPtr.Zero, packet) != 42) throw new InvalidOperationException("Heartbeat lost the existing native hook chain.");
+            Marshal.WriteInt16(packet, 0x211);
+            if (send(IntPtr.Zero, packet) != 0) throw new InvalidOperationException("Non-heartbeat packet was not blocked.");
+            Write(entry, backup);
+            if (send(IntPtr.Zero, packet) != 42 || !Read(entry, 15).SequenceEqual(backup))
+                throw new InvalidOperationException("Native send entry did not restore.");
+            Reject(() => SimulantNearMemory.CreateEntryPatch(entry, new IntPtr(entry.ToInt64() + 0x100000000L)));
+            Console.WriteLine("PASS: native heartbeat/block/restore through an existing hook returning at entry +10, in the test process only.");
+        }
+        finally
+        {
+            var slotReleased = slot == IntPtr.Zero || VirtualFree(slot, 0, 0x8000);
+            if (!VirtualFree(memory, 0, 0x8000) || !slotReleased) throw new InvalidOperationException("Fixture allocation did not release.");
         }
     }
 

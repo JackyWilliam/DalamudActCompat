@@ -48,15 +48,9 @@ public static partial class LegacyAssemblyRewriter
 
         var accessCheck = module.ImportReference(typeof(SimulantCompatibility).GetMethod(
             nameof(SimulantCompatibility.EnsureNativeAccess))!);
-        foreach (var method in new[]
-                 {
-                     module.GetType("Simulant.ACT.NamazuInterop").Methods.Single(m => m.Name == "Init"),
-                     module.GetType("Simulant.Core.Firewall.FirewallService").Methods.Single(m => m.Name == "Enable"),
-                 })
-        {
-            method.Body.GetILProcessor().InsertBefore(method.Body.Instructions[0],
-                Instruction.Create(OpCodes.Call, accessCheck));
-        }
+        var namazuInit = module.GetType("Simulant.ACT.NamazuInterop").Methods.Single(m => m.Name == "Init");
+        namazuInit.Body.GetILProcessor().InsertBefore(namazuInit.Body.Instructions[0],
+            Instruction.Create(OpCodes.Call, accessCheck));
 
         // Upstream marks initialization successful even with missing signatures. A failed
         // scan must keep the firewall and simulation controls disabled on a newer game build.
@@ -74,9 +68,6 @@ public static partial class LegacyAssemblyRewriter
         // Dalamud/plugin jump when upstream copies those bytes into its send-hook cave.
         var firewall = module.GetType("Simulant.Core.Firewall.FirewallService");
         var enableFirewall = firewall.Methods.Single(method => method.Name == "Enable");
-        enableFirewall.Body.GetILProcessor().InsertBefore(enableFirewall.Body.Instructions[0],
-            Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
-                .GetMethod(nameof(SimulantCompatibility.ValidateSendHookEntry))!)));
         var sendHook = firewall.Methods.Single(method => method.Name == "SendHookEnable");
         var copiedEntry = sendHook.Body.Instructions.Single(instruction =>
             instruction.OpCode == OpCodes.Ldfld && instruction.Operand is FieldReference field &&
@@ -87,6 +78,27 @@ public static partial class LegacyAssemblyRewriter
             .GetMethod(nameof(SimulantCompatibility.PrepareSendHookInstructions))!));
         sendHook.Body.GetILProcessor().InsertAfter(copiedEntry, getAddress);
         sendHook.Body.GetILProcessor().InsertAfter(getAddress, prepareEntry);
+
+        var allocation = sendHook.Body.Instructions.Single(instruction => instruction.Operand is MethodReference called && called.Name == "AllocateMemory");
+        allocation.OpCode = OpCodes.Call;
+        allocation.Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.AllocateSendHookMemory))!);
+
+        // The upstream 15-byte patch overlaps a Dalamud trampoline returning at +10.
+        // Keep its saved backup and cave logic, but write only a five-byte near jump.
+        var entryWrite = sendHook.Body.Instructions.Last(instruction => instruction.Operand is MethodReference called && called.Name == "WriteBytes");
+        var patchArray = entryWrite.Previous.Previous.Previous;
+        if (patchArray.Operand is not MethodReference { Name: "ToArray" })
+            throw new InvalidDataException("Unexpected Simulant send entry patch layout.");
+        var entryAddress = Instruction.Create(OpCodes.Call, sendAddress);
+        sendHook.Body.GetILProcessor().InsertAfter(patchArray, entryAddress);
+        sendHook.Body.GetILProcessor().InsertAfter(entryAddress, Instruction.Create(OpCodes.Call,
+            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.PrepareSendEntryPatch))!)));
+
+        enableFirewall.Body = new Mono.Cecil.Cil.MethodBody(enableFirewall);
+        var enableIl = enableFirewall.Body.GetILProcessor();
+        enableIl.Emit(OpCodes.Ldarg_0);
+        enableIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.EnableFirewall))!));
+        enableIl.Emit(OpCodes.Ret);
 
         using var output = new MemoryStream();
         definition.Write(output);
