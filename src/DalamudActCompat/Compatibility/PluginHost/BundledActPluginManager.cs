@@ -155,6 +155,10 @@ public sealed class BundledActPluginManager
 
     public bool IsAllowedToLoad(InstalledActPlugin installed)
     {
+        // Manual imports use their own explicit consent, even when their id also has a
+        // bundled version. A bundled acknowledgement must not authorize a replaced DLL.
+        if (installed.Manifest.UserInstalled)
+            return configuration.TrustedGenericActPluginIds.Contains(installed.Manifest.Id);
         lock (updateLock)
         {
             var bundled = bundledPlugins.FirstOrDefault(plugin =>

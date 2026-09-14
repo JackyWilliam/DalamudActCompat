@@ -14,6 +14,14 @@ internal static class SimulantPackageSmokeTests
             "A manual Simulant installation must not inherit native memory permission.");
         Assert(BundledActPluginCapabilities.Simulant.SequenceEqual([ActCapability.NativeGameMemory]),
             "The Simulant permission entry no longer matches its native bridge.");
+        var bundled = new ActPluginManifest { Id = "postnamazu" };
+        Assert(!ActPluginPackageInstaller.RequiresManualAuthorization(bundled) &&
+               !ActPluginPackageInstaller.IsUserManaged(bundled), "Bundled extensions unexpectedly entered manual consent/removal.");
+        bundled.UserInstalled = true;
+        Assert(ActPluginPackageInstaller.RequiresManualAuthorization(bundled) &&
+               ActPluginPackageInstaller.IsUserManaged(bundled), "A manual specialized import bypassed consent or removal.");
+        Assert(ActPluginPackageInstaller.IsUserManaged(new ActPluginManifest { Id = "simulant" }),
+            "Previously imported Simulant cannot be removed.");
 
         // The original fixture is supplied by the test caller. Product code neither fetches
         // Simulant nor creates an installation until the user imports their own package.
@@ -25,7 +33,7 @@ internal static class SimulantPackageSmokeTests
         var original = Environment.GetEnvironmentVariable("ACTCOMPAT_SIMULANT_DLL");
         if (!string.IsNullOrWhiteSpace(original))
         {
-            var installed = await installer.InstallAsync(original, CancellationToken.None);
+            var installed = await installer.InstallAsync(original, CancellationToken.None, userInitiated: true);
             Assert(installed.Manifest.Id == "simulant" && installed.Manifest.EntryType == "Simulant.PluginMain",
                 "The original DLL did not produce the specialized Simulant manifest.");
             Assert(installed.Manifest.SourceSha256.Equals(
@@ -33,6 +41,17 @@ internal static class SimulantPackageSmokeTests
                 "Installation modified the author's original fixture DLL.");
             Assert(ActPluginPackageInstaller.GetRequestedCapabilities(installed.Manifest).Contains(ActCapability.NativeGameMemory),
                 "The installed manifest omits Simulant's native permission.");
+            Assert(installed.Manifest.UserInstalled && ActPluginPackageInstaller.RequiresManualAuthorization(installed.Manifest),
+                "Manual Simulant import did not persist its consent requirement.");
+            var manager = new BundledActPluginManager("0.4.3.0", installer, config);
+            Assert(!manager.IsAllowedToLoad(installed), "A manual specialized DLL loaded before consent.");
+            config.TrustedGenericActPluginIds.Add("simulant");
+            Assert(manager.IsAllowedToLoad(installed), "Explicit manual consent did not permit the specialized DLL.");
+            config.TrustedGenericActPluginIds.Remove("simulant");
+            Assert(!manager.IsAllowedToLoad(installed), "Revoking manual consent left the DLL enabled.");
+            var backup = await installer.UninstallAsync("simulant", CancellationToken.None);
+            Assert(installer.Discover(config.DisabledActPluginIds).Count == 0 &&
+                   File.Exists(Path.Combine(backup!, "Simulant.dll")), "Specialized removal did not preserve a recoverable backup.");
         }
         Console.WriteLine("PASS: Simulant manual import, specialized routing, original DLL preservation, and default permissions.");
     }

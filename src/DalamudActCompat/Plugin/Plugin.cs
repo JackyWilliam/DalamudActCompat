@@ -328,7 +328,7 @@ public sealed class Plugin : IDalamudPlugin
         var disabledUntrustedPlugin = false;
         foreach (var installed in packageInstaller.Discover(configuration.DisabledActPluginIds))
         {
-            if (!ActPluginPackageInstaller.IsSpecializedPluginId(installed.Manifest.Id) &&
+            if (ActPluginPackageInstaller.RequiresManualAuthorization(installed.Manifest) &&
                 !configuration.TrustedGenericActPluginIds.Contains(installed.Manifest.Id))
             {
                 disabledUntrustedPlugin |= configuration.DisabledActPluginIds.Add(
@@ -2838,32 +2838,16 @@ public sealed class Plugin : IDalamudPlugin
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 var installed = await packageInstaller.InstallAsync(
                     normalizedPackagePath,
-                    timeout.Token).ConfigureAwait(false);
-                if (!ActPluginPackageInstaller.IsSpecializedPluginId(installed.Manifest.Id))
-                {
-                    // A changed DLL needs fresh consent even when an older version was trusted.
-                    configuration.DisabledActPluginIds.Add(installed.Manifest.Id);
-                    configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
-                    configuration.ActPluginPermissions.Remove(installed.Manifest.Id);
-                    SaveConfiguration();
-                    SetPluginInstallStatus(CreatePermissionPrompt(installed));
-                    ApplyActPermissionChanges();
-                    logger.Information(
-                        $"Static preflight completed for generic ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}; waiting for user permission.");
-                    return;
-                }
-
-                configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
+                    timeout.Token, userInitiated: true).ConfigureAwait(false);
+                // A changed DLL needs fresh consent even when an older version was trusted.
+                configuration.DisabledActPluginIds.Add(installed.Manifest.Id);
+                configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
+                configuration.ActPluginPermissions.Remove(installed.Manifest.Id);
                 SaveConfiguration();
-                SetPluginInstallStatus(new ThirdPartyPluginInstallStatus(
-                    ThirdPartyPluginInstallState.Ready,
-                    installed.Manifest.Name,
-                    installed.Manifest.Id,
-                    installed.Manifest.Version,
-                    Detail: "预检与安装完成；该插件继续使用现有特化 Host 和权限设置。"));
-                logger.Information(
-                    $"Installed ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}; its assigned Host will refresh.");
+                SetPluginInstallStatus(CreatePermissionPrompt(installed));
                 ApplyActPermissionChanges();
+                logger.Information(
+                    $"Static preflight completed for manually imported ACT plugin {installed.Manifest.Name} {installed.Manifest.Version}; waiting for user permission.");
             }
             catch (Exception ex)
             {
@@ -2963,8 +2947,12 @@ public sealed class Plugin : IDalamudPlugin
             installed.Manifest.Name,
             installed.Manifest.Id,
             installed.Manifest.Version,
-            ActPluginPackageInstaller.GetRequestedCapabilities(installed.Manifest),
-            "静态预检已通过。允许后，该 DLL 将在所有普通第三方插件共用的通用 Host 中作为桌面代码运行。");
+            ActPluginPackageInstaller.GetRequestedCapabilities(installed.Manifest)
+                .Concat(BundledActPluginCapabilities.FullPermissionConfirmation
+                    .FirstOrDefault(entry => entry.PluginId.Equals(installed.Manifest.Id, StringComparison.OrdinalIgnoreCase))
+                    .Capabilities ?? [])
+                .Distinct().ToArray(),
+            "静态预检已通过。允许后，该 DLL 将在对应的兼容 Host 中运行。");
 
     private void RequestGenericPluginAuthorization(string pluginId)
     {
@@ -2974,7 +2962,7 @@ public sealed class Plugin : IDalamudPlugin
                 plugin.Manifest.Id,
                 pluginId,
                 StringComparison.OrdinalIgnoreCase));
-        if (installed is null || ActPluginPackageInstaller.IsSpecializedPluginId(pluginId))
+        if (installed is null || !ActPluginPackageInstaller.IsUserManaged(installed.Manifest))
         {
             return;
         }
@@ -3015,7 +3003,7 @@ public sealed class Plugin : IDalamudPlugin
         SetPluginInstallStatus(pending with
         {
             State = ThirdPartyPluginInstallState.StartingHost,
-            Detail = "权限已确认，正在启动共享通用 Host 并执行运行时加载检查。",
+            Detail = "权限已确认，正在启动对应 Host 并执行运行时加载检查。",
         });
         StartBackgroundOperation(async () =>
         {
@@ -3037,19 +3025,16 @@ public sealed class Plugin : IDalamudPlugin
                 try
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(35));
-                    if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
-                    {
-                        await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
-                    }
-
-                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                    await StopPluginHostForPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
+                    await StartPluginHostAfterPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
                     if (!IsDactAccessAllowed())
                     {
                         return;
                     }
-                    await genericHostSupervisor.WaitForPluginStartupAsync(timeout.Token)
+                    var target = GetInstalledPluginHost(pending.PluginId);
+                    await target.WaitForPluginStartupAsync(timeout.Token)
                         .ConfigureAwait(false);
-                    var initStage = await genericHostSupervisor.WaitForPluginStageAsync(
+                    var initStage = await target.WaitForPluginStageAsync(
                             pending.PluginId,
                             "InitPlugin",
                             timeout.Token)
@@ -3060,7 +3045,7 @@ public sealed class Plugin : IDalamudPlugin
                             StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidOperationException(
-                            initStage.Detail ?? "通用 Host 未报告插件初始化成功。");
+                            initStage.Detail ?? "Host 未报告插件初始化成功。");
                     }
                 }
                 finally
@@ -3071,7 +3056,7 @@ public sealed class Plugin : IDalamudPlugin
                 SetPluginInstallStatus(pending with
                 {
                     State = ThirdPartyPluginInstallState.Ready,
-                    Detail = "运行时预检通过，插件已在共享通用 Host 中启用。",
+                    Detail = "运行时预检通过，插件已在对应 Host 中启用。",
                 });
             }
             catch (Exception ex)
@@ -3085,14 +3070,10 @@ public sealed class Plugin : IDalamudPlugin
                     try
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-                        if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
-                        {
-                            await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
-                        }
-
                         // A failed InitPlugin can leave handlers behind, so only a fresh
                         // process may continue serving the other trusted generic plugins.
-                        await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                        await StopPluginHostForPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
+                        await StartPluginHostAfterPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -3126,8 +3107,7 @@ public sealed class Plugin : IDalamudPlugin
                 plugin.Manifest.Id,
                 pluginId,
                 StringComparison.OrdinalIgnoreCase));
-        if (installed is null ||
-            ActPluginPackageInstaller.IsSpecializedPluginId(installed.Manifest.Id))
+        if (installed is null || !ActPluginPackageInstaller.IsUserManaged(installed.Manifest))
         {
             return;
         }
@@ -3137,7 +3117,7 @@ public sealed class Plugin : IDalamudPlugin
             installed.Manifest.Name,
             installed.Manifest.Id,
             installed.Manifest.Version,
-            Detail: "正在安全停止通用 Host 并删除插件。"));
+            Detail: "正在安全停止对应 Host 并删除插件。"));
         StartBackgroundOperation(async () =>
         {
             try
@@ -3147,20 +3127,22 @@ public sealed class Plugin : IDalamudPlugin
                 try
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                    await StopPluginHostForPackageChangeAsync(pluginId, timeout.Token).ConfigureAwait(false);
+                    try
                     {
-                        await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                        backupDirectory = await packageInstaller.UninstallAsync(
+                                installed.Manifest.Id,
+                                timeout.Token)
+                            .ConfigureAwait(false);
+                        configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
+                        configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
+                        configuration.ActPluginPermissions.Remove(installed.Manifest.Id);
+                        SaveConfiguration();
                     }
-
-                    backupDirectory = await packageInstaller.UninstallAsync(
-                            installed.Manifest.Id,
-                            timeout.Token)
-                        .ConfigureAwait(false);
-                    configuration.DisabledActPluginIds.Remove(installed.Manifest.Id);
-                    configuration.TrustedGenericActPluginIds.Remove(installed.Manifest.Id);
-                    configuration.ActPluginPermissions.Remove(installed.Manifest.Id);
-                    SaveConfiguration();
-                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                    finally
+                    {
+                        await StartPluginHostAfterPackageChangeAsync(pluginId, timeout.Token).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {
@@ -3190,6 +3172,47 @@ public sealed class Plugin : IDalamudPlugin
                 logger.Error(ex, $"Could not uninstall generic ACT plugin {installed.Manifest.Id}.");
             }
         });
+    }
+
+    private bool HasManualPluginConsent(InstalledActPlugin plugin)
+        => !ActPluginPackageInstaller.RequiresManualAuthorization(plugin.Manifest) ||
+           configuration.TrustedGenericActPluginIds.Contains(plugin.Manifest.Id);
+
+    private ActHostSupervisor GetInstalledPluginHost(string pluginId)
+        => pluginId.Equals("matcha", StringComparison.OrdinalIgnoreCase) ? matchaHostSupervisor
+            : ActPluginPackageInstaller.IsSpecializedPluginId(pluginId) ? hostSupervisor : genericHostSupervisor;
+
+    private async Task StopPluginHostForPackageChangeAsync(string pluginId, CancellationToken cancellationToken)
+    {
+        var target = GetInstalledPluginHost(pluginId);
+        // A shared-host restart also invalidates Matcha's dependency on that host.
+        if (target == hostSupervisor || target == matchaHostSupervisor)
+        {
+            Volatile.Write(ref matchaEventsEnabled, 0);
+            actRuntime.SetNetworkSentCaptureEnabled(false);
+            if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                await matchaHostSupervisor.StopAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (target.Snapshot.State != HostSupervisorState.Stopped)
+            await target.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task StartPluginHostAfterPackageChangeAsync(string pluginId, CancellationToken cancellationToken)
+    {
+        if (!IsDactAccessAllowed()) return;
+        var target = GetInstalledPluginHost(pluginId);
+        if (target == genericHostSupervisor)
+            await StartGenericHostAsync(cancellationToken).ConfigureAwait(false);
+        else
+        {
+            if (target == hostSupervisor)
+            {
+                await hostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+                await hostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
+            }
+            if (hostSupervisor.Snapshot.State == HostSupervisorState.Running)
+                await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true).ConfigureAwait(false);
+        }
     }
 
     private async Task<BundledPluginInstallOutcome> InstallBundledPluginsAsync(
@@ -4467,6 +4490,7 @@ public sealed class Plugin : IDalamudPlugin
             .Where(plugin =>
                 plugin.Enabled &&
                 bundledPluginManager.IsAllowedToLoad(plugin) &&
+                HasManualPluginConsent(plugin) &&
                 ActPluginPackageInstaller.IsSpecializedPluginId(plugin.Manifest.Id) &&
                 !string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
             .Select(plugin => plugin.Manifest.Id)
@@ -4506,6 +4530,7 @@ public sealed class Plugin : IDalamudPlugin
             .Where(plugin =>
                 plugin.Enabled &&
                 bundledPluginManager.IsAllowedToLoad(plugin) &&
+                HasManualPluginConsent(plugin) &&
                 string.Equals(plugin.Manifest.Id, "matcha", StringComparison.OrdinalIgnoreCase))
             .Select(plugin => plugin.Manifest.Id)
             .ToArray();

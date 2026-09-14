@@ -31,6 +31,7 @@ public static class SimulantCompatibility
 
     public static Dictionary<string, string> ValidateSignatures(Dictionary<string, string> result)
     {
+        SimulantEntryPointCompatibility.Recover(result);
         var failures = result.Where(pair => !string.IsNullOrEmpty(pair.Value)).ToArray();
         if (result.Count == 0 || failures.Length > 0)
         {
@@ -40,5 +41,29 @@ public static class SimulantCompatibility
         }
 
         return result;
+    }
+
+    public static byte[] PrepareSendHookInstructions(byte[] savedEntry, IntPtr address)
+    {
+        EnsureNativeAccess();
+        if (savedEntry.Length != 15) throw new InvalidOperationException("发包入口备份长度无效。");
+        // These three stack-relative moves are the upstream send hook's only supported
+        // unmodified prologue. Preserve the saved bytes separately for exact restoration.
+        if (savedEntry.AsSpan().SequenceEqual(new byte[]
+            { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x4C, 0x89, 0x64, 0x24, 0x18 }))
+            return savedEntry;
+        return SimulantEntryPointCompatibility.RelocateJump(savedEntry, address, SimulantEntryPointCompatibility.ReadMemory);
+    }
+
+    public static void ValidateSendHookEntry()
+    {
+        EnsureNativeAccess();
+        var assembly = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "Simulant");
+        var address = (IntPtr)assembly.GetType("Simulant.Game.AddressStore")!
+            .GetProperty("OnSendPacketFuncPtr")!.GetValue(null)!;
+        if (address == IntPtr.Zero) throw new InvalidOperationException("发包函数尚未就绪。");
+        // Check before upstream disables receiving packets, so an unsupported send entry
+        // cannot leave only half of the firewall enabled.
+        _ = PrepareSendHookInstructions(SimulantEntryPointCompatibility.ReadMemory(address, 15), address);
     }
 }

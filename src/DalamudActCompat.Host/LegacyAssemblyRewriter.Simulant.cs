@@ -70,6 +70,24 @@ public static partial class LegacyAssemblyRewriter
             scan.Body.GetILProcessor().InsertAfter(instruction, Instruction.Create(OpCodes.Ret));
         }
 
+        // Keep the original entry backup intact for Disable, but relocate an existing
+        // Dalamud/plugin jump when upstream copies those bytes into its send-hook cave.
+        var firewall = module.GetType("Simulant.Core.Firewall.FirewallService");
+        var enableFirewall = firewall.Methods.Single(method => method.Name == "Enable");
+        enableFirewall.Body.GetILProcessor().InsertBefore(enableFirewall.Body.Instructions[0],
+            Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
+                .GetMethod(nameof(SimulantCompatibility.ValidateSendHookEntry))!)));
+        var sendHook = firewall.Methods.Single(method => method.Name == "SendHookEnable");
+        var copiedEntry = sendHook.Body.Instructions.Single(instruction =>
+            instruction.OpCode == OpCodes.Ldfld && instruction.Operand is FieldReference field &&
+            field.Name == "_sendHookOriginal" && instruction.Next.Operand is MethodReference call && call.Name == "AddRange");
+        var sendAddress = module.GetType("Simulant.Game.AddressStore").Properties.Single(p => p.Name == "OnSendPacketFuncPtr").GetMethod;
+        var getAddress = Instruction.Create(OpCodes.Call, sendAddress);
+        var prepareEntry = Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
+            .GetMethod(nameof(SimulantCompatibility.PrepareSendHookInstructions))!));
+        sendHook.Body.GetILProcessor().InsertAfter(copiedEntry, getAddress);
+        sendHook.Body.GetILProcessor().InsertAfter(getAddress, prepareEntry);
+
         using var output = new MemoryStream();
         definition.Write(output);
         output.Position = 0;

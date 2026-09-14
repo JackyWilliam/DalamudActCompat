@@ -11,6 +11,7 @@ internal static class SimulantSmokeTests
 
     public static void RunGuards()
     {
+        SimulantEntryPointSmokeTests.Run();
         var field = typeof(HostPluginBridge).GetField("permissions", StaticInternal)!;
         var original = field.GetValue(null);
         try { RunGuardCases(); }
@@ -85,6 +86,7 @@ internal static class SimulantSmokeTests
                 "Loading the extension must not initialize native simulation.");
             Assert(!(bool)hostType.GetProperty("FirewallEnabled", internalInstance)!.GetValue(host)!,
                 "Loading the extension must not enable its firewall.");
+            ValidateTerritoryUi(assembly, host);
 
             var namazu = assembly.GetType("Simulant.ACT.NamazuInterop")!;
             Throws(() => namazu.GetMethod("Init")!.Invoke(null, null), "授权");
@@ -124,6 +126,58 @@ internal static class SimulantSmokeTests
                 Console.WriteLine($"Simulant fixture retained until process exit: {root}");
             }
         }
+    }
+
+    private static void ValidateTerritoryUi(Assembly assembly, object host)
+    {
+        const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
+        var ui = (System.Windows.Forms.Control)host.GetType().GetField("_ui", fields)!.GetValue(host)!;
+        // CsvReady alone misses failures in deferred row getters and UI event handlers.
+        // Exercise the upstream selector on its owning thread without starting simulation.
+        ui.Invoke((Action)(() =>
+        {
+            using var form = (System.Windows.Forms.Form)Activator.CreateInstance(
+                assembly.GetType("Simulant.UI.TerritoryForm")!)!;
+            var grid = (System.Windows.Forms.DataGridView)form.GetType()
+                .GetField("dgvTerritory", fields)!.GetValue(form)!;
+            form.ShowInTaskbar = false;
+            form.Opacity = 0;
+            form.Show();
+            System.Windows.Forms.Application.DoEvents();
+            Console.WriteLine($"Simulant displayed grid: {grid.Bounds}, visible={grid.Visible}, rows={grid.RowCount}, displayed={grid.DisplayedRowCount(false)}");
+            var capture = Environment.GetEnvironmentVariable("ACTCOMPAT_SIMULANT_UI_CAPTURE");
+            if (!string.IsNullOrEmpty(capture))
+            {
+                using var bitmap = new System.Drawing.Bitmap(form.Width, form.Height);
+                form.DrawToBitmap(bitmap, form.ClientRectangle);
+                bitmap.Save(capture);
+            }
+            Console.WriteLine($"Simulant territory rows: {grid.RowCount}");
+            Assert(grid.RowCount > 1122, "Original territory selector is empty.");
+            Assert(Convert.ToString(grid.Rows[1122].Cells[0].Value) == "1122",
+                "Virtual territory cells did not return map IDs.");
+            Assert(!string.IsNullOrWhiteSpace(Convert.ToString(grid.Rows[1122].Cells[2].Value)),
+                "The preset territory has no instance name.");
+            var presetOnly = (System.Windows.Forms.CheckBox)form.GetType()
+                .GetField("chkPresetOnly", fields)!.GetValue(form)!;
+            presetOnly.Checked = true;
+            Assert(grid.RowCount > 0 && grid.RowCount < 100, "Preset-only territory filter is empty.");
+            foreach (System.Windows.Forms.DataGridViewRow row in grid.Rows)
+                Console.WriteLine($"Simulant preset map: {row.Cells[0].Value} | {row.Cells[1].Value} | {row.Cells[2].Value}");
+            var search = (System.Windows.Forms.TextBox)form.GetType()
+                .GetField("txtFilter", fields)!.GetValue(form)!;
+            search.Text = "^1122$";
+            Assert(grid.RowCount == 1 && Convert.ToString(grid.Rows[0].Cells[0].Value) == "1122",
+                "Map search did not find the known preset territory.");
+            var map = (System.Windows.Forms.NumericUpDown)ui.GetType()
+                .GetField("numTerritoryId", fields)!.GetValue(ui)!;
+            map.Value = 1122;
+            var phases = (System.Windows.Forms.ComboBox)ui.GetType().GetField("cbxPhase", fields)!.GetValue(ui)!;
+            var presets = phases.Items.Cast<object>().Where(item => item.ToString()!.StartsWith("[模拟]", StringComparison.Ordinal)).ToArray();
+            Assert(presets.Length >= 2, "Known territory did not populate its simulation presets.");
+            foreach (var preset in presets) phases.SelectedItem = preset;
+            Console.WriteLine($"PASS: Simulant map names, preset-only filter, search, and {presets.Length} selectable presets for 1122.");
+        }));
     }
 
     private static void SetPermissions(int mask)

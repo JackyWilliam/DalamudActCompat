@@ -147,8 +147,7 @@ public sealed class SettingsWindow : Window
 
         foreach (var plugin in installedPlugins)
         {
-            var isGeneric = !ActPluginPackageInstaller.IsSpecializedPluginId(
-                plugin.Manifest.Id);
+            var isGeneric = ActPluginPackageInstaller.RequiresManualAuthorization(plugin.Manifest);
             var enabled = plugin.Enabled &&
                           (!isGeneric || configuration.TrustedGenericActPluginIds.Contains(
                               plugin.Manifest.Id));

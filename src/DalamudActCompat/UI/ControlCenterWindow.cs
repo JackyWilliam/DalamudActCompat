@@ -1997,13 +1997,7 @@ public sealed class ControlCenterWindow : Window
                 openPluginConfiguration(pluginId);
             }
         }
-        ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("删除", "Delete")))
-        {
-            genericPluginToDeleteId = pluginId;
-            genericPluginToDeleteName = plugin.Manifest.Name;
-            genericDeletePopupRequested = true;
-        }
+        DrawPluginDeleteButton(plugin);
 
         var requested = ActPluginPackageInstaller.GetRequestedCapabilities(plugin.Manifest);
         if (trusted && requested.Count > 0)
@@ -2013,6 +2007,43 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.PopID();
         return changed;
+    }
+
+    private void DrawPluginDeleteButton(InstalledActPlugin plugin)
+    {
+        if (!ActPluginPackageInstaller.IsUserManaged(plugin.Manifest)) return;
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Trash))
+        {
+            genericPluginToDeleteId = plugin.Manifest.Id;
+            genericPluginToDeleteName = plugin.Manifest.Name;
+            genericDeletePopupRequested = true;
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(text.Get("删除插件", "Delete plugin"));
+    }
+
+    private bool NeedsManualPluginConsent(InstalledActPlugin plugin)
+        => ActPluginPackageInstaller.RequiresManualAuthorization(plugin.Manifest) &&
+           !configuration.TrustedGenericActPluginIds.Contains(plugin.Manifest.Id);
+
+    private bool SetInstalledPluginEnabled(InstalledActPlugin plugin, bool enabled)
+    {
+        if (enabled && NeedsManualPluginConsent(plugin))
+        {
+            requestPluginAuthorization(plugin.Manifest.Id);
+            return false;
+        }
+        if (enabled) configuration.DisabledActPluginIds.Remove(plugin.Manifest.Id);
+        else configuration.DisabledActPluginIds.Add(plugin.Manifest.Id);
+        return true;
+    }
+
+    private void DrawInstalledPluginAuthorization(InstalledActPlugin plugin)
+    {
+        if (!NeedsManualPluginConsent(plugin)) return;
+        ImGui.SameLine();
+        if (ImGui.SmallButton(text.Get("查看并授权", "Review and authorize")))
+            requestPluginAuthorization(plugin.Manifest.Id);
     }
 
     private void DrawGenericDeleteModal()
@@ -2033,8 +2064,8 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.TextColored(Gold, text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"));
         ImGui.TextWrapped(text.Get(
-            $"确定删除 {genericPluginToDeleteName} 吗？运行中的通用 Host 会先安全停止，插件文件将移入备份目录，以便需要时恢复。",
-            $"Delete {genericPluginToDeleteName}? The generic Host will stop safely first, and plugin files will be moved to the backup directory for recovery."));
+            $"确定删除 {genericPluginToDeleteName} 吗？插件文件会先备份，相关扩展会短暂重启。",
+            $"Delete {genericPluginToDeleteName}? Plugin files will be backed up first, and related extensions will briefly restart."));
         if (ImGui.Button(text.Get("确认删除", "Delete"), new Vector2(140, 34)))
         {
             var pluginId = genericPluginToDeleteId;
@@ -2072,15 +2103,14 @@ public sealed class ControlCenterWindow : Window
         ImGui.PushID("extension-simulant");
         if (installed is not null)
         {
-            var enabled = installed.Enabled;
+            var enabled = installed.Enabled && !NeedsManualPluginConsent(installed);
             if (ImGui.Checkbox(text.Get("仿生石 / Simulant", "Simulant"), ref enabled))
             {
-                if (enabled) configuration.DisabledActPluginIds.Remove("simulant");
-                else configuration.DisabledActPluginIds.Add("simulant");
-                changed = enabledChanged = true;
+                changed = enabledChanged = SetInstalledPluginEnabled(installed, enabled);
             }
             ImGui.SameLine();
             DrawInstalledVersion(installed);
+            DrawInstalledPluginAuthorization(installed);
             if (enabled)
             {
                 ImGui.SameLine();
@@ -2089,6 +2119,7 @@ public sealed class ControlCenterWindow : Window
                     openPluginConfiguration("simulant");
                 }
             }
+            DrawPluginDeleteButton(installed);
         }
         ImGui.TextDisabled(text.Get(
             "本地机制模拟；与 PostNamazu、Triggernometry 一起运行。",
@@ -2164,30 +2195,23 @@ public sealed class ControlCenterWindow : Window
         }
         else
         {
-            var enabled = installed.Enabled;
+            var enabled = installed.Enabled && !NeedsManualPluginConsent(installed);
             if (ImGui.Checkbox(displayName, ref enabled))
             {
-                if (enabled)
-                {
-                    configuration.DisabledActPluginIds.Remove(pluginId);
-                }
-                else
-                {
-                    configuration.DisabledActPluginIds.Add(pluginId);
-                }
-                changed = true;
-                enabledChanged = true;
+                changed = enabledChanged = SetInstalledPluginEnabled(installed, enabled);
             }
 
             ImGui.SameLine();
             ImGui.TextColored(
                 enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
                 enabled ? text.Get("已启用", "Enabled") : text.Get("已禁用", "Disabled"));
+            DrawInstalledPluginAuthorization(installed);
             ImGui.SameLine();
             if (enabled && ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
             {
                 openPluginConfiguration(pluginId);
             }
+            DrawPluginDeleteButton(installed);
             ImGui.SameLine();
             DrawInstalledVersion(installed);
         }
