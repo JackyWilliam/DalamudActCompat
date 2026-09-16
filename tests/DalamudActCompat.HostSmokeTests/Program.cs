@@ -34,12 +34,13 @@ var mapEffectProbe = string.Equals(
     "--probe-triggernometry-mapeffect",
     StringComparison.Ordinal);
 var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe ? args[1..] : args;
+var u7bOrderingProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-ordering", StringComparison.Ordinal);
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect or --probe-triggernometry-u7b " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b or --probe-triggernometry-u7b-ordering " +
         "with the three-path form for a focused probe.");
 }
 
@@ -62,6 +63,7 @@ if (!File.Exists(hostExecutable))
 await ValidateAuthorizedTtsCadenceAsync();
 ValidateFfxivEntityDeltaRepository();
 ValidateFfxivRegionContext();
+TriggernometryActorControlTests.Run();
 
 if (entityTimingProbe)
 {
@@ -87,9 +89,9 @@ if (mapEffectProbe)
     return;
 }
 
-if (u7bProbe)
+if (u7bProbe || u7bOrderingProbe)
 {
-    await ValidateTriggernometryU7bProbeAsync();
+    await ValidateTriggernometryU7bProbeAsync(u7bOrderingProbe);
     return;
 }
 
@@ -143,6 +145,7 @@ if (pluginRoot is not null && configRoot is not null)
 {
     await ValidateLegacyPluginsLoadOutOfProcessAsync();
     await ValidateTriggernometryU7bProbeAsync();
+    await ValidateTriggernometryU7bProbeAsync(validateOrdering: true);
 }
 await ValidatePostNamazuQueueShutdownLifecycleAsync();
 var completion =
@@ -2504,14 +2507,15 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
     }
 }
 
-async Task ValidateTriggernometryU7bProbeAsync()
+async Task ValidateTriggernometryU7bProbeAsync(bool validateOrdering = false)
 {
     await PrepareLegacySmokeConfigurationAsync();
     var configurationPath = Path.Combine(configRoot!, "Config", "Triggernometry.config.xml");
     var configuration = XDocument.Load(configurationPath);
     var root = configuration.Root!.Element("Root")!;
     root.RemoveNodes();
-    var fixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "U7bP1.xml"));
+    var fixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures",
+        validateOrdering ? "U7bP1Current.xml" : "U7bP1.xml"));
     var folder = new XElement(fixture.Root!.Element("ExportedFolder")!);
     folder.Name = "Folder";
     // Speech is an observation sink in this offline test. Keep every original match, condition,
@@ -2568,13 +2572,13 @@ async Task ValidateTriggernometryU7bProbeAsync()
             var ready = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90).WaitAsync(TimeSpan.FromSeconds(30));
             Assert(ready.Payload.Deserialize<HostHealth>()?.State == "plugins.ready", "U7b Host did not load both real plugins.");
 
-            async Task LineAsync(string line)
+            async Task LineAsync(string line, int settleMilliseconds = 100)
             {
                 await SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data,
                     new[] { new HostLogEvent(DateTimeOffset.UtcNow, line, false, line) });
                 // Upstream dispatches sibling triggers asynchronously; let each prerequisite
                 // settle before advancing this deterministic event-content regression.
-                await Task.Delay(100);
+                await Task.Delay(settleMilliseconds);
             }
 
             async Task<List<string>> DrawingsAsync(int expected)
@@ -2590,6 +2594,9 @@ async Task ValidateTriggernometryU7bProbeAsync()
                     try { envelope = await HostFrameCodec.ReadAsync(pipe.Reader, cancellation.Token); }
                     catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { break; }
                     if (envelope is null) throw new EndOfStreamException("U7b Host closed its pipe.");
+                    if (envelope.Type == HostMessageTypes.Diagnostic)
+                        Assert(!envelope.Payload.GetRawText().Contains("ActorControl initialization observer", StringComparison.Ordinal),
+                            "The initialization observer threw: " + envelope.Payload.GetRawText());
                     if (envelope.Type != HostMessageTypes.CommandRequest) continue;
                     var request = envelope.Payload.Deserialize<HostCommandRequest>()!;
                     Assert(request.Command == "postnamazu.pictoact", "Unexpected U7b probe action: " + request.Command);
@@ -2649,14 +2656,56 @@ async Task ValidateTriggernometryU7bProbeAsync()
                     await Task.Delay(1100);
                 }
             }
+            if (validateOrdering)
+            {
+                // Exercise the real rewritten DLL, its log conversion and its separate
+                // action worker. Sending every dependent event before the object snapshot
+                // deliberately removes the sleeps that hid this race in content probes.
+                foreach (var delta in new[] { false, true })
+                foreach (var spread in new[] { true, false })
+                {
+                    var baseline = playerSnapshot with { TerritoryId = 1363, Timestamp = DateTimeOffset.UtcNow };
+                    await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
+                        baseline);
+                    await Task.Delay(150);
+                    await LineAsync("DACT_U7B_RESET");
+                    await LineAsync($"[21:38:41.638] 273 111:{(spread ? "4001895C" : "4001895c")}:019D:1:2:0:0:", 0);
+                    await LineAsync("[21:38:42.000] 263 107:4001895C:BA98:100:100:0:0:", 0);
+                    await LineAsync("[21:38:43.000] 27 1B:4001895C::0:0:02A2:", 0);
+                    await LineAsync($"[21:38:44.000] 27 1B:10001234::0:0:{(spread ? "007F" : "0080")}:", 0);
+                    await Task.Delay(50);
+                    if (delta)
+                        await SendAsync(HostMessageTypes.FfxivEntityDelta, HostMessagePriority.State,
+                            new HostFfxivEntityDelta(1363, baseline.CurrentPlayerId, baseline.Timestamp,
+                                DateTimeOffset.UtcNow, [statue], []));
+                    else
+                        await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
+                            baseline with { Timestamp = DateTimeOffset.UtcNow, Combatants = [.. baseline.Combatants, statue] });
+                    var drawings = await DrawingsAsync(spread ? 9 : 3);
+                    Assert(drawings.Count(x => x.Contains("Tag: U7b11a_散摊\r\n")) == (spread ? 8 : 2),
+                        "Late U7b entity with a dependent event backlog lost or duplicated circles.");
+                    observed[$"late-{(delta ? "delta" : "snapshot")}-backlog-{(spread ? "spread" : "stack")}"] = drawings;
+                    await Task.Delay(1100);
+                }
+            }
             var output = Environment.GetEnvironmentVariable("ACTCOMPAT_U7B_PROBE_OUTPUT");
             if (!string.IsNullOrWhiteSpace(output))
                 await File.WriteAllTextAsync(output, JsonSerializer.Serialize(observed, new JsonSerializerOptions { WriteIndented = true }));
-            Console.WriteLine("U7b original Utils/phase/8-circle/2-circle/left/right chain: filtered objects silent; retained unnamed objects passed.");
+            Console.WriteLine($"U7b {(validateOrdering ? "v1.0.5 built-in conversion + late entity/action ordering" : "original Utils")}/phase/8-circle/2-circle/left/right chain passed.");
             await SendAsync(HostMessageTypes.Shutdown, HostMessagePriority.Control,
                 new HostHealth("stopping", "U7b probe", DateTimeOffset.UtcNow));
             await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
             await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            if (validateOrdering)
+            {
+                var log = ReadProcessLog(host).Output;
+                Assert(log.Split("U7b P1 initialization completed after waiting for its scene entity.").Length - 1 == 4,
+                    "All late-entity cases must observe actual initialization completion, not rely on expiry.");
+                // The four deliberately filtered-object controls expire; the four recovered
+                // backlogs must complete without adding any more expiry warnings.
+                Assert(log.Split("prerequisites were not ready within 500 ms").Length - 1 == 4,
+                    "A recovered initialization unexpectedly fell back to its timeout.");
+            }
         }
         catch
         {

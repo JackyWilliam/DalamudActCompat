@@ -103,6 +103,11 @@ jobs:
             "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins/triggernometry/Triggernometry.dll"
           if ($LASTEXITCODE -ne 0) { throw "Host smoke failed." }
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+            --probe-triggernometry-u7b-ordering `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-ordering-smoke")
+          if ($LASTEXITCODE -ne 0) { throw "U7b initialization ordering regression." }
           & "tests/DalamudActCompat.LegacyResourceSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.LegacyResourceSmokeTests.exe" `
             "vendor/BundledActPlugins/triggernometry/Triggernometry.dll" `
             "vendor/BundledActPlugins/postnamazu/PostNamazu.dll"

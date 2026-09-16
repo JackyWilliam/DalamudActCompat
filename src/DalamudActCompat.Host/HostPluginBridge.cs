@@ -17,7 +17,7 @@ using Newtonsoft.Json.Linq;
 
 namespace DalamudActCompat.Host;
 
-public static class HostPluginBridge
+public static partial class HostPluginBridge
 {
     private const int ClipboardQueueCapacity = 8;
     private const int MaximumClipboardCharacters = 8 * 1024 * 1024;
@@ -81,6 +81,7 @@ public static class HostPluginBridge
             pair => pair.Key,
             pair => pair.Value.ToHashSet(StringComparer.Ordinal),
             StringComparer.OrdinalIgnoreCase);
+        if (!IsAllowed("triggernometry", "ReadCombatLogs")) ResetTriggernometryLogWaits();
         foreach (var pair in permissions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             Console.WriteLine(
@@ -719,10 +720,15 @@ public static class HostPluginBridge
         => IsAllowed("simulant", "NativeGameMemory") && IsPostNamazuNativeRuntimeAllowed();
 
     internal static void ApplyFfxivEntitySnapshot(HostFfxivEntitySnapshot snapshot)
-        => FfxivRepositoryInstance.Apply(snapshot);
+    {
+        FfxivRepositoryInstance.Apply(snapshot);
+        PumpTriggernometryLogWaits();
+    }
 
     internal static void ApplyFfxivEntityDelta(HostFfxivEntityDelta delta)
-        => FfxivRepositoryInstance.ApplyDelta(delta);
+    {
+        if (FfxivRepositoryInstance.ApplyDelta(delta)) PumpTriggernometryLogWaits();
+    }
 
     internal static void ConfigureTtsWriter(Action<string>? writer)
         => Volatile.Write(ref ttsWriter, writer);
@@ -1641,6 +1647,11 @@ public static class HostPluginBridge
         plugin = plugin is Delegate callback
             ? callback.Target ?? throw new ArgumentException("The Triggernometry zone handler must have an owner.", nameof(plugin))
             : plugin;
+        if (TriggerLogBindings.TryGetValue(plugin, out var binding))
+        {
+            TriggerLogBindings.Remove(plugin);
+            binding.Dispose();
+        }
         lock (TriggerZoneListenerLock)
         {
             if (triggerZoneListener?.TryGetTarget(out var current) == true &&
@@ -1653,6 +1664,7 @@ public static class HostPluginBridge
 
     internal static void PublishTriggernometryZoneChange(uint territoryId, string zoneName)
     {
+        ResetTriggernometryLogWaits();
         object? plugin;
         lock (TriggerZoneListenerLock)
         {
