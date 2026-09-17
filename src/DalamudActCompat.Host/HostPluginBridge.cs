@@ -722,12 +722,17 @@ public static partial class HostPluginBridge
     internal static void ApplyFfxivEntitySnapshot(HostFfxivEntitySnapshot snapshot)
     {
         FfxivRepositoryInstance.Apply(snapshot);
+        ObserveDrawingEntityUpdates();
         PumpTriggernometryLogWaits();
     }
 
     internal static void ApplyFfxivEntityDelta(HostFfxivEntityDelta delta)
     {
-        if (FfxivRepositoryInstance.ApplyDelta(delta)) PumpTriggernometryLogWaits();
+        if (FfxivRepositoryInstance.ApplyDelta(delta))
+        {
+            ObserveDrawingEntityUpdates();
+            PumpTriggernometryLogWaits();
+        }
     }
 
     internal static void ConfigureTtsWriter(Action<string>? writer)

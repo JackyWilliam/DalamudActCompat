@@ -97,6 +97,15 @@ jobs:
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-ordering-smoke")
           if ($LASTEXITCODE -ne 0) { throw "U7b initialization ordering regression." }
 
+      - name: Run encounter drawing diagnostics regression
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+            --probe-drawing-diagnostics `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "drawing-diagnostics-smoke")
+          if ($LASTEXITCODE -ne 0) { throw "Encounter drawing diagnostics regression." }
+
       - name: Run Legacy Resource smoke
         shell: pwsh
         run: |

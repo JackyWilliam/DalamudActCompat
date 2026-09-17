@@ -50,6 +50,7 @@ public static partial class HostPluginBridge
     public static void ProcessTriggernometryLog(object plugin, bool isImport, string line, string zone)
     {
         if (!IsAllowed("triggernometry", "ReadCombatLogs")) return;
+        ObserveDrawingLog(plugin, line, "received", isImport ? "import" : "live");
         TriggerLogBindings.GetValue(plugin, owner => new(owner)).Accept(isImport, line, zone);
     }
 

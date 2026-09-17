@@ -1916,6 +1916,7 @@ public static partial class LegacyAssemblyRewriter
             loadParameters: true);
 
         WrapTriggernometryLogOrdering(module);
+        ObserveTriggernometryDrawingPipeline(module);
 
         var repositoryUpdate = module.Types
             .SelectMany(EnumerateTypes)

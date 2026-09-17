@@ -35,12 +35,13 @@ var mapEffectProbe = string.Equals(
     StringComparison.Ordinal);
 var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringComparison.Ordinal);
 var u7bOrderingProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-ordering", StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe ? args[1..] : args;
+var drawingProbe = string.Equals(focusedProbe, "--probe-drawing-diagnostics", StringComparison.Ordinal);
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b or --probe-triggernometry-u7b-ordering " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering or --probe-drawing-diagnostics " +
         "with the three-path form for a focused probe.");
 }
 
@@ -64,6 +65,13 @@ await ValidateAuthorizedTtsCadenceAsync();
 ValidateFfxivEntityDeltaRepository();
 ValidateFfxivRegionContext();
 TriggernometryActorControlTests.Run();
+DrawingDiagnosticTests.Run();
+
+if (drawingProbe)
+{
+    await ValidateDrawingDiagnosticProbeAsync();
+    return;
+}
 
 if (entityTimingProbe)
 {
@@ -1066,6 +1074,7 @@ void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
             .Single(assembly => assembly.GetName().Name == "TriggernometryPlugin").Location;
         ValidateTriggernometryLaunchProcessPatch();
         var implementation = loadContext.Assemblies.Single(assembly => assembly.GetName().Name == "TriggernometryPlugin");
+        DrawingDiagnosticTests.ValidateRewrittenAssembly(implementation);
         var transcriber = implementation.GetType("Triggernometry.FFXIV.LogTranscribe.LogTranscriber");
         if (transcriber is not null)
         {
@@ -2507,6 +2516,139 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
     }
 }
 
+async Task ValidateDrawingDiagnosticProbeAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    var path = Path.Combine(configRoot!, "Config", "Triggernometry.config.xml");
+    var configuration = XDocument.Load(path);
+    var root = configuration.Root!.Element("Root")!;
+    root.RemoveNodes();
+    var fixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "U7aOrb.xml"));
+    var folder = new XElement(fixture.Root!.Element("ExportedFolder")!);
+    folder.Name = "Folder";
+    root.Add(new XElement("Folders", folder));
+    // Only the isolated probe registers these sinks; the fixture's original nodes,
+    // expressions and delays stay intact. No native permission or real game is used.
+    var setup = """
+        using System;
+        using Triggernometry.Core;
+        using Triggernometry.Core.Scripting;
+        var plugin = RealPlugin.Instance;
+        ScriptHelper.SetDictVariable(true, "U7a_cfg", new Triggernometry.Core.Variables.VariableDictionary(new System.Collections.Generic.Dictionary<string,string> { {"P1光轮缩放on", "1"} }));
+        foreach (var name in new [] {"ObjectScaling", "SetOpacity"}) {
+            var capturedName = name;
+            plugin.RegisterNamedCallback(name, new Action<object,string>((_, value) => {
+                if (ScriptHelper.GetScalarVariable(false,"DACT_DRAW_THROW")?.ToString() == "1")
+                    throw new InvalidOperationException("EXPECTED_DRAW_CALLBACK_FAILURE");
+                Console.WriteLine("DACT_DRAW_CAPTURE " + capturedName + " " + value);
+            }));
+        }
+        Console.WriteLine("DACT_DRAW_SETUP_DONE");
+        """;
+    XElement ScriptTrigger(string name, string script) => new("Trigger",
+        new XAttribute("Enabled", "true"), new XAttribute("Id", Guid.NewGuid()), new XAttribute("Name", name),
+        new XAttribute("RegularExpression", "^" + name + "$"), new XElement("Actions",
+            new XElement("Action", new XAttribute("ActionType", "ExecuteScript"), new XAttribute("ExecScriptExpression", script))));
+    root.Add(new XElement("Triggers", ScriptTrigger("DACT_DRAW_SETUP", setup),
+        ScriptTrigger("DACT_DRAW_OFF", "Triggernometry.Core.Scripting.ScriptHelper.SetDictVariable(true, \"U7a_cfg\", new Triggernometry.Core.Variables.VariableDictionary(new System.Collections.Generic.Dictionary<string,string> { {\"P1光轮缩放on\", \"0\"} })); System.Console.WriteLine(\"DACT_DRAW_OFF_DONE\");"),
+        ScriptTrigger("DACT_DRAW_THROW", "Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, \"DACT_DRAW_THROW\", 1); System.Console.WriteLine(\"DACT_DRAW_THROW_DONE\");")));
+    configuration.Save(path);
+    var (host, pipe, session) = await StartConnectedHostAsync(loadPlugins: true, faultInjection: true);
+    using var watchdog = new System.Threading.Timer(_ =>
+    {
+        try { if (!host.HasExited) host.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { }
+    }, null, TimeSpan.FromSeconds(90), Timeout.InfiniteTimeSpan);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            var sequence = 1L;
+            async Task SendAsync<T>(string type, HostMessagePriority priority, T payload) =>
+                await HostFrameCodec.WriteAsync(pipe.Writer, HostEnvelope.Create(session, sequence++, type, priority, payload), CancellationToken.None);
+            await SendAsync(HostMessageTypes.Hello, HostMessagePriority.Control,
+                new HostHello("drawing-diagnostic-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion]));
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            Console.WriteLine("Drawing probe: handshake ready.");
+            await SendAsync(HostMessageTypes.Permissions, HostMessagePriority.Control,
+                new HostPermissionSnapshot(new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["triggernometry"] = ["ReadCombatLogs", "ReadLocalConfiguration", "HighRiskScript"],
+                    ["postnamazu"] = ["ReadCombatLogs", "ReadLocalConfiguration", "GameCommand"],
+                }, ["triggernometry", "postnamazu"]));
+            await SendAsync(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical,
+                new HostZoneEvent(1238, "Another Future", DateTimeOffset.UtcNow));
+            var ready = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90).WaitAsync(TimeSpan.FromSeconds(30));
+            Assert(ready.Payload.Deserialize<HostHealth>()?.State == "plugins.ready", "Drawing probe plugins not ready.");
+            Console.WriteLine("Drawing probe: plugins ready.");
+            var baseline = CreateTestFfxivSnapshot() with { TerritoryId = 1238, Timestamp = DateTimeOffset.UtcNow };
+            var orb = baseline.Combatants[0] with { Id = 0x40FF0001, Type = 2, Name = "PRIVATE_ORB_NAME", BNpcId = 17821, Address = 0x12340000 };
+            await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
+                baseline with { Combatants = [.. baseline.Combatants, orb] });
+            async Task Line(string line)
+            {
+                await SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data,
+                    new[] { new HostLogEvent(DateTimeOffset.UtcNow, line, false, line) });
+                await Task.Delay(200);
+            }
+            async Task Setup(string command, string marker)
+            {
+                await Line(command);
+                await WaitForProcessOutputAsync(host, marker, TimeSpan.FromSeconds(15));
+                Console.WriteLine("Drawing probe: " + marker);
+            }
+            string OrbLine(string time, string id = "40FF0001") =>
+                $"[{time}] ChatLog 03:{id}:PRIVATE_ORB_NAME:0:100:0:0:0:0:17821:0:0:0:0:0:0:100:100:0:";
+            await Setup("DACT_DRAW_SETUP", "DACT_DRAW_SETUP_DONE");
+            await Line("[21:00:00.000] ChatLog 14:40000001:PRIVATE_BOSS:9CD7:cast:");
+            await Line(OrbLine("21:00:01.000"));
+            await WaitForProcessOutputAsync(host, "DACT_DRAW_CAPTURE ObjectScaling", TimeSpan.FromSeconds(5));
+            await Task.Delay(9500); // Exercise the original 8.4-second delayed callback too.
+            await Setup("DACT_DRAW_OFF", "DACT_DRAW_OFF_DONE");
+            await Line(OrbLine("21:00:20.000"));
+            await Setup("DACT_DRAW_SETUP", "DACT_DRAW_SETUP_DONE");
+            await Line(OrbLine("21:00:30.000", "40FF0002"));
+            await Task.Delay(300);
+            await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
+                baseline with { Timestamp = DateTimeOffset.UtcNow, Combatants = [.. baseline.Combatants, orb, orb with { Id = 0x40FF0002, Address = 0x12350000 }] });
+            await Task.Delay(9500);
+            await Setup("DACT_DRAW_THROW", "DACT_DRAW_THROW_DONE");
+            await Line(OrbLine("21:00:40.000"));
+            await Task.Delay(700);
+            await SendAsync(HostMessageTypes.Shutdown, HostMessagePriority.Control,
+                new HostHealth("stopping", "Drawing diagnostic probe", DateTimeOffset.UtcNow));
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var log = ReadProcessLog(host).Output;
+            var records = DrawingDiagnosticTests.ParseRecords(log);
+            bool Stage(string stage) => records.Any(r => r.GetProperty("stage").GetString() == stage);
+            foreach (var stage in new[] { "received", "queued", "inventory", "match", "condition-blocked", "fire-return", "action-return", "callback-return", "callback-throw", "exception", "entity-change" })
+                Assert(Stage(stage), "Missing real TN diagnostic stage: " + stage);
+            Assert(!Stage("observer-error"), "Observer failed during U7a chain.");
+            Assert(records.Any(r => r.GetProperty("stage").GetString() == "condition-blocked" && r.GetProperty("blocked").GetBoolean()), "Disabled feature condition not recorded.");
+            Assert(!records.Any(r => r.GetProperty("stage").GetString() == "callback-enter" && r.GetProperty("event").GetProperty("Time").GetString() == "[21:00:20.000]"), "Diagnostics bypassed a disabled feature.");
+            Assert(records.Any(r => r.GetProperty("stage").GetString() == "callback-enter" && r.GetProperty("event").GetProperty("Actor").GetString() == "40FF0002" && !r.GetProperty("state").GetProperty("snapshot").GetProperty("present").GetBoolean()), "Missing entity prerequisite not recorded at invocation.");
+            Assert(records.Any(r => r.TryGetProperty("state", out var state) && state.TryGetProperty("variables", out var variables) && variables.ValueKind == JsonValueKind.Object && variables.GetProperty("U7a1_光轮_is火safe").GetString() == "1"), "Original cast did not produce observed fire-safe variable.");
+            Assert(!string.Join('\n', records.Select(r => r.GetRawText())).Contains("PRIVATE_"), "Player/NPC labels leaked into new diagnostics.");
+            var output = Environment.GetEnvironmentVariable("ACTCOMPAT_DRAWING_PROBE_OUTPUT");
+            if (!string.IsNullOrWhiteSpace(output)) await File.WriteAllTextAsync(output, JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine($"Drawing diagnostics: real U7a cast/orb/disabled feature/missing+late entity/callback failure passed ({records.Length} records).");
+        }
+        catch
+        {
+            var log = ReadProcessLog(host);
+            Console.Error.WriteLine("Drawing probe output:\n" + log.Output + "\n" + log.Error);
+            throw;
+        }
+        finally
+        {
+            if (!host.HasExited) { host.Kill(entireProcessTree: true); await host.WaitForExitAsync(); }
+        }
+    }
+}
+
 async Task ValidateTriggernometryU7bProbeAsync(bool validateOrdering = false)
 {
     await PrepareLegacySmokeConfigurationAsync();
@@ -2699,6 +2841,10 @@ async Task ValidateTriggernometryU7bProbeAsync(bool validateOrdering = false)
             if (validateOrdering)
             {
                 var log = ReadProcessLog(host).Output;
+                var diagnosticRecords = DrawingDiagnosticTests.ParseRecords(log);
+                Assert(diagnosticRecords.Any(r => r.GetProperty("stage").GetString() == "entity-change"), "Missing entity arrival diagnostics.");
+                Assert(diagnosticRecords.Any(r => r.GetProperty("stage").GetString() == "callback-return"), "Missing original PictoACT callback diagnostics.");
+                Assert(!diagnosticRecords.Any(r => r.GetProperty("stage").GetString() == "observer-error"), "Drawing observer failed during original U7b chain.");
                 Assert(log.Split("U7b P1 initialization completed after waiting for its scene entity.").Length - 1 == 4,
                     "All late-entity cases must observe actual initialization completion, not rely on expiry.");
                 // The four deliberately filtered-object controls expire; the four recovered
