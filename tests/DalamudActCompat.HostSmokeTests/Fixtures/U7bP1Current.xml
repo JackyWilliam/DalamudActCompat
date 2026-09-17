@@ -1,0 +1,209 @@
+<?xml version="1.0"?>
+<TriggernometryExport PluginVersion="2.1.2.2">
+  <ExportedFolder Id="11cd4517-1f76-4ebf-9455-00862a617a35" Enabled="true" Name="U7b 绝妖星宝宝椅 v1.0.5" RawEnvironmentVariables="prefix = U7b&#xD;&#xA;alias = U7b,绝妖星&#xD;&#xA;zone = 1363&#xD;&#xA;version = 1.0.5&#xD;&#xA;CactbotTriggerSetName = DancingMadUltimate">
+    <Folders>
+      <Folder Id="334fe038-16ba-4463-a9ce-7e2b602df000" Enabled="true" Name="区域限制" FFXIVZoneFilterEnabled="True" FfxivZoneFilterRegularExpression="^1363$">
+        <Folders>
+          <Folder Id="8a43fe25-8247-4131-8f9c-d2a09b73995c" Enabled="true" Name="P1">
+            <Folders>
+              <Folder Id="48e1bd43-be47-446a-95f0-bd670a1dfaa4" Enabled="true" Name="P1-2" RawEnvironmentVariables="phase = P12">
+                <Triggers>
+                  <Trigger Enabled="true" Id="c65efd96-0bb5-4ec8-aed2-f1d6ab293eaa" Name="半场刀" RegularExpression="^.{15}\S+ 1019D:(?&lt;id&gt;4.{7}):[^:]*:[^:]*:(?&lt;baseId&gt;201516[45]):(?&lt;x&gt;[^:]+):(?&lt;y&gt;[^:]+):(?&lt;z&gt;[^:]+):(?&lt;h&gt;[^:]+):[^:]*:80:" PeriodRefire="Deny" RefirePeriodExpression="1000">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="U7b12_b打左半场" VariableExpression="0${baseId} = 2015164" />
+                      <Action OrderNumber="2" ActionType="UseTTS" UseTTSTextExpression="${if: ${!v:U7b12_b打左半场} ? 去右半场 : 去左半场 }" />
+                      <Action OrderNumber="3" ActionType="NamedCallback" DescBgColor="ffd" NamedCallbackName="PictoACT" NamedCallbackParam="Tag: U7b12_半场刀&#xD;&#xA;Omen: Fan180&#xD;&#xA;t: 5&#xD;&#xA;Pos: 100, 100&#xD;&#xA;Angle: ${!v:U7b12_b打左半场} ? -π/2 : π/2&#xD;&#xA;Scale: 20" />
+                    </Actions>
+                  </Trigger>
+                </Triggers>
+              </Folder>
+              <Folder Id="ac24aeeb-f6fd-4169-8681-771f4438cee9" Enabled="true" Name="P1-1a 前半" RawEnvironmentVariables="phase = P11a">
+                <Triggers>
+                  <Trigger Enabled="true" Id="19aa6a4d-0797-45c1-aa10-efc9c9581f4a" Name="0. 初始化" RegularExpression="^.{15}\S+ 1019D:(?&lt;id&gt;4.{7}):[^:]*:[^:]*:(?&lt;baseid&gt;2015156):(?&lt;x&gt;[^:]+):(?&lt;y&gt;[^:]+):(?&lt;z&gt;[^:]+):(?&lt;h&gt;[^:]+):[^:]*:(?&lt;flag&gt;2):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Variable" Asynchronous="False" VariableOp="SetString" VariableName="U7b_phase" VariableExpression="${env:phase}" />
+                      <Action OrderNumber="2" ActionType="Variable" Asynchronous="False" VariableOp="UnsetRegexUniversal" VariableName="^U7b11a" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="bd2e426e-67d8-47f3-acfc-53c3ac204ed5" Name="2.2 记录火真假 =&gt; 3" RegularExpression="^.{15}\S+ 1B:(?&lt;tid&gt;4.{7}):[^:]*:[^:]*:[^:]*:(?&lt;type&gt;02A[12]):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Placeholder" Description="phase&#xD;&#xA;" DescriptionOverride="True" />
+                      <Action OrderNumber="2" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="U7b11a_b真火" VariableExpression="0x${type} = 0x02A2" />
+                      <Action OrderNumber="3" ActionType="LogMessage" Asynchronous="False" LogMessageText="_U7b11a_魔法" LogProcess="True" LogProcessACT="True">
+                        <Condition Enabled="true" Grouping="And">
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b真冰}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b真火}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b散raw}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                    </Actions>
+                    <Condition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${v:U7b_phase}" ExpressionTypeL="String" ExpressionR="${env:phase}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="55815b65-851f-443e-9f57-74c308ff03ef" Name="2.1 记录冰扇形 =&gt; 3" RegularExpression="^.{15}\S+ 107:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BA9[8E]):(?&lt;x&gt;[^:]+):(?&lt;y&gt;[^:]+):(?&lt;z&gt;[^:]+):(?&lt;h&gt;[^:]+)" PeriodRefire="Deny" RefirePeriodExpression="1000">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Placeholder" Description="phase&#xD;&#xA;" DescriptionOverride="True" />
+                      <Action OrderNumber="2" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="U7b11a_b真冰" VariableExpression="0x${aid} = 0xBA98" />
+                      <Action OrderNumber="3" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="U7b11a_b冰主斜" VariableExpression="RadToDir(${h}, -4) % 2 = 0" />
+                      <Action OrderNumber="4" ActionType="LogMessage" Asynchronous="False" LogMessageText="_U7b11a_魔法" LogProcess="True" LogProcessACT="True">
+                        <Condition Enabled="true" Grouping="And">
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b真冰}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b真火}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b散raw}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                    </Actions>
+                    <Condition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${v:U7b_phase}" ExpressionTypeL="String" ExpressionR="${env:phase}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="d6f50d31-e3bb-4a3e-a280-8be3cceb997b" Name="3. 处理魔法 =&gt; 4" RegularExpression="^_U7b11a_魔法">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="LogMessage" Asynchronous="False" LogMessageText="U7b11a_魔法:b真冰:${!v:U7b11a_b真冰}:b散:${n: ${!v:U7b11a_b真火} = ${!v:U7b11a_b散raw}}:b冰主斜:${!v:U7b11a_b冰主斜}:b击退:${ev:U7b11a_b击退}" LogProcess="True" LogProcessACT="True" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="49b4545e-c37b-48d8-b0e1-eae2963ea427" Name="[F] 分散/分摊 =&gt; 点位" RegularExpression="^_U7b11a_散摊:b散:(?&lt;b散&gt;[01]):dirN4:(?&lt;dirN4&gt;[0-3])">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Placeholder" Description="远程分散位置要接近水平中轴线，故 dirN4 奇偶对应位置不同；这里用 dir4 代替 dirN4 方便写坐标" DescriptionOverride="True" />
+                      <Action OrderNumber="2" ActionType="ListVariable" Asynchronous="False" ListVariableOp="Build" ListVariableExpression="|-1:-6.5|-6.5:-1|-9:-9|-14:-1" ListVariableTarget="tmp_散">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${dirN4} % 2" ExpressionTypeL="Numeric" ExpressionR="0" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="3" ActionType="ListVariable" Asynchronous="False" ListVariableOp="Build" ListVariableExpression="|-1:-6.5|-6.5:-1|-1:-14|-9:-9" ListVariableTarget="tmp_散">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${dirN4} % 2" ExpressionTypeL="Numeric" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="4" ActionType="Placeholder" Description="分散" DescriptionOverride="True" />
+                      <Action OrderNumber="5" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 1) %% 4 = 0}:xy:${!l:tmp_散[1]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="6" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 2) %% 4 = 0}:xy:${!l:tmp_散[2]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="7" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 3) %% 4 = 0}:xy:${!l:tmp_散[3]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="8" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 4) %% 4 = 0}:xy:${!l:tmp_散[4]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="9" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:tmp_散[1]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="10" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:tmp_散[2]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="11" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:tmp_散[3]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="12" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:tmp_散[4]}" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="13" ActionType="Placeholder" Description="分摊" DescriptionOverride="True" />
+                      <Action OrderNumber="14" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:0:dir4:${dirN4}:b自:1:xy:-5:-5" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="0" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="15" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊点位:b散:0:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:-5:-5" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b散}" ExpressionTypeL="String" ExpressionR="0" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="16" ActionType="ListVariable" Asynchronous="False" ListVariableName="tmp_散" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="c3c2d67c-33c2-4b39-8d67-522467631db9" Name="4.1 播报魔法（冰火）" RegularExpression="^U7b11a_魔法:b真冰:(?&lt;b真冰&gt;[01]):b散:(?&lt;b散&gt;[01]):b冰主斜:(?&lt;b冰主斜&gt;[01]):b击退:(?&lt;b击退&gt;[01])">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Placeholder" Description="按 TH 分组" DescriptionOverride="True" />
+                      <Action OrderNumber="2" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊:b散:${b散}:dirN4:${n: ${!v:myIdx_isTH} ? (${b冰主斜} ? 1 : 0) : (${b冰主斜} ? 3 : 2) }" LogProcess="True">
+                        <Condition Enabled="true" Grouping="And">
+                          <ConditionSingle Enabled="true" ExpressionL="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" ExpressionTypeL="String" ExpressionR="0" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="3" ActionType="LogMessage" Asynchronous="False" LogMessageText="tts:0:${if: ${b击退} ? 击退到 : 直接去 }${?d: 00 = 右下, 01 = 右上, 10 = 左上, 11 = 左下 [${!v:myIdx_isTH}${b冰主斜}] }${if: ${b散} ? 分散 : 分摊 }" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" ExpressionTypeL="String" ExpressionR="0" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="4" ActionType="Placeholder" Description="按 击退 分组" DescriptionOverride="True" />
+                      <Action OrderNumber="5" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_散摊:b散:${b散}:dirN4:${n: ${b击退} ? (${b冰主斜} ? 1 : 2) : (${b冰主斜} ? 3 : 0) }" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="6" ActionType="LogMessage" Asynchronous="False" LogMessageText="tts:0:${if: ${b击退} ? 击退到 : 直接去 }${?d: 00 = 左上, 01 = 右上, 10 = 右下, 11 = 左下 [${b击退}${b冰主斜}] }${if: ${b散} ? 分散 : 分摊 }" LogProcess="True">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                      <Action OrderNumber="7" ActionType="UseTTS" ExecutionDelayExpression="4500" UseTTSTextExpression="横排站位" />
+                      <Action OrderNumber="8" ActionType="Placeholder" ExecutionDelayExpression="800" />
+                      <Action OrderNumber="9" ActionType="Placeholder" Description="点位为保证场外激光宽度 4.5 m 时刚好安全的位置（实际 3 m）" DescriptionOverride="True" />
+                      <Action OrderNumber="10" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:1:dx:-2.25" LogProcess="True" />
+                      <Action OrderNumber="11" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:2:dx:-6.81" LogProcess="True" />
+                      <Action OrderNumber="12" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:3:dx:-11.45" LogProcess="True" />
+                      <Action OrderNumber="13" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:4:dx:-16.25" LogProcess="True" />
+                      <Action OrderNumber="14" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:5:dx:2.25" LogProcess="True" />
+                      <Action OrderNumber="15" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:6:dx:6.81" LogProcess="True" />
+                      <Action OrderNumber="16" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:7:dx:11.45" LogProcess="True" />
+                      <Action OrderNumber="17" ActionType="LogMessage" Asynchronous="False" DescBgColor="ffd" LogMessageText="_U7b11a_横排点位:role:8:dx:16.25" LogProcess="True" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="6e1ac7bd-12ab-41ae-b111-7bf3c14e2627" Name="[F] 分散/分摊点位" RegularExpression="^_U7b11a_散摊点位:b散:(?&lt;b散&gt;[01]):dir4:(?&lt;dir4&gt;[0-3]):b自:(?&lt;b自&gt;[01]):xy:(?&lt;x&gt;[^:]*):(?&lt;y&gt;[^:]*)">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" DescBgColor="ffd" NamedCallbackName="PictoACT" NamedCallbackParam="Tag: U7b11a_散摊&#xD;&#xA;Omen: m0532om_don01x&#xD;&#xA;t: 5.1&#xD;&#xA;O: 100, 100, 0&#xD;&#xA;Dir4: ${dir4}&#xD;&#xA;Pos: ${x}, ${y}, 0.1&#xD;&#xA;ScaleCyl: ${b散} ? 1 : 4, 30&#xD;&#xA;Color: ${if: ${b自} ? 1, 1, 2, 5 : 3, 0.7, 0.4, 2 }" />
+                      <Action OrderNumber="2" ActionType="NamedCallback" DescBgColor="ffd" NamedCallbackName="PictoACT" NamedCallbackParam="Tag: U7b11a_散摊_指向&#xD;&#xA;Omen: m131om_setu0f&#xD;&#xA;t: 5.1&#xD;&#xA;O: 100, 100, 0&#xD;&#xA;Dir4: ${dir4}&#xD;&#xA;Target: ${x}, ${y}&#xD;&#xA;Scale: 0.2, _d, 0.2&#xD;&#xA;Color: 1, 1, 2, 2">
+                        <Condition Enabled="true" Grouping="Or">
+                          <ConditionSingle Enabled="true" ExpressionL="${b自}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="8b8c5cb4-9cc7-42c4-b109-2c18629e766c" Name="2.3 记录火分散/分摊 =&gt; 3" RegularExpression="^.{15}\S+ 1B:(?&lt;tid&gt;1.{7}):[^:]*:[^:]*:[^:]*:(?&lt;type&gt;007F|0080):" PeriodRefire="Deny" RefirePeriodExpression="1000">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Placeholder" Description="phase&#xD;&#xA;" DescriptionOverride="True" />
+                      <Action OrderNumber="2" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="U7b11a_b散raw" VariableExpression="0x${type} = 0x007F" />
+                      <Action OrderNumber="3" ActionType="LogMessage" Asynchronous="False" LogMessageText="_U7b11a_魔法" LogProcess="True" LogProcessACT="True">
+                        <Condition Enabled="true" Grouping="And">
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b真冰}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b真火}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                          <ConditionSingle Enabled="true" ExpressionL="${ev:U7b11a_b散raw}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                        </Condition>
+                      </Action>
+                    </Actions>
+                    <Condition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${v:U7b_phase}" ExpressionTypeL="String" ExpressionR="${env:phase}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                </Triggers>
+              </Folder>
+            </Folders>
+            <Triggers>
+            </Triggers>
+          </Folder>
+        </Folders>
+      </Folder>
+    </Folders>
+    <Triggers>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

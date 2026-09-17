@@ -235,6 +235,30 @@ internal sealed class FfxivDataRepository : IDataRepository
 
     public DateTime GetServerTimestamp() => DateTime.Now;
 
+    internal object DrawingDiagnosticSnapshot(uint id)
+    {
+        lock (syncRoot)
+        {
+            var entity = combatants.FirstOrDefault(value => value.ID == id);
+            return new
+            {
+                actor = id.ToString("X8"), present = entity is not null,
+                bnpcId = entity?.BNpcID, address = entity?.Address.ToInt64().ToString("X"),
+                ageMs = lastEntityUpdateTimestamp == DateTimeOffset.MinValue ? (double?)null :
+                    Math.Round((DateTimeOffset.UtcNow - lastEntityUpdateTimestamp).TotalMilliseconds),
+            };
+        }
+    }
+
+    internal string DrawingDiagnosticEntityState(uint id)
+    {
+        lock (syncRoot)
+        {
+            var entity = combatants.FirstOrDefault(value => value.ID == id);
+            return entity is null ? "missing" : $"bnpc={entity.BNpcID},address={entity.Address.ToInt64():X}";
+        }
+    }
+
     public string GetGameVersion() => string.Empty;
 
     public bool IsChatLogAvailable() => true;

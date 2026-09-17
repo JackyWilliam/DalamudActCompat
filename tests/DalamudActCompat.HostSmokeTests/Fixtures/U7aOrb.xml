@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<TriggernometryExport PluginVersion="2.2.0.1">
+  <ExportedFolder Id="11b03edd-1a96-4ab5-8899-cba6abe295a0" Enabled="true" Name="U7a 绝伊甸宝宝椅 v0.11.1" RawEnvironmentVariables="prefix = U7a&#xD;&#xA;zone = 1238&#xD;&#xA;version = 0.11.1">
+    <Folders>
+      <Folder Id="b92a34bf-e9ed-4c9d-a9f8-077415be5675" Enabled="true" Name="核心（此分组不可修改）" DisableRemoteExpand="True" DisableRemoteToggle="True">
+        <Folders>
+          <Folder Id="4e76b22c-a6c6-464f-82b3-3401acd913bf" Enabled="true" Name="区域限制" FFXIVZoneFilterEnabled="True" FfxivZoneFilterRegularExpression="^1238$">
+            <Folders>
+              <Folder Id="76b3d574-db5f-45d3-8b6f-4517055ab65d" Enabled="true" Name="P1">
+                <Folders>
+                  <Folder Id="7714eac1-9db5-4f6a-8da2-2e0412637395" Enabled="true" Name="B. 光轮" RawEnvironmentVariables="phase = P1光轮">
+                    <Triggers>
+                      <Trigger Enabled="true" Id="4bc02edc-0b09-42f1-869e-4004ff401215" Name="1. 储存雷火 光轮召唤" RegularExpression="^.{15}\S+ 14:(?&lt;sid&gt;4.{7}):[^:]+:9CD(?&lt;type&gt;6|7):">
+                        <Actions>
+                          <Action OrderNumber="1" ActionType="Variable" Asynchronous="False" VariableOp="UnsetRegexUniversal" VariableName="^U7a1_光轮" />
+                          <Action OrderNumber="2" ActionType="Variable" VariableOp="SetString" VariableName="U7a_phase" VariableExpression="${env:phase}" />
+                          <Action OrderNumber="3" ActionType="Variable" VariableOp="SetNumeric" VariableName="U7a1_光轮_is火safe" VariableExpression="${type} == 7" />
+                        </Actions>
+                      </Trigger>
+                    </Triggers>
+                  </Folder>
+                </Folders>
+              </Folder>
+            </Folders>
+          </Folder>
+        </Folders>
+      </Folder>
+      <Folder Id="0cd2f3b5-d573-47a2-9a38-4e6fa558a093" Enabled="true" Name="输出" FFXIVZoneFilterEnabled="True" FfxivZoneFilterRegularExpression="^1238$">
+        <Folders>
+          <Folder Id="15f3be34-f188-4034-89fd-070551391310" Enabled="true" Name="P1">
+            <Folders>
+              <Folder Id="565d8c10-1924-4c0d-8025-1718e5a17a25" Enabled="true" Name="B. 光轮" RawEnvironmentVariables="phase = P1光轮">
+                <Triggers>
+                  <Trigger Enabled="true" Id="b627ed69-9e21-4a22-9160-181ded9f9bd8" Name="O2. 光轮缩放+透明度" RegularExpression="^.{15}\S+ 03:(?&lt;id&gt;4.{7}):([^:]*:){7}(?&lt;bnpcid&gt;1782[12]):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="Placeholder" Asynchronous="False" Description="条件：on" DescriptionOverride="True" />
+                      <Action OrderNumber="2" ActionType="NamedCallback" DescTextColor="26f" NamedCallbackName="SetOpacity" NamedCallbackParam="${_entity[${id}].address}, ${n: (${bnpcid} = 17821) = ${v:U7a1_光轮_is火safe} ? 0.5 : 1}" />
+                      <Action OrderNumber="3" ActionType="NamedCallback" ExecutionDelayExpression="250" DescTextColor="26f" NamedCallbackName="ObjectScaling" NamedCallbackParam="${_entity[${id}].address}, ${n: (${bnpcid} = 17821) = ${v:U7a1_光轮_is火safe} ? 0.6 : 0.6}" />
+                      <Action OrderNumber="4" ActionType="NamedCallback" ExecutionDelayExpression="250" DescTextColor="26f" NamedCallbackName="ObjectScaling" NamedCallbackParam="${_entity[${id}].address}, ${n: (${bnpcid} = 17821) = ${v:U7a1_光轮_is火safe} ? 0.6 : 0.6}" />
+                      <Action OrderNumber="5" ActionType="NamedCallback" ExecutionDelayExpression="8400" DescTextColor="26f" NamedCallbackName="SetOpacity" NamedCallbackParam="${_entity[${id}].address}, ${n: (${bnpcid} = 17821) = ${v:U7a1_光轮_is火safe} ? 1 : 1}" />
+                      <Action OrderNumber="6" ActionType="NamedCallback" DescTextColor="26f" NamedCallbackName="ObjectScaling" NamedCallbackParam="${_entity[${id}].address}, ${n: (${bnpcid} = 17821) = ${v:U7a1_光轮_is火safe} ? 1 : 2}" />
+                    </Actions>
+                    <Condition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${pd:U7a_cfg[P1光轮缩放on]}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                    </Condition>
+                  </Trigger>
+                </Triggers>
+              </Folder>
+            </Folders>
+          </Folder>
+        </Folders>
+        <Triggers>
+        </Triggers>
+      </Folder>
+    </Folders>
+    <Triggers>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>
