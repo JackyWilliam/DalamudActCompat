@@ -51,6 +51,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly string clientLanguageName;
     private readonly byte? nativeClientLanguageCode;
     private readonly WindowSystem windowSystem = new("DalamudActCompat");
+    // Meters own their colors/opacity. Keep their old ID namespace so separating
+    // them from the management skin does not reset saved positions or sizes.
+    private readonly WindowSystem meterWindowSystem = new("DalamudActCompat");
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
@@ -750,10 +753,10 @@ public sealed class Plugin : IDalamudPlugin
             text,
             SetMeterVisible,
             () => SetSimplifiedMode(false));
-        windowSystem.AddWindow(meterWindow);
-        windowSystem.AddWindow(horizontalMeterWindow);
-        windowSystem.AddWindow(roleSplitDamageWindow);
-        windowSystem.AddWindow(roleSplitHealerWindow);
+        meterWindowSystem.AddWindow(meterWindow);
+        meterWindowSystem.AddWindow(horizontalMeterWindow);
+        meterWindowSystem.AddWindow(roleSplitDamageWindow);
+        meterWindowSystem.AddWindow(roleSplitHealerWindow);
         windowSystem.AddWindow(meterStyleEditorWindow);
         windowSystem.AddWindow(simplifiedHomeWindow);
         windowSystem.AddWindow(encounterWindow);
@@ -858,6 +861,7 @@ public sealed class Plugin : IDalamudPlugin
         advancedSettingsWindow.Detach();
         statusWindow.Detach();
         windowSystem.RemoveAllWindows();
+        meterWindowSystem.RemoveAllWindows();
         actRuntime.RawLogLineReceived -= OnRawLogLineForHost;
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
         actRuntime.NetworkReceived -= OnNetworkReceivedForHost;
@@ -878,11 +882,11 @@ public sealed class Plugin : IDalamudPlugin
     {
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
-        using var appearanceFrame = DactTheme.PushFrame();
         cloudAdministratorNotice.Update(cloudClient.Snapshot);
         triggernometryNativeBridge.Update(DateTimeOffset.UtcNow);
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
+            using var blockedAppearanceFrame = DactTheme.PushFrame();
             windowSystem.Draw();
             return;
         }
@@ -891,6 +895,7 @@ public sealed class Plugin : IDalamudPlugin
             // Authentication can be revoked by a network callback between Framework frames.
             // Close every functional window before this same UI frame is rendered.
             RestrictWindowsToAuthenticationGate(openGate: false);
+            using var signedOutAppearanceFrame = DactTheme.PushFrame();
             windowSystem.Draw();
             return;
         }
@@ -915,6 +920,10 @@ public sealed class Plugin : IDalamudPlugin
         OverlayEditShield.Draw(
             actRuntime.HasVisibleEditingOverlay,
             hasVisibleManagementWindow);
+        // Never wrap live meters in the skin scope: inherited ChildBg and popup
+        // colors otherwise replace translucent meter backgrounds with the skin.
+        meterWindowSystem.Draw();
+        using var appearanceFrame = DactTheme.PushFrame();
         windowSystem.Draw();
         friendsUi.Draw(settingsWindow.IsOpen, services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
         fileDialogManager.Draw();

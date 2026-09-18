@@ -930,11 +930,13 @@ public sealed class MeterWindow : Window
         var childHeight = Math.Max(
             CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) + 26,
             ImGui.GetContentRegionAvail().Y - summaryReserve);
+        // The parent and rows already draw the configured meter background.
+        // A child fill would stack its opacity (or inherit the editor's skin).
         if (ImGui.BeginChild(
                 childId,
                 new Vector2(-1, childHeight),
                 false,
-                (ImGuiWindowFlags)BuildRowsChildFlags(settings, useHorizontalScroll)))
+                (ImGuiWindowFlags)BuildRowsChildFlags(settings, useHorizontalScroll) | ImGuiWindowFlags.NoBackground))
         {
             var layout = BuildColumnLayout(
                 ImGui.GetContentRegionAvail().X,
