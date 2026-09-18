@@ -43,6 +43,8 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 输入 `/xlplugins`，搜索 **Dalamud ACT Compat**，点击安装。
 
+**已安装错误编号 4.4.0.0、无法更新到 0.4.4.0？** 关闭游戏和启动器，运行独立的 [DACT 修复工具](tools/DACT.Repair/README.md)，点击一次即可备份旧版并装入正确版本，保留账号与触发器配置。普通旧版本不需要使用此工具。
+
 0.3.10.0 起，Dalamud 先安装约 18 MiB 的核心包，插件再按缺失项获取 Host、Cactbot 和随包扩展资源；已验证的同版本缓存不会重复下载。下载中断可续传，更新失败时会保留上一份已验证资源。不要手动解压分包到插件目录。
 
 ### 3. 获取一次性激活码

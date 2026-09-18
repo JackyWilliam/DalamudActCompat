@@ -1,0 +1,30 @@
+name: Repair Tool
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths: ["tools/DACT.Repair/**", ".github/workflows/repair-tool.yml"]
+  pull_request:
+    paths: ["tools/DACT.Repair/**", ".github/workflows/repair-tool.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build offline tool and run isolated repair regressions
+        shell: pwsh
+        run: ./tools/DACT.Repair/build.ps1 -PreviewPath artifacts/repair/DACT-Repair-preview.png
+      - name: Save tested standalone tool
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dact-repair-${{ github.run_id }}
+          path: |
+            artifacts/repair/DACT-Repair-1.0.0.exe
+            artifacts/repair/DACT-Repair-1.0.0.sha256.txt
+            artifacts/repair/DACT-Repair-preview.png
+          if-no-files-found: error
