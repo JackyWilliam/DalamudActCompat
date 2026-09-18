@@ -11,11 +11,11 @@ namespace DalamudActCompat.UI;
 
 public sealed class StatusWindow : Window
 {
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
 
     private readonly IParserEngine parserEngine;
     private readonly UiText text;
@@ -82,8 +82,9 @@ public sealed class StatusWindow : Window
         headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         outerFrameStylePushed = true;
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -143,7 +144,7 @@ public sealed class StatusWindow : Window
             string.IsNullOrWhiteSpace(status.Detail) ? 126 : 166,
             () =>
             {
-                ImGui.TextColored(IceBlue, LocalizeParserState(status.State));
+                DactTheme.TextColored(IceBlue, LocalizeParserState(status.State));
                 ImGui.TextWrapped(status.Message);
                 if (!string.IsNullOrWhiteSpace(status.Detail))
                 {
@@ -156,7 +157,7 @@ public sealed class StatusWindow : Window
         var host = getHostSnapshot();
         DrawCard("runtime-host-card", text.Get("共享 ACT Host", "Shared ACT Host"), 330, () =>
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 host.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
                 $"{text.Get("进程", "Process")}: {LocalizeValue(host.State)}    " +
                 $"IPC: {LocalizeValue(host.IpcStatus)}");
@@ -183,12 +184,12 @@ public sealed class StatusWindow : Window
                 FormatMemoryProtectionDetail(host.MemoryProtection));
             ImGui.TextWrapped(
                 $"{text.Get("健康状态", "Health")}: {LocalizeValue(host.HealthState)} — {host.HealthDetail}");
-            if (ImGui.Button(text.Get("重启共享 Host", "Restart shared Host")))
+            if (DactTheme.Button(text.Get("重启共享 Host", "Restart shared Host")))
             {
                 restartHost();
             }
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("停止共享 Host", "Stop shared Host")))
+            if (DactTheme.Button(text.Get("停止共享 Host", "Stop shared Host")))
             {
                 stopHost();
             }
@@ -197,7 +198,7 @@ public sealed class StatusWindow : Window
                 HostMemoryProtectionState.EmergencyCountdown)
             {
                 ImGui.SameLine();
-                if (ImGui.Button(text.Get(
+                if (DactTheme.Button(text.Get(
                         "本次忽略自动内存回收",
                         "Ignore automatic recovery this session")))
                 {
@@ -209,7 +210,7 @@ public sealed class StatusWindow : Window
         var matchaHost = getMatchaHostSnapshot();
         DrawCard("runtime-matcha-host-card", text.Get("抹茶专属 Host", "Matcha dedicated Host"), 244, () =>
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 matchaHost.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
                 $"{text.Get("进程", "Process")}: {LocalizeValue(matchaHost.State)}    " +
                 $"IPC: {LocalizeValue(matchaHost.IpcStatus)}");
@@ -230,12 +231,12 @@ public sealed class StatusWindow : Window
                 $"{matchaHost.HostThreadCount} {text.Get("线程", "threads")}");
             ImGui.TextWrapped(
                 $"{text.Get("健康状态", "Health")}: {LocalizeValue(matchaHost.HealthState)} — {matchaHost.HealthDetail}");
-            if (ImGui.Button(text.Get("重启抹茶 Host", "Restart Matcha Host")))
+            if (DactTheme.Button(text.Get("重启抹茶 Host", "Restart Matcha Host")))
             {
                 restartMatchaHost();
             }
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("停止抹茶 Host", "Stop Matcha Host")))
+            if (DactTheme.Button(text.Get("停止抹茶 Host", "Stop Matcha Host")))
             {
                 stopMatchaHost();
             }
@@ -244,7 +245,7 @@ public sealed class StatusWindow : Window
         var genericHost = getGenericHostSnapshot();
         DrawCard("runtime-generic-host-card", text.Get("通用第三方 Host", "Generic third-party Host"), 210, () =>
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 genericHost.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
                 $"{text.Get("进程", "Process")}: {LocalizeValue(genericHost.State)}    " +
                 $"IPC: {LocalizeValue(genericHost.IpcStatus)}");
@@ -261,12 +262,12 @@ public sealed class StatusWindow : Window
                 $"{genericHost.HostThreadCount} {text.Get("线程", "threads")}");
             ImGui.TextWrapped(
                 $"{text.Get("健康状态", "Health")}: {LocalizeValue(genericHost.HealthState)} — {genericHost.HealthDetail}");
-            if (ImGui.Button(text.Get("重启通用 Host", "Restart generic Host")))
+            if (DactTheme.Button(text.Get("重启通用 Host", "Restart generic Host")))
             {
                 restartGenericHost();
             }
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("停止通用 Host", "Stop generic Host")))
+            if (DactTheme.Button(text.Get("停止通用 Host", "Stop generic Host")))
             {
                 stopGenericHost();
             }
@@ -279,7 +280,7 @@ public sealed class StatusWindow : Window
             {
                 foreach (var plugin in host.PluginHealth)
                 {
-                    ImGui.TextColored(IceBlue, plugin.PluginId);
+                    DactTheme.TextColored(IceBlue, plugin.PluginId);
                     ImGui.SameLine();
                     ImGui.TextWrapped(
                         $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, " +
@@ -299,7 +300,7 @@ public sealed class StatusWindow : Window
             {
                 foreach (var plugin in matchaHost.PluginHealth)
                 {
-                    ImGui.TextColored(IceBlue, plugin.PluginId);
+                    DactTheme.TextColored(IceBlue, plugin.PluginId);
                     ImGui.SameLine();
                     ImGui.TextWrapped(
                         $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, " +
@@ -319,7 +320,7 @@ public sealed class StatusWindow : Window
             {
                 foreach (var plugin in genericHost.PluginHealth)
                 {
-                    ImGui.TextColored(IceBlue, plugin.PluginId);
+                    DactTheme.TextColored(IceBlue, plugin.PluginId);
                     ImGui.SameLine();
                     ImGui.TextWrapped(
                         $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, " +
@@ -411,7 +412,7 @@ public sealed class StatusWindow : Window
         {
             foreach (var stage in stages)
             {
-                ImGui.TextColored(IceBlue, stage.Stage);
+                DactTheme.TextColored(IceBlue, stage.Stage);
                 ImGui.SameLine();
                 ImGui.TextWrapped($"{LocalizeValue(stage.State)} — {stage.Detail}");
             }
@@ -422,7 +423,7 @@ public sealed class StatusWindow : Window
     {
         if (BrandedWindowChrome.BeginGoldCard(id, height))
         {
-            ImGui.TextColored(Gold, title);
+            DactTheme.TextColored(Gold, title);
             drawContent();
         }
         BrandedWindowChrome.EndGoldCard();
@@ -522,13 +523,13 @@ public sealed class StatusWindow : Window
 
     private static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));

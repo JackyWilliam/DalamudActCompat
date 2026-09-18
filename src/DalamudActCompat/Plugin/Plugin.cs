@@ -472,6 +472,7 @@ public sealed class Plugin : IDalamudPlugin
         _ = new OverlayManager(new OverlayEventBus());
 
         text = new UiText(configuration);
+        DactTheme.GameAssets = new GameSkinAssets(textureProvider, dataManager);
         var assetDirectory = Path.Combine(
             pluginInterface.AssemblyLocation.Directory!.FullName,
             "Assets");
@@ -844,6 +845,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DetachDalamudResources()
     {
+        DactTheme.GameAssets = null;
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
@@ -874,6 +876,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        var appearanceAccount = cloudClient.Snapshot;
+        DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
+        using var appearanceFrame = DactTheme.PushFrame();
         cloudAdministratorNotice.Update(cloudClient.Snapshot);
         triggernometryNativeBridge.Update(DateTimeOffset.UtcNow);
         if (Volatile.Read(ref cloudAccessBlocked) != 0)

@@ -6,13 +6,13 @@ namespace DalamudActCompat.UI;
 
 internal static class BrandedWindowChrome
 {
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavigationHover = new(0.16f, 0.31f, 0.40f, 0.24f);
-    private static readonly Vector4 NavigationSelected = new(0.14f, 0.34f, 0.46f, 0.30f);
-    private static readonly Vector4 NavigationText = new(0.74f, 0.79f, 0.84f, 1);
-    private static readonly Vector4 NavigationAccent = new(0.42f, 0.78f, 0.96f, 1);
-    private static readonly Vector4 GoldCardBorder = new(0.78f, 0.66f, 0.36f, 0.82f);
-    private static readonly Vector4 GoldCardBackground = new(0.055f, 0.075f, 0.10f, 0.96f);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavigationHover => DactTheme.Tone(new Vector4(0.16f, 0.31f, 0.40f, 0.24f), DactTheme.Palette.Hover);
+    private static Vector4 NavigationSelected => DactTheme.Tone(new Vector4(0.14f, 0.34f, 0.46f, 0.30f), DactTheme.Palette.Hover);
+    private static Vector4 NavigationText => DactTheme.Tone(new Vector4(0.74f, 0.79f, 0.84f, 1), DactTheme.Palette.Muted);
+    private static Vector4 NavigationAccent => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
+    private static Vector4 GoldCardBorder => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 0.82f), DactTheme.Palette.Border);
+    private static Vector4 GoldCardBackground => DactTheme.Tone(new Vector4(0.055f, 0.075f, 0.10f, 0.96f), DactTheme.Palette.Raised);
     private static readonly Dictionary<string, float> NavigationIndicatorPositions = new(StringComparer.Ordinal);
 
     public static bool Draw(
@@ -32,8 +32,11 @@ internal static class BrandedWindowChrome
         string? statusTooltip = null,
         Action? friendsAction = null,
         int onlineFriends = 0,
-        bool friendsUnread = false)
+        bool friendsUnread = false,
+        Action? logoAction = null,
+        Action? versionAction = null)
     {
+        DactTheme.DrawGameWindow();
         const float height = 40;
         const float actionButtonSize = 28;
         const float helpCloseGap = 3;
@@ -44,7 +47,7 @@ internal static class BrandedWindowChrome
         var availableWidth = ImGui.GetContentRegionAvail().X;
         var screenEnd = screenStart + new Vector2(availableWidth, height);
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(
+        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             screenStart,
             screenEnd,
             ImGui.GetColorU32(NavyRaised),
@@ -53,21 +56,24 @@ internal static class BrandedWindowChrome
 
         var logoTop = screenStart.Y + ((height - logoSize) * 0.5f);
         var logoLeft = screenStart.X + horizontalPadding;
-        drawList.AddImage(
+        // Clip the texture itself so its square corners do not remain visible
+        // over the rounded title chrome; the discovery hit target stays unchanged.
+        drawList.AddImageRounded(
             logoTexture.GetWrapOrEmpty().Handle,
             new Vector2(logoLeft, logoTop),
-            new Vector2(logoLeft + logoSize, logoTop + logoSize));
+            new Vector2(logoLeft + logoSize, logoTop + logoSize),
+            Vector2.Zero, Vector2.One, ImGui.GetColorU32(Vector4.One), 6);
 
         var textTop = screenStart.Y + ((height - ImGui.GetTextLineHeight()) * 0.5f);
         const string title = "Dalamud ACT Compat";
         var titleLeft = logoLeft + logoSize + 9;
         drawList.AddText(
             new Vector2(titleLeft, textTop),
-            ImGui.GetColorU32(Vector4.One),
+            ImGui.GetColorU32(DactTheme.Palette.Text),
             title);
         drawList.AddText(
             new Vector2(titleLeft + ImGui.CalcTextSize(title).X + 9, textTop),
-            ImGui.GetColorU32(new Vector4(0.68f, 0.72f, 0.77f, 1)),
+            ImGui.GetColorU32(DactTheme.Tone(new Vector4(0.68f, 0.72f, 0.77f, 1), DactTheme.Palette.Muted)),
             sectionLabel);
 
         var helpWidth = helpAction is null ? 0 : actionButtonSize;
@@ -100,13 +106,28 @@ internal static class BrandedWindowChrome
             new Vector2(
                 screenStart.X + availableWidth - trailingWidth - versionSize.X - 12,
                 textTop),
-            ImGui.GetColorU32(new Vector4(0.62f, 0.66f, 0.71f, 1)),
+            ImGui.GetColorU32(DactTheme.Tone(new Vector4(0.62f, 0.66f, 0.71f, 1), DactTheme.Palette.Muted)),
             versionLabel);
 
+        // Give discoveries their own hit targets so a logo click never starts
+        // dragging the window. Other windows keep the existing full-width handle.
+        var dragLeft = logoAction is null ? 0 : horizontalPadding + logoSize + 5;
+        var dragRight = versionAction is null ? availableWidth - trailingWidth : versionLeft - screenStart.X - 4;
+        ImGui.SetCursorPos(start + new Vector2(dragLeft, 0));
         ImGui.InvisibleButton(
             $"branded-window-drag-handle##{id}",
-            new Vector2(Math.Max(1, availableWidth - trailingWidth), height));
+            new Vector2(Math.Max(1, dragRight - dragLeft), height));
         drag.HandleItem();
+        if (logoAction is not null)
+        {
+            ImGui.SetCursorScreenPos(new Vector2(logoLeft, logoTop));
+            if (ImGui.InvisibleButton($"logo-discovery##{id}", new Vector2(logoSize))) logoAction();
+        }
+        if (versionAction is not null)
+        {
+            ImGui.SetCursorScreenPos(new Vector2(versionLeft, screenStart.Y));
+            if (ImGui.InvisibleButton($"version-discovery##{id}", new Vector2(versionSize.X, height))) versionAction();
+        }
 
         var closeRequested = false;
         var actionButtonOffsetY = (height - actionButtonSize) * 0.5f;
@@ -121,11 +142,11 @@ internal static class BrandedWindowChrome
                 friendsWidth - friendsGap -
                 statusWidth,
                 start.Y + actionButtonOffsetY));
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.055f, 0.12f, 0.16f, 0.88f));
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.12f, 0.29f, 0.38f, 0.96f));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.16f, 0.39f, 0.50f, 1));
-            ImGui.PushStyleColor(ImGuiCol.Text, statusColor ?? NavigationText);
-            if (ImGui.Button(
+            DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.055f, 0.12f, 0.16f, 0.88f));
+            DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.12f, 0.29f, 0.38f, 0.96f));
+            DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.16f, 0.39f, 0.50f, 1));
+            DactTheme.PushStyleColor(ImGuiCol.Text, statusColor ?? NavigationText);
+            if (DactTheme.Button(
                     $"{statusLabel}##status-{id}",
                     new Vector2(statusWidth, actionButtonSize)))
             {
@@ -146,10 +167,10 @@ internal static class BrandedWindowChrome
             var buttonStart = ImGui.GetCursorScreenPos();
             if (ImGui.InvisibleButton($"friends-{id}", new Vector2(friendsWidth, actionButtonSize))) friendsAction();
             drawList.AddRectFilled(buttonStart, buttonStart + new Vector2(friendsWidth, actionButtonSize),
-                ImGui.GetColorU32(ImGui.IsItemHovered() ? NavigationHover : new Vector4(0.055f, 0.12f, 0.16f, 0.88f)), 5);
+                ImGui.GetColorU32(ImGui.IsItemHovered() ? NavigationHover : DactTheme.Tone(new Vector4(0.055f, 0.12f, 0.16f, 0.88f), DactTheme.Palette.Raised)), 5);
             FriendsGlyph.Draw(drawList, buttonStart + new Vector2(4, 3), 21, ImGui.GetColorU32(NavigationAccent));
             drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
-                ImGui.GetColorU32(Vector4.One), Math.Max(0, onlineFriends).ToString());
+                ImGui.GetColorU32(DactTheme.Palette.Text), Math.Max(0, onlineFriends).ToString());
             if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
             if (ImGui.IsItemHovered()) ImGui.SetTooltip($"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}");
         }
@@ -160,10 +181,10 @@ internal static class BrandedWindowChrome
                 (showCloseButton ? actionButtonSize + helpCloseGap : 0) -
                 helpWidth,
                 start.Y + actionButtonOffsetY));
-            ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.34f, 0.46f, 0.82f));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.45f, 0.60f, 1));
-            if (ImGui.Button($"?##help-{id}", new Vector2(actionButtonSize, actionButtonSize)))
+            DactTheme.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+            DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.34f, 0.46f, 0.82f));
+            DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.45f, 0.60f, 1));
+            if (DactTheme.IconButton($"help-{id}", GameSkinIcon.Help, "?", new Vector2(actionButtonSize, actionButtonSize)))
             {
                 helpAction();
             }
@@ -178,12 +199,13 @@ internal static class BrandedWindowChrome
             ImGui.SetCursorPos(new Vector2(
                 start.X + availableWidth - actionButtonSize,
                 start.Y + actionButtonOffsetY));
-            ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
-            closeRequested = ImGui.Button(
-                $"×##close-{id}",
+            DactTheme.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+            DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));
+            DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.72f, 0.20f, 0.20f, 1));
+            closeRequested = DactTheme.IconButton(
+                $"close-{id}", GameSkinIcon.Close, "×",
                 new Vector2(actionButtonSize, actionButtonSize));
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("关闭窗口 / Close window");
             ImGui.PopStyleColor(3);
         }
         ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));
@@ -210,7 +232,7 @@ internal static class BrandedWindowChrome
         var screenEnd = screenStart + new Vector2(width, height);
         var drawList = ImGui.GetWindowDrawList();
 
-        drawList.AddRectFilled(
+        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             screenStart,
             screenEnd,
             ImGui.GetColorU32(NavyRaised),
@@ -229,12 +251,12 @@ internal static class BrandedWindowChrome
 
         var indicatorMin = new Vector2(screenStart.X + (segmentWidth * indicatorPosition), screenStart.Y);
         var indicatorMax = indicatorMin + new Vector2(segmentWidth, height);
-        drawList.AddRectFilled(
+        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             indicatorMin,
             indicatorMax,
             ImGui.GetColorU32(NavigationSelected),
             6);
-        drawList.AddRectFilled(
+        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             new Vector2(indicatorMin.X + 8, indicatorMax.Y - 2),
             new Vector2(indicatorMax.X - 8, indicatorMax.Y),
             ImGui.GetColorU32(NavigationAccent),
@@ -246,7 +268,17 @@ internal static class BrandedWindowChrome
             var itemMin = new Vector2(screenStart.X + (segmentWidth * index), screenStart.Y);
             ImGui.SetCursorScreenPos(itemMin);
             ImGui.InvisibleButton($"navigation-segment-{index}##{id}", new Vector2(segmentWidth, height));
-            if (ImGui.IsItemHovered())
+            var texturedTab = false;
+            if (DactTheme.Palette.Light)
+            {
+                // Preserve a generous hit area while matching the game's compact
+                // tab proportions; this also scales with the user's text size.
+                var tabHeight = Math.Min(height - 6, ImGui.GetTextLineHeight() + 9);
+                var tabTop = (height - tabHeight) * .5f;
+                texturedTab = DactTheme.DrawGameTab(drawList, itemMin + new Vector2(1, tabTop),
+                    itemMin + new Vector2(segmentWidth - 2, tabTop + tabHeight), index == selectedIndex, ImGui.IsItemHovered());
+            }
+            else if (ImGui.IsItemHovered())
             {
                 drawList.AddRectFilled(
                     itemMin,
@@ -261,11 +293,16 @@ internal static class BrandedWindowChrome
             }
 
             var labelSize = ImGui.CalcTextSize(labels[index]);
-            drawList.AddText(
-                new Vector2(
+            var labelPosition = texturedTab
+                ? DactTheme.CenteredTextPosition(labels[index], itemMin, itemMin + new Vector2(segmentWidth, height - 2))
+                : new Vector2(
                     itemMin.X + ((segmentWidth - labelSize.X) * 0.5f),
-                    itemMin.Y + ((height - labelSize.Y) * 0.5f)),
-                ImGui.GetColorU32(index == selectedIndex ? NavigationAccent : NavigationText),
+                    itemMin.Y + ((height - labelSize.Y) * 0.5f));
+            drawList.AddText(
+                labelPosition,
+                ImGui.GetColorU32(texturedTab
+                    ? Vector4.One
+                    : index == selectedIndex ? NavigationAccent : NavigationText),
                 labels[index]);
             if (index == notificationIndex)
             {
@@ -297,8 +334,8 @@ internal static class BrandedWindowChrome
         float height,
         bool allowScrolling = true)
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
-        ImGui.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
+        DactTheme.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         var flags = allowScrolling
             ? ImGuiWindowFlags.None

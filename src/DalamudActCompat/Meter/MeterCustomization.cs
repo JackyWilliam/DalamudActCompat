@@ -40,6 +40,7 @@ public enum MeterSlotMetric
     Fflogs,
     EncDps,
     ExtDps,
+    TeamDps,
 }
 
 public enum MeterWindowKind
@@ -65,6 +66,8 @@ public sealed class MeterWindowProfile
 
     public float BackgroundOpacity { get; set; } = 0.85f;
 
+    public Vector3? BackgroundColor { get; set; }
+
     public float ItemWidth { get; set; } = 210;
 
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
@@ -81,6 +84,11 @@ public sealed class MeterWindowProfile
     internal bool Normalize(IReadOnlyList<MeterSlotDefinition> defaults)
     {
         var changed = false;
+        if (BackgroundColor is { } color && MeterBackground.Normalize(color) != color)
+        {
+            BackgroundColor = MeterBackground.Normalize(color);
+            changed = true;
+        }
         var normalizedFontScale = ClampFinite(FontScale, 0.65f, 2, 1);
         var normalizedBackgroundOpacity = ClampFinite(BackgroundOpacity, 0, 1, 0.85f);
         var normalizedItemWidth = ClampFinite(ItemWidth, 140, 420, 210);
@@ -144,6 +152,7 @@ public static class MeterSlotDefaults
         MeterSlotMetric.PlayerIdentity,
         MeterSlotMetric.Fflogs,
         MeterSlotMetric.Dps,
+        MeterSlotMetric.TeamDps,
         MeterSlotMetric.Rdps,
         MeterSlotMetric.EncDps,
         MeterSlotMetric.ExtDps,

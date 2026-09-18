@@ -57,15 +57,15 @@ public sealed class ControlCenterWindow : Window
 
     private sealed record CombatLogDirectoryFeedback(string Message, bool IsError);
 
-    internal static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    internal static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    internal static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
-    private static readonly Vector4 AuthenticationHeroBackground = new(0.045f, 0.075f, 0.105f, 1);
-    private static readonly Vector4 AuthenticationCardBackground = new(0.055f, 0.070f, 0.095f, 1);
-    private static readonly Vector4 AuthenticationBorder = new(0.25f, 0.48f, 0.60f, 0.62f);
-    private static readonly Vector4 AuthenticationMutedText = new(0.62f, 0.68f, 0.74f, 1);
+    internal static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    internal static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    internal static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
+    private static Vector4 AuthenticationHeroBackground => DactTheme.Tone(new Vector4(0.045f, 0.075f, 0.105f, 1), DactTheme.Palette.Surface);
+    private static Vector4 AuthenticationCardBackground => DactTheme.Tone(new Vector4(0.055f, 0.070f, 0.095f, 1), DactTheme.Palette.Raised);
+    private static Vector4 AuthenticationBorder => DactTheme.Tone(new Vector4(0.25f, 0.48f, 0.60f, 0.62f), DactTheme.Palette.Border);
+    private static Vector4 AuthenticationMutedText => DactTheme.Tone(new Vector4(0.62f, 0.68f, 0.74f, 1), DactTheme.Palette.Muted);
     private static readonly string VersionLabel = BuildVersionLabel();
     private const int OpenAnimationMilliseconds = 180;
     private const int CloseAnimationMilliseconds = 160;
@@ -80,8 +80,14 @@ public sealed class ControlCenterWindow : Window
     private const string CloudQuickPopupId = "云同步状态###DalamudActCompatCloudQuickStatus";
     private const string ActivationQqGroup = "1098561701";
     private const string ActivationDiscordUrl = "https://discord.gg/mZHFwXe7Gk";
+    private const string AfdianSupportUrl = "https://ifdian.net/a/raynor";
 
     private readonly PluginConfiguration configuration;
+    private readonly SkinDiscoveries skinDiscoveries = new();
+    private readonly SkinSettingsPanel skinSettings = new();
+    private bool resetSettingsScroll;
+    private string? discoveredSkin;
+    private long discoveryNoticeUntil;
     private readonly WindowDragController headerDrag = new();
     private readonly IParserEngine parserEngine;
     private readonly PluginLogger logger;
@@ -341,6 +347,7 @@ public sealed class ControlCenterWindow : Window
             return;
         }
 
+        skinSettings.Close();
         saveConfiguration();
         visibilityTransition = VisibilityTransition.Closing;
         visibilityTransitionStartedAt = Environment.TickCount64;
@@ -393,8 +400,9 @@ public sealed class ControlCenterWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Clamp(alpha, 0.01f, 1));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         visibilityStylePushed = true;
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -435,8 +443,10 @@ public sealed class ControlCenterWindow : Window
             DrawCloudQuickPopup(cloudSnapshot);
             if (!cloudSnapshot.IsSignedIn)
             {
+                skinSettings.Close();
                 ImGui.Spacing();
-                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, -1), false))
+                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, PageContentHeight()), false,
+                        DactTheme.Palette.Light ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None))
                 {
                     DrawAuthenticationGate(cloudSnapshot);
                 }
@@ -452,8 +462,12 @@ public sealed class ControlCenterWindow : Window
             }
             DrawPageTabs();
             ImGui.Spacing();
-            if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, -1), true))
+            if (selectedPage != Page.Diagnostics) skinSettings.Close();
+            var pageFlags = skinSettings.IsOpen ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None;
+            if (DactTheme.Palette.Light) pageFlags |= ImGuiWindowFlags.NoBackground;
+            if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, PageContentHeight()), true, pageFlags))
             {
+                if (resetSettingsScroll) { ImGui.SetScrollY(0); resetSettingsScroll = false; }
                 var hostConfigurationChanged = false;
                 var changed = selectedPage switch
                 {
@@ -462,7 +476,7 @@ public sealed class ControlCenterWindow : Window
                     Page.Overlays => DrawOverlays(),
                     Page.Extensions => DrawExtensions(out hostConfigurationChanged),
                     Page.Cloud => DrawCloud(),
-                    Page.Diagnostics => DrawDiagnostics(),
+                    Page.Diagnostics => DrawSettingsPage(),
                     _ => false,
                 };
 
@@ -484,8 +498,15 @@ public sealed class ControlCenterWindow : Window
         }
     }
 
+    internal static float PageContentHeight()
+        // The game frame ends before its transparent shadow tail. Keep scrolling
+        // child panels above that rim rather than painting across the bottom edge.
+        => DactTheme.Palette.Light
+            ? Math.Max(1, ImGui.GetContentRegionAvail().Y - 12 * Math.Max(.75f, ImGui.GetFontSize() / 17f)) : -1;
+
     public override void OnClose()
     {
+        skinSettings.Close();
         historyLimitDraft = null;
         saveConfiguration();
     }
@@ -511,13 +532,13 @@ public sealed class ControlCenterWindow : Window
 
         // This page shares the same destructive setting as advanced settings, so both
         // entry points require the same explicit confirmation contract.
-        if (ImGui.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
+        if (DactTheme.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
             applyHistoryLimit(pending))
         {
             historyLimitDraft = null;
         }
         ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
+        if (DactTheme.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
         {
             historyLimitDraft = null;
         }
@@ -577,7 +598,9 @@ public sealed class ControlCenterWindow : Window
                 statusTooltip: text.Get("查看云同步状态", "View cloud sync status"),
                 friendsAction: cloudSnapshot.IsSignedIn && Friends is { } friends ? friends.ToggleDrawer : null,
                 onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
-                friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false))
+                friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false,
+                logoAction: () => DiscoverSkin(skinDiscoveries.ClickLogo(configuration.Appearance, Environment.TickCount64)),
+                versionAction: () => DiscoverSkin(skinDiscoveries.ClickVersion(configuration.Appearance, Environment.TickCount64))))
         {
             HideAnimated();
         }
@@ -605,6 +628,20 @@ public sealed class ControlCenterWindow : Window
         {
             selectedPage = tabs[nextIndex].Page;
         }
+        DiscoverSkin(skinDiscoveries.VisitPage(configuration.Appearance, (int)selectedPage));
+        if (discoveredSkin is { } id && Environment.TickCount64 < discoveryNoticeUntil)
+        {
+            var skin = SkinCatalog.All.First(item => item.Id == id);
+            DactTheme.TextColored(IceBlue, text.Get($"发现隐藏配色「{skin.ChineseName}」！可在设置&账号中使用。", $"Discovered {skin.EnglishName}! Apply it in Settings & Account."));
+        }
+    }
+
+    private void DiscoverSkin(string? id)
+    {
+        if (id is null) return;
+        discoveredSkin = id;
+        discoveryNoticeUntil = Environment.TickCount64 + 8000;
+        saveConfiguration();
     }
     private bool DrawOverview()
     {
@@ -631,8 +668,8 @@ public sealed class ControlCenterWindow : Window
                 parserCardHeight,
                 allowScrolling: false))
         {
-            ImGui.TextColored(Gold, text.Get("解析器", "Parser"));
-            ImGui.TextColored(IceBlue, LocalizeState(parserStatus.State));
+            DactTheme.TextColored(Gold, text.Get("解析器", "Parser"));
+            DactTheme.TextColored(IceBlue, LocalizeState(parserStatus.State));
             ImGui.TextWrapped(parserStatus.Message);
             if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
             {
@@ -655,13 +692,13 @@ public sealed class ControlCenterWindow : Window
                 quickActionsCardHeight,
                 allowScrolling: false))
         {
-            ImGui.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
+            DactTheme.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
             var meterVisible = configuration.Meter.IsVisible;
             if (meterVisible)
             {
                 PushOpenWindowButtonStyle();
             }
-            if (ImGui.Button(
+            if (DactTheme.Button(
                     meterVisible
                         ? text.Get("关闭战斗统计", "Close Combat Meter")
                         : text.Get("打开战斗统计", "Open Combat Meter"),
@@ -674,14 +711,14 @@ public sealed class ControlCenterWindow : Window
                 ImGui.PopStyleColor(4);
             }
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
+            if (DactTheme.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
             {
                 openHistory();
             }
             ImGui.SameLine();
             DrawStatusWindowToggleButton(new Vector2(150, 36));
 
-            if (ImGui.Button(
+            if (DactTheme.Button(
                     text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs"),
                     new Vector2(230, 36)))
             {
@@ -696,7 +733,7 @@ public sealed class ControlCenterWindow : Window
             if (!string.IsNullOrWhiteSpace(combatLogFolderFeedback))
             {
                 ImGui.SameLine();
-                ImGui.TextColored(
+                DactTheme.TextColored(
                     combatLogFolderFeedbackIsError
                         ? new Vector4(0.95f, 0.45f, 0.40f, 1)
                         : IceBlue,
@@ -725,7 +762,7 @@ public sealed class ControlCenterWindow : Window
                 generalCardHeight,
                 allowScrolling: false))
         {
-            ImGui.TextColored(Gold, text.Get("基础设置", "General"));
+            DactTheme.TextColored(Gold, text.Get("基础设置", "General"));
             changed |= Checkbox(
                 text.Get("启用解析", "Enable parsing"),
                 configuration.EnableParsing,
@@ -739,7 +776,7 @@ public sealed class ControlCenterWindow : Window
                 getGameRegionSelection(),
                 setGameRegionMode);
             var simplifiedMode = configuration.SimplifiedModeEnabled;
-            if (ImGui.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
+            if (DactTheme.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
             {
                 setSimplifiedMode(simplifiedMode);
             }
@@ -750,7 +787,7 @@ public sealed class ControlCenterWindow : Window
                     "Keeps only parsing and the combat meter. Web overlays, extensions, and other DACT windows are temporarily closed. Use /actcompat simple off to exit."));
             }
             var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
-            if (ImGui.Checkbox(
+            if (DactTheme.Checkbox(
                     text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
                     ref hideWhenUnfocused))
             {
@@ -797,20 +834,20 @@ public sealed class ControlCenterWindow : Window
 
         var changed = false;
         var visible = configuration.Meter.IsVisible;
-        if (ImGui.Checkbox(text.Get("显示战斗统计", "Show Combat Meter"), ref visible))
+        if (DactTheme.Checkbox(text.Get("显示战斗统计", "Show Combat Meter"), ref visible))
         {
             setMeterVisible(visible);
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("定位到战斗统计", "Open Combat Meter window")))
+        if (DactTheme.Button(text.Get("定位到战斗统计", "Open Combat Meter window")))
         {
             openMeter();
         }
 
-        ImGui.TextColored(IceBlue, text.Get("榜单模板", "Meter template"));
+        DactTheme.TextColored(IceBlue, text.Get("榜单模板", "Meter template"));
         var activeKind = configuration.Meter.ActiveWindowKind;
         ImGui.SetNextItemWidth(260);
-        if (ImGui.BeginCombo("##meter-template", MeterKindLabel(activeKind)))
+        if (DactTheme.BeginCombo("##meter-template", MeterKindLabel(activeKind)))
         {
             foreach (var kind in Enum.GetValues<MeterWindowKind>())
             {
@@ -823,7 +860,7 @@ public sealed class ControlCenterWindow : Window
             ImGui.EndCombo();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("自定义", "Customize")))
+        if (DactTheme.Button(text.Get("自定义", "Customize")))
         {
             openMeterStyleEditor();
         }
@@ -831,10 +868,10 @@ public sealed class ControlCenterWindow : Window
             "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
             "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots."));
 
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
-        if (ImGui.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+        if (DactTheme.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
         {
             resetEncounterConfirmationExpiresAt =
                 Environment.TickCount64 + ResetConfirmationMilliseconds;
@@ -895,13 +932,13 @@ public sealed class ControlCenterWindow : Window
             $"This confirmation closes automatically in {secondsRemaining} seconds."));
         ImGui.Spacing();
 
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
-        var confirmed = ImGui.Button(text.Get("确认重置", "Confirm reset"));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
+        var confirmed = DactTheme.Button(text.Get("确认重置", "Confirm reset"));
         ImGui.PopStyleColor(3);
         ImGui.SameLine();
-        var cancelled = ImGui.Button(text.Get("取消", "Cancel"));
+        var cancelled = DactTheme.Button(text.Get("取消", "Cancel"));
 
         if (confirmed)
         {
@@ -931,7 +968,7 @@ public sealed class ControlCenterWindow : Window
 
         var changed = false;
         var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
-        if (ImGui.Checkbox(
+        if (DactTheme.Checkbox(
                 text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
                 ref hideWhenUnfocused))
         {
@@ -952,14 +989,14 @@ public sealed class ControlCenterWindow : Window
             .ThenBy(static template => template.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        ImGui.TextColored(Gold, "Cactbot");
+        DactTheme.TextColored(Gold, "Cactbot");
         ImGui.TextDisabled(FormatCactbotStatus());
-        if (ImGui.Button(text.Get("Cactbot 设置", "Cactbot settings")))
+        if (DactTheme.Button(text.Get("Cactbot 设置", "Cactbot settings")))
         {
             openCactbotSettings();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("安装 / 更新", "Install / update")))
+        if (DactTheme.Button(text.Get("安装 / 更新", "Install / update")))
         {
             selectCactbotPackage();
         }
@@ -971,7 +1008,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("HTML 悬浮窗", "HTML overlays"));
+        DactTheme.TextColored(Gold, text.Get("HTML 悬浮窗", "HTML overlays"));
         changed |= DrawCreatedHtmlOverlays();
 
         ImGui.Spacing();
@@ -1023,7 +1060,7 @@ public sealed class ControlCenterWindow : Window
                 changed = true;
             }
 
-            if (ImGui.BeginCombo(text.Get("模板", "Template"), configuration.SelectedOverlayTemplate))
+            if (DactTheme.BeginCombo(text.Get("模板", "Template"), configuration.SelectedOverlayTemplate))
             {
                 foreach (var template in templates)
                 {
@@ -1041,7 +1078,7 @@ public sealed class ControlCenterWindow : Window
             configuration.OverlayWindows.TryGetValue(
                 configuration.SelectedOverlayTemplate,
                 out var selectedSettings);
-            if (ImGui.Button(selectedSettings?.IsVisible == true
+            if (DactTheme.Button(selectedSettings?.IsVisible == true
                     ? text.Get("关闭所选 HTML 悬浮窗", "Close selected HTML overlay")
                     : text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
             {
@@ -1077,7 +1114,7 @@ public sealed class ControlCenterWindow : Window
             .ToArray();
 
         ImGui.Spacing();
-        ImGui.TextColored(IceBlue, text.Get(
+        DactTheme.TextColored(IceBlue, text.Get(
             "打开过的 Cactbot 悬浮窗",
             "Previously opened Cactbot overlays"));
         if (usedNames.Length == 0)
@@ -1128,7 +1165,7 @@ public sealed class ControlCenterWindow : Window
                 ImGui.PushID($"used-cactbot-actions-{selectedName}");
                 if (localTemplateAvailable)
                 {
-                    if (ImGui.Button(selectedSettings.IsVisible
+                    if (DactTheme.Button(selectedSettings.IsVisible
                             ? text.Get("关闭", "Close")
                             : text.Get("打开", "Open")))
                     {
@@ -1144,7 +1181,7 @@ public sealed class ControlCenterWindow : Window
                 }
                 else
                 {
-                    ImGui.TextColored(
+                    DactTheme.TextColored(
                         new Vector4(0.95f, 0.55f, 0.35f, 1),
                         templateCatalogAvailable
                             ? text.Get(
@@ -1154,7 +1191,7 @@ public sealed class ControlCenterWindow : Window
                                 "启动解析器后才能打开该悬浮窗。",
                                 "Start the parser before opening this overlay."));
                     if (selectedSettings.OpenOnStartup &&
-                        ImGui.Button(text.Get("停止自动打开", "Disable startup")))
+                        DactTheme.Button(text.Get("停止自动打开", "Disable startup")))
                     {
                         selectedSettings.OpenOnStartup = false;
                         changed = true;
@@ -1165,10 +1202,10 @@ public sealed class ControlCenterWindow : Window
                 {
                     ImGui.SameLine();
                 }
-                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
-                ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
-                ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
-                var removeSelected = ImGui.Button(text.Get(
+                DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
+                DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
+                DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
+                var removeSelected = DactTheme.Button(text.Get(
                     "移除并重置",
                     "Remove and reset"));
                 ImGui.PopStyleColor(3);
@@ -1193,7 +1230,7 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.Spacing();
-        ImGui.TextColored(IceBlue, text.Get(
+        DactTheme.TextColored(IceBlue, text.Get(
             "从本地模板添加",
             "Add from local template"));
         if (!templateCatalogAvailable)
@@ -1228,7 +1265,7 @@ public sealed class ControlCenterWindow : Window
                 }
 
                 var selectedAvailableName = selectedAvailableCactbotOverlay!;
-                if (ImGui.BeginCombo(
+                if (DactTheme.BeginCombo(
                         text.Get("本地模板", "Local template"),
                         FormatCactbotOverlayName(selectedAvailableName)))
                 {
@@ -1246,7 +1283,7 @@ public sealed class ControlCenterWindow : Window
                     ImGui.EndCombo();
                 }
 
-                if (ImGui.Button(text.Get("添加并打开", "Add and open")))
+                if (DactTheme.Button(text.Get("添加并打开", "Add and open")))
                 {
                     configuration.SelectedCactbotOverlay = selectedAvailableName;
                     openCactbotOverlay();
@@ -1264,7 +1301,7 @@ public sealed class ControlCenterWindow : Window
     private bool DrawCreatedHtmlOverlays()
     {
         var changed = false;
-        ImGui.TextColored(IceBlue, text.Get("已创建的悬浮窗", "Created overlays"));
+        DactTheme.TextColored(IceBlue, text.Get("已创建的悬浮窗", "Created overlays"));
         var createdNames = configuration.OverlayWindows.Keys
             .Where(name => !SelfHostedActRuntime.IsCactbotOverlayName(name))
             .OrderBy(
@@ -1311,7 +1348,7 @@ public sealed class ControlCenterWindow : Window
                 {
                     ImGui.TextWrapped(createdSettings.SourceUrl);
                 }
-                if (ImGui.Button(createdSettings.IsVisible
+                if (DactTheme.Button(createdSettings.IsVisible
                         ? text.Get("关闭", "Close")
                         : text.Get("打开", "Open")))
                 {
@@ -1325,7 +1362,7 @@ public sealed class ControlCenterWindow : Window
                     }
                 }
                 ImGui.SameLine();
-                if (ImGui.Button(text.Get("重命名", "Rename")))
+                if (DactTheme.Button(text.Get("重命名", "Rename")))
                 {
                     overlayBeingRenamed = selectedCreatedOverlay;
                     overlayRenameValue = ResolveOverlayDisplayName(
@@ -1334,10 +1371,10 @@ public sealed class ControlCenterWindow : Window
                     overlayRenameFeedback = null;
                 }
                 ImGui.SameLine();
-                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
-                ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
-                ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
-                var deleteSelected = ImGui.Button(text.Get("删除悬浮窗", "Delete overlay"));
+                DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
+                DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
+                DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
+                var deleteSelected = DactTheme.Button(text.Get("删除悬浮窗", "Delete overlay"));
                 ImGui.PopStyleColor(3);
                 if (ImGui.IsItemHovered())
                 {
@@ -1383,7 +1420,7 @@ public sealed class ControlCenterWindow : Window
             text.Get("新名称###overlay-rename-value", "New name###overlay-rename-value"),
             ref overlayRenameValue,
             80);
-        if (ImGui.Button(text.Get("保存名称", "Save name")))
+        if (DactTheme.Button(text.Get("保存名称", "Save name")))
         {
             var candidate = overlayRenameValue.Trim();
             if (string.IsNullOrWhiteSpace(candidate))
@@ -1414,14 +1451,14 @@ public sealed class ControlCenterWindow : Window
             }
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("取消重命名", "Cancel rename")))
+        if (DactTheme.Button(text.Get("取消重命名", "Cancel rename")))
         {
             CancelOverlayRename();
         }
 
         if (!string.IsNullOrWhiteSpace(overlayRenameFeedback))
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 new Vector4(0.96f, 0.42f, 0.38f, 1),
                 overlayRenameFeedback);
         }
@@ -1478,7 +1515,7 @@ public sealed class ControlCenterWindow : Window
             "支持 http、https 与 file 地址；只添加你信任的悬浮窗页面。",
             "Supports http, https, and file URLs. Only add overlay pages you trust."));
 
-        if (ImGui.Button(text.Get("创建并打开", "Create and open")))
+        if (DactTheme.Button(text.Get("创建并打开", "Create and open")))
         {
             var name = customOverlayName.Trim();
             var templates = getOverlayTemplates();
@@ -1520,7 +1557,7 @@ public sealed class ControlCenterWindow : Window
 
         if (!string.IsNullOrWhiteSpace(customOverlayFeedback))
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 customOverlayFeedbackIsError
                     ? new Vector4(0.96f, 0.42f, 0.38f, 1)
                     : new Vector4(0.45f, 0.88f, 0.62f, 1),
@@ -1558,7 +1595,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("兼容扩展", "Compatibility extensions"));
+        DactTheme.TextColored(Gold, text.Get("兼容扩展", "Compatibility extensions"));
         var installedPlugins = discoverPlugins();
         hostConfigurationChanged = false;
         changed |= DrawExtensionEntry(
@@ -1610,7 +1647,7 @@ public sealed class ControlCenterWindow : Window
         if (genericPlugins.Length > 0)
         {
             ImGui.Spacing();
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 IceBlue,
                 text.Get("用户安装的普通 ACT 插件", "User-installed generic ACT plugins"));
             ImGui.TextDisabled(text.Get(
@@ -1627,24 +1664,24 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("扩展管理", "Extension management"));
-        if (ImGui.Button(text.Get("安装 DLL / ZIP", "Install DLL / ZIP")))
+        DactTheme.TextColored(Gold, text.Get("扩展管理", "Extension management"));
+        if (DactTheme.Button(text.Get("安装 DLL / ZIP", "Install DLL / ZIP")))
         {
             selectPluginPackage();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("打开扩展文件夹", "Open extension folder")))
+        if (DactTheme.Button(text.Get("打开扩展文件夹", "Open extension folder")))
         {
             openPluginDirectory();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("检查更新与来源", "Check updates and sources")))
+        if (DactTheme.Button(text.Get("检查更新与来源", "Check updates and sources")))
         {
             checkBundledPluginUpdates();
         }
         DrawPluginInstallStatus();
         var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
-        if (ImGui.Checkbox(
+        if (DactTheme.Checkbox(
                 text.Get(
                     "启动时自动检查第三方扩展更新",
                     "Automatically check third-party extension updates on startup"),
@@ -1660,7 +1697,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
+        DactTheme.TextColored(Gold, text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
         ImGui.TextWrapped(text.Get(
             "高风险能力默认关闭，授权按扩展和能力分别保存；权限组保存后会自动重启 Host 一次，使完整功能立即生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
             "High-risk capabilities are denied by default. Grants are stored per extension and capability; after a permission group is saved, the Host restarts once so the complete feature set takes effect immediately. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
@@ -1721,7 +1758,7 @@ public sealed class ControlCenterWindow : Window
             : status.State is ThirdPartyPluginInstallState.Ready
                 ? new Vector4(0.42f, 0.88f, 0.56f, 1)
                 : Gold;
-        ImGui.TextColored(statusColor, text.Get(labelZh, labelEn));
+        DactTheme.TextColored(statusColor, text.Get(labelZh, labelEn));
         if (!string.IsNullOrWhiteSpace(status.Detail))
         {
             ImGui.TextWrapped(status.Detail);
@@ -1737,7 +1774,7 @@ public sealed class ControlCenterWindow : Window
                 ImGui.OpenPopup(PluginInstallFailurePopupId);
             }
 
-            if (ImGui.Button(text.Get("查看失败原因", "View failure details")))
+            if (DactTheme.Button(text.Get("查看失败原因", "View failure details")))
             {
                 ImGui.OpenPopup(PluginInstallFailurePopupId);
             }
@@ -1763,7 +1800,7 @@ public sealed class ControlCenterWindow : Window
             ImGui.OpenPopup(GenericPermissionPopupId);
         }
 
-        if (ImGui.Button(text.Get("查看授权", "Review permissions")))
+        if (DactTheme.Button(text.Get("查看授权", "Review permissions")))
         {
             ImGui.OpenPopup(GenericPermissionPopupId);
         }
@@ -1780,7 +1817,7 @@ public sealed class ControlCenterWindow : Window
             return;
         }
 
-        ImGui.TextColored(
+        DactTheme.TextColored(
             new Vector4(0.95f, 0.38f, 0.38f, 1),
             text.Get("插件导入失败", "Plugin import failed"));
         ImGui.TextUnformatted(string.IsNullOrWhiteSpace(status.DisplayName)
@@ -1797,7 +1834,7 @@ public sealed class ControlCenterWindow : Window
             ? text.Get("导入过程没有返回具体原因。", "The import did not return a specific reason.")
             : status.Detail);
         ImGui.Spacing();
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 text.Get("复制日志", "Copy log"),
                 new Vector2(140, 34)))
         {
@@ -1807,13 +1844,13 @@ public sealed class ControlCenterWindow : Window
         if (pluginFailureLogCopied)
         {
             ImGui.SameLine();
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 new Vector4(0.45f, 0.88f, 0.62f, 1),
                 text.Get("已复制", "Copied"));
         }
 
         ImGui.SameLine();
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 text.Get("关闭并清除记录", "Close and clear"),
                 new Vector2(180, 34)))
         {
@@ -1859,7 +1896,7 @@ public sealed class ControlCenterWindow : Window
             return;
         }
 
-        ImGui.TextColored(Gold, text.Get("第三方 ACT 插件授权", "Third-party ACT plugin authorization"));
+        DactTheme.TextColored(Gold, text.Get("第三方 ACT 插件授权", "Third-party ACT plugin authorization"));
         ImGui.TextUnformatted(status.DisplayName);
         if (!string.IsNullOrWhiteSpace(status.Version))
         {
@@ -1887,7 +1924,7 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.Spacing();
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 text.Get("授权并启用", "Authorize and enable"),
                 new Vector2(170, 34)))
         {
@@ -1895,7 +1932,7 @@ public sealed class ControlCenterWindow : Window
             approvePendingPlugin();
         }
         ImGui.SameLine();
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 text.Get("暂不授权", "Do not authorize"),
                 new Vector2(150, 34)))
         {
@@ -1920,7 +1957,7 @@ public sealed class ControlCenterWindow : Window
         foreach (var capability in capabilities)
         {
             var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
-            if (!ImGui.Checkbox(
+            if (!DactTheme.Checkbox(
                     $"{ActCapabilityDisplay.Label(capability, text)}##control-center-{pluginId}-{capability}",
                     ref allowed))
             {
@@ -1947,7 +1984,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.PushID($"generic-extension-{pluginId}");
         var trusted = configuration.TrustedGenericActPluginIds.Contains(pluginId);
         var enabled = plugin.Enabled && trusted;
-        if (ImGui.Checkbox(plugin.Manifest.Name, ref enabled))
+        if (DactTheme.Checkbox(plugin.Manifest.Name, ref enabled))
         {
             if (enabled && !configuration.TrustedGenericActPluginIds.Contains(pluginId))
             {
@@ -1972,7 +2009,7 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.SameLine();
-        ImGui.TextColored(
+        DactTheme.TextColored(
             enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
             enabled
                 ? text.Get("已启用", "Enabled")
@@ -1984,7 +2021,7 @@ public sealed class ControlCenterWindow : Window
         if (!trusted)
         {
             ImGui.SameLine();
-            if (ImGui.SmallButton(text.Get("查看并授权", "Review and authorize")))
+            if (DactTheme.SmallButton(text.Get("查看并授权", "Review and authorize")))
             {
                 requestPluginAuthorization(pluginId);
             }
@@ -1992,7 +2029,7 @@ public sealed class ControlCenterWindow : Window
         else if (enabled)
         {
             ImGui.SameLine();
-            if (ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+            if (DactTheme.SmallButton(text.Get("打开配置", "Open configuration")))
             {
                 openPluginConfiguration(pluginId);
             }
@@ -2042,7 +2079,7 @@ public sealed class ControlCenterWindow : Window
     {
         if (!NeedsManualPluginConsent(plugin)) return;
         ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("查看并授权", "Review and authorize")))
+        if (DactTheme.SmallButton(text.Get("查看并授权", "Review and authorize")))
             requestPluginAuthorization(plugin.Manifest.Id);
     }
 
@@ -2062,11 +2099,11 @@ public sealed class ControlCenterWindow : Window
             return;
         }
 
-        ImGui.TextColored(Gold, text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"));
+        DactTheme.TextColored(Gold, text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"));
         ImGui.TextWrapped(text.Get(
             $"确定删除 {genericPluginToDeleteName} 吗？插件文件会先备份，相关扩展会短暂重启。",
             $"Delete {genericPluginToDeleteName}? Plugin files will be backed up first, and related extensions will briefly restart."));
-        if (ImGui.Button(text.Get("确认删除", "Delete"), new Vector2(140, 34)))
+        if (DactTheme.Button(text.Get("确认删除", "Delete"), new Vector2(140, 34)))
         {
             var pluginId = genericPluginToDeleteId;
             ImGui.CloseCurrentPopup();
@@ -2078,7 +2115,7 @@ public sealed class ControlCenterWindow : Window
             }
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(120, 34)))
+        if (DactTheme.Button(text.Get("取消", "Cancel"), new Vector2(120, 34)))
         {
             ImGui.CloseCurrentPopup();
             genericPluginToDeleteId = null;
@@ -2104,7 +2141,7 @@ public sealed class ControlCenterWindow : Window
         if (installed is not null)
         {
             var enabled = installed.Enabled && !NeedsManualPluginConsent(installed);
-            if (ImGui.Checkbox(text.Get("仿生石 / Simulant", "Simulant"), ref enabled))
+            if (DactTheme.Checkbox(text.Get("仿生石 / Simulant", "Simulant"), ref enabled))
             {
                 changed = enabledChanged = SetInstalledPluginEnabled(installed, enabled);
             }
@@ -2114,7 +2151,7 @@ public sealed class ControlCenterWindow : Window
             if (enabled)
             {
                 ImGui.SameLine();
-                if (ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+                if (DactTheme.SmallButton(text.Get("打开配置", "Open configuration")))
                 {
                     openPluginConfiguration("simulant");
                 }
@@ -2158,7 +2195,7 @@ public sealed class ControlCenterWindow : Window
             ImGui.SameLine();
             if (resourceStatus.State == ResourcePackOperationState.Downloading)
             {
-                ImGui.TextColored(
+                DactTheme.TextColored(
                     IceBlue,
                     text.Get(
                         $"下载中...{resourceStatus.ProgressPercent}%",
@@ -2196,18 +2233,18 @@ public sealed class ControlCenterWindow : Window
         else
         {
             var enabled = installed.Enabled && !NeedsManualPluginConsent(installed);
-            if (ImGui.Checkbox(displayName, ref enabled))
+            if (DactTheme.Checkbox(displayName, ref enabled))
             {
                 changed = enabledChanged = SetInstalledPluginEnabled(installed, enabled);
             }
 
             ImGui.SameLine();
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
                 enabled ? text.Get("已启用", "Enabled") : text.Get("已禁用", "Disabled"));
             DrawInstalledPluginAuthorization(installed);
             ImGui.SameLine();
-            if (enabled && ImGui.SmallButton(text.Get("打开配置", "Open configuration")))
+            if (enabled && DactTheme.SmallButton(text.Get("打开配置", "Open configuration")))
             {
                 openPluginConfiguration(pluginId);
             }
@@ -2256,7 +2293,7 @@ public sealed class ControlCenterWindow : Window
         {
             ImGui.TableNextRow();
             ImGui.TableSetColumnIndex(0);
-            ImGui.TextColored(IceBlue, title);
+            DactTheme.TextColored(IceBlue, title);
             ImGui.TableSetColumnIndex(1);
             ImGui.TextUnformatted(string.Empty);
         }
@@ -2365,7 +2402,10 @@ public sealed class ControlCenterWindow : Window
             cloudQuickPopupRequested = false;
         }
 
-        const float popupWidth = 390;
+        var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        var viewport = ImGui.GetMainViewport();
+        var maximumSize = Vector2.Max(Vector2.One, viewport.WorkSize - new Vector2(16));
+        var popupWidth = Math.Min(390 * scale, maximumSize.X);
         var parentPosition = ImGui.GetWindowPos();
         var parentSize = ImGui.GetWindowSize();
         ImGui.SetNextWindowPos(
@@ -2373,12 +2413,15 @@ public sealed class ControlCenterWindow : Window
                 parentPosition.X + Math.Max(12, parentSize.X - popupWidth - 42),
                 parentPosition.Y + 48),
             ImGuiCond.Appearing);
-        ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
-        // BeginPopup uses PopupRounding; WindowRounding only affects normal windows.
+        ImGui.SetNextWindowSizeConstraints(new Vector2(popupWidth, 0), new Vector2(popupWidth, maximumSize.Y));
+        // Popup borders/background have separate ImGui settings. WindowBorderSize
+        // does not outline this surface, leaving it merged into the panel behind it.
         ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
+        ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 1);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(16, 16) * scale);
+        DactTheme.PushStyleColor(ImGuiCol.PopupBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
+        DactTheme.PreparePopupPosition(CloudQuickPopupId);
         if (!ImGui.BeginPopup(
                 CloudQuickPopupId,
                 ImGuiWindowFlags.AlwaysAutoResize |
@@ -2386,13 +2429,22 @@ public sealed class ControlCenterWindow : Window
                 ImGuiWindowFlags.NoMove))
         {
             ImGui.PopStyleColor(2);
-            ImGui.PopStyleVar(2);
+            ImGui.PopStyleVar(3);
             return;
         }
 
+        DactTheme.DrawGamePopupFrame();
         var (statusLabel, statusColor) = ResolveCloudStatus(snapshot);
-        ImGui.TextColored(Gold, text.Get("云同步状态", "Cloud sync status"));
-        ImGui.TextColored(statusColor, $"● {statusLabel}");
+        var heading = ImGui.GetCursorPos();
+        var closeSize = new Vector2(24 * scale);
+        var closeX = heading.X + ImGui.GetContentRegionAvail().X - closeSize.X;
+        DactTheme.TextColored(Gold, text.Get("云同步状态", "Cloud sync status"));
+        ImGui.SameLine();
+        ImGui.SetCursorPos(new Vector2(closeX, heading.Y));
+        if (DactTheme.IconButton("close-cloud-status", GameSkinIcon.Close, "×", closeSize)) ImGui.CloseCurrentPopup();
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(text.Get("关闭", "Close"));
+        ImGui.SetCursorPos(new Vector2(heading.X, heading.Y + Math.Max(closeSize.Y, ImGui.GetTextLineHeight()) + ImGui.GetStyle().ItemSpacing.Y));
+        DactTheme.TextColored(statusColor, $"● {statusLabel}");
         if (!string.IsNullOrWhiteSpace(snapshot.StatusMessage))
         {
             ImGui.TextWrapped(snapshot.StatusMessage);
@@ -2415,7 +2467,7 @@ public sealed class ControlCenterWindow : Window
             $"{snapshot.Backups.Count}/2");
 
         var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
-        if (ImGui.Checkbox(
+        if (DactTheme.Checkbox(
                 text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"),
                 ref autoCloudSyncEnabled))
         {
@@ -2430,22 +2482,23 @@ public sealed class ControlCenterWindow : Window
         if (snapshot.IsSignedIn)
         {
             ImGui.BeginDisabled(snapshot.IsBusy);
-            if (ImGui.Button(text.Get("刷新状态", "Refresh status"), new Vector2(118, 34)))
+            if (DactTheme.Button(text.Get("刷新状态", "Refresh status"), new Vector2(118, 34)))
             {
                 cloud.Refresh();
             }
             ImGui.EndDisabled();
             ImGui.SameLine();
         }
-        if (ImGui.Button(text.Get("打开云同步", "Open Cloud Sync"), new Vector2(142, 34)))
+        if (DactTheme.Button(text.Get("打开云同步", "Open Cloud Sync"), new Vector2(142, 34)))
         {
             selectedPage = Page.Cloud;
             ImGui.CloseCurrentPopup();
         }
 
+        if (ImGui.IsKeyPressed(ImGuiKey.Escape)) ImGui.CloseCurrentPopup();
         ImGui.EndPopup();
         ImGui.PopStyleColor(2);
-        ImGui.PopStyleVar(2);
+        ImGui.PopStyleVar(3);
     }
 
     private static void DrawCloudQuickRow(string label, string value)
@@ -2517,7 +2570,7 @@ public sealed class ControlCenterWindow : Window
     private void DrawCloudAuthentication(CloudClientSnapshot snapshot)
     {
         var busy = snapshot.IsBusy;
-        ImGui.TextColored(Gold, text.Get("账号入口", "ACCOUNT ACCESS"));
+        DactTheme.TextColored(Gold, text.Get("账号入口", "ACCOUNT ACCESS"));
         DrawAuthenticationMutedText(text.Get(
             "验证账号后进入 DACT 控制中心",
             "Verify your account to enter the DACT control center"));
@@ -2551,7 +2604,7 @@ public sealed class ControlCenterWindow : Window
                 text.Get("欢迎回来", "Welcome back"),
                 text.Get("输入账号和密码，继续使用 DACT。", "Enter your username and password to continue.")),
         };
-        ImGui.TextColored(IceBlue, pageTitle);
+        DactTheme.TextColored(IceBlue, pageTitle);
         DrawAuthenticationMutedText(pageDescription);
         ImGui.Spacing();
         DrawAuthenticationStatus(snapshot);
@@ -2654,7 +2707,7 @@ public sealed class ControlCenterWindow : Window
         }
         if (!string.IsNullOrEmpty(cloudPasswordConfirmation) && !passwordsMatch)
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 new Vector4(0.96f, 0.42f, 0.38f, 1),
                 text.Get("两次密码不一致，或密码不足 10 位。", "Passwords differ or contain fewer than 10 characters."));
         }
@@ -2679,7 +2732,7 @@ public sealed class ControlCenterWindow : Window
         var availableWidth = ImGui.GetContentRegionAvail().X;
         var buttonsWidth = ImGui.CalcTextSize(qqLabel).X + ImGui.CalcTextSize(discordLabel).X +
                            ImGui.GetStyle().FramePadding.X * 4 + ImGui.GetStyle().ItemSpacing.X;
-        if (ImGui.Button(qqLabel))
+        if (DactTheme.Button(qqLabel))
         {
             ImGui.SetClipboardText(ActivationQqGroup);
         }
@@ -2689,7 +2742,7 @@ public sealed class ControlCenterWindow : Window
         {
             ImGui.SameLine();
         }
-        if (ImGui.Button(discordLabel))
+        if (DactTheme.Button(discordLabel))
         {
             OpenUrl(ActivationDiscordUrl);
         }
@@ -2792,8 +2845,8 @@ public sealed class ControlCenterWindow : Window
             ImGui.Image(wrap.Handle, new Vector2(48));
             ImGui.SameLine();
             ImGui.BeginGroup();
-            ImGui.TextColored(Gold, "DACT");
-            ImGui.TextColored(IceBlue, text.Get("账号与云服务", "ACCOUNT & CLOUD"));
+            DactTheme.TextColored(Gold, "DACT");
+            DactTheme.TextColored(IceBlue, text.Get("账号与云服务", "ACCOUNT & CLOUD"));
             ImGui.EndGroup();
             ImGui.Spacing();
             DrawAuthenticationMutedText(text.Get(
@@ -2831,10 +2884,10 @@ public sealed class ControlCenterWindow : Window
         bool hero,
         bool allowScrolling)
     {
-        ImGui.PushStyleColor(
+        DactTheme.PushStyleColor(
             ImGuiCol.ChildBg,
             hero ? AuthenticationHeroBackground : AuthenticationCardBackground);
-        ImGui.PushStyleColor(
+        DactTheme.PushStyleColor(
             ImGuiCol.Border,
             hero
                 ? new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f)
@@ -2856,10 +2909,10 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawAuthenticationFeature(string title, string description)
     {
-        ImGui.TextColored(IceBlue, "◆");
+        DactTheme.TextColored(IceBlue, "◆");
         ImGui.SameLine();
         ImGui.BeginGroup();
-        ImGui.TextColored(new Vector4(0.90f, 0.94f, 0.98f, 1), title);
+        DactTheme.TextColored(new Vector4(0.90f, 0.94f, 0.98f, 1), title);
         DrawAuthenticationMutedText(description);
         ImGui.EndGroup();
         ImGui.Dummy(new Vector2(0, 9));
@@ -2869,12 +2922,12 @@ public sealed class ControlCenterWindow : Window
     {
         var offset = Math.Max(0, (ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize(value).X) * 0.5f);
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + offset);
-        ImGui.TextColored(color, value);
+        DactTheme.TextColored(color, value);
     }
 
     private static void DrawAuthenticationMutedText(string value)
     {
-        ImGui.PushStyleColor(ImGuiCol.Text, AuthenticationMutedText);
+        DactTheme.PushStyleColor(ImGuiCol.Text, AuthenticationMutedText);
         ImGui.TextWrapped(value);
         ImGui.PopStyleColor();
     }
@@ -2897,7 +2950,7 @@ public sealed class ControlCenterWindow : Window
             : new Vector4(0.07f, 0.18f, 0.24f, 0.78f);
         var wrapWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - 42);
         var statusHeight = Math.Max(40, ImGui.CalcTextSize(statusMessage, false, wrapWidth).Y + 16);
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, statusBackground);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, statusBackground);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 6);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10, 8));
         if (ImGui.BeginChild(
@@ -2906,9 +2959,9 @@ public sealed class ControlCenterWindow : Window
                 false,
                 ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
-            ImGui.TextColored(statusTextColor, snapshot.StatusIsError ? "!" : "●");
+            DactTheme.TextColored(statusTextColor, snapshot.StatusIsError ? "!" : "●");
             ImGui.SameLine();
-            ImGui.PushStyleColor(ImGuiCol.Text, statusTextColor);
+            DactTheme.PushStyleColor(ImGuiCol.Text, statusTextColor);
             ImGui.TextWrapped(statusMessage);
             ImGui.PopStyleColor();
         }
@@ -2933,7 +2986,7 @@ public sealed class ControlCenterWindow : Window
     private void DrawAuthenticationPersistenceOption()
     {
         ImGui.Spacing();
-        ImGui.Checkbox(
+        DactTheme.Checkbox(
             text.Get("记住登录状态（下次自动登录）", "Remember sign-in (auto-login next time)"),
             ref cloudRememberLogin);
         if (ImGui.IsItemHovered())
@@ -2947,11 +3000,11 @@ public sealed class ControlCenterWindow : Window
     private static bool DrawAuthenticationPrimaryButton(string label, bool enabled)
     {
         ImGui.BeginDisabled(!enabled);
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.10f, 0.36f, 0.50f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.48f, 0.64f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.56f, 0.72f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
-        var clicked = ImGui.Button(label, new Vector2(-1, 38));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.10f, 0.36f, 0.50f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.48f, 0.64f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.56f, 0.72f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
+        var clicked = DactTheme.Button(label, new Vector2(-1, 38));
         ImGui.PopStyleColor(4);
         ImGui.EndDisabled();
         return enabled && clicked;
@@ -3008,8 +3061,8 @@ public sealed class ControlCenterWindow : Window
                 allowScrolling: false))
         {
             var (statusLabel, statusColor) = ResolveCloudStatus(snapshot);
-            ImGui.TextColored(Gold, text.Get("同步概览", "Sync overview"));
-            ImGui.TextColored(statusColor, $"● {statusLabel}");
+            DactTheme.TextColored(Gold, text.Get("同步概览", "Sync overview"));
+            DactTheme.TextColored(statusColor, $"● {statusLabel}");
             if (!string.IsNullOrWhiteSpace(statusMessage))
             {
                 ImGui.TextWrapped(statusMessage);
@@ -3047,7 +3100,7 @@ public sealed class ControlCenterWindow : Window
 
             ImGui.Spacing();
             var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
-            if (ImGui.Checkbox(
+            if (DactTheme.Checkbox(
                     text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"),
                     ref autoCloudSyncEnabled))
             {
@@ -3057,7 +3110,7 @@ public sealed class ControlCenterWindow : Window
             DrawAuthenticationMutedText(syncHint);
 
             ImGui.BeginDisabled(snapshot.IsBusy);
-            if (ImGui.Button(
+            if (DactTheme.Button(
                     text.Get("刷新状态", "Refresh status"),
                     new Vector2(118, actionHeight)))
             {
@@ -3071,7 +3124,7 @@ public sealed class ControlCenterWindow : Window
     private static void DrawCloudMetric(string label, string value, Vector4 color)
     {
         ImGui.TextDisabled(label);
-        ImGui.TextColored(color, value);
+        DactTheme.TextColored(color, value);
     }
 
     private void DrawCloudRecoveryKeyCard(string recoveryKey)
@@ -3094,7 +3147,7 @@ public sealed class ControlCenterWindow : Window
                 cardHeight,
                 allowScrolling: false))
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 new Vector4(1f, 0.72f, 0.25f, 1),
                 recoveryTitle);
             var visibleRecoveryKey = recoveryKey;
@@ -3105,7 +3158,7 @@ public sealed class ControlCenterWindow : Window
                 96,
                 ImGuiInputTextFlags.ReadOnly);
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("复制", "Copy")))
+            if (DactTheme.Button(text.Get("复制", "Copy")))
             {
                 ImGui.SetClipboardText(recoveryKey);
             }
@@ -3131,7 +3184,7 @@ public sealed class ControlCenterWindow : Window
                 cardHeight,
                 allowScrolling: false))
         {
-            ImGui.TextColored(Gold, text.Get("备份与恢复", "Backup & restore"));
+            DactTheme.TextColored(Gold, text.Get("备份与恢复", "Backup & restore"));
             DrawAuthenticationMutedText(text.Get(
                 "配置在本机加密后上传，服务器无法读取；恢复前始终先预览变更。",
                 "Settings are encrypted on this PC before upload. Always preview changes before restoring."));
@@ -3143,7 +3196,7 @@ public sealed class ControlCenterWindow : Window
             var uploadLabel = snapshot.IsBusy
                 ? text.Get("处理中…", "Working…")
                 : text.Get("上传当前配置", "Upload current configuration");
-            if (ImGui.Button($"{uploadLabel}###CloudUploadCurrent", new Vector2(152, 34)))
+            if (DactTheme.Button($"{uploadLabel}###CloudUploadCurrent", new Vector2(152, 34)))
             {
                 cloud.Upload();
             }
@@ -3157,7 +3210,7 @@ public sealed class ControlCenterWindow : Window
 
             ImGui.Spacing();
             ImGui.Separator();
-            ImGui.TextColored(IceBlue, text.Get("选择云端版本", "Choose a cloud version"));
+            DactTheme.TextColored(IceBlue, text.Get("选择云端版本", "Choose a cloud version"));
             if (snapshot.Backups.Count == 0)
             {
                 DrawAuthenticationMutedText(text.Get(
@@ -3190,7 +3243,7 @@ public sealed class ControlCenterWindow : Window
                 !snapshot.IsBusy &&
                 !string.IsNullOrWhiteSpace(selectedCloudBackupId);
             ImGui.BeginDisabled(!canUseSelection);
-            if (ImGui.Button(text.Get("预览恢复内容", "Preview restore"), new Vector2(142, 32)))
+            if (DactTheme.Button(text.Get("预览恢复内容", "Preview restore"), new Vector2(142, 32)))
             {
                 cloudPreviewRequestedBackupId = selectedCloudBackupId;
                 confirmCloudRestore = false;
@@ -3214,7 +3267,7 @@ public sealed class ControlCenterWindow : Window
                 if (!confirmCloudRestore)
                 {
                     ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (ImGui.Button(text.Get("恢复这个版本", "Restore this version")))
+                    if (DactTheme.Button(text.Get("恢复这个版本", "Restore this version")))
                     {
                         confirmCloudRestore = true;
                     }
@@ -3222,20 +3275,20 @@ public sealed class ControlCenterWindow : Window
                 }
                 else
                 {
-                    ImGui.TextColored(
+                    DactTheme.TextColored(
                         new Vector4(1f, 0.56f, 0.30f, 1),
                         text.Get(
                             "将覆盖白名单内的本机配置，完成后必须重载 DACT。",
                             "Whitelisted local settings will be replaced; DACT must be reloaded afterward."));
                     ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (ImGui.Button(text.Get("确认覆盖", "Confirm restore")))
+                    if (DactTheme.Button(text.Get("确认覆盖", "Confirm restore")))
                     {
                         cloud.Restore(selectedCloudBackupId!);
                         confirmCloudRestore = false;
                     }
                     ImGui.EndDisabled();
                     ImGui.SameLine();
-                    if (ImGui.Button(text.Get("取消", "Cancel")))
+                    if (DactTheme.Button(text.Get("取消", "Cancel")))
                     {
                         confirmCloudRestore = false;
                     }
@@ -3248,7 +3301,7 @@ public sealed class ControlCenterWindow : Window
                 if (!confirmCloudRollback)
                 {
                     ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (ImGui.Button(text.Get("撤销上次恢复", "Undo last restore")))
+                    if (DactTheme.Button(text.Get("撤销上次恢复", "Undo last restore")))
                     {
                         confirmCloudRollback = true;
                     }
@@ -3257,14 +3310,14 @@ public sealed class ControlCenterWindow : Window
                 else
                 {
                     ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (ImGui.Button(text.Get("确认回滚", "Confirm rollback")))
+                    if (DactTheme.Button(text.Get("确认回滚", "Confirm rollback")))
                     {
                         cloud.Rollback();
                         confirmCloudRollback = false;
                     }
                     ImGui.EndDisabled();
                     ImGui.SameLine();
-                    if (ImGui.Button(text.Get("取消###cloud-rollback", "Cancel###cloud-rollback")))
+                    if (DactTheme.Button(text.Get("取消###cloud-rollback", "Cancel###cloud-rollback")))
                     {
                         confirmCloudRollback = false;
                     }
@@ -3288,10 +3341,10 @@ public sealed class ControlCenterWindow : Window
                 cardHeight,
                 allowScrolling: false))
         {
-            ImGui.TextColored(Gold, text.Get("邀请好友", "Invite friends"));
+            DactTheme.TextColored(Gold, text.Get("邀请好友", "Invite friends"));
             if (snapshot.Invitations is { } invitations)
             {
-                ImGui.TextColored(
+                DactTheme.TextColored(
                     IceBlue,
                     invitations.IsAdmin
                         ? text.Get($"管理员 · 无限生成 · 已生成 {invitations.Used} 个", $"Administrator · Unlimited · {invitations.Used} created")
@@ -3313,7 +3366,7 @@ public sealed class ControlCenterWindow : Window
                     snapshot.IsBusy ||
                     !invitations.CanGenerate ||
                     !inviteeContactValid);
-                if (ImGui.Button(text.Get("生成好友激活码", "Create friend activation key")))
+                if (DactTheme.Button(text.Get("生成好友激活码", "Create friend activation key")))
                 {
                     cloud.CreateInvitation(normalizedInviteeContact);
                 }
@@ -3334,7 +3387,7 @@ public sealed class ControlCenterWindow : Window
                         96,
                         ImGuiInputTextFlags.ReadOnly);
                     ImGui.SameLine();
-                    if (ImGui.Button(text.Get("复制###copy-invitation", "Copy###copy-invitation")))
+                    if (DactTheme.Button(text.Get("复制###copy-invitation", "Copy###copy-invitation")))
                     {
                         ImGui.SetClipboardText(snapshot.InvitationKeyToShare);
                     }
@@ -3353,21 +3406,30 @@ public sealed class ControlCenterWindow : Window
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Spacing();
-            ImGui.TextColored(Gold, text.Get("支持 DACT", "Support DACT"));
+            DactTheme.TextColored(Gold, text.Get("支持 DACT", "Support DACT"));
             ImGui.TextWrapped(text.Get(
                 "你的支持将用于账号与加密备份服务器的持续运行，以及 DACT 的维护和后续开发。",
                 "Your support helps keep the account and encrypted-backup server online and funds ongoing DACT maintenance and development."));
-            ImGui.TextColored(IceBlue, text.Get(
+            DactTheme.TextColored(IceBlue, text.Get(
                 "支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额。",
                 "Supporters may contact the administrator to request more friend-invite slots beyond the default 3."));
             DrawAuthenticationMutedText(text.Get(
-                "支持不会解除封禁、跳过风控或改变功能权限。",
-                "Support does not remove bans, bypass risk controls, or change feature permissions."));
-            ImGui.BeginDisabled();
-            ImGui.Button(
-                text.Get("爱发电支持（即将开放）", "Buy me a coffee (coming soon)"),
-                new Vector2(190, 34));
-            ImGui.EndDisabled();
+                "支持不会解除封禁、跳过风控或授予管理员权限。",
+                "Support does not remove bans, bypass risk controls, or grant administrator privileges."));
+            if (DactTheme.Button(
+                    text.Get("爱发电支持", "Support on Afdian"),
+                    new Vector2(190, 34)))
+            {
+                // Opening the support page does not grant benefits; sponsorship
+                // remains a permanent account grant verified by the administrator.
+                OpenUrl(AfdianSupportUrl);
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(text.Get(
+                    "在浏览器中打开爱发电。\n赞助后请联系管理员核对账号并开通等级；1 级永久解锁艾欧泽亚皮肤。",
+                    "Open Afdian in your browser.\nAfter sponsoring, contact the administrator to verify your account; tier 1 permanently unlocks the Eorzea skin."));
+            }
         }
         BrandedWindowChrome.EndGoldCard();
     }
@@ -3399,7 +3461,7 @@ public sealed class ControlCenterWindow : Window
     private void DrawAccountSettings()
     {
         var snapshot = cloud.GetSnapshot();
-        ImGui.TextColored(Gold, text.Get("账号", "Account"));
+        DactTheme.TextColored(Gold, text.Get("账号", "Account"));
         ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
         if (snapshot.SessionExpiresAt is { } expiresAt)
         {
@@ -3407,7 +3469,7 @@ public sealed class ControlCenterWindow : Window
                 $"登录有效期至 {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}",
                 $"Session expires {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}"));
         }
-        if (!snapshot.IsBusy && ImGui.Button(text.Get("退出登录", "Sign out")))
+        if (!snapshot.IsBusy && DactTheme.Button(text.Get("退出登录", "Sign out")))
         {
             cloud.Logout();
             ClearCloudSecrets();
@@ -3422,6 +3484,14 @@ public sealed class ControlCenterWindow : Window
         }
     }
 
+    private bool DrawSettingsPage()
+    {
+        if (!skinSettings.IsOpen) return DrawDiagnostics();
+        var changed = skinSettings.Draw(configuration.Appearance, cloud.GetSnapshot(), text, cloud.Refresh, HideAnimated);
+        if (!skinSettings.IsOpen) resetSettingsScroll = true;
+        return changed;
+    }
+
     private bool DrawDiagnostics()
     {
         DrawPageHeader(
@@ -3430,32 +3500,39 @@ public sealed class ControlCenterWindow : Window
                 "运行状态、账号、语言、快捷按钮与恢复选项。",
                 "Runtime status, account, language, quick-button, and recovery options."));
 
+        skinSettings.DrawEntry(configuration.Appearance, cloud.GetSnapshot(), text);
+        if (skinSettings.IsOpen)
+        {
+            resetSettingsScroll = true;
+            return false;
+        }
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
         DrawAccountSettings();
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
-        ImGui.TextColored(Gold, $"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
+        DactTheme.TextColored(Gold, $"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
         ImGui.TextWrapped(parserStatus.Message);
         if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
         {
             ImGui.TextWrapped(parserStatus.Detail);
         }
-        if (ImGui.Button(text.Get("重启解析器", "Restart parser")))
+        if (DactTheme.Button(text.Get("重启解析器", "Restart parser")))
         {
             RestartParser();
         }
         ImGui.SameLine();
         DrawStatusWindowToggleButton(Vector2.Zero, detailedLabel: true);
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("三方扩展声明", "Third-party extension notice")))
+        if (DactTheme.Button(text.Get("三方扩展声明", "Third-party extension notice")))
         {
             openBundledPluginNotice();
         }
 
         DrawCombatLogDirectorySettings();
 
-        if (ImGui.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
+        if (DactTheme.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
         {
             CopyDiagnosticReport();
         }
@@ -3466,14 +3543,14 @@ public sealed class ControlCenterWindow : Window
                 "Copies recent plugin diagnostics and runtime state. Combat logs and configuration files are excluded, and user paths and common credentials are redacted. For raw combat-data issues, use the button on the right to open the log folder."));
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("打开日志文件夹", "Open log folder")))
+        if (DactTheme.Button(text.Get("打开日志文件夹", "Open log folder")))
         {
             openLogDirectory();
         }
 
         if (!string.IsNullOrWhiteSpace(diagnosticCopyFeedback))
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 diagnosticCopyFeedbackIsError
                     ? new Vector4(0.95f, 0.45f, 0.40f, 1)
                     : IceBlue,
@@ -3484,7 +3561,9 @@ public sealed class ControlCenterWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
         var changed = false;
-        if (ImGui.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
+        ImGui.Spacing();
+        ImGui.Separator();
+        if (DactTheme.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
         {
             if (ImGui.Selectable("简体中文", text.IsChinese))
             {
@@ -3520,7 +3599,7 @@ public sealed class ControlCenterWindow : Window
             configuration.LauncherButtonSize = launcherButtonSize;
             changed = true;
         }
-        if (ImGui.Button(text.Get("重置快捷按钮大小与位置", "Reset quick-button size and position")))
+        if (DactTheme.Button(text.Get("重置快捷按钮大小与位置", "Reset quick-button size and position")))
         {
             configuration.LauncherPositionX = 80;
             configuration.LauncherPositionY = 160;
@@ -3536,13 +3615,13 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("恢复", "Recovery"));
+        DactTheme.TextColored(Gold, text.Get("恢复", "Recovery"));
         ImGui.TextWrapped(text.Get(
             "恢复出厂设置会停止 ACT 宿主、备份所有可变数据，并恢复两个系统插件和默认设置。",
             "Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings."));
         if (!confirmFactoryReset)
         {
-            if (ImGui.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
+            if (DactTheme.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
             {
                 confirmFactoryReset = true;
             }
@@ -3552,14 +3631,14 @@ public sealed class ControlCenterWindow : Window
             ImGui.TextWrapped(text.Get(
                 "按确认继续。此前状态仍可从备份目录恢复。",
                 "Press confirm to continue. The previous state remains recoverable from the backup directory."));
-            if (ImGui.Button(text.Get("确认恢复", "Confirm factory reset")))
+            if (DactTheme.Button(text.Get("确认恢复", "Confirm factory reset")))
             {
                 confirmFactoryReset = false;
                 _ = RunFactoryResetAsync();
             }
 
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("取消", "Cancel")))
+            if (DactTheme.Button(text.Get("取消", "Cancel")))
             {
                 confirmFactoryReset = false;
             }
@@ -3578,11 +3657,11 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("FFLogs 上传日志", "FFLogs upload logs"));
+        DactTheme.TextColored(Gold, text.Get("FFLogs 上传日志", "FFLogs upload logs"));
         ImGui.TextDisabled(text.Get("当前路径", "Current path"));
         ImGui.TextWrapped(getCombatLogDirectory());
 
-        if (ImGui.Button(text.Get("更改目录...", "Change directory...")))
+        if (DactTheme.Button(text.Get("更改目录...", "Change directory...")))
         {
             selectCombatLogDirectory(ReportCombatLogDirectoryChange);
         }
@@ -3593,7 +3672,7 @@ public sealed class ControlCenterWindow : Window
                 "Changes only future raw Network log writes; existing logs are not moved or deleted. A running parser restarts automatically, which may split the current encounter."));
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("恢复默认", "Restore default")))
+        if (DactTheme.Button(text.Get("恢复默认", "Restore default")))
         {
             resetCombatLogDirectory(ReportCombatLogDirectoryChange);
         }
@@ -3601,7 +3680,7 @@ public sealed class ControlCenterWindow : Window
         var feedback = Volatile.Read(ref combatLogDirectoryChangeFeedback);
         if (feedback is not null)
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 feedback.IsError
                     ? new Vector4(0.95f, 0.45f, 0.40f, 1)
                     : IceBlue,
@@ -3678,11 +3757,11 @@ public sealed class ControlCenterWindow : Window
                 OverlayConnectionState.Failed => new Vector4(0.96f, 0.42f, 0.38f, 1),
                 _ => IceBlue,
             };
-            ImGui.TextColored(connectionColor, connectionDetail);
+            DactTheme.TextColored(connectionColor, connectionDetail);
             if (ImGui.TreeNode(text.Get("连接高级设置", "Advanced connection settings")))
             {
                 var selectedMode = settings.ConnectionMode;
-                if (ImGui.BeginCombo(
+                if (DactTheme.BeginCombo(
                         text.Get("连接方式", "Connection mode"),
                         GetOverlayConnectionModeLabel(selectedMode)))
                 {
@@ -3703,7 +3782,7 @@ public sealed class ControlCenterWindow : Window
                 ImGui.TextDisabled(text.Get(
                     "默认自动检测；手动模式只用于检测失败时微调。",
                     "Automatic detection is the default. Manual modes are only for troubleshooting."));
-                if (ImGui.Button(text.Get("重新检测", "Detect again")))
+                if (DactTheme.Button(text.Get("重新检测", "Detect again")))
                 {
                     settings.ConnectionMode = OverlayConnectionMode.Auto;
                     settings.ResetConnectionDetection();
@@ -3715,7 +3794,7 @@ public sealed class ControlCenterWindow : Window
         }
 
         ImGui.TextDisabled(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
-        if (ImGui.Button(settings.IsEditing
+        if (DactTheme.Button(settings.IsEditing
                 ? text.Get("完成位置编辑", "Finish position editing")
                 : text.Get("编辑位置和大小", "Edit position and size")))
         {
@@ -3781,7 +3860,7 @@ public sealed class ControlCenterWindow : Window
 
     private void DrawPageHeader(string title, string description, bool showDivider = true)
     {
-        ImGui.TextColored(Gold, title);
+        DactTheme.TextColored(Gold, title);
         ImGui.TextDisabled(description);
         ImGui.Spacing();
         if (showDivider)
@@ -3806,7 +3885,7 @@ public sealed class ControlCenterWindow : Window
             : visible
                 ? text.Get("关闭运行状态", "Close Runtime status")
                 : text.Get("运行状态", "Runtime status");
-        if (ImGui.Button(label, size))
+        if (DactTheme.Button(label, size))
         {
             setStatusVisible(!visible);
         }
@@ -3819,10 +3898,10 @@ public sealed class ControlCenterWindow : Window
 
     private static void PushOpenWindowButtonStyle()
     {
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
     }
 
     private static string BuildVersionLabel()
@@ -3839,7 +3918,7 @@ public sealed class ControlCenterWindow : Window
     private static bool Checkbox(string label, bool current, Action<bool> set)
     {
         var value = current;
-        if (!ImGui.Checkbox(label, ref value))
+        if (!DactTheme.Checkbox(label, ref value))
         {
             return false;
         }
@@ -3876,7 +3955,7 @@ public sealed class ControlCenterWindow : Window
     {
         var changed = false;
         var identityMode = configuration.Meter.PlayerIdentityMode;
-        if (ImGui.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
+        if (DactTheme.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
         {
             foreach (var mode in Enum.GetValues<PlayerIdentityMode>())
             {
@@ -3910,7 +3989,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("FFLogs DPS Parse 预估", "FFLogs DPS Parse estimate"));
+        DactTheme.TextColored(Gold, text.Get("FFLogs DPS Parse 预估", "FFLogs DPS Parse estimate"));
         ImGui.TextWrapped(text.Get(
             "根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算 Parse 数字与颜色。缓存缺失时显示“--”，不会猜测百分位。",
             "Estimate the Parse number and color from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition. Missing cache data is shown as '--'; no percentile is guessed."));
@@ -3930,7 +4009,7 @@ public sealed class ControlCenterWindow : Window
                 ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableNextColumn();
-            ImGui.TextColored(IceBlue, text.Get(
+            DactTheme.TextColored(IceBlue, text.Get(
                 "API 凭据与数据刷新",
                 "API credentials and data refresh"));
             ImGui.TextDisabled(text.Get(
@@ -3938,7 +4017,7 @@ public sealed class ControlCenterWindow : Window
                 "Validates the FFLogs API credentials and refreshes estimate data."));
 
             var enabled = configuration.Fflogs.Enabled;
-            if (ImGui.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
+            if (DactTheme.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
             {
                 UpdateFflogsSettings(settings => settings.Enabled = enabled);
                 fflogsEstimateService.NotifyCredentialsChanged();
@@ -3953,7 +4032,7 @@ public sealed class ControlCenterWindow : Window
                     "如何创建 FFLogs API Client",
                     "How to create an FFLogs API client")))
             {
-                ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+                DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
                 if (ImGui.BeginChild("fflogs-client-guide", new Vector2(-1, 150), true))
                 {
                     ImGui.TextWrapped(text.Get(
@@ -3993,18 +4072,18 @@ public sealed class ControlCenterWindow : Window
             ImGui.TextDisabled(text.Get(
                 "使用免费的 FFLogs API Client；密钥保存在本机插件配置中，可随时撤销；不会上传玩家 ID。",
                 "Uses a free FFLogs API client. The secret is stored locally and can be revoked; player IDs are never uploaded."));
-            if (ImGui.Button(text.Get("创建 / 管理 API Client", "Create / manage API client")))
+            if (DactTheme.Button(text.Get("创建 / 管理 API Client", "Create / manage API client")))
             {
                 OpenUrl("https://www.fflogs.com/api/clients/");
             }
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("测试并刷新", "Test and refresh")))
+            if (DactTheme.Button(text.Get("测试并刷新", "Test and refresh")))
             {
                 fflogsEstimateService.RequestRefresh(getCurrentEncounter());
             }
 
             var status = fflogsEstimateService.Status;
-            ImGui.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
+            DactTheme.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
             var statusDetail = FflogsStatusDetail(status);
             var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 4.4f;
             if (ImGui.BeginChild(
@@ -4028,7 +4107,7 @@ public sealed class ControlCenterWindow : Window
                 ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableNextColumn();
-            ImGui.TextColored(IceBlue, text.Get("当前副本自动识别", "Automatic duty matching"));
+            DactTheme.TextColored(IceBlue, text.Get("当前副本自动识别", "Automatic duty matching"));
             ImGui.TextDisabled(text.Get(
                 "进入副本后按游戏 Territory ID 自动匹配；只会访问当前开放的 FFLogs 榜单。",
                 "Matches by the game's Territory ID on duty entry and only accesses the current FFLogs ranking tier."));
@@ -4043,7 +4122,7 @@ public sealed class ControlCenterWindow : Window
                     $"{(activeEncounter.Difficulty == 101 ? "Savage" : "Normal")}");
                 if (activeEncounter.Phase > 1)
                 {
-                    ImGui.TextColored(
+                    DactTheme.TextColored(
                         IceBlue,
                         text.Get("已自动切换至第二阶段榜单", "Automatically switched to the phase-two ranking"));
                 }
@@ -4160,17 +4239,17 @@ public sealed class ControlCenterWindow : Window
 
     internal static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.25f, 0.34f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.24f, 0.30f, 0.37f, 1));
-        ImGui.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.22f, 0.25f, 0.28f, 1));
-        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
+        DactTheme.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.24f, 0.30f, 0.37f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
+        DactTheme.PushStyleColor(ImGuiCol.Header, new Vector4(0.22f, 0.25f, 0.28f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.HeaderHovered, NavyHover);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));

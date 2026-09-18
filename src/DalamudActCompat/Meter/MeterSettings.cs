@@ -66,6 +66,7 @@ public sealed class MeterSettings
 
     public MeterWindowProfile HorizontalWindow { get; set; } = new()
     {
+        BackgroundOpacity = 0,
         Slots = MeterSlotDefaults.CreateHorizontal(),
         ItemWidth = 220,
     };
@@ -215,6 +216,7 @@ public sealed class MeterSettings
         };
         HorizontalWindow ??= new MeterWindowProfile
         {
+            BackgroundOpacity = 0,
             Slots = MeterSlotDefaults.CreateHorizontal(),
             ItemWidth = 220,
         };
@@ -515,6 +517,7 @@ public sealed class MeterSettings
         destination.ShowHeader = source.ShowHeader;
         destination.FontScale = source.FontScale;
         destination.BackgroundOpacity = source.BackgroundOpacity;
+        destination.BackgroundColor = source.BackgroundColor;
         destination.ItemWidth = source.ItemWidth;
         destination.SortMode = source.SortMode;
         destination.DpsSortMetric = source.DpsSortMetric;

@@ -1,23 +1,23 @@
 [
-  {
-    "Author": "raynording",
-    "Name": "Dalamud ACT Compat",
-    "InternalName": "DalamudActCompat",
-    "AssemblyVersion": "0.4.3.1",
-    "TestingAssemblyVersion": null,
-    "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
-    "Punchline": "In-game ACT-compatible parsing platform foundation.",
-    "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
-    "ApplicableVersion": "any",
-    "DalamudApiLevel": 15,
-    "IsHide": false,
-    "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.3.1/DalamudActCompat-core.zip",
-    "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.3.1/DalamudActCompat-core.zip",
-    "LastUpdate": 1789624462144,
-    "Changelog": "v0.4.3.1 修复绝妖星 P1 部分绘图事件早于实体同步和阶段初始化时的触发顺序问题；补充绝伊甸、绝妖星的事件、条件、变量、实体和绘图回调诊断日志，方便定位缺圈原因。绝伊甸缺圈仍需实战日志确认。更新后请完整重启游戏；使用仿生石时，退出游戏前先停止模拟并关闭防火墙。",
-    "CanUnloadAsync": true,
-    "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
-  }
+{
+  "Author": "raynording",
+  "Name": "Dalamud ACT Compat",
+  "InternalName": "DalamudActCompat",
+  "AssemblyVersion": "4.4.0.0",
+  "TestingAssemblyVersion": null,
+  "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
+  "Punchline": "In-game ACT-compatible parsing platform foundation.",
+  "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "IsHide": false,
+  "IsTestingExclusive": false,
+  "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v4.4.0/DalamudActCompat-core.zip",
+  "DownloadLinkTesting": null,
+  "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v4.4.0/DalamudActCompat-core.zip",
+  "LastUpdate": 1789705305888,
+  "Changelog": "适配 7.56 热修；新增赞助皮肤与探索配色、统计背景设置和团队秒伤槽位；修正浅色弹窗边框、好友栏底边及编辑器保存取消布局。",
+  "CanUnloadAsync": true,
+  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
+}
 ]

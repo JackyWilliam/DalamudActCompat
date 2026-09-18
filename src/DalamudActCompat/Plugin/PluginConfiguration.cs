@@ -4,12 +4,13 @@ using DalamudActCompat.Meter;
 using DalamudActCompat.Compatibility.PluginHost;
 using DalamudActCompat.Fflogs;
 using Newtonsoft.Json;
+using DalamudActCompat.UI;
 
 namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 16;
+    private const int CurrentVersion = 17;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -66,6 +67,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public MeterSettings Meter { get; set; } = new();
 
+    public UiSkinSettings Appearance { get; set; } = new();
+
     public FflogsSettings Fflogs { get; set; } = new();
 
     public EmbeddedPluginSettings EmbeddedPlugins { get; set; } = new();
@@ -91,6 +94,12 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool ApplyMigrations()
     {
         var changed = false;
+        if (Appearance is null)
+        {
+            Appearance = new();
+            changed = true;
+        }
+        changed |= Appearance.Normalize();
         DisabledActPluginIds = new HashSet<string>(
             DisabledActPluginIds ?? [],
             StringComparer.OrdinalIgnoreCase);
@@ -298,6 +307,15 @@ public sealed class PluginConfiguration : IPluginConfiguration
             changed = true;
         }
 
+        if (Version < 17)
+        {
+            // Horizontal previously ignored its stored opacity and always drew
+            // transparently. Preserve that appearance until the user opts in.
+            Meter.HorizontalWindow.BackgroundOpacity = 0;
+            Version = 17;
+            changed = true;
+        }
+
         return changed;
     }
 
@@ -326,6 +344,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         SelectedCactbotOverlay = SelfHostedActRuntime.CactbotOverlayName;
         OverlayWindows = CreateDefaultOverlayWindows();
         Meter = new MeterSettings();
+        Appearance = new UiSkinSettings();
         Fflogs = new FflogsSettings();
         EmbeddedPlugins = new EmbeddedPluginSettings();
         DisabledActPluginIds = CreateDefaultDisabledActPluginIds();

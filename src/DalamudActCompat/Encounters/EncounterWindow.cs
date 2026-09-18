@@ -21,11 +21,11 @@ public sealed class EncounterWindow : Window
         LogFiles,
     }
 
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
 
     private readonly EncounterStateStore stateStore;
     private readonly PluginPaths paths;
@@ -94,8 +94,9 @@ public sealed class EncounterWindow : Window
         headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         outerFrameStylePushed = true;
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -197,7 +198,7 @@ public sealed class EncounterWindow : Window
         var listWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.30f, 240, 320);
         if (ImGui.BeginChild("recent-encounter-list", new Vector2(listWidth, -1), true))
         {
-            ImGui.TextColored(Gold, text.Get("近期战斗", "Recent encounters"));
+            DactTheme.TextColored(Gold, text.Get("近期战斗", "Recent encounters"));
             ImGui.Separator();
             foreach (var encounter in recent)
             {
@@ -248,7 +249,7 @@ public sealed class EncounterWindow : Window
     private void DrawLogFilesPage()
     {
         Directory.CreateDirectory(paths.EncounterLogDirectory);
-        if (ImGui.Button(text.Get("打开日志文件夹", "Open log folder")))
+        if (DactTheme.Button(text.Get("打开日志文件夹", "Open log folder")))
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(paths.EncounterLogDirectory)
             {
@@ -258,7 +259,7 @@ public sealed class EncounterWindow : Window
         ImGui.SameLine();
         if (configuration.Meter.PlayerIdentityMode == PlayerIdentityMode.Original)
         {
-            ImGui.Checkbox(text.Get("查看原始 JSON", "Show raw JSON"), ref showRawJson);
+            DactTheme.Checkbox(text.Get("查看原始 JSON", "Show raw JSON"), ref showRawJson);
         }
         else
         {
@@ -286,7 +287,7 @@ public sealed class EncounterWindow : Window
         var listWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.30f, 240, 320);
         if (ImGui.BeginChild("log-file-list", new Vector2(listWidth, -1), true))
         {
-            ImGui.TextColored(Gold, text.Get("日志文件", "Log files"));
+            DactTheme.TextColored(Gold, text.Get("日志文件", "Log files"));
             ImGui.Separator();
             foreach (var file in files)
             {
@@ -360,7 +361,7 @@ public sealed class EncounterWindow : Window
     {
         if (encounter.SegmentRecords.Count > 0)
         {
-            ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
+            DactTheme.TextColored(Gold, LocalizeEncounterTitle(encounter));
             ImGui.TextDisabled(text.Get(
                 $"本次副本包含 {encounter.SegmentRecords.Count} 把战斗，请在近期战斗中选择其中一把。",
                 $"This duty contains {encounter.SegmentRecords.Count} pulls; select one under Recent encounters."));
@@ -373,7 +374,7 @@ public sealed class EncounterWindow : Window
 
         var damageDurationSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
         var healingDurationSeconds = Math.Max(1, encounter.Duration.TotalSeconds);
-        ImGui.TextColored(Gold, LocalizeEncounterTitle(encounter));
+        DactTheme.TextColored(Gold, LocalizeEncounterTitle(encounter));
         ImGui.TextDisabled(
             $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  " +
             $"{encounter.StartTime.LocalDateTime:yyyy-MM-dd HH:mm:ss}  ·  " +
@@ -395,7 +396,7 @@ public sealed class EncounterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextColored(Gold, text.Get("队伍表现", "Party performance"));
+        DactTheme.TextColored(Gold, text.Get("队伍表现", "Party performance"));
         ImGui.SameLine();
         ImGui.TextDisabled(text.Get(
             $"职业显示：{JobDisplayFormatter.Label(configuration.Meter.JobDisplayStyle, text)}（跟随战斗统计）",
@@ -607,9 +608,9 @@ public sealed class EncounterWindow : Window
     private void DrawMetricButton(MeterSortMode mode, string label)
     {
         var selected = MeterSortModeOptions.Normalize(configuration.Meter.SortMode) == mode;
-        ImGui.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(0.11f, 0.29f, 0.38f, 1) : new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.Text, selected ? IceBlue : new Vector4(0.84f, 0.87f, 0.91f, 1));
-        if (ImGui.Button($"{label}##history-sort-{mode}", new Vector2(82, 30)) && !selected)
+        DactTheme.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(0.11f, 0.29f, 0.38f, 1) : new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.Text, selected ? IceBlue : new Vector4(0.84f, 0.87f, 0.91f, 1));
+        if (DactTheme.Button($"{label}##history-sort-{mode}", new Vector2(82, 30)) && !selected)
         {
             configuration.Meter.SortMode = mode;
             saveConfiguration();
@@ -731,7 +732,7 @@ public sealed class EncounterWindow : Window
         var labelSize = ImGui.CalcTextSize(label);
         var badgeWidth = Math.Max(35, labelSize.X + 10);
         drawList.AddRectFilled(new Vector2(x, textY - 2), new Vector2(x + badgeWidth, textY + ImGui.GetTextLineHeight() + 2), ImGui.GetColorU32(new Vector4(0.24f, 0.36f, 0.46f, 0.9f)), 4);
-        drawList.AddText(new Vector2(x + (badgeWidth - labelSize.X) * 0.5f, textY), ImGui.GetColorU32(Vector4.One), label);
+        drawList.AddText(new Vector2(x + (badgeWidth - labelSize.X) * 0.5f, textY), ImGui.GetColorU32(DactTheme.Palette.Text), label);
         return x + badgeWidth + 8;
     }
 
@@ -823,11 +824,11 @@ public sealed class EncounterWindow : Window
     private static void SummaryCell(string id, string label, string value)
     {
         ImGui.TableNextColumn();
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
         if (ImGui.BeginChild($"summary-{id}", new Vector2(-1, 62), true))
         {
             ImGui.TextDisabled(label);
-            ImGui.TextColored(IceBlue, value);
+            DactTheme.TextColored(IceBlue, value);
         }
         ImGui.EndChild();
         ImGui.PopStyleColor();
@@ -846,17 +847,17 @@ public sealed class EncounterWindow : Window
 
     private static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.25f, 0.34f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.24f, 0.30f, 0.37f, 1));
-        ImGui.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.22f, 0.25f, 0.28f, 1));
-        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
+        DactTheme.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.24f, 0.30f, 0.37f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
+        DactTheme.PushStyleColor(ImGuiCol.Header, new Vector4(0.22f, 0.25f, 0.28f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.HeaderHovered, NavyHover);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));

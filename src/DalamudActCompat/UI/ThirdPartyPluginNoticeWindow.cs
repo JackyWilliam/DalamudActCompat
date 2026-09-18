@@ -25,11 +25,11 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 {
     private const string PermissionPopupId = "扩展完整功能###DalamudActCompatFullPermissions";
     private const string TtsProPopupId = "FoxTTS Pro 设置###DalamudActCompatFoxTtsPro";
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getDisclosures;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>> getPending;
     private readonly Func<IReadOnlyList<BundledActPluginDescriptor>, Task<BundledPluginInstallOutcome>> install;
@@ -94,8 +94,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         outerFrameStylePushed = true;
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -148,15 +149,15 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
             if (ImGui.BeginChild("third-party-notice-content", new Vector2(-1, -1), true))
             {
-                ImGui.TextColored(Gold, text.Get("第三方扩展来源声明", "Third-party extension sources"));
+                DactTheme.TextColored(Gold, text.Get("第三方扩展来源声明", "Third-party extension sources"));
                 ImGui.SameLine();
                 ImGui.TextDisabled(text.Get("安装前核对", "Review before installation"));
                 ImGui.Spacing();
 
-                ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+                DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
                 if (ImGui.BeginChild("third-party-notice-summary", new Vector2(-1, 110), true))
                 {
-                    ImGui.TextColored(IceBlue, text.Get("关于这些 DLL", "About these DLLs"));
+                    DactTheme.TextColored(IceBlue, text.Get("关于这些 DLL", "About these DLLs"));
                     ImGui.TextWrapped(text.Get(
                         "Dalamud ACT Compat 随安装包提供以下第三方 ACT DLL，并在启动时检查其公开上游。它们不由本项目开发，也不代表原作者或维护者与本项目存在合作、认可或联系。首次安装、本插件每次更新及发现上游 DLL 更新后，都会在安装或更新前展示本声明。",
                         "Dalamud ACT Compat bundles the third-party ACT DLLs below and checks their public upstream sources at startup. They are not authored by this project, and no collaboration, endorsement, or affiliation with their authors or maintainers is implied. This notice is shown before installation on first use, after each plugin update, and when a newer upstream DLL is found."));
@@ -176,7 +177,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 {
                     if (pending.Count == 0)
                     {
-                        ImGui.TextColored(IceBlue, text.Get(
+                        DactTheme.TextColored(IceBlue, text.Get(
                             "当前声明已确认；作者和来源信息仍会长期显示。",
                             "The current notices are acknowledged; author and source details remain visible."));
                         ImGui.Spacing();
@@ -202,14 +203,14 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 ImGui.Separator();
                 if (installTask is not null)
                 {
-                    ImGui.TextColored(IceBlue, text.Get(
+                    DactTheme.TextColored(IceBlue, text.Get(
                         "正在安装 / 更新扩展，请稍候……",
                         "Installing / updating extensions..."));
                 }
                 else if (pending.Count > 0)
                 {
-                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-                    if (ImGui.Button(text.Get(
+                    DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+                    if (DactTheme.Button(text.Get(
                             "知悉并安装 / 更新",
                             "Acknowledge and install / update"),
                             new Vector2(190, 36)))
@@ -389,13 +390,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
     private void DrawPluginCard(BundledActPluginDescriptor plugin, bool requiresAcknowledgement)
     {
         ImGui.PushID($"third-party-card-{plugin.Id}");
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
         if (ImGui.BeginChild("card", new Vector2(-1, 388), true))
         {
-            ImGui.TextColored(Gold, plugin.Name);
+            DactTheme.TextColored(Gold, plugin.Name);
             ImGui.SameLine();
-            ImGui.TextColored(IceBlue, $"v{plugin.Version}");
-            ImGui.TextColored(
+            DactTheme.TextColored(IceBlue, $"v{plugin.Version}");
+            DactTheme.TextColored(
                 requiresAcknowledgement ? Gold : new Vector4(0.66f, 0.70f, 0.75f, 1),
                 requiresAcknowledgement
                     ? plugin.IsOnlineUpdate
@@ -442,9 +443,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
     private void DrawUrl(string label, string url)
     {
-        ImGui.TextColored(IceBlue, label);
+        DactTheme.TextColored(IceBlue, label);
         ImGui.SameLine(88);
-        if (ImGui.SmallButton($"{text.Get("打开", "Open")}##{label}"))
+        if (DactTheme.SmallButton($"{text.Get("打开", "Open")}##{label}"))
         {
             OpenUrl(url);
         }
@@ -454,10 +455,10 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
     private void DrawEmptyState()
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
         if (ImGui.BeginChild("third-party-empty-state", new Vector2(-1, 92), true))
         {
-            ImGui.TextColored(IceBlue, text.Get("来源检查已完成", "Source check complete"));
+            DactTheme.TextColored(IceBlue, text.Get("来源检查已完成", "Source check complete"));
             ImGui.TextDisabled(text.Get(
                 "当前没有需要确认或安装的 DLL 更新。",
                 "There are no DLL updates awaiting acknowledgement or installation."));
@@ -490,9 +491,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
-        ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
+        DactTheme.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
         if (!ImGui.BeginPopupModal(
                 PermissionPopupId,
                 ImGuiWindowFlags.AlwaysAutoResize |
@@ -504,22 +505,22 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             return;
         }
 
-        ImGui.TextColored(Gold, text.Get("是否启用扩展的完整功能？", "Enable full extension functionality?"));
+        DactTheme.TextColored(Gold, text.Get("是否启用扩展的完整功能？", "Enable full extension functionality?"));
         ImGui.TextWrapped(text.Get(
             "DLL 已完成安装。安全默认设置会关闭网络请求、启动外部程序、写入文件、游戏指令、原生内存和高风险脚本等能力；部分 Triggernometry、鲶鱼精邮差、银山雀儿和抹茶功能因此不可用。你可以现在一次性启用五项随包扩展各自声明的全部能力，也可以保持安全默认，之后在“扩展 → ACT 插件权限边界”逐项开启。",
             "The DLLs are installed. Safe defaults deny network requests, launching external processes, file writes, game commands, native memory access, and high-risk scripts, so some Triggernometry, PostNamazu, SilverDasher, and Matcha features will remain unavailable. You can enable every capability declared by the five bundled extensions now, or keep the safe defaults and grant them individually later under Extensions > ACT plugin permission boundary."));
-        ImGui.TextColored(IceBlue, text.Get(
+        DactTheme.TextColored(IceBlue, text.Get(
             "请选择“同意完整权限”或“不同意并保持安全模式”；作出选择前此窗口无法关闭。",
             "Choose either full permissions or safe mode; this window cannot close until you make a choice."));
         ImGui.Spacing();
 
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-        var enableFull = ImGui.Button(
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        var enableFull = DactTheme.Button(
             text.Get("同意并启用完整权限", "Accept full permissions"),
             new Vector2(190, 36));
         ImGui.PopStyleColor();
         ImGui.SameLine();
-        var keepSafe = ImGui.Button(
+        var keepSafe = DactTheme.Button(
             text.Get("不同意完整权限，保持安全模式", "Decline full permissions; keep safe mode"),
             new Vector2(240, 36));
 
@@ -560,9 +561,9 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         ImGui.SetNextWindowSize(new Vector2(popupWidth, 0), ImGuiCond.Appearing);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
-        ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
+        DactTheme.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0, 0, 0, 0.66f));
         var ttsPopupOpen = true;
         if (!ImGui.BeginPopupModal(
                 TtsProPopupId,
@@ -582,7 +583,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             return;
         }
 
-        ImGui.TextColored(Gold, text.Get(
+        DactTheme.TextColored(Gold, text.Get(
             "是否将 FoxTTS 改为 Cafe TTS Pro？",
             "Switch FoxTTS to Cafe TTS Pro?"));
         ImGui.TextWrapped(text.Get(
@@ -593,17 +594,17 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
             "Keep current asks again after the next plugin update; never remind preserves the current engine and stops future prompts."));
         ImGui.Spacing();
 
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
-        var enablePro = ImGui.Button(
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        var enablePro = DactTheme.Button(
             text.Get("更改为 Pro", "Switch to Pro"),
             new Vector2(150, 36));
         ImGui.PopStyleColor();
         ImGui.SameLine();
-        var keepCurrent = ImGui.Button(
+        var keepCurrent = DactTheme.Button(
             text.Get("本次不更改", "Keep current"),
             new Vector2(150, 36));
         ImGui.SameLine();
-        var neverRemind = ImGui.Button(
+        var neverRemind = DactTheme.Button(
             text.Get("不再提醒", "Never remind"),
             new Vector2(150, 36));
 
@@ -633,7 +634,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
         if (BrandedWindowChrome.BeginGoldCard("third-party-update-status", 72))
         {
-            ImGui.TextColored(
+            DactTheme.TextColored(
                 updateCheckInProgress ? Gold : IceBlue,
                 updateCheckInProgress
                     ? text.Get("正在检查更新", "Checking for updates")
@@ -661,13 +662,13 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
 
     private static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));

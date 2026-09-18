@@ -174,10 +174,16 @@ jobs:
           } elseif ($LASTEXITCODE -ne 1) {
             throw "Could not inspect the release tag."
           }
+          # Publish the reviewed Chinese notes atomically with the release so
+          # subscribers never ingest auto-generated merge titles as the changelog.
+          $notesFile = "docs/releases/$($env:TAG_NAME.TrimStart('v')).md"
+          if (-not (Test-Path -LiteralPath $notesFile)) {
+            throw "Reviewed release notes are missing: $notesFile"
+          }
           gh release create $env:TAG_NAME @resourcePacks `
             --target $env:GITHUB_SHA `
             --title $env:TAG_NAME `
-            --generate-notes `
+            --notes-file $notesFile `
             --draft
           if ($LASTEXITCODE -ne 0) { throw "Draft release creation failed." }
           gh release upload $env:TAG_NAME `

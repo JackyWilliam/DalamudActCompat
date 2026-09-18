@@ -6,22 +6,22 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.4.3.1",
+    [string] $ExpectedAssemblyVersion = "4.4.0.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedIinactVersion = "2.10.3.7",
+    [string] $ExpectedIinactVersion = "2.10.3.8",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedOverlayPluginVersion = "0.19.107.0",
+    [string] $ExpectedOverlayPluginVersion = "0.19.108.0",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedUnscramblerVersion = "7.56.0.0",
+    [string] $ExpectedUnscramblerVersion = "7.56.1.0",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedFfxivActPluginVersion = "3.0.3.0",
+    [string] $ExpectedFfxivActPluginVersion = "3.0.3.1",
 
     [Parameter(Mandatory = $false)]
     [string] $ExpectedMachinaVersion = "2.3.1.3",

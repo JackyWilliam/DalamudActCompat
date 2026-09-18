@@ -157,16 +157,17 @@ public sealed class MeterWindow : Window
         }
 
         var backgroundOpacity = NormalizeBackgroundOpacity(settings.ClassicWindow.BackgroundOpacity);
+        MeterBackground.PushText(settings.ClassicWindow);
         ImGui.SetNextWindowBgAlpha(backgroundOpacity);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.035f, 0.055f, 0.09f, 1));
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, MeterBackground.Color(settings.ClassicWindow));
         ImGui.PushStyleColor(
             ImGuiCol.Border,
             ApplyBackgroundOpacity(new Vector4(0.62f, 0.52f, 0.28f, 0.85f), backgroundOpacity));
         ImGui.PushStyleColor(
             ImGuiCol.Separator,
             ApplyBackgroundOpacity(new Vector4(0.50f, 0.42f, 0.24f, 0.75f), backgroundOpacity));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, ApplyBackgroundOpacity(NavyRaised, backgroundOpacity));
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, ApplyBackgroundOpacity(NavyHover, backgroundOpacity));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, MeterBackground.Fill(settings.ClassicWindow, NavyRaised));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, MeterBackground.Fill(settings.ClassicWindow, NavyHover));
         ImGui.PushStyleColor(
             ImGuiCol.Button,
             ApplyBackgroundOpacity(new Vector4(0.11f, 0.17f, 0.25f, 1), backgroundOpacity));
@@ -185,7 +186,7 @@ public sealed class MeterWindow : Window
     public override void PostDraw()
     {
         ImGui.PopStyleVar(4);
-        ImGui.PopStyleColor(8);
+        ImGui.PopStyleColor(10);
     }
 
     public override void Draw()
@@ -264,16 +265,16 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + new Vector2(width, EmptyStateHeight),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow, NavyRaised)),
             6);
         var textWidth = Math.Max(20, toggleStart.X - start.X - 16);
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + new Vector2(10, 6),
-            ImGui.GetColorU32(IceBlue),
+            ImGui.GetColorU32(MeterBackground.Foreground(IceBlue)),
             TrimToWidth(
                 text.Get("● 等待战斗数据", "● Waiting for encounter data"),
                 textWidth));
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + new Vector2(10, 23),
             ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
             TrimToWidth(
@@ -317,15 +318,15 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + new Vector2(width, EncounterHeaderHeight),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(NavyRaised, settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow, NavyRaised)),
             6);
         DrawEncounterStateIcon(drawList, encounter, start + new Vector2(9, 5));
         var titleRight = Math.Max(
             start.X + 36,
             audienceStart.X - 6);
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + new Vector2(36, 6),
-            ImGui.GetColorU32(Gold),
+            ImGui.GetColorU32(MeterBackground.Foreground(Gold)),
             TrimToWidth(LocalizeEncounterTitle(encounter), titleRight - start.X - 36));
         var subtitle =
             $"{localizeZoneName(encounter.TerritoryId, encounter.ZoneName)}  ·  " +
@@ -335,7 +336,7 @@ public sealed class MeterWindow : Window
             subtitle += "  ·  " +
                         ResolveEncounterStateText(encounter);
         }
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + new Vector2(36, 24),
             ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
             TrimToWidth(subtitle, titleRight - start.X - 36));
@@ -417,10 +418,10 @@ public sealed class MeterWindow : Window
     {
         var hps = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode) == MeterSortMode.Hps;
         DrawHeaderIconFrame(drawList, settings, start, end, hovered, hps ? HealingGreen : IceBlue);
-        var color = ImGui.GetColorU32(hovered ? Vector4.One : hps ? HealingGreen : IceBlue);
+        var color = ImGui.GetColorU32(hovered ? MeterBackground.CurrentText : hps ? HealingGreen : IceBlue);
         var label = hps ? text.Get("HPS 榜", "HPS") : text.Get("DPS 榜", "DPS");
         var labelSize = ImGui.CalcTextSize(label);
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + ((end - start - labelSize) * 0.5f),
             color,
             label);
@@ -445,9 +446,9 @@ public sealed class MeterWindow : Window
             ? text.Get("24 人本", "24-player")
             : text.Get("8 人本", "8-player");
         var size = ImGui.CalcTextSize(label);
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + ((end - start - size) * 0.5f),
-            ImGui.GetColorU32(hovered ? Vector4.One : Gold),
+            ImGui.GetColorU32(hovered ? MeterBackground.CurrentText : Gold),
             label);
         if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
@@ -492,7 +493,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow, fill)),
             4);
         drawList.AddRect(start, end, ImGui.GetColorU32(accent), 4);
     }
@@ -799,7 +800,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(fill, settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow, fill)),
             4);
         drawList.AddRect(
             start,
@@ -811,7 +812,7 @@ public sealed class MeterWindow : Window
             start,
             end,
             pointsDown: settings.CompactMode,
-            hovered ? Vector4.One : accent);
+            hovered ? MeterBackground.CurrentText : accent);
         if (hovered)
         {
             ImGui.SetTooltip(text.Get(
@@ -863,7 +864,7 @@ public sealed class MeterWindow : Window
         var fallbackGlyph = encounter.IsActive
             ? encounter.IsTransitioning ? "◆" : "●"
             : "○";
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + new Vector2(4, 2),
             ImGui.GetColorU32(stateColor),
             fallbackGlyph);
@@ -1018,9 +1019,8 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + size,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(
-                hovered ? NavyHover : NavyRaised,
-                settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow,
+                hovered ? NavyHover : NavyRaised)),
             6);
         var ratio = (float)Math.Clamp(
             Score(
@@ -1045,11 +1045,11 @@ public sealed class MeterWindow : Window
             ? $"{row.Hps:N0}"
             : $"{MeterSlotPresentation.DpsScore(row, settings.ClassicWindow.DpsSortMetric):N0}";
         var valueWidth = ImGui.CalcTextSize(value).X;
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             new Vector2(cursorX, start.Y + 8),
-            ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+            ImGui.GetColorU32(MeterBackground.Foreground(row.IsLocalPlayer ? Gold : MeterBackground.CurrentText)),
             TrimToWidth(displayName, Math.Max(12, start.X + size.X - cursorX - valueWidth - 16)));
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             new Vector2(start.X + size.X - valueWidth - 7, start.Y + 8),
             ImGui.GetColorU32(
                 MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode) == MeterSortMode.Hps
@@ -1075,9 +1075,9 @@ public sealed class MeterWindow : Window
         }
 
         var job = JobDisplayFormatter.FormatText(row.Job, settings.JobDisplayStyle);
-        ImGui.GetWindowDrawList().AddText(
+        MeterBackground.AddText(ImGui.GetWindowDrawList(),
             start + new Vector2(0, 2),
-            ImGui.GetColorU32(IceBlue),
+            ImGui.GetColorU32(MeterBackground.Foreground(IceBlue)),
             job);
         return ImGui.CalcTextSize(job).X;
     }
@@ -1365,9 +1365,8 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(
-                new Vector4(NavyRaised.X, NavyRaised.Y, NavyRaised.Z, 0.78f),
-                settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow,
+                new Vector4(NavyRaised.X, NavyRaised.Y, NavyRaised.Z, 0.78f))),
             4);
         drawList.AddLine(
             new Vector2(start.X, end.Y),
@@ -1390,7 +1389,7 @@ public sealed class MeterWindow : Window
                 column.Width,
                 size.X,
                 alignment);
-            drawList.AddText(new Vector2(columnX, lineY), color, fittedLabel);
+            MeterBackground.AddText(drawList, new Vector2(columnX, lineY), color, fittedLabel);
         }
 
         if (layout.Rank is { } rank)
@@ -1506,9 +1505,8 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             end,
-            ImGui.GetColorU32(ApplyBackgroundOpacity(
-                hovered ? NavyHover : NavyRaised,
-                settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(settings.ClassicWindow,
+                hovered ? NavyHover : NavyRaised)),
             5);
 
         var sortMode = MeterSortModeOptions.Normalize(settings.ClassicWindow.SortMode);
@@ -1571,9 +1569,9 @@ public sealed class MeterWindow : Window
                     return currentX + iconSize + 7;
                 }
 
-                drawList.AddText(
+                MeterBackground.AddText(drawList,
                     new Vector2(currentX, textY),
-                    ImGui.GetColorU32(Gold),
+                    ImGui.GetColorU32(MeterBackground.Foreground(Gold)),
                     "LB");
                 return currentX + ImGui.CalcTextSize("LB").X + 7;
             }
@@ -1603,9 +1601,9 @@ public sealed class MeterWindow : Window
                     new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f),
                     settings.ClassicWindow.BackgroundOpacity)),
                 4);
-            drawList.AddText(
+            MeterBackground.AddText(drawList,
                 new Vector2(currentX + (badgeSize.X - jobSize.X) * 0.5f, textY + 1),
-                ImGui.GetColorU32(Vector4.One),
+                ImGui.GetColorU32(MeterBackground.CurrentText),
                 job);
             return currentX + badgeSize.X + 8;
         }
@@ -1623,7 +1621,7 @@ public sealed class MeterWindow : Window
                 column.Width,
                 size.X,
                 alignment);
-            drawList.AddText(new Vector2(columnX, lineY), ImGui.GetColorU32(color), value);
+            MeterBackground.AddText(drawList, new Vector2(columnX, lineY), ImGui.GetColorU32(color), value);
             previewInteraction?.Observe(
                 column.Slot,
                 new Vector2(start.X + column.Offset, start.Y),
@@ -1662,7 +1660,7 @@ public sealed class MeterWindow : Window
             var packedColor = ImGui.GetColorU32(color);
 
             DrawBoldText(drawList, new Vector2(groupX, lineY), packedColor, action);
-            drawList.AddText(
+            MeterBackground.AddText(drawList,
                 new Vector2(groupX + actionWidth + SyntheticBoldOffset + gap, lineY),
                 packedColor,
                 amount);
@@ -1693,9 +1691,9 @@ public sealed class MeterWindow : Window
                     12,
                     start.X + identity.Offset + identity.Width - identityTextX - 3);
                 var fittedName = TrimToWidth(displayName, availableNameWidth);
-                drawList.AddText(
+                MeterBackground.AddText(drawList,
                     new Vector2(identityTextX, lineY),
-                    ImGui.GetColorU32(row.IsLocalPlayer || isLimitBreak ? Gold : Vector4.One),
+                    ImGui.GetColorU32(MeterBackground.Foreground(row.IsLocalPlayer || isLimitBreak ? Gold : MeterBackground.CurrentText)),
                     fittedName);
                 if (!string.Equals(fittedName, displayName, StringComparison.Ordinal) &&
                     ImGui.IsMouseHoveringRect(
@@ -1837,8 +1835,8 @@ public sealed class MeterWindow : Window
     {
         // Reuse the active table/header font so localized skill names keep identical size
         // and glyph coverage; a subpixel second pass adds weight without a separate font atlas.
-        drawList.AddText(position, color, value);
-        drawList.AddText(position + new Vector2(SyntheticBoldOffset, 0), color, value);
+        MeterBackground.AddText(drawList, position, color, value);
+        MeterBackground.AddText(drawList, position + new Vector2(SyntheticBoldOffset, 0), color, value);
     }
 
     internal static float NormalizeBackgroundOpacity(float opacity)

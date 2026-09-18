@@ -19,7 +19,8 @@ internal sealed record CloudClientSnapshot(
     string? InvitationKeyToShare = null,
     CloudBanNotice? ActiveBan = null,
     bool HasSavedRecoveryKey = false,
-    CloudAdministratorStatus? Administrator = null)
+    CloudAdministratorStatus? Administrator = null,
+    CloudSponsorStatus? Sponsor = null)
 {
     public static CloudClientSnapshot SignedOut(string message = "请登录或注册账号。")
         => new(
@@ -469,6 +470,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         }, cancellationToken);
 
     private void ApplyAdministratorStatus(CloudStoredCredentials current, CloudAdministratorStatus status, long? expectedVersion = null)
+        => ApplyAccountStatus(current, status, expectedVersion, null);
+
+    private void ApplyAccountStatus(CloudStoredCredentials current, CloudAdministratorStatus status, long? expectedVersion, CloudSponsorStatus? sponsor)
     {
         if (sharedAccountStore is not null && sharedAccountStore.Read().Revision != sharedRevision) return;
         lock (stateLock)
@@ -476,11 +480,12 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             if (credentials?.Token != current.Token || !snapshot.IsSignedIn || activeBan is not null) return;
             if (expectedVersion is { } version && version != administratorStateVersion) return;
             administratorStateVersion++;
-            snapshot = snapshot with { Administrator = status,
+            snapshot = snapshot with { Administrator = status, Sponsor = sponsor ?? snapshot.Sponsor,
                 Invitations = snapshot.Invitations is { } invitations ? invitations with
                 {
                     IsAdmin = status.IsAdmin, AdminGrantId = status.AdminGrantId,
                     AdminNoticePending = status.AdminNoticePending,
+                    Sponsor = sponsor ?? invitations.Sponsor,
                 } : null };
         }
     }
@@ -864,6 +869,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         lock (stateLock)
         {
             credentials = saved;
+            // A fresh authentication must fetch its own grant, even when the
+            // username is unchanged (the administrator may have revoked it).
+            snapshot = snapshot with { Sponsor = null };
             friendsSessionGeneration++;
             storedAccount = persisted ? saved : null;
             persistCurrentAccount = persisted;
@@ -1129,8 +1137,10 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             var roleVersion = Interlocked.Read(ref administratorStateVersion);
             try
             {
-                var status = await apiClient.GetAdministratorStatusAsync(current.Token, cancellationToken).ConfigureAwait(false);
-                ApplyAdministratorStatus(current, status, roleVersion);
+                var status = await apiClient.GetAccountStatusAsync(current.Token, cancellationToken).ConfigureAwait(false);
+                // Old servers grant no sponsor skins. Apply both authorities under
+                // the same token/version guard so a late response cannot cross accounts.
+                ApplyAccountStatus(current, status.Administrator ?? new(), roleVersion, status.Sponsor ?? new());
             }
             catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
             {
@@ -1367,7 +1377,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 invitationKeyToShare,
                 null,
                 storedAccount is not null,
-                invitations?.Administrator ?? (snapshot.Username == current.Username ? snapshot.Administrator : null));
+                invitations?.Administrator ?? (snapshot.Username == current.Username ? snapshot.Administrator : null),
+                invitations is not null ? invitations.Sponsor ?? new() :
+                    snapshot.Username == current.Username ? snapshot.Sponsor : null);
         }
     }
 
