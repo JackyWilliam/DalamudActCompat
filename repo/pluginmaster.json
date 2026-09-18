@@ -19,5 +19,24 @@
   "Changelog": "更正错误发布编号为 0.4.4.0；保留皮肤系统与界面修正、战斗统计背景和团队秒伤，以及 7.56 热修解析适配。",
   "CanUnloadAsync": true,
   "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
+},
+{
+  "Author": "raynording",
+  "Name": "DACT 修复工具",
+  "InternalName": "DalamudActCompatRepair",
+  "AssemblyVersion": "0.1.0.0",
+  "Description": "独立卫月插件。停用 DACT 主插件后，将错误编号 4.4.0.0 备份并修复为 0.4.4.0；保留配置，完成后重启一次游戏。",
+  "Punchline": "在游戏内修复 DACT 版本号错误，保留配置。",
+  "RepoUrl": "https://github.com/JackyWilliam/DalamudActCompat",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "IsHide": false,
+  "IsTestingExclusive": false,
+  "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/repair-v0.1.0.0/DalamudActCompatRepair-0.1.0.0.zip",
+  "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/repair-v0.1.0.0/DalamudActCompatRepair-0.1.0.0.zip",
+  "LastUpdate": 1789711112705,
+  "Changelog": "首次发布独立卫月修复插件：内置已验证核心包，备份与失败回滚，保留账号、皮肤和触发器配置。",
+  "CanUnloadAsync": true,
+  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 }
 ]

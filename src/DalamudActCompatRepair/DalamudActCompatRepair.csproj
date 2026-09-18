@@ -1,0 +1,19 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <AssemblyName>DalamudActCompatRepair</AssemblyName>
+    <Version>0.1.0.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Name>DACT 修复工具</Name>
+    <Author>raynording</Author>
+    <Punchline>将错误编号 4.4.0.0 修复为 0.4.4.0，保留配置。</Punchline>
+    <Description>独立卫月修复插件。先停用 DACT，再在此插件点击修复；自动备份旧安装并安装内置的正式版，完成后重启一次游戏。</Description>
+    <RepoUrl>https://github.com/JackyWilliam/DalamudActCompat</RepoUrl>
+    <MinimumDalamudVersion>15.0.0</MinimumDalamudVersion>
+    <CanUnloadAsync>true</CanUnloadAsync>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(RepairCorePackage)" LogicalName="DACT.Core.zip" Condition="'$(RepairCorePackage)' != ''" />
+    <InternalsVisibleTo Include="DalamudActCompatRepair.SmokeTests" />
+  </ItemGroup>
+</Project>

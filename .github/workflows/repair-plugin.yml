@@ -1,0 +1,39 @@
+name: Repair Plugin
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths: ["src/DalamudActCompatRepair/**", "tests/DalamudActCompatRepair.SmokeTests/**", "tools/DACT.Repair/**", ".github/workflows/repair-plugin.yml"]
+  pull_request:
+    paths: ["src/DalamudActCompatRepair/**", "tests/DalamudActCompatRepair.SmokeTests/**", "tools/DACT.Repair/**", ".github/workflows/repair-plugin.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - name: Download API 15 reference assemblies
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'dalamud.zip'
+          $refs = Join-Path $env:RUNNER_TEMP 'dalamud'
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/stg/latest.zip -OutFile $zip
+          Expand-Archive -LiteralPath $zip -DestinationPath $refs
+          "DALAMUD_HOME=$refs" >> $env:GITHUB_ENV
+      - name: Build and validate independent repair plugin
+        shell: pwsh
+        run: ./tools/DACT.Repair/build.ps1
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dact-repair-plugin-${{ github.run_id }}
+          path: |
+            artifacts/repair-plugin/DalamudActCompatRepair-0.1.0.0.zip
+            artifacts/repair-plugin/DalamudActCompatRepair-0.1.0.0.sha256.txt
+          if-no-files-found: error
