@@ -1709,7 +1709,10 @@ static void ValidatePluginRepositoryMetadata()
     var projectRoot = FindProjectRoot();
     using var document = JsonDocument.Parse(File.ReadAllText(
         Path.Combine(projectRoot, "repo", "pluginmaster.json")));
-    var entry = document.RootElement.EnumerateArray().Single();
+    // The repository also contains the independent repair utility. Validate the
+    // main plugin by identity rather than assuming it is the only entry.
+    var entry = document.RootElement.EnumerateArray().Single(item =>
+        item.GetProperty("InternalName").GetString() == "DalamudActCompat");
     var assemblyVersion = typeof(ControlCenterWindow).Assembly
         .GetName()
         .Version!
