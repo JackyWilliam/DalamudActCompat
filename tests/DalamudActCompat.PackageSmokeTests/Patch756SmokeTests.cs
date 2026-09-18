@@ -13,29 +13,29 @@ internal static class Patch756SmokeTests
 {
     public static void Run()
     {
-        const string version = "2026.09.01.0000.0000";
-        const int tableSize = 193 * sizeof(int);
+        const string version = "2026.09.15.0000.0000";
+        const int tableSize = 165 * sizeof(int);
         const uint regionalOffset = 0x123400;
         var bundled = VersionConstants.ForGameVersion(version);
         var expected = new Dictionary<string, int>
         {
-            ["PlayerSpawn"] = 0x3B2, ["NpcSpawn"] = 0x1C4, ["NpcSpawn2"] = 0x26A,
-            ["ActionEffect01"] = 0x2EC, ["ActionEffect08"] = 0xFD,
-            ["ActionEffect16"] = 0x357, ["ActionEffect24"] = 0xB4, ["ActionEffect32"] = 0x14E,
-            ["StatusEffectList"] = 0x248, ["StatusEffectList3"] = 0x20D,
-            ["Examine"] = 0x69, ["UpdateGearset"] = 0x374, ["UpdateParty"] = 0x1DF,
-            ["ActorControl"] = 0x38C, ["ActorCast"] = 0x10A,
-            ["UnknownEffect01"] = 0x1DB, ["UnknownEffect16"] = 0x34C,
-            ["ActionEffect02"] = 0x356, ["ActionEffect04"] = 0x371,
+            ["PlayerSpawn"] = 0x1C4, ["NpcSpawn"] = 0x20C, ["NpcSpawn2"] = 0x1BD,
+            ["ActionEffect01"] = 0x313, ["ActionEffect08"] = 0x21C,
+            ["ActionEffect16"] = 0x8C, ["ActionEffect24"] = 0x30A, ["ActionEffect32"] = 0x3AA,
+            ["StatusEffectList"] = 0x83, ["StatusEffectList3"] = 0x3DC,
+            ["Examine"] = 0x1F2, ["UpdateGearset"] = 0x10F, ["UpdateParty"] = 0x191,
+            ["ActorControl"] = 0x25F, ["ActorCast"] = 0x162,
+            ["UnknownEffect01"] = 0x3BD, ["UnknownEffect16"] = 0x27D,
+            ["ActionEffect02"] = 0x30B, ["ActionEffect04"] = 0x292,
         };
-        Require(bundled.OpcodeKeyTableSize == tableSize && bundled.OpcodeKeyTableOffset == 0x2312040 &&
-                bundled.InitZoneOpcode == 0x3A1 && bundled.UnknownObfuscationInitOpcode == 0x66 &&
-                bundled.ObfuscationEnabledMode == 12 &&
+        Require(bundled.OpcodeKeyTableSize == tableSize && bundled.OpcodeKeyTableOffset == 0x2312740 &&
+                bundled.InitZoneOpcode == 0x32B && bundled.UnknownObfuscationInitOpcode == 0x2A4 &&
+                bundled.ObfuscationEnabledMode == 176 &&
                 expected.Count == bundled.ObfuscatedOpcodes.Count &&
                 expected.All(pair => bundled.ObfuscatedOpcodes[pair.Key] == pair.Value),
-            "Unscrambler 7.56 profile differs from the published constants.");
+            "Unscrambler 7.56h profile differs from the published constants.");
         Require(UnscramblerFactory.ForGameVersion(version) is Unscrambler73,
-            "The official 7.56 factory cannot initialize its embedded resources.");
+            "The official 7.56h factory cannot initialize its embedded resources.");
 
         var hookType = typeof(ZoneDownHookManager);
         var bundledPolicy = hookType.GetMethod("CanUseBundledVersionConstants", BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -44,12 +44,12 @@ internal static class Patch756SmokeTests
         Require(bundledPolicy.Invoke(null, [GameRegion.Global, version]) is true &&
                 bundledPolicy.Invoke(null, [GameRegion.Chinese, version]) is false &&
                 regionalPolicy.Invoke(null, [GameRegion.Chinese, version, tableSize]) is true,
-            "7.56 selected a fallback or reused Global memory addresses on CN.");
-        foreach (var size in new[] { tableSize - 4, tableSize + 4, 89 * 4 })
+            "7.56h selected a fallback or reused Global memory addresses on CN.");
+        foreach (var size in new[] { tableSize - 4, tableSize + 4, 193 * 4, 89 * 4 })
             Require(regionalPolicy.Invoke(null, [GameRegion.Chinese, version, size]) is false,
-                "CN 7.56 accepted a mismatched key table, including the old 7.55 size.");
+                "CN 7.56h accepted a mismatched key table, including the old 7.55 size.");
         Require(regionalPolicy.Invoke(null, [GameRegion.Chinese, "2099.01.01.0000.0000", tableSize]) is false,
-            "An unknown patch was treated as verified 7.56.");
+            "An unknown patch was treated as verified 7.56h.");
 
         // A made-up regional RVA proves the factory uses the scanned address rather than
         // accidentally borrowing the Global executable's address from the NuGet resource.
@@ -59,7 +59,7 @@ internal static class Patch756SmokeTests
                 regional.TableOffsets.Length == 0 && regional.MidTableOffset == 0 && regional.DayTableOffset == 0 &&
                 expected.Count == regional.ObfuscatedOpcodes.Count &&
                 expected.All(pair => regional.ObfuscatedOpcodes[pair.Key] == pair.Value),
-            "CN 7.56 runtime constants lost opcodes or reused Global lookup tables.");
+            "CN 7.56h runtime constants lost opcodes or reused Global lookup tables.");
 
         var mapping = new Dictionary<string, string>
         {
@@ -72,22 +72,22 @@ internal static class Patch756SmokeTests
         var previousRegion = OpcodeManager.Instance.GameRegion;
         try
         {
-            ValidateInternationalPath(version, bundledPolicy);
+            ValidateInternationalPath(version, bundledPolicy, regional);
             foreach (var region in new[] { GameRegion.Global, GameRegion.Chinese, GameRegion.Korean })
             {
                 OpcodeManager.Instance.SetRegion(region);
                 Require(mapping.All(pair => regional.ObfuscatedOpcodes[pair.Key] == OpcodeManager.Instance.CurrentOpcodes[pair.Value]),
-                    $"Unscrambler and Machina disagree on {region} 7.56 packets.");
+                    $"Unscrambler and Machina disagree on {region} 7.56h packets.");
             }
         }
         finally
         {
             OpcodeManager.Instance.SetRegion(previousRegion);
         }
-        Console.WriteLine("7.56 official resources, CN runtime keys, region/opcode alignment and fallback boundaries passed.");
+        Console.WriteLine("7.56h official resources, CN runtime keys, region/opcode alignment and fallback boundaries passed.");
     }
 
-    private static void ValidateInternationalPath(string version, MethodInfo bundledPolicy)
+    private static void ValidateInternationalPath(string version, MethodInfo bundledPolicy, VersionConstants regional)
     {
         foreach (var languageName in new[] { "Japanese", "English", "German", "French", "ChineseSimplified" })
         {
@@ -100,29 +100,34 @@ internal static class Patch756SmokeTests
                     selection.EffectiveRegion == HostGameRegion.Chinese);
                 Require(OpcodeManager.Instance.GameRegion == GameRegion.Global &&
                         bundledPolicy.Invoke(null, [OpcodeManager.Instance.GameRegion, version]) is true,
-                    "An international client, including translated clients, missed the Global 7.56 profile.");
+                    "An international client, including translated clients, missed the Global 7.56h profile.");
             }
         }
 
-        var unscrambler = UnscramblerFactory.ForGameVersion(version);
+        var chineseDecoder = new Unscrambler73();
+        chineseDecoder.Initialize(regional);
         var keys = new byte[] { 7, 11, 19 };
-        var table = Enumerable.Range(0, 193).Select(index => 0x1234 + index * 17).ToArray();
+        var table = Enumerable.Range(0, 165).Select(index => 0x1234 + index * 17).ToArray();
         // Encode known fields independently in synthetic IPC packets. Compare the whole
         // decoded packet so opcode selection, table indexing and collateral writes are checked.
-        foreach (var (opcode, fieldOffset) in new[] { ((ushort)0x10A, 20), ((ushort)0x2EC, 24) })
+        // Include all four tank invulnerability action IDs from the reported missing
+        // callouts, using both regional profiles. This checks the input to Ability matching.
+        foreach (var unscrambler in new[] { UnscramblerFactory.ForGameVersion(version), chineseDecoder })
+        foreach (var actionId in new uint[] { 0x1E, 0x2B, 0xE36, 0x3F18, 0x123456 })
+        foreach (var (opcode, fieldOffset) in new[] { ((ushort)0x162, 20), ((ushort)0x313, 24) })
         {
             var expectedPacket = Enumerable.Repeat((byte)0xA5, 128).ToArray();
             BinaryPrimitives.WriteUInt16LittleEndian(expectedPacket.AsSpan(2), opcode);
-            BinaryPrimitives.WriteUInt32LittleEndian(expectedPacket.AsSpan(fieldOffset), 0x123456);
-            if (opcode == 0x2EC)
+            BinaryPrimitives.WriteUInt32LittleEndian(expectedPacket.AsSpan(fieldOffset), actionId);
+            if (opcode == 0x313)
                 for (var index = 0; index < 8; index++)
                     BinaryPrimitives.WriteUInt16LittleEndian(expectedPacket.AsSpan(64 + index * 8), (ushort)(1234 + index * 2395));
 
             var encoded = (byte[])expectedPacket.Clone();
             var baseKey = keys[opcode % 3];
             var opcodeKey = table[(opcode + baseKey) % table.Length];
-            BinaryPrimitives.WriteUInt32LittleEndian(encoded.AsSpan(fieldOffset), 0x123456U + baseKey);
-            if (opcode == 0x2EC)
+            BinaryPrimitives.WriteUInt32LittleEndian(encoded.AsSpan(fieldOffset), actionId + baseKey);
+            if (opcode == 0x313)
                 for (var index = 0; index < 8; index++)
                 {
                     var field = encoded.AsSpan(64 + index * 8);
@@ -131,9 +136,9 @@ internal static class Patch756SmokeTests
                 }
             unscrambler.Unscramble(encoded, keys[0], keys[1], keys[2], table);
             Require(encoded.AsSpan().SequenceEqual(expectedPacket),
-                $"Global 7.56 opcode {opcode:X} did not restore the skill/damage fields exactly.");
+                $"7.56h opcode {opcode:X} did not restore action {actionId:X}/damage fields exactly.");
         }
-        Console.WriteLine("Global 7.56: native-language/translation routing and synthetic ActorCast/ActionEffect decoding passed.");
+        Console.WriteLine("7.56h CN/Global: language routing, four tank invulnerability IDs and synthetic ActorCast/ActionEffect decoding passed.");
     }
 
     private static void Require(bool condition, string message)

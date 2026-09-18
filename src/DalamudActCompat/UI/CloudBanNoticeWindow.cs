@@ -8,9 +8,9 @@ namespace DalamudActCompat.UI;
 
 internal sealed class CloudBanNoticeWindow : Window
 {
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
     private static readonly Vector4 Red = new(0.96f, 0.42f, 0.38f, 1);
 
     private readonly UiText text;
@@ -71,8 +71,9 @@ internal sealed class CloudBanNoticeWindow : Window
 
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         outerFrameStylePushed = true;
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -138,7 +139,7 @@ internal sealed class CloudBanNoticeWindow : Window
             const float buttonWidth = 132;
             var cursorX = ImGui.GetCursorPosX();
             ImGui.SetCursorPosX(Math.Max(cursorX, cursorX + ImGui.GetContentRegionAvail().X - buttonWidth));
-            if (ImGui.Button(text.Get("确认", "Confirm"), new Vector2(buttonWidth, 32)))
+            if (DactTheme.Button(text.Get("确认", "Confirm"), new Vector2(buttonWidth, 32)))
             {
                 IsOpen = false;
             }
@@ -151,7 +152,7 @@ internal sealed class CloudBanNoticeWindow : Window
 
     private void DrawBannedContent(CloudBanNotice current)
     {
-        ImGui.TextColored(Red, IsDeviceBan(current)
+        DactTheme.TextColored(Red, IsDeviceBan(current)
             ? text.Get(
                 "您的账号及关联机器已经被封禁",
                 "Your account and associated devices have been banned")
@@ -182,7 +183,7 @@ internal sealed class CloudBanNoticeWindow : Window
 
     private void DrawLiftedContent(CloudBanNotice? current)
     {
-        ImGui.TextColored(IceBlue, IsDeviceBan(current)
+        DactTheme.TextColored(IceBlue, IsDeviceBan(current)
             ? text.Get(
                 "您的账号及关联机器已经解除封禁",
                 "Your account and associated devices are no longer banned")
@@ -229,13 +230,13 @@ internal sealed class CloudBanNoticeWindow : Window
 
     private static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));

@@ -166,32 +166,33 @@ public static partial class LegacyAssemblyRewriter
                              "Matcha opcode enum is missing.");
         var verified = new Dictionary<ushort, string>
         {
-            [0x038C] = "ActorControl",
-            [0x0258] = "ActorControlSelf",
-            [0x0393] = "CEDirector",
-            [0x02F8] = "CompanyAirshipStatus",
-            [0x0222] = "CompanySubmersibleStatus",
-            [0x0080] = "ContentFinderNotifyPop",
-            [0x0335] = "ResumeEventScene32",
-            [0x01F1] = "EventPlay",
-            [0x00F2] = "EventStart",
-            [0x0069] = "Examine",
-            [0x03A1] = "InitZone",
-            [0x024E] = "InventoryTransaction",
-            [0x0073] = "ItemInfo",
-            [0x027B] = "MarketBoardItemListing",
-            [0x0324] = "MarketBoardItemListingCount",
-            [0x02FE] = "MarketBoardItemListingHistory",
-            [0x825D] = "MarketBoardRequestItemListingInfo",
-            [0x01C4] = "NpcSpawn",
-            [0x01DD] = "PlayerSetup",
-            [0x03B2] = "PlayerSpawn",
-            [0x01A9] = "SubmarineStatusList",
+            [0x025F] = "ActorControl",
+            [0x0204] = "ActorControlSelf",
+            [0x031E] = "CEDirector",
+            [0x006C] = "CompanyAirshipStatus",
+            [0x01EC] = "CompanySubmersibleStatus",
+            [0x0333] = "ContentFinderNotifyPop",
+            // Matcha uses this legacy name for MiniCactpotInit, not EventPlay32.
+            [0x024D] = "ResumeEventScene32",
+            [0x01FD] = "EventPlay",
+            [0x02E1] = "EventStart",
+            [0x01F2] = "Examine",
+            [0x032B] = "InitZone",
+            [0x023A] = "InventoryTransaction",
+            [0x0084] = "ItemInfo",
+            [0x034D] = "MarketBoardItemListing",
+            [0x00C0] = "MarketBoardItemListingCount",
+            [0x0241] = "MarketBoardItemListingHistory",
+            [0x8320] = "MarketBoardRequestItemListingInfo",
+            [0x020C] = "NpcSpawn",
+            [0x0093] = "PlayerSetup",
+            [0x01C4] = "PlayerSpawn",
+            [0x038A] = "SubmarineStatusList",
         };
 
-        // FFXIVOpcodes 040fafa publishes matching CN/Global 7.56 tables. The bundled
+        // FFXIVOpcodes 7.56h publishes matching CN/Global tables. The bundled
         // Matcha tables predate this patch; update both without changing its public ABI.
-        // FateInfo and WorldVisitQueue are not published in the verified 7.56 table.
+        // FateInfo and WorldVisitQueue are not published in the verified 7.56h table.
         // Omitting them is safer than retaining stale keys that now identify other packets.
         foreach (var region in new[] { "Global", "China" })
         {

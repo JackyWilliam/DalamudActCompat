@@ -11,7 +11,7 @@ internal static class GameRegionSelector
         GameRegionSelection selection,
         Action<GameRegionMode> setMode)
     {
-        if (ImGui.BeginCombo(
+        if (DactTheme.BeginCombo(
                 text.Get("游戏区域", "Game region"),
                 FormatMode(text, selection.Mode, selection.EffectiveRegion)))
         {

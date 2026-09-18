@@ -76,7 +76,7 @@ internal sealed partial class FriendsUiManager
                     !entry.Message.Sender.IsOfficial && state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.IsAdmin == true,
                     origin, textWidth, entry.Message.Sender.IsOfficial ? Gold : Blue);
                 origin.Y += lineHeight + gap;
-                list.AddText(ImGui.GetFont(), ImGui.GetFontSize(), origin, ImGui.GetColorU32(Vector4.One), layout.Body, textWidth);
+                list.AddText(ImGui.GetFont(), ImGui.GetFontSize(), origin, ImGui.GetColorU32(DactTheme.Palette.Text), layout.Body, textWidth);
                 if (FriendsIncomingNotifications.Replies(entry.Message).Count > 0)
                 {
                     var status = NotificationReplyStatus(entry, state);
@@ -93,7 +93,7 @@ internal sealed partial class FriendsUiManager
             if (ImGui.Begin(NotificationPrefix + id + "-expand", NotificationFlags))
             {
                 ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
-                if (ImGui.Button("全部展开", new(expandWidth, buttonHeight)) && controller.Snapshot.Session == state.Session)
+                if (DactTheme.Button("全部展开", new(expandWidth, buttonHeight)) && controller.Snapshot.Session == state.Session)
                 { OpenChat(entry.Message.ConversationId); entry.ExpiresAt = now; }
             }
             ImGui.End(); ImGui.PopStyleVar(3);
@@ -137,7 +137,7 @@ internal sealed partial class FriendsUiManager
             // New no-focus windows may be inserted below an existing body. Keep
             // the actual controls above its translucent fill without focusing them.
             ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
-            ImGui.BeginDisabled(!enabled); clicked = ImGui.Button(label, size); ImGui.EndDisabled();
+            ImGui.BeginDisabled(!enabled); clicked = DactTheme.Button(label, size); ImGui.EndDisabled();
         }
         ImGui.End(); return clicked;
     }

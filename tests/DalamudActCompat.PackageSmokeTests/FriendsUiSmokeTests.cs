@@ -269,6 +269,7 @@ internal static partial class FriendsUiSmokeTests
             io.Fonts.AddFontFromFileTTF(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "msyh.ttc"), 17, default, ranges);
             Check(io.Fonts.Build(), "Native test font atlas failed.");
             var raster = new NativeUiRasterizer(io.Fonts);
+            SkinSmokeTests.LoadGameTextures(raster);
             AdministratorSmokeTests.LoadIcon(raster);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             var anchor = new Vector2(60, 120); var mainSize = new Vector2(920, 720);
@@ -276,17 +277,18 @@ internal static partial class FriendsUiSmokeTests
             void Frame(bool focusGame = false)
             {
                 ImGui.NewFrame();
+                using var appearance = DactTheme.PushFrame();
                 ImGui.SetNextWindowPos(new(10, 10)); ImGui.SetNextWindowSize(new(500, 80));
                 if (focusGame) ImGui.SetNextWindowFocus();
                 ImGui.Begin("isolated-game-input"); ImGui.TextUnformatted("game controls"); ImGui.End();
                 ImGui.SetNextWindowPos(anchor); ImGui.SetNextWindowSize(mainSize);
                 ImGui.PushStyleColor(ImGuiCol.WindowBg, ControlCenterWindow.Navy);
-                ImGui.Begin("isolated-dact-header", ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoDecoration);
+                ImGui.Begin("isolated-dact-header", DactTheme.WindowFlags(ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoDecoration));
                 ui.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), 1, ImGuiP.GetCurrentWindow().ID);
                 BrandedWindowChrome.Draw(drag, texture, "主页", "运行中", Vector4.One, "0.4.0.4", "friend-native",
                     helpAction: () => { }, statusAction: () => { }, statusLabel: "● 云同步", friendsAction: () => ui.ToggleDrawer(),
                     onlineFriends: controller.Snapshot.Friends?.OnlineCount ?? 0, friendsUnread: controller.Snapshot.HasUnreadMessages);
-                ImGui.SetCursorPos(new(28, 110)); ImGui.TextColored(new Vector4(.42f, .78f, .96f, 1), "DACT · 原生界面验证");
+                ImGui.SetCursorPos(new(28, 110)); DactTheme.TextColored(new Vector4(.42f, .78f, .96f, 1), "DACT · 原生界面验证");
                 ImGui.SetCursorPos(new(28, 146)); ImGui.TextUnformatted("主窗口占位内容；右侧好友抽屉、图标和聊天使用实际插件代码绘制。");
                 ImGui.End(); ImGui.PopStyleColor();
                 ui.Draw(true, true); ImGui.Render();
@@ -308,6 +310,25 @@ internal static partial class FriendsUiSmokeTests
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-opening.png"));
             for (var i = 0; i < 10; i++) Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
+            if (output is not null && DactTheme.GameAssets is not null)
+            {
+                // Capture the real friend drawer with synthetic users; no live
+                // account, messages or game input participate in this preview.
+                DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+                io.DisplaySize = new(1440, 920);
+                Frame(); Frame();
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-eorzea.png"));
+                var lightLayout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, 1);
+                var presenceButton = lightLayout.Position + new Vector2(40, 74);
+                io.AddMousePosEvent(presenceButton.X, presenceButton.Y); Frame();
+                io.AddMouseButtonEvent(0, true); Frame(); io.AddMouseButtonEvent(0, false); Frame(); Frame();
+                Check(context.OpenPopupStack.Size > 0, "Light presence menu did not open.");
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-presence-metal.png"));
+                io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+                DactTheme.SetCurrent(new(), false, 0);
+                io.DisplaySize = new(1920, 1080);
+                Frame(true); Frame();
+            }
             Check(Focus() == "isolated-game-input", "Opening a no-focus drawer stole game focus.");
             void Click(Vector2 point)
             {
@@ -417,7 +438,7 @@ internal static partial class FriendsUiSmokeTests
                 ui.Hide(); NotificationFrames(api, controller, raster, output);
             }
         }
-        finally { ImGui.DestroyContext(context); }
+        finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
     }
     private static void BubbleBounds(NativeUiRasterizer raster, string? output)
     {

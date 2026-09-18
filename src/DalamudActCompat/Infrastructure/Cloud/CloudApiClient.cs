@@ -52,7 +52,8 @@ internal sealed record CloudInvitationSummary(
     bool IsAdmin = false,
     string? AdminGrantId = null,
     bool AdminNoticePending = false,
-    int? QuotaUsed = null)
+    int? QuotaUsed = null,
+    CloudSponsorStatus? Sponsor = null)
 {
     public CloudAdministratorStatus Administrator => new(IsAdmin, AdminGrantId, AdminNoticePending);
     public bool CanGenerate => IsAdmin || Remaining > 0;
@@ -62,6 +63,9 @@ internal sealed record CloudAdministratorStatus(
     bool IsAdmin = false,
     string? AdminGrantId = null,
     bool AdminNoticePending = false);
+
+internal sealed record CloudSponsorStatus(int Tier = 0);
+internal sealed record CloudAccountStatus(CloudAdministratorStatus? Administrator = null, CloudSponsorStatus? Sponsor = null);
 
 internal sealed record CloudCreatedInvitation(
     string Id,
@@ -213,6 +217,9 @@ internal sealed partial class CloudApiClient : IDisposable
     }
 
     private sealed record SessionAdministratorResponse(CloudAdministratorStatus? Administrator = null);
+
+    public Task<CloudAccountStatus> GetAccountStatusAsync(string token, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudAccountStatus>(HttpMethod.Get, "api/v1/auth/me", null, token, cancellationToken);
 
     public Task<CloudAdministratorStatus> AcknowledgeAdministratorAsync(
         string token, string adminGrantId, CancellationToken cancellationToken)

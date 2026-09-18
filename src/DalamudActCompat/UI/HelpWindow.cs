@@ -21,11 +21,11 @@ public sealed class HelpWindow : Window
         Copyright,
     }
 
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
     private static readonly Vector4 Warning = new(0.96f, 0.36f, 0.34f, 1);
 
     private readonly UiText text;
@@ -73,8 +73,9 @@ public sealed class HelpWindow : Window
         headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
         outerFrameStylePushed = true;
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -207,7 +208,7 @@ public sealed class HelpWindow : Window
     private void DrawSearchBar()
     {
         ImGui.Dummy(new Vector2(0, 8));
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         // The input and button already define this toolbar; an additional child border adds visual clutter.
         if (ImGui.BeginChild(
@@ -217,9 +218,9 @@ public sealed class HelpWindow : Window
                 ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 7);
-            ImGui.PushStyleColor(ImGuiCol.FrameBg, Navy);
-            ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.09f, 0.14f, 0.20f, 1));
-            ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new Vector4(0.11f, 0.18f, 0.25f, 1));
+            DactTheme.PushStyleColor(ImGuiCol.FrameBg, Navy);
+            DactTheme.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.09f, 0.14f, 0.20f, 1));
+            DactTheme.PushStyleColor(ImGuiCol.FrameBgActive, new Vector4(0.11f, 0.18f, 0.25f, 1));
             ImGui.SetNextItemWidth(-94);
             var submitted = ImGui.InputTextWithHint(
                 "##help-search",
@@ -229,11 +230,11 @@ public sealed class HelpWindow : Window
                 ImGuiInputTextFlags.EnterReturnsTrue);
             ImGui.PopStyleColor(3);
             ImGui.SameLine();
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.29f, 0.38f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.17f, 0.38f, 0.49f, 1));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.20f, 0.44f, 0.56f, 1));
-            ImGui.PushStyleColor(ImGuiCol.Text, IceBlue);
-            submitted |= ImGui.Button("Search", new Vector2(82, 0));
+            DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.29f, 0.38f, 1));
+            DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.17f, 0.38f, 0.49f, 1));
+            DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.20f, 0.44f, 0.56f, 1));
+            DactTheme.PushStyleColor(ImGuiCol.Text, IceBlue);
+            submitted |= DactTheme.Button("Search", new Vector2(82, 0));
             ImGui.PopStyleColor(4);
             if (submitted)
             {
@@ -330,16 +331,16 @@ public sealed class HelpWindow : Window
         });
         DrawCard("help-notice-boundary", text.Get("特别提醒", "Important reminder"), 284, () =>
         {
-            ImGui.TextColored(Warning, text.Get("不要去绿玩面前跳脸。", "Do not flaunt plugins in front of players who do not use them."));
+            DactTheme.TextColored(Warning, text.Get("不要去绿玩面前跳脸。", "Do not flaunt plugins in front of players who do not use them."));
             ImGui.Spacing();
             ImGui.TextWrapped(text.Get("你自己开插件是一回事。", "Using a plugin privately is one thing."));
             ImGui.TextWrapped(text.Get("跑到别人面前：", "Going up to someone else and saying:"));
-            ImGui.TextColored(IceBlue, text.Get("“你看我这个插件多牛逼！”", "“Look how amazing my plugin is!”"));
+            DactTheme.TextColored(IceBlue, text.Get("“你看我这个插件多牛逼！”", "“Look how amazing my plugin is!”"));
             ImGui.TextWrapped(text.Get(
                 "然后把截图、悬浮窗、DPS、第三方工具全甩别人脸上，是另一回事。",
                 "Then pushing screenshots, overlays, DPS, and third-party tools in their face is another matter."));
             ImGui.Spacing();
-            ImGui.TextColored(Warning, text.Get("一经发现立刻踢出！", "If discovered, you will be removed immediately."));
+            DactTheme.TextColored(Warning, text.Get("一经发现立刻踢出！", "If discovered, you will be removed immediately."));
             ImGui.TextWrapped(text.Get("请保持最基本的边界感。", "Please maintain basic boundaries and respect for others."));
         });
     }
@@ -428,8 +429,8 @@ public sealed class HelpWindow : Window
                 "“脱战自动隐藏”只改变显示状态，不会停止解析或删除战斗数据。",
                 "Auto hide out of combat changes only visibility; it does not stop parsing or delete combat data."));
             DrawBullet(text.Get(
-                "经典榜、D/T 榜和 H 榜分别保存背景透明度，并统一作用于窗口、标题、表头、玩家行和进度条底色；横版始终没有背景，因此不提供该滑块。",
-                "Classic, D/T, and H save opacity independently and apply it to the window, header, table rows, and bar fills. Horizontal always has no background, so it has no opacity slider."));
+                "经典榜、D/T 榜和 H 榜分别保存背景颜色及不透明度；横版也支持背景颜色，默认保持透明。0 完全透明，1 完全不透明，可在页面预览中查看并保存。",
+                "Classic, Horizontal, D/T and H save background color and opacity independently. Horizontal starts transparent. Preview changes before saving; 0 is transparent and 1 is opaque."));
         });
         DrawCard("help-meter-setup", text.Get("第一次配置战斗统计", "Configuring Combat Meter for the first time"), 640, () =>
         {
@@ -443,8 +444,8 @@ public sealed class HelpWindow : Window
                 "在槽位列表中可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS、暴击%、直击%、直暴%、伤害占比%、总伤害、最高伤害和死亡。最高伤害使用紧凑宽度显示，悬停可查看完整技能名与数值；FFLogs 只有同时开启在线预估和对应槽位时才出现。",
                 "Slots independently control FFLogs, DPS, EncDPS, ExtDPS, rDPS, HPS, CRIT %, DH %, CDH %, damage %, total damage, highest single-hit action, and deaths. FFLogs appears only when both online estimates and its slot are enabled."));
             DrawBullet(text.Get(
-                "经典榜、横版和职能分栏三个模板互斥启用。职能分栏中的 D/T 与 H 各自保存标题、字号、透明度、锁定、穿透、脱战隐藏和槽位；DPS、HPS、全队汇总等内容由当前分栏自己的槽位决定，H 榜不会强制添加 DPS。24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。横版没有背景，可横向滑动并按当前榜单排序。编辑器的页面预览直接复用真实悬浮窗渲染，并支持点选、拖动排序以及保存或取消修改。只有存在未保存修改时，点击取消或右上角关闭才会询问保存并退出、不保存并退出或继续编辑；没有修改会直接关闭。",
-                "Classic, Horizontal, and Role split are mutually exclusive templates. Within Role split, D/T and H independently save the header, font size, opacity, lock, click-through, auto-hide, and slots. DPS, HPS, and team summaries are controlled by the current pane's own slots, and H never forces a DPS slot. The 24-player classic mode is fixed to job/name plus the current DPS/HPS value. Horizontal stays background-free and scrollable. Page preview reuses the runtime renderer and supports selection and drag ordering. Cancel or the top-right close button asks whether to save, discard, or keep editing only when unsaved changes exist; an unchanged editor closes immediately."));
+                "经典榜、横版和职能分栏三个模板互斥启用。职能分栏中的 D/T 与 H 各自保存标题、字号、透明度、锁定、穿透、脱战隐藏和槽位；DPS、HPS、全队汇总等内容由当前分栏自己的槽位决定，H 榜不会强制添加 DPS。24 人经典榜固定只显示职业 / 名字和当前 DPS/HPS。横版默认透明，可设置背景颜色和不透明度，可横向滑动并按当前榜单排序。编辑器的页面预览直接复用真实悬浮窗渲染，并支持点选、拖动排序以及保存或取消修改。只有存在未保存修改时，点击取消或右上角关闭才会询问保存并退出、不保存并退出或继续编辑；没有修改会直接关闭。",
+                "Classic, Horizontal, and Role split are mutually exclusive templates. Within Role split, D/T and H independently save the header, font size, opacity, lock, click-through, auto-hide, and slots. DPS, HPS, and team summaries are controlled by the current pane's own slots, and H never forces a DPS slot. The 24-player classic mode is fixed to job/name plus the current DPS/HPS value. Horizontal is transparent by default, supports custom background color and opacity, and stays scrollable. Page preview reuses the runtime renderer and supports selection and drag ordering. Cancel or the top-right close button asks whether to save, discard, or keep editing only when unsaved changes exist; an unchanged editor closes immediately."));
             DrawBullet(text.Get(
                 "经典榜收起后只保留自己并隐藏全队汇总；职能分栏会分别收起到自己所在行（找不到自己时保留首行）。空数据时也可收起，收起不会停止统计。职业 / ID 会先缩到两字省略显示，只有继续缩小窗口才出现横向滚动；悬停可查看完整名称。玩家 ID 遮盖只影响界面，不会改写战斗日志。",
                 "Collapsed Classic keeps only your row and hides the team summary. Each role-split window collapses independently to your row, or its first row when you are absent. Empty windows can also collapse, without stopping collection. Job / ID shrinks to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Player-ID masking affects only the UI and does not rewrite combat logs."));
@@ -692,7 +693,7 @@ public sealed class HelpWindow : Window
         });
         DrawCard("help-extension-safety", text.Get("权限与安全要求", "Permissions and security requirements"), 286, () =>
         {
-            ImGui.TextColored(Warning, text.Get("只安装你信任并能确认来源的 DLL、ZIP 和网页。", "Install only DLLs, ZIPs, and pages whose source you trust and can verify."));
+            DactTheme.TextColored(Warning, text.Get("只安装你信任并能确认来源的 DLL、ZIP 和网页。", "Install only DLLs, ZIPs, and pages whose source you trust and can verify."));
             ImGui.TextWrapped(text.Get(
                 "DLL 仍是桌面代码。权限清单约束兼容接口，但无法拦截 DLL 直接调用 Windows API。授权前请自行判断来源和风险；分享日志前请检查其中的角色名、服务器名和本地路径。",
                 "A DLL remains desktop code. The permission list governs compatibility APIs but cannot intercept direct Windows API calls. Judge the source and risk before authorization, and inspect character names, server names, and local paths before sharing logs."));
@@ -703,7 +704,7 @@ public sealed class HelpWindow : Window
             ImGui.TextWrapped(text.Get(
                 "“同意完整权限”表示允许该扩展声明的全部能力，不等于 DACT 已证明第三方代码绝对安全。来源不明时应保持安全模式，只按需要逐项开放。",
                 "Accept full permissions allows every capability declared by that extension; it does not mean DACT has proven the third-party code absolutely safe. Keep safe mode for unknown sources and grant only what is needed."));
-            if (ImGui.Button(text.Get("查看内置第三方 DLL 的作者与来源", "View bundled DLL authors and sources")))
+            if (DactTheme.Button(text.Get("查看内置第三方 DLL 的作者与来源", "View bundled DLL authors and sources")))
             {
                 openThirdPartyNotice();
             }
@@ -817,12 +818,12 @@ public sealed class HelpWindow : Window
                 "战斗统计缺失、数值明显异常或 FFLogs 对不上：除诊断日志外，保留对应时间的原始 Network 日志。发送前自行检查角色名、服务器名和本地路径。",
                 "For missing combat data, clearly incorrect values, or FFLogs discrepancies, keep the matching raw Network log in addition to diagnostics. Review character names, worlds, and local paths before sharing."));
         });
-        if (ImGui.Button(text.Get("打开运行状态", "Open runtime status"), new Vector2(170, 34)))
+        if (DactTheme.Button(text.Get("打开运行状态", "Open runtime status"), new Vector2(170, 34)))
         {
             openRuntimeStatus();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("打开诊断日志目录", "Open diagnostic logs"), new Vector2(190, 34)))
+        if (DactTheme.Button(text.Get("打开诊断日志目录", "Open diagnostic logs"), new Vector2(190, 34)))
         {
             openLogDirectory();
         }
@@ -890,7 +891,7 @@ public sealed class HelpWindow : Window
             text.Get("本页只声明 Dalamud ACT Compat 自身的版权与许可。", "This page states copyright and licensing only for Dalamud ACT Compat itself."));
         DrawCard("help-copyright-project", "Dalamud ACT Compat", 260, () =>
         {
-            ImGui.TextColored(IceBlue, "Copyright © 2026 DalamudActCompat contributors.");
+            DactTheme.TextColored(IceBlue, "Copyright © 2026 DalamudActCompat contributors.");
             ImGui.Spacing();
             ImGui.TextWrapped(text.Get(
                 "Dalamud ACT Compat 自有源代码以 GNU General Public License version 3（GPL-3.0）发布。你可以在许可证条款下运行、研究、修改与再分发本项目。",
@@ -904,12 +905,12 @@ public sealed class HelpWindow : Window
                 "本声明不主张任何第三方插件、依赖、网页悬浮窗、游戏内容、商标或素材的版权。",
                 "This notice claims no copyright over third-party plugins, dependencies, web overlays, game content, trademarks, or assets."));
         });
-        if (ImGui.Button(text.Get("查看项目源代码", "View project source"), new Vector2(170, 34)))
+        if (DactTheme.Button(text.Get("查看项目源代码", "View project source"), new Vector2(170, 34)))
         {
             OpenUrl("https://github.com/JackyWilliam/DalamudActCompat");
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("查看 GPL-3.0 许可证", "View GPL-3.0 license"), new Vector2(190, 34)))
+        if (DactTheme.Button(text.Get("查看 GPL-3.0 许可证", "View GPL-3.0 license"), new Vector2(190, 34)))
         {
             OpenUrl("https://github.com/JackyWilliam/DalamudActCompat/blob/main/LICENSE.md");
         }
@@ -980,7 +981,7 @@ public sealed class HelpWindow : Window
 
     private void DrawPageHeader(string title, string description)
     {
-        ImGui.TextColored(Gold, title);
+        DactTheme.TextColored(Gold, title);
         ImGui.TextDisabled(description);
         ImGui.Spacing();
     }
@@ -995,7 +996,7 @@ public sealed class HelpWindow : Window
 
         if (BrandedWindowChrome.BeginGoldCard(id, height, allowScrolling: false))
         {
-            ImGui.TextColored(IceBlue, title);
+            DactTheme.TextColored(IceBlue, title);
             ImGui.Separator();
             drawContent();
         }
@@ -1019,12 +1020,12 @@ public sealed class HelpWindow : Window
 
     private void DrawCommand(string id, string command, string description)
     {
-        if (ImGui.SmallButton($"{text.Get("复制", "Copy")}##help-command-{id}"))
+        if (DactTheme.SmallButton($"{text.Get("复制", "Copy")}##help-command-{id}"))
         {
             ImGui.SetClipboardText(command);
         }
         ImGui.SameLine();
-        ImGui.TextColored(IceBlue, command);
+        DactTheme.TextColored(IceBlue, command);
         ImGui.Indent();
         ImGui.TextWrapped(description);
         ImGui.Unindent();
@@ -1048,17 +1049,17 @@ public sealed class HelpWindow : Window
 
     private static void PushTheme()
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.25f, 0.34f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.24f, 0.30f, 0.37f, 1));
-        ImGui.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.22f, 0.25f, 0.28f, 1));
-        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
+        DactTheme.PushStyleColor(ImGuiCol.FrameBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.24f, 0.30f, 0.37f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
+        DactTheme.PushStyleColor(ImGuiCol.Header, new Vector4(0.22f, 0.25f, 0.28f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.HeaderHovered, NavyHover);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));

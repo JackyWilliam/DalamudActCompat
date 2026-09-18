@@ -51,6 +51,18 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    TeamDpsSmokeTests.Run();
+    if (args.Contains("--skins-api-only", StringComparer.Ordinal))
+    {
+        await SkinSmokeTests.ApiAsync(testRoot);
+        return 0;
+    }
+    if (args.Contains("--skins-only", StringComparer.Ordinal))
+    {
+        SkinSmokeTests.Run(Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
+        return 0;
+    }
+    SkinSmokeTests.Run();
     if (args.Contains("--display-options-only", StringComparer.Ordinal))
     {
         await DisplayOptionsSmokeTests.RunAsync();
@@ -550,7 +562,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 16 &&
+        configuration.Version == 17 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -1702,8 +1714,17 @@ static void ValidatePluginRepositoryMetadata()
         .GetName()
         .Version!
         .ToString(4);
-    var expectedDownloadSuffix = $"/v{assemblyVersion}/DalamudActCompat-core.zip";
+    // Release tags retain the user-facing three/four-part version; CLR assembly
+    // versions always have four parts, so v4.4.0 must not become v4.4.0.0 here.
+    var project = System.Xml.Linq.XDocument.Load(Path.Combine(
+        projectRoot, "src", "DalamudActCompat", "DalamudActCompat.csproj"));
+    var releaseVersion = project.Descendants("Version").Single().Value;
+    var normalizedVersion = releaseVersion.Split('.').Length == 3
+        ? releaseVersion + ".0"
+        : releaseVersion;
+    var expectedDownloadSuffix = $"/v{releaseVersion}/DalamudActCompat-core.zip";
     Assert(
+        normalizedVersion == assemblyVersion &&
         entry.GetProperty("AssemblyVersion").GetString() == assemblyVersion &&
         entry.GetProperty("DownloadLinkInstall").GetString() is { } installUrl &&
         installUrl.EndsWith(expectedDownloadSuffix, StringComparison.Ordinal) &&
@@ -2129,7 +2150,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 16 &&
+        legacyConfiguration.Version == 17 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -2159,7 +2180,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 16 &&
+        parserMigration.Version == 17 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -2173,7 +2194,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 16 &&
+        newConfiguration.Version == 17 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -2212,7 +2233,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousHorizontalUser.ApplyMigrations() &&
-        previousHorizontalUser.Version == 16 &&
+        previousHorizontalUser.Version == 17 &&
         !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
@@ -2237,7 +2258,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousCompositeIdentityUser.ApplyMigrations() &&
-        previousCompositeIdentityUser.Version == 16 &&
+        previousCompositeIdentityUser.Version == 17 &&
         previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
         previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
         !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
@@ -2266,7 +2287,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousOpacityUser.ApplyMigrations() &&
-        previousOpacityUser.Version == 16 &&
+        previousOpacityUser.Version == 17 &&
         Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         previousOpacityUser.Meter.RoleSplitDamageCompact &&
@@ -2298,7 +2319,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousSharedRoleUser.ApplyMigrations() &&
-        previousSharedRoleUser.Version == 16 &&
+        previousSharedRoleUser.Version == 17 &&
         previousSharedRoleUser.Meter.RoleSplitDamageSlots.Select(static slot =>
             (slot.Metric, slot.Visible)).SequenceEqual(
                 previousSharedRoleUser.Meter.RoleSplitHealerSlots.Select(static slot =>
@@ -2333,7 +2354,7 @@ static void ValidateMeterRows()
     previousSharedRoleAppearance.Meter.RoleSplitWindow.SortMode = MeterSortMode.Hps;
     Assert(
         previousSharedRoleAppearance.ApplyMigrations() &&
-        previousSharedRoleAppearance.Version == 16 &&
+        previousSharedRoleAppearance.Version == 17 &&
         previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsEnabled &&
         previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsEnabled &&
         previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
@@ -2363,7 +2384,7 @@ static void ValidateMeterRows()
         Newtonsoft.Json.JsonConvert.SerializeObject(previousSharedRoleAppearance));
     Assert(
         restoredRoleAppearance is not null &&
-        restoredRoleAppearance.Version == 16 &&
+        restoredRoleAppearance.Version == 17 &&
         restoredRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
         !restoredRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
         !restoredRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
@@ -2426,7 +2447,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 16 &&
+        previousDebugConfiguration.Version == 17 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -2438,7 +2459,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 16 &&
+        previousV6Configuration.Version == 17 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -2476,7 +2497,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 16 &&
+        previousGenericPluginUser.Version == 17 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -2488,7 +2509,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 16 &&
+        previousEdpsUser.Version == 17 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -2504,7 +2525,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 16 &&
+        previousCustomMetricUser.Version == 17 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2533,7 +2554,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 16 &&
+        previousTimelineUser.Version == 17 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2622,7 +2643,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 16 &&
+        previousV5CactbotUser.Version == 17 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -3352,8 +3373,8 @@ static void ValidateIndependentMeterWindows()
         typeof(HorizontalMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         typeof(RoleSplitMeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         typeof(MeterWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
-        horizontalSource.Contains("ImGui.SetNextWindowBgAlpha(0)", StringComparison.Ordinal) &&
-        horizontalSource.Contains("ImGuiCol.WindowBg, Vector4.Zero", StringComparison.Ordinal) &&
+        horizontalSource.Contains("NormalizeBackgroundOpacity(Profile.BackgroundOpacity)", StringComparison.Ordinal) &&
+        horizontalSource.Contains("ImGuiCol.WindowBg, MeterBackground.Color(Profile)", StringComparison.Ordinal) &&
         horizontalSource.Contains("ImGuiCol.ChildBg, Vector4.Zero", StringComparison.Ordinal) &&
         !horizontalSource.Contains("AddRectFilled", StringComparison.Ordinal) &&
         horizontalSource.Contains("scrollOffset", StringComparison.Ordinal) &&
@@ -3361,7 +3382,7 @@ static void ValidateIndependentMeterWindows()
         horizontalSource.Contains("Flags |= ImGuiWindowFlags.NoResize", StringComparison.Ordinal) &&
         horizontalSource.Contains("MeterSlotPresentation.SelectParty", StringComparison.Ordinal) &&
         horizontalSource.Contains("horizontal-party-", StringComparison.Ordinal),
-        "The horizontal Meter is not a transparent eight-player slider with an alliance party selector.");
+        "The horizontal Meter lost its configurable background, transparent children, eight-player slider or alliance party selector.");
     Assert(
         classicSource.Contains("DrawClassicTable", StringComparison.Ordinal) &&
         classicSource.Contains("DrawAllianceCompactTiles", StringComparison.Ordinal) &&
@@ -3443,7 +3464,8 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("SerializeForChangeDetection", StringComparison.Ordinal) &&
         editorSource.Contains("CloseWithoutChanges", StringComparison.Ordinal) &&
         editorSource.Contains("ImGuiWindowFlags.NoScrollbar", StringComparison.Ordinal) &&
-        editorSource.Contains("ImGui.GetFrameHeightWithSpacing()", StringComparison.Ordinal) &&
+        // Footer visibility and clicks are verified by SkinSmokeTests across font scales;
+        // requiring one specific height calculation would reject equivalent layout fixes.
         editorSource.Contains("DrawInlineHelp", StringComparison.Ordinal) &&
         editorSource.Contains("moveButtonWidth", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
@@ -3510,7 +3532,7 @@ static void ValidateIndependentMeterWindows()
         simplifiedSource.Contains("IsOpen = false", StringComparison.Ordinal) &&
         Regex.IsMatch(
             simplifiedSource,
-            "ImGui\\.Button\\(\\s*text\\.Get\\(\"退出精简模式\"") &&
+            "DactTheme\\.Button\\(\\s*text\\.Get\\(\"退出精简模式\"") &&
         !simplifiedSource.Contains("EnableParsing", StringComparison.Ordinal) &&
         !simplifiedSource.Contains("HTML", StringComparison.Ordinal),
         "Simplified mode lost its dedicated controls or independent close action.");
@@ -4688,7 +4710,8 @@ static void ValidateControlCenterPresentation()
     Assert(
         popupRoundingIndex >= 0 && popupRoundingIndex < cloudPopupSource.IndexOf("ImGui.BeginPopup(", StringComparison.Ordinal) &&
         !cloudPopupSource.Contains("ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
-        Regex.Matches(cloudPopupSource, @"ImGui\.PopStyleVar\(2\);").Count == 2,
+        cloudPopupSource.Contains("ImGuiStyleVar.PopupBorderSize", StringComparison.Ordinal) &&
+        Regex.Matches(cloudPopupSource, @"ImGui\.PopStyleVar\(3\);").Count == 2,
         "The cloud status popup lost its local popup rounding or balanced open/closed style restoration.");
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
@@ -4728,7 +4751,7 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("statusAction: () => cloudQuickPopupRequested = true", StringComparison.Ordinal) &&
         controlCenterSource.Contains("查看云同步状态", StringComparison.Ordinal) &&
         controlCenterSource.Contains("支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("支持不会解除封禁、跳过风控或改变功能权限", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("支持不会解除封禁、跳过风控或授予管理员权限", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("客户端只上传不可逆的 SHA-256 设备指纹", StringComparison.Ordinal) &&
         configurationSource.Contains("AutoCloudSyncEnabled { get; set; } = true", StringComparison.Ordinal) &&
         pluginSource.Contains("ScheduleCloudStartupSync(DateTimeOffset.UtcNow)", StringComparison.Ordinal) &&
@@ -5137,35 +5160,35 @@ static void ValidateInstalledPluginVersionDisplay(string testRoot)
 
 static void Validate756Opcodes()
 {
-    // Assert the published 7.56 values independently of runtime resource selection.
+    // Assert the published 7.56h values independently of runtime resource selection.
     var expected = new Dictionary<string, ushort>
     {
-        ["StatusEffectList"] = 0x0248,
-        ["StatusEffectList2"] = 0x00B5,
-        ["StatusEffectList3"] = 0x020D,
-        ["BossStatusEffectList"] = 0x02E1,
-        ["StatusEffectListForay3"] = 0x0162,
-        ["Ability1"] = 0x02EC,
-        ["Ability8"] = 0x00FD,
-        ["Ability16"] = 0x0357,
-        ["Ability24"] = 0x00B4,
-        ["Ability32"] = 0x014E,
-        ["ActorCast"] = 0x010A,
-        ["EffectResult"] = 0x01B0,
-        ["EffectResultBasic"] = 0x02F4,
-        ["ActorControl"] = 0x038C,
-        ["ActorControlSelf"] = 0x0258,
-        ["ActorControlTarget"] = 0x024F,
-        ["UpdateHpMpTp"] = 0x0390,
-        ["PlayerSpawn"] = 0x03B2,
-        ["NpcSpawn"] = 0x01C4,
-        ["NpcSpawn2"] = 0x026A,
-        ["ActorMove"] = 0x0334,
-        ["ActorSetPos"] = 0x03A2,
-        ["ActorGauge"] = 0x028B,
-        ["PresetWaymark"] = 0x008D,
-        ["Waymark"] = 0x00E9,
-        ["SystemLogMessage"] = 0x03BE,
+        ["StatusEffectList"] = 0x0083,
+        ["StatusEffectList2"] = 0x0151,
+        ["StatusEffectList3"] = 0x03DC,
+        ["BossStatusEffectList"] = 0x0066,
+        ["StatusEffectListForay3"] = 0x0163,
+        ["Ability1"] = 0x0313,
+        ["Ability8"] = 0x021C,
+        ["Ability16"] = 0x008C,
+        ["Ability24"] = 0x030A,
+        ["Ability32"] = 0x03AA,
+        ["ActorCast"] = 0x0162,
+        ["EffectResult"] = 0x0131,
+        ["EffectResultBasic"] = 0x02B9,
+        ["ActorControl"] = 0x025F,
+        ["ActorControlSelf"] = 0x0204,
+        ["ActorControlTarget"] = 0x0358,
+        ["UpdateHpMpTp"] = 0x011B,
+        ["PlayerSpawn"] = 0x01C4,
+        ["NpcSpawn"] = 0x020C,
+        ["NpcSpawn2"] = 0x01BD,
+        ["ActorMove"] = 0x01D9,
+        ["ActorSetPos"] = 0x02AE,
+        ["ActorGauge"] = 0x0266,
+        ["PresetWaymark"] = 0x0167,
+        ["Waymark"] = 0x029D,
+        ["SystemLogMessage"] = 0x00A8,
     };
     foreach (var region in new[] { GameRegion.Chinese, GameRegion.Global, GameRegion.Korean })
     {
@@ -5174,7 +5197,7 @@ static void Validate756Opcodes()
         {
             Assert(
                 OpcodeManager.Instance.CurrentOpcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
-                $"{region} 7.56 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+                $"{region} 7.56h opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
         }
     }
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
@@ -5289,11 +5312,11 @@ static void ValidatePostNamazuOverlayHandlerResponse()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 7),
-        "IINACT is not at 2.10.3.7.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 8),
+        "IINACT is not at 2.10.3.8.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 107, 0),
-        "OverlayPlugin Core is not at 0.19.107.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 108, 0),
+        "OverlayPlugin Core is not at 0.19.108.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -5303,17 +5326,17 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.56.0.0",
+        "7.56.1.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
-        "3.0.3.0",
+        "3.0.3.1",
         "FFXIV_ACT_Plugin");
     var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
     Assert(
         FetchDependencies.LogFormatIdentity.Matches(
             logfileAssemblyPath,
-            new Version(2, 10, 3, 7)),
+            new Version(2, 10, 3, 8)),
         $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
@@ -5332,13 +5355,13 @@ static void ValidateParserDependencyVersions()
         });
     foreach (var region in new[] { "Chinese", "Global", "Korean" })
     {
-        var opcodes = document.RootElement.GetProperty(region).GetProperty("2026.09.01.0000.0000");
+        var opcodes = document.RootElement.GetProperty(region).GetProperty("2026.09.15.0000.0000");
         var expected = new Dictionary<string, int>
         {
-            ["MapEffect"] = 177, ["MapEffect4"] = 579, ["MapEffect8"] = 133,
-            ["MapEffect12"] = 210, ["CEDirector"] = 915, ["RSVData"] = 819,
-            ["NpcYell"] = 202, ["BattleTalk2"] = 341, ["Countdown"] = 542,
-            ["CountdownCancel"] = 286, ["ActorMove"] = 820, ["ActorSetPos"] = 930,
+            ["MapEffect"] = 408, ["MapEffect4"] = 942, ["MapEffect8"] = 711,
+            ["MapEffect12"] = 550, ["CEDirector"] = 798, ["RSVData"] = 243,
+            ["NpcYell"] = 221, ["BattleTalk2"] = 481, ["Countdown"] = 846,
+            ["CountdownCancel"] = 441, ["ActorMove"] = 473, ["ActorSetPos"] = 686,
         };
         Assert(expected.All(pair => opcodes.GetProperty(pair.Key).GetProperty("opcode").GetInt32() == pair.Value),
             $"OverlayPlugin {region} 7.56 opcodes are stale.");
@@ -5350,7 +5373,7 @@ static void ValidateParserDependencyVersions()
     var logFormatType = logfileAssembly.GetType("FFXIV_ACT_Plugin.Logfile.LogFormat", throwOnError: true)!;
     var formatVersion = logFormatType.GetMethod("FormatVersion", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
     var header = (string)formatVersion.Invoke(Activator.CreateInstance(logFormatType, nonPublic: true), null)!;
-    Assert(header == "This is IINACT 2.10.3.7 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.0",
+    Assert(header == "This is IINACT 2.10.3.8 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.1",
         $"The actual FFLogs version header is stale: {header}");
     Console.WriteLine($"Verified FFLogs version header: {header}");
 }
@@ -10292,7 +10315,8 @@ static void ValidateHtmlOverlayDefaults()
         controlCenterSource.Contains("helpTooltip: text.Get(\"帮助\", \"Help\")", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("需要更多帮助吗？", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("DrawHelpEntry", StringComparison.Ordinal) &&
-        brandedChromeSource.Contains("?##help-{id}", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("help-{id}", StringComparison.Ordinal) &&
+        brandedChromeSource.Contains("GameSkinIcon.Help", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("helpAction();", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("const float actionButtonSize = 28;", StringComparison.Ordinal) &&
         brandedChromeSource.Contains("actionButtonOffsetY", StringComparison.Ordinal) &&
@@ -10320,7 +10344,7 @@ static void ValidateHtmlOverlayDefaults()
         !helpWindowSource.Contains(
             "ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f))",
             StringComparison.Ordinal) &&
-        helpWindowSource.Contains("ImGui.Button(\"Search\"", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("DactTheme.Button(\"Search\"", StringComparison.Ordinal) &&
         helpWindowSource.Contains("searchDraft", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("text.Get(\"清除\", \"Clear\")", StringComparison.Ordinal) &&
         helpWindowSource.Contains("CreateSearchEntries", StringComparison.Ordinal) &&
@@ -10339,7 +10363,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("三个模板互斥启用", StringComparison.Ordinal) &&
         helpWindowSource.Contains("页面预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
         helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("横版始终没有背景", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("横版也支持背景颜色", StringComparison.Ordinal) &&
         helpWindowSource.Contains("只有存在未保存修改时", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有修改会直接关闭", StringComparison.Ordinal) &&
         helpWindowSource.Contains("职业 / ID 会先缩到两字", StringComparison.Ordinal) &&

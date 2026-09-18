@@ -20,9 +20,9 @@ internal sealed partial class FriendsUiManager : IDisposable
         public Vector2 Position;
         public Vector2 Size = new(400, 460);
     }
-    private static readonly Vector4 Navy = ControlCenterWindow.Navy;
-    private static readonly Vector4 Gold = ControlCenterWindow.Gold;
-    private static readonly Vector4 Blue = ControlCenterWindow.IceBlue;
+    private static Vector4 Navy => DactTheme.Tone(ControlCenterWindow.Navy, DactTheme.Palette.Surface);
+    private static Vector4 Gold => DactTheme.Tone(ControlCenterWindow.Gold, DactTheme.Palette.Gold);
+    private static Vector4 Blue => DactTheme.Tone(ControlCenterWindow.IceBlue, DactTheme.Palette.Accent);
     private readonly FriendsChatController controller;
     private readonly Action openMain;
     private readonly PluginConfiguration configuration;
@@ -139,7 +139,7 @@ internal sealed partial class FriendsUiManager : IDisposable
             var frame = ImGui.GetFrameHeight();
             AdministratorBadge.DrawName(administratorIcon, title, true,
                 ImGui.GetWindowPos() + new Vector2(frame + ImGui.GetStyle().ItemInnerSpacing.X, ImGui.GetStyle().FramePadding.Y),
-                ImGui.GetWindowSize().X - frame * 2 - ImGui.GetStyle().ItemInnerSpacing.X * 2, Vector4.One);
+                ImGui.GetWindowSize().X - frame * 2 - ImGui.GetStyle().ItemInnerSpacing.X * 2, DactTheme.Palette.Text);
         }
         if (expanded)
         {
@@ -186,13 +186,13 @@ internal sealed partial class FriendsUiManager : IDisposable
                             ImGui.TextUnformatted(preview); ImGui.PopTextWrapPos(); ImGui.EndTooltip();
                         }
                         ImGui.BeginDisabled(state.Busy);
-                        if (ImGui.Button("重试原消息")) controller.Retry(id);
-                        ImGui.SameLine(); if (ImGui.Button("放弃此发送…")) ImGui.OpenPopup("discard-pending");
+                        if (DactTheme.Button("重试原消息")) controller.Retry(id);
+                        ImGui.SameLine(); if (DactTheme.Button("放弃此发送…")) ImGui.OpenPopup("discard-pending");
                         ImGui.EndDisabled();
                         if (ImGui.BeginPopup("discard-pending"))
                         {
                             ImGui.TextWrapped("原消息可能已送达。放弃后请先查看会话记录，再决定是否重新输入发送。");
-                            if (ImGui.Button("确认放弃")) { controller.Discard(id); ImGui.CloseCurrentPopup(); }
+                            if (DactTheme.Button("确认放弃")) { controller.Discard(id); ImGui.CloseCurrentPopup(); }
                             ImGui.EndPopup();
                         }
                     }
@@ -201,10 +201,10 @@ internal sealed partial class FriendsUiManager : IDisposable
                     var enter = ImGui.InputTextWithHint("##chat-draft", "输入消息，按回车发送", ref window.Draft, 4000, ImGuiInputTextFlags.EnterReturnsTrue);
                     if (enter && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } enterOperation)
                         window.SubmittedOperation = enterOperation;
-                    if (ImGui.Button("发送") && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } buttonOperation)
+                    if (DactTheme.Button("发送") && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } buttonOperation)
                         window.SubmittedOperation = buttonOperation;
-                    ImGui.SameLine(); if (ImGui.Button("下把邀我")) controller.Send(id, "", CloudChatPolicy.InviteNext);
-                    ImGui.SameLine(); if (ImGui.Button("你什么时候结束")) controller.Send(id, "", CloudChatPolicy.WhenFinished);
+                    ImGui.SameLine(); if (DactTheme.Button("下把邀我")) controller.Send(id, "", CloudChatPolicy.InviteNext);
+                    ImGui.SameLine(); if (DactTheme.Button("你什么时候结束")) controller.Send(id, "", CloudChatPolicy.WhenFinished);
                     ImGui.EndDisabled();
                     if (!string.IsNullOrEmpty(view.SendStatus)) ImGui.TextWrapped(view.SendStatus);
                 }
@@ -228,7 +228,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         var start = ImGui.GetCursorScreenPos() + new Vector2(own ? Math.Max(0, available - width) : 0, 0);
         var gap = 5 * scale;
         var height = authorHeight + bodyHeight + timeHeight + vertical * 2 + gap * 2;
-        var background = own ? new Vector4(.09f, .23f, .31f, 1) : new Vector4(.09f, .115f, .15f, 1);
+        var background = DactTheme.Tone(own ? new Vector4(.09f, .23f, .31f, 1) : new Vector4(.09f, .115f, .15f, 1), own ? DactTheme.Palette.Hover : DactTheme.Palette.Raised);
         ImGui.GetWindowDrawList().AddRectFilled(start, start + new Vector2(width, height), ImGui.GetColorU32(background), 8);
         if (message.Sender.IsOfficial) ImGui.GetWindowDrawList().AddRect(start, start + new Vector2(width, height), ImGui.GetColorU32(Gold), 8);
         // ImGui resets the next item's X to the window indent after Text(). Draw
@@ -239,9 +239,9 @@ internal sealed partial class FriendsUiManager : IDisposable
             AdministratorBadge.DrawName(administratorIcon, author, true, origin, textWidth, Blue);
         else list.AddText(font, fontSize, origin, ImGui.GetColorU32(message.Sender.IsOfficial ? Gold : Blue), author, textWidth);
         origin.Y += authorHeight + gap;
-        list.AddText(font, fontSize, origin, ImGui.GetColorU32(Vector4.One), message.Text, textWidth);
+        list.AddText(font, fontSize, origin, ImGui.GetColorU32(DactTheme.Palette.Text), message.Text, textWidth);
         origin.Y += bodyHeight + gap;
-        list.AddText(font, fontSize, origin, ImGui.GetColorU32(new Vector4(.62f, .69f, .75f, 1)), timestamp, textWidth);
+        list.AddText(font, fontSize, origin, ImGui.GetColorU32(DactTheme.Palette.Muted), timestamp, textWidth);
         ImGui.Dummy(new Vector2(available, height + 8 * scale));
     }
     private void DrawToast(FriendsChatSnapshot state, bool inCombat)
@@ -252,7 +252,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (ImGui.Begin("##DACTFriendNotification", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoDecoration |
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav))
         {
-            if (ImGui.SmallButton("● 新好友申请 · 点击查看"))
+            if (DactTheme.SmallButton("● 新好友申请 · 点击查看"))
             { openMain(); drawerOpen = true; toastUntil = 0; }
         }
         ImGui.End();
@@ -262,7 +262,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         // Share the owner's exact input/button/spacing theme rather than grow a
         // second palette that drifts from cloud sync and the rest of DACT.
         ControlCenterWindow.PushTheme();
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy); ImGui.PushStyleColor(ImGuiCol.PopupBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy); DactTheme.PushStyleColor(ImGuiCol.PopupBg, Navy);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9); ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
     }
     private static void PopTheme() { ImGui.PopStyleVar(2); ImGui.PopStyleColor(2); ControlCenterWindow.PopTheme(); }

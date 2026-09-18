@@ -7,6 +7,7 @@ internal static class FriendsGlyph
 {
     public static void Draw(ImDrawListPtr list, Vector2 origin, float size, uint color)
     {
+        if (DactTheme.Palette.Light && DactTheme.GameAssets?.Icon(GameSkinIcon.Friends, origin, size) == true) return;
         // Open shoulders and outlined heads stay legible at 20px; avoid the
         // former filled circles/thick horizontal bars that read as blobs.
         var unit = size / 24;

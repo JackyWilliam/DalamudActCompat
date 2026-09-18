@@ -18,6 +18,7 @@ internal static class MeterSlotPresentation
             MeterSlotMetric.PlayerIdentity => text.Get("职业 / ID", "Job / ID"),
             MeterSlotMetric.Fflogs => "FFLogs",
             MeterSlotMetric.Dps => "DPS",
+            MeterSlotMetric.TeamDps => text.Get("团队秒伤", "Team DPS"),
             MeterSlotMetric.Rdps => "rDPS",
             MeterSlotMetric.EncDps => "EncDPS",
             MeterSlotMetric.ExtDps => "ExtDPS",
@@ -177,7 +178,25 @@ internal static class MeterSlotPresentation
     public static bool HasTeamSummary(IEnumerable<MeterSlotDefinition> slots)
         => slots.Any(static slot =>
             slot.Visible &&
-            slot.Metric is MeterSlotMetric.TotalDamage or MeterSlotMetric.TotalHealing);
+            IsTeamSummaryMetric(slot.Metric));
+
+    public static bool IsTeamSummaryMetric(MeterSlotMetric metric)
+        => metric is MeterSlotMetric.TotalDamage or MeterSlotMetric.TotalHealing or MeterSlotMetric.TeamDps;
+
+    public static double TeamDps(Encounter encounter)
+        // A team rate shares one combat clock, unlike personal DPS values which
+        // may use different active times. Always include the full encounter even
+        // when the view filters to self, healers, or damage/tank players.
+        => encounter.TotalDamage / Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
+
+    public static string TeamSummaryValue(MeterSlotMetric metric, Encounter encounter)
+        => metric switch
+        {
+            MeterSlotMetric.TeamDps => $"{TeamDps(encounter):N0}",
+            MeterSlotMetric.TotalHealing => MeterWindow.FormatCompactNumber(encounter.TotalHealing),
+            MeterSlotMetric.TotalDamage => MeterWindow.FormatCompactNumber(encounter.TotalDamage),
+            _ => string.Empty,
+        };
 
     public static bool IsAlliance(Encounter encounter, IEnumerable<CombatantRow> rows)
         => encounter.PartyCapacity > 8 ||
@@ -224,7 +243,7 @@ internal static class MeterSlotPresentation
     {
         var summaries = slots.Where(static slot =>
                 slot.Visible &&
-                slot.Metric is MeterSlotMetric.TotalDamage or MeterSlotMetric.TotalHealing)
+                IsTeamSummaryMetric(slot.Metric))
             .GroupBy(static slot => slot.Metric)
             .Select(static group => group.First())
             .ToArray();
@@ -246,16 +265,20 @@ internal static class MeterSlotPresentation
         {
             var metric = summaries[index].Metric;
             var label = Label(metric, text);
-            var value = metric == MeterSlotMetric.TotalHealing
-                ? MeterWindow.FormatCompactNumber(encounter.TotalHealing)
-                : MeterWindow.FormatCompactNumber(encounter.TotalDamage);
+            var value = TeamSummaryValue(metric, encounter);
             var cellStart = start + new Vector2(index * cellWidth, 8);
-            drawList.AddText(cellStart, ImGui.GetColorU32(labelColor), label);
             var valueSize = ImGui.CalcTextSize(value);
-            drawList.AddText(
+            var labelWidth = cellWidth - valueSize.X - 14;
+            var visibleLabel = labelWidth > ImGui.GetFontSize() ? TrimToWidth(label, labelWidth) : "";
+            drawList.PushClipRect(new(cellStart.X, start.Y), new(cellStart.X + cellWidth, start.Y + TeamSummaryHeight), true);
+            MeterBackground.AddText(drawList, cellStart, ImGui.GetColorU32(MeterBackground.Foreground(labelColor)), visibleLabel);
+            MeterBackground.AddText(drawList,
                 new Vector2(cellStart.X + cellWidth - valueSize.X - 6, cellStart.Y),
-                ImGui.GetColorU32(valueColor),
+                ImGui.GetColorU32(MeterBackground.Foreground(valueColor)),
                 value);
+            drawList.PopClipRect();
+            if (ImGui.IsMouseHoveringRect(new(cellStart.X, start.Y), new(cellStart.X + cellWidth, start.Y + TeamSummaryHeight)))
+                ImGui.SetTooltip($"{label}: {value}");
             previewInteraction?.Observe(
                 summaries[index],
                 new Vector2(cellStart.X, start.Y),

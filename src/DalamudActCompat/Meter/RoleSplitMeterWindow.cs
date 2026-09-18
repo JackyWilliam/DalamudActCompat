@@ -148,8 +148,9 @@ public sealed class RoleSplitMeterWindow : Window
         }
 
         var backgroundOpacity = MeterWindow.NormalizeBackgroundOpacity(Profile.BackgroundOpacity);
+        MeterBackground.PushText(Profile);
         ImGui.SetNextWindowBgAlpha(backgroundOpacity);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, MeterBackground.Color(Profile, Navy));
         ImGui.PushStyleColor(
             ImGuiCol.Border,
             MeterWindow.ApplyBackgroundOpacity(
@@ -166,7 +167,7 @@ public sealed class RoleSplitMeterWindow : Window
     public override void PostDraw()
     {
         ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(3);
+        ImGui.PopStyleColor(5);
     }
 
     public override void Draw()
@@ -177,7 +178,7 @@ public sealed class RoleSplitMeterWindow : Window
         DrawHeader(encounter);
         if (encounter is null)
         {
-            ImGui.TextColored(IceBlue, text.Get("等待战斗数据…", "Waiting for encounter data…"));
+            MeterBackground.DrawText(IceBlue, text.Get("等待战斗数据…", "Waiting for encounter data…"));
             // Empty windows still honor the saved compact state; otherwise the header
             // button changes its arrow while the early return leaves the window expanded.
             ApplyCompactWindowHeight(hasEncounter: false, useHealing: false);
@@ -201,7 +202,7 @@ public sealed class RoleSplitMeterWindow : Window
         MeterSlotPresentation.DrawTeamSummary(
             useHealing ? "role-split-healer" : "role-split-damage",
             encounter,
-            Slots.Where(slot => slot.Metric ==
+            Slots.Where(slot => slot.Metric == MeterSlotMetric.TeamDps || slot.Metric ==
                 (useHealing ? MeterSlotMetric.TotalHealing : MeterSlotMetric.TotalDamage)),
             text,
             IceBlue,
@@ -232,7 +233,7 @@ public sealed class RoleSplitMeterWindow : Window
         MeterSlotPresentation.DrawTeamSummary(
             useHealing ? "role-editor-healer" : "role-editor-damage",
             encounter,
-            Slots.Where(slot => slot.Metric ==
+            Slots.Where(slot => slot.Metric == MeterSlotMetric.TeamDps || slot.Metric ==
                 (useHealing ? MeterSlotMetric.TotalHealing : MeterSlotMetric.TotalDamage)),
             text,
             IceBlue,
@@ -284,27 +285,23 @@ public sealed class RoleSplitMeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + size,
-            ImGui.GetColorU32(MeterWindow.ApplyBackgroundOpacity(
-                NavyRaised,
-                Profile.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(Profile, NavyRaised)),
             6);
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             start + new Vector2(12, 7),
             ImGui.GetColorU32(group == RoleSplitGroup.Healer ? HealingGreen : Gold),
             title);
         var stateSize = ImGui.CalcTextSize(state);
-        drawList.AddText(
+        MeterBackground.AddText(drawList,
             new Vector2(
                 Math.Max(start.X + 80, toggleStart.X - stateSize.X - 8),
                 start.Y + 7),
-            ImGui.GetColorU32(IceBlue),
+            ImGui.GetColorU32(MeterBackground.Foreground(IceBlue)),
             state);
         drawList.AddRectFilled(
             toggleStart,
             toggleEnd,
-            ImGui.GetColorU32(MeterWindow.ApplyBackgroundOpacity(
-                toggleHovered && !embeddedPreview ? NavyHover : Navy,
-                Profile.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Fill(Profile, toggleHovered && !embeddedPreview ? NavyHover : Navy)),
             4);
         drawList.AddRect(
             toggleStart,
@@ -344,7 +341,7 @@ public sealed class RoleSplitMeterWindow : Window
                 ? MeterSlotMetric.TotalHealing
                 : MeterSlotMetric.TotalDamage;
             var summaryHeight = Slots.Any(slot =>
-                slot.Visible && slot.Metric == summaryMetric)
+                slot.Visible && (slot.Metric == summaryMetric || slot.Metric == MeterSlotMetric.TeamDps))
                     ? MeterSlotPresentation.TeamSummaryHeight + 4
                     : 0;
             targetHeight = 42 +
@@ -458,6 +455,7 @@ public sealed class RoleSplitMeterWindow : Window
                 IsLocked = Profile.IsLocked,
                 ClickThroughWhenLocked = Profile.ClickThroughWhenLocked,
                 BackgroundOpacity = Profile.BackgroundOpacity,
+                BackgroundColor = Profile.BackgroundColor,
                 FontScale = Profile.FontScale,
                 SortMode = useHealing ? MeterSortMode.Hps : MeterSortMode.Dps,
                 DpsSortMetric = Profile.DpsSortMetric,
@@ -502,7 +500,7 @@ public sealed class RoleSplitMeterWindow : Window
         var center = (start + end) * 0.5f;
         var edgeY = center.Y + (compact ? -2.5f : 2.5f);
         var pointY = center.Y + (compact ? 2.5f : -2.5f);
-        var color = ImGui.GetColorU32(Vector4.One);
+        var color = ImGui.GetColorU32(MeterBackground.CurrentText);
         drawList.AddLine(new Vector2(center.X - 4.5f, edgeY), new Vector2(center.X, pointY), color, 2);
         drawList.AddLine(new Vector2(center.X, pointY), new Vector2(center.X + 4.5f, edgeY), color, 2);
     }

@@ -8,9 +8,9 @@ namespace DalamudActCompat.UI;
 
 public sealed class SimplifiedHomeWindow : Window
 {
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
     private static readonly string VersionLabel =
         $"v{typeof(SimplifiedHomeWindow).Assembly.GetName().Version?.ToString(4) ?? "0.0.0.0"}";
     private readonly PluginConfiguration configuration;
@@ -69,12 +69,13 @@ public sealed class SimplifiedHomeWindow : Window
             locateOnNextDraw = false;
         }
 
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.Border, Gold);
-        ImGui.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
+        DactTheme.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(22, 20));
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -85,6 +86,7 @@ public sealed class SimplifiedHomeWindow : Window
 
     public override void Draw()
     {
+        DactTheme.DrawGameWindow();
         DrawCloseButton();
         DrawCenteredLogo();
         DrawCenteredText(VersionLabel, new Vector4(0.66f, 0.70f, 0.75f, 1));
@@ -93,7 +95,7 @@ public sealed class SimplifiedHomeWindow : Window
         ImGui.Dummy(new Vector2(1, 12));
 
         var meterVisible = configuration.Meter.IsVisible;
-        if (ImGui.Checkbox(
+        if (DactTheme.Checkbox(
                 text.Get("显示战斗统计悬浮窗", "Show Combat Meter overlay"),
                 ref meterVisible))
         {
@@ -101,7 +103,7 @@ public sealed class SimplifiedHomeWindow : Window
         }
 
         ImGui.Dummy(new Vector2(1, 8));
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 text.Get("退出精简模式", "Exit simplified mode"),
                 new Vector2(-1, 0)))
         {
@@ -115,10 +117,10 @@ public sealed class SimplifiedHomeWindow : Window
         var startX = ImGui.GetCursorPosX();
         var availableWidth = ImGui.GetContentRegionAvail().X;
         ImGui.SetCursorPosX(startX + Math.Max(0, availableWidth - buttonSize));
-        ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.16f, 0.22f, 0.30f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.22f, 0.29f, 0.38f, 1));
-        if (ImGui.Button("×##close-simplified-home", new Vector2(buttonSize)))
+        DactTheme.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.16f, 0.22f, 0.30f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.22f, 0.29f, 0.38f, 1));
+        if (DactTheme.Button("×##close-simplified-home", new Vector2(buttonSize)))
         {
             // Closing the menu must not disable simplified mode; `/actcompat` reopens it.
             IsOpen = false;
@@ -145,6 +147,6 @@ public sealed class SimplifiedHomeWindow : Window
         var width = ImGui.GetContentRegionAvail().X;
         var textSize = ImGui.CalcTextSize(value);
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, (width - textSize.X) * 0.5f));
-        ImGui.TextColored(color, value);
+        DactTheme.TextColored(color, value);
     }
 }

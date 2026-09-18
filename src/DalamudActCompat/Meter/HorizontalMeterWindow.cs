@@ -109,10 +109,11 @@ public sealed class HorizontalMeterWindow : Window
             Flags |= ImGuiWindowFlags.NoInputs;
         }
 
-        // The horizontal meter must remain compositable over the game. Every style
-        // color capable of producing a black block is explicitly transparent.
-        ImGui.SetNextWindowBgAlpha(0);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Vector4.Zero);
+        // Paint once at the window level; transparent children avoid stacking
+        // opacity when the user chooses a translucent background.
+        ImGui.SetNextWindowBgAlpha(MeterWindow.NormalizeBackgroundOpacity(Profile.BackgroundOpacity));
+        MeterBackground.PushText(Profile);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, MeterBackground.Color(Profile));
         ImGui.PushStyleColor(ImGuiCol.ChildBg, Vector4.Zero);
         ImGui.PushStyleColor(ImGuiCol.Border, Vector4.Zero);
         ImGui.PushStyleColor(ImGuiCol.ScrollbarBg, Vector4.Zero);
@@ -124,7 +125,7 @@ public sealed class HorizontalMeterWindow : Window
     public override void PostDraw()
     {
         ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(4);
+        ImGui.PopStyleColor(6);
     }
 
     public override void Draw()
@@ -134,7 +135,7 @@ public sealed class HorizontalMeterWindow : Window
         if (encounter is null)
         {
             DrawHeader(null, []);
-            ImGui.TextColored(Muted, text.Get("等待战斗数据…", "Waiting for encounter data…"));
+            MeterBackground.DrawText(Muted, text.Get("等待战斗数据…", "Waiting for encounter data…"));
             return;
         }
 
@@ -147,7 +148,7 @@ public sealed class HorizontalMeterWindow : Window
         var rows = MeterSlotPresentation.SelectParty(allRows, partyGroup);
         if (rows.Count == 0)
         {
-            ImGui.TextColored(Muted, text.Get("等待玩家数据…", "Waiting for player data…"));
+            MeterBackground.DrawText(Muted, text.Get("等待玩家数据…", "Waiting for player data…"));
             return;
         }
 
@@ -200,7 +201,7 @@ public sealed class HorizontalMeterWindow : Window
             headerDrag.HandleItem(enabled: !Profile.IsLocked);
         }
 
-        ImGui.GetWindowDrawList().AddText(
+        MeterBackground.AddText(ImGui.GetWindowDrawList(),
             dragStart,
             ImGui.GetColorU32(new Vector4(Muted.X, Muted.Y, Muted.Z, 0.62f)),
             Profile.IsLocked ? text.Get("已锁定", "Locked") : text.Get("拖动窗口", "Drag window"));
@@ -256,7 +257,7 @@ public sealed class HorizontalMeterWindow : Window
                 ImGui.GetColorU32(selected ? Gold : hovered ? IceBlue : Muted),
                 4);
             var textSize = ImGui.CalcTextSize(label);
-            drawList.AddText(
+            MeterBackground.AddText(drawList,
                 new Vector2(x + ((width - textSize.X) * 0.5f), startY + 1),
                 ImGui.GetColorU32(selected ? Gold : hovered ? IceBlue : Muted),
                 label);
@@ -320,7 +321,7 @@ public sealed class HorizontalMeterWindow : Window
         ImGui.InvisibleButton($"horizontal-mode-{mode}", new Vector2(width, height));
         var selected = MeterSortModeOptions.Normalize(Profile.SortMode) == mode;
         var hovered = ImGui.IsItemHovered();
-        ImGui.GetWindowDrawList().AddText(
+        MeterBackground.AddText(ImGui.GetWindowDrawList(),
             start + new Vector2(2, 1),
             ImGui.GetColorU32(selected ? Gold : hovered ? IceBlue : Muted),
             label);
@@ -428,9 +429,9 @@ public sealed class HorizontalMeterWindow : Window
             {
                 case MeterSlotMetric.PlayerIdentity:
                     var cursorX = slotStart.X + DrawJob(row, slotStart, 22) + 5;
-                    drawList.AddText(
+                    MeterBackground.AddText(drawList,
                         new Vector2(cursorX, slotStart.Y + 3),
-                        ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+                        ImGui.GetColorU32(MeterBackground.Foreground(row.IsLocalPlayer ? Gold : MeterBackground.CurrentText)),
                         MeterSlotPresentation.TrimToWidth(
                             displayName,
                             Math.Max(16, slotEnd.X - cursorX - 4)));
@@ -439,9 +440,9 @@ public sealed class HorizontalMeterWindow : Window
                     DrawJob(row, slotStart, 22);
                     break;
                 case MeterSlotMetric.PlayerName:
-                    drawList.AddText(
+                    MeterBackground.AddText(drawList,
                         slotStart + new Vector2(0, 3),
-                        ImGui.GetColorU32(row.IsLocalPlayer ? Gold : Vector4.One),
+                        ImGui.GetColorU32(MeterBackground.Foreground(row.IsLocalPlayer ? Gold : MeterBackground.CurrentText)),
                         MeterSlotPresentation.TrimToWidth(displayName, Math.Max(16, slotWidth - 4)));
                     break;
                 default:
@@ -449,13 +450,13 @@ public sealed class HorizontalMeterWindow : Window
                     var value = MeterSlotPresentation.Value(placement.Slot.Metric, row, displayName,
                         placement.Slot.UseCompactHighestDamage, includeHighestDamageAmount);
                     var labelWidth = Math.Min(slotWidth * 0.47f, ImGui.CalcTextSize(label).X + 6);
-                    drawList.AddText(
+                    MeterBackground.AddText(drawList,
                         slotStart + new Vector2(0, 3),
-                        ImGui.GetColorU32(Muted),
+                        ImGui.GetColorU32(MeterBackground.Foreground(Muted)),
                         MeterSlotPresentation.TrimToWidth(label, labelWidth));
-                    drawList.AddText(
+                    MeterBackground.AddText(drawList,
                         slotStart + new Vector2(labelWidth, 3),
-                        ImGui.GetColorU32(PrimaryColor(placement.Slot.Metric, row.IsLocalPlayer)),
+                        ImGui.GetColorU32(MeterBackground.Foreground(PrimaryColor(placement.Slot.Metric, row.IsLocalPlayer))),
                         MeterSlotPresentation.TrimToWidth(
                             value,
                             Math.Max(10, slotWidth - labelWidth - 5)));
@@ -489,9 +490,8 @@ public sealed class HorizontalMeterWindow : Window
         var row = 0;
         var column = 0;
         foreach (var slot in slots.Where(static slot =>
-                     slot.Metric is not MeterSlotMetric.TotalDamage and
-                     not MeterSlotMetric.TotalHealing and
-                     not MeterSlotMetric.Fflogs))
+                     !MeterSlotPresentation.IsTeamSummaryMetric(slot.Metric) &&
+                     slot.Metric != MeterSlotMetric.Fflogs))
         {
             var fullWidth = slot.Metric is MeterSlotMetric.PlayerIdentity or
                 MeterSlotMetric.Job or MeterSlotMetric.PlayerName;
@@ -527,7 +527,7 @@ public sealed class HorizontalMeterWindow : Window
         }
 
         var job = JobDisplayFormatter.FormatText(row.Job, configuration.Meter.JobDisplayStyle);
-        ImGui.GetWindowDrawList().AddText(start + new Vector2(0, 3), ImGui.GetColorU32(IceBlue), job);
+        MeterBackground.AddText(ImGui.GetWindowDrawList(), start + new Vector2(0, 3), ImGui.GetColorU32(MeterBackground.Foreground(IceBlue)), job);
         return ImGui.CalcTextSize(job).X;
     }
 

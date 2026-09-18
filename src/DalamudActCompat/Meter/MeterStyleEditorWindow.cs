@@ -12,11 +12,11 @@ namespace DalamudActCompat.Meter;
 
 public sealed class MeterStyleEditorWindow : Window
 {
-    private static readonly Vector4 Navy = new(0.035f, 0.048f, 0.068f, 1);
-    private static readonly Vector4 NavyRaised = new(0.070f, 0.095f, 0.125f, 1);
-    private static readonly Vector4 NavyHover = new(0.105f, 0.145f, 0.185f, 1);
-    private static readonly Vector4 Gold = new(0.78f, 0.66f, 0.36f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
+    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
+    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
+    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
+    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
+    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
     private readonly PluginConfiguration configuration;
     private readonly ISharedImmediateTexture logoTexture;
     private readonly MeterWindow meterWindow;
@@ -105,19 +105,20 @@ public sealed class MeterStyleEditorWindow : Window
                 ImGuiWindowFlags.NoCollapse |
                 ImGuiWindowFlags.NoScrollbar |
                 ImGuiWindowFlags.NoScrollWithMouse;
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f));
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.055f, 0.075f, 0.10f, 1));
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.14f, 0.34f, 0.46f, 0.30f));
+        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
+        DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f));
+        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.055f, 0.075f, 0.10f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.FrameBgHovered, NavyHover);
+        DactTheme.PushStyleColor(ImGuiCol.Header, new Vector4(0.14f, 0.34f, 0.46f, 0.30f));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 6);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 7));
+        Flags = DactTheme.WindowFlags(Flags);
     }
 
     public override void PostDraw()
@@ -174,12 +175,12 @@ public sealed class MeterStyleEditorWindow : Window
         var available = ImGui.GetContentRegionAvail();
         const float leftWidth = 255;
         const float rightWidth = 270;
-        // Account for the themed frame and both inter-item gaps instead of using a
-        // scale-independent constant that can overflow by a few pixels at high DPI.
-        var footerHeight = ImGui.GetFrameHeightWithSpacing() +
-                           ImGui.GetStyle().ItemSpacing.Y +
-                           6;
-        var workspaceHeight = Math.Max(200, available.Y - footerHeight);
+        // Reserve the real sprite height and its window's lower shadow margin.
+        // A minimum workspace height must not push Save/Cancel outside the window.
+        var buttonHeight = DactTheme.ButtonHeight;
+        var bottomInset = DactTheme.Palette.Light ? 12 * Math.Max(.75f, ImGui.GetFontSize() / 17f) : 0;
+        var actionsY = ImGui.GetCursorPosY() + Math.Max(0, available.Y - buttonHeight - bottomInset);
+        var workspaceHeight = Math.Max(1, actionsY - ImGui.GetCursorPosY() - 12);
         if (ImGui.BeginChild("meter-editor-slots", new Vector2(leftWidth, workspaceHeight), true))
         {
             changed |= DrawSlotList(CurrentSlots);
@@ -200,7 +201,8 @@ public sealed class MeterStyleEditorWindow : Window
             changed |= DrawSlotProperties(CurrentProfile, CurrentSlots);
         }
         ImGui.EndChild();
-        if (DrawEditorActions())
+        ImGui.SetCursorPosY(actionsY);
+        if (DrawEditorActions(buttonHeight))
         {
             return;
         }
@@ -250,7 +252,7 @@ public sealed class MeterStyleEditorWindow : Window
         var changed = false;
         var active = profile.IsEnabled;
         ImGui.BeginDisabled(active);
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 active
                     ? text.Get("当前模板已启用", "This template is enabled")
                     : text.Get("启用此模板", "Enable this template"),
@@ -266,7 +268,7 @@ public sealed class MeterStyleEditorWindow : Window
             "Enabling this template disables the other two."));
 
         var locked = profile.IsLocked;
-        if (ImGui.Checkbox(text.Get("锁定", "Lock"), ref locked))
+        if (DactTheme.Checkbox(text.Get("锁定", "Lock"), ref locked))
         {
             profile.IsLocked = locked;
             changed = true;
@@ -274,7 +276,7 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.SameLine();
         var clickThrough = profile.ClickThroughWhenLocked;
         ImGui.BeginDisabled(!profile.IsLocked);
-        if (ImGui.Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), ref clickThrough))
+        if (DactTheme.Checkbox(text.Get("锁定时鼠标穿透", "Click-through when locked"), ref clickThrough))
         {
             profile.ClickThroughWhenLocked = clickThrough;
             changed = true;
@@ -282,7 +284,7 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.EndDisabled();
         ImGui.SameLine();
         var autoHide = profile.AutoHideOutOfCombat;
-        if (ImGui.Checkbox(text.Get("脱战隐藏", "Hide out of combat"), ref autoHide))
+        if (DactTheme.Checkbox(text.Get("脱战隐藏", "Hide out of combat"), ref autoHide))
         {
             profile.AutoHideOutOfCombat = autoHide;
             changed = true;
@@ -291,7 +293,7 @@ public sealed class MeterStyleEditorWindow : Window
         {
             var compact = configuration.Meter.CompactMode;
             ImGui.SameLine();
-            if (ImGui.Checkbox(text.Get("只显示自己", "Show self only"), ref compact))
+            if (DactTheme.Checkbox(text.Get("只显示自己", "Show self only"), ref compact))
             {
                 configuration.Meter.CompactMode = compact;
                 changed = true;
@@ -303,7 +305,7 @@ public sealed class MeterStyleEditorWindow : Window
     private bool DrawSlotList(List<MeterSlotDefinition> slots)
     {
         var changed = false;
-        ImGui.TextColored(Gold, text.Get("槽位", "Complication slots"));
+        DactTheme.TextColored(Gold, text.Get("槽位", "Complication slots"));
         if (selectedKind == MeterWindowKind.Classic && configuration.Meter.ClassicAllianceView)
         {
             ImGui.TextWrapped(text.Get(
@@ -321,7 +323,7 @@ public sealed class MeterStyleEditorWindow : Window
             var visible = slot.Visible;
             var canEnable = CanUseMetric(slot.Metric);
             ImGui.BeginDisabled(!canEnable);
-            if (ImGui.Checkbox($"##slot-visible-{slot.Id}", ref visible))
+            if (DactTheme.Checkbox($"##slot-visible-{slot.Id}", ref visible))
             {
                 slot.Visible = visible;
                 changed = true;
@@ -343,7 +345,7 @@ public sealed class MeterStyleEditorWindow : Window
         }
 
         ImGui.Dummy(new Vector2(1, 4));
-        if (ImGui.Button(text.Get("＋ 添加槽位", "+ Add slot"), new Vector2(-1, 0)))
+        if (DactTheme.Button(text.Get("＋ 添加槽位", "+ Add slot"), new Vector2(-1, 0)))
         {
             var slot = new MeterSlotDefinition(
                 FirstUnusedMetric(slots),
@@ -356,7 +358,7 @@ public sealed class MeterStyleEditorWindow : Window
             selectedSlotId = slot.Id;
             changed = true;
         }
-        if (ImGui.Button(text.Get("恢复此模板默认槽位", "Restore template slots"), new Vector2(-1, 0)))
+        if (DactTheme.Button(text.Get("恢复此模板默认槽位", "Restore template slots"), new Vector2(-1, 0)))
         {
             ReplaceCurrentSlots(DefaultSlots(selectedKind).Select(static slot => slot.Clone()).ToList());
             selectedSlotId = CurrentSlots.FirstOrDefault()?.Id;
@@ -367,7 +369,7 @@ public sealed class MeterStyleEditorWindow : Window
 
     private bool DrawPreview(MeterWindowProfile profile)
     {
-        ImGui.TextColored(Gold, text.Get("页面预览", "Page preview"));
+        DactTheme.TextColored(Gold, text.Get("页面预览", "Page preview"));
         ImGui.TextDisabled(KindDescription(selectedKind));
         ImGui.Separator();
         ImGui.TextWrapped(text.Get(
@@ -383,7 +385,7 @@ public sealed class MeterStyleEditorWindow : Window
                 DrawRuntimePreviewFrame(
                     "horizontal-runtime-preview",
                     availableHeight,
-                    Vector4.Zero,
+                    MeterBackground.Fill(profile),
                     Vector4.Zero,
                     () => horizontalMeterWindow.DrawEditorPreview(
                         previewEncounter,
@@ -404,7 +406,7 @@ public sealed class MeterStyleEditorWindow : Window
                 if (DrawRuntimePreviewFrame(
                     "role-damage-runtime-preview",
                     roleHeight,
-                    MeterWindow.ApplyBackgroundOpacity(Navy, damageProfile.BackgroundOpacity),
+                    MeterBackground.Fill(damageProfile),
                     MeterWindow.ApplyBackgroundOpacity(
                         selectedRoleSplitGroup == RoleSplitGroup.DamageTank
                             ? Gold
@@ -421,7 +423,7 @@ public sealed class MeterStyleEditorWindow : Window
                 if (DrawRuntimePreviewFrame(
                     "role-healer-runtime-preview",
                     roleHeight,
-                    MeterWindow.ApplyBackgroundOpacity(Navy, healerProfile.BackgroundOpacity),
+                    MeterBackground.Fill(healerProfile),
                     MeterWindow.ApplyBackgroundOpacity(
                         selectedRoleSplitGroup == RoleSplitGroup.Healer
                             ? Gold
@@ -445,7 +447,7 @@ public sealed class MeterStyleEditorWindow : Window
                 DrawRuntimePreviewFrame(
                     "classic-runtime-preview",
                     availableHeight,
-                    MeterWindow.ApplyBackgroundOpacity(Navy, profile.BackgroundOpacity),
+                    MeterBackground.Fill(profile),
                     MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
                     () => meterWindow.DrawEditorPreview(
                         previewEncounter,
@@ -464,8 +466,13 @@ public sealed class MeterStyleEditorWindow : Window
         Vector4 border,
         Action draw)
     {
+        // A meter has its own background, independent of the surrounding skin.
+        // Preview it over a neutral dark surface, like the runtime overlay.
+        var start = ImGui.GetCursorScreenPos();
+        ImGui.GetWindowDrawList().AddRectFilled(start, start + new Vector2(ImGui.GetContentRegionAvail().X, height), ImGui.GetColorU32(new Vector4(.06f, .075f, .09f, 1)), 6);
         ImGui.PushStyleColor(ImGuiCol.ChildBg, background);
         ImGui.PushStyleColor(ImGuiCol.Border, border);
+        MeterBackground.PushText(new MeterWindowProfile { BackgroundColor = new Vector3(background.X, background.Y, background.Z), BackgroundOpacity = background.W });
         if (ImGui.BeginChild(id, new Vector2(-1, height), true))
         {
             draw();
@@ -473,26 +480,25 @@ public sealed class MeterStyleEditorWindow : Window
         var clicked = ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows) &&
                       ImGui.IsMouseClicked(ImGuiMouseButton.Left);
         ImGui.EndChild();
-        ImGui.PopStyleColor(2);
+        ImGui.PopStyleColor(4);
         return clicked;
     }
 
-    private bool DrawEditorActions()
+    private bool DrawEditorActions(float buttonHeight)
     {
-        ImGui.Dummy(new Vector2(1, 6));
         const float buttonWidth = 110;
         const float spacing = 8;
         var startX = ImGui.GetCursorPosX();
         var availableWidth = ImGui.GetContentRegionAvail().X;
         ImGui.SetCursorPosX(startX + Math.Max(0, availableWidth - (buttonWidth * 2) - spacing));
-        if (ImGui.Button(text.Get("保存", "Save"), new Vector2(buttonWidth, 0)))
+        if (DactTheme.Button(text.Get("保存", "Save"), new Vector2(buttonWidth, buttonHeight)))
         {
             SaveAndClose();
             return true;
         }
 
         ImGui.SameLine(0, spacing);
-        if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, 0)))
+        if (DactTheme.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, buttonHeight)))
         {
             RequestExitConfirmation();
         }
@@ -559,21 +565,21 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.Dummy(new Vector2(1, 8));
         const float buttonWidth = 130;
         var closed = false;
-        if (ImGui.Button(text.Get("保存并退出", "Save and exit"), new Vector2(buttonWidth, 0)))
+        if (DactTheme.Button(text.Get("保存并退出", "Save and exit"), new Vector2(buttonWidth, 0)))
         {
             ImGui.CloseCurrentPopup();
             SaveAndClose();
             closed = true;
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("不保存并退出", "Exit without saving"), new Vector2(buttonWidth, 0)))
+        if (DactTheme.Button(text.Get("不保存并退出", "Exit without saving"), new Vector2(buttonWidth, 0)))
         {
             ImGui.CloseCurrentPopup();
             CancelAndClose();
             closed = true;
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, 0)))
+        if (DactTheme.Button(text.Get("取消", "Cancel"), new Vector2(buttonWidth, 0)))
         {
             ImGui.CloseCurrentPopup();
         }
@@ -754,13 +760,13 @@ public sealed class MeterStyleEditorWindow : Window
         List<MeterSlotDefinition> slots)
     {
         var changed = false;
-        ImGui.TextColored(Gold, text.Get("窗口与槽位", "Window and slot"));
+        DactTheme.TextColored(Gold, text.Get("窗口与槽位", "Window and slot"));
         DrawInlineHelp(text.Get(
             "页面预览中的黄色框是当前槽位；点击可切换，拖到另一项可交换位置。修改完成后请使用底部的保存或取消。",
             "The gold frame in Page preview marks the current slot. Click to select or drag onto another item to swap positions. Use Save or Cancel when finished."));
         var showHeader = profile.ShowHeader;
         if (selectedKind != MeterWindowKind.Horizontal &&
-            ImGui.Checkbox(text.Get("显示标题区", "Show header"), ref showHeader))
+            DactTheme.Checkbox(text.Get("显示标题区", "Show header"), ref showHeader))
         {
             profile.ShowHeader = showHeader;
             changed = true;
@@ -794,13 +800,32 @@ public sealed class MeterStyleEditorWindow : Window
                 changed = true;
             }
         }
-        if (selectedKind != MeterWindowKind.Horizontal)
+        var backgroundColor = profile.BackgroundColor ?? MeterBackground.DefaultColor;
+        if (ImGui.ColorEdit3(text.Get("背景颜色", "Background color"), ref backgroundColor))
+        {
+            profile.BackgroundColor = backgroundColor;
+            // A color selected on a previously transparent overlay should be visible.
+            if (profile.BackgroundOpacity == 0) profile.BackgroundOpacity = 0.85f;
+            changed = true;
+        }
+        if (DactTheme.SmallButton(text.Get("恢复默认背景", "Reset background")))
+        {
+            profile.BackgroundColor = null;
+            profile.BackgroundOpacity = selectedKind == MeterWindowKind.Horizontal ? 0 : 0.85f;
+            changed = true;
+        }
+        ImGui.SameLine();
+        if (DactTheme.SmallButton(text.Get("完全透明", "Fully transparent")))
+        {
+            profile.BackgroundOpacity = 0;
+            changed = true;
+        }
         {
             var backgroundOpacity = profile.BackgroundOpacity;
             if (DrawLabeledSlider(
                     "profile-background-opacity",
-                    text.Get("背景透明度", "Background opacity"),
-                    text.Get("0 为完全透明，1 为完全不透明；经典榜与职能分栏分别保存。横版始终无背景。", "0 is fully transparent and 1 is opaque. Classic and Role split save separate values; Horizontal never draws a background."),
+                    text.Get("背景不透明度", "Background opacity"),
+                    text.Get("0 为完全透明，1 为完全不透明；经典榜、横版、D/T 和 H 分别保存。", "0 is fully transparent and 1 is opaque. Classic, Horizontal, D/T and H each save their own background."),
                     ref backgroundOpacity,
                     0,
                     1,
@@ -820,7 +845,7 @@ public sealed class MeterStyleEditorWindow : Window
 
         if (selectedKind == MeterWindowKind.Classic && configuration.Meter.ClassicAllianceView)
         {
-            ImGui.TextColored(IceBlue, text.Get("24 人本固定布局", "Fixed 24-player layout"));
+            DactTheme.TextColored(IceBlue, text.Get("24 人本固定布局", "Fixed 24-player layout"));
             ImGui.TextWrapped(text.Get(
                 "固定显示职业 / 名字和当前 DPS/HPS；没有可调整槽位。上方 8/24 下拉菜单切回 8 人本后可继续编辑经典表格。",
                 "Shows only job/name and the current DPS/HPS value. Switch the 8/24 menu above back to 8-player mode to edit classic table slots."));
@@ -835,10 +860,10 @@ public sealed class MeterStyleEditorWindow : Window
             return changed;
         }
 
-        ImGui.TextColored(IceBlue, text.Get("槽位内容", "Slot content"));
+        DactTheme.TextColored(IceBlue, text.Get("槽位内容", "Slot content"));
         var preview = MeterSlotPresentation.Label(slot.Metric, text);
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.BeginCombo("##slot-metric", preview))
+        if (DactTheme.BeginCombo("##slot-metric", preview))
         {
             foreach (var metric in MeterSlotDefaults.EditableMetrics.Where(CanUseMetric))
             {
@@ -852,11 +877,17 @@ public sealed class MeterStyleEditorWindow : Window
             }
             ImGui.EndCombo();
         }
+        if (slot.Metric == MeterSlotMetric.TeamDps)
+        {
+            ImGui.TextWrapped(text.Get(
+                "在队伍汇总区显示：本场全队总伤害 ÷ 有效战斗时长；切换职能分栏或只显示自己不会缩小统计范围。",
+                "Shown in the team summary: total encounter damage / effective combat time. Role and self-only views keep the full team total."));
+        }
         if (slot.Metric == MeterSlotMetric.PlayerIdentity)
         {
             var jobStyle = configuration.Meter.JobDisplayStyle;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.BeginCombo(
+            if (DactTheme.BeginCombo(
                     text.Get("职业显示方式", "Job display"),
                     JobDisplayFormatter.Label(jobStyle, text)))
             {
@@ -876,7 +907,7 @@ public sealed class MeterStyleEditorWindow : Window
         var visible = slot.Visible;
         var canUseSelectedSlot = CanUseMetric(slot.Metric);
         ImGui.BeginDisabled(!canUseSelectedSlot);
-        if (ImGui.Checkbox(text.Get("使用这个槽位", "Use this slot"), ref visible))
+        if (DactTheme.Checkbox(text.Get("使用这个槽位", "Use this slot"), ref visible))
         {
             slot.Visible = visible;
             changed = true;
@@ -886,7 +917,7 @@ public sealed class MeterStyleEditorWindow : Window
         {
             var isRankingMetric = profile.DpsSortMetric == dpsMetric;
             ImGui.BeginDisabled(!slot.Visible || isRankingMetric);
-            if (ImGui.Button(
+            if (DactTheme.Button(
                     text.Get(
                         isRankingMetric ? "✓ 当前 DPS 排序依据" : "设为 DPS 排序依据",
                         isRankingMetric ? "✓ Current DPS ranking metric" : "Use for DPS ranking"),
@@ -914,7 +945,7 @@ public sealed class MeterStyleEditorWindow : Window
             ImGui.TextUnformatted(text.Get("伤害数字格式", "Damage number format"));
             ImGui.SetNextItemWidth(-1);
             var format = slot.UseCompactHighestDamage ? 0 : 1;
-            if (ImGui.Combo("##highest-damage-format", ref format,
+            if (DactTheme.Combo("##highest-damage-format", ref format,
                     [text.Get("缩写（K / M）", "Compact (K / M)"), text.Get("完整数字", "Full number")], 2))
             {
                 slot.UseCompactHighestDamage = format == 0;
@@ -934,7 +965,7 @@ public sealed class MeterStyleEditorWindow : Window
             80,
             (ImGui.GetContentRegionAvail().X - moveButtonSpacing) * 0.5f);
         ImGui.BeginDisabled(index <= 0);
-        if (ImGui.Button(text.Get("↑ 前移", "↑ Move up"), new Vector2(moveButtonWidth, 0)))
+        if (DactTheme.Button(text.Get("↑ 前移", "↑ Move up"), new Vector2(moveButtonWidth, 0)))
         {
             (slots[index - 1], slots[index]) =
                 (slots[index], slots[index - 1]);
@@ -943,14 +974,14 @@ public sealed class MeterStyleEditorWindow : Window
         ImGui.EndDisabled();
         ImGui.SameLine(0, moveButtonSpacing);
         ImGui.BeginDisabled(index < 0 || index >= slots.Count - 1);
-        if (ImGui.Button(text.Get("↓ 后移", "↓ Move down"), new Vector2(moveButtonWidth, 0)))
+        if (DactTheme.Button(text.Get("↓ 后移", "↓ Move down"), new Vector2(moveButtonWidth, 0)))
         {
             (slots[index + 1], slots[index]) =
                 (slots[index], slots[index + 1]);
             changed = true;
         }
         ImGui.EndDisabled();
-        if (ImGui.Button(text.Get("删除槽位", "Delete slot"), new Vector2(-1, 0)))
+        if (DactTheme.Button(text.Get("删除槽位", "Delete slot"), new Vector2(-1, 0)))
         {
             slots.Remove(slot);
             selectedSlotId = slots.Count == 0
@@ -1098,8 +1129,8 @@ public sealed class MeterStyleEditorWindow : Window
         => kind switch
         {
             MeterWindowKind.Horizontal => text.Get(
-                "横向滑动；内容按槽位顺序排布；运行时完全透明。",
-                "Horizontal carousel; content follows slot order; fully transparent at runtime."),
+                "横向滑动；内容按槽位顺序排布；背景颜色和不透明度可调整。",
+                "Horizontal carousel; content follows slot order; background color and opacity are adjustable."),
             MeterWindowKind.RoleSplit => text.Get(
                 "D/T 与治疗复用经典表格；左侧名称为文字，右上角按钮负责收起。",
                 "D/T and healer reuse the classic table; the title is plain text and the top-right button collapses it."),

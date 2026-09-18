@@ -252,11 +252,11 @@ public static partial class HostPluginBridge
         var replacements = new Dictionary<string, (string Chinese, string Global)>(
             StringComparer.Ordinal)
         {
-            ["InitZone"] = ("0x03A1", "0x03A1"),
-            // No verified 7.56 FateInfo opcode is published. Keep the existing out-of-band
+            ["InitZone"] = ("0x032B", "0x032B"),
+            // No verified 7.56h FateInfo opcode is published. Keep the existing out-of-band
             // placeholder for both regions; the old CN 0x00E9 now identifies Waymark.
             ["FateInfo"] = ("0xF009", "0xF009"),
-            ["ActorControlSelf"] = ("0x0258", "0x0258"),
+            ["ActorControlSelf"] = ("0x0204", "0x0204"),
         };
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in data.OfType<JObject>())

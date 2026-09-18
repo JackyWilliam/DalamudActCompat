@@ -110,7 +110,7 @@ public sealed class SettingsWindow : Window
     {
         var changed = false;
         var hostConfigurationChanged = false;
-        if (ImGui.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
+        if (DactTheme.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
         {
             if (ImGui.Selectable("简体中文", text.IsChinese))
             {
@@ -151,7 +151,7 @@ public sealed class SettingsWindow : Window
             var enabled = plugin.Enabled &&
                           (!isGeneric || configuration.TrustedGenericActPluginIds.Contains(
                               plugin.Manifest.Id));
-            if (ImGui.Checkbox(
+            if (DactTheme.Checkbox(
                     $"{plugin.Manifest.Name} {plugin.DisplayVersion}###{plugin.Manifest.Id}",
                     ref enabled))
             {
@@ -180,24 +180,24 @@ public sealed class SettingsWindow : Window
             }
 
             ImGui.SameLine();
-            if (ImGui.SmallButton($"{text.Get("打开配置", "Open configuration")}###open-config-{plugin.Manifest.Id}"))
+            if (DactTheme.SmallButton($"{text.Get("打开配置", "Open configuration")}###open-config-{plugin.Manifest.Id}"))
             {
                 openPluginConfiguration(plugin.Manifest.Id);
             }
         }
 
-        if (ImGui.Button(text.Get("安装 ACT 扩展 DLL 或 ZIP...", "Install ACT plugin DLL or ZIP...")))
+        if (DactTheme.Button(text.Get("安装 ACT 扩展 DLL 或 ZIP...", "Install ACT plugin DLL or ZIP...")))
         {
             selectPluginPackage();
         }
 
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("打开 ACT 扩展文件夹", "Open ACT plugin folder")))
+        if (DactTheme.Button(text.Get("打开 ACT 扩展文件夹", "Open ACT plugin folder")))
         {
             openPluginDirectory();
         }
 
-        if (ImGui.Button(text.Get(
+        if (DactTheme.Button(text.Get(
                 "检查 DLL 更新并查看作者与来源网址",
                 "Check DLL updates and view authors/source URLs")))
         {
@@ -205,7 +205,7 @@ public sealed class SettingsWindow : Window
         }
 
         var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
-        if (ImGui.Checkbox(
+        if (DactTheme.Checkbox(
                 text.Get(
                     "启动时自动检查第三方扩展更新",
                     "Automatically check third-party extension updates on startup"),
@@ -221,17 +221,17 @@ public sealed class SettingsWindow : Window
         ImGui.Separator();
         ImGui.TextUnformatted("Cactbot（OverlayPlugin addon）");
         ImGui.TextDisabled(FormatCactbotStatus());
-        if (ImGui.Button(text.Get("安装/更新 Cactbot...", "Install/update Cactbot...")))
+        if (DactTheme.Button(text.Get("安装/更新 Cactbot...", "Install/update Cactbot...")))
         {
             selectCactbotPackage();
         }
         ImGui.SameLine();
-        if (ImGui.Button(text.Get("Cactbot 设置", "Cactbot settings")))
+        if (DactTheme.Button(text.Get("Cactbot 设置", "Cactbot settings")))
         {
             openCactbotSettings();
         }
         ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("打开官方项目页###Cactbot", "Open official project###Cactbot")))
+        if (DactTheme.SmallButton(text.Get("打开官方项目页###Cactbot", "Open official project###Cactbot")))
         {
             OpenUrl("https://github.com/OverlayPlugin/cactbot");
         }
@@ -266,7 +266,7 @@ public sealed class SettingsWindow : Window
                 changed = true;
             }
 
-            if (ImGui.BeginCombo(
+            if (DactTheme.BeginCombo(
                     text.Get("悬浮窗模板", "Overlay template"),
                     configuration.SelectedOverlayTemplate))
             {
@@ -288,7 +288,7 @@ public sealed class SettingsWindow : Window
 
             var selectedSettings = configuration.GetOverlayWindowSettings(
                 configuration.SelectedOverlayTemplate);
-            if (ImGui.Button(selectedSettings.IsVisible
+            if (DactTheme.Button(selectedSettings.IsVisible
                     ? text.Get("关闭所选 HTML 悬浮窗", "Close selected HTML overlay")
                     : text.Get("打开所选 HTML 悬浮窗", "Open selected HTML overlay")))
             {
@@ -356,7 +356,7 @@ public sealed class SettingsWindow : Window
             ImGui.TextWrapped(parserStatus.Detail);
         }
 
-        if (ImGui.Button(text.Get("重启解析器", "Restart parser")))
+        if (DactTheme.Button(text.Get("重启解析器", "Restart parser")))
         {
             _ = Task.Run(async () =>
             {
@@ -391,7 +391,7 @@ public sealed class SettingsWindow : Window
         ImGui.TextUnformatted($"{text.Get("配置", "Config")}: {paths.ConfigDirectory}");
         ImGui.TextUnformatted($"{text.Get("调试日志", "Debug logs")}: {paths.LogDirectory}");
         ImGui.TextUnformatted($"{text.Get("战斗日志", "Combat logs")}: {paths.CombatLogDirectory}");
-        if (ImGui.Button(text.Get("打开日志文件夹", "Open log directory")))
+        if (DactTheme.Button(text.Get("打开日志文件夹", "Open log directory")))
         {
             OpenDirectory(paths.LogDirectory);
         }
@@ -400,7 +400,7 @@ public sealed class SettingsWindow : Window
         ImGui.TextWrapped(text.Get("恢复出厂设置会停止 ACT 宿主、备份所有可变数据，并恢复两个系统插件和默认设置。", "Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings."));
         if (!confirmFactoryReset)
         {
-            if (ImGui.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
+            if (DactTheme.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
             {
                 confirmFactoryReset = true;
             }
@@ -408,14 +408,14 @@ public sealed class SettingsWindow : Window
         else
         {
             ImGui.TextWrapped(text.Get("按确认继续。此前状态仍可从备份目录恢复。", "Press confirm to continue. The previous state remains recoverable from the backup directory."));
-            if (ImGui.Button(text.Get("确认恢复", "Confirm factory reset")))
+            if (DactTheme.Button(text.Get("确认恢复", "Confirm factory reset")))
             {
                 confirmFactoryReset = false;
                 _ = RunFactoryResetAsync();
             }
 
             ImGui.SameLine();
-            if (ImGui.Button(text.Get("取消", "Cancel")))
+            if (DactTheme.Button(text.Get("取消", "Cancel")))
             {
                 confirmFactoryReset = false;
             }
@@ -462,13 +462,13 @@ public sealed class SettingsWindow : Window
 
         // The value owns destructive retention. Dragging edits only a draft so cleanup
         // cannot start until the user explicitly confirms it.
-        if (ImGui.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
+        if (DactTheme.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
             applyHistoryLimit(pending))
         {
             historyLimitDraft = null;
         }
         ImGui.SameLine();
-        if (ImGui.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
+        if (DactTheme.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
         {
             historyLimitDraft = null;
         }
@@ -520,7 +520,7 @@ public sealed class SettingsWindow : Window
         foreach (var capability in capabilities)
         {
             var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
-            if (ImGui.Checkbox(
+            if (DactTheme.Checkbox(
                     $"{ActCapabilityDisplay.Label(capability, text)}##{pluginId}-{capability}",
                     ref allowed))
             {
@@ -557,7 +557,7 @@ public sealed class SettingsWindow : Window
     private static bool Checkbox(string label, bool current, Action<bool> set)
     {
         var value = current;
-        if (!ImGui.Checkbox(label, ref value))
+        if (!DactTheme.Checkbox(label, ref value))
         {
             return false;
         }
@@ -634,7 +634,7 @@ public sealed class SettingsWindow : Window
                 ImGui.PushID($"advanced-used-cactbot-actions-{selectedName}");
                 if (localTemplateAvailable)
                 {
-                    if (ImGui.Button(selectedSettings.IsVisible
+                    if (DactTheme.Button(selectedSettings.IsVisible
                             ? text.Get("关闭", "Close")
                             : text.Get("打开", "Open")))
                     {
@@ -658,7 +658,7 @@ public sealed class SettingsWindow : Window
                             "启动解析器后才能打开该悬浮窗。",
                             "Start the parser before opening this overlay."));
                     if (selectedSettings.OpenOnStartup &&
-                        ImGui.Button(text.Get("停止自动打开", "Disable startup")))
+                        DactTheme.Button(text.Get("停止自动打开", "Disable startup")))
                     {
                         selectedSettings.OpenOnStartup = false;
                         changed = true;
@@ -669,7 +669,7 @@ public sealed class SettingsWindow : Window
                 {
                     ImGui.SameLine();
                 }
-                if (ImGui.Button(text.Get("移除并重置", "Remove and reset")))
+                if (DactTheme.Button(text.Get("移除并重置", "Remove and reset")))
                 {
                     deleteHtmlOverlay(selectedName);
                     selectedUsedCactbotOverlay = null;
@@ -723,7 +723,7 @@ public sealed class SettingsWindow : Window
                 }
 
                 var selectedAvailableName = selectedAvailableCactbotOverlay!;
-                if (ImGui.BeginCombo(
+                if (DactTheme.BeginCombo(
                         text.Get("本地模板", "Local template"),
                         FormatCactbotOverlayName(selectedAvailableName)))
                 {
@@ -741,7 +741,7 @@ public sealed class SettingsWindow : Window
                     ImGui.EndCombo();
                 }
 
-                if (ImGui.Button(text.Get("添加并打开", "Add and open")))
+                if (DactTheme.Button(text.Get("添加并打开", "Add and open")))
                 {
                     configuration.SelectedCactbotOverlay = selectedAvailableName;
                     openCactbotOverlay();
@@ -785,7 +785,7 @@ public sealed class SettingsWindow : Window
         var settings = configuration.GetOverlayWindowSettings(name);
         ImGui.TextDisabled($"{text.Get("窗口设置", "Window settings")}: {name}");
         var editing = settings.IsEditing;
-        if (ImGui.Button(
+        if (DactTheme.Button(
                 editing
                     ? $"{text.Get("完成编辑悬浮窗", "Finish editing overlay")}###{name}-edit-mode"
                     : $"{text.Get("编辑位置和大小", "Edit position and size")}###{name}-edit-mode"))
@@ -900,7 +900,7 @@ public sealed class SettingsWindow : Window
     {
         var changed = false;
         var identityMode = configuration.Meter.PlayerIdentityMode;
-        if (ImGui.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
+        if (DactTheme.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
         {
             foreach (var mode in Enum.GetValues<PlayerIdentityMode>())
             {
