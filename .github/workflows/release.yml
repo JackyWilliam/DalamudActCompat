@@ -190,5 +190,7 @@ jobs:
             artifacts/release/resource-packs.json `
             artifacts/release/DalamudActCompat-core.zip
           if ($LASTEXITCODE -ne 0) { throw "Core upload failed; the release remains a draft." }
-          gh release edit $env:TAG_NAME --draft=false
+          # Explicitly select the verified stable release, including a version-number
+          # correction whose erroneous higher-numbered release was withdrawn.
+          gh release edit $env:TAG_NAME --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed." }

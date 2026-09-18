@@ -1715,7 +1715,7 @@ static void ValidatePluginRepositoryMetadata()
         .Version!
         .ToString(4);
     // Release tags retain the user-facing three/four-part version; CLR assembly
-    // versions always have four parts, so v4.4.0 must not become v4.4.0.0 here.
+    // versions always have four parts, so a three-part tag must not gain a suffix.
     var project = System.Xml.Linq.XDocument.Load(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "DalamudActCompat.csproj"));
     var releaseVersion = project.Descendants("Version").Single().Value;
