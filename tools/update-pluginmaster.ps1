@@ -30,7 +30,9 @@ if (-not (Test-Path $PluginMasterPath)) {
 
 $downloadUrl = "$SourceRepository/releases/download/v$Version/DalamudActCompat-core.zip"
 $entries = Get-Content $PluginMasterPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$entry = @($entries)[0]
+$mainEntries = @($entries | Where-Object InternalName -eq 'DalamudActCompat')
+if ($mainEntries.Count -ne 1) { throw 'Expected exactly one DalamudActCompat entry.' }
+$entry = $mainEntries[0]
 
 $entry.AssemblyVersion = $assemblyVersion
 $entry.DownloadLinkInstall = $downloadUrl
@@ -40,9 +42,10 @@ $entry.Changelog = $Changelog
 $entry | Add-Member -NotePropertyName CanUnloadAsync -NotePropertyValue $true -Force
 $entry | Add-Member -NotePropertyName IconUrl -NotePropertyValue $IconUrl -Force
 
-$json = $entry | ConvertTo-Json -Depth 10
+# Updating the main plugin must retain independent utilities in the same repo.
+$json = ConvertTo-Json -InputObject @($entries) -Depth 10
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($PluginMasterPath, "[`n$json`n]`n", $utf8NoBom)
+[System.IO.File]::WriteAllText($PluginMasterPath, "$json`n", $utf8NoBom)
 
 Write-Host "Updated $PluginMasterPath"
 Write-Host "Custom repository raw URL:"
