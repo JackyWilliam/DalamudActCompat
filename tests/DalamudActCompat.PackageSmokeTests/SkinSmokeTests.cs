@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Textures.TextureWraps;
+using Dalamud.Interface.Windowing;
+using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Storage;
@@ -271,6 +273,7 @@ internal static class SkinSmokeTests
             Check(unlockCount == 1 && !closed, "Logo hit target dragged/closed the window or missed discovery clicks.");
             ButtonAlignment(raster, output);
             PopupSurfaces(raster, output, config, text, logo);
+            MeterSkinIsolation(raster, output, logo);
             MeterEditor(raster, output, logo, config, text);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
@@ -368,6 +371,89 @@ internal static class SkinSmokeTests
             selected = 0;
         }
         io.FontGlobalScale = 1;
+    }
+
+    private static unsafe void MeterSkinIsolation(NativeUiRasterizer raster, string? output, EmptyTexture logo)
+    {
+        var config = new PluginConfiguration();
+        config.Fflogs.Enabled = false;
+        config.Appearance.UnlockedEasterEggs.UnionWith([SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber]);
+        var store = new EncounterStateStore();
+        var encounter = (Encounter)typeof(MeterStyleEditorWindow)
+            .GetMethod("CreatePreviewEncounter", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, null)!;
+        // A completed fixture keeps elapsed time and all row values stable between frames.
+        store.UpdateCurrent(encounter with { EndTime = encounter.StartTime.AddMinutes(3) });
+        var service = new MeterService(store, config.Meter);
+        var text = new UiText(config);
+        var icons = new JobIconTextureSet(null!, Path.Combine(Path.GetTempPath(), "dact-missing-preview-icons"));
+        var classic = new MeterWindow(service, null!, config, text, icons, logo, logo, logo, (_, name) => name, () => { });
+        (Window Window, MeterWindowProfile Profile, string Name)[] windows =
+        [
+            (classic, config.Meter.ClassicWindow, "classic"),
+            (new HorizontalMeterWindow(service, config, text, icons, () => { }), config.Meter.HorizontalWindow, "horizontal"),
+            (new RoleSplitMeterWindow(service, config, text, classic, () => { }, RoleSplitGroup.DamageTank), config.Meter.RoleSplitDamageWindow, "damage-tank"),
+            (new RoleSplitMeterWindow(service, config, text, classic, () => { }, RoleSplitGroup.Healer), config.Meter.RoleSplitHealerWindow, "healer"),
+        ];
+        var io = ImGui.GetIO();
+        io.AddMousePosEvent(-100, -100);
+        io.DisplaySize = new(1120, 840);
+        var context = ImGui.GetCurrentContext();
+        foreach (var (window, profile, name) in windows)
+        foreach (var opacity in new[] { 0f, .27f, 1f })
+        {
+            profile.BackgroundColor = opacity == 1 ? new Vector3(.91f, .87f, .76f) : null;
+            profile.BackgroundOpacity = opacity;
+            profile.IsLocked = true;
+            profile.ClickThroughWhenLocked = false;
+            if (profile.Slots.All(slot => slot.Metric != MeterSlotMetric.TeamDps))
+                profile.Slots.Add(new() { Metric = MeterSlotMetric.TeamDps, Visible = true });
+            var colorBefore = profile.BackgroundColor;
+            string? baseline = null;
+            uint? windowId = null;
+            foreach (var skin in SkinCatalog.All)
+            {
+                config.Appearance.SelectedSkin = skin.Id;
+                DactTheme.SetCurrent(config.Appearance, true, 1);
+                // The live layer is outside PushFrame. An opaque inherited ChildBg
+                // additionally exercises the editor preview and custom host themes.
+                foreach (var inheritedChild in new[] { Vector4.Zero, DactTheme.For(SkinCatalog.Eorzea).Surface })
+                {
+                    for (var frame = 0; frame < 3; frame++)
+                    {
+                        ImGui.NewFrame();
+                        ImGui.PushID("DalamudActCompat");
+                        ImGui.PushStyleColor(ImGuiCol.ChildBg, inheritedChild);
+                        window.PreDraw();
+                        ImGui.SetNextWindowPos(new(30, 30)); ImGui.SetNextWindowSize(new(1050, 740));
+                        ImGui.Begin(window.WindowName, window.Flags | ImGuiWindowFlags.NoSavedSettings);
+                        windowId ??= context.CurrentWindow.ID;
+                        Check(windowId == context.CurrentWindow.ID, "Skin changed a saved meter window ID.");
+                        window.Draw(); ImGui.End(); window.PostDraw();
+                        ImGui.PopStyleColor(); ImGui.PopID();
+                        using (DactTheme.PushFrame()) { }
+                        ImGui.Render();
+                        Check(context.ColorStack.Size == 0 && context.StyleVarStack.Size == 0, "Meter leaked style state.");
+                    }
+                    // Compare actual cimgui geometry and RGBA vertex colors, not
+                    // just configuration: the reported bug never changed saved RGB.
+                    using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+                    var data = ImGui.GetDrawData();
+                    Check(data.TotalVtxCount > 100, "Live meter fixture produced no rows.");
+                    for (var n = 0; n < data.CmdListsCount; n++)
+                    {
+                        var list = new ImDrawListPtr(data.CmdLists[n]);
+                        hash.AppendData(new ReadOnlySpan<byte>(list.VtxBuffer.Data, list.VtxBuffer.Size * sizeof(ImDrawVert)));
+                    }
+                    var fingerprint = Convert.ToHexString(hash.GetHashAndReset());
+                    baseline ??= fingerprint;
+                    Check(fingerprint == baseline, $"Skin/child fill changed {name} meter rendering: {skin.Id}, opacity {opacity}.");
+                    Check(profile.BackgroundColor == colorBefore && profile.BackgroundOpacity == opacity,
+                        "Rendering changed the saved meter background.");
+                }
+                if (output is not null && skin.Id is SkinCatalog.Default or SkinCatalog.Eorzea)
+                    raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"meter-isolated-{name}-{opacity * 100:0}-{skin.Id}.png"));
+            }
+        }
     }
 
     private static unsafe void MeterEditor(NativeUiRasterizer raster, string? output, EmptyTexture logo, PluginConfiguration config, UiText text)
