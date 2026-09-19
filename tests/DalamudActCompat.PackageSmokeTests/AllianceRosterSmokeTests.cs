@@ -75,11 +75,21 @@ internal static class AllianceRosterSmokeTests
                 var settings = new MeterSettings();
                 var rows = new MeterService(new EncounterStateStore(), settings).GetRows(mapped);
                 var select = typeof(MeterWindow).GetMethod("SelectClassicRows", BindingFlags.Static | BindingFlags.NonPublic)!;
-                Check(((IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings])!).Count == 8,
+                Check(((IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings, false])!).Count == 8,
                     "Default local-party mode no longer shows eight.");
+                settings.CompactMode = true;
+                var self = (IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings, false])!;
+                Check(self.Count == 1 && self[0].IsLocalPlayer,
+                    "The live self-only meter no longer selects the local player.");
+                Check(((IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings, true])!).Count == 8 && settings.CompactMode,
+                    "The live self-only preference changed the editor party or was cleared by preview selection.");
+                settings.CompactMode = false;
                 settings.ClassicAllianceView = true;
-                Check(((IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings])!).Count == 24,
+                Check(((IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings, false])!).Count == 24,
                     "24-player mode still truncates a complete roster.");
+                settings.CompactMode = true;
+                Check(((IReadOnlyList<CombatantRow>)select.Invoke(null, [rows, settings, true])!).Count == 24 && settings.CompactMode,
+                    "Self-only mode truncated the alliance editor preview.");
             }
 
             memory->MainGroup.AllianceMembers[0].Flags = 0;

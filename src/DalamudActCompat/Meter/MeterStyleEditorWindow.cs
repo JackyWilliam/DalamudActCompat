@@ -298,6 +298,10 @@ public sealed class MeterStyleEditorWindow : Window
                 configuration.Meter.CompactMode = compact;
                 changed = true;
             }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(text.Get(
+                    "只影响实际统计窗口；页面预览始终展示完整示例队伍。",
+                    "Applies to the live meter only; the preview always shows the full sample party."));
         }
         return changed;
     }
@@ -1001,8 +1005,8 @@ public sealed class MeterStyleEditorWindow : Window
                 "最高伤害会自动截短；把鼠标移到统计项上可查看完整技能名和数值。",
                 "Max-hit values are truncated; hover the meter for full details.")
             : text.Get(
-                "职业 / ID 和其他普通槽位都按列表顺序显示；姓名列会先压缩到两字省略，继续缩小窗口才出现横向滚动，悬停可看完整名称。全队总伤害与总治疗固定在底部汇总区，经典榜收起时隐藏。",
-                "Job / ID and other regular slots follow list order. Names shrink to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Team damage and healing stay in the bottom summary and hide when Classic is collapsed."));
+                "职业 / ID 和其他普通槽位都按列表顺序显示；姓名列会先压缩到两字省略，继续缩小窗口才出现横向滚动，悬停可看完整名称。全队汇总固定在底部；经典榜收起时隐藏，编辑器预览中仍可查看和选择。",
+                "Job / ID and other regular slots follow list order. Names shrink to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Team totals stay at the bottom. They hide when the live Classic meter is collapsed, but remain visible and selectable in the editor preview."));
         return changed;
     }
 

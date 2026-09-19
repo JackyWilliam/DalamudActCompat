@@ -3022,10 +3022,14 @@ static void ValidateMeterLayout()
     Assert(
         !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
         "The collapsed classic Meter still rendered its team summary.");
+    Assert(
+        MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings, editorPreview: true),
+        "The self-only classic editor hid editable team summary slots.");
     summaryVisibilitySettings.CompactMode = false;
     summaryVisibilitySettings.ClassicAllianceView = true;
     Assert(
-        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings),
+        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings) &&
+        !MeterWindow.ShouldDrawTeamSummary(summaryVisibilitySettings, editorPreview: true),
         "The fixed 24-player classic layout unexpectedly rendered the editable team summary.");
     Assert(
         MeterWindow.ResolveIdentityColumnWidth(600, 600, 240, 90) == 240 &&
