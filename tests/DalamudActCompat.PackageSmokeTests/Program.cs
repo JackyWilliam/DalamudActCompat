@@ -54,6 +54,12 @@ try
     TeamDpsSmokeTests.Run();
     AllianceRosterSmokeTests.Run();
     if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
+    if (args.Contains("--liquid-glass-only", StringComparer.Ordinal))
+    {
+        using var glass = new LiquidGlassSmokeTests();
+        glass.Run();
+        return 0;
+    }
     if (args.Contains("--skins-cloud-only", StringComparer.Ordinal))
     {
         await SkinSmokeTests.CloudAsync(testRoot);

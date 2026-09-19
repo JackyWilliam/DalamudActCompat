@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="TerraFX.Interop.Windows">
+      <HintPath>$(DalamudLibPath)TerraFX.Interop.Windows.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Content Include="Fixtures/PictoCleanupScopes.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/PictoOnline*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/U7bP1Drawings.json" CopyToOutputDirectory="PreserveNewest" />

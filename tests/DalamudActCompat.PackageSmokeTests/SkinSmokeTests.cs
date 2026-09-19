@@ -40,12 +40,14 @@ internal static class SkinSmokeTests
         for (var i = 0; i < 7; i++) discoveries.ClickVersion(config.Appearance, i * 100);
         for (var i = 0; i < 6; i++) discoveries.VisitPage(config.Appearance, i);
         for (var i = 0; i < 5; i++) discoveries.ClickAppearanceTitle(config.Appearance, i * 100);
+        for (var i = 0; i < 6; i++) discoveries.ClickAppearanceBreadcrumb(config.Appearance, i * 100);
+        for (var i = 0; i < 7; i++) discoveries.ClickAppearanceHint(config.Appearance, i * 100);
         await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(config));
         var unlocked = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
             Path.Combine(root, "skin-cloud-unlocked.enc"), key, default);
         Check(before.ContentId != unlocked.ContentId && backups.IsIncludedPath(sourcePaths.ConfigDirectory, sourceFile),
             "Unlocking colors without changing the selected skin was invisible to cloud sync.");
-        config.Appearance.SelectedSkin = SkinCatalog.NeonPink;
+        config.Appearance.SelectedSkin = SkinCatalog.LiquidGlass;
         await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(config));
         var archive = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
             Path.Combine(root, "skin-cloud-selected.enc"), key, default);
@@ -72,13 +74,13 @@ internal static class SkinSmokeTests
                 "Restored skin preferences could not be saved.");
         }
         ApplyAndSave();
-        var expected = new[] { SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber, SkinCatalog.NeonPink };
-        Check(live.Appearance.SelectedSkin == SkinCatalog.NeonPink && live.Appearance.UnlockedEasterEggs.SetEquals(expected),
+        var expected = SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id).ToArray();
+        Check(live.Appearance.SelectedSkin == SkinCatalog.LiquidGlass && live.Appearance.UnlockedEasterEggs.SetEquals(expected),
             "Cloud restoration lost skin selection/discoveries in the running configuration.");
         var reloaded = JsonConvert.DeserializeObject<PluginConfiguration>(await File.ReadAllTextAsync(destinationFile))!;
         reloaded.ApplyMigrations();
         Check(reloaded.Appearance.UnlockedEasterEggs.SetEquals(expected) &&
-              SkinCatalog.Resolve(reloaded.Appearance, false, 0) == SkinCatalog.NeonPink,
+              SkinCatalog.Resolve(reloaded.Appearance, false, 0) == SkinCatalog.LiquidGlass,
             "The next save or cold reload erased the restored discoveries.");
         reloaded.Appearance.SelectedSkin = SkinCatalog.Eorzea;
         Check(SkinCatalog.Resolve(reloaded.Appearance, true, 0) == SkinCatalog.Default &&
@@ -191,6 +193,23 @@ internal static class SkinSmokeTests
             "Pink discovery repeated or incorrectly requires sponsor/login authority.");
         Check(DactTheme.For(SkinCatalog.NeonPink).Accent == new Vector4(254 / 255f, 20 / 255f, 147 / 255f, 1),
             "Neon pink no longer matches the user's FE1493 swatch.");
+        foreach (var (id, count, click) in new (string, int, Func<UiSkinSettings, long, string?>)[]
+                 { (SkinCatalog.LiquidGlass, 6, discoveries.ClickAppearanceBreadcrumb), (SkinCatalog.Obsidian, 7, discoveries.ClickAppearanceHint) })
+        {
+            config.Appearance.SelectedSkin = id;
+            Check(SkinCatalog.Resolve(config.Appearance, true, 99) == SkinCatalog.Default, "New mystery skin bypassed discovery.");
+            for (var i = 0; i < count - 1; i++) Check(click(config.Appearance, i * 100) is null, "New skin unlocked early.");
+            Check(click(config.Appearance, 5000) is null, "New skin counted across an idle gap.");
+            for (var i = 1; i < count - 1; i++) Check(click(config.Appearance, 5000 + i * 100) is null, "New skin unlocked before its threshold.");
+            Check(click(config.Appearance, 5000 + (count - 1) * 100) == id && click(config.Appearance, 6000) is null,
+                "New discovery failed or repeated.");
+            var cold = JsonConvert.DeserializeObject<PluginConfiguration>(JsonConvert.SerializeObject(config))!;
+            cold.ApplyMigrations();
+            Check(SkinCatalog.Resolve(cold.Appearance, false, 0) == id, "New skin did not survive save/reload without sponsorship.");
+        }
+        var black = DactTheme.For(SkinCatalog.Obsidian);
+        Check(black.Surface == new Vector4(0, 0, 0, 1) && black.Accent == Vector4.One, "Obsidian lost its pure black canvas or neutral accent.");
+        Check(DactTheme.For(SkinCatalog.LiquidGlass) is { Glass: true, Surface.W: > 0 and < 1 }, "Glass became an opaque palette.");
         config.Appearance.SelectedSkin = SkinCatalog.Jade;
         config.Meter.HorizontalWindow.BackgroundColor = new(.12f, .23f, .34f);
         config.Meter.HorizontalWindow.BackgroundOpacity = .7f;
@@ -202,7 +221,7 @@ internal static class SkinSmokeTests
             "Cold reload or repeat migration lost the horizontal color/opacity.");
         Check(restored.Meter.RoleSplitDamageWindow.BackgroundColor != restored.Meter.RoleSplitHealerWindow.BackgroundColor,
             "D/T and H backgrounds were coupled.");
-        Check(restored.Appearance.UnlockedEasterEggs.SetEquals([SkinCatalog.Jade, SkinCatalog.Amber, SkinCatalog.Amethyst, SkinCatalog.NeonPink]) &&
+        Check(restored.Appearance.UnlockedEasterEggs.SetEquals(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id)) &&
               SkinCatalog.Resolve(restored.Appearance, true, 0) == SkinCatalog.Jade, "Discovered colors did not persist or incorrectly require sponsorship.");
         var background = restored.Meter.HorizontalWindow;
         var fill = MeterBackground.Fill(background);
@@ -254,7 +273,7 @@ internal static class SkinSmokeTests
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
             var config = new PluginConfiguration();
-            config.Appearance.UnlockedEasterEggs.UnionWith([SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber, SkinCatalog.NeonPink]);
+            config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
             var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(1) };
             var text = new UiText(config); var logo = new EmptyTexture(); var drag = new WindowDragController();
             using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "act-logo.jpg")))
@@ -273,6 +292,7 @@ internal static class SkinSmokeTests
             var applyButtonPosition = Vector2.Zero;
             var backButtonPosition = Vector2.Zero;
             var appearanceTitlePosition = Vector2.Zero;
+            var closeHit = Vector4.Zero;
             skins.Open(config.Appearance, account);
             void Frame()
             {
@@ -287,6 +307,7 @@ internal static class SkinSmokeTests
                     closed |= BrandedWindowChrome.Draw(drag, logo, "设置&账号", "运行中", DactTheme.Palette.Accent, "0.4.3.1", "skin-test",
                         helpAction: () => { }, friendsAction: () => { }, onlineFriends: 2,
                         logoAction: () => { if (discoveries.ClickLogo(config.Appearance, Environment.TickCount64) is not null) unlockCount++; });
+                    closeHit = new(ImGui.GetItemRectMin(), ImGui.GetItemRectMax().X, ImGui.GetItemRectMax().Y);
                     BrandedWindowChrome.DrawNavigationRail("skin-preview-tabs", ["概览", "战斗统计", "悬浮窗", "扩展", "云同步", "设置&账号"], 5);
                     ImGui.BeginChild("control-center-page-content", new Vector2(-1, ControlCenterWindow.PageContentHeight()), true,
                         (skins.IsOpen ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None) |
@@ -295,7 +316,9 @@ internal static class SkinSmokeTests
                     {
                         appearanceTitlePosition = ImGui.GetCursorScreenPos() + new Vector2(60, ImGui.GetTextLineHeightWithSpacing() + ImGui.GetTextLineHeight() * .5f);
                         if (skins.Draw(config.Appearance, account, text, () => { }, () =>
-                            { if (discoveries.ClickAppearanceTitle(config.Appearance, Environment.TickCount64) is not null) { unlockCount++; saves++; } })) saves++;
+                            { if (discoveries.ClickAppearanceTitle(config.Appearance, Environment.TickCount64) is not null) { unlockCount++; saves++; } }, () =>
+                            { if (discoveries.ClickAppearanceBreadcrumb(config.Appearance, Environment.TickCount64) is not null) { unlockCount++; saves++; } }, () =>
+                            { if (discoveries.ClickAppearanceHint(config.Appearance, Environment.TickCount64) is not null) { unlockCount++; saves++; } })) saves++;
                         applyButtonPosition = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) * .5f;
                         backButtonPosition = applyButtonPosition - new Vector2(150 * Math.Max(.75f, ImGui.GetFontSize() / 17f) + ImGui.GetStyle().ItemSpacing.X, 0);
                     }
@@ -386,6 +409,51 @@ internal static class SkinSmokeTests
                   config.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.NeonPink) &&
                   config.Appearance.SelectedSkin == selectedBeforeDiscovery,
                 "Real appearance-title clicks failed to save pink discovery once, or automatically applied it.");
+            foreach (var (id, count, offset) in new[] { (SkinCatalog.LiquidGlass, 6, -1), (SkinCatalog.Obsidian, 7, 1) })
+            {
+                config.Appearance.UnlockedEasterEggs.Remove(id);
+                var priorSaves = saves;
+                for (var i = 0; i < count; i++) Click(appearanceTitlePosition + new Vector2(0, offset * ImGui.GetTextLineHeightWithSpacing()));
+                Check(saves == priorSaves + 1 && config.Appearance.UnlockedEasterEggs.Contains(id) && config.Appearance.SelectedSkin == selectedBeforeDiscovery,
+                    "Real glass/obsidian discovery missed its text hit target, saved repeatedly, or auto-applied.");
+                // Open from an already selected new skin to exercise its actual apply button
+                // while the catalogue is scrolled out of view and the window is compact.
+                config.Appearance.SelectedSkin = id; skins.Open(config.Appearance, account);
+                config.Appearance.SelectedSkin = SkinCatalog.Default; windowSize = new(760, 520); Frame(); Frame();
+                Click(applyButtonPosition); Frame();
+                Check(config.Appearance.SelectedSkin == id && DactTheme.CurrentSkin == id, "New skin could not be applied from the compact picker.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"skin-{id}-compact.png"));
+                Click(backButtonPosition);
+                Check(!skins.IsOpen && !closed, "New skin broke its back button.");
+                config.Appearance.SelectedSkin = selectedBeforeDiscovery; windowSize = new(1060, 780);
+                skins.Open(config.Appearance, account); Frame(); Frame();
+            }
+            if (Environment.GetEnvironmentVariable("DACT_TEST_GPU_GLASS") == "1")
+            {
+                using var gpu = new LiquidGlassSmokeTests();
+                gpu.Run(); gpu.Install(raster);
+                foreach (var id in new[] { SkinCatalog.LiquidGlass, SkinCatalog.Obsidian })
+                {
+                    config.Appearance.UnlockedEasterEggs.Add(id); config.Appearance.SelectedSkin = id;
+                    skins.Open(config.Appearance, account);
+                    gpu.Renderer.BeginFrame(gpu.Device, id == SkinCatalog.LiquidGlass); Frame(); Frame();
+                    if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"skin-{id}-gpu.png"));
+                    if (id == SkinCatalog.LiquidGlass && output is not null)
+                        Check(gpu.Renderer.RenderedSurfaces > 5, "Native UI did not execute the real glass callbacks.");
+                }
+                raster.RenderCallback = null; raster.PaintBackdrop = null;
+            }
+            config.Appearance.SelectedSkin = SkinCatalog.LiquidGlass;
+            foreach (var scale in new[] { 1f, 1.4f })
+            {
+                io.FontGlobalScale = scale; windowSize = new(760, 520); Frame(); Frame();
+                // Check the real hit rectangle, not just the cross glyph: its
+                // entire target must clear the rim and still close on release.
+                Check(30 + windowSize.X - closeHit.Z >= 16, "Glass close button still touches the outer rim.");
+                Click(new((closeHit.X + closeHit.Z) / 2, (closeHit.Y + closeHit.W) / 2));
+                Check(closed, "Inset glass close button lost its click target."); closed = false;
+            }
+            io.FontGlobalScale = 1;
             ButtonAlignment(raster, output);
             PopupSurfaces(raster, output, config, text, logo);
             MeterSkinIsolation(raster, output, logo);
@@ -561,6 +629,33 @@ internal static class SkinSmokeTests
             Check(context.ColorStack.Size == 0 && context.StyleVarStack.Size == 0, "Popup leaked style state.");
         }
         void Click(Vector2 at) { io.AddMousePosEvent(at.X, at.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); io.AddMouseButtonEvent(0, false); Frame(); }
+        foreach (var skin in SkinCatalog.All)
+        foreach (var scale in new[] { .75f, 16f / 17, 1f, 1.4f })
+        {
+            io.FontGlobalScale = scale;
+            DactTheme.SetCurrent(new() { SelectedSkin = skin.Id, UnlockedEasterEggs = SkinCatalog.All.Where(s => s.EasterEgg).Select(s => s.Id).ToHashSet() }, true, 1);
+            Field("cloudQuickPopupRequested", true); Frame(); Frame(); Frame(); Frame();
+            var fitted = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
+            Check(!fitted.ScrollbarY && fitted.ScrollMax.Y == 0,
+                $"Cloud popup has a needless scrollbar: {skin.Id}, scale={scale}, size={fitted.Size}, content={fitted.ContentSize}, scroll={fitted.ScrollMax}.");
+            if (output is not null && skin.Id == SkinCatalog.NeonPink && scale == 16f / 17)
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, "cloud-popup-pink-no-scrollbar.png"));
+            io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+        }
+        // Real overflow must remain scrollable; simply hiding the bar would make
+        // the lower actions inaccessible on a small viewport or a long status.
+        io.FontGlobalScale = 1.4f; io.DisplaySize = new(800, 360);
+        var normalSnapshot = snapshot;
+        snapshot = snapshot with { StatusMessage = string.Concat(Enumerable.Repeat("这是用于验证滚动的较长同步状态。", 60)) };
+        Field("cloudQuickPopupRequested", true); Frame(); Frame(); Frame(); Frame();
+        var overflow = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
+        Check(overflow.ScrollbarY && overflow.ScrollMax.Y > 100, "Long cloud status lost its scrollbar.");
+        io.AddMousePosEvent(overflow.Pos.X + 60, overflow.Pos.Y + 60); Frame();
+        io.AddMouseWheelEvent(0, -20); Frame(); Frame();
+        Check(overflow.Scroll.Y > 0, "Long cloud status no longer scrolls.");
+        snapshot = normalSnapshot; Frame(); Frame(); Frame(); Frame();
+        io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+        io.DisplaySize = new(1120, 840);
         foreach (var scale in new[] { 1f, 1.4f })
         {
             io.FontGlobalScale = scale;
@@ -590,7 +685,7 @@ internal static class SkinSmokeTests
     {
         var config = new PluginConfiguration();
         config.Fflogs.Enabled = false;
-        config.Appearance.UnlockedEasterEggs.UnionWith([SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber]);
+        config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
         var store = new EncounterStateStore();
         var encounter = (Encounter)typeof(MeterStyleEditorWindow)
             .GetMethod("CreatePreviewEncounter", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, null)!;
@@ -627,6 +722,7 @@ internal static class SkinSmokeTests
             {
                 config.Appearance.SelectedSkin = skin.Id;
                 DactTheme.SetCurrent(config.Appearance, true, 1);
+                Check(DactTheme.CurrentSkin == skin.Id, "Meter isolation fixture silently fell back to the default skin.");
                 // The live layer is outside PushFrame. An opaque inherited ChildBg
                 // additionally exercises the editor preview and custom host themes.
                 foreach (var inheritedChild in new[] { Vector4.Zero, DactTheme.For(SkinCatalog.Eorzea).Surface })

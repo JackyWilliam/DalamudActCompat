@@ -46,7 +46,8 @@ internal sealed class SkinSettingsPanel
         ImGui.EndChild();
     }
 
-    public bool Draw(UiSkinSettings settings, CloudClientSnapshot account, UiText text, Action refresh, Action discoverPalette)
+    public bool Draw(UiSkinSettings settings, CloudClientSnapshot account, UiText text, Action refresh,
+        Action discoverPalette, Action discoverGlass, Action discoverObsidian)
     {
         if (!IsOpen) return false;
         if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) &&
@@ -61,9 +62,11 @@ internal sealed class SkinSettingsPanel
         var pageStart = ImGui.GetCursorScreenPos();
         var pageSize = ImGui.GetContentRegionAvail();
         DactTheme.TextColored(DactTheme.Palette.Gold, text.Get("设置与账号 / 外观与皮肤", "Settings & Account / Appearance & skins"));
+        if (ImGui.IsItemClicked()) discoverGlass();
         ImGui.TextUnformatted(text.Get("选择喜欢的外观", "Find your look"));
         if (ImGui.IsItemClicked()) discoverPalette();
         ImGui.TextDisabled(text.Get("点击卡片查看预览，应用后自动保存。", "Select a card to preview. Applying saves your choice."));
+        if (ImGui.IsItemClicked()) discoverObsidian();
         ImGui.Spacing();
 
         // Only the catalogue/detail body scrolls. Exit and apply stay reachable
@@ -164,7 +167,11 @@ internal sealed class SkinSettingsPanel
         DrawPreview(Discovered(skin, settings) ? skin.Id : null, ImGui.GetCursorScreenPos(), size, text, false);
         ImGui.Dummy(size);
         ImGui.Spacing();
-        ImGui.TextWrapped(skin.SponsorTier > 0
+        ImGui.TextWrapped(Discovered(skin, settings) && skin.Id == SkinCatalog.LiquidGlass
+            ? text.Get("偏白的半透玻璃与墨色文字，圆润边缘折射流光。", "Milky translucent glass, dark lettering and luminous refractive edges.")
+            : Discovered(skin, settings) && skin.Id == SkinCatalog.Obsidian
+            ? text.Get("纯黑底色与灰白细节，让内容安静而清晰。", "Pure black surfaces with quiet, clear grayscale details.")
+            : skin.SponsorTier > 0
             ? text.Get("浅色面板，沿用游戏原版标签、按钮和图标。", "Light panels with original game tabs, buttons and icons.")
             : skin.EasterEgg ? Discovered(skin, settings)
                 ? text.Get("探索所得的配色，保留熟悉的 DACT 布局。", "A discovered palette for the familiar DACT layout.")
@@ -204,7 +211,8 @@ internal sealed class SkinSettingsPanel
 
         var unit = size.Y / 190f;
         var game = palette.Light ? DactTheme.GameAssets : null;
-        if (game?.Window(min, max, unit) != true)
+        if (palette.Glass) DactTheme.DrawGlassSurface(draw, min, max, 10 * unit, palette.Surface);
+        else if (game?.Window(min, max, unit) != true)
         {
             draw.AddRectFilled(min, max, ImGui.GetColorU32(palette.Surface), 7 * unit);
             draw.AddRect(min, max, ImGui.GetColorU32(palette.Border), 7 * unit);
@@ -229,7 +237,8 @@ internal sealed class SkinSettingsPanel
             var tabMin = new Vector2(min.X + pad + i * tabWidth, tabY);
             var tabMax = tabMin + new Vector2(tabWidth - 3 * unit, 23 * unit);
             var textured = game?.Tab(tabMin, tabMax, i == 0, false) == true;
-            if (!textured) draw.AddRectFilled(tabMin, tabMax, ImGui.GetColorU32(i == 0 ? palette.Hover : palette.Raised), 3 * unit);
+            if (palette.Glass) DactTheme.DrawGlassSurface(draw, tabMin, tabMax, 12 * unit, i == 0 ? palette.Hover : palette.Raised);
+            else if (!textured) draw.AddRectFilled(tabMin, tabMax, ImGui.GetColorU32(i == 0 ? palette.Hover : palette.Raised), 3 * unit);
             if (!miniature) CenterPreviewText(labels[i], tabMin, tabMax, fontSizeNormal * .9f, textured ? Vector4.One : palette.Text);
         }
         var rowMin = new Vector2(min.X + pad, min.Y + 70 * unit);
@@ -244,7 +253,8 @@ internal sealed class SkinSettingsPanel
         var buttonMin = new Vector2(min.X + pad, min.Y + 150 * unit);
         var buttonMax = buttonMin + new Vector2(Math.Min(size.X - pad * 2, 110 * unit), 28 * unit);
         var gameButton = game?.Button(buttonMin, buttonMax, false, false) == true;
-        if (!gameButton) draw.AddRectFilled(buttonMin, buttonMax, ImGui.GetColorU32(palette.Hover), 5 * unit);
+        if (palette.Glass) DactTheme.DrawGlassSurface(draw, buttonMin, buttonMax, 14 * unit, palette.Hover);
+        else if (!gameButton) draw.AddRectFilled(buttonMin, buttonMax, ImGui.GetColorU32(palette.Hover), 5 * unit);
         if (!miniature) CenterPreviewText(text.Get("按钮效果", "Button style"), buttonMin, buttonMax - new Vector2(0, gameButton ? 4 * unit : 0), fontSizeNormal * .9f, gameButton ? Vector4.One : palette.Text);
         draw.PopClipRect();
     }

@@ -2418,7 +2418,9 @@ public sealed class ControlCenterWindow : Window
         // does not outline this surface, leaving it merged into the panel behind it.
         ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
         ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 1);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(16, 16) * scale);
+        // Auto-fit truncates the window size to pixels. Fractional padding (e.g.
+        // 16/17 font scale) otherwise leaves a 0.12px overflow and a permanent bar.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(MathF.Ceiling(16 * scale)));
         DactTheme.PushStyleColor(ImGuiCol.PopupBg, Navy);
         DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
         DactTheme.PreparePopupPosition(CloudQuickPopupId);
@@ -3492,10 +3494,15 @@ public sealed class ControlCenterWindow : Window
     {
         if (!skinSettings.IsOpen) return DrawDiagnostics();
         var changed = skinSettings.Draw(configuration.Appearance, cloud.GetSnapshot(), text, cloud.Refresh,
-            () => DiscoverSkin(skinDiscoveries.ClickAppearanceTitle(configuration.Appearance, Environment.TickCount64)));
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceTitle(configuration.Appearance, Environment.TickCount64)),
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceBreadcrumb(configuration.Appearance, Environment.TickCount64)),
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceHint(configuration.Appearance, Environment.TickCount64)));
         if (!skinSettings.IsOpen) resetSettingsScroll = true;
         return changed;
     }
+
+    internal bool NeedsGlassPreview => skinSettings.IsOpen && skinSettings.PreviewSkinId == SkinCatalog.LiquidGlass &&
+        configuration.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.LiquidGlass);
 
     private bool DrawDiagnostics()
     {

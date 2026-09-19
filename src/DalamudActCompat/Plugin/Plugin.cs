@@ -57,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfiguration configuration;
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
+    private readonly LiquidGlassRenderer liquidGlass;
     private readonly ResourcePackManager resourcePackManager;
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
@@ -477,6 +478,8 @@ public sealed class Plugin : IDalamudPlugin
 
         text = new UiText(configuration);
         DactTheme.GameAssets = new GameSkinAssets(textureProvider, dataManager);
+        liquidGlass = new LiquidGlassRenderer(error => logger.Error(error, "Liquid glass rendering failed; using the fallback surface."));
+        DactTheme.GlassRenderer = liquidGlass;
         var assetDirectory = Path.Combine(
             pluginInterface.AssemblyLocation.Directory!.FullName,
             "Assets");
@@ -852,6 +855,8 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DetachDalamudResources()
     {
+        DactTheme.GlassRenderer = null;
+        liquidGlass.Dispose();
         DactTheme.GameAssets = null;
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
@@ -886,6 +891,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
+        liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || settingsWindow.NeedsGlassPreview);
         cloudAdministratorNotice.Update(cloudClient.Snapshot);
         // Serialize the two celebrations so their windows and confirmation buttons
         // never overlap. The queued animation starts only when it becomes visible.

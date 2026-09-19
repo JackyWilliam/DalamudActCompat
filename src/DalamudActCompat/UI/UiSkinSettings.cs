@@ -40,6 +40,8 @@ internal static class SkinCatalog
     public const string Amber = "amber";
     // Display names may change; the saved ID keeps existing and cloud-restored discoveries valid.
     public const string NeonPink = "neon-pink";
+    public const string LiquidGlass = "liquid-glass";
+    public const string Obsidian = "obsidian";
 
     public static IReadOnlyList<SkinDefinition> All { get; } =
     [
@@ -49,6 +51,8 @@ internal static class SkinCatalog
         new(Amethyst, "月下紫晶", "Moonlit Amethyst", EasterEgg: true),
         new(Amber, "暮光琥珀", "Twilight Amber", EasterEgg: true),
         new(NeonPink, "绯梦霓光", "Neon Reverie", EasterEgg: true),
+        new(LiquidGlass, "澄光流璃", "Lucent Glass", EasterEgg: true),
+        new(Obsidian, "无相玄墨", "Obsidian Void", EasterEgg: true),
     ];
 
     public static bool IsEasterEgg(string id) => All.Any(skin => skin.Id == id && skin.EasterEgg);
@@ -70,9 +74,13 @@ internal sealed class SkinDiscoveries
     private int logoClicks;
     private int versionClicks;
     private int appearanceClicks;
+    private int breadcrumbClicks;
+    private int hintClicks;
     private long lastLogoClick = long.MinValue;
     private long lastVersionClick = long.MinValue;
     private long lastAppearanceClick = long.MinValue;
+    private long lastBreadcrumbClick = long.MinValue;
+    private long lastHintClick = long.MinValue;
     private int visitedPages;
 
     public string? ClickLogo(UiSkinSettings settings, long now)
@@ -83,6 +91,12 @@ internal sealed class SkinDiscoveries
 
     public string? ClickAppearanceTitle(UiSkinSettings settings, long now)
         => Click(settings, SkinCatalog.NeonPink, 5, now, ref appearanceClicks, ref lastAppearanceClick);
+
+    public string? ClickAppearanceBreadcrumb(UiSkinSettings settings, long now)
+        => Click(settings, SkinCatalog.LiquidGlass, 6, now, ref breadcrumbClicks, ref lastBreadcrumbClick);
+
+    public string? ClickAppearanceHint(UiSkinSettings settings, long now)
+        => Click(settings, SkinCatalog.Obsidian, 7, now, ref hintClicks, ref lastHintClick);
 
     public string? VisitPage(UiSkinSettings settings, int page)
     {

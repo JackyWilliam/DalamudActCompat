@@ -8,6 +8,8 @@ using Dalamud.Bindings.ImGui;
 // atlas. This supplies inspectable evidence without a mock HTML UI or game injection.
 internal sealed class NativeUiRasterizer
 {
+    internal Action<ImDrawCmdPtr, byte[], int, int>? RenderCallback { get; set; }
+    internal Action<byte[], int, int>? PaintBackdrop { get; set; }
     private readonly Dictionary<ulong, (byte[] Pixels, int Width, int Height)> textures = new();
     public void AddTexture(ImTextureID id, byte[] pixels, int width, int height)
         => textures.Add(id.Handle, (pixels, width, height));
@@ -28,12 +30,20 @@ internal sealed class NativeUiRasterizer
         var width = (int)data.DisplaySize.X; var height = (int)data.DisplaySize.Y;
         var pixels = new byte[width * height * 3];
         for (var i = 0; i < pixels.Length; i += 3) { pixels[i] = 23; pixels[i + 1] = 30; pixels[i + 2] = 40; }
+        PaintBackdrop?.Invoke(pixels, width, height);
         for (var n = 0; n < data.CmdListsCount; n++)
         {
             var list = new ImDrawListPtr(data.CmdLists[n]);
             for (var c = 0; c < list.CmdBuffer.Size; c++)
             {
                 var command = list.CmdBuffer[c];
+                if (command.UserCallback != null)
+                {
+                    // Optional real D3D11 pass over the pixels drawn so far: this
+                    // preserves native draw order and does not fake the glass shader.
+                    RenderCallback?.Invoke(new ImDrawCmdPtr(&command), pixels, width, height);
+                    continue;
+                }
                 if (!textures.TryGetValue(command.TextureId.Handle, out var texture)) continue;
                 var clip = command.ClipRect;
                 for (var i = 0; i < command.ElemCount; i += 3)
