@@ -29,7 +29,7 @@ internal sealed record CloudFriendLookup(CloudApiUser? User, string Relationship
 internal sealed record CloudFriendRemoval(string Status);
 internal sealed record CloudFriendPresence(
     bool Online, int OnlineConnectionCount, int HeartbeatIntervalSeconds, DateTimeOffset? ExpiresAt, CloudPresenceSettings? Settings = null);
-internal sealed record CloudChatSender(string Kind, string? UserId, string Name, bool IsAdmin = false)
+internal sealed record CloudChatSender(string Kind, string? UserId, string Name, bool IsAdmin = false, int SponsorTier = 0)
 {
     // Only the authenticated server assigns this discriminator; names are not identity.
     public bool IsOfficial => Kind == "official";

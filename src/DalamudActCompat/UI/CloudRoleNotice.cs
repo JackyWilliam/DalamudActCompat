@@ -5,7 +5,10 @@ using DalamudActCompat.Infrastructure.Cloud;
 
 namespace DalamudActCompat.UI;
 
-internal sealed class CloudAdministratorNotice(UiText text, ISharedImmediateTexture icon, Action<string, string> acknowledge, Func<double>? clock = null)
+internal enum CloudRoleNoticeKind { Administrator, Sponsor }
+
+internal sealed class CloudRoleNotice(UiText text, ISharedImmediateTexture icon, Action<string, string> acknowledge,
+    Func<double>? clock = null, CloudRoleNoticeKind kind = CloudRoleNoticeKind.Administrator)
 {
     private static readonly Vector4 Gold = new(.91f, .75f, .42f, 1);
     private static readonly Vector4 Ice = new(.56f, .81f, .94f, 1);
@@ -18,9 +21,11 @@ internal sealed class CloudAdministratorNotice(UiText text, ISharedImmediateText
 
     public void Update(CloudClientSnapshot snapshot)
     {
-        var next = snapshot is { IsSignedIn: true, ActiveBan: null,
-            Administrator: { IsAdmin: true, AdminNoticePending: true } role }
-            ? role.AdminGrantId : null;
+        var next = snapshot is { IsSignedIn: true, ActiveBan: null }
+            ? kind == CloudRoleNoticeKind.Sponsor
+                ? snapshot.Sponsor is { Tier: > 0, SponsorNoticePending: true } sponsor ? sponsor.SponsorGrantId : null
+                : snapshot.Administrator is { IsAdmin: true, AdminNoticePending: true } role ? role.AdminGrantId : null
+            : null;
         if (string.IsNullOrWhiteSpace(next) || string.IsNullOrWhiteSpace(snapshot.Username))
         {
             grantId = null;
@@ -60,7 +65,7 @@ internal sealed class CloudAdministratorNotice(UiText text, ISharedImmediateText
         ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(.06f, .075f, .1f, 1));
         // A normal window keeps the celebration local to DACT; it must not take
         // keyboard focus from the game or capture input outside its own bounds.
-        var visible = ImGui.Begin("###DACTAdministratorCongratulations", ImGuiWindowFlags.NoDecoration |
+        var visible = ImGui.Begin(kind == CloudRoleNoticeKind.Sponsor ? "###DACTSponsorCongratulations" : "###DACTAdministratorCongratulations", ImGuiWindowFlags.NoDecoration |
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoFocusOnAppearing |
             ImGuiWindowFlags.NoNavFocus | ImGuiWindowFlags.NoNavInputs);
         try
@@ -99,9 +104,18 @@ internal sealed class CloudAdministratorNotice(UiText text, ISharedImmediateText
                     draw.AddCircleFilled(point, (i % 3 == 0 ? 2 : 1.3f) * scale, Color(i % 4 == 0 ? Ice : Gold, fade), 6);
                 }
             }
-            Center(text.Get("恭喜您成为管理员", "Congratulations, Administrator!"), 148, 24, Gold);
-            Center(text.Get("您已获得无限生成激活码的权限", "You can now generate unlimited activation keys."), 199, 16, Vector4.One);
-            Center(text.Get("无需额外额度，即可继续邀请好友加入 DACT", "Invite friends to DACT without requesting more quota."), 229, 14, Ice);
+            if (kind == CloudRoleNoticeKind.Sponsor)
+            {
+                Center(text.Get("感谢您成为 DACT 赞助者", "Thank you for supporting DACT!"), 148, 24, Gold);
+                Center(text.Get($"赞助等级 {snapshot.Sponsor!.Tier} · 永久身份", $"Sponsor level {snapshot.Sponsor!.Tier} · Permanent"), 199, 16, Vector4.One);
+                Center(text.Get("专属皇冠等级标识与红色名字已解锁", "Your crown badge and red account name are unlocked."), 229, 14, Ice);
+            }
+            else
+            {
+                Center(text.Get("恭喜您成为管理员", "Congratulations, Administrator!"), 148, 24, Gold);
+                Center(text.Get("您已获得无限生成激活码的权限", "You can now generate unlimited activation keys."), 199, 16, Vector4.One);
+                Center(text.Get("无需额外额度，即可继续邀请好友加入 DACT", "Invite friends to DACT without requesting more quota."), 229, 14, Ice);
+            }
             ImGui.SetCursorPos(new Vector2(180, 283) * scale);
             ImGui.BeginDisabled(snapshot.IsBusy || progress < 1);
             if (ImGui.Button(text.Get("我知道了", "Got it"), new Vector2(200, 40) * scale))

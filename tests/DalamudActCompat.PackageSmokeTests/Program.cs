@@ -81,6 +81,11 @@ try
         await AdministratorSmokeTests.RunAsync(testRoot);
         return 0;
     }
+    if (args.Contains("--sponsor-native-only", StringComparer.Ordinal))
+    {
+        SponsorIdentitySmokeTests.Run();
+        return 0;
+    }
     if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
     {
         UnnamedEntitySmokeTests.Run();

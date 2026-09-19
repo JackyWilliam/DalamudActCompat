@@ -121,11 +121,24 @@ internal static class SkinSmokeTests
             Check(service.Snapshot is { IsSignedIn: true, Sponsor.Tier: 1 }, "Real login did not fetch sponsorship.");
             var response = await api.GetAccountStatusAsync(sponsor.Token, default);
             Check(response.Sponsor?.Tier == 1, "Heartbeat account response lost sponsorship.");
+            var grant = service.Snapshot.Sponsor!.SponsorGrantId!;
+            Check(!string.IsNullOrEmpty(grant) && service.Snapshot.Sponsor.SponsorNoticePending,
+                "First sponsorship did not reach the real client as a persistent notice.");
+            await service.AcknowledgeSponsorAsync("different-account", grant, default);
+            Check(service.Snapshot.Sponsor.SponsorNoticePending, "Another account confirmed this sponsor notice.");
+            var version = (long)typeof(CloudClientService).GetField("administratorStateVersion", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+            await service.AcknowledgeSponsorAsync(sponsor.Username, grant, default);
+            Check(service.Snapshot.Sponsor is { Tier: 1, SponsorNoticePending: false }, "Sponsor acknowledgement failed.");
+            typeof(CloudClientService).GetMethod("ApplyAccountStatus", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(service, [sponsor, new CloudAdministratorStatus(), version, response.Sponsor]);
+            Check(!service.Snapshot.Sponsor.SponsorNoticePending, "A late heartbeat replayed the sponsor celebration.");
+            var friends = await api.ListFriendsAsync(sponsor.Token, default);
+            Check(friends.User?.SponsorTier == 1, "The public account identity lost its permanent sponsor level.");
         }
         using (var cold = Service())
         {
             await cold.InitializeAsync(default);
-            Check(cold.Snapshot.Sponsor?.Tier == 1, "Cold login lost a permanent sponsor grant.");
+            Check(cold.Snapshot.Sponsor is { Tier: 1, SponsorNoticePending: false }, "Cold login lost the permanent grant or replayed its notice.");
         }
         disk.Save(Credentials(other));
         using (var standard = Service())

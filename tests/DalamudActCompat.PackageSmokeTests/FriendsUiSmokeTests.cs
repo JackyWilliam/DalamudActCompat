@@ -215,12 +215,12 @@ internal static partial class FriendsUiSmokeTests
     }
     public static async Task RunNativeAsync(bool runNotifications = true)
     {
-        var api = new Fake(administrator: true) { VisualData = true, Self = new("native-self", "Raynor", true) }; var disk = new MemoryDisk();
+        var api = new Fake(administrator: true, sponsorTier: 10) { VisualData = true, Self = new("native-self", "Raynor", true, 1) }; var disk = new MemoryDisk();
         // Local fixtures expose both directions and official/empty rows without
         // creating users or delivering test messages to the live service.
         api.AddIncoming(5, history: true);
         api.Chat = api.Chat with { History = api.Chat.History.Take(3).Select(m => m with { Text = "今晚一起刷坐骑吗？我已经准备好了。" }).ToArray(), LatestMessageId = 3 };
-        api.Requests.Add(new(Guid.NewGuid().ToString(), "pending", "incoming", new("request-in", "想组队的旅人", true), default, default, null));
+        api.Requests.Add(new(Guid.NewGuid().ToString(), "pending", "incoming", new("request-in", "想组队的旅人", true, 2), default, default, null));
         api.Requests.Add(new(Guid.NewGuid().ToString(), "pending", "outgoing", new("request-out", "已邀请的旅人"), default, default, null));
         var awayId = Guid.NewGuid().ToString(); var officialId = Guid.NewGuid().ToString();
         var own = new CloudChatMessage(4, awayId, new("user", api.Self.Id, api.Self.Username), "away", 1, Guid.NewGuid(),
@@ -230,7 +230,8 @@ internal static partial class FriendsUiSmokeTests
         api.AdditionalChats.Add(new(awayId, "friend", 1, new("away", "远方的旅行者"), 1, 0, 4, [own], [], 2, CloudChatPolicy.Notice));
         api.AdditionalChats.Add(new(officialId, "official", 1, new("official", "DACT 官方"), 1, 0, 5, [official], [], null, CloudChatPolicy.Notice));
         using var controller = new FriendsChatController(api, disk, TimeSpan.FromHours(1));
-        using var ui = new FriendsUiManager(controller, () => { }, administratorIcon: new AdministratorSmokeTests.PreviewIcon());
+        using var ui = new FriendsUiManager(controller, () => { }, administratorIcon: new AdministratorSmokeTests.PreviewIcon(),
+            sponsorIcon: new AdministratorSmokeTests.PreviewIcon(1000));
         await Until(() => controller.Snapshot.Conversations.Count == 3, "native model");
         NativeFrames(api, controller, ui, runNotifications);
         Console.WriteLine("Friends UI: real cimgui draw, viewport/scaling, explicit chat focus and combat notification focus passed (outside the game).");
@@ -271,6 +272,7 @@ internal static partial class FriendsUiSmokeTests
             var raster = new NativeUiRasterizer(io.Fonts);
             SkinSmokeTests.LoadGameTextures(raster);
             AdministratorSmokeTests.LoadIcon(raster);
+            AdministratorSmokeTests.LoadIcon(raster, "SponsorCrown.png", 1000);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             var anchor = new Vector2(60, 120); var mainSize = new Vector2(920, 720);
             var drag = new WindowDragController(); var texture = new EmptyTexture();
@@ -454,7 +456,7 @@ internal static partial class FriendsUiSmokeTests
                 var message = new CloudChatMessage(1, "native", new(kind == "official" ? "official" : "user", "user", "旅行者 · 多行消息"), "peer", 1, Guid.NewGuid(),
                     "今晚刷坐骑，这是一条会自动换行的中文消息，用于验证每一行文字与气泡左右边缘都有足够距离。\nSecond line with a long unbroken URL: https://example.test/abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789", null, "history", DateTimeOffset.Now, null);
                 var list = ImGui.GetWindowDrawList(); var before = list.VtxBuffer.Size;
-                method.Invoke(null, [message, kind == "own", null]);
+                method.Invoke(null, [message, kind == "own", null, null]);
                 var after = list.VtxBuffer.Size;
                 var textColors = new[] { ImGui.GetColorU32(Vector4.One), ImGui.GetColorU32(new Vector4(.42f, .78f, .96f, 1)), ImGui.GetColorU32(new Vector4(.62f, .69f, .75f, 1)) };
                 // Actual emitted ink vertices must remain inside the emitted bubble
@@ -515,15 +517,15 @@ internal static partial class FriendsUiSmokeTests
         public CloudPresenceSettings Profile = CloudPresenceSettings.Default;
         public Func<CancellationToken, Task>? GetGate; public Action? BeforeAck;
         public int Acks; private long nextMessage;
-        public Fake(bool administrator = false)
+        public Fake(bool administrator = false, int sponsorTier = 0)
         {
-            Peer = Peer with { IsAdmin = administrator };
+            Peer = Peer with { IsAdmin = administrator, SponsorTier = sponsorTier };
             Chat = new(Id, "friend", 0, Peer, 0, 0, 0, [], [], 1, CloudChatPolicy.Notice);
         }
         public void SwitchAccount() { Self = new(Guid.NewGuid().ToString(), "isolated_c"); FriendsSession = new(2, true, Self.Username); GetGate = null; Profile = CloudPresenceSettings.Default; }
         public void AddIncoming(int count, bool history = false)
         {
-            var messages = Enumerable.Range(0, count).Select(_ => new CloudChatMessage(++nextMessage, Id, new("user", Peer.Id, Peer.Username, Peer.IsAdmin),
+            var messages = Enumerable.Range(0, count).Select(_ => new CloudChatMessage(++nextMessage, Id, new("user", Peer.Id, Peer.Username, Peer.IsAdmin, Peer.SponsorTier),
                 Self.Id, nextMessage, Guid.NewGuid(), "incoming " + nextMessage, null, history ? "history" : "pending", DateTimeOffset.UtcNow, null)).ToArray();
             Chat = Chat with { Revision = Chat.Revision + 1, History = history ? Chat.History.Concat(messages).ToArray() : Chat.History,
                 Pending = history ? Chat.Pending : messages, LatestMessageId = nextMessage };

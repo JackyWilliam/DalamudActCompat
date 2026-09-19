@@ -2452,11 +2452,14 @@ public sealed class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        DrawCloudQuickRow(
-            text.Get("账号", "Account"),
-            snapshot.IsSignedIn
-                ? snapshot.Username ?? "—"
-                : text.Get("尚未登录", "Signed out"));
+        if (snapshot.IsSignedIn && Friends is not null)
+        {
+            ImGui.TextDisabled(text.Get("账号", "Account"));
+            ImGui.SameLine();
+            Friends.DrawAccountName(snapshot);
+        }
+        else DrawCloudQuickRow(text.Get("账号", "Account"),
+            snapshot.IsSignedIn ? snapshot.Username ?? "—" : text.Get("尚未登录", "Signed out"));
         DrawCloudQuickRow(
             text.Get("最近备份", "Latest backup"),
             snapshot.Backups.FirstOrDefault() is { } latestBackup
@@ -3462,7 +3465,8 @@ public sealed class ControlCenterWindow : Window
     {
         var snapshot = cloud.GetSnapshot();
         DactTheme.TextColored(Gold, text.Get("账号", "Account"));
-        ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
+        if (Friends is not null) Friends.DrawAccountName(snapshot);
+        else ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
         if (snapshot.SessionExpiresAt is { } expiresAt)
         {
             ImGui.TextDisabled(text.Get(
