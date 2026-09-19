@@ -85,6 +85,17 @@ internal static class SkinSmokeTests
         for (var i = 0; i < 5; i++) Check(discoveries.VisitPage(config.Appearance, i) is null, "Exploration unlocked before visiting all pages.");
         Check(discoveries.VisitPage(config.Appearance, 5) == SkinCatalog.Amber && discoveries.VisitPage(config.Appearance, 0) is null,
             "Page discovery repeated or missed the sixth page.");
+        config.Appearance.SelectedSkin = SkinCatalog.NeonPink;
+        Check(SkinCatalog.Resolve(config.Appearance, true, 99) == SkinCatalog.Default, "Undiscovered pink was unlocked by sponsorship.");
+        for (var i = 0; i < 4; i++) Check(discoveries.ClickAppearanceTitle(config.Appearance, i * 100) is null, "Pink unlocked early.");
+        Check(discoveries.ClickAppearanceTitle(config.Appearance, 5000) is null, "Pink discovery counted clicks across a long pause.");
+        for (var i = 1; i < 4; i++) Check(discoveries.ClickAppearanceTitle(config.Appearance, 5000 + i * 100) is null, "Pink unlocked before five consecutive clicks.");
+        Check(discoveries.ClickAppearanceTitle(config.Appearance, 5400) == SkinCatalog.NeonPink &&
+              discoveries.ClickAppearanceTitle(config.Appearance, 5500) is null &&
+              SkinCatalog.Resolve(config.Appearance, false, 0) == SkinCatalog.NeonPink,
+            "Pink discovery repeated or incorrectly requires sponsor/login authority.");
+        Check(DactTheme.For(SkinCatalog.NeonPink).Accent == new Vector4(254 / 255f, 20 / 255f, 147 / 255f, 1),
+            "Neon pink no longer matches the user's FE1493 swatch.");
         config.Appearance.SelectedSkin = SkinCatalog.Jade;
         config.Meter.HorizontalWindow.BackgroundColor = new(.12f, .23f, .34f);
         config.Meter.HorizontalWindow.BackgroundOpacity = .7f;
@@ -96,7 +107,7 @@ internal static class SkinSmokeTests
             "Cold reload or repeat migration lost the horizontal color/opacity.");
         Check(restored.Meter.RoleSplitDamageWindow.BackgroundColor != restored.Meter.RoleSplitHealerWindow.BackgroundColor,
             "D/T and H backgrounds were coupled.");
-        Check(restored.Appearance.UnlockedEasterEggs.SetEquals([SkinCatalog.Jade, SkinCatalog.Amber, SkinCatalog.Amethyst]) &&
+        Check(restored.Appearance.UnlockedEasterEggs.SetEquals([SkinCatalog.Jade, SkinCatalog.Amber, SkinCatalog.Amethyst, SkinCatalog.NeonPink]) &&
               SkinCatalog.Resolve(restored.Appearance, true, 0) == SkinCatalog.Jade, "Discovered colors did not persist or incorrectly require sponsorship.");
         var background = restored.Meter.HorizontalWindow;
         var fill = MeterBackground.Fill(background);
@@ -148,7 +159,7 @@ internal static class SkinSmokeTests
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
             var config = new PluginConfiguration();
-            config.Appearance.UnlockedEasterEggs.UnionWith([SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber]);
+            config.Appearance.UnlockedEasterEggs.UnionWith([SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber, SkinCatalog.NeonPink]);
             var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(1) };
             var text = new UiText(config); var logo = new EmptyTexture(); var drag = new WindowDragController();
             using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "act-logo.jpg")))
@@ -164,7 +175,9 @@ internal static class SkinSmokeTests
             var discoveries = new SkinDiscoveries(); var unlockCount = 0; var closed = false;
             var skins = new SkinSettingsPanel(); var saves = 0;
             var windowSize = new Vector2(1060, 780);
-            var closeButtonPosition = Vector2.Zero;
+            var applyButtonPosition = Vector2.Zero;
+            var backButtonPosition = Vector2.Zero;
+            var appearanceTitlePosition = Vector2.Zero;
             skins.Open(config.Appearance, account);
             void Frame()
             {
@@ -185,8 +198,11 @@ internal static class SkinSmokeTests
                         (DactTheme.Palette.Light ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None));
                     if (skins.IsOpen)
                     {
-                        if (skins.Draw(config.Appearance, account, text, () => { }, () => closed = true)) saves++;
-                        closeButtonPosition = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) * .5f;
+                        appearanceTitlePosition = ImGui.GetCursorScreenPos() + new Vector2(60, ImGui.GetTextLineHeightWithSpacing() + ImGui.GetTextLineHeight() * .5f);
+                        if (skins.Draw(config.Appearance, account, text, () => { }, () =>
+                            { if (discoveries.ClickAppearanceTitle(config.Appearance, Environment.TickCount64) is not null) { unlockCount++; saves++; } })) saves++;
+                        applyButtonPosition = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) * .5f;
+                        backButtonPosition = applyButtonPosition - new Vector2(150 * Math.Max(.75f, ImGui.GetFontSize() / 17f) + ImGui.GetStyle().ItemSpacing.X, 0);
                     }
                     else skins.DrawEntry(config.Appearance, account, text);
                     ImGui.EndChild();
@@ -224,25 +240,20 @@ internal static class SkinSmokeTests
             Check(skins.PreviewSkinId == SkinCatalog.Eorzea && config.Appearance.SelectedSkin == SkinCatalog.Default && saves == 0,
                 "Preview changed the saved skin.");
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "skin-browser-preview-only.png"));
-            Click(closeButtonPosition - new Vector2(158, 0)); Frame();
+            Click(applyButtonPosition); Frame();
             Check(config.Appearance.SelectedSkin == SkinCatalog.Eorzea && saves == 1, "Apply did not save exactly once.");
             Click(CardPosition(0));
-            Click(closeButtonPosition - new Vector2(316, 0));
+            Click(backButtonPosition);
             Check(!skins.IsOpen && !closed && config.Appearance.SelectedSkin == SkinCatalog.Eorzea && saves == 1,
                 "Back applied a draft or closed the main window.");
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "skin-settings-entry.png"));
             skins.Open(config.Appearance, account); Frame(); Frame(); Click(CardPosition(0));
             io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             Check(!skins.IsOpen && !closed && saves == 1, "Escape did not return without saving.");
-            skins.Open(config.Appearance, account); Frame(); Frame(); Click(CardPosition(0));
-            Click(closeButtonPosition);
-            Check(closed && !skins.IsOpen && config.Appearance.SelectedSkin == SkinCatalog.Eorzea && saves == 1,
-                "Close applied a draft or failed to close.");
-            closed = false;
             account = account with { Sponsor = new(0) };
             config.Appearance.SelectedSkin = SkinCatalog.Default;
             skins.Open(config.Appearance, account); Frame(); Frame(); Click(CardPosition(1));
-            Click(closeButtonPosition - new Vector2(158, 0));
+            Click(applyButtonPosition);
             Check(config.Appearance.SelectedSkin == SkinCatalog.Default && saves == 1, "Locked sponsor preview granted a skin.");
             config.Appearance.UnlockedEasterEggs.Clear(); Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "skin-browser-locked.png"));
@@ -253,10 +264,10 @@ internal static class SkinSmokeTests
             {
                 config.UiLanguage = language; io.FontGlobalScale = scale; windowSize = new(760, 520);
                 skins.Open(config.Appearance, account); Frame(); Frame();
-                Check(closeButtonPosition.X < 790 && closeButtonPosition.Y < 550, "Skin footer escaped a small window.");
+                Check(applyButtonPosition.X < 790 && applyButtonPosition.Y < 550, "Skin footer escaped a small window.");
                 if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"skin-browser-small-{language}-{scale * 100:0}.png"));
-                Click(closeButtonPosition);
-                Check(closed && !skins.IsOpen, "Close is unreachable with a large font or small window."); closed = false;
+                Click(backButtonPosition);
+                Check(!closed && !skins.IsOpen, "Back is unreachable with a large font or small window, or closes the main window.");
             }
             config.UiLanguage = "zh-CN"; io.FontGlobalScale = 1; windowSize = new(1060, 780);
             skins.Open(config.Appearance, account); Frame(); Frame();
@@ -271,12 +282,94 @@ internal static class SkinSmokeTests
                 io.AddMouseButtonEvent(0, false); Frame();
             }
             Check(unlockCount == 1 && !closed, "Logo hit target dragged/closed the window or missed discovery clicks.");
+            config.Appearance.UnlockedEasterEggs.Remove(SkinCatalog.NeonPink);
+            skins.Open(config.Appearance, account); Frame(); Frame();
+            var selectedBeforeDiscovery = config.Appearance.SelectedSkin;
+            var savesBeforeDiscovery = saves;
+            for (var i = 0; i < 5; i++) Click(appearanceTitlePosition);
+            Check(unlockCount == 2 && saves == savesBeforeDiscovery + 1 &&
+                  config.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.NeonPink) &&
+                  config.Appearance.SelectedSkin == selectedBeforeDiscovery,
+                "Real appearance-title clicks failed to save pink discovery once, or automatically applied it.");
             ButtonAlignment(raster, output);
             PopupSurfaces(raster, output, config, text, logo);
             MeterSkinIsolation(raster, output, logo);
             MeterEditor(raster, output, logo, config, text);
+            EmptyMeterEditorSummary(raster, output, logo);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
+    }
+
+    private static unsafe void EmptyMeterEditorSummary(NativeUiRasterizer raster, string? output, EmptyTexture logo)
+    {
+        var config = new PluginConfiguration();
+        config.Fflogs.Enabled = false;
+        var store = new EncounterStateStore();
+        var service = new MeterService(store, config.Meter);
+        var text = new UiText(config);
+        var icons = new JobIconTextureSet(null!, Path.Combine(Path.GetTempPath(), "dact-no-icons"));
+        var classic = new MeterWindow(service, null!, config, text, icons, logo, logo, logo, (_, name) => name, () => { });
+        var horizontal = new HorizontalMeterWindow(service, config, text, icons, () => { });
+        var dt = new RoleSplitMeterWindow(service, config, text, classic, () => { }, RoleSplitGroup.DamageTank);
+        var h = new RoleSplitMeterWindow(service, config, text, classic, () => { }, RoleSplitGroup.Healer);
+        var editor = new MeterStyleEditorWindow(config, logo, classic, horizontal, dt, h, text, () => { });
+        var io = ImGui.GetIO();
+        var context = ImGui.GetCurrentContext();
+        foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Eorzea })
+        foreach (var kind in new[] { MeterWindowKind.Classic, MeterWindowKind.Horizontal })
+        foreach (var size in new[] { new Vector2(880, 590), new Vector2(1040, 690) })
+        foreach (var scale in new[] { 1f, 1.4f })
+        {
+            config.Appearance.SelectedSkin = skin;
+            DactTheme.SetCurrent(config.Appearance, true, 1);
+            config.Meter.ActivateWindow(kind);
+            io.FontGlobalScale = scale;
+            editor.Open();
+            ImGuiWindowPtr preview = default;
+            void Frame()
+            {
+                ImGui.NewFrame();
+                using (DactTheme.PushFrame())
+                {
+                    editor.PreDraw();
+                    ImGui.SetNextWindowPos(new(25, 35)); ImGui.SetNextWindowSize(size);
+                    ImGui.Begin("empty-meter-editor", editor.Flags);
+                    editor.Draw(); ImGui.End(); editor.PostDraw();
+                }
+                ImGui.Render();
+                for (var i = 0; i < context.Windows.Size; i++)
+                {
+                    var w = context.Windows[i];
+                    var name = Marshal.PtrToStringUTF8((nint)w.Name) ?? "";
+                    if (w.Active && name.StartsWith("empty-meter-editor/", StringComparison.Ordinal) &&
+                        name[(name.LastIndexOf('/') + 1)..].StartsWith(kind == MeterWindowKind.Classic ? "classic-runtime-preview_" : "horizontal-runtime-preview_", StringComparison.Ordinal))
+                        preview = w;
+                }
+            }
+            io.AddMousePosEvent(-100, -100);
+            for (var frame = 0; frame < 3; frame++) Frame();
+            Check(service.DisplayEncounter is null, "Editor regression fixture accidentally supplied a real encounter.");
+            Check(preview.Handle != null, "No runtime preview was rendered without an encounter.");
+            // The summary is the final item in the preview. Verify its real native
+            // rectangle against the inherited clip rect, then click its visible label.
+            var top = preview.DC.CursorPosPrevLine.Y;
+            Check(top >= preview.ClipRect.Min.Y && top + MeterSlotPresentation.TeamSummaryHeight <= preview.ClipRect.Max.Y + 1,
+                $"Team summary is clipped without combat: {skin}/{kind}/{size}/{scale}, footer={top}, clip={preview.ClipRect.Min.Y}..{preview.ClipRect.Max.Y}.");
+            var position = new Vector2(preview.Pos.X + 30, top + 16);
+            io.AddMousePosEvent(position.X, position.Y); Frame();
+            io.AddMouseButtonEvent(0, true); Frame();
+            io.AddMouseButtonEvent(0, false); Frame();
+            var profile = kind == MeterWindowKind.Classic ? config.Meter.ClassicWindow : config.Meter.HorizontalWindow;
+            var selected = (string?)typeof(MeterStyleEditorWindow).GetField("selectedSlotId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor);
+            Check(selected == profile.Slots.First(slot => slot.Metric == MeterSlotMetric.TotalDamage).Id,
+                $"Visible summary was not selectable without combat: {skin}/{kind}/{size}/{scale}.");
+            if (output is not null && size.X == 880 && scale == 1.4f)
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"empty-editor-summary-{kind}-{skin}.png"));
+            editor.OnClose();
+        }
+        io.FontGlobalScale = 1;
+        Check(service.DisplayEncounter is null, "Preview created a real combat record.");
+        Console.WriteLine("Empty meter editor: summary visible and clickable, classic/horizontal, two skins, minimum/default sizes, 100/140% fonts; no combat record created.");
     }
 
     private static void ButtonAlignment(NativeUiRasterizer raster, string? output)

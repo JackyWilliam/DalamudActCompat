@@ -52,6 +52,8 @@ Directory.CreateDirectory(testRoot);
 try
 {
     TeamDpsSmokeTests.Run();
+    AllianceRosterSmokeTests.Run();
+    if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--skins-api-only", StringComparer.Ordinal))
     {
         await SkinSmokeTests.ApiAsync(testRoot);

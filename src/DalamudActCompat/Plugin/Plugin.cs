@@ -5482,7 +5482,7 @@ public sealed class Plugin : IDalamudPlugin
             identities[identity.DisplayName] = identity;
         }
 
-        foreach (var (member, partyGroup) in EnumeratePartyMembers(partyList))
+        foreach (var (member, partyGroup) in PartyRosterReader.Read(partyList))
         {
             var name = member.Name.TextValue;
             if (string.IsNullOrWhiteSpace(name))
@@ -5522,22 +5522,6 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return identities.Values.ToArray();
-    }
-
-    private static IEnumerable<(Dalamud.Game.ClientState.Party.IPartyMember Member, int PartyGroup)>
-        EnumeratePartyMembers(IPartyList partyList)
-    {
-        var capacity = partyList.IsAlliance ? 24 : 8;
-        for (var index = 0; index < capacity; index++)
-        {
-            // Dalamud's alliance indexer is the only authoritative 24-player roster. Keeping
-            // its natural blocks of eight also gives the meter stable A/B/C grouping metadata.
-            var member = partyList[index];
-            if (member is not null)
-            {
-                yield return (member, partyList.IsAlliance ? (index / 8) + 1 : 0);
-            }
-        }
     }
 
     private GameRegionSelection ResolveGameRegionSelection()

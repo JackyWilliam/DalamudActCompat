@@ -3487,7 +3487,8 @@ public sealed class ControlCenterWindow : Window
     private bool DrawSettingsPage()
     {
         if (!skinSettings.IsOpen) return DrawDiagnostics();
-        var changed = skinSettings.Draw(configuration.Appearance, cloud.GetSnapshot(), text, cloud.Refresh, HideAnimated);
+        var changed = skinSettings.Draw(configuration.Appearance, cloud.GetSnapshot(), text, cloud.Refresh,
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceTitle(configuration.Appearance, Environment.TickCount64)));
         if (!skinSettings.IsOpen) resetSettingsScroll = true;
         return changed;
     }
