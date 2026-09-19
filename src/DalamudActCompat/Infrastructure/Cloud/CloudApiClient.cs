@@ -501,6 +501,10 @@ internal sealed partial class CloudApiClient : IDisposable
         string? token)
     {
         var request = new HttpRequestMessage(method, relativeUri);
+        // Use the loaded plugin assembly so support sees the installed client,
+        // including downgrades, rather than a separately maintained version string.
+        if (typeof(CloudApiClient).Assembly.GetName().Version is { } version)
+            request.Headers.Add("X-DACT-Version", version.ToString(4));
         if (!string.IsNullOrWhiteSpace(token))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
