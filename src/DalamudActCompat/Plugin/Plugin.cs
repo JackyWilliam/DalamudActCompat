@@ -442,7 +442,8 @@ public sealed class Plugin : IDalamudPlugin
             () => _ = framework.RunOnFrameworkThread(SaveConfiguration),
             () => configuration.DebugMode,
             () => configuration.EnableFflogsParityRecorder,
-            configuration.IsActCapabilityAllowed);
+            configuration.IsActCapabilityAllowed,
+            () => configuration.ParserScope);
         actRuntime.ConfigureExternalPluginBridges(
             text => hostSupervisor.RequestTts(text, "game-side-act"),
             (action, payload) => hostSupervisor.InvokePluginAction(

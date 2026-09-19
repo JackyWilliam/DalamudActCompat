@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Verify the shipped parser's filtering behavior, including its live settings mediator. -->
+    <Reference Include="FFXIV_ACT_Plugin.Config;FFXIV_ACT_Plugin.Common;FFXIV_ACT_Plugin.Logfile">
+      <HintPath>../../vendor/IINACT/external_dependencies/%(Identity).dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Reference Include="TerraFX.Interop.Windows">
       <HintPath>$(DalamudLibPath)TerraFX.Interop.Windows.dll</HintPath>
       <Private>true</Private>
