@@ -157,8 +157,11 @@ internal sealed partial class FriendsUiManager : IDisposable
                 // Fill inside the same eight-pixel strips used by PopupFrame,
                 // leaving its outer transparency and rounded corners intact.
                 var inset = new Vector2(8 * scale);
-                ImGui.GetWindowDrawList().AddRectFilled(window.Position + inset,
-                    window.Position + window.Size - inset, ImGui.GetColorU32(Navy));
+                // The opaque fill belongs to the game sprite. Glass must sample
+                // the actual scene here, before chat content is drawn.
+                if (!DactTheme.Palette.Glass)
+                    ImGui.GetWindowDrawList().AddRectFilled(window.Position + inset,
+                        window.Position + window.Size - inset, ImGui.GetColorU32(Navy));
                 DactTheme.DrawGamePopupFrame();
             }
             DrawChatHeader(window, title, official, view?.Chat.Peer, scale);

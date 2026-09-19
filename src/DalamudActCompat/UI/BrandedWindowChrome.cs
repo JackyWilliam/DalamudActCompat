@@ -47,7 +47,9 @@ internal static class BrandedWindowChrome
         var availableWidth = ImGui.GetContentRegionAvail().X;
         var screenEnd = screenStart + new Vector2(availableWidth, height);
         var drawList = ImGui.GetWindowDrawList();
-        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
+        if (DactTheme.Palette.Glass)
+            DactTheme.DrawGlassSurface(drawList, screenStart, screenEnd, 12, NavyRaised);
+        else if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             screenStart,
             screenEnd,
             ImGui.GetColorU32(NavyRaised),
@@ -232,7 +234,9 @@ internal static class BrandedWindowChrome
         var screenEnd = screenStart + new Vector2(width, height);
         var drawList = ImGui.GetWindowDrawList();
 
-        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
+        if (DactTheme.Palette.Glass)
+            DactTheme.DrawGlassSurface(drawList, screenStart, screenEnd, height * .5f, DactTheme.Palette.Raised);
+        else if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             screenStart,
             screenEnd,
             ImGui.GetColorU32(NavyRaised),
@@ -251,12 +255,15 @@ internal static class BrandedWindowChrome
 
         var indicatorMin = new Vector2(screenStart.X + (segmentWidth * indicatorPosition), screenStart.Y);
         var indicatorMax = indicatorMin + new Vector2(segmentWidth, height);
-        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
+        if (DactTheme.Palette.Glass)
+            DactTheme.DrawGlassSurface(drawList, indicatorMin + new Vector2(2, 1), indicatorMax - new Vector2(2, 1), height * .5f,
+                DactTheme.Palette.Raised, true);
+        else if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             indicatorMin,
             indicatorMax,
             ImGui.GetColorU32(NavigationSelected),
             6);
-        if (!DactTheme.Palette.Light) drawList.AddRectFilled(
+        if (!DactTheme.Palette.Light && !DactTheme.Palette.Glass) drawList.AddRectFilled(
             new Vector2(indicatorMin.X + 8, indicatorMax.Y - 2),
             new Vector2(indicatorMax.X - 8, indicatorMax.Y),
             ImGui.GetColorU32(NavigationAccent),
@@ -340,7 +347,10 @@ internal static class BrandedWindowChrome
         var flags = allowScrolling
             ? ImGuiWindowFlags.None
             : ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
-        return ImGui.BeginChild(id, new Vector2(-1, height), true, flags);
+        var visible = ImGui.BeginChild(id, new Vector2(-1, height), true, flags);
+        if (visible && DactTheme.Palette.Glass)
+            DactTheme.DrawGlassSurface(ImGui.GetWindowDrawList(), ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(), 8, Vector4.Zero);
+        return visible;
     }
 
     public static void EndGoldCard()

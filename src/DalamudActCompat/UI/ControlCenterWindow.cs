@@ -3492,10 +3492,15 @@ public sealed class ControlCenterWindow : Window
     {
         if (!skinSettings.IsOpen) return DrawDiagnostics();
         var changed = skinSettings.Draw(configuration.Appearance, cloud.GetSnapshot(), text, cloud.Refresh,
-            () => DiscoverSkin(skinDiscoveries.ClickAppearanceTitle(configuration.Appearance, Environment.TickCount64)));
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceTitle(configuration.Appearance, Environment.TickCount64)),
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceBreadcrumb(configuration.Appearance, Environment.TickCount64)),
+            () => DiscoverSkin(skinDiscoveries.ClickAppearanceHint(configuration.Appearance, Environment.TickCount64)));
         if (!skinSettings.IsOpen) resetSettingsScroll = true;
         return changed;
     }
+
+    internal bool NeedsGlassPreview => skinSettings.IsOpen && skinSettings.PreviewSkinId == SkinCatalog.LiquidGlass &&
+        configuration.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.LiquidGlass);
 
     private bool DrawDiagnostics()
     {

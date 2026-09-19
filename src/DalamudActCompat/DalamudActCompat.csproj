@@ -18,6 +18,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="TerraFX.Interop.Windows">
+      <HintPath>$(DalamudLibPath)TerraFX.Interop.Windows.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <EmbeddedResource Include="UI/LiquidGlass.hlsl" LogicalName="DACT.LiquidGlass.hlsl" />
     <ProjectReference Include="../DalamudActCompat.Host/DalamudActCompat.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../DalamudActCompat.Protocol/DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />

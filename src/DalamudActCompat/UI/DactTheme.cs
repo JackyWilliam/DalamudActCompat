@@ -4,7 +4,7 @@ using Dalamud.Bindings.ImGui;
 namespace DalamudActCompat.UI;
 
 internal sealed record SkinPalette(Vector4 Surface, Vector4 Raised, Vector4 Hover,
-    Vector4 Gold, Vector4 Accent, Vector4 Text, Vector4 Muted, Vector4 Border, bool Light = false);
+    Vector4 Gold, Vector4 Accent, Vector4 Text, Vector4 Muted, Vector4 Border, bool Light = false, bool Glass = false);
 
 internal static class DactTheme
 {
@@ -32,6 +32,7 @@ internal static class DactTheme
         new(.78f, .66f, .36f, 1), new(.42f, .78f, .96f, 1), Vector4.One, new(.65f, .70f, .76f, 1), new(.34f, .29f, .18f, 1));
 
     public static GameSkinAssets? GameAssets { get; set; }
+    public static LiquidGlassRenderer? GlassRenderer { get; set; }
     public static string CurrentSkin { get; private set; } = SkinCatalog.Default;
     public static SkinPalette Palette { get; private set; } = DefaultPalette;
     private static readonly ImGuiCol[] FrameSlots = [ImGuiCol.WindowBg, ImGuiCol.ChildBg, ImGuiCol.PopupBg, ImGuiCol.Border, ImGuiCol.Separator,
@@ -55,6 +56,12 @@ internal static class DactTheme
         // preserve text contrast across long settings pages and dialogs.
         SkinCatalog.NeonPink => new(Rgb(0x271023), Rgb(0x3D1232), Rgb(0x602049), Rgb(0xFF91CE),
             Rgb(0xFE1493), Rgb(0xFFF0F8), Rgb(0xDFA6C9), Rgb(0xBD256F)),
+        SkinCatalog.LiquidGlass => new(Rgb(0x1C232B) with { W = .72f }, Rgb(0xDBE7F3) with { W = .12f },
+            Rgb(0xE5F1FF) with { W = .24f }, Rgb(0xE4F0FF), Rgb(0xB9DEFF),
+            Rgb(0xF7FAFF), Rgb(0xBDC9D6), Rgb(0xDFEDFF) with { W = .38f }, Glass: true),
+        // Keep the canvas genuinely black; only interactive states lift into gray.
+        SkinCatalog.Obsidian => new(Rgb(0x000000), Rgb(0x0C0C0C), Rgb(0x252525), Rgb(0xE1E1E1),
+            Rgb(0xFFFFFF), Rgb(0xF5F5F5), Rgb(0xA3A3A3), Rgb(0x383838)),
         _ => DefaultPalette,
     };
 
@@ -67,7 +74,7 @@ internal static class DactTheme
     }
 
     public static Vector4 Tone(Vector4 original, Vector4 themed)
-        => CurrentSkin == SkinCatalog.Default ? original : themed with { W = original.W };
+        => CurrentSkin == SkinCatalog.Default ? original : themed with { W = themed.W * original.W };
 
     public static Vector4 Foreground(Vector4 color)
         => Palette.Light && !IsPaletteColor(color) && .2126f * color.X + .7152f * color.Y + .0722f * color.Z > .4f
@@ -76,7 +83,10 @@ internal static class DactTheme
     public static void TextColored(Vector4 color, string text) => ImGui.TextColored(Foreground(color), text);
 
     public static void PushStyleColor(ImGuiCol slot, Vector4 original)
-        => ImGui.PushStyleColor(slot, CurrentSkin == SkinCatalog.Default || original.W == 0 || IsPaletteColor(original) ? original : Color(slot, original));
+        // Page containers must not stack opaque sheets over the glass window.
+        => ImGui.PushStyleColor(slot, Palette.Glass && slot == ImGuiCol.ChildBg && SameRgb(original, Palette.Surface)
+            ? Vector4.Zero
+            : CurrentSkin == SkinCatalog.Default || original.W == 0 || IsPaletteColor(original) ? original : Color(slot, original));
 
     private static bool IsPaletteColor(Vector4 color)
         => SameRgb(color, Palette.Surface) || SameRgb(color, Palette.Raised) || SameRgb(color, Palette.Hover) ||
@@ -85,8 +95,12 @@ internal static class DactTheme
     private static bool SameRgb(Vector4 left, Vector4 right) => left.X == right.X && left.Y == right.Y && left.Z == right.Z;
 
     private static Vector4 Color(ImGuiCol slot, Vector4 original)
-        => (slot switch
+    {
+        var color = slot switch
         {
+            ImGuiCol.ChildBg when Palette.Glass => Vector4.Zero,
+            // Menus need their own contrast scrim above a busy game scene.
+            ImGuiCol.PopupBg when Palette.Glass => Palette.Surface with { W = .96f },
             ImGuiCol.WindowBg or ImGuiCol.ChildBg or ImGuiCol.PopupBg => Palette.Surface,
             ImGuiCol.Border or ImGuiCol.Separator => Palette.Border,
             ImGuiCol.FrameBg or ImGuiCol.Button => Palette.Raised,
@@ -96,8 +110,10 @@ internal static class DactTheme
             ImGuiCol.Header => Palette.Hover,
             ImGuiCol.Text => Palette.Text,
             ImGuiCol.TextDisabled => Palette.Muted,
-            _ => original,
-        }) with { W = original.W };
+            _ => original with { W = 1 },
+        };
+        return color with { W = color.W * original.W };
+    }
 
     public static Scope PushFrame()
     {
@@ -111,9 +127,20 @@ internal static class DactTheme
             ImGui.PushStyleColor(ImGuiCol.ResizeGripHovered, Vector4.Zero);
             ImGui.PushStyleColor(ImGuiCol.ResizeGripActive, Vector4.Zero);
         }
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, Palette.Light ? 12 : 5);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, Palette.Light || Palette.Glass ? 12 : 5);
         ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, Palette.Light ? 1 : 0);
-        return new Scope(FrameSlots.Length + (Palette.Light ? 3 : 0), 2);
+        if (Palette.Glass) ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 14 * Math.Max(.75f, ImGui.GetFontSize() / 17f));
+        var extraColors = 0;
+        if (Palette.Glass || CurrentSkin == SkinCatalog.Obsidian)
+        {
+            foreach (var slot in new[] { ImGuiCol.TitleBg, ImGuiCol.TitleBgActive, ImGuiCol.ScrollbarBg })
+                ImGui.PushStyleColor(slot, Palette.Surface);
+            foreach (var slot in new[] { ImGuiCol.ScrollbarGrab, ImGuiCol.ScrollbarGrabHovered, ImGuiCol.ScrollbarGrabActive,
+                         ImGuiCol.ResizeGrip, ImGuiCol.ResizeGripHovered, ImGuiCol.ResizeGripActive })
+                ImGui.PushStyleColor(slot, Palette.Muted with { W = .45f });
+            extraColors = 9;
+        }
+        return new Scope(FrameSlots.Length + (Palette.Light ? 3 : 0) + extraColors, Palette.Glass ? 3 : 2);
     }
 
     public static bool Button(string label, Vector2 size = default) => DrawButton(label, size, false);
@@ -128,15 +155,75 @@ internal static class DactTheme
         return false;
     }
 
-    public static bool DrawGameWindow() => Palette.Light && GameAssets?.Window() == true;
+    public static bool DrawGameWindow()
+    {
+        if (!Palette.Glass) return Palette.Light && GameAssets?.Window() == true;
+        var min = ImGui.GetWindowPos();
+        var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        var draw = ImGui.GetWindowDrawList();
+        // Expand the content clip only while painting the rim, never for controls.
+        draw.PushClipRect(min, min + ImGui.GetWindowSize(), false);
+        DrawGlassSurface(draw, min + Vector2.One, min + ImGui.GetWindowSize() - Vector2.One, 14 * scale, Vector4.Zero);
+        draw.PopClipRect();
+        return true;
+    }
+
+    internal static void DrawGlassSurface(ImDrawListPtr draw, Vector2 min, Vector2 max, float radius, Vector4 fill, bool interactive = false)
+    {
+        if (max.X <= min.X || max.Y <= min.Y) return;
+        radius = Math.Clamp(radius, 0, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
+        // Insert the GPU pass before labels and content. Each pane samples exactly
+        // what has already been drawn behind it, including lower DACT windows.
+        if (GlassRenderer?.Enqueue(draw, min, max, radius, fill.W == 0 ? .12f : .06f, interactive) == true) return;
+        if (fill.W > 0) draw.AddRectFilled(min, max, ImGui.GetColorU32(fill), radius);
+        // Vertex tinting keeps the sheen inside the rounded mesh and adds no textures
+        // or framebuffer hooks. This is optical styling, not sampled game refraction.
+        var first = draw.VtxBuffer.Size;
+        draw.AddRectFilled(min, max, ImGui.GetColorU32(Vector4.One), radius);
+        TintGlassVertices(draw, first, min, max, false, interactive);
+        first = draw.VtxBuffer.Size;
+        draw.AddRect(min + Vector2.One, max - Vector2.One, ImGui.GetColorU32(Vector4.One), Math.Max(0, radius - 1), ImDrawFlags.None, 1.25f);
+        TintGlassVertices(draw, first, min, max, true, interactive);
+        draw.AddRect(min + new Vector2(3), max - new Vector2(3), ImGui.GetColorU32(new Vector4(.08f, .12f, .18f, .18f)), Math.Max(0, radius - 3));
+    }
+
+    private static void TintGlassVertices(ImDrawListPtr draw, int first, Vector2 min, Vector2 max, bool rim, bool interactive)
+    {
+        var mouse = ImGui.GetIO().MousePos;
+        var size = max - min;
+        for (var i = first; i < draw.VtxBuffer.Size; i++)
+        {
+            var vertex = draw.VtxBuffer[i];
+            var uv = (vertex.Pos - min) / size;
+            var light = Math.Clamp(1 - uv.Y * .8f - uv.X * .2f, 0, 1);
+            var glint = interactive ? Math.Max(0, 1 - Vector2.Distance(vertex.Pos, mouse) / 130f) : 0;
+            var tint = Vector4.Lerp(new(.60f, .77f, .95f, rim ? .16f : .015f),
+                new(1, 1, 1, rim ? .65f : .13f), light);
+            tint.W += glint * (rim ? .3f : .08f);
+            // Retain the mesh's anti-aliased fringe and the enclosing fade animation.
+            tint.W *= (vertex.Col >> 24) / 255f;
+            vertex.Col = ImGui.ColorConvertFloat4ToU32(tint);
+            draw.VtxBuffer[i] = vertex;
+        }
+    }
 
     public static void DrawGamePopupFrame()
     {
         if (Palette.Light) GameAssets?.PopupFrame();
+        else if (Palette.Glass) DrawGameWindow();
     }
 
     public static bool BeginCombo(string label, string preview, ImGuiComboFlags flags = ImGuiComboFlags.None)
     {
+        if (Palette.Glass && GlassRenderer?.Ready == true)
+        {
+            ImGui.PushStyleColor(ImGuiCol.PopupBg, Vector4.Zero);
+            ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 14 * Math.Max(.75f, ImGui.GetFontSize() / 17f));
+            var glassOpen = ImGui.BeginCombo(label, preview, flags);
+            ImGui.PopStyleVar(); ImGui.PopStyleColor();
+            if (glassOpen) DrawGamePopupFrame();
+            return glassOpen;
+        }
         if (!Palette.Light) return ImGui.BeginCombo(label, preview, flags);
         var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
         var padding = ImGui.GetStyle().FramePadding;
@@ -155,7 +242,7 @@ internal static class DactTheme
 
     public static bool Combo(string label, ref int selected, string[] items, int count)
     {
-        if (!Palette.Light) return ImGui.Combo(label, ref selected, items, count);
+        if (!Palette.Light && !Palette.Glass) return ImGui.Combo(label, ref selected, items, count);
         var changed = false;
         if (BeginCombo(label, selected >= 0 && selected < count ? items[selected] : ""))
         {
@@ -174,7 +261,7 @@ internal static class DactTheme
     public static ImGuiWindowFlags WindowFlags(ImGuiWindowFlags flags)
         // Keep the normal background until asynchronous textures are available.
         // Once ready, only the original rounded window sprite owns the border.
-        => Palette.Light && GameAssets?.HasWindowTextures == true
+        => Palette.Glass && GlassRenderer?.Ready == true || Palette.Light && GameAssets?.HasWindowTextures == true
             ? flags | ImGuiWindowFlags.NoBackground : flags & ~ImGuiWindowFlags.NoBackground;
 
     public static bool IconButton(string id, GameSkinIcon icon, string fallback, Vector2 size)
@@ -212,6 +299,29 @@ internal static class DactTheme
 
     private static bool DrawButton(string label, Vector2 size, bool small)
     {
+        if (Palette.Glass)
+        {
+            // Let ImGui own focus, keyboard navigation, hit testing and disabled state;
+            // replace only its fill, then paint the label above the glass material.
+            var textColor = ImGui.GetStyle().Colors[(int)ImGuiCol.Text];
+            ImGui.PushStyleColor(ImGuiCol.Text, Vector4.Zero);
+            ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, Vector4.Zero);
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, Vector4.Zero);
+            var clicked = small ? ImGui.SmallButton(label) : ImGui.Button(label, size);
+            ImGui.PopStyleColor(4);
+            if (!ImGui.IsItemVisible()) return clicked;
+            var glassMin = ImGui.GetItemRectMin(); var glassMax = ImGui.GetItemRectMax();
+            var glassDraw = ImGui.GetWindowDrawList();
+            DrawGlassSurface(glassDraw, glassMin, glassMax, (glassMax.Y - glassMin.Y) * .5f,
+                ImGui.IsItemActive() ? Palette.Hover : Palette.Raised, ImGui.IsItemHovered());
+            var caption = label.Split("##", 2)[0];
+            glassDraw.PushClipRect(glassMin, glassMax, true);
+            glassDraw.AddText(CenteredTextPosition(caption, glassMin, glassMax), ImGui.GetColorU32(textColor), caption);
+            glassDraw.PopClipRect();
+            if (ImGui.IsItemFocused()) glassDraw.AddRect(glassMin, glassMax, ImGui.GetColorU32(Palette.Accent), (glassMax.Y - glassMin.Y) * .5f);
+            return clicked;
+        }
         if (!Palette.Light) return small ? ImGui.SmallButton(label) : ImGui.Button(label, size);
         ImGui.PushStyleColor(ImGuiCol.Text, Vector4.Zero);
         ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
