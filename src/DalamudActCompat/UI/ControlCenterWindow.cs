@@ -2418,7 +2418,9 @@ public sealed class ControlCenterWindow : Window
         // does not outline this surface, leaving it merged into the panel behind it.
         ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
         ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 1);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(16, 16) * scale);
+        // Auto-fit truncates the window size to pixels. Fractional padding (e.g.
+        // 16/17 font scale) otherwise leaves a 0.12px overflow and a permanent bar.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(MathF.Ceiling(16 * scale)));
         DactTheme.PushStyleColor(ImGuiCol.PopupBg, Navy);
         DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
         DactTheme.PreparePopupPosition(CloudQuickPopupId);

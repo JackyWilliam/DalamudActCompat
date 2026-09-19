@@ -34,7 +34,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         var source = new byte[w * h * 3]; PaintBackdrop(source, w, h);
         var request = new LiquidGlassRenderer.Request { Min = new(70, 50), Max = new(570, 350), Radius = 30,
             Origin = Vector2.Zero, Pointer = new(80, 70), Clip = new(70, 50, 570, 350),
-            Alpha = 1, Scale = 1, Scrim = .12f, Refraction = 12, Dispersion = 2, Blur = 3 };
+            Alpha = 1, Scale = 1, Scrim = .56f, Refraction = 24, Dispersion = 2, Blur = 3 };
         byte[] Render(LiquidGlassRenderer.Request value)
         {
             var pixels = (byte[])source.Clone();
@@ -45,6 +45,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         var blurred = Render(request with { Refraction = 0, Dispersion = 0 });
         var glass = Render(request);
         var dispersed = Render(request with { Dispersion = 0 });
+        var previousStrength = Render(request with { Refraction = 12 });
         double Difference(byte[] a, byte[] b, int x1, int y1, int x2, int y2)
         {
             long sum = 0;
@@ -54,6 +55,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         }
         Assert(Difference(plain, blurred, 150, 110, 480, 290) > 3, "Blur did not sample and soften the backdrop.");
         Assert(Difference(blurred, glass, 72, 105, 93, 290) > 1, "Refraction did not move real backdrop features at the bevel.");
+        Assert(Difference(previousStrength, glass, 72, 105, 93, 290) > .5, "Stronger refraction did not change the edge lens.");
         Assert(Difference(dispersed, glass, 72, 105, 93, 290) > .1, "Chromatic dispersion did not separate edge samples.");
         Assert(Difference(blurred, glass, 160, 110, 480, 290) < .1, "Refraction distorted the flat center.");
         Assert(Difference(source, glass, 0, 0, 65, h) == 0 && Difference(source, glass, 70, 50, 74, 54) == 0,
@@ -77,8 +79,56 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         Assert(!Renderer.Ready, "Switching away from glass retained GPU resources.");
         Renderer.BeginFrame(Device, true);
         Assert(Renderer.Ready && Render(request).SequenceEqual(glass), "Re-enabling the effect changed its pixels.");
+        HighFrequencyBlur();
+        WhiteBody();
         Benchmark();
         Console.WriteLine("Liquid glass GPU: real shader compile/render, blur, bevel refraction, center preservation, rounded/parent clipping, hover, fade, resize and re-enable passed.");
+    }
+
+    private void WhiteBody()
+    {
+        const int w = 240, h = 180;
+        var black = new byte[w * h * 3];
+        var white = Enumerable.Repeat((byte)255, black.Length).ToArray();
+        var request = new LiquidGlassRenderer.Request { Min = new(10), Max = new(w - 10, h - 10),
+            Clip = new(10, 10, w - 10, h - 10), Radius = 14, Alpha = 1, Scale = 1, Blur = 3, Scrim = .56f };
+        Process(black, w, h, () => Renderer.Render(request));
+        Process(white, w, h, () => Renderer.Render(request));
+        var center = (h / 2 * w + w / 2) * 3;
+        Assert(black[center] >= 135 && black[center + 1] >= 135 && black[center + 2] >= 135,
+            "The white glass body leaves dark text against a dark backdrop.");
+        Assert(white[center] - black[center] > 85, "The white body became opaque and hid the backdrop.");
+    }
+
+    private void HighFrequencyBlur()
+    {
+        // A sparse kernel can soften large squares while preserving pixel-sized
+        // stripes. Exercise multiple periods, directions and UI scales with no
+        // tint, so a white overlay cannot conceal the sampling regression.
+        const int w = 240, h = 180;
+        foreach (var scale in new[] { 1f, 1.4f, 2f })
+        foreach (var period in new[] { 3, 2, 4, 5, 6 })
+        foreach (var vertical in new[] { false, true })
+        {
+            var pixels = new byte[w * h * 3];
+            for (var y = 0; y < h; y++) for (var x = 0; x < w; x++)
+            {
+                var value = (byte)(((vertical ? y : x) % period) < period / 2 ? 0 : 255);
+                for (var c = 0; c < 3; c++) pixels[(y * w + x) * 3 + c] = value;
+            }
+            var request = new LiquidGlassRenderer.Request { Min = new(10), Max = new(w - 10, h - 10),
+                Clip = new(10, 10, w - 10, h - 10), Radius = 14, Alpha = 1, Scale = scale, Blur = 3 };
+            Process(pixels, w, h, () => Renderer.Render(request));
+            long contrast = 0; var count = 0;
+            for (var y = 60; y < 120; y++) for (var x = 70; x < 170; x++)
+            {
+                var next = vertical ? ((y + 1) * w + x) * 3 : (y * w + x + 1) * 3;
+                contrast += Math.Abs(pixels[(y * w + x) * 3] - pixels[next]); count++;
+            }
+            var residual = contrast / (double)count;
+            Assert(residual < 3, $"Pixel grain survived blur: period={period}, vertical={vertical}, scale={scale}, adjacent contrast={residual:F2}/255.");
+        }
+        Console.WriteLine("Liquid glass pixel grain: 30 stripe-period/direction/scale cases passed without tint masking.");
     }
 
     internal void Install(NativeUiRasterizer raster)
@@ -108,6 +158,12 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         uint count = 1; RECT after; context->RSGetScissorRects(&count, &after);
         Assert(topology == D3D_PRIMITIVE_TOPOLOGY.D3D11_PRIMITIVE_TOPOLOGY_LINELIST && after.left == 3 && after.top == 4 && after.right == w - 3,
             "Glass failed to restore pipeline/scissor state.");
+        ID3D11RenderTargetView* restored = null; context->OMGetRenderTargets(1, &restored, null);
+        var sameTarget = restored == view; if (restored != null) restored->Release();
+        D3D11_VIEWPORT restoredViewport; count = 1; context->RSGetViewports(&count, &restoredViewport);
+        Assert(sameTarget && count == 1 && restoredViewport.Width == w && restoredViewport.Height == h &&
+            restoredViewport.TopLeftX == 0 && restoredViewport.TopLeftY == 0 && restoredViewport.MaxDepth == 1,
+            "Offscreen blur leaked its render target or viewport into the following UI.");
         context->CopyResource((ID3D11Resource*)staging, (ID3D11Resource*)target);
         D3D11_MAPPED_SUBRESOURCE mapped; Check(context->Map((ID3D11Resource*)staging, 0, D3D11_MAP.D3D11_MAP_READ, 0, &mapped));
         try
@@ -135,7 +191,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
             Process(pixels, w, h, () =>
             {
                 var request = new LiquidGlassRenderer.Request { Min = new(30), Max = new(1090, 810), Radius = 14, Clip = new(30, 30, 1090, 810),
-                    Alpha = 1, Scale = 1, Scrim = .12f, Refraction = 12, Dispersion = 2, Blur = 3 };
+                    Alpha = 1, Scale = 1, Scrim = .56f, Refraction = 24, Dispersion = 2, Blur = 3 };
                 Renderer.Render(request);
                 context->Begin((ID3D11Asynchronous*)disjointQuery); context->End((ID3D11Asynchronous*)beginQuery);
                 for (var i = 0; i < iterations; i++) Renderer.Render(request);
@@ -147,7 +203,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
             Check(context->GetData((ID3D11Asynchronous*)disjoint, &timing, (uint)sizeof(D3D11_QUERY_DATA_TIMESTAMP_DISJOINT), 0));
             Assert(!timing.Disjoint && timing.Frequency > 0 && endTime > startTime, "GPU timestamp measurement was unavailable.");
             var milliseconds = (endTime - startTime) * 1000d / timing.Frequency / iterations;
-            Console.WriteLine($"Liquid glass GPU timing: 1060x780 pane, capture + 25-tap blur + refractive bevel, {milliseconds:F3} ms average over {iterations} passes (local hardware; excludes CPU test readback).");
+            Console.WriteLine($"Liquid glass GPU timing: 1060x780 pane, capture + two-pass continuous Gaussian blur + refractive bevel, {milliseconds:F3} ms average over {iterations} passes (local hardware; excludes CPU test readback).");
         }
         finally { if (begin != null) begin->Release(); if (end != null) end->Release(); if (disjoint != null) disjoint->Release(); }
     }

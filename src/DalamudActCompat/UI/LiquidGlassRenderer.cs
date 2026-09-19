@@ -20,6 +20,7 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
     private ID3D11DeviceContext* context;
     private ID3D11VertexShader* vertexShader;
     private ID3D11PixelShader* pixelShader;
+    private ID3D11PixelShader* blurShader;
     private ID3D11Buffer* constants;
     private ID3D11SamplerState* sampler;
     private ID3D11RasterizerState* rasterizer;
@@ -27,6 +28,12 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
     private ID3D11DepthStencilState* depth;
     private ID3D11Texture2D* snapshot;
     private ID3D11ShaderResourceView* snapshotView;
+    private ID3D11Texture2D* blurTemp;
+    private ID3D11ShaderResourceView* blurTempView;
+    private ID3D11RenderTargetView* blurTempTarget;
+    private ID3D11Texture2D* blurred;
+    private ID3D11ShaderResourceView* blurredView;
+    private ID3D11RenderTargetView* blurredTarget;
     private uint textureWidth, textureHeight;
     private DXGI_FORMAT textureFormat;
     private nint deviceIdentity;
@@ -48,7 +55,8 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     private struct Parameters
     {
-        public Vector4 Bounds, Capture, Optics, Material, PointerClip;
+        public Vector4 Bounds, Capture, Optics, Material, PointerClip, BlurPass;
+        public fixed float BlurTaps[25 * 4];
     }
 
     public LiquidGlassRenderer(Action<Exception> reportError) => this.reportError = reportError;
@@ -93,7 +101,7 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
                 Clip = new(clipMin.X, clipMin.Y, clipMax.X, clipMax.Y), Radius = radius,
                 Scrim = scrim, Alpha = ImGui.GetStyle().Alpha, Hover = interactive ? 1 : 0,
                 Scale = Math.Max(.75f, ImGui.GetFontSize() / 17f),
-                Refraction = 12, Dispersion = 2, Blur = 3,
+                Refraction = 24, Dispersion = 2, Blur = 3,
             };
             list.AddCallback(Callback, request);
             return true;
@@ -156,16 +164,42 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
                 Material = new(request.Scrim, request.Alpha, request.Hover, 0),
                 PointerClip = new(pointer.X, pointer.Y, right - left, bottom - top),
             };
-            context->UpdateSubresource((ID3D11Resource*)constants, 0, null, &parameters, 0, 0);
             context->IASetInputLayout(null);
             context->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context->VSSetShader(vertexShader, null, 0);
-            context->PSSetShader(pixelShader, null, 0);
             var buffer = constants; var srv = snapshotView; var sampling = sampler;
             context->PSSetConstantBuffers(0, 1, &buffer);
             context->PSSetShaderResources(0, 1, &srv);
             context->PSSetSamplers(0, 1, &sampling);
             context->RSSetState(rasterizer);
+            context->OMSetDepthStencilState(depth, 0);
+            if (request.Blur > .01f)
+            {
+                SetBlurKernel(ref parameters, request.Blur * request.Scale);
+                var viewport = new D3D11_VIEWPORT(0, 0, right - left, bottom - top);
+                context->RSSetViewports(1, &viewport);
+                var area = new RECT(0, 0, (int)(right - left), (int)(bottom - top));
+                context->RSSetScissorRects(1, &area);
+                context->OMSetBlendState(null, null, uint.MaxValue);
+                context->PSSetShader(blurShader, null, 0);
+                var output = blurTempTarget;
+                context->OMSetRenderTargets(1, &output, null);
+                parameters.BlurPass.X = 1;
+                context->UpdateSubresource((ID3D11Resource*)constants, 0, null, &parameters, 0, 0);
+                context->Draw(3, 0);
+                // Switch the output before binding the horizontal result as input;
+                // D3D11 must never see the same texture as an RTV and an SRV.
+                output = blurredTarget;
+                context->OMSetRenderTargets(1, &output, null);
+                srv = blurTempView; context->PSSetShaderResources(0, 1, &srv);
+                parameters.BlurPass.X = 0; parameters.BlurPass.Y = 1;
+                context->UpdateSubresource((ID3D11Resource*)constants, 0, null, &parameters, 0, 0);
+                context->Draw(3, 0);
+                saved.RestoreOutput();
+                srv = blurredView; context->PSSetShaderResources(0, 1, &srv);
+            }
+            context->PSSetShader(pixelShader, null, 0);
+            context->UpdateSubresource((ID3D11Resource*)constants, 0, null, &parameters, 0, 0);
             var clip = request.Clip - new Vector4(request.Origin.X, request.Origin.Y, request.Origin.X, request.Origin.Y);
             var rectangle = new RECT((int)Math.Max(0, clip.X), (int)Math.Max(0, clip.Y),
                 (int)Math.Min(description.Width, clip.Z), (int)Math.Min(description.Height, clip.W));
@@ -179,6 +213,30 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
         finally
         {
             Release((IUnknown*)targetTexture); Release((IUnknown*)resource); Release((IUnknown*)target);
+        }
+    }
+
+    private static void SetBlurKernel(ref Parameters parameters, float sigma)
+    {
+        // Radius and weights are calculated in physical pixels. Scaling tap
+        // spacing would reintroduce skipped texels at larger UI font scales.
+        sigma = Math.Clamp(sigma, .1f, 8);
+        var radius = Math.Min(24, (int)MathF.Ceiling(sigma * 3 / 2) * 2);
+        float Weight(int offset) => MathF.Exp(-offset * offset / (2 * sigma * sigma));
+        var total = 1f;
+        for (var i = 1; i <= radius; i++) total += 2 * Weight(i);
+        fixed (float* taps = parameters.BlurTaps)
+        {
+            taps[0] = 0; taps[1] = 1 / total;
+            var count = 1;
+            for (var i = 1; i <= radius; i += 2)
+            {
+                var a = Weight(i); var b = Weight(i + 1); var weight = a + b;
+                var offset = i + b / weight;
+                taps[count * 4] = offset; taps[count++ * 4 + 1] = weight / total;
+                taps[count * 4] = -offset; taps[count++ * 4 + 1] = weight / total;
+            }
+            parameters.BlurPass = new(0, 0, count, 0);
         }
     }
 
@@ -197,6 +255,9 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
         var ps = Compile(shader, "PS", "ps_5_0");
         try { ID3D11PixelShader* value = null; Check(device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), null, &value)); pixelShader = value; }
         finally { ps->Release(); }
+        var blur = Compile(shader, "BlurPS", "ps_5_0");
+        try { ID3D11PixelShader* value = null; Check(device->CreatePixelShader(blur->GetBufferPointer(), blur->GetBufferSize(), null, &value)); blurShader = value; }
+        finally { blur->Release(); }
         var bufferDesc = new D3D11_BUFFER_DESC { ByteWidth = (uint)sizeof(Parameters), Usage = D3D11_USAGE.D3D11_USAGE_DEFAULT, BindFlags = (uint)D3D11_BIND_FLAG.D3D11_BIND_CONSTANT_BUFFER };
         ID3D11Buffer* cb = null; Check(device->CreateBuffer(&bufferDesc, null, &cb)); constants = cb;
         var samplerDesc = new D3D11_SAMPLER_DESC { Filter = D3D11_FILTER.D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -228,6 +289,13 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
             Format = format, SampleDesc = new(1, 0), Usage = D3D11_USAGE.D3D11_USAGE_DEFAULT, BindFlags = (uint)D3D11_BIND_FLAG.D3D11_BIND_SHADER_RESOURCE };
         ID3D11Texture2D* texture = null; Check(device->CreateTexture2D(&desc, null, &texture)); snapshot = texture;
         ID3D11ShaderResourceView* view = null; Check(device->CreateShaderResourceView((ID3D11Resource*)snapshot, null, &view)); snapshotView = view;
+        desc.BindFlags |= (uint)D3D11_BIND_FLAG.D3D11_BIND_RENDER_TARGET;
+        texture = null; Check(device->CreateTexture2D(&desc, null, &texture)); blurTemp = texture;
+        view = null; Check(device->CreateShaderResourceView((ID3D11Resource*)blurTemp, null, &view)); blurTempView = view;
+        ID3D11RenderTargetView* target = null; Check(device->CreateRenderTargetView((ID3D11Resource*)blurTemp, null, &target)); blurTempTarget = target;
+        texture = null; Check(device->CreateTexture2D(&desc, null, &texture)); blurred = texture;
+        view = null; Check(device->CreateShaderResourceView((ID3D11Resource*)blurred, null, &view)); blurredView = view;
+        target = null; Check(device->CreateRenderTargetView((ID3D11Resource*)blurred, null, &target)); blurredTarget = target;
     }
 
     private static ID3DBlob* Compile(string source, string entry, string profile)
@@ -260,12 +328,15 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
     private void ReleaseSnapshot()
     {
         Release((IUnknown*)snapshotView); snapshotView = null; Release((IUnknown*)snapshot); snapshot = null;
+        Release((IUnknown*)blurTempTarget); blurTempTarget = null; Release((IUnknown*)blurTempView); blurTempView = null; Release((IUnknown*)blurTemp); blurTemp = null;
+        Release((IUnknown*)blurredTarget); blurredTarget = null; Release((IUnknown*)blurredView); blurredView = null; Release((IUnknown*)blurred); blurred = null;
         textureWidth = textureHeight = 0;
     }
     private void ReleaseDevice()
     {
         ReleaseSnapshot();
         Release((IUnknown*)vertexShader); vertexShader = null; Release((IUnknown*)pixelShader); pixelShader = null;
+        Release((IUnknown*)blurShader); blurShader = null;
         Release((IUnknown*)constants); constants = null; Release((IUnknown*)sampler); sampler = null;
         Release((IUnknown*)rasterizer); rasterizer = null; Release((IUnknown*)blend); blend = null;
         Release((IUnknown*)depth); depth = null; Release((IUnknown*)context); context = null; Release((IUnknown*)device); device = null;
@@ -275,8 +346,8 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
         lock (gate) { if (disposed) return; disposed = true; ReleaseDevice(); NativeMemory.Free(requests); }
     }
 
-    // Only states touched by this pass are captured. Vertex/index buffers, output
-    // targets, viewport and VS constants stay bound, avoiding a full pipeline reset.
+    // Blur uses offscreen targets and its own viewport; restore both before the
+    // pane composite and all touched state before returning to ImGui.
     private struct PipelineState : IDisposable
     {
         private readonly ID3D11DeviceContext* ctx;
@@ -293,6 +364,11 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
         private Vector4 factor;
         private uint mask, stencil, rectCount;
         private fixed int rects[64];
+        // The plugin and Dalamud renderer run in a 64-bit process.
+        private fixed ulong targets[8];
+        private ID3D11DepthStencilView* depthView;
+        private fixed float viewports[16 * 6];
+        private uint viewportCount;
 
         public PipelineState(ID3D11DeviceContext* ctx)
         {
@@ -309,9 +385,19 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
             ID3D11BlendState* blending = null; Vector4 f; uint m; ctx->OMGetBlendState(&blending, (float*)&f, &m); bs = blending; factor = f; mask = m;
             ID3D11DepthStencilState* d = null; uint reference; ctx->OMGetDepthStencilState(&d, &reference); ds = d; stencil = reference;
             uint count = 16; fixed (int* r = rects) ctx->RSGetScissorRects(&count, (RECT*)r); rectCount = count;
+            ID3D11DepthStencilView* dv = null;
+            fixed (ulong* rt = targets) ctx->OMGetRenderTargets(8, (ID3D11RenderTargetView**)rt, &dv);
+            depthView = dv;
+            count = 16; fixed (float* vp = viewports) ctx->RSGetViewports(&count, (D3D11_VIEWPORT*)vp); viewportCount = count;
+        }
+        public void RestoreOutput()
+        {
+            fixed (ulong* rt = targets) ctx->OMSetRenderTargets(8, (ID3D11RenderTargetView**)rt, depthView);
+            fixed (float* vp = viewports) ctx->RSSetViewports(viewportCount, (D3D11_VIEWPORT*)vp);
         }
         public void Dispose()
         {
+            RestoreOutput();
             ctx->IASetInputLayout(layout); ctx->IASetPrimitiveTopology(topology);
             ctx->VSSetShader(vs, null, 0); ctx->PSSetShader(ps, null, 0);
             var b = cb; var s = srv; var sampling = ss;
@@ -320,6 +406,8 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
             var f = factor; ctx->OMSetBlendState(bs, (float*)&f, mask); ctx->OMSetDepthStencilState(ds, stencil);
             Release((IUnknown*)layout); Release((IUnknown*)vs); Release((IUnknown*)ps); Release((IUnknown*)cb);
             Release((IUnknown*)srv); Release((IUnknown*)ss); Release((IUnknown*)rs); Release((IUnknown*)bs); Release((IUnknown*)ds);
+            fixed (ulong* rt = targets) for (var i = 0; i < 8; i++) Release((IUnknown*)rt[i]);
+            Release((IUnknown*)depthView);
         }
     }
 }

@@ -168,7 +168,7 @@ internal sealed class SkinSettingsPanel
         ImGui.Dummy(size);
         ImGui.Spacing();
         ImGui.TextWrapped(Discovered(skin, settings) && skin.Id == SkinCatalog.LiquidGlass
-            ? text.Get("通透的冷色玻璃，柔和高光沿着圆润边缘流转。", "Cool translucent glass with soft highlights along rounded edges.")
+            ? text.Get("偏白的半透玻璃与墨色文字，圆润边缘折射流光。", "Milky translucent glass, dark lettering and luminous refractive edges.")
             : Discovered(skin, settings) && skin.Id == SkinCatalog.Obsidian
             ? text.Get("纯黑底色与灰白细节，让内容安静而清晰。", "Pure black surfaces with quiet, clear grayscale details.")
             : skin.SponsorTier > 0

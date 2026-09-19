@@ -45,6 +45,9 @@ internal static class BrandedWindowChrome
         var start = ImGui.GetCursorPos();
         var screenStart = ImGui.GetCursorScreenPos();
         var availableWidth = ImGui.GetContentRegionAvail().X;
+        // Keep the entire action group inside the curved glass rim; moving only
+        // the close glyph would overlap Help and leave its hit target at the edge.
+        var actionRight = availableWidth - (DactTheme.Palette.Glass ? 10 * Math.Max(.75f, ImGui.GetFontSize() / 17f) : 0);
         var screenEnd = screenStart + new Vector2(availableWidth, height);
         var drawList = ImGui.GetWindowDrawList();
         if (DactTheme.Palette.Glass)
@@ -98,15 +101,15 @@ internal static class BrandedWindowChrome
         var versionSize = ImGui.CalcTextSize(versionLabel);
         var centerSize = ImGui.CalcTextSize(centerLabel);
         var centerLeft = screenStart.X + ((availableWidth - centerSize.X) * 0.5f);
-        var versionLeft = screenStart.X + availableWidth - trailingWidth - versionSize.X - 12;
+        var versionLeft = screenStart.X + actionRight - trailingWidth - versionSize.X - 12;
         // On narrow/scaled windows preserve clickable controls and omit the optional
         // middle status instead of drawing it over the version or friend button.
         if (centerLeft > titleLeft + ImGui.CalcTextSize(title).X + ImGui.CalcTextSize(sectionLabel).X + 24 &&
             centerLeft + centerSize.X < versionLeft - 8)
-            drawList.AddText(new Vector2(centerLeft, textTop), ImGui.GetColorU32(centerColor), centerLabel);
+            drawList.AddText(new Vector2(centerLeft, textTop), ImGui.GetColorU32(DactTheme.Foreground(centerColor)), centerLabel);
         drawList.AddText(
             new Vector2(
-                screenStart.X + availableWidth - trailingWidth - versionSize.X - 12,
+                versionLeft,
                 textTop),
             ImGui.GetColorU32(DactTheme.Tone(new Vector4(0.62f, 0.66f, 0.71f, 1), DactTheme.Palette.Muted)),
             versionLabel);
@@ -114,7 +117,7 @@ internal static class BrandedWindowChrome
         // Give discoveries their own hit targets so a logo click never starts
         // dragging the window. Other windows keep the existing full-width handle.
         var dragLeft = logoAction is null ? 0 : horizontalPadding + logoSize + 5;
-        var dragRight = versionAction is null ? availableWidth - trailingWidth : versionLeft - screenStart.X - 4;
+        var dragRight = versionAction is null ? actionRight - trailingWidth : versionLeft - screenStart.X - 4;
         ImGui.SetCursorPos(start + new Vector2(dragLeft, 0));
         ImGui.InvisibleButton(
             $"branded-window-drag-handle##{id}",
@@ -136,7 +139,7 @@ internal static class BrandedWindowChrome
         if (statusWidth > 0 && statusAction is not null)
         {
             ImGui.SetCursorPos(new Vector2(
-                start.X + availableWidth -
+                start.X + actionRight -
                 (showCloseButton ? actionButtonSize : 0) -
                 helpWidth -
                 (showCloseButton && helpWidth > 0 ? helpCloseGap : 0) -
@@ -162,7 +165,7 @@ internal static class BrandedWindowChrome
         }
         if (friendsAction is not null)
         {
-            ImGui.SetCursorPos(new Vector2(start.X + availableWidth -
+            ImGui.SetCursorPos(new Vector2(start.X + actionRight -
                 (showCloseButton ? actionButtonSize : 0) - helpWidth -
                 (showCloseButton && helpWidth > 0 ? helpCloseGap : 0) - friendsWidth - statusTrailingGap,
                 start.Y + actionButtonOffsetY));
@@ -179,7 +182,7 @@ internal static class BrandedWindowChrome
         if (helpAction is not null)
         {
             ImGui.SetCursorPos(new Vector2(
-                start.X + availableWidth -
+                start.X + actionRight -
                 (showCloseButton ? actionButtonSize + helpCloseGap : 0) -
                 helpWidth,
                 start.Y + actionButtonOffsetY));
@@ -199,7 +202,7 @@ internal static class BrandedWindowChrome
         if (showCloseButton)
         {
             ImGui.SetCursorPos(new Vector2(
-                start.X + availableWidth - actionButtonSize,
+                start.X + actionRight - actionButtonSize,
                 start.Y + actionButtonOffsetY));
             DactTheme.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
             DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.16f, 0.88f));

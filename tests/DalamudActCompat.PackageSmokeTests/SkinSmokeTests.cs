@@ -292,6 +292,7 @@ internal static class SkinSmokeTests
             var applyButtonPosition = Vector2.Zero;
             var backButtonPosition = Vector2.Zero;
             var appearanceTitlePosition = Vector2.Zero;
+            var closeHit = Vector4.Zero;
             skins.Open(config.Appearance, account);
             void Frame()
             {
@@ -306,6 +307,7 @@ internal static class SkinSmokeTests
                     closed |= BrandedWindowChrome.Draw(drag, logo, "设置&账号", "运行中", DactTheme.Palette.Accent, "0.4.3.1", "skin-test",
                         helpAction: () => { }, friendsAction: () => { }, onlineFriends: 2,
                         logoAction: () => { if (discoveries.ClickLogo(config.Appearance, Environment.TickCount64) is not null) unlockCount++; });
+                    closeHit = new(ImGui.GetItemRectMin(), ImGui.GetItemRectMax().X, ImGui.GetItemRectMax().Y);
                     BrandedWindowChrome.DrawNavigationRail("skin-preview-tabs", ["概览", "战斗统计", "悬浮窗", "扩展", "云同步", "设置&账号"], 5);
                     ImGui.BeginChild("control-center-page-content", new Vector2(-1, ControlCenterWindow.PageContentHeight()), true,
                         (skins.IsOpen ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None) |
@@ -441,6 +443,17 @@ internal static class SkinSmokeTests
                 }
                 raster.RenderCallback = null; raster.PaintBackdrop = null;
             }
+            config.Appearance.SelectedSkin = SkinCatalog.LiquidGlass;
+            foreach (var scale in new[] { 1f, 1.4f })
+            {
+                io.FontGlobalScale = scale; windowSize = new(760, 520); Frame(); Frame();
+                // Check the real hit rectangle, not just the cross glyph: its
+                // entire target must clear the rim and still close on release.
+                Check(30 + windowSize.X - closeHit.Z >= 16, "Glass close button still touches the outer rim.");
+                Click(new((closeHit.X + closeHit.Z) / 2, (closeHit.Y + closeHit.W) / 2));
+                Check(closed, "Inset glass close button lost its click target."); closed = false;
+            }
+            io.FontGlobalScale = 1;
             ButtonAlignment(raster, output);
             PopupSurfaces(raster, output, config, text, logo);
             MeterSkinIsolation(raster, output, logo);
@@ -616,6 +629,33 @@ internal static class SkinSmokeTests
             Check(context.ColorStack.Size == 0 && context.StyleVarStack.Size == 0, "Popup leaked style state.");
         }
         void Click(Vector2 at) { io.AddMousePosEvent(at.X, at.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); io.AddMouseButtonEvent(0, false); Frame(); }
+        foreach (var skin in SkinCatalog.All)
+        foreach (var scale in new[] { .75f, 16f / 17, 1f, 1.4f })
+        {
+            io.FontGlobalScale = scale;
+            DactTheme.SetCurrent(new() { SelectedSkin = skin.Id, UnlockedEasterEggs = SkinCatalog.All.Where(s => s.EasterEgg).Select(s => s.Id).ToHashSet() }, true, 1);
+            Field("cloudQuickPopupRequested", true); Frame(); Frame(); Frame(); Frame();
+            var fitted = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
+            Check(!fitted.ScrollbarY && fitted.ScrollMax.Y == 0,
+                $"Cloud popup has a needless scrollbar: {skin.Id}, scale={scale}, size={fitted.Size}, content={fitted.ContentSize}, scroll={fitted.ScrollMax}.");
+            if (output is not null && skin.Id == SkinCatalog.NeonPink && scale == 16f / 17)
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, "cloud-popup-pink-no-scrollbar.png"));
+            io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+        }
+        // Real overflow must remain scrollable; simply hiding the bar would make
+        // the lower actions inaccessible on a small viewport or a long status.
+        io.FontGlobalScale = 1.4f; io.DisplaySize = new(800, 360);
+        var normalSnapshot = snapshot;
+        snapshot = snapshot with { StatusMessage = string.Concat(Enumerable.Repeat("这是用于验证滚动的较长同步状态。", 60)) };
+        Field("cloudQuickPopupRequested", true); Frame(); Frame(); Frame(); Frame();
+        var overflow = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
+        Check(overflow.ScrollbarY && overflow.ScrollMax.Y > 100, "Long cloud status lost its scrollbar.");
+        io.AddMousePosEvent(overflow.Pos.X + 60, overflow.Pos.Y + 60); Frame();
+        io.AddMouseWheelEvent(0, -20); Frame(); Frame();
+        Check(overflow.Scroll.Y > 0, "Long cloud status no longer scrolls.");
+        snapshot = normalSnapshot; Frame(); Frame(); Frame(); Frame();
+        io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+        io.DisplaySize = new(1120, 840);
         foreach (var scale in new[] { 1f, 1.4f })
         {
             io.FontGlobalScale = scale;

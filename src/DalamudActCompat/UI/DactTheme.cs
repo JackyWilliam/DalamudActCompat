@@ -56,9 +56,10 @@ internal static class DactTheme
         // preserve text contrast across long settings pages and dialogs.
         SkinCatalog.NeonPink => new(Rgb(0x271023), Rgb(0x3D1232), Rgb(0x602049), Rgb(0xFF91CE),
             Rgb(0xFE1493), Rgb(0xFFF0F8), Rgb(0xDFA6C9), Rgb(0xBD256F)),
-        SkinCatalog.LiquidGlass => new(Rgb(0x1C232B) with { W = .72f }, Rgb(0xDBE7F3) with { W = .12f },
-            Rgb(0xE5F1FF) with { W = .24f }, Rgb(0xE4F0FF), Rgb(0xB9DEFF),
-            Rgb(0xF7FAFF), Rgb(0xBDC9D6), Rgb(0xDFEDFF) with { W = .38f }, Glass: true),
+        // Dark foregrounds sit on a milky body even when GPU glass is unavailable.
+        SkinCatalog.LiquidGlass => new(Rgb(0xF9FBFF) with { W = .78f }, Rgb(0xFFFFFF) with { W = .20f },
+            Rgb(0xFFFFFF) with { W = .38f }, Rgb(0x293B4D), Rgb(0x174A6B),
+            Rgb(0x14191F), Rgb(0x3D4955), Rgb(0x596D80) with { W = .28f }, Glass: true),
         // Keep the canvas genuinely black; only interactive states lift into gray.
         SkinCatalog.Obsidian => new(Rgb(0x000000), Rgb(0x0C0C0C), Rgb(0x252525), Rgb(0xE1E1E1),
             Rgb(0xFFFFFF), Rgb(0xF5F5F5), Rgb(0xA3A3A3), Rgb(0x383838)),
@@ -77,7 +78,7 @@ internal static class DactTheme
         => CurrentSkin == SkinCatalog.Default ? original : themed with { W = themed.W * original.W };
 
     public static Vector4 Foreground(Vector4 color)
-        => Palette.Light && !IsPaletteColor(color) && .2126f * color.X + .7152f * color.Y + .0722f * color.Z > .4f
+        => (Palette.Light || Palette.Glass) && !IsPaletteColor(color) && .2126f * color.X + .7152f * color.Y + .0722f * color.Z > .4f
             ? new Vector4(color.X * .45f, color.Y * .45f, color.Z * .45f, color.W) : color;
 
     public static void TextColored(Vector4 color, string text) => ImGui.TextColored(Foreground(color), text);
@@ -174,7 +175,10 @@ internal static class DactTheme
         radius = Math.Clamp(radius, 0, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
         // Insert the GPU pass before labels and content. Each pane samples exactly
         // what has already been drawn behind it, including lower DACT windows.
-        if (GlassRenderer?.Enqueue(draw, min, max, radius, fill.W == 0 ? .12f : .06f, interactive) == true) return;
+        // Root panes need a white body for dark labels. Nested controls already
+        // sample that body and only add a small amount to avoid opaque stacking.
+        var body = fill.W == 0 || fill.W >= .5f ? .56f : interactive ? .18f : .10f;
+        if (GlassRenderer?.Enqueue(draw, min, max, radius, body, interactive) == true) return;
         if (fill.W > 0) draw.AddRectFilled(min, max, ImGui.GetColorU32(fill), radius);
         // Vertex tinting keeps the sheen inside the rounded mesh and adds no textures
         // or framebuffer hooks. This is optical styling, not sampled game refraction.
