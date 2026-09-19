@@ -111,7 +111,13 @@ internal sealed partial class FriendsUiManager
             // Preserve its mouse press until release while returning keyboard focus.
             var preserveActive = context.ActiveIdNoClearOnFocusLoss;
             context.ActiveIdNoClearOnFocusLoss = true;
+            // Returning keyboard focus must not raise the chat over the pressed
+            // notification: the mouse release would then hit the chat underneath.
+            var root = previous.Handle != null ? previous.RootWindow : default;
+            var previousFlags = root.Handle != null ? root.Flags : default;
+            if (root.Handle != null) root.Flags |= ImGuiWindowFlags.NoBringToFrontOnFocus;
             ImGuiP.FocusWindow(previous);
+            if (root.Handle != null) root.Flags = previousFlags;
             context.ActiveIdNoClearOnFocusLoss = preserveActive;
         }
         if (context.ActiveId != 0 && IsNotification(context.ActiveIdWindow)) ImGui.SetNextFrameWantCaptureKeyboard(false);

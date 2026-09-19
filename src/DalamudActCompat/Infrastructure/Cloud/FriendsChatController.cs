@@ -198,7 +198,7 @@ internal sealed class FriendsChatController : IDisposable
         Publish(snapshot with { Conversations = updated });
         foreach (var summary in sync.Conversations)
         {
-            if (!snapshot.Conversations.TryGetValue(summary.Id, out var view) || view.Chat.Revision != summary.Revision || local.Outbox.ContainsKey(summary.Id))
+            if (!snapshot.Conversations.TryGetValue(summary.Id, out var view) || view.Chat.Revision != summary.Revision || local.Outbox.ContainsKey(summary.Id) || NeedsReadSync(view.Chat))
                 await ReceiveAsync(await Call(ct => api.GetChatAsync(summary.Id, ct, session)).ConfigureAwait(false)).ConfigureAwait(false);
             if (snapshot.Conversations.TryGetValue(summary.Id, out view))
             {
@@ -236,7 +236,17 @@ internal sealed class FriendsChatController : IDisposable
             else status = "发送结果待确认，请重试原消息。";
         }
         SetConversation(chat, status);
+        if (NeedsReadSync(chat))
+        {
+            var synced = await Call(ct => api.MarkChatReadAsync(chat.Id,
+                Math.Min(local.ReadThrough.GetValueOrDefault(chat.Id), chat.LatestMessageId), ct, session)).ConfigureAwait(false);
+            SetConversation(synced, status);
+        }
     }
+    // Missing fields identify older servers. Existing local cursors migrate on
+    // reconnect, and a failed upload retries without making read messages red again.
+    private bool NeedsReadSync(CloudChatConversation chat) => chat.ReadThrough is { } remote &&
+        Math.Min(local.ReadThrough.GetValueOrDefault(chat.Id), chat.LatestMessageId) > remote;
     private void SetConversation(CloudChatConversation chat, string status)
     {
         EnsureCurrent();
@@ -245,7 +255,7 @@ internal sealed class FriendsChatController : IDisposable
         // ACK promotes pending messages into history; count unique received IDs
         // beyond the existing read watermark, never deliveries or our own sends.
         var unreadCount = bounded.History.Concat(bounded.Pending)
-            .Where(m => m.RecipientId == userId && m.Sender.UserId != userId && m.Id > local.ReadThrough.GetValueOrDefault(chat.Id))
+            .Where(m => m.RecipientId == userId && m.Sender.UserId != userId && m.Id > Math.Max(local.ReadThrough.GetValueOrDefault(chat.Id), chat.ReadThrough ?? 0))
             .Select(m => m.Id).Distinct().Count();
         var value = new FriendConversationView(bounded, local.Outbox.GetValueOrDefault(chat.Id), status, unreadCount > 0,
             snapshot.Conversations.GetValueOrDefault(chat.Id)?.LastPreparedOperation) { UnreadCount = unreadCount };
@@ -293,7 +303,7 @@ internal sealed class FriendsChatController : IDisposable
                     local.ReadThrough[command.Id] = through;
                     try { await SaveAsync().ConfigureAwait(false); }
                     catch { local.ReadThrough[command.Id] = previous; throw; }
-                    SetConversation(read.Chat, read.SendStatus);
+                    await ReceiveAsync(read.Chat).ConfigureAwait(false);
                 }
                 lock (queuedReads) queuedReads.Remove(command.Id);
                 return;

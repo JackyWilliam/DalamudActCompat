@@ -81,7 +81,8 @@ internal static partial class FriendsUiSmokeTests
         var io = ImGui.GetIO(); io.DisplaySize = new(1440, 1000); io.FontGlobalScale = 1; io.DeltaTime = 1f / 60;
         var context = ImGui.GetCurrentContext(); var configuration = new PluginConfiguration(); long now = 10000; var sounds = 0;
         using var ui = new FriendsUiManager(controller, () => throw new Exception("Notification opened the main drawer."), configuration,
-            () => now, () => sounds++);
+            () => now, () => sounds++, administratorIcon: new AdministratorSmokeTests.PreviewIcon(),
+            sponsorIcon: new AdministratorSmokeTests.PreviewIcon(1000));
         Check(SpinWait.SpinUntil(() => controller.Snapshot.InitialSyncComplete, TimeSpan.FromSeconds(3)), "Native notification bootstrap did not finish.");
         void Frame(bool focus = false)
         {
@@ -140,6 +141,38 @@ internal static partial class FriendsUiSmokeTests
         if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-notification-replied.png"));
         var expand = Window(first, true); Click(expand.Pos + expand.Size / 2);
         Check(Name(context.NavWindow).Contains("DACTFriendChat-" + api.Id), "Expand did not open/focus this exact conversation.");
+        Check(SpinWait.SpinUntil(() => { Frame(); return controller.Snapshot.Conversations[api.Id].UnreadCount == 0; }, TimeSpan.FromSeconds(3)),
+            "Opening chat from a notification did not clear its unread count.");
+        Arrive(string.Join('\n', Enumerable.Repeat("用于上翻聊天记录的较长消息", 32)));
+        for (var i = 0; i < 20; i++) Frame();
+        ImGuiWindowPtr Messages()
+        {
+            for (var i = 0; i < context.Windows.Size; i++)
+                if (context.Windows[i].Active && Name(context.Windows[i]).Contains("DACTFriendChat-" + api.Id) &&
+                    Name(context.Windows[i]).Contains("/messages")) return context.Windows[i];
+            throw new Exception("Native chat history child was not found.");
+        }
+        var historyWindow = Messages();
+        Check(historyWindow.ScrollMax.Y > 100, "Chat history did not overflow for the reopen regression.");
+        io.AddMousePosEvent(historyWindow.Pos.X + 40, historyWindow.Pos.Y + 50); Frame();
+        io.AddMouseWheelEvent(0, 100); for (var i = 0; i < 10; i++) Frame();
+        Check(Messages().Scroll.Y < Messages().ScrollMax.Y - 50, "Actual mouse wheel did not scroll into older messages.");
+        var reopen = Arrive("请从气泡回到最新消息并清除未读。");
+        for (var i = 0; i < 20; i++) Frame();
+        Check(controller.Snapshot.Conversations[api.Id].UnreadCount > 0, "Background arrival was marked read while viewing old history.");
+        expand = Window(reopen, true); Click(expand.Pos + expand.Size / 2);
+        Check(SpinWait.SpinUntil(() => { Frame(); return controller.Snapshot.Conversations[api.Id].UnreadCount == 0; }, TimeSpan.FromSeconds(3)),
+            "Reopening a scrolled chat from its notification left unread counts and old scroll position.");
+        var chatWindow = Messages().ParentWindow;
+        Check((chatWindow.Flags & ImGuiWindowFlags.NoTitleBar) != 0, "Chat retained the native title bar.");
+        var originalPosition = chatWindow.Pos; var grab = originalPosition + new Vector2(200, 22); var movement = new Vector2(90, 45);
+        io.AddMousePosEvent(grab.X, grab.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame();
+        io.AddMousePosEvent(grab.X + movement.X, grab.Y + movement.Y); Frame(); Frame();
+        io.AddMouseButtonEvent(0, false); Frame();
+        Check(Vector2.Distance(chatWindow.Pos, originalPosition + movement) < 2, "Custom header drag lost mouse movement.");
+        if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-chat-custom-header.png"));
+        Click(chatWindow.Pos + new Vector2(chatWindow.Size.X - 23, 23)); Frame();
+        Check(!chatWindow.Active, "Custom header close did not close chat.");
         ui.Hide(); Frame(true); configuration.FriendNotificationsOnRight = true; now += 1500;
         var second = Arrive("你什么时候结束", CloudChatPolicy.WhenFinished); Frame();
         Check(Window(second).Pos.X >= io.DisplaySize.X, "Right bubble did not start outside the right edge.");

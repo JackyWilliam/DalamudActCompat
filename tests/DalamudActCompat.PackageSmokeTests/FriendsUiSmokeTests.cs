@@ -26,6 +26,7 @@ internal static partial class FriendsUiSmokeTests
     public static async Task RunAsync(string root)
     {
         await DeliveryAndReadAsync();
+        await CloudReadRecoveryAsync();
         await DurableRetryAsync(root);
         await SaveFailureAsync();
         await SwitchAndPreparationAsync();
@@ -76,6 +77,38 @@ internal static partial class FriendsUiSmokeTests
         await Until(() => restarted.Snapshot.Conversations[api.Id].Chat.History.Last().Id == api.Chat.History.Last().Id, "bounded update");
         Check(restarted.Snapshot.Conversations[api.Id].Chat.History.Count == 20, "UI accumulated an unbounded transcript.");
         Check(restarted.Snapshot.Conversations[api.Id].UnreadCount == 20, "Unread count included messages already trimmed from retention.");
+    }
+    private static async Task CloudReadRecoveryAsync()
+    {
+        var api = new Fake(); api.AddIncoming(3, history: true);
+        var oldDisk = new MemoryDisk();
+        await oldDisk.SaveAsync(api.Self.Id, new(new(), new() { [api.Id] = 2 }), default);
+        api.Chat = api.Chat with { ReadThrough = 0 };
+        using (var upgraded = new FriendsChatController(api, oldDisk, TimeSpan.FromHours(1)))
+        {
+            upgraded.AttachConsumer();
+            await Until(() => upgraded.Snapshot.InitialSyncComplete, "local read migration");
+            Check(api.Chat.ReadThrough == 2 && upgraded.Snapshot.Conversations[api.Id].UnreadCount == 1,
+                "Upgrade failed to migrate existing local reads or marked new messages read.");
+            api.FailRead = true;
+            upgraded.MarkRead(api.Id, long.MaxValue);
+            await Until(() => upgraded.Snapshot.State == "error", "read upload failure");
+            Check(!upgraded.Snapshot.HasUnread && api.Chat.ReadThrough == 2, "Upload failure lost the local read or pretended to sync.");
+            api.FailRead = false; upgraded.Refresh();
+            await Until(() => upgraded.Snapshot.Conversations[api.Id].Chat.ReadThrough == 3, "read upload retry");
+        }
+        // A clean state store represents reinstall, not an ordinary restart that
+        // could accidentally pass by reusing the old local read watermark.
+        using var reinstalled = new FriendsChatController(api, new MemoryDisk(), TimeSpan.FromHours(1));
+        reinstalled.AttachConsumer();
+        await Until(() => reinstalled.Snapshot.InitialSyncComplete, "reinstall bootstrap");
+        Check(!reinstalled.Snapshot.HasUnread, "Reinstall resurrected read messages.");
+        api.AddIncoming(1, history: true); reinstalled.Refresh();
+        await Until(() => reinstalled.Snapshot.Conversations[api.Id].UnreadCount == 1, "post-reinstall new arrival");
+        api.Chat = api.Chat with { ReadThrough = 4, Revision = api.Chat.Revision + 1 }; reinstalled.Refresh();
+        await Until(() => !reinstalled.Snapshot.HasUnread, "another device read sync");
+        var calls = api.ReadCalls; reinstalled.Refresh(); await Task.Delay(100);
+        Check(api.ReadCalls == calls, "Unchanged remote reads caused repeated uploads.");
     }
     private static async Task DurableRetryAsync(string root)
     {
@@ -551,6 +584,15 @@ internal static partial class FriendsUiSmokeTests
         {
             Guard(expectedSession); BeforeAck?.Invoke(); Acks++;
             Chat = Chat with { Revision = Chat.Revision + 1, History = Chat.History.Concat(Chat.Pending.Where(m => ids.Contains(m.Id)).Select(m => m with { State = "history" })).TakeLast(20).ToArray(), Pending = Chat.Pending.Where(m => !ids.Contains(m.Id)).ToArray() };
+            return Task.FromResult(Chat);
+        }
+        public bool FailRead; public int ReadCalls;
+        public Task<CloudChatConversation> MarkChatReadAsync(string id, long through, CancellationToken ct, CloudFriendsSession? expectedSession = null)
+        {
+            Guard(expectedSession); ReadCalls++;
+            if (FailRead) throw new HttpRequestException("isolated read upload failure");
+            Check(Chat.ReadThrough is not null, "Old server received an unsupported read request.");
+            Chat = Chat with { ReadThrough = Math.Max(Chat.ReadThrough.GetValueOrDefault(), Math.Min(through, Chat.LatestMessageId)), Revision = Chat.Revision + 1 };
             return Task.FromResult(Chat);
         }
         public Task<CloudChatSendResult> SendChatAsync(string id, CloudChatSendRequest message, CancellationToken ct, CloudFriendsSession? expectedSession = null)

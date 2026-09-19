@@ -388,6 +388,18 @@ internal static class CloudFriendsSmokeTests
             await Until(() => b.Snapshot.Conversations.TryGetValue(id, out var view) && view.Chat.Pending.Count == 0 && view.Chat.History.Any(m => m.OperationId == op));
             Check(b.Snapshot.Conversations[id].Unread && b.Snapshot.Conversations[id].Chat.History.Count == 20, "Controller lost unread state or 20-history cap after ACK.");
             b.MarkRead(id, long.MaxValue); await Until(() => !b.Snapshot.Conversations[id].Unread);
+            await Until(() => b.Snapshot.Conversations[id].Chat.ReadThrough > 0);
+            using (var reinstalled = new FriendsChatController(new RemoteSession(api, f.B),
+                new FriendsLocalStateStore(Path.Combine(root, "b-clean-reinstall")), TimeSpan.FromMilliseconds(50)))
+            {
+                reinstalled.AttachConsumer(); await Until(() => reinstalled.Snapshot.InitialSyncComplete);
+                Check(!reinstalled.Snapshot.Conversations[id].Unread, "Real server failed to preserve read state with an empty local store.");
+                a.Send(id, "new after reinstall");
+                await Until(() => reinstalled.Snapshot.Conversations[id].UnreadCount == 1);
+                await Until(() => b.Snapshot.Conversations[id].UnreadCount == 1);
+                b.MarkRead(id, long.MaxValue);
+                await Until(() => !reinstalled.Snapshot.Conversations[id].Unread);
+            }
             var official = a.Snapshot.Conversations[f.OfficialId];
             Check(official.Chat.Kind == "official" && official.Chat.NextSendSequence is null && official.Chat.History.Single().Sender.IsOfficial, "Controller official identity not readonly.");
             a.Send(f.OfficialId, "cannot reply"); await Until(() => !a.Snapshot.Busy);
@@ -412,6 +424,7 @@ internal static class CloudFriendsSmokeTests
         public Task<CloudChatConversation> GetChatAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.GetChatAsync(account.Token, id, ct));
         public Task<CloudChatSendResult> SendChatAsync(string id, CloudChatSendRequest message, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.SendChatAsync(account.Token, id, message, ct));
         public Task<CloudChatConversation> AcknowledgeChatAsync(string id, IReadOnlyList<long> ids, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.AcknowledgeChatAsync(account.Token, id, ids, ct));
+        public Task<CloudChatConversation> MarkChatReadAsync(string id, long through, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.MarkChatReadAsync(account.Token, id, through, ct));
     }
 
     private static async Task LegacyAsync(string root, LegacyFixture f)

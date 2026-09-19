@@ -14,6 +14,8 @@ internal sealed partial class FriendsUiManager : IDisposable
         public bool Focus = true;
         public bool New = true;
         public bool AtBottom = true;
+        public bool ScrollToLatest = true;
+        public readonly WindowDragController Drag = new();
         public long LastMessage;
         public string Draft = "";
         public Guid? SubmittedOperation;
@@ -110,7 +112,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     private void OpenChat(string id)
     {
         if (!windows.TryGetValue(id, out var window)) windows[id] = window = new();
-        window.Open = true; window.Focus = true;
+        window.Open = true; window.Focus = true; window.ScrollToLatest = true;
     }
     private void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
     {
@@ -137,26 +139,18 @@ internal sealed partial class FriendsUiManager : IDisposable
         }
         // Focus is requested only by a user's click, never by arrival/polling.
         if (window.Focus) { ImGui.SetNextWindowFocus(); window.Focus = false; }
-        var titleHasBadge = !official && (view?.Chat.Peer.SponsorTier > 0 || view?.Chat.Peer.IsAdmin == true && administratorIcon is not null);
-        var expanded = ImGui.Begin($"{(titleHasBadge ? "" : title)}###DACTFriendChat-{id}", ref window.Open,
-            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing);
-        if (titleHasBadge)
-        {
-            var frame = ImGui.GetFrameHeight();
-            AccountIdentityBadge.DrawName(administratorIcon, title, view!.Chat.Peer.IsAdmin,
-                ImGui.GetWindowPos() + new Vector2(frame + ImGui.GetStyle().ItemInnerSpacing.X, ImGui.GetStyle().FramePadding.Y),
-                ImGui.GetWindowSize().X - frame * 2 - ImGui.GetStyle().ItemInnerSpacing.X * 2, DactTheme.Palette.Text,
-                sponsorIcon, view.Chat.Peer.SponsorTier);
-        }
+        window.Drag.PrepareNextWindow();
+        var expanded = ImGui.Begin($"{title}###DACTFriendChat-{id}", ref window.Open,
+            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoTitleBar |
+            ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove);
         if (expanded)
         {
             window.Position = ImGui.GetWindowPos(); window.Size = ImGui.GetWindowSize();
+            DrawChatHeader(window, title, official, view?.Chat.Peer, scale);
             var focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
             if (view is null) { ImGui.TextWrapped("会话正在同步，或好友关系已解除。"); }
             else
             {
-                AccountIdentityBadge.Text(administratorIcon, official ? "DACT 官方 · 只读通知" : title,
-                    !official && view.Chat.Peer.IsAdmin, official ? Gold : Blue, sponsorIcon, official ? 0 : view.Chat.Peer.SponsorTier);
                 if (state.State != "ready") ImGui.TextWrapped(state.Status);
                 var contentWidth = ImGui.GetContentRegionAvail().X;
                 var statusHeight = string.IsNullOrEmpty(view.SendStatus) ? 0 : ImGui.CalcTextSize(view.SendStatus, false, contentWidth).Y;
@@ -170,7 +164,10 @@ internal sealed partial class FriendsUiManager : IDisposable
                     foreach (var message in messages) DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon);
                     if (messages.Length == 0) ImGui.TextDisabled("暂无消息。");
                     var last = messages.LastOrDefault()?.Id ?? 0;
-                    if (window.AtBottom && last != window.LastMessage) ImGui.SetScrollHereY(1);
+                    // Explicitly entering from a notification also reopens an old
+                    // scrolled view. Read only once its latest content is visible.
+                    if (window.ScrollToLatest || window.AtBottom && last != window.LastMessage) ImGui.SetScrollHereY(1);
+                    window.ScrollToLatest = false;
                     window.LastMessage = last;
                     window.AtBottom = ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4;
                     if (focused && window.AtBottom)
@@ -218,6 +215,35 @@ internal sealed partial class FriendsUiManager : IDisposable
             }
         }
         ImGui.End();
+    }
+
+    private void DrawChatHeader(ChatWindow window, string title, bool official, CloudApiUser? peer, float scale)
+    {
+        var start = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        var height = ImGui.GetFontSize() + 14 * scale;
+        var dragWidth = Math.Max(1, width - height - ImGui.GetStyle().ItemSpacing.X);
+        // A dedicated handle keeps clicking messages/input from dragging the
+        // window, while the custom close control cannot start a drag.
+        ImGui.InvisibleButton("##chat-header-drag", new Vector2(dragWidth, height));
+        window.Drag.HandleItem();
+        AccountIdentityBadge.DrawName(administratorIcon, title, !official && peer?.IsAdmin == true,
+            start + new Vector2(4 * scale, 7 * scale), dragWidth - 8 * scale, official ? Gold : Blue,
+            sponsorIcon, official ? 0 : peer?.SponsorTier ?? 0);
+        ImGui.SameLine();
+        var close = ImGui.GetCursorScreenPos();
+        if (ImGui.InvisibleButton("##chat-close", new Vector2(height))) { window.Open = false; window.Drag.Cancel(); }
+        var list = ImGui.GetWindowDrawList();
+        if (ImGui.IsItemHovered())
+        {
+            list.AddRectFilled(close, close + new Vector2(height), ImGui.GetColorU32(DactTheme.Palette.Surface), 4 * scale);
+            ImGui.SetTooltip("关闭聊天");
+        }
+        var inset = height * .34f;
+        var color = ImGui.GetColorU32(DactTheme.Palette.Text);
+        list.AddLine(close + new Vector2(inset), close + new Vector2(height - inset), color, 1.5f * scale);
+        list.AddLine(close + new Vector2(height - inset, inset), close + new Vector2(inset, height - inset), color, 1.5f * scale);
+        list.AddLine(start + new Vector2(0, height), start + new Vector2(width, height), ImGui.GetColorU32(Blue), scale);
     }
     private static void DrawBubble(CloudChatMessage message, bool own, ISharedImmediateTexture? administratorIcon = null,
         ISharedImmediateTexture? sponsorIcon = null)

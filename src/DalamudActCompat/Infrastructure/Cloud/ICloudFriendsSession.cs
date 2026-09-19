@@ -19,4 +19,5 @@ internal interface ICloudFriendsSession
     Task<CloudChatConversation> GetChatAsync(string id, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null);
     Task<CloudChatSendResult> SendChatAsync(string id, CloudChatSendRequest message, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null);
     Task<CloudChatConversation> AcknowledgeChatAsync(string id, IReadOnlyList<long> ids, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null);
+    Task<CloudChatConversation> MarkChatReadAsync(string id, long through, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null);
 }
