@@ -410,17 +410,28 @@ internal static class SkinSmokeTests
         var editor = new MeterStyleEditorWindow(config, logo, classic, horizontal, dt, h, text, () => { });
         var io = ImGui.GetIO();
         var context = ImGui.GetCurrentContext();
+        var expandedRowHeights = new Dictionary<(string Skin, Vector2 Size, float Scale), float>();
         foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Eorzea })
         foreach (var kind in new[] { MeterWindowKind.Classic, MeterWindowKind.Horizontal })
         foreach (var size in new[] { new Vector2(880, 590), new Vector2(1040, 690) })
         foreach (var scale in new[] { 1f, 1.4f })
+        foreach (var selfOnly in new[] { false, true })
         {
             config.Appearance.SelectedSkin = skin;
             DactTheme.SetCurrent(config.Appearance, true, 1);
             config.Meter.ActivateWindow(kind);
+            // The reported empty preview uses self-only mode and a 1.06 meter font.
+            // Keep that mode active while exercising the actual footer hit target.
+            config.Meter.CompactMode = selfOnly;
+            config.Meter.ClassicWindow.FontScale = 1.06f;
             io.FontGlobalScale = scale;
+            // A selection left by the preceding case must not make a missing
+            // footer pass merely because clicking empty space preserves that ID.
+            var selection = typeof(MeterStyleEditorWindow).GetField("selectedSlotId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            selection.SetValue(editor, null);
             editor.Open();
             ImGuiWindowPtr preview = default;
+            ImGuiWindowPtr rows = default;
             void Frame()
             {
                 ImGui.NewFrame();
@@ -439,32 +450,46 @@ internal static class SkinSmokeTests
                     if (w.Active && name.StartsWith("empty-meter-editor/", StringComparison.Ordinal) &&
                         name[(name.LastIndexOf('/') + 1)..].StartsWith(kind == MeterWindowKind.Classic ? "classic-runtime-preview_" : "horizontal-runtime-preview_", StringComparison.Ordinal))
                         preview = w;
+                    if (w.Active && name.StartsWith("empty-meter-editor/", StringComparison.Ordinal) &&
+                        name[(name.LastIndexOf('/') + 1)..].StartsWith("classic-editor-preview-rows_", StringComparison.Ordinal))
+                        rows = w;
                 }
             }
             io.AddMousePosEvent(-100, -100);
             for (var frame = 0; frame < 3; frame++) Frame();
             Check(service.DisplayEncounter is null, "Editor regression fixture accidentally supplied a real encounter.");
+            Check(config.Meter.CompactMode == selfOnly, "Preview changed the live self-only setting.");
             Check(preview.Handle != null, "No runtime preview was rendered without an encounter.");
+            if (kind == MeterWindowKind.Classic)
+            {
+                Check(rows.Handle != null, "Classic preview did not render its sample rows.");
+                var key = (skin, size, scale);
+                if (!selfOnly) expandedRowHeights[key] = rows.ContentSize.Y;
+                else Check(Math.Abs(rows.ContentSize.Y - expandedRowHeights[key]) < 1,
+                    "Self-only mode changed the actual rendered preview party height.");
+            }
             // The summary is the final item in the preview. Verify its real native
             // rectangle against the inherited clip rect, then click its visible label.
             var top = preview.DC.CursorPosPrevLine.Y;
             Check(top >= preview.ClipRect.Min.Y && top + MeterSlotPresentation.TeamSummaryHeight <= preview.ClipRect.Max.Y + 1,
-                $"Team summary is clipped without combat: {skin}/{kind}/{size}/{scale}, footer={top}, clip={preview.ClipRect.Min.Y}..{preview.ClipRect.Max.Y}.");
+                $"Team summary is clipped without combat: {skin}/{kind}/{size}/{scale}/selfOnly={selfOnly}, footer={top}, clip={preview.ClipRect.Min.Y}..{preview.ClipRect.Max.Y}.");
             var position = new Vector2(preview.Pos.X + 30, top + 16);
             io.AddMousePosEvent(position.X, position.Y); Frame();
             io.AddMouseButtonEvent(0, true); Frame();
             io.AddMouseButtonEvent(0, false); Frame();
             var profile = kind == MeterWindowKind.Classic ? config.Meter.ClassicWindow : config.Meter.HorizontalWindow;
-            var selected = (string?)typeof(MeterStyleEditorWindow).GetField("selectedSlotId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor);
+            var selected = (string?)selection.GetValue(editor);
             Check(selected == profile.Slots.First(slot => slot.Metric == MeterSlotMetric.TotalDamage).Id,
-                $"Visible summary was not selectable without combat: {skin}/{kind}/{size}/{scale}.");
+                $"Visible summary was not selectable without combat: {skin}/{kind}/{size}/{scale}/selfOnly={selfOnly}.");
             if (output is not null && size.X == 880 && scale == 1.4f)
-                raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"empty-editor-summary-{kind}-{skin}.png"));
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"empty-editor-summary-{kind}-{skin}-self-{selfOnly}.png"));
+            if (output is not null && size.X == 1040 && scale == 1 && selfOnly && skin == SkinCatalog.Eorzea)
+                raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"empty-editor-summary-{kind}-eorzea-self-only.png"));
             editor.OnClose();
         }
         io.FontGlobalScale = 1;
         Check(service.DisplayEncounter is null, "Preview created a real combat record.");
-        Console.WriteLine("Empty meter editor: summary visible and clickable, classic/horizontal, two skins, minimum/default sizes, 100/140% fonts; no combat record created.");
+        Console.WriteLine("Empty meter editor: summary visible and clickable, classic/horizontal, full/self-only, two skins, minimum/default sizes, 100/140% fonts and 1.06 meter font; no combat record created.");
     }
 
     private static void ButtonAlignment(NativeUiRasterizer raster, string? output)

@@ -298,7 +298,7 @@ public sealed class MeterWindow : Window
         var audienceStart = new Vector2(audienceEnd.X - audienceButtonWidth, toggleStart.Y);
         var rankingEnd = new Vector2(audienceStart.X - 5, toggleEnd.Y);
         var rankingStart = new Vector2(rankingEnd.X - rankingButtonWidth, toggleStart.Y);
-        var toggleHovered = CanInteractWithCompactToggle(settings) &&
+        var toggleHovered = !embeddedPreview && CanInteractWithCompactToggle(settings) &&
                             ImGui.IsMouseHoveringRect(toggleStart, toggleEnd);
         var rankingHovered = CanInteractWithCompactToggle(settings) &&
                              ImGui.IsMouseHoveringRect(rankingStart, rankingEnd);
@@ -340,7 +340,7 @@ public sealed class MeterWindow : Window
             start + new Vector2(36, 24),
             ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
             TrimToWidth(subtitle, titleRight - start.X - 36));
-        DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered);
+        DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered, editorPreview: embeddedPreview);
         DrawRankingModeIcon(drawList, settings, rankingStart, rankingEnd, rankingHovered);
         DrawAudienceModeDropdown(
             drawList,
@@ -359,7 +359,7 @@ public sealed class MeterWindow : Window
         var settings = configuration.Meter;
         using var fontScale = new FontScaleScope(settings.ClassicWindow.FontScale);
         DrawEncounterHeader(encounter, settings, embeddedPreview: true);
-        var rows = SelectClassicRows(allRows, settings);
+        var rows = SelectClassicRows(allRows, settings, editorPreview: true);
         if (settings.ClassicAllianceView)
         {
             DrawAllianceCompactTiles(encounter, rows, settings);
@@ -373,7 +373,7 @@ public sealed class MeterWindow : Window
                 "classic-editor-preview-rows",
                 previewInteraction);
         }
-        if (ShouldDrawTeamSummary(settings))
+        if (ShouldDrawTeamSummary(settings, editorPreview: true))
         {
             MeterSlotPresentation.DrawTeamSummary(
                 "classic-editor-preview",
@@ -780,20 +780,22 @@ public sealed class MeterWindow : Window
         MeterSettings settings,
         Vector2 start,
         Vector2 end,
-        bool hovered)
+        bool hovered,
+        bool editorPreview = false)
     {
+        var compact = settings.CompactMode && !editorPreview;
         var pressed = hovered && ImGui.IsMouseDown(ImGuiMouseButton.Left);
         var fill = pressed
             ? new Vector4(0.07f, 0.11f, 0.17f, 0.98f)
             : hovered
-                ? settings.CompactMode
+                ? compact
                     ? new Vector4(0.21f, 0.40f, 0.49f, 0.98f)
                     : NavyHover
-                : settings.CompactMode
+                : compact
                     ? new Vector4(0.17f, 0.34f, 0.42f, 0.96f)
                     : new Vector4(0.10f, 0.14f, 0.20f, 0.96f);
-        var accent = settings.CompactMode ? IceBlue : Gold;
-        if (!hovered && !settings.CompactMode)
+        var accent = compact ? IceBlue : Gold;
+        if (!hovered && !compact)
         {
             accent.W = 0.72f;
         }
@@ -811,13 +813,13 @@ public sealed class MeterWindow : Window
             drawList,
             start,
             end,
-            pointsDown: settings.CompactMode,
+            pointsDown: compact,
             hovered ? MeterBackground.CurrentText : accent);
         if (hovered)
         {
             ImGui.SetTooltip(text.Get(
-                settings.CompactMode ? "展开：显示完整队伍" : "收起：只显示自己",
-                settings.CompactMode ? "Expand: show the full party" : "Collapse: show only yourself"));
+                compact ? "展开：显示完整队伍" : "收起：只显示自己",
+                compact ? "Expand: show the full party" : "Collapse: show only yourself"));
         }
     }
 
@@ -872,11 +874,14 @@ public sealed class MeterWindow : Window
 
     private static IReadOnlyList<CombatantRow> SelectClassicRows(
         IReadOnlyList<CombatantRow> rows,
-        MeterSettings settings)
+        MeterSettings settings,
+        bool editorPreview = false)
     {
         var players = rows.Where(static row => !MeterService.IsLimitBreak(row.Id, row.Name))
             .ToArray();
-        if (settings.CompactMode)
+        // Editing always shows a full sample party without changing the live
+        // self-only preference or its expand/collapse animation state.
+        if (settings.CompactMode && !editorPreview)
         {
             // Compact mode is a self card, not an empty header when the local row arrives late.
             var localPlayer = players.FirstOrDefault(static row => row.IsLocalPlayer) ??
@@ -916,7 +921,7 @@ public sealed class MeterWindow : Window
         };
         var minimumTableWidth = CalculateRequiredTableWidth(minimumColumnWidths, settings.FontScale);
         var useHorizontalScroll = ShouldEnableHorizontalScroll(availableTableWidth, minimumTableWidth);
-        var summaryReserve = ShouldDrawTeamSummary(settings) &&
+        var summaryReserve = ShouldDrawTeamSummary(settings, editorPreview: previewInteraction is not null) &&
                              MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots)
             ? MeterSlotPresentation.TeamSummaryHeight + ImGui.GetStyle().ItemSpacing.Y
             : 0;
@@ -1968,8 +1973,10 @@ public sealed class MeterWindow : Window
     internal static bool ShouldShowFflogsColumn(bool integrationEnabled, MeterSettings settings)
         => integrationEnabled && settings.ShowFflogs;
 
-    internal static bool ShouldDrawTeamSummary(MeterSettings settings)
-        => !settings.ClassicAllianceView && !settings.CompactMode;
+    internal static bool ShouldDrawTeamSummary(MeterSettings settings, bool editorPreview = false)
+        // The live self card omits totals to stay compact, but the editor must
+        // keep enabled summary slots visible and selectable even in self-only mode.
+        => !settings.ClassicAllianceView && (editorPreview || !settings.CompactMode);
 
     internal static TimeSpan ResolveHeaderDuration(Encounter encounter)
     {

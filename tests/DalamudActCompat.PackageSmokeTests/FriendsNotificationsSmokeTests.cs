@@ -171,8 +171,21 @@ internal static partial class FriendsUiSmokeTests
         io.AddMouseButtonEvent(0, false); Frame();
         Check(Vector2.Distance(chatWindow.Pos, originalPosition + movement) < 2, "Custom header drag lost mouse movement.");
         if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-chat-custom-header.png"));
+        // Exercise the same custom header with the real Eorzea rim: it must not
+        // cover the drag/close hit targets or reintroduce a native title bar.
+        DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+        Frame(); Frame();
+        originalPosition = chatWindow.Pos;
+        grab = originalPosition + new Vector2(200, 22);
+        io.AddMousePosEvent(grab.X, grab.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame();
+        io.AddMousePosEvent(grab.X + movement.X, grab.Y + movement.Y); Frame(); Frame();
+        io.AddMouseButtonEvent(0, false); Frame();
+        Check(Vector2.Distance(chatWindow.Pos, originalPosition + movement) < 2 && (chatWindow.Flags & ImGuiWindowFlags.NoTitleBar) != 0,
+            "Eorzea metal frame interfered with the custom chat header.");
+        if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-chat-eorzea-metal.png"));
         Click(chatWindow.Pos + new Vector2(chatWindow.Size.X - 23, 23)); Frame();
         Check(!chatWindow.Active, "Custom header close did not close chat.");
+        DactTheme.SetCurrent(new(), false, 0);
         ui.Hide(); Frame(true); configuration.FriendNotificationsOnRight = true; now += 1500;
         var second = Arrive("你什么时候结束", CloudChatPolicy.WhenFinished); Frame();
         Check(Window(second).Pos.X >= io.DisplaySize.X, "Right bubble did not start outside the right edge.");

@@ -146,6 +146,9 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (expanded)
         {
             window.Position = ImGui.GetWindowPos(); window.Size = ImGui.GetWindowSize();
+            // Reuse only the skin's metal rim, keeping the custom chat header,
+            // resize grip and message surface independent of native window chrome.
+            DactTheme.DrawGamePopupFrame();
             DrawChatHeader(window, title, official, view?.Chat.Peer, scale);
             var focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
             if (view is null) { ImGui.TextWrapped("会话正在同步，或好友关系已解除。"); }
