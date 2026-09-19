@@ -529,6 +529,14 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                         token)
                     .ConfigureAwait(false);
                 var currentBackups = Snapshot.Backups;
+                if (exported.IsDefaultConfiguration)
+                {
+                    // A fresh/reset installation must not displace the account's
+                    // latest usable backup, including on a manual upload click.
+                    SetSignedIn(current, currentBackups, Snapshot.Invitations,
+                        "当前是默认配置，已跳过云同步；云端备份保持不变。", false);
+                    return false;
+                }
                 if (skipIfUnchanged &&
                     currentBackups.FirstOrDefault()?.ContentId is { } latestContentId &&
                     latestContentId.Equals(exported.ContentId, StringComparison.Ordinal))

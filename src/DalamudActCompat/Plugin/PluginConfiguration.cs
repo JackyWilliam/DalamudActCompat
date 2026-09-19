@@ -386,6 +386,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
         SelectedCactbotOverlay = snapshot.SelectedCactbotOverlay;
         OverlayWindows = snapshot.OverlayWindows;
         Meter = snapshot.Meter;
+        // Cloud restore replaces the file before updating the running configuration.
+        // Keep discoveries in memory too, or the next save erases the restored unlocks.
+        Appearance = snapshot.Appearance;
         Fflogs = snapshot.Fflogs;
         EmbeddedPlugins = snapshot.EmbeddedPlugins;
         DisabledActPluginIds = snapshot.DisabledActPluginIds;

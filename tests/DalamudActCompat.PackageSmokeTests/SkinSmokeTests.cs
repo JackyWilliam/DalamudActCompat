@@ -1,6 +1,8 @@
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using Dalamud.Plugin;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Textures.TextureWraps;
@@ -16,6 +18,86 @@ using Newtonsoft.Json;
 
 internal static class SkinSmokeTests
 {
+    public static async Task CloudAsync(string root)
+    {
+        var source = Path.Combine(root, "skin-cloud-source");
+        var destination = Path.Combine(root, "skin-cloud-destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        var sourceFile = Path.Combine(source, "DalamudActCompat.json");
+        var destinationFile = Path.Combine(destination, "DalamudActCompat.json");
+        var sourcePaths = new PluginPaths(Path.Combine(source, "DalamudActCompat"));
+        var destinationPaths = new PluginPaths(Path.Combine(destination, "DalamudActCompat"));
+        var config = new PluginConfiguration();
+        var backups = new PortableConfigurationBackupService();
+        var key = backups.GenerateRecoveryKey();
+        await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(config));
+        var before = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
+            Path.Combine(root, "skin-cloud-before.enc"), key, default);
+
+        var discoveries = new SkinDiscoveries();
+        for (var i = 0; i < 10; i++) discoveries.ClickLogo(config.Appearance, i * 100);
+        for (var i = 0; i < 7; i++) discoveries.ClickVersion(config.Appearance, i * 100);
+        for (var i = 0; i < 6; i++) discoveries.VisitPage(config.Appearance, i);
+        for (var i = 0; i < 5; i++) discoveries.ClickAppearanceTitle(config.Appearance, i * 100);
+        await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(config));
+        var unlocked = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
+            Path.Combine(root, "skin-cloud-unlocked.enc"), key, default);
+        Check(before.ContentId != unlocked.ContentId && backups.IsIncludedPath(sourcePaths.ConfigDirectory, sourceFile),
+            "Unlocking colors without changing the selected skin was invisible to cloud sync.");
+        config.Appearance.SelectedSkin = SkinCatalog.NeonPink;
+        await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(config));
+        var archive = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
+            Path.Combine(root, "skin-cloud-selected.enc"), key, default);
+        Check(archive.ContentId != unlocked.ContentId, "Changing the selected skin was invisible to cloud sync.");
+
+        var live = new PluginConfiguration();
+        await File.WriteAllTextAsync(destinationFile, JsonConvert.SerializeObject(live));
+        var rollback = Path.Combine(root, "skin-cloud-rollback.enc");
+        await backups.RestoreEncryptedAsync(archive.ArchivePath, destinationPaths.ConfigDirectory, rollback, key, default);
+        // Exercise the actual restore-to-memory and subsequent save entry points.
+        // Disk-only checks miss the bug because the encrypted archive was already complete.
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var plugin = (Plugin)RuntimeHelpers.GetUninitializedObject(typeof(Plugin));
+        var pluginInterface = DispatchProxy.Create<IDalamudPluginInterface, LogLifecycleConfigSaveProxy>();
+        ((LogLifecycleConfigSaveProxy)pluginInterface).Path = destinationFile;
+        typeof(Plugin).GetField("configuration", flags)!.SetValue(plugin, live);
+        typeof(Plugin).GetField("paths", flags)!.SetValue(plugin, destinationPaths);
+        typeof(Plugin).GetField("services", flags)!.SetValue(plugin,
+            new PluginServices(pluginInterface, null!, null!, null!, null!, null!, null!, null!, null!, null!));
+        void ApplyAndSave()
+        {
+            typeof(Plugin).GetMethod("ApplyRestoredConfigurationToMemory", flags)!.Invoke(plugin, null);
+            Check(typeof(Plugin).GetMethod("TrySaveConfiguration", flags)!.Invoke(plugin, null) is true,
+                "Restored skin preferences could not be saved.");
+        }
+        ApplyAndSave();
+        var expected = new[] { SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber, SkinCatalog.NeonPink };
+        Check(live.Appearance.SelectedSkin == SkinCatalog.NeonPink && live.Appearance.UnlockedEasterEggs.SetEquals(expected),
+            "Cloud restoration lost skin selection/discoveries in the running configuration.");
+        var reloaded = JsonConvert.DeserializeObject<PluginConfiguration>(await File.ReadAllTextAsync(destinationFile))!;
+        reloaded.ApplyMigrations();
+        Check(reloaded.Appearance.UnlockedEasterEggs.SetEquals(expected) &&
+              SkinCatalog.Resolve(reloaded.Appearance, false, 0) == SkinCatalog.NeonPink,
+            "The next save or cold reload erased the restored discoveries.");
+        reloaded.Appearance.SelectedSkin = SkinCatalog.Eorzea;
+        Check(SkinCatalog.Resolve(reloaded.Appearance, true, 0) == SkinCatalog.Default &&
+              SkinCatalog.Resolve(reloaded.Appearance, true, 1) == SkinCatalog.Eorzea,
+            "Restoring discovery data granted paid skin authority without the account entitlement.");
+
+        await backups.RestoreEncryptedAsync(rollback, destinationPaths.ConfigDirectory,
+            Path.Combine(root, "skin-cloud-undo-rollback.enc"), key, default);
+        ApplyAndSave();
+        Check(live.Appearance.SelectedSkin == SkinCatalog.Default && live.Appearance.UnlockedEasterEggs.Count == 0,
+            "Rollback did not restore the exact previous appearance state.");
+        // Older archives predate Appearance; their normal default must remain loadable.
+        await File.WriteAllTextAsync(destinationFile, "{\"Version\":16}");
+        ApplyAndSave();
+        Check(live.Appearance.SelectedSkin == SkinCatalog.Default && live.Appearance.UnlockedEasterEggs.Count == 0,
+            "A pre-skin cloud snapshot no longer restores with default appearance.");
+        Console.WriteLine("Skin cloud: unlock/selection content IDs, encrypted cross-machine restore, live apply/save/cold reload, rollback, old backups and sponsor authority passed (offline).");
+    }
+
     public static async Task ApiAsync(string root)
     {
         var json = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);

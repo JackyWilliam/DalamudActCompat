@@ -54,6 +54,12 @@ try
     TeamDpsSmokeTests.Run();
     AllianceRosterSmokeTests.Run();
     if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
+    if (args.Contains("--skins-cloud-only", StringComparer.Ordinal))
+    {
+        await SkinSmokeTests.CloudAsync(testRoot);
+        await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--skins-api-only", StringComparer.Ordinal))
     {
         await SkinSmokeTests.ApiAsync(testRoot);
@@ -200,6 +206,8 @@ try
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
     await ValidatePortableConfigurationArchiveAsync(testRoot);
+    await SkinSmokeTests.CloudAsync(testRoot);
+    await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
     await ValidateEncryptedConfigurationBackupAsync(testRoot);
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
