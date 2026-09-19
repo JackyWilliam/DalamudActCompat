@@ -86,7 +86,9 @@ internal static partial class FriendsUiSmokeTests
         Check(SpinWait.SpinUntil(() => controller.Snapshot.InitialSyncComplete, TimeSpan.FromSeconds(3)), "Native notification bootstrap did not finish.");
         void Frame(bool focus = false)
         {
-            ImGui.NewFrame(); ImGui.SetNextWindowPos(new(600, 10)); ImGui.SetNextWindowSize(new(500, 80));
+            ImGui.NewFrame();
+            using var appearance = DactTheme.PushFrame();
+            ImGui.SetNextWindowPos(new(600, 10)); ImGui.SetNextWindowSize(new(500, 80));
             if (focus) ImGui.SetNextWindowFocus();
             ImGui.Begin("isolated-game-input"); ImGui.TextUnformatted("game controls"); ImGui.End();
             ui.Draw(false, true); ImGui.Render(); now += 17;
@@ -175,6 +177,16 @@ internal static partial class FriendsUiSmokeTests
         // cover the drag/close hit targets or reintroduce a native title bar.
         DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
         Frame(); Frame();
+        if (DactTheme.GameAssets?.HasWindowTextures == true)
+        {
+            Check((chatWindow.Flags & ImGuiWindowFlags.NoBackground) != 0 && chatWindow.WindowBorderSize == 0,
+                "The native background/outline still shows outside the metal rim.");
+            var assets = DactTheme.GameAssets;
+            DactTheme.GameAssets = null; Frame(); Frame();
+            Check((chatWindow.Flags & ImGuiWindowFlags.NoBackground) == 0,
+                "Chat lost its background while skin textures were unavailable.");
+            DactTheme.GameAssets = assets; Frame(); Frame();
+        }
         originalPosition = chatWindow.Pos;
         grab = originalPosition + new Vector2(200, 22);
         io.AddMousePosEvent(grab.X, grab.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame();

@@ -140,15 +140,27 @@ internal sealed partial class FriendsUiManager : IDisposable
         // Focus is requested only by a user's click, never by arrival/polling.
         if (window.Focus) { ImGui.SetNextWindowFocus(); window.Focus = false; }
         window.Drag.PrepareNextWindow();
-        var expanded = ImGui.Begin($"{title}###DACTFriendChat-{id}", ref window.Open,
+        var flags = DactTheme.WindowFlags(
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove);
+        var gameFrame = (flags & ImGuiWindowFlags.NoBackground) != 0;
+        // The sprite has transparent outer pixels. Suppress the original fill
+        // and outline only once textures are ready, or they show as a second rim.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, gameFrame ? 0 : ImGui.GetStyle().WindowBorderSize);
+        var expanded = ImGui.Begin($"{title}###DACTFriendChat-{id}", ref window.Open, flags);
+        ImGui.PopStyleVar();
         if (expanded)
         {
             window.Position = ImGui.GetWindowPos(); window.Size = ImGui.GetWindowSize();
-            // Reuse only the skin's metal rim, keeping the custom chat header,
-            // resize grip and message surface independent of native window chrome.
-            DactTheme.DrawGamePopupFrame();
+            if (gameFrame)
+            {
+                // Fill inside the same eight-pixel strips used by PopupFrame,
+                // leaving its outer transparency and rounded corners intact.
+                var inset = new Vector2(8 * scale);
+                ImGui.GetWindowDrawList().AddRectFilled(window.Position + inset,
+                    window.Position + window.Size - inset, ImGui.GetColorU32(Navy));
+                DactTheme.DrawGamePopupFrame();
+            }
             DrawChatHeader(window, title, official, view?.Chat.Peer, scale);
             var focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
             if (view is null) { ImGui.TextWrapped("会话正在同步，或好友关系已解除。"); }
