@@ -38,6 +38,7 @@ internal static class SkinCatalog
     public const string Jade = "jade";
     public const string Amethyst = "amethyst";
     public const string Amber = "amber";
+    // Display names may change; the saved ID keeps existing and cloud-restored discoveries valid.
     public const string NeonPink = "neon-pink";
 
     public static IReadOnlyList<SkinDefinition> All { get; } =
@@ -47,7 +48,7 @@ internal static class SkinCatalog
         new(Jade, "森之青玉", "Forest Jade", EasterEgg: true),
         new(Amethyst, "月下紫晶", "Moonlit Amethyst", EasterEgg: true),
         new(Amber, "暮光琥珀", "Twilight Amber", EasterEgg: true),
-        new(NeonPink, "荧光粉", "Neon Pink", EasterEgg: true),
+        new(NeonPink, "绯梦霓光", "Neon Reverie", EasterEgg: true),
     ];
 
     public static bool IsEasterEgg(string id) => All.Any(skin => skin.Id == id && skin.EasterEgg);
