@@ -79,7 +79,7 @@ internal static class AdministratorSmokeTests
             if (output is not null) Directory.CreateDirectory(output);
             double time = 0; var confirms = new List<(string, string)>();
             var config = new PluginConfiguration();
-            var ui = new CloudAdministratorNotice(new UiText(config), icon, (name, grant) => confirms.Add((name, grant)), () => time);
+            var ui = new CloudRoleNotice(new UiText(config), icon, (name, grant) => confirms.Add((name, grant)), () => time);
             var state = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "test-admin",
                 Administrator = new(true, "first-grant", true) };
             void Frame()
@@ -118,10 +118,10 @@ internal static class AdministratorSmokeTests
         finally { ImGui.DestroyContext(context); }
     }
 
-    internal static PreviewIcon LoadIcon(NativeUiRasterizer raster)
+    internal static PreviewIcon LoadIcon(NativeUiRasterizer raster, string filename = "Player26_Icon.png", ulong handle = 999)
     {
-        var icon = new PreviewIcon();
-        using var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "Icons", "Player26_Icon.png"));
+        var icon = new PreviewIcon(handle);
+        using var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "Icons", filename));
         var pixels = new byte[bitmap.Width * bitmap.Height * 4];
         for (var y = 0; y < bitmap.Height; y++) for (var x = 0; x < bitmap.Width; x++)
         {
@@ -132,9 +132,9 @@ internal static class AdministratorSmokeTests
         return icon;
     }
 
-    internal sealed class PreviewIcon : ISharedImmediateTexture, IDalamudTextureWrap
+    internal sealed class PreviewIcon(ulong handle = 999) : ISharedImmediateTexture, IDalamudTextureWrap
     {
-        public ImTextureID Handle => new(999);
+        public ImTextureID Handle => new(handle);
         public int Width => 32;
         public int Height => 32;
         public Vector2 Size => new(32);

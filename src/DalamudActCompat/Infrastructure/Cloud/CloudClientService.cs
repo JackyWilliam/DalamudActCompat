@@ -469,16 +469,30 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 SetSnapshot(Snapshot with { StatusMessage = "管理员通知已确认。", StatusIsError = false });
         }, cancellationToken);
 
+    public Task AcknowledgeSponsorAsync(string username, string grantId, CancellationToken cancellationToken)
+        => RunExclusiveAsync("正在确认赞助者通知…", async token =>
+        {
+            var current = RequireCredentials();
+            if (current.Username != username || Snapshot.Sponsor?.SponsorGrantId != grantId) return;
+            var status = await apiClient.AcknowledgeSponsorAsync(current.Token, grantId, token).ConfigureAwait(false);
+            // Apply under the same session/version guard as administrator notices,
+            // so a late heartbeat cannot bring back an acknowledged celebration.
+            ApplyAccountStatus(current, null, null, status);
+            if (IsCurrentSession(current))
+                SetSnapshot(Snapshot with { StatusMessage = "赞助者通知已确认。", StatusIsError = false });
+        }, cancellationToken);
+
     private void ApplyAdministratorStatus(CloudStoredCredentials current, CloudAdministratorStatus status, long? expectedVersion = null)
         => ApplyAccountStatus(current, status, expectedVersion, null);
 
-    private void ApplyAccountStatus(CloudStoredCredentials current, CloudAdministratorStatus status, long? expectedVersion, CloudSponsorStatus? sponsor)
+    private void ApplyAccountStatus(CloudStoredCredentials current, CloudAdministratorStatus? status, long? expectedVersion, CloudSponsorStatus? sponsor)
     {
         if (sharedAccountStore is not null && sharedAccountStore.Read().Revision != sharedRevision) return;
         lock (stateLock)
         {
             if (credentials?.Token != current.Token || !snapshot.IsSignedIn || activeBan is not null) return;
             if (expectedVersion is { } version && version != administratorStateVersion) return;
+            status ??= snapshot.Administrator ?? new();
             administratorStateVersion++;
             snapshot = snapshot with { Administrator = status, Sponsor = sponsor ?? snapshot.Sponsor,
                 Invitations = snapshot.Invitations is { } invitations ? invitations with
@@ -529,6 +543,14 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                         token)
                     .ConfigureAwait(false);
                 var currentBackups = Snapshot.Backups;
+                if (exported.IsDefaultConfiguration)
+                {
+                    // A fresh/reset installation must not displace the account's
+                    // latest usable backup, including on a manual upload click.
+                    SetSignedIn(current, currentBackups, Snapshot.Invitations,
+                        "当前是默认配置，已跳过云同步；云端备份保持不变。", false);
+                    return false;
+                }
                 if (skipIfUnchanged &&
                     currentBackups.FirstOrDefault()?.ContentId is { } latestContentId &&
                     latestContentId.Equals(exported.ContentId, StringComparison.Ordinal))

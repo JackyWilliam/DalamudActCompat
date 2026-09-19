@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace DalamudActCompat.Infrastructure.Cloud;
 
-internal sealed record CloudApiUser(string Id, string Username, bool IsAdmin = false);
+internal sealed record CloudApiUser(string Id, string Username, bool IsAdmin = false, int SponsorTier = 0);
 
 internal sealed record CloudAuthenticationResponse(
     string Token,
@@ -64,7 +64,7 @@ internal sealed record CloudAdministratorStatus(
     string? AdminGrantId = null,
     bool AdminNoticePending = false);
 
-internal sealed record CloudSponsorStatus(int Tier = 0);
+internal sealed record CloudSponsorStatus(int Tier = 0, string? SponsorGrantId = null, bool SponsorNoticePending = false);
 internal sealed record CloudAccountStatus(CloudAdministratorStatus? Administrator = null, CloudSponsorStatus? Sponsor = null);
 
 internal sealed record CloudCreatedInvitation(
@@ -217,6 +217,10 @@ internal sealed partial class CloudApiClient : IDisposable
     }
 
     private sealed record SessionAdministratorResponse(CloudAdministratorStatus? Administrator = null);
+
+    public Task<CloudSponsorStatus> AcknowledgeSponsorAsync(string token, string grantId, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudSponsorStatus>(HttpMethod.Post,
+            "api/v1/auth/sponsor-notice/ack", new { sponsorGrantId = grantId }, token, cancellationToken);
 
     public Task<CloudAccountStatus> GetAccountStatusAsync(string token, CancellationToken cancellationToken)
         => SendJsonAsync<CloudAccountStatus>(HttpMethod.Get, "api/v1/auth/me", null, token, cancellationToken);
@@ -497,6 +501,10 @@ internal sealed partial class CloudApiClient : IDisposable
         string? token)
     {
         var request = new HttpRequestMessage(method, relativeUri);
+        // Use the loaded plugin assembly so support sees the installed client,
+        // including downgrades, rather than a separately maintained version string.
+        if (typeof(CloudApiClient).Assembly.GetName().Version is { } version)
+            request.Headers.Add("X-DACT-Version", version.ToString(4));
         if (!string.IsNullOrWhiteSpace(token))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);

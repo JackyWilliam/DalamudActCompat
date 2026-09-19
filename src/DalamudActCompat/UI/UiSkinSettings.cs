@@ -38,6 +38,8 @@ internal static class SkinCatalog
     public const string Jade = "jade";
     public const string Amethyst = "amethyst";
     public const string Amber = "amber";
+    // Display names may change; the saved ID keeps existing and cloud-restored discoveries valid.
+    public const string NeonPink = "neon-pink";
 
     public static IReadOnlyList<SkinDefinition> All { get; } =
     [
@@ -46,6 +48,7 @@ internal static class SkinCatalog
         new(Jade, "森之青玉", "Forest Jade", EasterEgg: true),
         new(Amethyst, "月下紫晶", "Moonlit Amethyst", EasterEgg: true),
         new(Amber, "暮光琥珀", "Twilight Amber", EasterEgg: true),
+        new(NeonPink, "绯梦霓光", "Neon Reverie", EasterEgg: true),
     ];
 
     public static bool IsEasterEgg(string id) => All.Any(skin => skin.Id == id && skin.EasterEgg);
@@ -66,8 +69,10 @@ internal sealed class SkinDiscoveries
 {
     private int logoClicks;
     private int versionClicks;
+    private int appearanceClicks;
     private long lastLogoClick = long.MinValue;
     private long lastVersionClick = long.MinValue;
+    private long lastAppearanceClick = long.MinValue;
     private int visitedPages;
 
     public string? ClickLogo(UiSkinSettings settings, long now)
@@ -75,6 +80,9 @@ internal sealed class SkinDiscoveries
 
     public string? ClickVersion(UiSkinSettings settings, long now)
         => Click(settings, SkinCatalog.Amethyst, 7, now, ref versionClicks, ref lastVersionClick);
+
+    public string? ClickAppearanceTitle(UiSkinSettings settings, long now)
+        => Click(settings, SkinCatalog.NeonPink, 5, now, ref appearanceClicks, ref lastAppearanceClick);
 
     public string? VisitPage(UiSkinSettings settings, int page)
     {

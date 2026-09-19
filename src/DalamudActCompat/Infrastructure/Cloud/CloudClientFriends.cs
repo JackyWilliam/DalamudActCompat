@@ -103,6 +103,9 @@ internal sealed partial class CloudClientService
     public Task<CloudChatConversation> AcknowledgeChatAsync(string conversationId, IReadOnlyList<long> messageIds, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
         => WithFriendSessionAsync((token, ct) => apiClient.AcknowledgeChatAsync(token, conversationId, messageIds, ct), cancellationToken, expectedSession);
 
+    public Task<CloudChatConversation> MarkChatReadAsync(string conversationId, long through, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
+        => WithFriendSessionAsync((token, ct) => apiClient.MarkChatReadAsync(token, conversationId, through, ct), cancellationToken, expectedSession);
+
     private async Task<T> WithFriendSessionAsync<T>(Func<string, CancellationToken, Task<T>> operation, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
     {
         CloudStoredCredentials current;

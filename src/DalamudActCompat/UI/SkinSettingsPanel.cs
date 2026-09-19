@@ -46,7 +46,7 @@ internal sealed class SkinSettingsPanel
         ImGui.EndChild();
     }
 
-    public bool Draw(UiSkinSettings settings, CloudClientSnapshot account, UiText text, Action refresh, Action closeWindow)
+    public bool Draw(UiSkinSettings settings, CloudClientSnapshot account, UiText text, Action refresh, Action discoverPalette)
     {
         if (!IsOpen) return false;
         if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) &&
@@ -62,6 +62,7 @@ internal sealed class SkinSettingsPanel
         var pageSize = ImGui.GetContentRegionAvail();
         DactTheme.TextColored(DactTheme.Palette.Gold, text.Get("设置与账号 / 外观与皮肤", "Settings & Account / Appearance & skins"));
         ImGui.TextUnformatted(text.Get("选择喜欢的外观", "Find your look"));
+        if (ImGui.IsItemClicked()) discoverPalette();
         ImGui.TextDisabled(text.Get("点击卡片查看预览，应用后自动保存。", "Select a card to preview. Applying saves your choice."));
         ImGui.Spacing();
 
@@ -112,7 +113,7 @@ internal sealed class SkinSettingsPanel
             : !available
             ? text.Get("此皮肤尚未解锁，可以预览。", "Locked skins can be previewed.")
             : active == PreviewSkinId ? text.Get("当前外观已保存。", "Your current look is saved.")
-            : text.Get("当前仅预览；返回或关闭不会应用。", "Preview only. Apply to save."));
+            : text.Get("当前仅预览；点击应用后保存。", "Preview only. Apply to save."));
         if (DactTheme.Button(text.Get("返回设置", "Back to settings"), new Vector2(150 * scale, 0))) Close();
         ImGui.SameLine();
         ImGui.BeginDisabled(!available || active == PreviewSkinId);
@@ -123,12 +124,6 @@ internal sealed class SkinSettingsPanel
             changed = true;
         }
         ImGui.EndDisabled();
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("关闭窗口", "Close window"), new Vector2(150 * scale, 0)))
-        {
-            Close();
-            closeWindow();
-        }
         return changed;
     }
 

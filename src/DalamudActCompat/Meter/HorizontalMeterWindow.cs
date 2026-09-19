@@ -353,7 +353,7 @@ public sealed class HorizontalMeterWindow : Window
         var cardHeight = Math.Max(28, slotRows * slotRowHeight);
         var available = ImGui.GetContentRegionAvail();
         var summaryReserve = MeterSlotPresentation.HasTeamSummary(slots)
-            ? MeterSlotPresentation.TeamSummaryHeight + 4
+            ? MeterSlotPresentation.TeamSummaryHeight + ImGui.GetStyle().ItemSpacing.Y
             : 0;
         var bodySize = new Vector2(
             Math.Max(1, available.X),

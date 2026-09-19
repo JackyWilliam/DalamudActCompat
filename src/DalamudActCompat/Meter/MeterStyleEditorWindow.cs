@@ -372,11 +372,15 @@ public sealed class MeterStyleEditorWindow : Window
         DactTheme.TextColored(Gold, text.Get("页面预览", "Page preview"));
         ImGui.TextDisabled(KindDescription(selectedKind));
         ImGui.Separator();
-        ImGui.TextWrapped(text.Get(
-            "点击 D/T 或 H 预览会自动切换到对应分栏；点击表头或内容可选择槽位，按住后拖到另一项可交换顺序。",
-            "Click the D/T or H preview to switch panes automatically. Click a header or value to select its slot, then drag it onto another item to swap their order."));
+        ImGui.TextWrapped(text.Get("点击栏目选择，拖动交换顺序。", "Click to select; drag to swap columns."));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(text.Get(
+                "点击 D/T 或 H 预览会自动切换到对应分栏；点击表头或内容可选择槽位，按住后拖到另一项可交换顺序。",
+                "Click D/T or H to switch panes. Select a header or value, then drag onto another item to swap their order."));
         ImGui.Dummy(new Vector2(1, 4));
-        var availableHeight = Math.Max(220, ImGui.GetContentRegionAvail().Y);
+        // A fixed minimum pushes the footer below the parent clip rectangle at
+        // small window sizes or larger fonts, even with the built-in sample data.
+        var availableHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - ImGui.GetStyle().ItemSpacing.Y);
         switch (selectedKind)
         {
             case MeterWindowKind.Horizontal:

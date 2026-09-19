@@ -918,7 +918,7 @@ public sealed class MeterWindow : Window
         var useHorizontalScroll = ShouldEnableHorizontalScroll(availableTableWidth, minimumTableWidth);
         var summaryReserve = ShouldDrawTeamSummary(settings) &&
                              MeterSlotPresentation.HasTeamSummary(settings.ClassicWindow.Slots)
-            ? MeterSlotPresentation.TeamSummaryHeight + 4
+            ? MeterSlotPresentation.TeamSummaryHeight + ImGui.GetStyle().ItemSpacing.Y
             : 0;
         if (useHorizontalScroll)
         {

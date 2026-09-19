@@ -85,7 +85,10 @@ internal sealed class PortableConfigurationBackupService
                 exported.FileCount,
                 exported.UncompressedBytes,
                 new FileInfo(destination).Length,
-                contentId);
+                contentId)
+            {
+                IsDefaultConfiguration = PortableConfigurationDefaults.IsDefaultArchive(plaintextArchive),
+            };
         }
         finally
         {
@@ -629,7 +632,10 @@ internal sealed record PortableConfigurationBackupExportResult(
     int FileCount,
     long UncompressedBytes,
     long EncryptedBytes,
-    string ContentId);
+    string ContentId)
+{
+    public bool IsDefaultConfiguration { get; init; }
+}
 
 internal sealed record PortableConfigurationBackupRestoreResult(
     string ArchivePath,

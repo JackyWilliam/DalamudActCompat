@@ -83,7 +83,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CoreResourceDownloadWindow coreResourceDownloadWindow;
     private readonly ThirdPartyPluginNoticeWindow thirdPartyPluginNoticeWindow;
     private readonly CloudBanNoticeWindow cloudBanNoticeWindow;
-    private readonly CloudAdministratorNotice cloudAdministratorNotice;
+    private readonly CloudRoleNotice cloudAdministratorNotice;
+    private readonly CloudRoleNotice cloudSponsorNotice;
     private readonly FactoryResetService factoryResetService;
     private readonly FactoryResetOperationCoordinator factoryResetOperations;
     private readonly CloudClientService cloudClient;
@@ -482,6 +483,7 @@ public sealed class Plugin : IDalamudPlugin
         var logoTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-logo.jpg"));
         var administratorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "Player26_Icon.png"));
+        var sponsorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "SponsorCrown.png"));
         var launcherTexture = textureProvider.GetFromFile(
             Path.Combine(assetDirectory, "act-button.png"));
         var jobIcons = new JobIconTextureSet(
@@ -725,7 +727,7 @@ public sealed class Plugin : IDalamudPlugin
         friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
             playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
             stopNotificationSound: friendsNotificationSound.Stop,
-            administratorIcon: administratorIcon);
+            administratorIcon: administratorIcon, sponsorIcon: sponsorIcon);
         settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
@@ -735,8 +737,10 @@ public sealed class Plugin : IDalamudPlugin
             StartHostResourceDownload,
             CancelHostResourceDownload);
         cloudBanNoticeWindow = new CloudBanNoticeWindow(text, logoTexture);
-        cloudAdministratorNotice = new CloudAdministratorNotice(text, administratorIcon, (username, grantId) =>
+        cloudAdministratorNotice = new CloudRoleNotice(text, administratorIcon, (username, grantId) =>
             StartCloudOperation(token => cloudClient.AcknowledgeAdministratorAsync(username, grantId, token)));
+        cloudSponsorNotice = new CloudRoleNotice(text, sponsorIcon, (username, grantId) =>
+            StartCloudOperation(token => cloudClient.AcknowledgeSponsorAsync(username, grantId, token)), kind: CloudRoleNoticeKind.Sponsor);
         launcherWindow = new LauncherWindow(
             configuration,
             launcherTexture,
@@ -883,6 +887,9 @@ public sealed class Plugin : IDalamudPlugin
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
         cloudAdministratorNotice.Update(cloudClient.Snapshot);
+        // Serialize the two celebrations so their windows and confirmation buttons
+        // never overlap. The queued animation starts only when it becomes visible.
+        cloudSponsorNotice.Update(cloudAdministratorNotice.IsOpen ? CloudClientSnapshot.SignedOut() : cloudClient.Snapshot);
         triggernometryNativeBridge.Update(DateTimeOffset.UtcNow);
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
@@ -914,6 +921,7 @@ public sealed class Plugin : IDalamudPlugin
                                          coreResourceDownloadWindow.IsOpen ||
                                          cloudBanNoticeWindow.IsOpen ||
                                          cloudAdministratorNotice.IsOpen ||
+                                         cloudSponsorNotice.IsOpen ||
                                          encounterWindow.IsOpen ||
                                          simplifiedHomeWindow.IsOpen ||
                                          meterStyleEditorWindow.IsOpen || friendsUi.AnyOpen;
@@ -928,6 +936,7 @@ public sealed class Plugin : IDalamudPlugin
         friendsUi.Draw(settingsWindow.IsOpen, services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
         fileDialogManager.Draw();
         cloudAdministratorNotice.Draw(cloudClient.Snapshot);
+        if (!cloudAdministratorNotice.IsOpen) cloudSponsorNotice.Draw(cloudClient.Snapshot);
     }
 
     private bool IsDactAccessAllowed()
@@ -5482,7 +5491,7 @@ public sealed class Plugin : IDalamudPlugin
             identities[identity.DisplayName] = identity;
         }
 
-        foreach (var (member, partyGroup) in EnumeratePartyMembers(partyList))
+        foreach (var (member, partyGroup) in PartyRosterReader.Read(partyList))
         {
             var name = member.Name.TextValue;
             if (string.IsNullOrWhiteSpace(name))
@@ -5522,22 +5531,6 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return identities.Values.ToArray();
-    }
-
-    private static IEnumerable<(Dalamud.Game.ClientState.Party.IPartyMember Member, int PartyGroup)>
-        EnumeratePartyMembers(IPartyList partyList)
-    {
-        var capacity = partyList.IsAlliance ? 24 : 8;
-        for (var index = 0; index < capacity; index++)
-        {
-            // Dalamud's alliance indexer is the only authoritative 24-player roster. Keeping
-            // its natural blocks of eight also gives the meter stable A/B/C grouping metadata.
-            var member = partyList[index];
-            if (member is not null)
-            {
-                yield return (member, partyList.IsAlliance ? (index / 8) + 1 : 0);
-            }
-        }
     }
 
     private GameRegionSelection ResolveGameRegionSelection()

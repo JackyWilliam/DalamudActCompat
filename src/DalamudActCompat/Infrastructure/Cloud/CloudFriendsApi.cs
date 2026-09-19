@@ -29,7 +29,7 @@ internal sealed record CloudFriendLookup(CloudApiUser? User, string Relationship
 internal sealed record CloudFriendRemoval(string Status);
 internal sealed record CloudFriendPresence(
     bool Online, int OnlineConnectionCount, int HeartbeatIntervalSeconds, DateTimeOffset? ExpiresAt, CloudPresenceSettings? Settings = null);
-internal sealed record CloudChatSender(string Kind, string? UserId, string Name, bool IsAdmin = false)
+internal sealed record CloudChatSender(string Kind, string? UserId, string Name, bool IsAdmin = false, int SponsorTier = 0)
 {
     // Only the authenticated server assigns this discriminator; names are not identity.
     public bool IsOfficial => Kind == "official";
@@ -48,7 +48,7 @@ internal sealed record CloudChatConversation(
     string Id, string Kind, long Revision, CloudApiUser Peer,
     int HistoryCount, int PendingCount, long LatestMessageId,
     IReadOnlyList<CloudChatMessage> History, IReadOnlyList<CloudChatMessage> Pending,
-    long? NextSendSequence, string PolicyNotice, IReadOnlyList<long>? RetiredIds = null);
+    long? NextSendSequence, string PolicyNotice, IReadOnlyList<long>? RetiredIds = null, long? ReadThrough = null);
 
 internal sealed record CloudQuickMessage(string Id, string Text);
 internal sealed record CloudChatSync(
@@ -105,4 +105,7 @@ internal sealed partial class CloudApiClient
         => SendJsonAsync<CloudChatConversation>(HttpMethod.Post, $"{ChatPath(conversationId)}/ack", new { messageIds }, token, cancellationToken);
 
     private static string ChatPath(string id) => $"api/v1/chat/conversations/{Uri.EscapeDataString(id)}";
+
+    public Task<CloudChatConversation> MarkChatReadAsync(string token, string conversationId, long through, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudChatConversation>(HttpMethod.Post, $"{ChatPath(conversationId)}/read", new { through }, token, cancellationToken);
 }

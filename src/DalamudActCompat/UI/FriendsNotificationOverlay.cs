@@ -72,9 +72,10 @@ internal sealed partial class FriendsUiManager
                 var author = entry.Message.Sender.IsOfficial ? "DACT 官方通知" : entry.Message.Sender.Name;
                 author = FriendsMessagePreview.Ellipsize(author, textWidth, s => ImGui.CalcTextSize(s).X);
                 var origin = bodyPosition + new Vector2(padding);
-                AdministratorBadge.DrawName(administratorIcon, author,
+                AccountIdentityBadge.DrawName(administratorIcon, author,
                     !entry.Message.Sender.IsOfficial && state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.IsAdmin == true,
-                    origin, textWidth, entry.Message.Sender.IsOfficial ? Gold : Blue);
+                    origin, textWidth, entry.Message.Sender.IsOfficial ? Gold : Blue, sponsorIcon,
+                    entry.Message.Sender.IsOfficial ? 0 : state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.SponsorTier ?? entry.Message.Sender.SponsorTier);
                 origin.Y += lineHeight + gap;
                 list.AddText(ImGui.GetFont(), ImGui.GetFontSize(), origin, ImGui.GetColorU32(DactTheme.Palette.Text), layout.Body, textWidth);
                 if (FriendsIncomingNotifications.Replies(entry.Message).Count > 0)
@@ -110,7 +111,13 @@ internal sealed partial class FriendsUiManager
             // Preserve its mouse press until release while returning keyboard focus.
             var preserveActive = context.ActiveIdNoClearOnFocusLoss;
             context.ActiveIdNoClearOnFocusLoss = true;
+            // Returning keyboard focus must not raise the chat over the pressed
+            // notification: the mouse release would then hit the chat underneath.
+            var root = previous.Handle != null ? previous.RootWindow : default;
+            var previousFlags = root.Handle != null ? root.Flags : default;
+            if (root.Handle != null) root.Flags |= ImGuiWindowFlags.NoBringToFrontOnFocus;
             ImGuiP.FocusWindow(previous);
+            if (root.Handle != null) root.Flags = previousFlags;
             context.ActiveIdNoClearOnFocusLoss = preserveActive;
         }
         if (context.ActiveId != 0 && IsNotification(context.ActiveIdWindow)) ImGui.SetNextFrameWantCaptureKeyboard(false);

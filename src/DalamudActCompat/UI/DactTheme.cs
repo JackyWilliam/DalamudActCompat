@@ -51,6 +51,10 @@ internal static class DactTheme
             Rgb(0xC5A4FF), Rgb(0xF4EFFB), Rgb(0xB9A8C9), Rgb(0x69557C)),
         SkinCatalog.Amber => new(Rgb(0x231913), Rgb(0x35261C), Rgb(0x4B3525), Rgb(0xE7B771),
             Rgb(0xFFC988), Rgb(0xFFF3E6), Rgb(0xC7AD95), Rgb(0x805C39)),
+        // Keep the requested fluorescent accent exact; darker pink surfaces
+        // preserve text contrast across long settings pages and dialogs.
+        SkinCatalog.NeonPink => new(Rgb(0x271023), Rgb(0x3D1232), Rgb(0x602049), Rgb(0xFF91CE),
+            Rgb(0xFE1493), Rgb(0xFFF0F8), Rgb(0xDFA6C9), Rgb(0xBD256F)),
         _ => DefaultPalette,
     };
 

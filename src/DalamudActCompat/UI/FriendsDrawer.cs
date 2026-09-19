@@ -134,8 +134,9 @@ internal sealed partial class FriendsUiManager
         if (hovered) list.AddRectFilled(start - new Vector2(3 * scale), start + new Vector2(width, 51 * scale), ImGui.GetColorU32(DactTheme.Tone(new Vector4(.08f, .15f, .20f, 1), DactTheme.Palette.Hover)), 6);
         list.AddCircleFilled(start + new Vector2(7, 13) * scale, 4.5f * scale, ImGui.GetColorU32(StatusColor(status)));
         list.PushClipRect(start + new Vector2(21 * scale, 0), start + new Vector2(width, 53 * scale), true);
-        AdministratorBadge.DrawName(administratorIcon, state.Friends?.User?.Username ?? "我的账号",
-            state.Friends?.User?.IsAdmin == true, start + new Vector2(22, 2) * scale, width - 26 * scale, DactTheme.Palette.Text);
+        AccountIdentityBadge.DrawName(administratorIcon, state.Friends?.User?.Username ?? "我的账号",
+            state.Friends?.User?.IsAdmin == true, start + new Vector2(22, 2) * scale, width - 26 * scale, DactTheme.Palette.Text,
+            sponsorIcon, state.Friends?.User?.SponsorTier ?? 0);
         var detail = current is null ? "正在读取状态…" : StatusName(status) + (string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text);
         list.AddText(start + new Vector2(22, 26) * scale, ImGui.GetColorU32(DactTheme.Tone(new Vector4(.60f, .68f, .75f, 1), DactTheme.Palette.Muted)), detail);
         list.PopClipRect();
@@ -296,8 +297,9 @@ internal sealed partial class FriendsUiManager
             string Fit(string value) => FriendsMessagePreview.Ellipsize(value, Math.Max(0, textRight - 29 * scale), s => ImGui.CalcTextSize(s).X);
             list.AddCircleFilled(start + new Vector2(6, 12) * scale, 3.5f * scale, ImGui.GetColorU32(StatusColor(status)));
             list.PushClipRect(start + new Vector2(18 * scale, 0), start + new Vector2(textRight - 10 * scale, rowHeight), true);
-            AdministratorBadge.DrawName(administratorIcon, friend.User.Username, friend.User.IsAdmin,
-                start + new Vector2(19, 1) * scale, Math.Max(1, textRight - 29 * scale), DactTheme.Palette.Text);
+            AccountIdentityBadge.DrawName(administratorIcon, friend.User.Username, friend.User.IsAdmin,
+                start + new Vector2(19, 1) * scale, Math.Max(1, textRight - 29 * scale), DactTheme.Palette.Text,
+                sponsorIcon, friend.User.SponsorTier);
             if (hasMessage) list.AddText(start + new Vector2(19, 23) * scale, ImGui.GetColorU32(DactTheme.Tone(new Vector4(.75f, .80f, .85f, 1), DactTheme.Palette.Muted)), Fit(preview));
             list.AddText(start + new Vector2(19, statusY) * scale, ImGui.GetColorU32(DactTheme.Tone(new Vector4(.57f, .65f, .73f, 1), DactTheme.Palette.Muted)), Fit(statusText));
             if (duty is not null) list.AddText(start + new Vector2(19, statusY + 22) * scale, ImGui.GetColorU32(Blue), Fit("正在进行：" + duty));
@@ -330,7 +332,7 @@ internal sealed partial class FriendsUiManager
         ImGui.EndDisabled();
         if (state.Lookup?.User is { } found)
         {
-            AdministratorBadge.Text(administratorIcon, found.Username, found.IsAdmin, DactTheme.Palette.Text);
+            AccountIdentityBadge.Text(administratorIcon, found.Username, found.IsAdmin, DactTheme.Palette.Text, sponsorIcon, found.SponsorTier);
             ImGui.BeginDisabled(state.Busy || state.Lookup.Relationship is "friend" or "outgoing");
             if (DactTheme.Button(state.Lookup.Relationship == "incoming" ? "同意互加" : state.Lookup.Relationship == "friend" ? "已经是好友" : state.Lookup.Relationship == "outgoing" ? "申请已发出" : "发送好友申请")) controller.Request(found.Username);
             ImGui.EndDisabled();
@@ -344,7 +346,7 @@ internal sealed partial class FriendsUiManager
         foreach (var request in state.Friends?.Requests ?? [])
         {
             ImGui.PushID(request.Id);
-            AdministratorBadge.Text(administratorIcon, request.User.Username, request.User.IsAdmin, DactTheme.Palette.Text);
+            AccountIdentityBadge.Text(administratorIcon, request.User.Username, request.User.IsAdmin, DactTheme.Palette.Text, sponsorIcon, request.User.SponsorTier);
             ImGui.TextDisabled(request.Direction == "incoming" ? "希望添加你" : "等待对方确认");
             if (request.Direction == "incoming")
             {

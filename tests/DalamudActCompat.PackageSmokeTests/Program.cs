@@ -52,6 +52,14 @@ Directory.CreateDirectory(testRoot);
 try
 {
     TeamDpsSmokeTests.Run();
+    AllianceRosterSmokeTests.Run();
+    if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
+    if (args.Contains("--skins-cloud-only", StringComparer.Ordinal))
+    {
+        await SkinSmokeTests.CloudAsync(testRoot);
+        await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--skins-api-only", StringComparer.Ordinal))
     {
         await SkinSmokeTests.ApiAsync(testRoot);
@@ -71,6 +79,11 @@ try
     if (args.Contains("--administrator-only", StringComparer.Ordinal))
     {
         await AdministratorSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
+    if (args.Contains("--sponsor-native-only", StringComparer.Ordinal))
+    {
+        SponsorIdentitySmokeTests.Run();
         return 0;
     }
     if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
@@ -198,6 +211,8 @@ try
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
     await ValidatePortableConfigurationArchiveAsync(testRoot);
+    await SkinSmokeTests.CloudAsync(testRoot);
+    await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
     await ValidateEncryptedConfigurationBackupAsync(testRoot);
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);

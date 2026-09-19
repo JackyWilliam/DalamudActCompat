@@ -14,6 +14,8 @@ internal sealed partial class FriendsUiManager : IDisposable
         public bool Focus = true;
         public bool New = true;
         public bool AtBottom = true;
+        public bool ScrollToLatest = true;
+        public readonly WindowDragController Drag = new();
         public long LastMessage;
         public string Draft = "";
         public Guid? SubmittedOperation;
@@ -30,6 +32,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     private readonly Action? playNotificationSound, stopNotificationSound;
     private readonly FriendsIncomingNotifications incoming = new();
     private readonly ISharedImmediateTexture? administratorIcon;
+    private readonly ISharedImmediateTexture? sponsorIcon;
     private uint lastNonNotificationFocus;
     private long lastSoundAt = long.MinValue;
     private bool notificationSoundWasEnabled = true;
@@ -49,10 +52,11 @@ internal sealed partial class FriendsUiManager : IDisposable
 
     public FriendsUiManager(FriendsChatController controller, Action openMain, PluginConfiguration? configuration = null,
         Func<long>? clock = null, Action? playNotificationSound = null, Action? stopNotificationSound = null,
-        ISharedImmediateTexture? administratorIcon = null)
+        ISharedImmediateTexture? administratorIcon = null, ISharedImmediateTexture? sponsorIcon = null)
     {
         this.controller = controller; this.openMain = openMain;
         this.administratorIcon = administratorIcon;
+        this.sponsorIcon = sponsorIcon;
         this.configuration = configuration ?? new(); this.clock = clock ?? (() => Environment.TickCount64);
         this.playNotificationSound = playNotificationSound; this.stopNotificationSound = stopNotificationSound;
         // Recreating a view against an already-live controller is not a new arrival.
@@ -62,6 +66,10 @@ internal sealed partial class FriendsUiManager : IDisposable
         controller.AttachConsumer();
     }
     public FriendsChatSnapshot Snapshot => controller.Snapshot;
+    public void DrawAccountName(CloudClientSnapshot account)
+        => AccountIdentityBadge.Text(administratorIcon, account.Username ?? string.Empty,
+            account.IsSignedIn && account.Administrator?.IsAdmin == true, DactTheme.Palette.Text,
+            sponsorIcon, account.IsSignedIn ? account.Sponsor?.Tier ?? 0 : 0);
     public bool AnyOpen => drawerOpen || drawerProgress > 0 || windows.Values.Any(w => w.Open);
     public void SetAnchor(Vector2 position, Vector2 size, float alpha = 1, uint windowId = 0)
     { anchor = position; anchorSize = size; anchorAlpha = alpha; anchorWindowId = windowId; }
@@ -104,7 +112,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     private void OpenChat(string id)
     {
         if (!windows.TryGetValue(id, out var window)) windows[id] = window = new();
-        window.Open = true; window.Focus = true;
+        window.Open = true; window.Focus = true; window.ScrollToLatest = true;
     }
     private void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
     {
@@ -131,25 +139,18 @@ internal sealed partial class FriendsUiManager : IDisposable
         }
         // Focus is requested only by a user's click, never by arrival/polling.
         if (window.Focus) { ImGui.SetNextWindowFocus(); window.Focus = false; }
-        var titleHasBadge = !official && view?.Chat.Peer.IsAdmin == true && administratorIcon is not null;
-        var expanded = ImGui.Begin($"{(titleHasBadge ? "" : title)}###DACTFriendChat-{id}", ref window.Open,
-            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing);
-        if (titleHasBadge)
-        {
-            var frame = ImGui.GetFrameHeight();
-            AdministratorBadge.DrawName(administratorIcon, title, true,
-                ImGui.GetWindowPos() + new Vector2(frame + ImGui.GetStyle().ItemInnerSpacing.X, ImGui.GetStyle().FramePadding.Y),
-                ImGui.GetWindowSize().X - frame * 2 - ImGui.GetStyle().ItemInnerSpacing.X * 2, DactTheme.Palette.Text);
-        }
+        window.Drag.PrepareNextWindow();
+        var expanded = ImGui.Begin($"{title}###DACTFriendChat-{id}", ref window.Open,
+            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoTitleBar |
+            ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove);
         if (expanded)
         {
             window.Position = ImGui.GetWindowPos(); window.Size = ImGui.GetWindowSize();
+            DrawChatHeader(window, title, official, view?.Chat.Peer, scale);
             var focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
             if (view is null) { ImGui.TextWrapped("会话正在同步，或好友关系已解除。"); }
             else
             {
-                AdministratorBadge.Text(administratorIcon, official ? "DACT 官方 · 只读通知" : title,
-                    !official && view.Chat.Peer.IsAdmin, official ? Gold : Blue);
                 if (state.State != "ready") ImGui.TextWrapped(state.Status);
                 var contentWidth = ImGui.GetContentRegionAvail().X;
                 var statusHeight = string.IsNullOrEmpty(view.SendStatus) ? 0 : ImGui.CalcTextSize(view.SendStatus, false, contentWidth).Y;
@@ -160,10 +161,13 @@ internal sealed partial class FriendsUiManager : IDisposable
                 if (ImGui.BeginChild("messages", new Vector2(-1, historyHeight), false))
                 {
                     var messages = view.Chat.History.Concat(view.Chat.Pending).OrderBy(m => m.Id).ToArray();
-                    foreach (var message in messages) DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon);
+                    foreach (var message in messages) DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon);
                     if (messages.Length == 0) ImGui.TextDisabled("暂无消息。");
                     var last = messages.LastOrDefault()?.Id ?? 0;
-                    if (window.AtBottom && last != window.LastMessage) ImGui.SetScrollHereY(1);
+                    // Explicitly entering from a notification also reopens an old
+                    // scrolled view. Read only once its latest content is visible.
+                    if (window.ScrollToLatest || window.AtBottom && last != window.LastMessage) ImGui.SetScrollHereY(1);
+                    window.ScrollToLatest = false;
                     window.LastMessage = last;
                     window.AtBottom = ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4;
                     if (focused && window.AtBottom)
@@ -212,7 +216,37 @@ internal sealed partial class FriendsUiManager : IDisposable
         }
         ImGui.End();
     }
-    private static void DrawBubble(CloudChatMessage message, bool own, ISharedImmediateTexture? administratorIcon = null)
+
+    private void DrawChatHeader(ChatWindow window, string title, bool official, CloudApiUser? peer, float scale)
+    {
+        var start = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        var height = ImGui.GetFontSize() + 14 * scale;
+        var dragWidth = Math.Max(1, width - height - ImGui.GetStyle().ItemSpacing.X);
+        // A dedicated handle keeps clicking messages/input from dragging the
+        // window, while the custom close control cannot start a drag.
+        ImGui.InvisibleButton("##chat-header-drag", new Vector2(dragWidth, height));
+        window.Drag.HandleItem();
+        AccountIdentityBadge.DrawName(administratorIcon, title, !official && peer?.IsAdmin == true,
+            start + new Vector2(4 * scale, 7 * scale), dragWidth - 8 * scale, official ? Gold : Blue,
+            sponsorIcon, official ? 0 : peer?.SponsorTier ?? 0);
+        ImGui.SameLine();
+        var close = ImGui.GetCursorScreenPos();
+        if (ImGui.InvisibleButton("##chat-close", new Vector2(height))) { window.Open = false; window.Drag.Cancel(); }
+        var list = ImGui.GetWindowDrawList();
+        if (ImGui.IsItemHovered())
+        {
+            list.AddRectFilled(close, close + new Vector2(height), ImGui.GetColorU32(DactTheme.Palette.Surface), 4 * scale);
+            ImGui.SetTooltip("关闭聊天");
+        }
+        var inset = height * .34f;
+        var color = ImGui.GetColorU32(DactTheme.Palette.Text);
+        list.AddLine(close + new Vector2(inset), close + new Vector2(height - inset), color, 1.5f * scale);
+        list.AddLine(close + new Vector2(height - inset, inset), close + new Vector2(inset, height - inset), color, 1.5f * scale);
+        list.AddLine(start + new Vector2(0, height), start + new Vector2(width, height), ImGui.GetColorU32(Blue), scale);
+    }
+    private static void DrawBubble(CloudChatMessage message, bool own, ISharedImmediateTexture? administratorIcon = null,
+        ISharedImmediateTexture? sponsorIcon = null)
     {
         var available = ImGui.GetContentRegionAvail().X;
         var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
@@ -222,7 +256,8 @@ internal sealed partial class FriendsUiManager : IDisposable
         var textWidth = Math.Max(1, width - padding * 2);
         var author = message.Sender.IsOfficial ? "DACT 官方" : message.Sender.Name;
         var timestamp = $"{message.CreatedAt.ToLocalTime():MM-dd HH:mm}{(message.State == "pending" ? " · 待上线接收" : "")}";
-        var authorHeight = ImGui.CalcTextSize(author, false, textWidth).Y;
+        var hasIdentity = !message.Sender.IsOfficial && (message.Sender.IsAdmin || message.Sender.SponsorTier > 0);
+        var authorHeight = hasIdentity ? ImGui.GetTextLineHeight() : ImGui.CalcTextSize(author, false, textWidth).Y;
         var bodyHeight = ImGui.CalcTextSize(message.Text, false, textWidth).Y;
         var timeHeight = ImGui.CalcTextSize(timestamp, false, textWidth).Y;
         var start = ImGui.GetCursorScreenPos() + new Vector2(own ? Math.Max(0, available - width) : 0, 0);
@@ -235,8 +270,9 @@ internal sealed partial class FriendsUiManager : IDisposable
         // all three blocks from explicit padded origins so every wrapped line stays inside.
         var list = ImGui.GetWindowDrawList(); var font = ImGui.GetFont(); var fontSize = ImGui.GetFontSize();
         var origin = start + new Vector2(padding, vertical);
-        if (message.Sender.IsAdmin && !message.Sender.IsOfficial)
-            AdministratorBadge.DrawName(administratorIcon, author, true, origin, textWidth, Blue);
+        if (hasIdentity)
+            AccountIdentityBadge.DrawName(administratorIcon, author, message.Sender.IsAdmin, origin, textWidth, Blue,
+                sponsorIcon, message.Sender.SponsorTier);
         else list.AddText(font, fontSize, origin, ImGui.GetColorU32(message.Sender.IsOfficial ? Gold : Blue), author, textWidth);
         origin.Y += authorHeight + gap;
         list.AddText(font, fontSize, origin, ImGui.GetColorU32(DactTheme.Palette.Text), message.Text, textWidth);
