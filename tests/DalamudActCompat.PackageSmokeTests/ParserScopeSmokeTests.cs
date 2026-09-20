@@ -80,7 +80,8 @@ internal static class ParserScopeSmokeTests
                 {
                     selected = scope;
                     runtime.UpdateFrameworkState(At);
-                    Check((int)mediator.ParseSettings.ParseFilter == (int)scope,
+                    var expected = scope == ParserScope.Auto ? ParserScope.Alliance : scope;
+                    Check((int)mediator.ParseSettings.ParseFilter == (int)expected,
                         "Framework update did not reach ACT's live settings mediator.");
                     foreach (var source in actors)
                     foreach (var target in actors)
@@ -94,11 +95,13 @@ internal static class ParserScopeSmokeTests
             }
             finally { Set(runtime, "parser", null); }
         }
+        ValidateAutomatic(wrapper, mediator, assembly, report, nativeCheck);
+        ValidateAutomaticFallback();
         ValidateFallback();
         ValidateLedger();
         ValidateClock();
         if (native) NativeUi();
-        Console.WriteLine("Parser scope: legacy/reset/restore, native live filter, A/B/C parties, pets, incoming events and fallback passed.");
+        Console.WriteLine("Parser scope: legacy/reset/restore, auto roster transitions, native live filter, A/B/C parties, pets, incoming events and fallback passed.");
     }
 
     public static async Task CloudAsync(string root)
@@ -154,13 +157,107 @@ internal static class ParserScopeSmokeTests
         new("Alliance", "", "PLD", false, false) { EntityId = 0x10000003, PartyGroup = group == 1 ? 2 : 1 },
     ];
 
-    private static SelfHostedActRuntime CreateRuntime(ActPlayerIdentity[] roster, Func<ParserScope> scope)
+    private static SelfHostedActRuntime CreateRuntime(ActPlayerIdentity[] roster, Func<ParserScope> scope,
+        Func<IReadOnlyList<ActPlayerIdentity>>? currentRoster = null)
         => new(null!, DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>(), null!, () => true,
-            () => roster[0].Name, () => roster, () => null, null!,
+            () => roster[0].Name, currentRoster ?? (() => roster), () => null, null!,
             DispatchProxy.Create<IFramework, NoOpPluginLogProxy>(), null!,
             () => new(134, 0, EncounterMode.OpenWorld, true, false, false), null!, null!, null!,
             _ => null, () => false, _ => new(), () => new Dictionary<string, HtmlOverlayWindowSettings>(),
             () => { }, () => false, () => false, (_, _) => false, scope);
+
+    private static void ValidateAutomatic(IINACT.FfxivActPluginWrapper wrapper, ISettingsMediator mediator,
+        Assembly assembly, object report, MethodInfo nativeCheck)
+    {
+        var solo = Roster(0)[..1];
+        ActPlayerIdentity[] Party(int count) => Enumerable.Range(0, count).Select(index =>
+            new ActPlayerIdentity(index == 0 ? "Self" : $"Member {index}", "", "PLD", index == 0, false)
+            { EntityId = 0x10000001u + (uint)index }).ToArray();
+        var fullAlliance = Party(24).Select((member, index) => member with { PartyGroup = index / 8 + 1 }).ToArray();
+        var transitions = new (ActPlayerIdentity[] Roster, ParserScope Expected)[]
+        {
+            ([], ParserScope.All), (solo, ParserScope.Self), (Party(4), ParserScope.Party),
+            (Party(8), ParserScope.Party), (fullAlliance, ParserScope.Alliance),
+            (Roster(2), ParserScope.Alliance), (Roster(3)[..1], ParserScope.Alliance),
+            (Party(4), ParserScope.Party), (solo, ParserScope.Self),
+            ([Roster(0)[1]], ParserScope.All), ([], ParserScope.All), (solo, ParserScope.Self),
+        };
+        var current = solo;
+        var selected = ParserScope.Auto;
+        using var runtime = CreateRuntime(solo, () => selected, () => current);
+        Set(runtime, "parser", wrapper);
+        try
+        {
+            // Drive the live framework setter and ACT's own filter across joins,
+            // leaves and partially loaded rosters; never send the DACT-only value 4.
+            foreach (var requested in new[] { ParserScope.Auto, ParserScope.All, ParserScope.Self, ParserScope.Party, ParserScope.Alliance })
+            foreach (var transition in transitions)
+            {
+                selected = requested; current = transition.Roster;
+                runtime.UpdateFrameworkState(At);
+                var expected = requested == ParserScope.Auto ? transition.Expected : requested;
+                Check((int)mediator.ParseSettings.ParseFilter == (int)expected,
+                    $"Auto/manual live transition selected {mediator.ParseSettings.ParseFilter}, expected {expected}.");
+                var environment = Activator.CreateInstance(assembly.GetType("FFXIV_ACT_Plugin.Parse.EnvironmentState", true)!)!;
+                var local = current.FirstOrDefault(member => member.IsLocalPlayer);
+                // ACT bypasses its filter before PlayerId is available. Auto
+                // mirrors that fallback; manual modes retain their existing policy.
+                if (local is null && requested != ParserScope.Auto) continue;
+                SetProperty(environment, "PlayerId", local?.EntityId ?? 0u);
+                SetProperty(environment, "PartyCount", (byte)current.Count(member => member.PartyGroup == local?.PartyGroup));
+                SetProperty(environment, "PartyMembers", current.Select(member => member.EntityId).ToList());
+                var actors = current.Select(member => member.EntityId).Append(0x10000099u).Append(0x40000010u).ToArray();
+                var combatants = (IDictionary)environment.GetType().GetProperty("Combatants")!.GetValue(environment)!;
+                foreach (var id in actors)
+                {
+                    var actor = RuntimeHelpers.GetUninitializedObject(assembly.GetType("FFXIV_ACT_Plugin.Parse.CombatantState", true)!);
+                    SetProperty(actor, "Id", id); SetProperty(actor, "ParentId", 0u);
+                    SetProperty(actor, "Name", id.ToString("X8")); combatants.Add(id, actor);
+                }
+                foreach (var source in actors)
+                foreach (var target in actors)
+                {
+                    var native = (bool)nativeCheck.Invoke(report, [environment, source, target, false])!;
+                    Check(native == ParserScopePolicy.IncludesEvent(selected, source.ToString("X8"), target.ToString("X8"), current),
+                        $"Auto/manual native filter drift: {requested}, {current.Length} members, {source:X8}/{target:X8}.");
+                }
+            }
+        }
+        finally { Set(runtime, "parser", null); }
+    }
+
+    private static void ValidateAutomaticFallback()
+    {
+        var alliance = Roster(2);
+        var current = alliance[..1].Select(member => member with { PartyGroup = 0 }).ToArray();
+        using var runtime = CreateRuntime(current, () => ParserScope.Auto, () => current);
+        var snapshots = new List<ActEncounterSnapshot>();
+        runtime.EncounterChanged += (snapshot, _) => snapshots.Add(snapshot);
+        var hit = typeof(SelfHostedActRuntime).GetMethod("RecordFallbackDamageUnsafe", Fields)!;
+        var step = 0;
+        // Changing the roster must update fallback filtering without resetting a
+        // fight or retrospectively adding previously excluded damage.
+        void Observe(ActPlayerIdentity[] next, int expectedTotal, int? expectedVisibleTotal = null)
+        {
+            current = next;
+            var timestamp = At.AddSeconds(step++);
+            runtime.UpdateFrameworkState(timestamp);
+            foreach (var member in alliance)
+                hit.Invoke(runtime, [timestamp, member.Name, "Boss", 100L, "Attack", false, false, "Auto test"]);
+            runtime.UpdateFrameworkState(timestamp.AddMilliseconds(250));
+            var total = snapshots[^1].Combatants.Sum(member => member.TotalDamage);
+            var stored = (Dictionary<string, long>)typeof(SelfHostedActRuntime).GetField("chatDamageTotals", Fields)!.GetValue(runtime)!;
+            Check(stored.Values.Sum() == expectedTotal && total == (expectedVisibleTotal ?? expectedTotal),
+                $"Auto roster transition {step} lost existing damage or admitted excluded fallback events.");
+        }
+        Observe(current, 100);
+        Observe(alliance[..2].Select(member => member with { PartyGroup = 0 }).ToArray(), 300);
+        Observe(alliance, 600);
+        // The existing meter hides players who left; their accumulated totals
+        // must still remain stored for the same encounter if they rejoin.
+        Observe(current[..1].Select(member => member with { PartyGroup = 0 }).ToArray(), 700, 400);
+        Observe(alliance, 1000);
+    }
 
     private static void ValidateFallback()
     {
@@ -237,6 +334,7 @@ internal static class ParserScopeSmokeTests
             var raster = new NativeUiRasterizer(io.Fonts);
             var config = new PluginConfiguration(); var text = new UiText(config); var saves = 0;
             var combo = Vector2.Zero;
+            var optionHeight = 0f;
             void Frame()
             {
                 ImGui.NewFrame();
@@ -246,6 +344,9 @@ internal static class ParserScopeSmokeTests
                     ImGui.SetNextWindowPos(new(30, 30)); ImGui.SetNextWindowSize(new(640, 340));
                     ImGui.Begin("解析设置", ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoResize);
                     ImGui.TextUnformatted("基础设置"); ImGui.SetNextItemWidth(350);
+                    // Theme spacing is popped after rendering; use the spacing
+                    // that actually laid out the popup when targeting its rows.
+                    optionHeight = ImGui.GetTextLineHeightWithSpacing();
                     if (ParserScopeSelector.Draw(text, config)) saves++;
                     combo = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) / 2;
                     ImGui.End(); ControlCenterWindow.PopTheme();
@@ -262,7 +363,7 @@ internal static class ParserScopeSmokeTests
             {
                 config.Appearance.SelectedSkin = skin; config.Appearance.UnlockedEasterEggs.Add(skin);
                 DactTheme.SetCurrent(config.Appearance, true, 1); io.FontGlobalScale = scale;
-                foreach (var scope in new[] { ParserScope.Self, ParserScope.Party, ParserScope.Alliance, ParserScope.All })
+                foreach (var scope in new[] { ParserScope.Auto, ParserScope.Self, ParserScope.Party, ParserScope.Alliance, ParserScope.All })
                 {
                     Frame(); Frame(); Click(combo); Frame();
                     ImGuiWindowPtr popup = default;
@@ -279,8 +380,9 @@ internal static class ParserScopeSmokeTests
                     }
                     var prior = saves;
                     Click(new(popup.Pos.X + 45, popup.Pos.Y + popup.WindowPadding.Y +
-                        ((int)scope + .5f) * ImGui.GetTextLineHeightWithSpacing()));
-                    Check(config.ParserScope == scope && saves == prior + 1, "Scope selection missed its option or failed to save once.");
+                        ((scope == ParserScope.Auto ? 0 : (int)scope + 1) + .5f) * optionHeight));
+                    Check(config.ParserScope == scope && saves == prior + 1,
+                        $"Scope selection missed {scope} ({skin}, scale {scale}): selected {config.ParserScope}, saves {saves}/{prior + 1}.");
                 }
             }
         }
