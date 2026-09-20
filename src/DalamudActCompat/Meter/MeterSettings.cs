@@ -46,6 +46,13 @@ public enum JobDisplayStyle
     FlatIcon,
 }
 
+public enum MeterDisplayScope
+{
+    // Zero keeps existing configurations' per-template audience choices.
+    MeterSettings = 0,
+    ParserScope = 1,
+}
+
 public sealed class MeterSettings
 {
     private static readonly Vector4 LegacyLocalPlayerColor =
@@ -139,6 +146,14 @@ public sealed class MeterSettings
 
     public bool ClassicAllianceView { get; set; }
 
+    public MeterDisplayScope DisplayScope { get; set; }
+
+    [JsonIgnore]
+    internal bool FollowsParserScope => DisplayScope == MeterDisplayScope.ParserScope;
+
+    [JsonIgnore]
+    internal bool EffectiveClassicCompact => CompactMode && !FollowsParserScope;
+
     public int HorizontalPartyGroup { get; set; }
 
     public bool RoleSplitDamageCompact { get; set; }
@@ -207,6 +222,11 @@ public sealed class MeterSettings
     internal bool NormalizeCustomization()
     {
         var changed = false;
+        if (!Enum.IsDefined(DisplayScope))
+        {
+            DisplayScope = MeterDisplayScope.MeterSettings;
+            changed = true;
+        }
         ClassicWindow ??= new MeterWindowProfile
         {
             IsEnabled = true,

@@ -23,7 +23,16 @@ public sealed record ActEncounterSnapshot(
     public IReadOnlyList<string> CurrentPartyMemberIds { get; init; } = [];
 
     public int PartyCapacity { get; init; }
+
+    // Keep the original party snapshot intact for history/FFLogs consumers while
+    // the optional meter projection can include other parsed player characters.
+    public IReadOnlyList<ActCombatantSnapshot>? ParsedPlayers { get; init; }
+
+    public ParserScopeContext? ParserContext { get; init; }
 }
+
+public sealed record ParserScopeContext(ParserScope AutoScope, int LocalPartyGroup,
+    IReadOnlyList<string> PartyMemberIds);
 
 public sealed record ActCombatantSnapshot(
     string Id,

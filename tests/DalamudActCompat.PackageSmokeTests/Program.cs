@@ -58,6 +58,9 @@ try
         Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
     await ParserScopeSmokeTests.CloudAsync(testRoot);
     if (args.Contains("--parser-scope-only", StringComparer.Ordinal)) return 0;
+    MeterDisplayScopeSmokeTests.Run(args.Contains("--meter-display-scope-only", StringComparer.Ordinal) &&
+        Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
+    if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--liquid-glass-only", StringComparer.Ordinal))
     {
         using var glass = new LiquidGlassSmokeTests();

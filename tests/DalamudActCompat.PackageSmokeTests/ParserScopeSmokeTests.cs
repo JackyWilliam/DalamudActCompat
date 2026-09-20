@@ -9,6 +9,7 @@ using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.Meter;
 using DalamudActCompat.UI;
 using FFXIV_ACT_Plugin.Config;
 using FFXIV_ACT_Plugin.Logfile;
@@ -118,17 +119,21 @@ internal static class ParserScopeSmokeTests
         Set(plugin, "configuration", live); Set(plugin, "paths", destinationPaths);
         string? previous = null;
         foreach (var scope in Enum.GetValues<ParserScope>())
+        foreach (var displayScope in Enum.GetValues<MeterDisplayScope>())
         {
-            await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(new PluginConfiguration { ParserScope = scope }));
+            var configuration = new PluginConfiguration { ParserScope = scope };
+            configuration.Meter.DisplayScope = displayScope;
+            await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(configuration));
             await File.WriteAllTextAsync(destinationFile, JsonConvert.SerializeObject(live));
             var archive = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
-                Path.Combine(root, $"scope-{scope}.enc"), key, default);
+                Path.Combine(root, $"scope-{scope}-{displayScope}.enc"), key, default);
             Check(archive.ContentId != previous, "Scope-only changes were invisible to cloud sync.");
             previous = archive.ContentId;
             await backups.RestoreEncryptedAsync(archive.ArchivePath, destinationPaths.ConfigDirectory,
-                Path.Combine(root, $"scope-{scope}-rollback.enc"), key, default);
+                Path.Combine(root, $"scope-{scope}-{displayScope}-rollback.enc"), key, default);
             typeof(Plugin).GetMethod("ApplyRestoredConfigurationToMemory", Fields)!.Invoke(plugin, null);
-            Check(live.ParserScope == scope, "Encrypted restore did not update the running scope.");
+            Check(live.ParserScope == scope && live.Meter.DisplayScope == displayScope,
+                "Encrypted restore did not update the running parser/meter scope.");
         }
         Console.WriteLine("Parser scope cloud: content IDs, encrypted restore and live memory application passed (offline).");
     }

@@ -26,6 +26,10 @@ public sealed record Encounter(
     // keeps 4-player and 8/24-player presentation rules stable before everyone acts.
     public int PartyCapacity { get; init; }
 
+    public IReadOnlyList<Combatant>? ParsedPlayers { get; init; }
+
+    public DalamudActCompat.ActRuntime.ParserScopeContext? ParserContext { get; init; }
+
     // A folder represents one duty entry; its child records are independent pulls so a
     // wipe never leaks totals into the next attempt.
     public IReadOnlyList<Encounter> SegmentRecords { get; init; } = [];

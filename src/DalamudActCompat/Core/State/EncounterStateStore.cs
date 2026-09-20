@@ -7,6 +7,7 @@ public sealed class EncounterStateStore
     private readonly object syncRoot = new();
     private EncounterSnapshot snapshot = EncounterSnapshot.Empty;
     private Encounter? latestDisplayableEncounter;
+    private Encounter? latestParserDisplayableEncounter;
 
     public EncounterSnapshot GetSnapshot()
     {
@@ -16,17 +17,17 @@ public sealed class EncounterStateStore
         }
     }
 
-    public Encounter? GetDisplayEncounter()
+    public Encounter? GetDisplayEncounter(bool parserView = false)
     {
         lock (syncRoot)
         {
             var current = snapshot.Current;
-            if (HasDisplayData(current))
+            if (HasDisplayData(current, parserView))
             {
                 return current;
             }
 
-            return latestDisplayableEncounter ?? current;
+            return (parserView ? latestParserDisplayableEncounter : latestDisplayableEncounter) ?? current;
         }
     }
 
@@ -69,6 +70,7 @@ public sealed class EncounterStateStore
         lock (syncRoot)
         {
             latestDisplayableEncounter = null;
+            latestParserDisplayableEncounter = null;
             snapshot = snapshot with
             {
                 Current = null,
@@ -79,13 +81,19 @@ public sealed class EncounterStateStore
 
     private void RememberDisplayableEncounter(Encounter? encounter)
     {
-        if (HasDisplayData(encounter))
+        Remember(ref latestDisplayableEncounter, encounter, false);
+        Remember(ref latestParserDisplayableEncounter, encounter, true);
+    }
+
+    private static void Remember(ref Encounter? previous, Encounter? encounter, bool parserView)
+    {
+        if (HasDisplayData(encounter, parserView))
         {
-            latestDisplayableEncounter = encounter;
+            previous = encounter;
             return;
         }
 
-        if (latestDisplayableEncounter is not { IsActive: true } retained)
+        if (previous is not { IsActive: true } retained)
         {
             return;
         }
@@ -93,13 +101,14 @@ public sealed class EncounterStateStore
         var endTime = encounter?.Id == retained.Id && encounter.EndTime is { } completedAt
             ? completedAt
             : DateTimeOffset.UtcNow;
-        latestDisplayableEncounter = retained with
+        previous = retained with
         {
             EndTime = endTime < retained.StartTime ? retained.StartTime : endTime,
         };
     }
 
-    private static bool HasDisplayData(Encounter? encounter)
+    private static bool HasDisplayData(Encounter? encounter, bool parserView = false)
         => encounter is not null &&
-           (encounter.TotalDamage > 0 || encounter.TotalHealing > 0);
+           (parserView ? (encounter.ParsedPlayers ?? encounter.Combatants).Any(player => player.TotalDamage > 0 || player.TotalHealing > 0)
+               : encounter.TotalDamage > 0 || encounter.TotalHealing > 0);
 }

@@ -87,7 +87,7 @@ public sealed class MeterWindow : Window
         this.endedStatusIcon = endedStatusIcon;
         this.localizeZoneName = localizeZoneName;
         this.saveConfiguration = saveConfiguration;
-        observedCompactMode = configuration.Meter.CompactMode;
+        observedCompactMode = configuration.Meter.EffectiveClassicCompact;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
         Size = new Vector2(1180, 420);
@@ -140,7 +140,7 @@ public sealed class MeterWindow : Window
         {
             MinimumSize = new Vector2(
                 120,
-                settings.CompactMode || isHeightAnimationActive
+                settings.EffectiveClassicCompact || isHeightAnimationActive
                     ? CompactWindowMinimumHeight
                     : MinimumExpandedWindowHeight),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
@@ -197,7 +197,7 @@ public sealed class MeterWindow : Window
 
         AdvanceWindowHeightAnimation();
         SynchronizeCompactMode(settings);
-        if (!settings.CompactMode)
+        if (!settings.EffectiveClassicCompact)
         {
             CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
         }
@@ -442,9 +442,10 @@ public sealed class MeterWindow : Window
         bool persistChanges = true)
     {
         DrawHeaderIconFrame(drawList, settings, start, end, hovered, Gold);
-        var label = settings.ClassicAllianceView
-            ? text.Get("24 人本", "24-player")
-            : text.Get("8 人本", "8-player");
+        // Follow mode controls the audience; this existing button only chooses layout.
+        var listLabel = settings.FollowsParserScope ? text.Get("列表", "List") : text.Get("8 人本", "8-player");
+        var gridLabel = settings.FollowsParserScope ? text.Get("平铺", "Tiles") : text.Get("24 人本", "24-player");
+        var label = settings.ClassicAllianceView ? gridLabel : listLabel;
         var size = ImGui.CalcTextSize(label);
         MeterBackground.AddText(drawList,
             start + ((end - start - size) * 0.5f),
@@ -456,12 +457,14 @@ public sealed class MeterWindow : Window
         }
         if (hovered)
         {
-            ImGui.SetTooltip(text.Get("切换 8 人本 / 24 人本", "Switch 8-player / 24-player mode"));
+            ImGui.SetTooltip(settings.FollowsParserScope
+                ? text.Get("切换列表 / 平铺布局；人数跟随解析范围", "Switch list / tile layout; players follow the parse scope")
+                : text.Get("切换 8 人本 / 24 人本", "Switch 8-player / 24-player mode"));
         }
 
         if (ImGui.BeginPopup("classic-party-size-popup"))
         {
-            if (ImGui.Selectable(text.Get("8 人本", "8-player duty"), !settings.ClassicAllianceView))
+            if (ImGui.Selectable(listLabel, !settings.ClassicAllianceView))
             {
                 settings.ClassicAllianceView = false;
                 if (persistChanges)
@@ -469,7 +472,7 @@ public sealed class MeterWindow : Window
                     saveConfiguration();
                 }
             }
-            if (ImGui.Selectable(text.Get("24 人本", "24-player duty"), settings.ClassicAllianceView))
+            if (ImGui.Selectable(gridLabel, settings.ClassicAllianceView))
             {
                 settings.ClassicAllianceView = true;
                 if (persistChanges)
@@ -602,12 +605,12 @@ public sealed class MeterWindow : Window
         MeterSettings settings,
         bool hovered)
     {
-        if (!hovered || !ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        if (settings.FollowsParserScope || !hovered || !ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
             return;
         }
 
-        if (settings.CompactMode)
+        if (settings.EffectiveClassicCompact)
         {
             settings.CompactMode = false;
             observedCompactMode = false;
@@ -625,12 +628,12 @@ public sealed class MeterWindow : Window
 
     private void SynchronizeCompactMode(MeterSettings settings)
     {
-        if (settings.CompactMode == observedCompactMode)
+        if (settings.EffectiveClassicCompact == observedCompactMode)
         {
             return;
         }
 
-        if (settings.CompactMode)
+        if (settings.EffectiveClassicCompact)
         {
             CaptureExpandedWindowSize(settings, ImGui.GetWindowSize());
         }
@@ -639,7 +642,7 @@ public sealed class MeterWindow : Window
             RestoreExpandedWindowSize(settings);
         }
 
-        observedCompactMode = settings.CompactMode;
+        observedCompactMode = settings.EffectiveClassicCompact;
         saveConfiguration();
     }
 
@@ -687,7 +690,7 @@ public sealed class MeterWindow : Window
 
     private void ApplyCompactWindowHeight(MeterSettings settings)
     {
-        if (!settings.CompactMode)
+        if (!settings.EffectiveClassicCompact)
         {
             return;
         }
@@ -706,7 +709,7 @@ public sealed class MeterWindow : Window
 
     private void ApplyEmptyStateCompactWindowHeight(MeterSettings settings)
     {
-        if (!settings.CompactMode)
+        if (!settings.EffectiveClassicCompact)
         {
             return;
         }
@@ -783,7 +786,7 @@ public sealed class MeterWindow : Window
         bool hovered,
         bool editorPreview = false)
     {
-        var compact = settings.CompactMode && !editorPreview;
+        var compact = settings.EffectiveClassicCompact && !editorPreview;
         var pressed = hovered && ImGui.IsMouseDown(ImGuiMouseButton.Left);
         var fill = pressed
             ? new Vector4(0.07f, 0.11f, 0.17f, 0.98f)
@@ -818,8 +821,8 @@ public sealed class MeterWindow : Window
         if (hovered)
         {
             ImGui.SetTooltip(text.Get(
-                compact ? "展开：显示完整队伍" : "收起：只显示自己",
-                compact ? "Expand: show the full party" : "Collapse: show only yourself"));
+                settings.FollowsParserScope ? "当前跟随解析范围；可在插件的战斗统计页切回按榜单设置。" : compact ? "展开：显示完整队伍" : "收起：只显示自己",
+                settings.FollowsParserScope ? "Following parse scope; switch back in the Combat Meter settings page." : compact ? "Expand: show the full party" : "Collapse: show only yourself"));
         }
     }
 
@@ -881,7 +884,7 @@ public sealed class MeterWindow : Window
             .ToArray();
         // Editing always shows a full sample party without changing the live
         // self-only preference or its expand/collapse animation state.
-        if (settings.CompactMode && !editorPreview)
+        if (settings.EffectiveClassicCompact && !editorPreview)
         {
             // Compact mode is a self card, not an empty header when the local row arrives late.
             var localPlayer = players.FirstOrDefault(static row => row.IsLocalPlayer) ??
@@ -893,6 +896,7 @@ public sealed class MeterWindow : Window
             players,
             settings.ClassicWindow.SortMode,
             settings.ClassicWindow.DpsSortMetric);
+        if (settings.FollowsParserScope) return ranked;
         if (settings.ClassicAllianceView)
         {
             return ranked.Take(24).ToArray();
@@ -1976,7 +1980,7 @@ public sealed class MeterWindow : Window
     internal static bool ShouldDrawTeamSummary(MeterSettings settings, bool editorPreview = false)
         // The live self card omits totals to stay compact, but the editor must
         // keep enabled summary slots visible and selectable even in self-only mode.
-        => !settings.ClassicAllianceView && (editorPreview || !settings.CompactMode);
+        => !settings.ClassicAllianceView && (editorPreview || !settings.EffectiveClassicCompact);
 
     internal static TimeSpan ResolveHeaderDuration(Encounter encounter)
     {

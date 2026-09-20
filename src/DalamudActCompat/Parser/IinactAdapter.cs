@@ -564,7 +564,8 @@ public sealed class IinactAdapter : IParserEngine
     internal static bool HasMeaningfulActivity(Encounter encounter)
         => encounter.TotalDamage > 0 ||
            encounter.TotalHealing > 0 ||
-           encounter.TotalDeaths > 0;
+           encounter.TotalDeaths > 0 ||
+           encounter.ParsedPlayers?.Any(player => player.TotalDamage > 0 || player.TotalHealing > 0 || player.Deaths > 0) == true;
 
     internal static bool CanAccumulateSegment(
         EncounterMode segmentMode,
