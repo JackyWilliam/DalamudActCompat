@@ -949,7 +949,7 @@ internal static class SkinSmokeTests
         io.FontGlobalScale = 1;
     }
 
-    private sealed class EmptyTexture(int handle = 998, int width = 1, int height = 1) : ISharedImmediateTexture, IDalamudTextureWrap
+    internal sealed class EmptyTexture(int handle = 998, int width = 1, int height = 1) : ISharedImmediateTexture, IDalamudTextureWrap
     {
         public ImTextureID Handle => new(handle);
         public int Width => width;

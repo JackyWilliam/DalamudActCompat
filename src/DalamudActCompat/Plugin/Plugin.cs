@@ -158,6 +158,7 @@ public sealed class Plugin : IDalamudPlugin
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
     private HostFfxivEntitySnapshot? hostEntitySnapshotBaseline;
     private IReadOnlyList<ActPlayerIdentity> playerIdentitySnapshot = [];
+    private IReadOnlyList<ActPlayerIdentity> observedPlayerIdentitySnapshot = [];
     private ActPlayerPose? localPlayerPoseSnapshot;
     private HostPostNamazuHeading? pendingPostNamazuHeading;
     private CactbotOperationStatus cactbotOperationStatus = new(CactbotOperationState.Idle);
@@ -443,7 +444,8 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.DebugMode,
             () => configuration.EnableFflogsParityRecorder,
             configuration.IsActCapabilityAllowed,
-            () => configuration.ParserScope);
+            () => configuration.ParserScope,
+            () => Volatile.Read(ref observedPlayerIdentitySnapshot));
         actRuntime.ConfigureExternalPluginBridges(
             text => hostSupervisor.RequestTts(text, "game-side-act"),
             (action, payload) => hostSupervisor.InvokePluginAction(
@@ -473,7 +475,7 @@ public sealed class Plugin : IDalamudPlugin
             DiscoverRuntimePlugins,
             fflogsEstimateService.CaptureAvailableEstimates);
         parserEngine = new ParserEngine(parserAdapter);
-        var meterService = new MeterService(stateStore, configuration.Meter);
+        var meterService = new MeterService(stateStore, configuration.Meter, () => configuration.ParserScope);
 
         _ = new OverlayManager(new OverlayEventBus());
 
@@ -4973,6 +4975,7 @@ public sealed class Plugin : IDalamudPlugin
                     objectTable,
                     services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]);
                 Volatile.Write(ref playerIdentitySnapshot, identities);
+                Volatile.Write(ref observedPlayerIdentitySnapshot, BuildObservedPlayerIdentities(objectTable));
                 hostEntitySnapshotBaseline = snapshot;
                 hostSupervisor.PublishFfxivEntities(snapshot);
                 genericHostSupervisor.PublishFfxivEntities(snapshot);
@@ -5539,6 +5542,21 @@ public sealed class Plugin : IDalamudPlugin
 
         return identities.Values.ToArray();
     }
+
+    internal static IReadOnlyList<ActPlayerIdentity> BuildObservedPlayerIdentities(IObjectTable objectTable)
+        // This runs on the framework thread. Keep nearby players separate from the
+        // roster so they cannot make Auto think the player has joined a party.
+        => objectTable.OfType<Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter>()
+            .Where(player => player.EntityId is not (0 or 0xE0000000) && !string.IsNullOrWhiteSpace(player.Name.TextValue))
+            .Select(player => new ActPlayerIdentity(player.Name.TextValue,
+                player.HomeWorld.ValueNullable?.Name.ToString() ?? string.Empty,
+                player.ClassJob.ValueNullable?.Abbreviation.ToString() ?? string.Empty,
+                player.EntityId == objectTable.LocalPlayer?.EntityId, player.CurrentHp == 0)
+            {
+                EntityId = player.EntityId,
+                WorldId = player.HomeWorld.RowId,
+                JobId = unchecked((byte)player.ClassJob.RowId),
+            }).ToArray();
 
     private GameRegionSelection ResolveGameRegionSelection()
         => GameRegionResolver.Resolve(

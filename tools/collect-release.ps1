@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.4.4.5",
+    [string] $ExpectedAssemblyVersion = "0.4.4.6",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,

@@ -143,9 +143,9 @@ public sealed class HorizontalMeterWindow : Window
             meterService.GetRows(encounter),
             Profile.SortMode,
             Profile.DpsSortMetric);
-        var partyGroup = ResolvePartyGroup(encounter, allRows);
+        var partyGroup = configuration.Meter.FollowsParserScope ? 0 : ResolvePartyGroup(encounter, allRows);
         DrawHeader(encounter, allRows);
-        var rows = MeterSlotPresentation.SelectParty(allRows, partyGroup);
+        var rows = configuration.Meter.FollowsParserScope ? allRows : MeterSlotPresentation.SelectParty(allRows, partyGroup);
         if (rows.Count == 0)
         {
             MeterBackground.DrawText(Muted, text.Get("等待玩家数据…", "Waiting for player data…"));
@@ -183,7 +183,7 @@ public sealed class HorizontalMeterWindow : Window
             lineHeight,
             persistChanges: !embeddedPreview);
         var controlsEnd = hpsStart.X + hpsWidth + 14;
-        if (encounter is not null && MeterSlotPresentation.IsAlliance(encounter, rows))
+        if (!configuration.Meter.FollowsParserScope && encounter is not null && MeterSlotPresentation.IsAlliance(encounter, rows))
         {
             controlsEnd = DrawPartyButtons(
                 rows,
@@ -218,11 +218,11 @@ public sealed class HorizontalMeterWindow : Window
             rows,
             Profile.SortMode,
             Profile.DpsSortMetric);
-        var partyGroup = ResolvePartyGroup(encounter, ranked, persistChanges: false);
+        var partyGroup = configuration.Meter.FollowsParserScope ? 0 : ResolvePartyGroup(encounter, ranked, persistChanges: false);
         DrawHeader(encounter, ranked, embeddedPreview: true);
         DrawSlidingPlayers(
             encounter,
-            MeterSlotPresentation.SelectParty(ranked, partyGroup),
+            configuration.Meter.FollowsParserScope ? ranked : MeterSlotPresentation.SelectParty(ranked, partyGroup),
             previewInteraction);
         MeterSlotPresentation.DrawTeamSummary(
             "horizontal-editor-preview",

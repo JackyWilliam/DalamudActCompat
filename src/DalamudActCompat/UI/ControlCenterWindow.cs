@@ -869,6 +869,9 @@ public sealed class ControlCenterWindow : Window
             "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
             "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots."));
 
+        ImGui.SetNextItemWidth(260);
+        changed |= MeterDisplayScopeSelector.Draw(text, configuration);
+
         DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
         DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
         DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));

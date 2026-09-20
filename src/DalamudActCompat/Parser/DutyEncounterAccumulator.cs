@@ -7,6 +7,8 @@ internal sealed class DutyEncounterAccumulator
 {
     private readonly Dictionary<string, CombatantTotals> completedCombatants =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CombatantTotals> completedParsedPlayers =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> completedSegmentIds = [];
     private readonly HashSet<Guid> segmentIds = [];
     private readonly List<Encounter> completedSegments = [];
@@ -41,6 +43,7 @@ internal sealed class DutyEncounterAccumulator
         {
             var segmentDurationSeconds = ResolveSegmentDurationSeconds(segment, now);
             AddCombatants(segment.Combatants, segmentDurationSeconds);
+            AddCombatants(segment.ParsedPlayers ?? segment.Combatants, segmentDurationSeconds, completedParsedPlayers);
             completedDurationSeconds += segmentDurationSeconds;
             completedSegments.Add(CompleteSegmentRecord(segment, now));
         }
@@ -63,6 +66,7 @@ internal sealed class DutyEncounterAccumulator
         {
             var segmentDurationSeconds = ResolveSegmentDurationSeconds(latestSegment, endTime);
             AddCombatants(latestSegment.Combatants, segmentDurationSeconds);
+            AddCombatants(latestSegment.ParsedPlayers ?? latestSegment.Combatants, segmentDurationSeconds, completedParsedPlayers);
             completedDurationSeconds += segmentDurationSeconds;
             completedSegments.Add(CompleteSegmentRecord(latestSegment, endTime));
         }
@@ -75,6 +79,7 @@ internal sealed class DutyEncounterAccumulator
     public void Reset()
     {
         completedCombatants.Clear();
+        completedParsedPlayers.Clear();
         completedSegmentIds.Clear();
         segmentIds.Clear();
         completedSegments.Clear();
@@ -112,15 +117,17 @@ internal sealed class DutyEncounterAccumulator
 
     private void AddCombatants(
         IEnumerable<Combatant> combatants,
-        double encounterDurationSeconds)
+        double encounterDurationSeconds,
+        Dictionary<string, CombatantTotals>? target = null)
     {
+        target ??= completedCombatants;
         foreach (var combatant in combatants)
         {
             var key = CombatantKey(combatant);
-            if (!completedCombatants.TryGetValue(key, out var totals))
+            if (!target.TryGetValue(key, out var totals))
             {
                 totals = new CombatantTotals();
-                completedCombatants.Add(key, totals);
+                target.Add(key, totals);
             }
 
             totals.Add(combatant, encounterDurationSeconds);
@@ -217,6 +224,11 @@ internal sealed class DutyEncounterAccumulator
         var durationSeconds = Math.Max(
             1,
             completedDurationSeconds + activeDurationSeconds);
+        // Accumulate the parser view independently of roster replacement. Switching
+        // display policy must not erase recorded non-party players or count a segment twice.
+        var parsed = completedParsedPlayers.ToDictionary(pair => pair.Key, pair => pair.Value.Clone(), StringComparer.OrdinalIgnoreCase);
+        if (activeSegment is not null)
+            AddCombatants(activeSegment.ParsedPlayers ?? activeSegment.Combatants, activeDurationSeconds, parsed);
         var visibleRoster = displayRoster.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var combatants = merged
             .Where(pair =>
@@ -256,6 +268,8 @@ internal sealed class DutyEncounterAccumulator
             TerritoryId = territoryId,
             IsTransitioning = (activeSegment ?? latestSegment)?.IsTransitioning == true,
             PartyCapacity = partyCapacity,
+            ParsedPlayers = parsed.Values.Select(value => value.ToCombatant(durationSeconds)).ToArray(),
+            ParserContext = (activeSegment ?? latestSegment)?.ParserContext,
             SegmentRecords = BuildSegmentRecords(activeSegment),
             // ACT treats merged fragments as the sum of their active encounter durations.
             // Transition downtime inside one pull must not lower DPS.

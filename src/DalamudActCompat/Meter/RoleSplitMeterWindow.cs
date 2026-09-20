@@ -37,6 +37,7 @@ public sealed class RoleSplitMeterWindow : Window
     private float heightAnimationElapsedSeconds;
     private float heightAnimationStart;
     private float heightAnimationTarget;
+    private bool observedFollowScope;
 
     public RoleSplitMeterWindow(
         MeterService meterService,
@@ -74,9 +75,9 @@ public sealed class RoleSplitMeterWindow : Window
 
     private bool Compact
     {
-        get => group == RoleSplitGroup.Healer
+        get => !configuration.Meter.FollowsParserScope && (group == RoleSplitGroup.Healer
             ? configuration.Meter.RoleSplitHealerCompact
-            : configuration.Meter.RoleSplitDamageCompact;
+            : configuration.Meter.RoleSplitDamageCompact);
         set
         {
             if (group == RoleSplitGroup.Healer)
@@ -173,6 +174,11 @@ public sealed class RoleSplitMeterWindow : Window
     public override void Draw()
     {
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
+        if (observedFollowScope != configuration.Meter.FollowsParserScope)
+        {
+            observedFollowScope = configuration.Meter.FollowsParserScope;
+            if (observedFollowScope) BeginWindowHeightAnimation(expandedHeight);
+        }
         AdvanceWindowHeightAnimation();
         var encounter = meterService.DisplayEncounter;
         DrawHeader(encounter);
@@ -262,7 +268,7 @@ public sealed class RoleSplitMeterWindow : Window
         {
             headerDrag.HandleItem(enabled: !Profile.IsLocked, allowStart: !toggleHovered);
         }
-        if (!embeddedPreview && toggleHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        if (!embeddedPreview && !configuration.Meter.FollowsParserScope && toggleHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
             if (!Compact)
             {
@@ -312,8 +318,8 @@ public sealed class RoleSplitMeterWindow : Window
         if (!embeddedPreview && toggleHovered)
         {
             ImGui.SetTooltip(text.Get(
-                Compact ? "展开榜单" : "收起榜单",
-                Compact ? "Expand ranking" : "Collapse ranking"));
+                configuration.Meter.FollowsParserScope ? "当前跟随解析范围；可在插件的战斗统计页切回按榜单设置。" : Compact ? "展开榜单" : "收起榜单",
+                configuration.Meter.FollowsParserScope ? "Following parse scope; switch back in the Combat Meter settings page." : Compact ? "Expand ranking" : "Collapse ranking"));
         }
         ImGui.Dummy(new Vector2(1, 3));
     }

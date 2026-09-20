@@ -68,6 +68,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Func<bool> debugMode;
     private readonly Func<bool> parityDiagnosticsEnabled;
     private readonly Func<ParserScope> getParserScope;
+    private readonly Func<IReadOnlyList<ActPlayerIdentity>> observedPlayerIdentities;
+    private IReadOnlyList<ActPlayerIdentity> observedPlayerSnapshot = [];
+    private readonly Dictionary<string, ActPlayerIdentity> parsedPlayerIdentities = new(StringComparer.OrdinalIgnoreCase);
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
     private readonly object networkCaptureSync = new();
@@ -167,7 +170,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         Func<bool> debugMode,
         Func<bool> parityDiagnosticsEnabled,
         Func<string, ActCapability, bool> permissionCheck,
-        Func<ParserScope>? getParserScope = null)
+        Func<ParserScope>? getParserScope = null,
+        Func<IReadOnlyList<ActPlayerIdentity>>? observedPlayerIdentities = null)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -190,6 +194,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.debugMode = debugMode;
         this.parityDiagnosticsEnabled = parityDiagnosticsEnabled;
         this.getParserScope = getParserScope ?? (() => ParserScope.All);
+        this.observedPlayerIdentities = observedPlayerIdentities ?? playerIdentities;
         effectiveDamageLedger = new EffectiveDamageLedger(IncludesParserEvent);
         encounterDurationTracker = new EncounterDurationTracker(IncludesParserEvent);
         HashSet<uint> weaponskillActionIds;
@@ -1846,6 +1851,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         gameStateProvider.Clear();
+        Volatile.Write(ref observedPlayerSnapshot, []);
         lock (encounterSync)
         {
             raidDpsEstimator.Reset();
@@ -1859,6 +1865,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             activeEncounterTerritoryId = 0;
             activeEncounterPartyCapacity = 0;
             activeEncounterIdentities.Clear();
+            parsedPlayerIdentities.Clear();
             activeEncounterPublished = false;
             activeEncounterNamesLogged = false;
             activeEncounterRelevantStart = default;
@@ -2149,6 +2156,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     internal void UpdateFrameworkState(DateTimeOffset? frameTime)
     {
         var identities = playerIdentities();
+        Volatile.Write(ref observedPlayerSnapshot, observedPlayerIdentities().ToArray());
         var gameState = encounterModeSnapshot();
         var inCombat = gameState.InCombat;
         var combatChanged = frameworkInCombat != inCombat;
@@ -2345,6 +2353,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                     .Select(static identity => identity.DisplayName)
                     .ToArray(),
                 PartyCapacity = Math.Max(activeEncounterPartyCapacity, identities.Count),
+                ParsedPlayers = combatants,
+                ParserContext = CreateParserContext(identities),
             };
     }
 
@@ -2356,7 +2366,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         var swing = action.combatAction;
-        var identities = gameStateProvider.Identities;
+        var identities = ObservedPlayers();
         var attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Attacker);
         if (attackerIdentity is null &&
             raidDpsEstimator.TryResolvePetOwner(swing.Attacker, out var ownerName))
@@ -2440,6 +2450,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             var knownIdentities = identities
                 .Concat(activeEncounterIdentities.Values)
+                .Concat(parsedPlayerIdentities.Values)
                 .GroupBy(static identity => identity.EntityId)
                 .Select(static group => group.First())
                 .ToArray();
@@ -2554,6 +2565,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         var continuesChatEncounter = chatEncounterId != Guid.Empty;
                         damageHitCounters.Clear();
                         activeEncounterIdentities.Clear();
+                        parsedPlayerIdentities.Clear();
                         activeEncounterPartyCapacity = 0;
                         activeEncounter = encounter;
                         activeEncounterId = continuesChatEncounter
@@ -2611,84 +2623,85 @@ public sealed class SelfHostedActRuntime : IDisposable
                         identities.Count);
                     CacheActiveEncounterIdentities(identities);
                     var cachedIdentities = activeEncounterIdentities.Values.ToArray();
+                    foreach (var item in ResolveParsedPlayers(encounter, ObservedPlayers()))
+                        parsedPlayerIdentities[item.Identity.DisplayName] = item.Identity;
                     if (finished)
                     {
                         effectiveDamageLedger.PrepareFinalSnapshot();
                         ObserveCommittedDamageEvents(identities);
                     }
-                    var combatants = ResolveEncounterCombatants(
-                            encounter,
-                            identities,
-                            cachedIdentities,
-                            activeEncounterPartyCapacity)
-                        .Select(item =>
-                        {
-                            var hitCounts = GetDamageHitCounts(item.Combatant);
-                            var highestDamage = GetHighestDamageHit(item.Combatant);
-                            var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
-                            var actorName = item.Identity?.Name ?? item.Combatant.Name;
-                            var effectiveDamage = 0L;
-                            var hasEffectiveDamage = item.Identity is { EntityId: not 0 } &&
-                                                     effectiveDamageLedger.TryResolveDamage(
-                                                         item.Identity,
-                                                         out effectiveDamage);
-                            var totalDamage = hasEffectiveDamage
-                                ? effectiveDamage
-                                : item.Combatant.Damage;
-                            var rawHealing = 0L;
-                            var hasRawHealing = item.Identity is { EntityId: not 0 } &&
-                                                effectiveDamageLedger.TryResolveHealing(
-                                                    item.Identity,
-                                                    out rawHealing);
-                            // Some damage actions carry a secondary self-heal that ACT omits.
-                            // The cumulative raw total supplements ACT without double-counting
-                            // ordinary heals that both pipelines already observed.
-                            var totalHealing = hasRawHealing
-                                ? Math.Max(item.Combatant.Healed, rawHealing)
-                                : item.Combatant.Healed;
-                            var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
-                                                string.Equals(
-                                                    item.Combatant.Name,
-                                                    "YOU",
-                                                    StringComparison.OrdinalIgnoreCase) ||
-                                                string.Equals(
-                                                    item.Combatant.Name,
-                                                    playerName(),
-                                                    StringComparison.OrdinalIgnoreCase);
-                            return new ActCombatantSnapshot(
-                                displayName,
-                                displayName,
-                                item.Identity?.Job ?? string.Empty,
-                                isLocalPlayer,
-                                totalDamage,
-                                totalHealing,
-                                Math.Max(
-                                    item.Combatant.Deaths,
-                                    Math.Max(
-                                        observedDeaths.GetValueOrDefault(displayName),
-                                        observedDeaths.GetValueOrDefault(item.Combatant.Name))),
-                                totalDamage / effectiveEncounterSeconds,
-                                totalDamage / effectiveEncounterSeconds,
-                                item.Combatant.ExtDPS,
-                                hitCounts.DamageHits,
-                                hitCounts.CriticalHits,
-                                hitCounts.CriticalDirectHits,
-                                hasEffectiveDamage
-                                    ? raidDpsEstimator.ResolveRate(
-                                        actorName,
-                                        totalDamage,
-                                        effectiveEncounterSeconds)
-                                    : 0,
-                                hitCounts.DirectHits,
-                                highestDamage.Action,
-                                highestDamage.Amount,
-                                item.Identity?.PartyGroup ?? 0);
-                        })
-                        .ToArray();
-
-                    if (combatants.Length > 0)
+                    ActCombatantSnapshot ToSnapshot((CombatantData Combatant, ActPlayerIdentity? Identity) item)
                     {
-                        activeEncounterPublished |= combatants.Any(static combatant =>
+                        var hitCounts = GetDamageHitCounts(item.Combatant);
+                        var highestDamage = GetHighestDamageHit(item.Combatant);
+                        var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
+                        var actorName = item.Identity?.Name ?? item.Combatant.Name;
+                        var effectiveDamage = 0L;
+                        var hasEffectiveDamage = item.Identity is { EntityId: not 0 } &&
+                                                 effectiveDamageLedger.TryResolveDamage(
+                                                     item.Identity,
+                                                     out effectiveDamage);
+                        var totalDamage = hasEffectiveDamage
+                            ? effectiveDamage
+                            : item.Combatant.Damage;
+                        var rawHealing = 0L;
+                        var hasRawHealing = item.Identity is { EntityId: not 0 } &&
+                                            effectiveDamageLedger.TryResolveHealing(
+                                                item.Identity,
+                                                out rawHealing);
+                        // Some damage actions carry a secondary self-heal that ACT omits.
+                        // The cumulative raw total supplements ACT without double-counting
+                        // ordinary heals that both pipelines already observed.
+                        var totalHealing = hasRawHealing
+                            ? Math.Max(item.Combatant.Healed, rawHealing)
+                            : item.Combatant.Healed;
+                        var isLocalPlayer = item.Identity?.IsLocalPlayer == true ||
+                                            string.Equals(
+                                                item.Combatant.Name,
+                                                "YOU",
+                                                StringComparison.OrdinalIgnoreCase) ||
+                                            string.Equals(
+                                                item.Combatant.Name,
+                                                playerName(),
+                                                StringComparison.OrdinalIgnoreCase);
+                        return new ActCombatantSnapshot(
+                            displayName,
+                            displayName,
+                            item.Identity?.Job ?? string.Empty,
+                            isLocalPlayer,
+                            totalDamage,
+                            totalHealing,
+                            Math.Max(
+                                item.Combatant.Deaths,
+                                Math.Max(
+                                    observedDeaths.GetValueOrDefault(displayName),
+                                    observedDeaths.GetValueOrDefault(item.Combatant.Name))),
+                            totalDamage / effectiveEncounterSeconds,
+                            totalDamage / effectiveEncounterSeconds,
+                            item.Combatant.ExtDPS,
+                            hitCounts.DamageHits,
+                            hitCounts.CriticalHits,
+                            hitCounts.CriticalDirectHits,
+                            hasEffectiveDamage
+                                ? raidDpsEstimator.ResolveRate(
+                                    actorName,
+                                    totalDamage,
+                                    effectiveEncounterSeconds)
+                                : 0,
+                            hitCounts.DirectHits,
+                            highestDamage.Action,
+                            highestDamage.Amount,
+                            item.Identity?.PartyGroup ?? 0);
+                    }
+                    var combatants = ResolveEncounterCombatants(encounter, identities, cachedIdentities, activeEncounterPartyCapacity)
+                        .Select(ToSnapshot).ToArray();
+                    var parsedPlayers = ResolveParsedPlayers(encounter, parsedPlayerIdentities.Values.ToArray())
+                        .Select(item => ToSnapshot(item)).Concat(combatants.Where(item =>
+                            string.Equals(item.Name, ChineseCombatChatContext.LimitBreakActorName, StringComparison.OrdinalIgnoreCase))).ToArray();
+
+                    if (combatants.Length > 0 || parsedPlayers.Length > 0)
+                    {
+                        activeEncounterPublished |= parsedPlayers.Concat(combatants).Any(static combatant =>
                             combatant.TotalDamage > 0 || combatant.TotalHealing > 0);
                         snapshot = new ActEncounterSnapshot(
                             activeEncounterId,
@@ -2708,6 +2721,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                                 .Select(static identity => identity.DisplayName)
                                 .ToArray(),
                             PartyCapacity = activeEncounterPartyCapacity,
+                            ParsedPlayers = parsedPlayers,
+                            ParserContext = CreateParserContext(identities),
                         };
                     }
                     else if (!activeEncounterNamesLogged)
@@ -2724,7 +2739,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     snapshot = MergeFallbackDamage(snapshot, fallbackSnapshot);
                     if (snapshot is not null)
                     {
-                        activeEncounterPublished |= snapshot.Combatants.Any(static combatant =>
+                        activeEncounterPublished |= (snapshot.ParsedPlayers ?? snapshot.Combatants).Any(static combatant =>
                             combatant.TotalDamage > 0 || combatant.TotalHealing > 0);
                     }
 
@@ -2765,6 +2780,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         activeEncounterTerritoryId = 0;
                         activeEncounterPartyCapacity = 0;
                         activeEncounterIdentities.Clear();
+                        parsedPlayerIdentities.Clear();
                         activeEncounterPublished = false;
                         activeEncounterNamesLogged = false;
                         activeEncounterRelevantStart = default;
@@ -2842,47 +2858,52 @@ public sealed class SelfHostedActRuntime : IDisposable
             return primary;
         }
 
-        var merged = primary.Combatants.ToList();
-        foreach (var fallbackCombatant in fallback.Combatants.Where(static combatant =>
-                     combatant.TotalDamage > 0))
+        static IReadOnlyList<ActCombatantSnapshot> MergeRows(IReadOnlyList<ActCombatantSnapshot> primaryRows,
+            IReadOnlyList<ActCombatantSnapshot> fallbackRows)
         {
-            var index = merged.FindIndex(primaryCombatant =>
-                string.Equals(
-                    primaryCombatant.Id,
-                    fallbackCombatant.Id,
-                    StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(
-                    primaryCombatant.Name,
-                    fallbackCombatant.Name,
-                    StringComparison.OrdinalIgnoreCase));
-            if (index < 0)
+            var merged = primaryRows.ToList();
+            foreach (var fallbackCombatant in fallbackRows.Where(static combatant =>
+                         combatant.TotalDamage > 0))
             {
-                merged.Add(fallbackCombatant);
-                continue;
-            }
+                var index = merged.FindIndex(primaryCombatant =>
+                    string.Equals(
+                        primaryCombatant.Id,
+                        fallbackCombatant.Id,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(
+                        primaryCombatant.Name,
+                        fallbackCombatant.Name,
+                        StringComparison.OrdinalIgnoreCase));
+                if (index < 0)
+                {
+                    merged.Add(fallbackCombatant);
+                    continue;
+                }
 
-            if (merged[index].TotalDamage > 0)
-            {
-                // ACT remains authoritative whenever it produced damage. Adding both
-                // sources would double-count every normal action line.
-                continue;
-            }
+                if (merged[index].TotalDamage > 0)
+                {
+                    // ACT remains authoritative whenever it produced damage. Adding both
+                    // sources would double-count every normal action line.
+                    continue;
+                }
 
-            var primaryCombatant = merged[index];
-            merged[index] = primaryCombatant with
-            {
-                TotalDamage = fallbackCombatant.TotalDamage,
-                Dps = fallbackCombatant.Dps,
-                EncDps = fallbackCombatant.EncDps,
-                ExtDps = fallbackCombatant.ExtDps,
-                DamageHits = fallbackCombatant.DamageHits,
-                CriticalHits = fallbackCombatant.CriticalHits,
-                CriticalDirectHits = fallbackCombatant.CriticalDirectHits,
-                Rdps = fallbackCombatant.Rdps,
-                DirectHits = fallbackCombatant.DirectHits,
-                HighestDamageAction = fallbackCombatant.HighestDamageAction,
-                HighestDamage = fallbackCombatant.HighestDamage,
-            };
+                var primaryCombatant = merged[index];
+                merged[index] = primaryCombatant with
+                {
+                    TotalDamage = fallbackCombatant.TotalDamage,
+                    Dps = fallbackCombatant.Dps,
+                    EncDps = fallbackCombatant.EncDps,
+                    ExtDps = fallbackCombatant.ExtDps,
+                    DamageHits = fallbackCombatant.DamageHits,
+                    CriticalHits = fallbackCombatant.CriticalHits,
+                    CriticalDirectHits = fallbackCombatant.CriticalDirectHits,
+                    Rdps = fallbackCombatant.Rdps,
+                    DirectHits = fallbackCombatant.DirectHits,
+                    HighestDamageAction = fallbackCombatant.HighestDamageAction,
+                    HighestDamage = fallbackCombatant.HighestDamage,
+                };
+            }
+            return merged;
         }
 
         // ACT can see only a late fragment when an opcode is stale while the structured
@@ -2900,7 +2921,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             StartTime = startTime,
             EndTime = endTime,
-            Combatants = merged,
+            Combatants = MergeRows(primary.Combatants, fallback.Combatants),
+            ParsedPlayers = primary.ParsedPlayers is null && fallback.ParsedPlayers is null ? null
+                : MergeRows(primary.ParsedPlayers ?? primary.Combatants, fallback.ParsedPlayers ?? fallback.Combatants),
         };
     }
 
@@ -3056,6 +3079,25 @@ public sealed class SelfHostedActRuntime : IDisposable
             activeEncounterIdentities[key] = identity;
         }
     }
+
+    private IReadOnlyList<ActPlayerIdentity> ObservedPlayers()
+        => gameStateProvider.Identities.Concat(Volatile.Read(ref observedPlayerSnapshot))
+            .DistinctBy(identity => identity.EntityId != 0 ? $"id:{identity.EntityId}" : identity.DisplayName,
+                StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static ParserScopeContext CreateParserContext(IReadOnlyList<ActPlayerIdentity> identities)
+        => new(ParserScopePolicy.ResolveEffectiveScope(ParserScope.Auto, identities),
+            identities.FirstOrDefault(identity => identity.IsLocalPlayer)?.PartyGroup ?? 0,
+            identities.Select(identity => identity.DisplayName).ToArray());
+
+    internal static IReadOnlyList<(CombatantData Combatant, ActPlayerIdentity Identity)> ResolveParsedPlayers(
+        EncounterData encounter, IReadOnlyList<ActPlayerIdentity> observedPlayers)
+        // Only identities supplied by actual player-character objects qualify.
+        // Friendly NPCs and pets can have jobs or belong to ACT's ally graph.
+        => encounter.Items.Values.Select(combatant =>
+                (Combatant: combatant, Identity: ActPlayerIdentityResolver.Resolve(observedPlayers, combatant.Name)))
+            .Where(item => item.Identity is not null)
+            .Select(item => (item.Combatant, item.Identity!)).ToArray();
 
     internal static IReadOnlyList<(CombatantData Combatant, ActPlayerIdentity? Identity)>
         ResolveEncounterCombatants(

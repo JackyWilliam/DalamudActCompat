@@ -1,5 +1,6 @@
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
+using DalamudActCompat.ActRuntime;
 
 namespace DalamudActCompat.Meter;
 
@@ -7,6 +8,11 @@ public sealed class MeterService
 {
     private readonly EncounterStateStore stateStore;
     private readonly MeterSettings settings;
+    private readonly Func<ParserScope> parserScope;
+    private Encounter? projectedSource;
+    private Encounter? projectedEncounter;
+    private MeterDisplayScope projectedMode;
+    private ParserScope projectedScope;
     private readonly object cacheLock = new();
     private readonly Dictionary<string, HitRateSnapshot> lastKnownHitRates =
         new(StringComparer.OrdinalIgnoreCase);
@@ -14,13 +20,57 @@ public sealed class MeterService
     private Guid cachedEncounterId;
     private DateTimeOffset nextRefresh;
 
-    public MeterService(EncounterStateStore stateStore, MeterSettings settings)
+    public MeterService(EncounterStateStore stateStore, MeterSettings settings, Func<ParserScope>? parserScope = null)
     {
         this.stateStore = stateStore;
         this.settings = settings;
+        this.parserScope = parserScope ?? (() => ParserScope.All);
     }
 
-    public Encounter? DisplayEncounter => stateStore.GetDisplayEncounter();
+    public Encounter? DisplayEncounter => Project(stateStore.GetDisplayEncounter(settings.DisplayScope == MeterDisplayScope.ParserScope));
+
+    private Encounter? Project(Encounter? encounter)
+    {
+        lock (cacheLock)
+        {
+            var selected = parserScope();
+            if (selected == ParserScope.Auto) selected = encounter?.ParserContext?.AutoScope ?? ParserScope.All;
+            if (!Enum.IsDefined(selected)) selected = ParserScope.All;
+            if (settings.DisplayScope != projectedMode || selected != projectedScope)
+                nextRefresh = DateTimeOffset.MinValue;
+            if (ReferenceEquals(encounter, projectedSource) && settings.DisplayScope == projectedMode && selected == projectedScope)
+                return projectedEncounter;
+            projectedSource = encounter; projectedMode = settings.DisplayScope; projectedScope = selected;
+            if (encounter is null || projectedMode != MeterDisplayScope.ParserScope)
+                return projectedEncounter = encounter;
+
+            var players = SelectParsedPlayers(encounter, selected);
+            // Project the encounter as well as rows, so totals and damage shares
+            // use the same scope. The stored fight remains intact when switching back.
+            return projectedEncounter = encounter with
+            {
+                Combatants = players,
+                JobSummaries = players.Where(player => !string.IsNullOrWhiteSpace(player.Job))
+                    .GroupBy(player => player.Job, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new JobSummary(group.Key, group.Sum(player => player.TotalDamage),
+                        group.Sum(player => player.TotalHealing), group.Count())).ToArray(),
+            };
+        }
+    }
+
+    internal static IReadOnlyList<Combatant> SelectParsedPlayers(Encounter encounter, ParserScope scope)
+    {
+        var players = encounter.ParsedPlayers ?? encounter.Combatants;
+        var context = encounter.ParserContext;
+        if (scope == ParserScope.Auto) scope = context?.AutoScope ?? ParserScope.All;
+        if (scope == ParserScope.All) return players;
+        var partyIds = (context?.PartyMemberIds ?? encounter.Combatants.Select(player => player.Id).ToArray())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var localGroup = context?.LocalPartyGroup ?? encounter.Combatants.FirstOrDefault(player => player.IsLocalPlayer)?.PartyGroup ?? 0;
+        return players.Where(player => player.IsLocalPlayer || (scope != ParserScope.Self &&
+            (IsLimitBreak(player) || partyIds.Contains(player.Id) &&
+                (scope == ParserScope.Alliance || player.PartyGroup == localGroup)))).ToArray();
+    }
 
     public IReadOnlyList<CombatantRow> GetRows()
     {
