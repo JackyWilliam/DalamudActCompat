@@ -747,7 +747,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             LogFilePath = logDirectory,
             WriteLogFile = true,
-            ParseFilterMode = (int)ParserScopePolicy.Normalize(getParserScope()),
+            ParseFilterMode = (int)ParserScopePolicy.ResolveEffectiveScope(getParserScope(), playerIdentities()),
         };
         configuration.Initialize(pluginInterface);
         configuration.PlayerCharacterName = playerName();
@@ -2148,11 +2148,6 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     internal void UpdateFrameworkState(DateTimeOffset? frameTime)
     {
-        // The native parser reads this shared setting for every combat action.
-        // Updating here also applies cloud restores without restarting the parser,
-        // closing overlays, or clearing recorded fights.
-        parser?.SetParseFilterMode((FFXIV_ACT_Plugin.Config.ParseFilterMode)
-            ParserScopePolicy.Normalize(getParserScope()));
         var identities = playerIdentities();
         var gameState = encounterModeSnapshot();
         var inCombat = gameState.InCombat;
@@ -2168,6 +2163,10 @@ public sealed class SelfHostedActRuntime : IDisposable
             identities,
             localPlayerPose(),
             inCombat);
+        // Auto and the supplemental paths use the same current roster. ACT only
+        // receives a native mode (0..3), including on joins, leaves and restores.
+        parser?.SetParseFilterMode((FFXIV_ACT_Plugin.Config.ParseFilterMode)
+            ParserScopePolicy.ResolveEffectiveScope(getParserScope(), identities));
         TrackPlayerDeaths(identities);
 
         ActEncounterSnapshot? activeChatEncounter = null;
