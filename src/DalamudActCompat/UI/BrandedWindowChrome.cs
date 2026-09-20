@@ -344,15 +344,31 @@ internal static class BrandedWindowChrome
         float height,
         bool allowScrolling = true)
     {
+        var glass = DactTheme.Palette.Glass;
+        var parentDraw = ImGui.GetWindowDrawList();
+        var parentClipMin = parentDraw.GetClipRectMin();
+        var parentClipMax = parentDraw.GetClipRectMax();
         DactTheme.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
         DactTheme.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
         var flags = allowScrolling
             ? ImGuiWindowFlags.None
             : ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+        // Glass owns the card's fill and rim. A native child background/border
+        // underneath would be sampled again and turn it into a white box.
+        if (glass) flags |= ImGuiWindowFlags.NoBackground;
         var visible = ImGui.BeginChild(id, new Vector2(-1, height), true, flags);
-        if (visible && DactTheme.Palette.Glass)
-            DactTheme.DrawGlassSurface(ImGui.GetWindowDrawList(), ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(), 8, Vector4.Zero);
+        if (visible && glass)
+        {
+            var draw = ImGui.GetWindowDrawList();
+            var min = ImGui.GetWindowPos();
+            var max = min + ImGui.GetWindowSize();
+            // BeginChild clips content inside the border. Paint the complete
+            // rounded rim within the parent's clip, then restore content clipping.
+            draw.PushClipRect(Vector2.Max(min, parentClipMin), Vector2.Min(max, parentClipMax), false);
+            DactTheme.DrawGlassSurface(draw, min, max, 8, DactTheme.Palette.Raised);
+            draw.PopClipRect();
+        }
         return visible;
     }
 

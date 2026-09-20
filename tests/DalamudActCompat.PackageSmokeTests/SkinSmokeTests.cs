@@ -272,6 +272,7 @@ internal static class SkinSmokeTests
             LoadGameTextures(raster);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
+            GlassCards(raster, output);
             var config = new PluginConfiguration();
             config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
             var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(1) };
@@ -461,6 +462,97 @@ internal static class SkinSmokeTests
             EmptyMeterEditorSummary(raster, output, logo);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
+    }
+
+    private static unsafe void GlassCards(NativeUiRasterizer raster, string? output)
+    {
+        var appearance = new UiSkinSettings { SelectedSkin = SkinCatalog.LiquidGlass };
+        appearance.UnlockedEasterEggs.Add(SkinCatalog.LiquidGlass);
+        DactTheme.SetCurrent(appearance, true, 1);
+        using var gpu = Environment.GetEnvironmentVariable("DACT_TEST_GPU_GLASS") == "1" ? new LiquidGlassSmokeTests() : null;
+        gpu?.Install(raster);
+        // A uniform backdrop makes excess white stacking measurable independently
+        // of the game scene, while native clipping and GPU callbacks stay real.
+        raster.PaintBackdrop = (pixels, _, _) => Array.Fill(pixels, (byte)30);
+        var io = ImGui.GetIO();
+        var oldScale = io.FontGlobalScale;
+        try
+        {
+            foreach (var scale in new[] { 1f, 1.4f, 2f })
+            foreach (var clipped in new[] { false, true })
+            {
+                io.FontGlobalScale = scale;
+                var cardMin = Vector2.Zero; var cardMax = Vector2.Zero;
+                var parentClip = Vector4.Zero;
+                var card = default(ImGuiWindowPtr);
+                void Frame()
+                {
+                    gpu?.Renderer.BeginFrame(gpu.Device, true);
+                    ImGui.NewFrame();
+                    using (DactTheme.PushFrame())
+                    {
+                        ControlCenterWindow.PushTheme();
+                        ImGui.SetNextWindowPos(new(30)); ImGui.SetNextWindowSize(new(700, 460));
+                        ImGui.Begin("glass-cards", DactTheme.WindowFlags(ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings));
+                        DactTheme.DrawGameWindow();
+                        ImGui.BeginChild("page", new(0, clipped ? 145 : 350), false, ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.NoScrollbar);
+                        var parent = ImGui.GetWindowDrawList();
+                        parentClip = new(parent.GetClipRectMin(), parent.GetClipRectMax().X, parent.GetClipRectMax().Y);
+                        if (BrandedWindowChrome.BeginGoldCard("card", 200, false))
+                        {
+                            card = ImGuiP.GetCurrentWindow();
+                            cardMin = ImGui.GetWindowPos(); cardMax = cardMin + ImGui.GetWindowSize();
+                            ImGui.TextUnformatted("解析器 · 运行中");
+                            ImGui.TextUnformatted("基础设置");
+                            DactTheme.Button("战斗统计", new(180, 36));
+                        }
+                        BrandedWindowChrome.EndGoldCard();
+                        ImGui.EndChild(); ImGui.End(); ControlCenterWindow.PopTheme();
+                    }
+                    ImGui.Render();
+                }
+                Frame(); Frame();
+                var path = Path.Combine(output ?? Path.GetTempPath(), $"glass-card-{(gpu is null ? "fallback" : "gpu")}-{scale * 100:0}-{clipped}.png");
+                raster.Save(ImGui.GetDrawData(), path);
+                Check((card.Flags & ImGuiWindowFlags.NoBackground) != 0,
+                    "A native card fill/border is stacked under the glass surface.");
+                if (gpu is not null)
+                {
+                    var found = false;
+                    for (var i = 0; i < card.DrawList.CmdBuffer.Size; i++)
+                    {
+                        var command = card.DrawList.CmdBuffer[i];
+                        if (command.UserCallback == null) continue;
+                        var request = *(LiquidGlassRenderer.Request*)command.UserCallbackData;
+                        if (request.Min != cardMin || request.Max != cardMax) continue;
+                        var min = Vector2.Max(cardMin, new(parentClip.X, parentClip.Y));
+                        var max = Vector2.Min(cardMax, new(parentClip.Z, parentClip.W));
+                        Check(request.Clip == new Vector4(min, max.X, max.Y),
+                            "Card rim was cropped by its own content clip, or escaped its parent.");
+                        Check(request.Scrim <= .2f, "Nested card repeats the thick root white body.");
+                        found = true;
+                    }
+                    Check(found && gpu.Renderer.RenderedSurfaces >= 3, "Native card skipped the real GPU glass pass.");
+                    if (!clipped)
+                    {
+                        using var bitmap = new System.Drawing.Bitmap(path);
+                        var x = (int)((cardMin.X + cardMax.X) * .5f);
+                        var inside = bitmap.GetPixel(x, (int)cardMax.Y - 40);
+                        var outside = bitmap.GetPixel(x, (int)cardMax.Y + 40);
+                        Check(inside.R - outside.R is > 2 and < 40,
+                            "Nested glass became an opaque white block instead of a subtle panel.");
+                    }
+                }
+                if (output is null) File.Delete(path);
+            }
+        }
+        finally
+        {
+            io.FontGlobalScale = oldScale;
+            raster.RenderCallback = null; raster.PaintBackdrop = null;
+            DactTheme.GlassRenderer = null;
+        }
+        Console.WriteLine("Glass cards: native fill isolation, complete rounded rims, parent clipping and nested white-body contrast passed at three scales.");
     }
 
     private static unsafe void EmptyMeterEditorSummary(NativeUiRasterizer raster, string? output, EmptyTexture logo)
