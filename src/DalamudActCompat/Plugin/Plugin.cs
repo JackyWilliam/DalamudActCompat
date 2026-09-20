@@ -475,7 +475,7 @@ public sealed class Plugin : IDalamudPlugin
             DiscoverRuntimePlugins,
             fflogsEstimateService.CaptureAvailableEstimates);
         parserEngine = new ParserEngine(parserAdapter);
-        var meterService = new MeterService(stateStore, configuration.Meter, () => configuration.ParserScope);
+        var meterService = new MeterService(stateStore, () => configuration.Meter, () => configuration.ParserScope);
 
         _ = new OverlayManager(new OverlayEventBus());
 

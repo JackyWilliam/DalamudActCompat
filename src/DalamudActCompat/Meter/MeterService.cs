@@ -7,7 +7,8 @@ namespace DalamudActCompat.Meter;
 public sealed class MeterService
 {
     private readonly EncounterStateStore stateStore;
-    private readonly MeterSettings settings;
+    private readonly Func<MeterSettings> getSettings;
+    private MeterSettings Settings => getSettings();
     private readonly Func<ParserScope> parserScope;
     private Encounter? projectedSource;
     private Encounter? projectedEncounter;
@@ -21,18 +22,26 @@ public sealed class MeterService
     private DateTimeOffset nextRefresh;
 
     public MeterService(EncounterStateStore stateStore, MeterSettings settings, Func<ParserScope>? parserScope = null)
+        : this(stateStore, () => settings, parserScope)
+    {
+    }
+
+    public MeterService(EncounterStateStore stateStore, Func<MeterSettings> getSettings, Func<ParserScope>? parserScope = null)
     {
         this.stateStore = stateStore;
-        this.settings = settings;
+        // Cloud restore and factory reset replace MeterSettings. Resolve the live
+        // instance so the display policy and the window controls cannot diverge.
+        this.getSettings = getSettings;
         this.parserScope = parserScope ?? (() => ParserScope.All);
     }
 
-    public Encounter? DisplayEncounter => Project(stateStore.GetDisplayEncounter(settings.DisplayScope == MeterDisplayScope.ParserScope));
+    public Encounter? DisplayEncounter => Project(stateStore.GetDisplayEncounter(Settings.DisplayScope == MeterDisplayScope.ParserScope));
 
     private Encounter? Project(Encounter? encounter)
     {
         lock (cacheLock)
         {
+            var settings = Settings;
             var selected = parserScope();
             if (selected == ParserScope.Auto) selected = encounter?.ParserContext?.AutoScope ?? ParserScope.All;
             if (!Enum.IsDefined(selected)) selected = ParserScope.All;
@@ -101,7 +110,7 @@ public sealed class MeterService
             }
 
             cachedEncounterId = encounter.Id;
-            nextRefresh = now.AddMilliseconds(Math.Clamp(settings.RefreshIntervalMs, 250, 2000));
+            nextRefresh = now.AddMilliseconds(Math.Clamp(Settings.RefreshIntervalMs, 250, 2000));
             cachedRows = BuildRows(encounter);
             return cachedRows;
         }
@@ -138,7 +147,7 @@ public sealed class MeterService
                 ExtDps: ResolveExternalDps(combatant, healingDuration));
         });
 
-        var ordered = MeterSortModeOptions.Normalize(settings.SortMode) switch
+        var ordered = MeterSortModeOptions.Normalize(Settings.SortMode) switch
         {
             MeterSortMode.Hps => rows
                 .OrderBy(static row => IsLimitBreak(row.Id, row.Name))
@@ -172,7 +181,7 @@ public sealed class MeterService
         => isLimitBreak ? null : ++playerRank;
 
     private double ResolveDps(Combatant combatant, double encounterDuration)
-        => settings.DpsMetric switch
+        => Settings.DpsMetric switch
         {
             DpsMetric.Rdps when combatant.Rdps > 0 => combatant.Rdps,
             DpsMetric.Dps when combatant.Dps > 0 => combatant.Dps,

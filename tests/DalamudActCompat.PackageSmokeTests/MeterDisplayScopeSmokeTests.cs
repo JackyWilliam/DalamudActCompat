@@ -93,6 +93,7 @@ internal static class MeterDisplayScopeSmokeTests
         }
         VerifyObservedPlayers();
         VerifyRetainedViews();
+        VerifyLiveRestore();
         VerifyActPublication();
         if (native) NativeUi();
         Console.WriteLine("Meter display scope: old preferences, live five-scope switching, 32-player view, A/B/C, totals/ranks/shares, duty/history retention and player-only identity passed.");
@@ -201,6 +202,20 @@ internal static class MeterDisplayScopeSmokeTests
                 "A player leaving the object table erased the finished encounter.");
         }
         finally { ActGlobals.oFormActMain = previous; }
+    }
+
+    private static void VerifyLiveRestore()
+    {
+        var configuration = new PluginConfiguration();
+        var store = new EncounterStateStore(); store.UpdateCurrent(Encounter(2));
+        var meter = new MeterService(store, () => configuration.Meter, () => configuration.ParserScope);
+        Check(meter.GetRows().Count == 24, "Legacy baseline lost party players.");
+        var restored = new PluginConfiguration { ParserScope = ParserScope.Self };
+        restored.Meter.DisplayScope = MeterDisplayScope.ParserScope;
+        configuration.RestoreFrom(restored);
+        Check(meter.GetRows().Count == 1, "Live restore left the meter holding the replaced settings instance.");
+        configuration.ResetToDefaults("logs");
+        Check(meter.GetRows().Count == 24, "Factory reset did not restore the legacy meter audience.");
     }
 
     private static unsafe void NativeUi()
