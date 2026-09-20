@@ -38,6 +38,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public GameRegionMode GameRegionMode { get; set; } = GameRegionMode.Auto;
 
+    public ParserScope ParserScope { get; set; } = ParserScope.All;
+
     public bool ShowLauncherButton { get; set; } = true;
 
     // Display preferences belong to this installation, not the cloud presence profile.
@@ -94,6 +96,11 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool ApplyMigrations()
     {
         var changed = false;
+        if (!Enum.IsDefined(ParserScope))
+        {
+            ParserScope = ParserScope.All;
+            changed = true;
+        }
         if (Appearance is null)
         {
             Appearance = new();
@@ -334,6 +341,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
         GameRegionMode = GameRegionMode.Auto;
+        ParserScope = ParserScope.All;
         ShowLauncherButton = true;
         HideHtmlOverlaysWhenGameUnfocused = true;
         SimplifiedModeEnabled = false;
@@ -376,6 +384,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         ActPluginDirectory = snapshot.ActPluginDirectory;
         UiLanguage = snapshot.UiLanguage;
         GameRegionMode = snapshot.GameRegionMode;
+        ParserScope = snapshot.ParserScope;
         ShowLauncherButton = snapshot.ShowLauncherButton;
         HideHtmlOverlaysWhenGameUnfocused = snapshot.HideHtmlOverlaysWhenGameUnfocused;
         SimplifiedModeEnabled = snapshot.SimplifiedModeEnabled;

@@ -10,6 +10,7 @@ internal sealed class EncounterDurationTracker
 {
     private static readonly TimeSpan PreEncounterRawLineLifetime = TimeSpan.FromSeconds(2);
     private readonly object syncRoot = new();
+    private readonly Func<string, string, bool>? includeCombatEvent;
     private readonly HashSet<string> partyActorIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ActorPresence> actors =
         new(StringComparer.OrdinalIgnoreCase);
@@ -26,6 +27,9 @@ internal sealed class EncounterDurationTracker
     private DateTimeOffset firstConfirmedDamage;
     private DateTimeOffset lastConfirmedDamage;
     private bool encounterActive;
+
+    public EncounterDurationTracker(Func<string, string, bool>? includeCombatEvent = null)
+        => this.includeCombatEvent = includeCombatEvent;
 
     public void StartEncounter(
         DateTimeOffset startTime,
@@ -482,6 +486,10 @@ internal sealed class EncounterDurationTracker
         string targetId,
         string targetName)
     {
+        // Excluded attacks must not create a target timeline or extend the DPS
+        // clock after all included players have stopped dealing damage.
+        if (includeCombatEvent?.Invoke(string.IsNullOrWhiteSpace(ownerId) ? sourceId : ownerId,
+                ownerIdsByActorId.GetValueOrDefault(targetId, targetId)) == false) return;
         if (!encounterActive)
         {
             return;

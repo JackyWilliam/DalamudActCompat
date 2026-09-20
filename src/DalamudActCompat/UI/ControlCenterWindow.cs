@@ -753,7 +753,7 @@ public sealed class ControlCenterWindow : Window
         var generalCardHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             ImGui.GetTextLineHeightWithSpacing() +
-            (ImGui.GetFrameHeightWithSpacing() * 6) +
+            (ImGui.GetFrameHeightWithSpacing() * 7) +
             ImGui.CalcTextSize(regionHint, false, cardContentWidth).Y +
             ImGui.CalcTextSize(generalHint, false, cardContentWidth).Y +
             (ImGui.GetStyle().ItemSpacing.Y * 2);
@@ -775,6 +775,7 @@ public sealed class ControlCenterWindow : Window
                 text,
                 getGameRegionSelection(),
                 setGameRegionMode);
+            changed |= ParserScopeSelector.Draw(text, configuration);
             var simplifiedMode = configuration.SimplifiedModeEnabled;
             if (DactTheme.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
             {

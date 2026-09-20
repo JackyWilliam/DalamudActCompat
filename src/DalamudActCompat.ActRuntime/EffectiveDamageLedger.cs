@@ -12,6 +12,7 @@ internal sealed class EffectiveDamageLedger
     private static readonly TimeSpan NormalizedCandidateLifetime = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PreEncounterRawLineLifetime = TimeSpan.FromSeconds(2);
     private readonly object syncRoot = new();
+    private readonly Func<string, string, bool>? includeCombatEvent;
     private readonly HashSet<string> partyActorIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> ownerIdsByActorId =
         new(StringComparer.OrdinalIgnoreCase);
@@ -29,6 +30,9 @@ internal sealed class EffectiveDamageLedger
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<EffectiveDamageEvent> committedEvents = [];
     private bool encounterActive;
+
+    public EffectiveDamageLedger(Func<string, string, bool>? includeCombatEvent = null)
+        => this.includeCombatEvent = includeCombatEvent;
 
     public void StartEncounter(IReadOnlyList<ActPlayerIdentity> identities)
     {
@@ -304,7 +308,7 @@ internal sealed class EffectiveDamageLedger
                     out var healing,
                     out _) && healing > 0)
             {
-                AddHealingUnsafe(sourceId, fields[3], ownerId, healing);
+                AddHealingUnsafe(sourceId, fields[3], ownerId, targetId, healing);
                 healingChanged = true;
                 continue;
             }
@@ -405,7 +409,7 @@ internal sealed class EffectiveDamageLedger
                 return false;
             }
 
-            AddHealingUnsafe(sourceId, fields[18], ownerId, rawAmount);
+            AddHealingUnsafe(sourceId, fields[18], ownerId, NormalizeActorId(fields[2]), rawAmount);
             return true;
         }
         if (!string.Equals(fields[4], "DoT", StringComparison.Ordinal))
@@ -545,7 +549,9 @@ internal sealed class EffectiveDamageLedger
 
     private void AddDamageUnsafe(EffectiveDamageEvent item)
     {
-        if (item.Amount <= 0)
+        // Consume target HP before filtering the attribution: an excluded party
+        // member can still reduce the HP available for the next included hit.
+        if (item.Amount <= 0 || !IncludesEventUnsafe(item.SourceId, item.OwnerId, item.TargetId))
         {
             return;
         }
@@ -564,14 +570,21 @@ internal sealed class EffectiveDamageLedger
         string sourceId,
         string sourceName,
         string ownerId,
+        string targetId,
         long amount)
     {
+        if (!IncludesEventUnsafe(sourceId, ownerId, targetId)) return;
         var sourceKey = ActorKey(sourceId, sourceName);
         var ownerKey = !string.IsNullOrWhiteSpace(ownerId)
             ? NormalizeActorId(ownerId)
             : sourceKey;
         ownerHealing[ownerKey] = ownerHealing.GetValueOrDefault(ownerKey) + amount;
     }
+
+    private bool IncludesEventUnsafe(string sourceId, string ownerId, string targetId)
+        => includeCombatEvent?.Invoke(
+            string.IsNullOrWhiteSpace(ownerId) ? sourceId : ownerId,
+            ownerIdsByActorId.GetValueOrDefault(targetId, targetId)) ?? true;
 
     private void UpdatePartyActorsUnsafe(IReadOnlyList<ActPlayerIdentity> identities)
     {

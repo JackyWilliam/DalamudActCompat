@@ -54,6 +54,10 @@ try
     TeamDpsSmokeTests.Run();
     AllianceRosterSmokeTests.Run();
     if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
+    ParserScopeSmokeTests.Run(args.Contains("--parser-scope-only", StringComparer.Ordinal) &&
+        Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
+    await ParserScopeSmokeTests.CloudAsync(testRoot);
+    if (args.Contains("--parser-scope-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--liquid-glass-only", StringComparer.Ordinal))
     {
         using var glass = new LiquidGlassSmokeTests();

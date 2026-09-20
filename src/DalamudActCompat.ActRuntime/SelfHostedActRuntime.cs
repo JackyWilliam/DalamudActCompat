@@ -67,6 +67,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Action persistOverlaySettings;
     private readonly Func<bool> debugMode;
     private readonly Func<bool> parityDiagnosticsEnabled;
+    private readonly Func<ParserScope> getParserScope;
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
     private readonly object networkCaptureSync = new();
@@ -74,8 +75,8 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Dictionary<string, DamageHitCounter> damageHitCounters =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly RaidDpsEstimator raidDpsEstimator;
-    private readonly EffectiveDamageLedger effectiveDamageLedger = new();
-    private readonly EncounterDurationTracker encounterDurationTracker = new();
+    private readonly EffectiveDamageLedger effectiveDamageLedger;
+    private readonly EncounterDurationTracker encounterDurationTracker;
     private int effectiveDamageEventCursor;
     private EncounterData? effectiveDamageEncounter;
     private readonly FflogsParityDiagnosticRecorder parityDiagnosticRecorder = new();
@@ -165,7 +166,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         Action persistOverlaySettings,
         Func<bool> debugMode,
         Func<bool> parityDiagnosticsEnabled,
-        Func<string, ActCapability, bool> permissionCheck)
+        Func<string, ActCapability, bool> permissionCheck,
+        Func<ParserScope>? getParserScope = null)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -187,6 +189,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.persistOverlaySettings = persistOverlaySettings;
         this.debugMode = debugMode;
         this.parityDiagnosticsEnabled = parityDiagnosticsEnabled;
+        this.getParserScope = getParserScope ?? (() => ParserScope.All);
+        effectiveDamageLedger = new EffectiveDamageLedger(IncludesParserEvent);
+        encounterDurationTracker = new EncounterDurationTracker(IncludesParserEvent);
         HashSet<uint> weaponskillActionIds;
         try
         {
@@ -742,6 +747,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             LogFilePath = logDirectory,
             WriteLogFile = true,
+            ParseFilterMode = (int)ParserScopePolicy.Normalize(getParserScope()),
         };
         configuration.Initialize(pluginInterface);
         configuration.PlayerCharacterName = playerName();
@@ -2046,6 +2052,9 @@ public sealed class SelfHostedActRuntime : IDisposable
                identity.EntityId != 0 && identity.EntityId == damageEvent.SourceId) ??
            ActPlayerIdentityResolver.Resolve(identities, damageEvent.SourceName);
 
+    private bool IncludesParserEvent(string source, string target)
+        => ParserScopePolicy.IncludesEvent(getParserScope(), source, target, gameStateProvider.Identities);
+
     private ActEncounterSnapshot? RecordFallbackDamageUnsafe(
         DateTimeOffset now,
         string actor,
@@ -2056,6 +2065,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         bool isDirectHit,
         string zone)
     {
+        if (!IncludesParserEvent(actor, target)) return null;
+
         ActEncounterSnapshot? completedEncounter = null;
         if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
         {
@@ -2137,6 +2148,11 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     internal void UpdateFrameworkState(DateTimeOffset? frameTime)
     {
+        // The native parser reads this shared setting for every combat action.
+        // Updating here also applies cloud restores without restarting the parser,
+        // closing overlays, or clearing recorded fights.
+        parser?.SetParseFilterMode((FFXIV_ACT_Plugin.Config.ParseFilterMode)
+            ParserScopePolicy.Normalize(getParserScope()));
         var identities = playerIdentities();
         var gameState = encounterModeSnapshot();
         var inCombat = gameState.InCombat;
@@ -3285,6 +3301,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             var changed = false;
             foreach (var identity in identities)
             {
+                if (!ParserScopePolicy.Includes(getParserScope(), identity, identities)) continue;
                 var name = identity.DisplayName;
                 if (!lastKnownDead.TryGetValue(name, out var wasDead))
                 {
