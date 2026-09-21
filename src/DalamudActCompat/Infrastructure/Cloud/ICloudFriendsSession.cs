@@ -6,6 +6,8 @@ internal readonly record struct CloudFriendsSession(long Generation, bool IsSign
 internal interface ICloudFriendsSession
 {
     CloudFriendsSession FriendsSession { get; }
+    Task<CloudFriendRemark> SetFriendRemarkAsync(string relationId, CloudFriendRemark remark, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
+        => Task.FromException<CloudFriendRemark>(new NotSupportedException("当前好友服务尚不支持备注云同步。"));
     void SuppressFriendDuty(CloudFriendsSession expectedSession) { }
     Task<CloudPresenceSettings> UpdateFriendPresenceSettingsAsync(CloudPresenceSettings settings, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
         => Task.FromException<CloudPresenceSettings>(new NotSupportedException("当前好友服务不支持编辑状态。"));

@@ -12,7 +12,9 @@ internal static class CloudChatPolicy
 internal sealed record CloudFriendRelation(
     string Id, string State, string Direction, CloudApiUser User,
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string? ConversationId,
-    bool Online = false, string Status = "offline", string StatusText = "", CloudDutyActivity? Duty = null);
+    bool Online = false, string Status = "offline", string StatusText = "", CloudDutyActivity? Duty = null, CloudFriendRemark? Remark = null);
+
+internal sealed record CloudFriendRemark(string Text, long Revision);
 
 internal sealed record CloudFriendList(
     IReadOnlyList<CloudFriendRelation> Friends, int OnlineCount,
@@ -82,6 +84,9 @@ internal sealed partial class CloudApiClient
 
     public Task<CloudFriendRemoval> RemoveFriendAsync(string token, string relationId, CancellationToken cancellationToken)
         => SendJsonAsync<CloudFriendRemoval>(HttpMethod.Delete, $"api/v1/friends/{Uri.EscapeDataString(relationId)}", new { }, token, cancellationToken);
+
+    public Task<CloudFriendRemark> SetFriendRemarkAsync(string token, string relationId, CloudFriendRemark remark, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudFriendRemark>(HttpMethod.Put, $"api/v1/friends/{Uri.EscapeDataString(relationId)}/remark", remark, token, cancellationToken);
 
     public Task<CloudPresenceSettings> UpdateFriendPresenceSettingsAsync(string token, CloudPresenceSettings settings, CancellationToken cancellationToken)
         => SendJsonAsync<CloudPresenceSettings>(HttpMethod.Put, "api/v1/friends/presence/settings", settings, token, cancellationToken);

@@ -47,6 +47,11 @@ internal sealed partial class FriendsUiManager : IDisposable
     private bool settingsDirty, shareSubmission, presenceChangedElsewhere, privacySaveUnconfirmed;
     private string search = "";
     private string? removeId, removeName;
+    private string? remarkRelationId;
+    private string remarkDraft = "", remarkError = "";
+    private bool openRemarkEditor;
+    private Guid? submittedRemark;
+    private long remarkRevision;
     private int notifiedRequests;
     private long toastUntil;
 
@@ -74,7 +79,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     public void SetAnchor(Vector2 position, Vector2 size, float alpha = 1, uint windowId = 0)
     { anchor = position; anchorSize = size; anchorAlpha = alpha; anchorWindowId = windowId; }
     public void ToggleDrawer() { drawerOpen = !drawerOpen; if (drawerOpen) controller.Refresh(); }
-    public void Hide() { drawerOpen = false; drawerProgress = 0; friendSection = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; incoming.ClearVisible(); stopNotificationSound?.Invoke(); }
+    public void Hide() { drawerOpen = false; drawerProgress = 0; friendSection = 0; windows.Clear(); search = ""; toastUntil = 0; editingSettings = submittedSettings = null; settingsDirty = presenceChangedElsewhere = privacySaveUnconfirmed = false; remarkRelationId = null; remarkDraft = remarkError = ""; submittedRemark = null; openRemarkEditor = false; incoming.ClearVisible(); stopNotificationSound?.Invoke(); }
     public void Draw(bool mainVisible, bool inCombat)
     {
         var state = Snapshot;
@@ -122,7 +127,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (window.SubmittedOperation is { } submitted && view?.LastPreparedOperation == submitted)
         { window.Draft = ""; window.SubmittedOperation = null; }
         var official = view?.Chat.Kind == "official";
-        var title = official ? "DACT 官方通知" : view?.Chat.Peer.Username ?? "好友聊天";
+        var title = official ? "DACT 官方通知" : view is null ? "好友聊天" : state.FriendDisplayName(view.Chat.Peer.Id, view.Chat.Peer.Username);
         var viewport = ImGui.GetMainViewport(); var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
         var maximum = viewport.WorkSize - new Vector2(16);
         ImGui.SetNextWindowSizeConstraints(Vector2.Min(new Vector2(320, 340) * scale, maximum), maximum);
@@ -179,7 +184,9 @@ internal sealed partial class FriendsUiManager : IDisposable
                 if (ImGui.BeginChild("messages", new Vector2(-1, historyHeight), false))
                 {
                     var messages = view.Chat.History.Concat(view.Chat.Pending).OrderBy(m => m.Id).ToArray();
-                    foreach (var message in messages) DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon);
+                    foreach (var message in messages)
+                        DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon,
+                            message.Sender.IsOfficial ? null : state.FriendDisplayName(message.Sender.UserId, message.Sender.Name));
                     if (messages.Length == 0) ImGui.TextDisabled("暂无消息。");
                     var last = messages.LastOrDefault()?.Id ?? 0;
                     // Explicitly entering from a notification also reopens an old
@@ -245,6 +252,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         // window, while the custom close control cannot start a drag.
         ImGui.InvisibleButton("##chat-header-drag", new Vector2(dragWidth, height));
         window.Drag.HandleItem();
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(title);
         AccountIdentityBadge.DrawName(administratorIcon, title, !official && peer?.IsAdmin == true,
             start + new Vector2(4 * scale, 7 * scale), dragWidth - 8 * scale, official ? Gold : Blue,
             sponsorIcon, official ? 0 : peer?.SponsorTier ?? 0);
@@ -264,7 +272,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         list.AddLine(start + new Vector2(0, height), start + new Vector2(width, height), ImGui.GetColorU32(Blue), scale);
     }
     private static void DrawBubble(CloudChatMessage message, bool own, ISharedImmediateTexture? administratorIcon = null,
-        ISharedImmediateTexture? sponsorIcon = null)
+        ISharedImmediateTexture? sponsorIcon = null, string? displayName = null)
     {
         var available = ImGui.GetContentRegionAvail().X;
         var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
@@ -272,7 +280,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         var vertical = 8 * scale;
         var width = Math.Min(available, Math.Max(100 * scale, available * .85f));
         var textWidth = Math.Max(1, width - padding * 2);
-        var author = message.Sender.IsOfficial ? "DACT 官方" : message.Sender.Name;
+        var author = message.Sender.IsOfficial ? "DACT 官方" : displayName ?? message.Sender.Name;
         var timestamp = $"{message.CreatedAt.ToLocalTime():MM-dd HH:mm}{(message.State == "pending" ? " · 待上线接收" : "")}";
         var hasIdentity = !message.Sender.IsOfficial && (message.Sender.IsAdmin || message.Sender.SponsorTier > 0);
         var authorHeight = hasIdentity ? ImGui.GetTextLineHeight() : ImGui.CalcTextSize(author, false, textWidth).Y;

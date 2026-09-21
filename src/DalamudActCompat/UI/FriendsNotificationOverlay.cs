@@ -69,7 +69,7 @@ internal sealed partial class FriendsUiManager
                 var list = ImGui.GetWindowDrawList();
                 var background = Navy; background.W = 1 - Math.Clamp(configuration.FriendNotificationBackgroundTransparency, 0, 100) / 100f;
                 list.AddRectFilled(bodyPosition, bodyPosition + new Vector2(bodyWidth, layout.Height), ImGui.GetColorU32(background), 9 * scale);
-                var author = entry.Message.Sender.IsOfficial ? "DACT 官方通知" : entry.Message.Sender.Name;
+                var author = entry.Message.Sender.IsOfficial ? "DACT 官方通知" : state.FriendDisplayName(entry.Message.Sender.UserId, entry.Message.Sender.Name);
                 author = FriendsMessagePreview.Ellipsize(author, textWidth, s => ImGui.CalcTextSize(s).X);
                 var origin = bodyPosition + new Vector2(padding);
                 AccountIdentityBadge.DrawName(administratorIcon, author,
