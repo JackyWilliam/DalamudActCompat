@@ -51,6 +51,15 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--directory-reset-only", StringComparer.Ordinal))
+    {
+        await CactbotDirectorySmokeTests.RunAsync(testRoot);
+        EncounterResetSmokeTests.Run();
+        await EncounterResetSmokeTests.AdapterAsync(testRoot);
+        EncounterResetUiSmokeTests.Run();
+        SkinSmokeTests.Run();
+        return 0;
+    }
     TeamDpsSmokeTests.Run();
     AllianceRosterSmokeTests.Run();
     if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
@@ -224,6 +233,9 @@ try
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
     await ValidatePortableConfigurationArchiveAsync(testRoot);
+    await CactbotDirectorySmokeTests.RunAsync(testRoot);
+    EncounterResetSmokeTests.Run();
+    await EncounterResetSmokeTests.AdapterAsync(testRoot);
     await SkinSmokeTests.CloudAsync(testRoot);
     await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
     await ValidateEncryptedConfigurationBackupAsync(testRoot);
@@ -259,6 +271,7 @@ try
     Directory.CreateDirectory(paths.ActPluginDirectory);
     var installer = new ActPluginPackageInstaller(paths);
     await ValidateBundledPluginDisclosureAsync(testRoot);
+    await ValidateBundledDataRefreshAsync(testRoot);
     if (string.Equals(
             Environment.GetEnvironmentVariable("ACTCOMPAT_ONLINE_UPDATE_SMOKE"),
             "1",
@@ -5801,6 +5814,62 @@ static void AssertFileVersion(string path, string expected, string component)
     Assert(actual == expected, $"{component} version was {actual}, expected {expected}.");
 }
 
+static async Task ValidateBundledDataRefreshAsync(string testRoot)
+{
+    var bundle = Path.Combine(testRoot, "data-refresh-bundle");
+    var originalBundle = Path.Combine(FindProjectRoot(), "vendor", "BundledActPlugins");
+    foreach (var file in Directory.EnumerateFiles(originalBundle, "*", SearchOption.AllDirectories))
+    {
+        var target = Path.Combine(bundle, Path.GetRelativePath(originalBundle, file));
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.Copy(file, target);
+    }
+    var paths = new PluginPaths(Path.Combine(testRoot, "data-refresh-config"));
+    var installer = new ActPluginPackageInstaller(paths);
+    var configuration = new DalamudActCompat.Plugin.PluginConfiguration();
+    var manager = new BundledActPluginManager(bundle, "test", installer, configuration, directoryIsBundleRoot: true);
+    var matcha = manager.Plugins.Single(plugin => plugin.Id == "matcha");
+    await manager.InstallAndAcknowledgeAsync([matcha], CancellationToken.None);
+    var installed = installer.Discover(configuration.DisabledActPluginIds).Single();
+    Assert(installed.Manifest.SourcePackageSha256 == matcha.PackageSha256,
+        "The installer did not record the actual complete-package identity.");
+
+    // Simulate an older installation that knows only the DLL hash. It must not silently
+    // claim to have current data, but remains upgradeable through the normal installer.
+    installed.Manifest.SourcePackageSha256 = string.Empty;
+    File.WriteAllText(Path.Combine(installed.InstallDirectory, ActPluginManifest.FileName),
+        JsonSerializer.Serialize(installed.Manifest));
+    Assert(manager.GetPendingDisclosures().Any(plugin => plugin.Id == "matcha") &&
+        !manager.IsAllowedToLoad(installed), "A legacy manifest bypassed complete-package verification.");
+    configuration.DisabledActPluginIds.Add("matcha");
+    await manager.InstallAndAcknowledgeAsync([matcha], CancellationToken.None);
+
+    const string dataEntry = "Plugins/Cafe.Matcha/data/world.json";
+    const string revisedData = "{\"data-only-update-fixture\":true}";
+    using (var archive = ZipFile.Open(matcha.PackagePath, ZipArchiveMode.Update))
+    {
+        archive.GetEntry(dataEntry)!.Delete();
+        using var writer = new StreamWriter(archive.CreateEntry(dataEntry).Open());
+        writer.Write(revisedData);
+    }
+    using (var source = File.OpenRead(matcha.PackagePath))
+        matcha.PackageSha256 = Convert.ToHexString(SHA256.HashData(source)).ToLowerInvariant();
+    File.WriteAllText(Path.Combine(bundle, BundledActPluginManager.LockFileName),
+        JsonSerializer.Serialize(new BundledActPluginLock { SchemaVersion = 1, Plugins = manager.Plugins.ToList() }));
+    manager.LoadBundle(bundle);
+    var updated = manager.GetPendingDisclosures().Single(plugin => plugin.Id == "matcha");
+    Assert(!manager.IsAllowedToLoad(installer.Discover(configuration.DisabledActPluginIds).Single()),
+        "Changed data remained loadable under the old acknowledgement.");
+    await manager.InstallAndAcknowledgeAsync([updated], CancellationToken.None);
+    var refreshed = installer.Discover(configuration.DisabledActPluginIds).Single();
+    Assert(File.ReadAllText(Path.Combine(refreshed.InstallDirectory, dataEntry)) == revisedData &&
+        refreshed.Manifest.SourceSha256 == matcha.Sha256 &&
+        refreshed.Manifest.SourcePackageSha256 == updated.PackageSha256 &&
+        !refreshed.Enabled && manager.IsAllowedToLoad(refreshed) &&
+        manager.GetPendingDisclosures().All(plugin => plugin.Id != "matcha"),
+        "Same-DLL data refresh was skipped, lost its identity, or re-enabled a disabled plugin.");
+}
+
 static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
 {
     var bundleParent = Path.Combine(
@@ -5867,7 +5936,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             plugin.SourceUrl.EndsWith(
                 "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
                 StringComparison.Ordinal) &&
-            plugin.PackageSha256 == "da2037d3fb75914fd980f72978debf83fc761f693adfff939dbf386f0196a89b" &&
+            plugin.PackageSha256 == "e9bbe09870dd3102603342d972ed8e1fd06637449e8e15de6ff6992f7905639f" &&
             plugin.Sha256 == "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa" &&
             File.Exists(plugin.PackagePath)),
         "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
@@ -10388,7 +10457,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("战斗结束后悬浮窗会保留上一把结果", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("副本外结束后保留上一场结果", StringComparison.Ordinal) &&
         helpWindowSource.Contains("手动重置会立即清空", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
@@ -12161,7 +12230,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
-        "BundledActPlugins/matcha/Cafe.Matcha-26.8.12.1622-dact3.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.8.12.1622-dact4.zip",
         "BundledActPlugins/matcha/LICENSE.txt",
         "BundledActPlugins/matcha/BUILD.md",
         "BundledActPlugins/matcha/dact-compat.patch",

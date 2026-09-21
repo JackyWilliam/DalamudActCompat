@@ -735,6 +735,29 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
     }
 
+    internal string ChooseCactbotDirectory(string currentDirectory)
+    {
+        var owner = form;
+        if (disposing || owner is null || owner.IsDisposed) return currentDirectory;
+        var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = lifecycleCancellation.Token.Register(() => completion.TrySetResult(currentDirectory));
+        void Choose()
+        {
+            if (disposing || owner.IsDisposed) { completion.TrySetResult(currentDirectory); return; }
+            try { completion.TrySetResult(CactbotDirectoryPicker.Show(owner, currentDirectory)); }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Could not open the Cactbot user directory picker.");
+                completion.TrySetResult(currentDirectory);
+            }
+        }
+        // OverlayPlugin handles the request on a WebSocket worker. The dialog must
+        // run on this WebView's existing STA thread and have its window as owner.
+        try { if (owner.InvokeRequired) owner.BeginInvoke(Choose); else Choose(); }
+        catch (InvalidOperationException) { return currentDirectory; }
+        return completion.Task.GetAwaiter().GetResult();
+    }
+
     public void SetTemporarilyHidden(bool hidden)
     {
         temporarilyHidden = hidden;

@@ -32,6 +32,7 @@ internal static partial class FriendsUiSmokeTests
         await SwitchAndPreparationAsync();
         await LocalStateAsync(root);
         await PresenceAsync();
+        await RemarksAsync();
         await UnreadRequestsAndOwnAsync();
         MessagePreviews();
         NotificationModel();
@@ -349,7 +350,7 @@ internal static partial class FriendsUiSmokeTests
             {
                 // Capture the real friend drawer with synthetic users; no live
                 // account, messages or game input participate in this preview.
-                DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+                DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 3);
                 io.DisplaySize = new(1440, 920);
                 Frame(); Frame();
                 raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-eorzea.png"));
@@ -401,6 +402,60 @@ internal static partial class FriendsUiSmokeTests
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-status-popup-saved.png"));
             io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             Check(context.OpenPopupStack.Size == 0, "Status popup did not close with Escape.");
+            // Use the actual context menu and keyboard input against synthetic
+            // accounts; this never sends input or messages to the running game.
+            void OpenRemark()
+            {
+                io.AddMousePosEvent(1040, 450); Frame();
+                io.AddMouseButtonEvent(1, true); Frame(); io.AddMouseButtonEvent(1, false); Frame(); Frame();
+                Check(context.OpenPopupStack.Size > 0, "Friend context menu did not open.");
+                Click(context.NavWindow.Pos + new Vector2(45, 15)); Frame(); Frame();
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-remark-open.png"));
+                Check(context.OpenPopupStack.Size == 1 &&
+                    (string?)typeof(FriendsUiManager).GetField("remarkRelationId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ui) == "native-friend",
+                    "Remark context action did not open its editor.");
+            }
+            void Key(ImGuiKey key)
+            { io.AddKeyEvent(key, true); Frame(); io.AddKeyEvent(key, false); Frame(); Frame(); }
+            OpenRemark();
+            io.AddInputCharacters("固定队奶妈"); Frame(); Frame();
+            var remarkWindow = context.NavWindow;
+            Check(!remarkWindow.ScrollbarX && !remarkWindow.ScrollbarY, "Remark editor has unnecessary scrollbars.");
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-remark-editor.png"));
+            Key(ImGuiKey.Enter);
+            Check(SpinWait.SpinUntil(() => !controller.Snapshot.Busy && controller.Snapshot.Remarks.GetValueOrDefault(api.Peer.Id) == "固定队奶妈",
+                TimeSpan.FromSeconds(3)), "Native Enter did not save the private cloud remark.");
+            Frame(); Frame();
+            Check(context.OpenPopupStack.Size == 0, "Successful remark save did not close the editor.");
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-remark-saved.png"));
+            OpenRemark();
+            io.AddInputCharacters("取消的草稿"); Frame();
+            Key(ImGuiKey.Escape);
+            Check(controller.Snapshot.Remarks[api.Peer.Id] == "固定队奶妈", "Cancel wrote the edited draft.");
+            OpenRemark();
+            remarkWindow = context.NavWindow;
+            Console.WriteLine($"Native remark popup: position={remarkWindow.Pos}, size={remarkWindow.Size}, content={remarkWindow.ContentSize}.");
+            Click(remarkWindow.Pos + new Vector2(130, remarkWindow.Size.Y - 28));
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-remark-clear-click.png"));
+            Check(SpinWait.SpinUntil(() => !controller.Snapshot.Busy && !controller.Snapshot.Remarks.ContainsKey(api.Peer.Id),
+                TimeSpan.FromSeconds(3)), "Native clear button failed to remove the cloud remark.");
+            Frame(); Frame();
+            Check(context.OpenPopupStack.Size == 0, "Successful clear did not close the editor.");
+            io.FontGlobalScale = 1.5f; io.DisplaySize = new(1440, 920);
+            // Reopen at the edge with a long draft to check the real editor's
+            // scaled layout independently from the friend row's changed position.
+            typeof(FriendsUiManager).GetField("remarkRelationId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, "native-friend");
+            typeof(FriendsUiManager).GetField("remarkDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, new string('长', 40));
+            typeof(FriendsUiManager).GetField("openRemarkEditor", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, true);
+            Frame(); Frame(); Frame();
+            remarkWindow = context.NavWindow;
+            Check(!remarkWindow.ScrollbarX && remarkWindow.Pos.X >= 0 && remarkWindow.Pos.Y >= 0 &&
+                remarkWindow.Pos.X + remarkWindow.Size.X <= io.DisplaySize.X && remarkWindow.Pos.Y + remarkWindow.Size.Y <= io.DisplaySize.Y,
+                "Scaled remark editor escaped its viewport or horizontally overflowed.");
+            if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-remark-scale150.png"));
+            Key(ImGuiKey.Escape); Key(ImGuiKey.Escape);
+            io.FontGlobalScale = 1; io.DisplaySize = new(1920, 1080); Frame(); Frame();
+            Console.WriteLine("Native friend remarks: real context menu, Chinese input, Enter save, cancel and clear passed.");
             var fullLayout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, 1);
             Click(fullLayout.Position + new Vector2(fullLayout.Size.X - 12, fullLayout.Size.Y / 2));
             var previousWidth = DrawerWidth();
@@ -489,7 +544,7 @@ internal static partial class FriendsUiSmokeTests
                 var message = new CloudChatMessage(1, "native", new(kind == "official" ? "official" : "user", "user", "旅行者 · 多行消息"), "peer", 1, Guid.NewGuid(),
                     "今晚刷坐骑，这是一条会自动换行的中文消息，用于验证每一行文字与气泡左右边缘都有足够距离。\nSecond line with a long unbroken URL: https://example.test/abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789", null, "history", DateTimeOffset.Now, null);
                 var list = ImGui.GetWindowDrawList(); var before = list.VtxBuffer.Size;
-                method.Invoke(null, [message, kind == "own", null, null]);
+                method.Invoke(null, [message, kind == "own", null, null, null]);
                 var after = list.VtxBuffer.Size;
                 var textColors = new[] { ImGui.GetColorU32(Vector4.One), ImGui.GetColorU32(new Vector4(.42f, .78f, .96f, 1)), ImGui.GetColorU32(new Vector4(.62f, .69f, .75f, 1)) };
                 // Actual emitted ink vertices must remain inside the emitted bubble
@@ -548,6 +603,19 @@ internal static partial class FriendsUiSmokeTests
         public readonly ConcurrentQueue<CloudChatSendRequest> Attempts = new();
         public bool FailSend, CommitThenFail, FailGet, FailPresence, DutySuppressed, VisualData;
         public CloudPresenceSettings Profile = CloudPresenceSettings.Default;
+        public readonly Dictionary<string, CloudFriendRemark> Remarks = new();
+        public bool FailRemark, CommitRemarkThenFail, RemarkSupported = true;
+        public CloudFriendRemark CurrentRemark => Remarks.GetValueOrDefault(Self.Id, new("", 0));
+        public Task<CloudFriendRemark> SetFriendRemarkAsync(string relationId, CloudFriendRemark remark, CancellationToken ct, CloudFriendsSession? expectedSession = null)
+        {
+            Guard(expectedSession); Check(relationId == "native-friend", "Remark used the wrong relationship.");
+            if (FailRemark) throw new HttpRequestException("isolated remark failure");
+            if (CurrentRemark.Text == remark.Text && CurrentRemark.Revision > 0) return Task.FromResult(CurrentRemark);
+            if (CurrentRemark.Revision != remark.Revision) throw new CloudApiException(System.Net.HttpStatusCode.Conflict, "friend_remark_conflict", "remark changed");
+            Remarks[Self.Id] = remark with { Revision = CurrentRemark.Revision + 1 };
+            if (CommitRemarkThenFail) throw new HttpRequestException("isolated lost remark response");
+            return Task.FromResult(CurrentRemark);
+        }
         public Func<CancellationToken, Task>? GetGate; public Action? BeforeAck;
         public int Acks; private long nextMessage;
         public Fake(bool administrator = false, int sponsorTier = 0)
@@ -566,7 +634,7 @@ internal static partial class FriendsUiSmokeTests
         private void Guard(CloudFriendsSession? expected) => Check(expected == FriendsSession, "Controller omitted expected account generation.");
         public Task<CloudFriendList> ListFriendsAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null)
         { Guard(expectedSession); return Task.FromResult(new CloudFriendList(VisualData ? [
-            new("native-friend", "accepted", "", Peer, default, default, Id, true, "busy", "今晚刷坐骑", new(123, "阿卡狄亚零式登天斗技场 重量级3")),
+            new("native-friend", "accepted", "", Peer, default, default, Id, true, "busy", "今晚刷坐骑", new(123, "阿卡狄亚零式登天斗技场 重量级3"), RemarkSupported ? CurrentRemark : null),
             new("native-away", "accepted", "", new("away", "远方的旅行者"), default, default, AdditionalChats.FirstOrDefault(c => c.Peer?.Id == "away")?.Id, true, "away", "晚点回来"),
             new("native-offline", "accepted", "", new("offline", "星光下的猫"), default, default, null)] : [], VisualData ? 2 : 0, Requests.ToArray(), CloudChatPolicy.Notice, Self, Profile)); }
         public void SuppressFriendDuty(CloudFriendsSession expectedSession) { Guard(expectedSession); DutySuppressed = true; }

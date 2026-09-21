@@ -93,6 +93,13 @@ internal sealed partial class FriendsUiManager
                 }
                 ImGui.PopStyleVar();
                 DrawRemoveConfirmation(state);
+                // The drawer intentionally has no vertical padding; editing popups
+                // need their own inset so text and controls clear the themed frame.
+                ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(16 * scale));
+                ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 1);
+                DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
+                DrawRemarkEditor(state, scale);
+                ImGui.PopStyleColor(); ImGui.PopStyleVar(2);
                 ImGui.Spacing(); ImGui.Separator();
                 ImGui.TextDisabled("消息使用须知"); ImGui.TextWrapped(CloudChatPolicy.Notice);
             }
@@ -269,7 +276,7 @@ internal sealed partial class FriendsUiManager
             DrawUnreadBadge(start, width, official.UnreadCount, scale);
         }
         if (state.Friends?.Friends.Count == 0) ImGui.TextDisabled("还没有好友，去“添加”找一个账号吧。");
-        foreach (var friend in (state.Friends?.Friends ?? []).OrderByDescending(f => f.Online).ThenBy(f => f.User.Username))
+        foreach (var friend in (state.Friends?.Friends ?? []).OrderByDescending(f => f.Online).ThenBy(f => state.FriendDisplayName(f.User.Id, f.User.Username)))
         {
             ImGui.PushID(friend.Id);
             var visible = state.State == "ready" && friend.Online;
@@ -290,14 +297,20 @@ internal sealed partial class FriendsUiManager
             var hovered = ImGui.IsItemHovered();
             if (ImGui.BeginPopupContextItem("friend-options"))
             {
-                if (ImGui.MenuItem("解除好友关系…")) { removeId = friend.Id; removeName = friend.User.Username; }
+                if (ImGui.MenuItem(state.Remarks.ContainsKey(friend.User.Id) ? "修改备注…" : "设置备注…"))
+                {
+                    remarkRelationId = friend.Id; remarkDraft = state.Remarks.GetValueOrDefault(friend.User.Id, "");
+                    remarkError = ""; submittedRemark = null; openRemarkEditor = true;
+                    remarkRevision = friend.Remark?.Revision ?? 0;
+                }
+                if (ImGui.MenuItem("解除好友关系…")) { removeId = friend.Id; removeName = state.FriendDisplayName(friend.User.Id, friend.User.Username); }
                 ImGui.EndPopup();
             }
             var list = ImGui.GetWindowDrawList();
             string Fit(string value) => FriendsMessagePreview.Ellipsize(value, Math.Max(0, textRight - 29 * scale), s => ImGui.CalcTextSize(s).X);
             list.AddCircleFilled(start + new Vector2(6, 12) * scale, 3.5f * scale, ImGui.GetColorU32(StatusColor(status)));
             list.PushClipRect(start + new Vector2(18 * scale, 0), start + new Vector2(textRight - 10 * scale, rowHeight), true);
-            AccountIdentityBadge.DrawName(administratorIcon, friend.User.Username, friend.User.IsAdmin,
+            AccountIdentityBadge.DrawName(administratorIcon, state.FriendDisplayName(friend.User.Id, friend.User.Username), friend.User.IsAdmin,
                 start + new Vector2(19, 1) * scale, Math.Max(1, textRight - 29 * scale), DactTheme.Palette.Text,
                 sponsorIcon, friend.User.SponsorTier);
             if (hasMessage) list.AddText(start + new Vector2(19, 23) * scale, ImGui.GetColorU32(DactTheme.Tone(new Vector4(.75f, .80f, .85f, 1), DactTheme.Palette.Muted)), Fit(preview));
@@ -305,7 +318,7 @@ internal sealed partial class FriendsUiManager
             if (duty is not null) list.AddText(start + new Vector2(19, statusY + 22) * scale, ImGui.GetColorU32(Blue), Fit("正在进行：" + duty));
             list.PopClipRect();
             DrawUnreadBadge(start, width, unreadCount, scale);
-            if (hovered) ImGui.SetTooltip(friend.User.Username + "\n" + statusText + (duty is null ? "" : "\n正在进行：" + duty));
+            if (hovered) ImGui.SetTooltip(state.FriendDisplayName(friend.User.Id, friend.User.Username) + "\n" + statusText + (duty is null ? "" : "\n正在进行：" + duty) + "\n右键设置备注或管理好友");
             ImGui.PopID();
         }
     }

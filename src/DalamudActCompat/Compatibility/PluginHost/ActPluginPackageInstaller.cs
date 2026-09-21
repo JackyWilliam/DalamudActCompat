@@ -67,12 +67,21 @@ public sealed partial class ActPluginPackageInstaller
                 paths.PluginStagingDirectory,
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stagingDirectory);
+            var sourcePackageSha256 = string.Empty;
             switch (Path.GetExtension(fullPackagePath).ToLowerInvariant())
             {
                 case ".zip":
-                    using (var archive = ZipFile.OpenRead(fullPackagePath))
+                    // Keep the same read-only handle for extraction and identity so the
+                    // archive cannot be replaced between those operations.
+                    using (var source = File.OpenRead(fullPackagePath))
                     {
-                        ExtractSafely(archive, stagingDirectory);
+                        using (var archive = new ZipArchive(source, ZipArchiveMode.Read, leaveOpen: true))
+                        {
+                            ExtractSafely(archive, stagingDirectory);
+                        }
+                        source.Position = 0;
+                        sourcePackageSha256 = Convert.ToHexString(
+                            await SHA256.HashDataAsync(source, cancellationToken).ConfigureAwait(false)).ToLowerInvariant();
                     }
 
                     break;
@@ -88,6 +97,9 @@ public sealed partial class ActPluginPackageInstaller
             ValidateManifest(manifest, stagingDirectory);
             // Provenance comes from the import entry point, never a package's own claim.
             manifest.UserInstalled = userInitiated;
+            // Data-only bundle refreshes keep the DLL version/hash. Stamp the archive we
+            // actually extracted, never a package manifest's claim about its own identity.
+            manifest.SourcePackageSha256 = sourcePackageSha256;
             if (!IsSpecializedPluginId(manifest.Id))
             {
                 var entryAssembly = Path.Combine(stagingDirectory, manifest.EntryAssembly);

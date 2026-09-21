@@ -62,6 +62,8 @@ internal sealed class PortableConfigurationBackupService
         var destination = EnsureArchiveOutsideConfigurationRoot(
             layout.ConfigurationRoot,
             encryptedArchivePath);
+        var scopePaths = CactbotUserDirectoryStorage.ScopePaths(layout.ConfigurationRoot);
+        PortableConfigurationArchiveService.EnsureArchiveOutsideScopes(destination, scopePaths);
         var operationRoot = CreateOperationRoot();
         var plaintextArchive = Path.Combine(operationRoot, "configuration.dactbackup");
         try
@@ -70,7 +72,8 @@ internal sealed class PortableConfigurationBackupService
                     layout.ConfigurationRoot,
                     plaintextArchive,
                     PortableScopes,
-                    cancellationToken)
+                    cancellationToken,
+                    scopePaths)
                 .ConfigureAwait(false);
             await encryptionService.EncryptFileAsync(
                     plaintextArchive,
@@ -100,6 +103,9 @@ internal sealed class PortableConfigurationBackupService
     {
         var layout = ResolveLayout(pluginConfigurationDirectory);
         var fullPath = Path.GetFullPath(path);
+        var customDirectory = CactbotUserDirectoryStorage.LocalPath(CactbotUserDirectoryStorage.Read(layout.ConfigurationRoot));
+        if (customDirectory is not null && (fullPath.Equals(customDirectory, StringComparison.OrdinalIgnoreCase) ||
+            fullPath.StartsWith(customDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) return true;
         var relative = Path.GetRelativePath(layout.ConfigurationRoot, fullPath)
             .Replace('\\', '/');
         if (relative.StartsWith("../", StringComparison.Ordinal) ||
@@ -154,11 +160,14 @@ internal sealed class PortableConfigurationBackupService
                     layout,
                     cancellationToken)
                 .ConfigureAwait(false);
+            var scopePaths = CactbotUserDirectoryStorage.ScopePaths(layout.ConfigurationRoot, restoring: true, extracted.Directory);
+            await CactbotUserDirectoryStorage.PreserveLocalPathAsync(extracted.Directory, layout.ConfigurationRoot, scopePaths, cancellationToken).ConfigureAwait(false);
             return await BuildPreviewAsync(
                     extracted.Directory,
                     layout.ConfigurationRoot,
                     extracted.Inspection,
-                    cancellationToken)
+                    cancellationToken,
+                    scopePaths)
                 .ConfigureAwait(false);
         }
         finally
@@ -202,6 +211,11 @@ internal sealed class PortableConfigurationBackupService
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            var scopePaths = CactbotUserDirectoryStorage.ScopePaths(layout.ConfigurationRoot, restoring: true, extracted.Directory);
+            await CactbotUserDirectoryStorage.PreserveLocalPathAsync(extracted.Directory, layout.ConfigurationRoot, scopePaths, cancellationToken).ConfigureAwait(false);
+
+            PortableConfigurationArchiveService.EnsureArchiveOutsideScopes(encryptedArchivePath, scopePaths);
+            PortableConfigurationArchiveService.EnsureArchiveOutsideScopes(rollbackDestination, scopePaths);
             await archiveService.ExportAsync(
                     extracted.Directory,
                     materializedArchive,
@@ -217,7 +231,8 @@ internal sealed class PortableConfigurationBackupService
                         rollbackPath,
                         rollbackDestination,
                         recoveryKey,
-                        token))
+                        token),
+                    scopePaths)
                 .ConfigureAwait(false);
             return new PortableConfigurationBackupRestoreResult(
                 Path.GetFullPath(encryptedArchivePath),
@@ -347,14 +362,17 @@ internal sealed class PortableConfigurationBackupService
         string extractedRoot,
         string configurationRoot,
         PortableConfigurationArchiveInspection inspection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? scopePaths = null)
     {
         var scopes = new List<PortableConfigurationScopePreview>();
+        PortableConfigurationArchiveService.ValidateScopePaths(configurationRoot,
+            inspection.Scopes.Select(scope => scope.RelativePath).ToArray(), scopePaths);
         foreach (var scope in inspection.Scopes)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var source = GetPath(extractedRoot, scope.RelativePath);
-            var target = GetPath(configurationRoot, scope.RelativePath);
+            var target = PortableConfigurationArchiveService.ResolveScopePath(configurationRoot, scope.RelativePath, scopePaths);
             scopes.Add(await CompareScopeAsync(
                     scope.RelativePath,
                     scope.Kind,

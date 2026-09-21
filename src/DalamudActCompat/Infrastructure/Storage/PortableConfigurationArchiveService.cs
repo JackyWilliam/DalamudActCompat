@@ -29,7 +29,8 @@ internal sealed class PortableConfigurationArchiveService
         string configurationRoot,
         string archivePath,
         IReadOnlyCollection<string> relativeScopes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? scopePaths = null)
     {
         var root = ValidateConfigurationRoot(configurationRoot, mustExist: true);
         var destination = ValidateArchivePathOutsideRoot(root, archivePath);
@@ -39,8 +40,10 @@ internal sealed class PortableConfigurationArchiveService
         }
 
         var scopes = NormalizeScopes(root, relativeScopes);
+        ValidateScopePaths(root, scopes, scopePaths);
+        EnsureArchiveOutsideScopes(destination, scopePaths);
         var snapshots = scopes
-            .Select(relativePath => CaptureScope(root, relativePath))
+            .Select(relativePath => CaptureScope(root, relativePath, scopePaths))
             .ToArray();
         var destinationDirectory = Path.GetDirectoryName(destination)
                                    ?? throw new InvalidOperationException(
@@ -67,7 +70,8 @@ internal sealed class PortableConfigurationArchiveService
                         cancellationToken.ThrowIfCancellationRequested();
                         var record = await AddFileAsync(
                                 archive,
-                                root,
+                                snapshot.Kind == ArchiveScopeKind.File ? snapshot.RelativePath
+                                    : snapshot.RelativePath + "/" + ToArchivePath(Path.GetRelativePath(snapshot.SourcePath, file)),
                                 file,
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -121,7 +125,8 @@ internal sealed class PortableConfigurationArchiveService
         string configurationRoot,
         string rollbackArchivePath,
         CancellationToken cancellationToken,
-        Func<string, CancellationToken, Task>? prepareRollbackAsync = null)
+        Func<string, CancellationToken, Task>? prepareRollbackAsync = null,
+        IReadOnlyDictionary<string, string>? scopePaths = null)
     {
         var root = ValidateConfigurationRoot(configurationRoot, mustExist: false);
         var sourceArchive = ValidateArchivePathOutsideRoot(root, archivePath);
@@ -153,6 +158,7 @@ internal sealed class PortableConfigurationArchiveService
         var undoRoot = Path.Combine(operationRoot, "undo");
         Directory.CreateDirectory(stagedRoot);
         Directory.CreateDirectory(undoRoot);
+        var preserveUndo = false;
 
         try
         {
@@ -165,10 +171,13 @@ internal sealed class PortableConfigurationArchiveService
             var relativeScopes = manifest.Scopes
                 .Select(static scope => scope.RelativePath)
                 .ToArray();
+            ValidateScopePaths(root, relativeScopes, scopePaths);
+            EnsureArchiveOutsideScopes(sourceArchive, scopePaths);
+            EnsureArchiveOutsideScopes(rollbackArchive, scopePaths);
 
             // A successful restore keeps this snapshot so the user can undo it later;
             // the same snapshot also documents the exact state used by automatic rollback.
-            await ExportAsync(root, rollbackArchive, relativeScopes, cancellationToken)
+            await ExportAsync(root, rollbackArchive, relativeScopes, cancellationToken, scopePaths)
                 .ConfigureAwait(false);
             if (prepareRollbackAsync is not null)
             {
@@ -177,7 +186,7 @@ internal sealed class PortableConfigurationArchiveService
                 await prepareRollbackAsync(rollbackArchive, cancellationToken)
                     .ConfigureAwait(false);
             }
-            ApplySnapshot(root, stagedRoot, undoRoot, manifest, cancellationToken);
+            ApplySnapshot(root, stagedRoot, undoRoot, manifest, cancellationToken, scopePaths);
 
             return new PortableConfigurationRestoreResult(
                 sourceArchive,
@@ -185,9 +194,15 @@ internal sealed class PortableConfigurationArchiveService
                 manifest.Scopes.Count,
                 manifest.Files.Count);
         }
+        catch (AggregateException)
+        {
+            // An incomplete rollback must leave the original files recoverable.
+            preserveUndo = true;
+            throw;
+        }
         finally
         {
-            TryDeleteDirectory(operationRoot);
+            if (!preserveUndo) TryDeleteDirectory(operationRoot);
         }
     }
 
@@ -248,22 +263,39 @@ internal sealed class PortableConfigurationArchiveService
         string stagedRoot,
         string undoRoot,
         ArchiveManifest manifest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? scopePaths)
     {
         foreach (var scope in manifest.Scopes)
         {
-            EnsurePathHasNoReparsePoints(root, GetSafePath(root, scope.RelativePath));
+            ValidateScopePath(root, scope.RelativePath, scopePaths);
         }
 
         var transactions = new List<ScopeTransaction>();
+        var externalWorkDirectories = new List<string>();
+        var preserveExternalUndo = false;
         try
         {
             for (var index = 0; index < manifest.Scopes.Count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var scope = manifest.Scopes[index];
-                var target = GetSafePath(root, scope.RelativePath);
+                var target = ResolveScopePath(root, scope.RelativePath, scopePaths);
+                var staged = GetSafePath(stagedRoot, scope.RelativePath);
                 var undo = GetSafePath(undoRoot, scope.RelativePath);
+                var external = scopePaths?.ContainsKey(scope.RelativePath) == true;
+                if (external)
+                {
+                    // Stage on the destination volume before touching live data. A cloud
+                    // folder may be on a different drive; Directory.Move cannot cross drives.
+                    var work = Path.Combine(Path.GetDirectoryName(target)!, $".dact-restore-{Guid.NewGuid():N}");
+                    Directory.CreateDirectory(work);
+                    externalWorkDirectories.Add(work);
+                    undo = Path.Combine(work, "undo");
+                    var localStaged = Path.Combine(work, "staged");
+                    CopyEntry(staged, localStaged, scope.Kind);
+                    staged = localStaged;
+                }
                 var hadOriginal = EntryExists(target);
                 if (hadOriginal)
                 {
@@ -273,7 +305,7 @@ internal sealed class PortableConfigurationArchiveService
 
                 var createdParentDirectories = scope.Kind == ArchiveScopeKind.Missing
                     ? []
-                    : FindMissingParentDirectories(root, Path.GetDirectoryName(target)!);
+                    : FindMissingParentDirectories(external ? Path.GetDirectoryName(target)! : root, Path.GetDirectoryName(target)!);
                 transactions.Add(new ScopeTransaction(
                     target,
                     undo,
@@ -285,7 +317,6 @@ internal sealed class PortableConfigurationArchiveService
                     continue;
                 }
 
-                var staged = GetSafePath(stagedRoot, scope.RelativePath);
                 if (scope.Kind == ArchiveScopeKind.Directory && !Directory.Exists(staged))
                 {
                     Directory.CreateDirectory(staged);
@@ -299,6 +330,7 @@ internal sealed class PortableConfigurationArchiveService
             var rollbackFailures = RollbackTransactions(transactions);
             if (rollbackFailures.Count > 0)
             {
+                preserveExternalUndo = true;
                 throw new AggregateException(
                     "Portable configuration restore failed and rollback was incomplete.",
                     [failure, .. rollbackFailures]);
@@ -306,6 +338,66 @@ internal sealed class PortableConfigurationArchiveService
 
             ExceptionDispatchInfo.Capture(failure).Throw();
             throw;
+        }
+        finally
+        {
+            if (!preserveExternalUndo)
+                foreach (var directory in externalWorkDirectories) TryDeleteDirectory(directory);
+        }
+    }
+
+    internal static string ResolveScopePath(string root, string relativePath, IReadOnlyDictionary<string, string>? scopePaths)
+        => scopePaths is not null && scopePaths.TryGetValue(relativePath, out var path)
+            ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))
+            : GetSafePath(root, relativePath);
+
+    internal static void EnsureArchiveOutsideScopes(string archivePath, IReadOnlyDictionary<string, string>? scopePaths)
+    {
+        if (scopePaths is null) return;
+        var archive = Path.GetFullPath(archivePath);
+        foreach (var path in scopePaths.Values)
+        {
+            var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            if (PathsEqual(archive, directory) || archive.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Backup files must be stored outside the Cactbot user directory.");
+        }
+    }
+
+    private static void ValidateScopePath(string root, string relativePath, IReadOnlyDictionary<string, string>? scopePaths)
+    {
+        var path = ResolveScopePath(root, relativePath, scopePaths);
+        var boundary = scopePaths?.ContainsKey(relativePath) == true ? Path.GetPathRoot(path)! : root;
+        if (PathsEqual(path, boundary)) throw new InvalidDataException("A configuration scope cannot replace a filesystem root.");
+        EnsurePathHasNoReparsePoints(boundary, path);
+    }
+
+    internal static void ValidateScopePaths(string root, IReadOnlyCollection<string> scopes, IReadOnlyDictionary<string, string>? scopePaths)
+    {
+        if (scopePaths is null || scopePaths.Count == 0) return;
+        // Overrides come only from this machine's explicit configuration, never an
+        // archive manifest. Portable scope names and the archive whitelist stay fixed.
+        if (scopePaths.Keys.Any(key => !scopes.Contains(key, StringComparer.OrdinalIgnoreCase)))
+            throw new InvalidDataException("A scope override is outside the backup whitelist.");
+        var paths = scopes.Select(scope => ResolveScopePath(root, scope, scopePaths)).ToArray();
+        for (var i = 0; i < paths.Length; i++)
+        for (var j = i + 1; j < paths.Length; j++)
+            if (PathsEqual(paths[i], paths[j]) || paths[i].StartsWith(paths[j] + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                paths[j].StartsWith(paths[i] + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Configuration directories must not overlap.");
+        foreach (var scope in scopes) ValidateScopePath(root, scope, scopePaths);
+    }
+
+    private static void CopyEntry(string source, string destination, ArchiveScopeKind kind)
+    {
+        if (kind == ArchiveScopeKind.Missing) return;
+        if (kind == ArchiveScopeKind.File) { File.Copy(source, destination); return; }
+        Directory.CreateDirectory(destination);
+        if (!Directory.Exists(source)) return;
+        foreach (var file in EnumeratePortableFiles(source))
+        {
+            var target = GetSafePath(destination, ToArchivePath(Path.GetRelativePath(source, file)));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
         }
     }
 
@@ -516,23 +608,23 @@ internal sealed class PortableConfigurationArchiveService
             _ => false,
         };
 
-    private static ScopeSnapshot CaptureScope(string root, string relativePath)
+    private static ScopeSnapshot CaptureScope(string root, string relativePath, IReadOnlyDictionary<string, string>? scopePaths)
     {
-        var path = GetSafePath(root, relativePath);
-        EnsurePathHasNoReparsePoints(root, path);
+        var path = ResolveScopePath(root, relativePath, scopePaths);
+        ValidateScopePath(root, relativePath, scopePaths);
         if (File.Exists(path))
         {
-            return new ScopeSnapshot(relativePath, ArchiveScopeKind.File, [path]);
+            return new ScopeSnapshot(relativePath, path, ArchiveScopeKind.File, [path]);
         }
         if (!Directory.Exists(path))
         {
-            return new ScopeSnapshot(relativePath, ArchiveScopeKind.Missing, []);
+            return new ScopeSnapshot(relativePath, path, ArchiveScopeKind.Missing, []);
         }
 
         var files = EnumeratePortableFiles(path)
             .OrderBy(static file => file, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return new ScopeSnapshot(relativePath, ArchiveScopeKind.Directory, files);
+        return new ScopeSnapshot(relativePath, path, ArchiveScopeKind.Directory, files);
     }
 
     private static IEnumerable<string> EnumeratePortableFiles(string directory)
@@ -558,11 +650,10 @@ internal sealed class PortableConfigurationArchiveService
 
     private static async Task<ArchiveFile> AddFileAsync(
         ZipArchive archive,
-        string root,
+        string relativePath,
         string filePath,
         CancellationToken cancellationToken)
     {
-        var relativePath = ToArchivePath(Path.GetRelativePath(root, filePath));
         var entry = archive.CreateEntry(PayloadPrefix + relativePath, CompressionLevel.Optimal);
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         long length = 0;
@@ -902,6 +993,7 @@ internal sealed class PortableConfigurationArchiveService
 
     private sealed record ScopeSnapshot(
         string RelativePath,
+        string SourcePath,
         ArchiveScopeKind Kind,
         IReadOnlyList<string> Files);
 

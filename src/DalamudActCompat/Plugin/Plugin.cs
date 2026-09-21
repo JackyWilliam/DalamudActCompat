@@ -445,7 +445,8 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.EnableFflogsParityRecorder,
             configuration.IsActCapabilityAllowed,
             () => configuration.ParserScope,
-            () => Volatile.Read(ref observedPlayerIdentitySnapshot));
+            () => Volatile.Read(ref observedPlayerIdentitySnapshot),
+            () => new(configuration.EncounterResetMode, configuration.EncounterResetSeconds));
         actRuntime.ConfigureExternalPluginBridges(
             text => hostSupervisor.RequestTts(text, "game-side-act"),
             (action, payload) => hostSupervisor.InvokePluginAction(
@@ -460,7 +461,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.ZoneChanged += OnZoneChangedForHost;
         actRuntime.NetworkReceived += OnNetworkReceivedForHost;
         actRuntime.NetworkSent += OnNetworkSentForMatchaHost;
-        actRuntime.EncounterChanged += OnEncounterChangedForHost;
+        actRuntime.PluginCombatStateChanged += OnEncounterChangedForHost;
         framework.Update += OnFrameworkUpdateForHost;
         parserAdapter = new IinactAdapter(
             actRuntime,
@@ -473,7 +474,8 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
             DiscoverRuntimePlugins,
-            fflogsEstimateService.CaptureAvailableEstimates);
+            fflogsEstimateService.CaptureAvailableEstimates,
+            () => new(configuration.EncounterResetMode, configuration.EncounterResetSeconds));
         parserEngine = new ParserEngine(parserAdapter);
         var meterService = new MeterService(stateStore, () => configuration.Meter, () => configuration.ParserScope);
 
@@ -878,7 +880,7 @@ public sealed class Plugin : IDalamudPlugin
         actRuntime.ZoneChanged -= OnZoneChangedForHost;
         actRuntime.NetworkReceived -= OnNetworkReceivedForHost;
         actRuntime.NetworkSent -= OnNetworkSentForMatchaHost;
-        actRuntime.EncounterChanged -= OnEncounterChangedForHost;
+        actRuntime.PluginCombatStateChanged -= OnEncounterChangedForHost;
         services.Framework.Update -= OnFrameworkUpdateForHost;
         hostSupervisor.CommandRequested -= OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested -= OnPostNamazuHeadingRequested;
@@ -4869,7 +4871,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void OnEncounterChangedForHost(ActEncounterSnapshot _, bool finished)
+    private void OnEncounterChangedForHost(bool finished)
     {
         if (!IsDactAccessAllowed())
         {

@@ -40,6 +40,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
 
     public ParserScope ParserScope { get; set; } = ParserScope.All;
 
+    public EncounterResetMode EncounterResetMode { get; set; } = EncounterResetMode.DactDefault;
+    public int EncounterResetSeconds { get; set; } = 5;
+
     public bool ShowLauncherButton { get; set; } = true;
 
     // Display preferences belong to this installation, not the cloud presence profile.
@@ -96,6 +99,13 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool ApplyMigrations()
     {
         var changed = false;
+        var reset = new EncounterResetOptions(EncounterResetMode, EncounterResetSeconds).Normalize();
+        if (reset.Mode != EncounterResetMode || reset.Seconds != EncounterResetSeconds)
+        {
+            EncounterResetMode = reset.Mode;
+            EncounterResetSeconds = reset.Seconds;
+            changed = true;
+        }
         if (!Enum.IsDefined(ParserScope))
         {
             ParserScope = ParserScope.All;
@@ -342,6 +352,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
         UiLanguage = "zh-CN";
         GameRegionMode = GameRegionMode.Auto;
         ParserScope = ParserScope.All;
+        EncounterResetMode = EncounterResetMode.DactDefault;
+        EncounterResetSeconds = 5;
         ShowLauncherButton = true;
         HideHtmlOverlaysWhenGameUnfocused = true;
         SimplifiedModeEnabled = false;
@@ -385,6 +397,8 @@ public sealed class PluginConfiguration : IPluginConfiguration
         UiLanguage = snapshot.UiLanguage;
         GameRegionMode = snapshot.GameRegionMode;
         ParserScope = snapshot.ParserScope;
+        EncounterResetMode = snapshot.EncounterResetMode;
+        EncounterResetSeconds = snapshot.EncounterResetSeconds;
         ShowLauncherButton = snapshot.ShowLauncherButton;
         HideHtmlOverlaysWhenGameUnfocused = snapshot.HideHtmlOverlaysWhenGameUnfocused;
         SimplifiedModeEnabled = snapshot.SimplifiedModeEnabled;

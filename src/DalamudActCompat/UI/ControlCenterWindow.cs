@@ -871,6 +871,7 @@ public sealed class ControlCenterWindow : Window
 
         ImGui.SetNextItemWidth(260);
         changed |= MeterDisplayScopeSelector.Draw(text, configuration);
+        changed |= EncounterResetSelector.Draw(text, configuration);
 
         DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
         DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
@@ -3436,8 +3437,8 @@ public sealed class ControlCenterWindow : Window
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip(text.Get(
-                    "在浏览器中打开爱发电。\n赞助后请联系管理员核对账号并开通等级；1 级永久解锁艾欧泽亚皮肤。",
-                    "Open Afdian in your browser.\nAfter sponsoring, contact the administrator to verify your account; tier 1 permanently unlocks the Eorzea skin."));
+                    $"在浏览器中打开爱发电。\n赞助后请联系管理员核对账号并开通等级；{SkinCatalog.EorzeaSponsorTier} 级永久解锁艾欧泽亚皮肤。",
+                    $"Open Afdian in your browser.\nAfter sponsoring, contact the administrator to verify your account; tier {SkinCatalog.EorzeaSponsorTier} permanently unlocks the Eorzea skin."));
             }
         }
         BrandedWindowChrome.EndGoldCard();

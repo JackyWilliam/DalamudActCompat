@@ -15,6 +15,11 @@ internal sealed record FriendsChatSnapshot(
 {
     public bool InitialSyncComplete { get; init; }
     public long NotificationBaseline { get; init; }
+    public ImmutableDictionary<string, string> Remarks { get; init; } = ImmutableDictionary<string, string>.Empty;
+    public Guid? LastSavedRemark { get; init; }
+    public string RemarkStatus { get; init; } = "";
+    public string FriendDisplayName(string? id, string username)
+        => FriendRemark.Display(id is null ? null : Remarks.GetValueOrDefault(id), username);
     public static FriendsChatSnapshot Empty(CloudFriendsSession session) => new(session,
         session.IsSignedIn ? "loading" : "signed-out", session.IsSignedIn ? "正在连接好友服务…" : "登录后可使用好友功能。",
         false, null, null, ImmutableDictionary<string, FriendConversationView>.Empty);
@@ -29,9 +34,9 @@ internal sealed record FriendsChatSnapshot(
 // commands and read immutable snapshots; they never await IO or call ImGui off-thread.
 internal sealed class FriendsChatController : IDisposable
 {
-    private enum Kind { Refresh, Lookup, Request, Accept, Decline, Remove, Send, Retry, Discard, Read, Presence }
+    private enum Kind { Refresh, Lookup, Request, Accept, Decline, Remove, Send, Retry, Discard, Read, Presence, Remark }
     private sealed record Command(CloudFriendsSession Session, Kind Kind, string Id = "", string Text = "", string? Quick = null, long ReadId = 0,
-        Guid Operation = default, CloudPresenceSettings? Presence = null);
+        Guid Operation = default, CloudPresenceSettings? Presence = null, long RemarkRevision = 0);
     private readonly ICloudFriendsSession api;
     private readonly IFriendsLocalStateStore disk;
     private readonly Channel<Command> commands = Channel.CreateBounded<Command>(32);
@@ -70,6 +75,13 @@ internal sealed class FriendsChatController : IDisposable
     public bool Accept(string id) => Enqueue(new(api.FriendsSession, Kind.Accept, id));
     public bool Decline(string id) => Enqueue(new(api.FriendsSession, Kind.Decline, id));
     public bool Remove(string id) => Enqueue(new(api.FriendsSession, Kind.Remove, id));
+    public Guid? SetRemark(string relationId, string value, CloudFriendsSession expectedSession, long expectedRevision)
+    {
+        var current = api.FriendsSession;
+        if (current != expectedSession || !FriendRemark.IsValid(value.Trim())) return null;
+        var operation = Guid.NewGuid();
+        return Enqueue(new(current, Kind.Remark, relationId, value.Trim(), Operation: operation, RemarkRevision: expectedRevision)) ? operation : null;
+    }
     public bool UpdatePresence(CloudPresenceSettings settings)
     {
         var current = api.FriendsSession;
@@ -186,7 +198,7 @@ internal sealed class FriendsChatController : IDisposable
             EnsureCurrent(); local = loaded; userId = friends.User.Id;
         }
         if (userId != friends.User.Id) throw new InvalidDataException("好友账号身份发生变化，请重新登录。");
-        Publish(snapshot with { Friends = friends, State = "ready", Status = "好友服务已连接。" });
+        Publish(snapshot with { Friends = friends, Remarks = RemarksFor(friends), State = "ready", Status = "好友服务已连接。" });
         if (Volatile.Read(ref consumerAttached) == 0) return;
         var sync = await Call(ct => api.SyncChatAsync(ct, session)).ConfigureAwait(false);
         var ids = sync.Conversations.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
@@ -274,6 +286,8 @@ internal sealed class FriendsChatController : IDisposable
         if (userId is null) { await PollAsync().ConfigureAwait(false); EnsureCurrent(); }
         switch (command.Kind)
         {
+            case Kind.Remark:
+                await SaveRemarkAsync(command).ConfigureAwait(false); return;
             case Kind.Presence:
                 var saved = await Call(ct => api.UpdateFriendPresenceSettingsAsync(command.Presence!, ct, session)).ConfigureAwait(false);
                 Publish(snapshot with { Friends = snapshot.Friends! with { PresenceSettings = saved }, Status = "状态已保存。" }); break;
@@ -310,6 +324,34 @@ internal sealed class FriendsChatController : IDisposable
         }
         nextPoll = DateTimeOffset.MinValue;
     }
+    private async Task SaveRemarkAsync(Command command)
+    {
+        var friend = snapshot.Friends?.Friends.FirstOrDefault(friend => friend.Id == command.Id);
+        if (friend is null)
+        {
+            Publish(snapshot with { RemarkStatus = "好友关系已变化，未保存备注。" }); return;
+        }
+        try
+        {
+            if (friend.Remark is null) throw new NotSupportedException("当前服务器尚未支持备注云同步，请稍后重试。");
+            // The editor's original revision travels with the save. Polling a newer
+            // server value must not silently authorize overwriting another device.
+            var saved = await Call(ct => api.SetFriendRemarkAsync(friend.Id, new(command.Text, command.RemarkRevision), ct, session)).ConfigureAwait(false);
+            var friends = snapshot.Friends! with { Friends = snapshot.Friends!.Friends.Select(item => item.Id == friend.Id ? item with { Remark = saved } : item).ToArray() };
+            Publish(snapshot with { Friends = friends, Remarks = RemarksFor(friends), LastSavedRemark = command.Operation,
+                RemarkStatus = command.Text.Length == 0 ? "备注已清除并同步。" : "备注已保存并同步。" });
+        }
+        catch (Exception error)
+        {
+            EnsureCurrent();
+            Publish(snapshot with { RemarkStatus = "备注同步未确认：" + error.Message });
+            nextPoll = DateTimeOffset.MinValue;
+        }
+    }
+    private static ImmutableDictionary<string, string> RemarksFor(CloudFriendList friends)
+        => friends.Friends.Select(friend => new KeyValuePair<string, string>(friend.User.Id,
+                friend.Remark?.Text ?? ""))
+            .Where(pair => pair.Value.Length > 0).ToImmutableDictionary();
     private async Task SendAsync(Command command)
     {
         if (!snapshot.Conversations.TryGetValue(command.Id, out var view) || view.Chat.Kind == "official")

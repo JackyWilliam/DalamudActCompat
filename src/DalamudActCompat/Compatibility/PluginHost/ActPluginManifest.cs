@@ -12,6 +12,8 @@ public sealed class ActPluginManifest
 
     public string SourceSha256 { get; set; } = string.Empty;
 
+    public string SourcePackageSha256 { get; set; } = string.Empty;
+
     public bool UserInstalled { get; set; }
 
     public string EntryAssembly { get; set; } = string.Empty;

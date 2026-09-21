@@ -21,6 +21,7 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Func<bool> overlayEnabled;
     private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
     private readonly Func<Encounter, Encounter> captureFflogsEstimates;
+    private readonly Func<EncounterResetOptions> getEncounterResetOptions;
     private readonly object syncRoot = new();
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object dutySessionLock = new();
@@ -50,7 +51,8 @@ public sealed class IinactAdapter : IParserEngine
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
         Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
-        Func<Encounter, Encounter>? captureFflogsEstimates = null)
+        Func<Encounter, Encounter>? captureFflogsEstimates = null,
+        Func<EncounterResetOptions>? getEncounterResetOptions = null)
     {
         this.actRuntime = actRuntime;
         this.logger = logger;
@@ -63,11 +65,13 @@ public sealed class IinactAdapter : IParserEngine
         this.overlayEnabled = overlayEnabled;
         this.customPlugins = customPlugins;
         this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
+        this.getEncounterResetOptions = getEncounterResetOptions ?? (() => default);
         frameworkGameState = getEncounterModeSnapshot();
         dutyWipeTracker.Reset(frameworkGameState.DutyPartyWiped);
         // Subscribe only after the initial state exists so a concurrent ACT callback cannot
         // observe the default snapshot during construction.
         actRuntime.EncounterChanged += OnEncounterChanged;
+        actRuntime.StatisticsReset += OnStatisticsReset;
     }
 
     public event EventHandler<ParserStatus>? StatusChanged;
@@ -288,6 +292,7 @@ public sealed class IinactAdapter : IParserEngine
             {
                 SetStatus(ParserState.Stopped, "Parser disposed.");
                 actRuntime.EncounterChanged -= OnEncounterChanged;
+                actRuntime.StatisticsReset -= OnStatisticsReset;
                 UnsubscribeFrameworkUpdates();
                 actRuntime.Dispose();
             }
@@ -295,6 +300,16 @@ public sealed class IinactAdapter : IParserEngine
         finally
         {
             lifecycleLock.Release();
+        }
+    }
+
+    private void OnStatisticsReset(DateTimeOffset at)
+    {
+        lock (encounterModeTransitionLock)
+        {
+            if (encounterCallbacksSuppressed) return;
+            FinalizeAccumulatedEncounter(at, completeFolder: false);
+            stateStore.ResetCurrent();
         }
     }
 
@@ -369,7 +384,8 @@ public sealed class IinactAdapter : IParserEngine
         }
 
         var segmentMode = snapshot.EncounterMode;
-        if (EncounterModePolicy.AccumulatesSegments(segmentMode))
+        var timedReset = getEncounterResetOptions().Mode == EncounterResetMode.AfterCombat;
+        if (EncounterModePolicy.AccumulatesSegments(segmentMode) || timedReset || accumulatedMode == segmentMode)
         {
             Encounter displayEncounter;
             lock (dutySessionLock)
@@ -377,7 +393,7 @@ public sealed class IinactAdapter : IParserEngine
                 // Mode transitions are finalized by the Framework callback before the ACT
                 // runtime ends its old segment. Rejecting a mismatched late callback prevents
                 // that old segment from reopening the just-closed accumulator.
-                if (!CanAccumulateSegment(segmentMode, gameState.Mode, accumulatedMode))
+                if (!CanAccumulateSegment(segmentMode, gameState.Mode, accumulatedMode, timedReset || accumulatedMode == segmentMode))
                 {
                     return;
                 }
@@ -394,6 +410,10 @@ public sealed class IinactAdapter : IParserEngine
             // ACT may finish individual records during downtime or a phase boundary. Those
             // records remain part of the live cumulative display until the game confirms a wipe.
             stateStore.UpdateCurrent(displayEncounter);
+            // Disabling timed reset outdoors returns to normal ACT boundaries
+            // after the current segment, without resurrecting earlier totals.
+            if (finished && segmentMode == EncounterMode.OpenWorld && !timedReset)
+                FinalizeAccumulatedEncounter(encounter.EndTime ?? DateTimeOffset.UtcNow, completeFolder: true);
             return;
         }
 
@@ -474,7 +494,9 @@ public sealed class IinactAdapter : IParserEngine
             frameworkGameState = gameState;
         }
 
-        if (ShouldFinalizeAccumulatedMode(previousGameState.Mode, gameState.Mode))
+        if (ShouldFinalizeAccumulatedMode(previousGameState.Mode, gameState.Mode) ||
+            accumulatedMode == EncounterMode.OpenWorld &&
+            (previousGameState.Mode != gameState.Mode || previousGameState.TerritoryId != gameState.TerritoryId))
         {
             FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: true);
         }
@@ -517,21 +539,22 @@ public sealed class IinactAdapter : IParserEngine
         {
             RememberFinalizedSegmentsUnsafe(dutySession.SegmentIds);
             completedPull = dutySession.Complete(endTime);
+            var openWorld = accumulatedMode == EncounterMode.OpenWorld;
             if (completedPull is not null)
             {
                 completedPull = CaptureFflogsEstimatesSafely(completedPull);
-                folderSnapshot = dutyFolder.Add(completedPull);
+                folderSnapshot = openWorld ? completedPull : dutyFolder.Add(completedPull);
             }
             else
             {
                 folderSnapshot = null;
             }
 
-            if (completeFolder)
+            if (completeFolder && !openWorld)
             {
                 folderSnapshot = dutyFolder.Complete() ?? folderSnapshot;
-                accumulatedMode = null;
             }
+            if (completeFolder || openWorld) accumulatedMode = null;
         }
 
         if (completedPull is not null)
@@ -570,8 +593,9 @@ public sealed class IinactAdapter : IParserEngine
     internal static bool CanAccumulateSegment(
         EncounterMode segmentMode,
         EncounterMode gameMode,
-        EncounterMode? currentAccumulatorMode)
-        => EncounterModePolicy.AccumulatesSegments(segmentMode) &&
+        EncounterMode? currentAccumulatorMode,
+        bool timedReset = false)
+        => (EncounterModePolicy.AccumulatesSegments(segmentMode) || timedReset) &&
            segmentMode == gameMode &&
            (currentAccumulatorMode is null || currentAccumulatorMode == segmentMode);
 

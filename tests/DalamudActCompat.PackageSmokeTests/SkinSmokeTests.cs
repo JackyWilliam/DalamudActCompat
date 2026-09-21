@@ -84,7 +84,7 @@ internal static class SkinSmokeTests
             "The next save or cold reload erased the restored discoveries.");
         reloaded.Appearance.SelectedSkin = SkinCatalog.Eorzea;
         Check(SkinCatalog.Resolve(reloaded.Appearance, true, 0) == SkinCatalog.Default &&
-              SkinCatalog.Resolve(reloaded.Appearance, true, 1) == SkinCatalog.Eorzea,
+              SkinCatalog.Resolve(reloaded.Appearance, true, 3) == SkinCatalog.Eorzea,
             "Restoring discovery data granted paid skin authority without the account entitlement.");
 
         await backups.RestoreEncryptedAsync(rollback, destinationPaths.ConfigDirectory,
@@ -168,7 +168,7 @@ internal static class SkinSmokeTests
         Check(config.Version == 17 && config.Meter.HorizontalWindow.BackgroundOpacity == 0, "Migration changed the old horizontal appearance.");
         Check(config.Appearance.UnlockedEasterEggs.Count == 0 && SkinCatalog.Resolve(config.Appearance, true, 0) == SkinCatalog.Default,
             "A local config or discovery list granted sponsor access.");
-        Check(SkinCatalog.Resolve(config.Appearance, false, 1) == SkinCatalog.Default && SkinCatalog.Resolve(config.Appearance, true, 1) == SkinCatalog.Eorzea,
+        Check(Enumerable.Range(0, 3).All(tier => SkinCatalog.Resolve(config.Appearance, true, tier) == SkinCatalog.Default) && SkinCatalog.Resolve(config.Appearance, false, 3) == SkinCatalog.Default && Enumerable.Range(3, 8).All(tier => SkinCatalog.Resolve(config.Appearance, true, tier) == SkinCatalog.Eorzea),
             "Sponsor authorization ignored the active account.");
         Check(config.Appearance.SelectedSkin == SkinCatalog.Eorzea, "Temporary loss of access destroyed the preferred skin.");
         var discoveries = new SkinDiscoveries();
@@ -275,7 +275,7 @@ internal static class SkinSmokeTests
             GlassCards(raster, output);
             var config = new PluginConfiguration();
             config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
-            var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(1) };
+            var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(3) };
             var text = new UiText(config); var logo = new EmptyTexture(); var drag = new WindowDragController();
             using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "act-logo.jpg")))
             {
@@ -376,7 +376,7 @@ internal static class SkinSmokeTests
             Check(config.Appearance.SelectedSkin == SkinCatalog.Default && saves == 1, "Locked sponsor preview granted a skin.");
             config.Appearance.UnlockedEasterEggs.Clear(); Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "skin-browser-locked.png"));
-            account = account with { Sponsor = new(1) };
+            account = account with { Sponsor = new(3) };
             config.Appearance.SelectedSkin = SkinCatalog.Eorzea;
             foreach (var language in new[] { "zh-CN", "en" })
             foreach (var scale in new[] { 1f, 1.4f })
@@ -468,7 +468,7 @@ internal static class SkinSmokeTests
     {
         var appearance = new UiSkinSettings { SelectedSkin = SkinCatalog.LiquidGlass };
         appearance.UnlockedEasterEggs.Add(SkinCatalog.LiquidGlass);
-        DactTheme.SetCurrent(appearance, true, 1);
+        DactTheme.SetCurrent(appearance, true, 3);
         using var gpu = Environment.GetEnvironmentVariable("DACT_TEST_GPU_GLASS") == "1" ? new LiquidGlassSmokeTests() : null;
         gpu?.Install(raster);
         // A uniform backdrop makes excess white stacking measurable independently
@@ -578,7 +578,7 @@ internal static class SkinSmokeTests
         foreach (var selfOnly in new[] { false, true })
         {
             config.Appearance.SelectedSkin = skin;
-            DactTheme.SetCurrent(config.Appearance, true, 1);
+            DactTheme.SetCurrent(config.Appearance, true, 3);
             config.Meter.ActivateWindow(kind);
             // The reported empty preview uses self-only mode and a 1.06 meter font.
             // Keep that mode active while exercising the actual footer hit target.
@@ -654,7 +654,7 @@ internal static class SkinSmokeTests
 
     private static void ButtonAlignment(NativeUiRasterizer raster, string? output)
     {
-        DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+        DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 3);
         var io = ImGui.GetIO();
         foreach (var scale in new[] { .85f, 1f, 1.4f })
         {
@@ -725,7 +725,7 @@ internal static class SkinSmokeTests
         foreach (var scale in new[] { .75f, 16f / 17, 1f, 1.4f })
         {
             io.FontGlobalScale = scale;
-            DactTheme.SetCurrent(new() { SelectedSkin = skin.Id, UnlockedEasterEggs = SkinCatalog.All.Where(s => s.EasterEgg).Select(s => s.Id).ToHashSet() }, true, 1);
+            DactTheme.SetCurrent(new() { SelectedSkin = skin.Id, UnlockedEasterEggs = SkinCatalog.All.Where(s => s.EasterEgg).Select(s => s.Id).ToHashSet() }, true, 3);
             Field("cloudQuickPopupRequested", true); Frame(); Frame(); Frame(); Frame();
             var fitted = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
             Check(!fitted.ScrollbarY && fitted.ScrollMax.Y == 0,
@@ -751,7 +751,7 @@ internal static class SkinSmokeTests
         foreach (var scale in new[] { 1f, 1.4f })
         {
             io.FontGlobalScale = scale;
-            DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+            DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 3);
             Field("cloudQuickPopupRequested", true); Frame(); Frame();
             var window = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
             Check(window.Pos.X >= 8 && window.Pos.Y >= 8 && window.Pos.X + window.Size.X <= io.DisplaySize.X - 8 &&
@@ -813,7 +813,7 @@ internal static class SkinSmokeTests
             foreach (var skin in SkinCatalog.All)
             {
                 config.Appearance.SelectedSkin = skin.Id;
-                DactTheme.SetCurrent(config.Appearance, true, 1);
+                DactTheme.SetCurrent(config.Appearance, true, 3);
                 Check(DactTheme.CurrentSkin == skin.Id, "Meter isolation fixture silently fell back to the default skin.");
                 // The live layer is outside PushFrame. An opaque inherited ChildBg
                 // additionally exercises the editor preview and custom host themes.
@@ -890,7 +890,7 @@ internal static class SkinSmokeTests
                 profile.BackgroundOpacity = 1;
             }
             config.Appearance.SelectedSkin = SkinCatalog.Eorzea;
-            DactTheme.SetCurrent(config.Appearance, true, 1);
+            DactTheme.SetCurrent(config.Appearance, true, 3);
             editor.Open();
             for (var i = 0; i < 3; i++)
             {

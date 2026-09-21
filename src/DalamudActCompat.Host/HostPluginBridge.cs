@@ -253,9 +253,9 @@ public static partial class HostPluginBridge
             StringComparer.Ordinal)
         {
             ["InitZone"] = ("0x032B", "0x032B"),
-            // No verified 7.56h FateInfo opcode is published. Keep the existing out-of-band
-            // placeholder for both regions; the old CN 0x00E9 now identifies Waymark.
-            ["FateInfo"] = ("0xF009", "0xF009"),
+            // Matcha upstream 3e4ecb4 verifies this value for CN and Global; the bundled
+            // SilverDasher table predates 7.56h and cannot safely be used unchanged.
+            ["FateInfo"] = ("0x0154", "0x0154"),
             ["ActorControlSelf"] = ("0x0204", "0x0204"),
         };
         var found = new HashSet<string>(StringComparer.Ordinal);
@@ -278,7 +278,7 @@ public static partial class HostPluginBridge
             return payload;
         }
 
-        root["version"] = "20260909";
+        root["version"] = "20260917";
         return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 

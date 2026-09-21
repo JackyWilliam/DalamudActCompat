@@ -182,6 +182,7 @@ public sealed class BundledActPluginManager
         CancellationToken cancellationToken)
     {
         var acknowledged = new List<BundledActPluginDescriptor>(selected.Count);
+        var firstInstalls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var plugin in selected)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -191,9 +192,12 @@ public sealed class BundledActPluginManager
                     string.Equals(
                         installed.Manifest.Id,
                         plugin.Id,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    IsCurrentPackage(installed, plugin));
+                        StringComparison.OrdinalIgnoreCase));
             if (current is null)
+            {
+                firstInstalls.Add(plugin.Id);
+            }
+            if (current is null || !IsCurrentPackage(current, plugin))
             {
                 var installSource = string.IsNullOrWhiteSpace(plugin.PackagePath)
                     ? plugin.AssemblyPath
@@ -234,7 +238,8 @@ public sealed class BundledActPluginManager
             {
                 configuration.BundledPluginDisclosureKeys[plugin.Id] =
                     GetDisclosureKey(plugin);
-                if (plugin.EnableAfterInstall)
+                // Refreshing resources must preserve a user's decision to disable a plugin.
+                if (plugin.EnableAfterInstall && firstInstalls.Contains(plugin.Id))
                 {
                     configuration.DisabledActPluginIds.Remove(plugin.Id);
                 }
@@ -435,7 +440,12 @@ public sealed class BundledActPluginManager
            string.Equals(
                installed.Manifest.SourceSha256,
                bundled.Sha256,
-               StringComparison.OrdinalIgnoreCase);
+               StringComparison.OrdinalIgnoreCase) &&
+           (string.IsNullOrWhiteSpace(bundled.PackageSha256) ||
+            string.Equals(
+                installed.Manifest.SourcePackageSha256,
+                bundled.PackageSha256,
+                StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<BundledActPluginDescriptor> LoadAndValidate(
         string bundleDirectory)

@@ -380,6 +380,18 @@ internal static class CloudFriendsSmokeTests
             }
             await Until(() => a.Snapshot.Conversations.ContainsKey(id) && b.Snapshot.Friends is not null);
             Check(a.Snapshot.Friends!.User?.Id == f.A.Id && b.Snapshot.Friends!.User?.Id == f.B.Id, "Controller account identities differ from authenticated users.");
+            var relationId = a.Snapshot.Friends.Friends.Single(friend => friend.User.Id == f.B.Id).Id;
+            var remarkOperation = a.SetRemark(relationId, "跨设备备注", a.Snapshot.Session, 0);
+            await Until(() => !a.Snapshot.Busy && a.Snapshot.LastSavedRemark == remarkOperation);
+            using (var otherDevice = new FriendsChatController(new RemoteSession(api, f.A),
+                new FriendsLocalStateStore(Path.Combine(root, "a-second-device")), TimeSpan.FromMilliseconds(50)))
+            {
+                await Until(() => otherDevice.Snapshot.Remarks.GetValueOrDefault(f.B.Id) == "跨设备备注");
+                Check(!b.Snapshot.Remarks.ContainsKey(f.A.Id), "Peer received another account's private remark.");
+                var clear = otherDevice.SetRemark(relationId, "", otherDevice.Snapshot.Session, 1);
+                await Until(() => !otherDevice.Snapshot.Busy && otherDevice.Snapshot.LastSavedRemark == clear);
+                await Until(() => !a.Snapshot.Remarks.ContainsKey(f.B.Id));
+            }
             var op = a.Send(id, "", CloudChatPolicy.InviteNext);
             await Until(() => !a.Snapshot.Busy && a.Snapshot.Conversations[id].PendingSend is null && a.Snapshot.Conversations[id].Chat.Pending.Any(m => m.OperationId == op));
             var waiting = await api.GetChatAsync(f.B.Token, id, default);
@@ -420,6 +432,7 @@ internal static class CloudFriendsSmokeTests
         public Task<CloudFriendRelation> AcceptFriendAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.AcceptFriendAsync(account.Token, id, ct));
         public Task<CloudFriendRelation> DeclineFriendAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.DeclineFriendAsync(account.Token, id, ct));
         public Task<CloudFriendRemoval> RemoveFriendAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.RemoveFriendAsync(account.Token, id, ct));
+        public Task<CloudFriendRemark> SetFriendRemarkAsync(string id, CloudFriendRemark remark, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.SetFriendRemarkAsync(account.Token, id, remark, ct));
         public Task<CloudChatSync> SyncChatAsync(CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.SyncChatAsync(account.Token, ct));
         public Task<CloudChatConversation> GetChatAsync(string id, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.GetChatAsync(account.Token, id, ct));
         public Task<CloudChatSendResult> SendChatAsync(string id, CloudChatSendRequest message, CancellationToken ct, CloudFriendsSession? expectedSession = null) => Run(expectedSession, () => api.SendChatAsync(account.Token, id, message, ct));

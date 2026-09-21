@@ -175,7 +175,7 @@ internal static partial class FriendsUiSmokeTests
         if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-chat-custom-header.png"));
         // Exercise the same custom header with the real Eorzea rim: it must not
         // cover the drag/close hit targets or reintroduce a native title bar.
-        DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+        DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 3);
         Frame(); Frame();
         if (DactTheme.GameAssets?.HasWindowTextures == true)
         {

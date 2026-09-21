@@ -68,6 +68,10 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly Func<bool> debugMode;
     private readonly Func<bool> parityDiagnosticsEnabled;
     private readonly Func<ParserScope> getParserScope;
+    private readonly Func<EncounterResetOptions> getEncounterResetOptions;
+    private readonly EncounterResetTimer statisticsResetTimer = new();
+    private readonly StatisticsEncounterSegments statisticsSegments = new();
+    private readonly object statisticsLifecycleLock = new();
     private readonly Func<IReadOnlyList<ActPlayerIdentity>> observedPlayerIdentities;
     private IReadOnlyList<ActPlayerIdentity> observedPlayerSnapshot = [];
     private readonly Dictionary<string, ActPlayerIdentity> parsedPlayerIdentities = new(StringComparer.OrdinalIgnoreCase);
@@ -171,7 +175,8 @@ public sealed class SelfHostedActRuntime : IDisposable
         Func<bool> parityDiagnosticsEnabled,
         Func<string, ActCapability, bool> permissionCheck,
         Func<ParserScope>? getParserScope = null,
-        Func<IReadOnlyList<ActPlayerIdentity>>? observedPlayerIdentities = null)
+        Func<IReadOnlyList<ActPlayerIdentity>>? observedPlayerIdentities = null,
+        Func<EncounterResetOptions>? getEncounterResetOptions = null)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
@@ -194,6 +199,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         this.debugMode = debugMode;
         this.parityDiagnosticsEnabled = parityDiagnosticsEnabled;
         this.getParserScope = getParserScope ?? (() => ParserScope.All);
+        this.getEncounterResetOptions = getEncounterResetOptions ?? (() => default);
         this.observedPlayerIdentities = observedPlayerIdentities ?? playerIdentities;
         effectiveDamageLedger = new EffectiveDamageLedger(IncludesParserEvent);
         encounterDurationTracker = new EncounterDurationTracker(IncludesParserEvent);
@@ -675,6 +681,14 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
+    public event Action<bool>? PluginCombatStateChanged;
+    public event Action<DateTimeOffset>? StatisticsReset;
+
+    private void DispatchEncounter(ActEncounterSnapshot snapshot, bool finished, bool statisticsOnly = false)
+    {
+        if (!statisticsOnly) PluginCombatStateChanged?.Invoke(finished);
+        EncounterChanged?.Invoke(snapshot, finished);
+    }
 
     public event Action<DateTimeOffset, string, string, bool>? RawLogLineReceived;
 
@@ -843,6 +857,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                 gameStateProvider);
             container.Register(httpClient);
             container.Register(new FileDialogManager());
+            container.Register<RainbowMage.OverlayPlugin.EventSources.ICactbotDirectoryPicker>(
+                new CactbotDirectoryPicker(current => cactbotSettings?.ChooseCactbotDirectory(current) ?? current));
             container.Register(pluginInterface);
 
             overlay = new RainbowMage.OverlayPlugin.PluginMain(
@@ -1857,6 +1873,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             raidDpsEstimator.Reset();
             effectiveDamageLedger.Reset();
             encounterDurationTracker.Reset();
+            statisticsResetTimer.Reset();
+            statisticsSegments.Reset();
             effectiveDamageEventCursor = 0;
             effectiveDamageEncounter = null;
             activeEncounter = null;
@@ -1912,6 +1930,11 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     private void OnBeforeLogLineRead(bool isImport, LogLineEventArgs logInfo)
+    {
+        lock (statisticsLifecycleLock) OnBeforeLogLineReadSerialized(isImport, logInfo);
+    }
+
+    private void OnBeforeLogLineReadSerialized(bool isImport, LogLineEventArgs logInfo)
     {
         RawLogLineReceived?.Invoke(
             new DateTimeOffset(logInfo.detectedTime),
@@ -2048,7 +2071,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         if (completedEncounter is not null)
         {
-            EncounterChanged?.Invoke(completedEncounter, true);
+            DispatchEncounter(completedEncounter, true);
         }
     }
 
@@ -2099,6 +2122,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         chatLastDamage = now;
+        statisticsResetTimer.ObserveActivity();
         chatEnemy = target;
         chatZone = zone;
         chatDamageTotals[actor] = chatDamageTotals.GetValueOrDefault(actor) + damage;
@@ -2249,12 +2273,12 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         if (activeChatEncounter is not null)
         {
-            EncounterChanged?.Invoke(activeChatEncounter, false);
+            DispatchEncounter(activeChatEncounter, false);
         }
 
         if (completedChatEncounter is not null)
         {
-            EncounterChanged?.Invoke(completedChatEncounter, true);
+            DispatchEncounter(completedChatEncounter, true);
         }
 
         if (transitionEncounterToPublish is not null)
@@ -2281,6 +2305,34 @@ public sealed class SelfHostedActRuntime : IDisposable
                 }
             }
         }
+
+        var resetAt = frameTime ?? DateTimeOffset.Now;
+        lock (statisticsLifecycleLock)
+        {
+            // Serialize the expiry decision with ACT actions so a hit arriving at
+            // the deadline cannot reopen the just-finalized statistics snapshot.
+            if (statisticsResetTimer.Observe(getEncounterResetOptions(), inCombat || localDeathWhilePartyContinues(), resetAt))
+                CompleteStatisticsSegment(resetAt);
+        }
+    }
+
+    private void CompleteStatisticsSegment(DateTimeOffset now)
+    {
+        lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
+        lock (encounterSync)
+        {
+            if (activeEncounter is { } encounter)
+            {
+                statisticsSegments.Cut(encounter, now);
+                PublishEncounter(encounter, finished: true, statisticsOnly: true);
+            }
+            else if (CreateChatEncounterSnapshot(true, gameStateProvider.Identities) is { } fallback)
+            {
+                DispatchEncounter(fallback, true, statisticsOnly: true);
+                ResetChatEncounterUnsafe();
+            }
+        }
+        StatisticsReset?.Invoke(now);
     }
 
     private ActEncounterSnapshot? CreateChatEncounterSnapshot(
@@ -2360,12 +2412,22 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnAfterCombatAction(bool isImport, CombatActionEventArgs action)
     {
+        lock (statisticsLifecycleLock) OnAfterCombatActionSerialized(isImport, action);
+    }
+
+    private void OnAfterCombatActionSerialized(bool isImport, CombatActionEventArgs action)
+    {
         if (isImport)
         {
             return;
         }
 
         var swing = action.combatAction;
+        lock (encounterSync)
+        {
+            swing = statisticsSegments.Map(swing);
+            if (swing is null) return;
+        }
         var identities = ObservedPlayers();
         var attackerIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Attacker);
         if (attackerIdentity is null &&
@@ -2439,6 +2501,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                 activeEncounterRelevantStart = actionTime;
             }
             lastRelevantCombatAction = actionTime;
+            statisticsResetTimer.ObserveActivity();
         }
 
         PublishEncounter(encounter, false);
@@ -2493,8 +2556,25 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void OnAfterCombatEnd(EncounterData encounter)
     {
+        lock (statisticsLifecycleLock) OnAfterCombatEndSerialized(encounter);
+    }
+
+    private void OnAfterCombatEndSerialized(EncounterData encounter)
+    {
+        // Finishing a private ACT view takes ActionDataLock internally. Keep the
+        // same lock order as PublishEncounter so concurrent snapshots cannot deadlock.
+        lock (ActGlobals.oFormActMain.AfterCombatActionDataLock)
         lock (encounterSync)
         {
+            var statisticsEncounter = statisticsSegments.Finish(encounter);
+            if (statisticsEncounter is null)
+            {
+                // The original ACT encounter may end after its statistics were
+                // reset. Its real lifecycle still belongs to the extension Host.
+                PluginCombatStateChanged?.Invoke(true);
+                return;
+            }
+            encounter = statisticsEncounter;
             if (!ReferenceEquals(activeEncounter, encounter))
             {
                 return;
@@ -2545,7 +2625,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         networkSentSubscribed = networkSentCaptureRequested;
     }
 
-    private void PublishEncounter(EncounterData encounter, bool finished)
+    private void PublishEncounter(EncounterData encounter, bool finished, bool statisticsOnly = false)
     {
         try
         {
@@ -2836,7 +2916,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
             if (snapshot is not null)
             {
-                EncounterChanged?.Invoke(snapshot, finished);
+                DispatchEncounter(snapshot, finished, statisticsOnly);
             }
         }
         catch (Exception ex)

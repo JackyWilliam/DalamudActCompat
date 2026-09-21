@@ -35,6 +35,8 @@ internal static class SkinCatalog
 {
     public const string Default = "default";
     public const string Eorzea = "eorzea";
+    // Entitlement and its UI copy share one threshold; local saved skins grant no access.
+    public const int EorzeaSponsorTier = 3;
     public const string Jade = "jade";
     public const string Amethyst = "amethyst";
     public const string Amber = "amber";
@@ -46,7 +48,7 @@ internal static class SkinCatalog
     public static IReadOnlyList<SkinDefinition> All { get; } =
     [
         new(Default, "深海原色", "Deep Ocean"),
-        new(Eorzea, "艾欧泽亚", "Eorzea", SponsorTier: 1),
+        new(Eorzea, "艾欧泽亚", "Eorzea", SponsorTier: EorzeaSponsorTier),
         new(Jade, "森之青玉", "Forest Jade", EasterEgg: true),
         new(Amethyst, "月下紫晶", "Moonlit Amethyst", EasterEgg: true),
         new(Amber, "暮光琥珀", "Twilight Amber", EasterEgg: true),

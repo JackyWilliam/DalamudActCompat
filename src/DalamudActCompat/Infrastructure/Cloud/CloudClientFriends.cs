@@ -91,6 +91,9 @@ internal sealed partial class CloudClientService
     public Task<CloudFriendRemoval> RemoveFriendAsync(string relationId, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
         => WithFriendSessionAsync((token, ct) => apiClient.RemoveFriendAsync(token, relationId, ct), cancellationToken, expectedSession);
 
+    public Task<CloudFriendRemark> SetFriendRemarkAsync(string relationId, CloudFriendRemark remark, CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
+        => WithFriendSessionAsync((token, ct) => apiClient.SetFriendRemarkAsync(token, relationId, remark, ct), cancellationToken, expectedSession);
+
     public Task<CloudChatSync> SyncChatAsync(CancellationToken cancellationToken, CloudFriendsSession? expectedSession = null)
         => WithFriendSessionAsync(apiClient.SyncChatAsync, cancellationToken, expectedSession);
 
