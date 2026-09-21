@@ -260,7 +260,7 @@ internal static class MeterDisplayScopeSmokeTests
             foreach (var scale in new[] { 1f, 1.4f })
             {
                 config.Appearance.SelectedSkin = skin; config.Appearance.UnlockedEasterEggs.Add(skin);
-                DactTheme.SetCurrent(config.Appearance, true, 1); io.FontGlobalScale = scale;
+                DactTheme.SetCurrent(config.Appearance, true, 3); io.FontGlobalScale = scale;
                 foreach (var mode in new[] { MeterDisplayScope.ParserScope, MeterDisplayScope.MeterSettings })
                 {
                     Frame(); Frame(); Click(combo); Frame();

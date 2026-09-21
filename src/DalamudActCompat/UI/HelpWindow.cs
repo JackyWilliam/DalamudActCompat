@@ -450,11 +450,14 @@ public sealed class HelpWindow : Window
                 "经典榜收起后只保留自己并隐藏全队汇总；职能分栏会分别收起到自己所在行（找不到自己时保留首行）。空数据时也可收起，收起不会停止统计。职业 / ID 会先缩到两字省略显示，只有继续缩小窗口才出现横向滚动；悬停可查看完整名称。玩家 ID 遮盖只影响界面，不会改写战斗日志。",
                 "Collapsed Classic keeps only your row and hides the team summary. Each role-split window collapses independently to your row, or its first row when you are absent. Empty windows can also collapse, without stopping collection. Job / ID shrinks to a two-character ellipsis before horizontal scrolling appears; hover for the full name. Player-ID masking affects only the UI and does not rewrite combat logs."));
             DrawBullet(text.Get(
-                "战斗结束后悬浮窗会保留上一把结果，方便继续查看；下一场出现有效战斗数据后会用新数据从 0 重新计算。普通脱战、阶段切换、击杀前置目标和 ACT 自动分段不会提前清零。副本内只有确认全队团灭后的重新开怪才开始新一把；手动重置会立即清空，并阻止旧总数在后续刷新中弹回。",
-                "Outside duties, the live meter clears after the party produces no relevant combat data for five seconds, so a party member pulling first no longer causes repeated resets while the local player is still out of combat. Duty statistics keep accumulating through ordinary combat exits, phase changes, defeated preliminary targets, and ACT segment boundaries. Only a confirmed party wipe makes the repull start from zero, including checkpoint restarts from an intermediate phase such as P2."));
+                "统计重置方式默认是“DACT默认”，保持原逻辑：副本内普通脱战、阶段切换和 ACT 自动分段继续累计，全队团灭或离本才结算。副本外结束后保留上一场结果，下一场出现有效数据时从零计算。",
+                "DACT default keeps the existing behavior: duty statistics accumulate through ordinary combat exits, phase changes and ACT segments, ending on a confirmed party wipe or duty exit. Outside duties the previous result stays visible until the next fight's data arrives."));
             DrawBullet(text.Get(
-                "历史记录以“一次副本进入”为一个可展开文件夹，里面每条子记录代表一次团灭前累计的完整战斗。团灭重开会在同一文件夹新增记录，但实时统计立即从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
-                "History stores one duty entry as an expandable folder, with each child representing the complete totals accumulated before a wipe. A wipe adds the repull to the same folder while the live meter resets immediately. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
+                "也可选择“脱战指定秒数后重置”，自行填写等待秒数（0–3600）。倒计时内重新进入战斗会取消重置；到期后保存本场统计并清空榜单。此设置不重启解析器，不向触发器或邮差额外发送战斗结束事件。手动重置会立即清空，并阻止旧总数在后续刷新中弹回。",
+                "Alternatively choose Reset after combat and enter 0–3600 seconds. Re-entering combat cancels the countdown; expiry saves the result and clears the meter. This does not restart the parser or send extra combat-end events to Triggernometry or PostNamazu. Manual reset clears immediately and prevents old totals from reappearing."));
+            DrawBullet(text.Get(
+                "历史记录以“一次副本进入”为一个可展开文件夹，每次团灭或脱战计时到期结算的统计各存为一条子记录，后续战斗从 0 开始；退出副本后关闭该文件夹，下次进本才新建文件夹。同一把的转阶段 ACT 片段只在内部合并。",
+                "History stores one duty entry as an expandable folder. Each wipe or timed reset saves one child record and the next fight starts from zero. Leaving the duty closes the folder, and phase-split ACT fragments within one pull are merged internally."));
             DrawBullet(text.Get(
                 "“重置当前战斗”需要二次确认，会结束并清空本把统计；同一底层战斗段的后续刷新不会把旧数据带回。已保存的历史和原始 Network 日志不会被删除。",
                 "Reset current encounter requires confirmation and closes and clears the current pull. Later refreshes from the same underlying combat segment cannot restore old totals. Saved history and raw Network logs are not deleted."));

@@ -349,7 +349,7 @@ internal static partial class FriendsUiSmokeTests
             {
                 // Capture the real friend drawer with synthetic users; no live
                 // account, messages or game input participate in this preview.
-                DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 1);
+                DactTheme.SetCurrent(new() { SelectedSkin = SkinCatalog.Eorzea }, true, 3);
                 io.DisplaySize = new(1440, 920);
                 Frame(); Frame();
                 raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-eorzea.png"));

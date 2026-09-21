@@ -28,7 +28,7 @@ internal static class SponsorIdentitySmokeTests
             foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
             foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Eorzea })
             {
-                DactTheme.SetCurrent(new() { SelectedSkin = skin }, true, 1);
+                DactTheme.SetCurrent(new() { SelectedSkin = skin }, true, 3);
                 io.FontGlobalScale = scale;
                 ImGui.NewFrame();
                 ImGui.SetNextWindowPos(new(12)); ImGui.SetNextWindowSize(new(656, 436));

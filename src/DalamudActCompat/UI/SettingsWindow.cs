@@ -127,6 +127,7 @@ public sealed class SettingsWindow : Window
         WindowName = text.Get("ACT 兼容设置###DalamudActCompatSettings", "ACT Compat Settings###DalamudActCompatSettings");
         GameRegionSelector.Draw(text, getGameRegionSelection(), setGameRegionMode);
         changed |= ParserScopeSelector.Draw(text, configuration);
+        changed |= EncounterResetSelector.Draw(text, configuration);
         changed |= Checkbox(text.Get("启用解析", "Enable parsing"), configuration.EnableParsing, value => configuration.EnableParsing = value);
         changed |= Checkbox(text.Get("自动启动解析器", "Auto start parser"), configuration.AutoStartParser, value => configuration.AutoStartParser = value);
         changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);

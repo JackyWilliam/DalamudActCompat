@@ -367,7 +367,7 @@ internal static class ParserScopeSmokeTests
             foreach (var scale in new[] { 1f, 1.4f })
             {
                 config.Appearance.SelectedSkin = skin; config.Appearance.UnlockedEasterEggs.Add(skin);
-                DactTheme.SetCurrent(config.Appearance, true, 1); io.FontGlobalScale = scale;
+                DactTheme.SetCurrent(config.Appearance, true, 3); io.FontGlobalScale = scale;
                 foreach (var scope in new[] { ParserScope.Auto, ParserScope.Self, ParserScope.Party, ParserScope.Alliance, ParserScope.All })
                 {
                     Frame(); Frame(); Click(combo); Frame();

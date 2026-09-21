@@ -51,6 +51,15 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--directory-reset-only", StringComparer.Ordinal))
+    {
+        await CactbotDirectorySmokeTests.RunAsync(testRoot);
+        EncounterResetSmokeTests.Run();
+        await EncounterResetSmokeTests.AdapterAsync(testRoot);
+        EncounterResetUiSmokeTests.Run();
+        SkinSmokeTests.Run();
+        return 0;
+    }
     TeamDpsSmokeTests.Run();
     AllianceRosterSmokeTests.Run();
     if (args.Contains("--alliance-roster-only", StringComparer.Ordinal)) return 0;
@@ -224,6 +233,9 @@ try
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
     await ValidatePortableConfigurationArchiveAsync(testRoot);
+    await CactbotDirectorySmokeTests.RunAsync(testRoot);
+    EncounterResetSmokeTests.Run();
+    await EncounterResetSmokeTests.AdapterAsync(testRoot);
     await SkinSmokeTests.CloudAsync(testRoot);
     await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
     await ValidateEncryptedConfigurationBackupAsync(testRoot);
@@ -10388,7 +10400,7 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
         helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
         helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("战斗结束后悬浮窗会保留上一把结果", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("副本外结束后保留上一场结果", StringComparison.Ordinal) &&
         helpWindowSource.Contains("手动重置会立即清空", StringComparison.Ordinal) &&
         helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
         helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
