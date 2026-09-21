@@ -4,6 +4,21 @@ The bundled `Cafe.Matcha.dll` is built from upstream commit
 `6cf242b59475aa77e4c2deee61e1b9191be5ba13` under AGPL-3.0, with only the
 changes recorded in `dact-compat.patch`.
 
+Package revision **DACT4** keeps those binaries unchanged and replaces only
+`data/dynamic-event.json`, `data/fate.json`, `data/instance.json`, and `data/world.json`
+with their exact upstream bytes from
+[`3e4ecb486d20a801a3e537dde71807320c4a26ca`](https://github.com/thewakingsands/matcha/tree/3e4ecb486d20a801a3e537dde71807320c4a26ca).
+The only C# difference between that revision and the DLL's source is the opcode
+table, which the Host already replaces in memory. The Host now also applies
+the newly verified FateInfo `0x0154` and WorldVisitQueue `0x01E8` for both regions.
+This keeps the tested compatibility bridge and runtime constants intact.
+
+`Cafe.Matcha-26.8.12.1622-dact4.zip` SHA-256:
+`e9bbe09870dd3102603342d972ed8e1fd06637449e8e15de6ff6992f7905639f`.
+To reproduce its contents, take the preceding DACT3 package and replace only
+those four files under `Plugins/Cafe.Matcha/data/`. The displayed DLL version
+remains `26.8.12.1622`; archive identity distinguishes the data refresh.
+
 The patch adds a small reflection bridge used only when the DLL runs in the
 dedicated DalamudActCompat Host. Configuration and bundled data stay confined
 to their assigned roots; import/export may access only a JSON file explicitly

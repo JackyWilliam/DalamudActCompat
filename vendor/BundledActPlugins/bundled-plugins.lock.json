@@ -1,4 +1,4 @@
-﻿{
+{
     "schemaVersion":  1,
     "plugins":  [
                     {
@@ -82,8 +82,8 @@
                         "licenseFile":  "matcha/LICENSE.txt",
                         "relativeAssembly":  "Plugins/Cafe.Matcha/Cafe.Matcha.dll",
                         "sha256":  "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa",
-                        "relativePackage":  "matcha/Cafe.Matcha-26.8.12.1622-dact3.zip",
-                        "packageSha256":  "da2037d3fb75914fd980f72978debf83fc761f693adfff939dbf386f0196a89b",
+                        "relativePackage":  "matcha/Cafe.Matcha-26.8.12.1622-dact4.zip",
+                        "packageSha256":  "e9bbe09870dd3102603342d972ed8e1fd06637449e8e15de6ff6992f7905639f",
                         "disableOnlineUpdates":  true,
                         "enableAfterInstall":  true
                     }

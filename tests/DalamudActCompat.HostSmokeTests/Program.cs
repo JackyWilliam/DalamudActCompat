@@ -143,7 +143,7 @@ var matchaPackage = Path.Combine(
     "vendor",
     "BundledActPlugins",
     "matcha",
-    "Cafe.Matcha-26.8.12.1622-dact3.zip");
+    "Cafe.Matcha-26.8.12.1622-dact4.zip");
 if (File.Exists(matchaPackage))
 {
     ValidateMatchaAssemblyContract(matchaPackage);
@@ -3532,6 +3532,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
             [0x01FD] = "EventPlay",
             [0x02E1] = "EventStart",
             [0x01F2] = "Examine",
+            [0x0154] = "FateInfo",
             [0x032B] = "InitZone",
             [0x023A] = "InventoryTransaction",
             [0x0084] = "ItemInfo",
@@ -3543,6 +3544,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
             [0x0093] = "PlayerSetup",
             [0x01C4] = "PlayerSpawn",
             [0x038A] = "SubmarineStatusList",
+            [0x01E8] = "WorldVisitQueue",
         };
         foreach (var region in new[] { "Global", "China" })
         {
@@ -3633,7 +3635,79 @@ void ValidateMatchaAssemblyContract(string packagePath)
             ],
             "Matcha's real native-toast entry point did not preserve world/duty event kinds on the typed Host notification route.");
 
+        ValidateMatchaEventPackets(loadedAssembly);
         context.Unload();
+    }
+}
+
+static void ValidateMatchaEventPackets(Assembly assembly)
+{
+    // Config's initializer needs ACT's directory even though this probe neither loads nor
+    // saves settings. Supply that field without starting ACT's UI or queue threads.
+    var originalAct = ActGlobals.oFormActMain;
+    var act = (FormActMain)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(FormActMain));
+    act.AppDataFolder = new DirectoryInfo(Path.GetTempPath());
+    ActGlobals.oFormActMain = act;
+    var config = assembly.GetType("Cafe.Matcha.Config", true)!.GetProperty("Instance")!.GetValue(null)!;
+    var regionProperty = config.GetType().GetProperty("Region")!;
+    var regionType = assembly.GetType("Cafe.Matcha.Constant.Region", true)!;
+    var packetType = assembly.GetType("Cafe.Matcha.Network.Packet", true)!;
+    var senderType = packetType.GetNestedType("PacketSender")!;
+    var monitorType = assembly.GetType("Cafe.Matcha.Network.NetworkMonitor", true)!;
+    var monitor = Activator.CreateInstance(monitorType)!;
+    var handle = monitorType.GetMethod("HandleMessageByOpcode", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    var stateType = assembly.GetType("Cafe.Matcha.Network.State", true)!;
+    var state = stateType.BaseType!.GetProperty("Instance")!.GetValue(null)!;
+    var fates = stateType.GetField("Fate")!.GetValue(state)!;
+    // Verify parsing without starting upstream telemetry/network workers.
+    fates.GetType().GetField("OnChanged", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(fates, null);
+    var queueType = assembly.GetType("Cafe.Matcha.Network.Handler.QueueHandler", true)!;
+    var events = new List<object>();
+    Action<object> receive = events.Add;
+    var queue = queueType.GetConstructors().Single().Invoke([receive]);
+    var originalRegion = regionProperty.GetValue(config);
+    try
+    {
+        foreach (var region in new[] { "China", "Global" })
+        {
+            regionProperty.SetValue(config, Enum.Parse(regionType, region));
+            object Packet(ushort opcode, uint first, uint second, uint third, bool client = false)
+            {
+                var bytes = new byte[56];
+                BitConverter.GetBytes(opcode).CopyTo(bytes, 18);
+                BitConverter.GetBytes(first).CopyTo(bytes, 32);
+                BitConverter.GetBytes(second).CopyTo(bytes, 40);
+                BitConverter.GetBytes(third).CopyTo(bytes, 48);
+                return Activator.CreateInstance(packetType, Enum.Parse(senderType, client ? "Client" : "Server"), bytes)!;
+            }
+            fates.GetType().GetMethod("Clear")!.Invoke(fates, null);
+            var fate = Packet(0x0154, 1234, 1700000000, 900);
+            Assert(handle.Invoke(monitor, [fate]) is true, $"Matcha {region} did not route FateInfo.");
+            var parsed = fates.GetType().GetProperty("Item")!.GetValue(fates, [1234u])!;
+            Assert((uint)parsed.GetType().GetField("StartTime")!.GetValue(parsed)! == 1700000000 &&
+                (uint)parsed.GetType().GetField("Duration")!.GetValue(parsed)! == 900,
+                $"Matcha {region} lost FATE time/duration.");
+            var visit = Packet(0x01E8, 1, 45, 0);
+            var bytes = (byte[])packetType.GetField("Bytes")!.GetValue(visit)!;
+            BitConverter.GetBytes(7u).CopyTo(bytes, 36);
+            events.Clear();
+            Assert(queueType.GetMethod("Handle")!.Invoke(queue, [visit]) is true && events.Count == 1,
+                $"Matcha {region} did not dispatch WorldVisitQueue.");
+            var payload = events.Single();
+            Assert((string)payload.GetType().GetField("Stage")!.GetValue(payload)! == "waiting" &&
+                (uint)payload.GetType().GetField("Order")!.GetValue(payload)! == 7 &&
+                (uint)payload.GetType().GetField("Time")!.GetValue(payload)! == 45,
+                $"Matcha {region} lost queue position/wait time.");
+            Assert(packetType.GetField("Known")!.GetValue(Packet(0x0154, 0, 0, 0, client: true)) is false &&
+                packetType.GetField("Known")!.GetValue(Packet(0xF009, 0, 0, 0)) is false &&
+                packetType.GetField("Known")!.GetValue(Packet(0x00E9, 0, 0, 0)) is false,
+                $"Matcha {region} accepted a stale or wrong-direction event opcode.");
+        }
+    }
+    finally
+    {
+        regionProperty.SetValue(config, originalRegion);
+        ActGlobals.oFormActMain = originalAct;
     }
 }
 
@@ -4035,11 +4109,11 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         .Children<JObject>()
         .ToDictionary(item => item.Value<string>("name")!, StringComparer.Ordinal);
     Assert(
-        normalizedOpcodePayload.Value<string>("version") == "20260909" &&
+        normalizedOpcodePayload.Value<string>("version") == "20260917" &&
         normalizedOpcodes["InitZone"].Value<string>("cn") == "0x032B" &&
         normalizedOpcodes["InitZone"].Value<string>("global") == "0x032B" &&
-        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0xF009" &&
-        normalizedOpcodes["FateInfo"].Value<string>("global") == "0xF009" &&
+        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x0154" &&
+        normalizedOpcodes["FateInfo"].Value<string>("global") == "0x0154" &&
         normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x0204" &&
         normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x0204",
         "SilverDasher opcode data was not normalized to Chinese / Global 7.56.");

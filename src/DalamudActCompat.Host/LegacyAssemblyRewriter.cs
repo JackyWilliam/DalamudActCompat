@@ -177,6 +177,7 @@ public static partial class LegacyAssemblyRewriter
             [0x01FD] = "EventPlay",
             [0x02E1] = "EventStart",
             [0x01F2] = "Examine",
+            [0x0154] = "FateInfo",
             [0x032B] = "InitZone",
             [0x023A] = "InventoryTransaction",
             [0x0084] = "ItemInfo",
@@ -188,12 +189,13 @@ public static partial class LegacyAssemblyRewriter
             [0x0093] = "PlayerSetup",
             [0x01C4] = "PlayerSpawn",
             [0x038A] = "SubmarineStatusList",
+            [0x01E8] = "WorldVisitQueue",
         };
 
         // FFXIVOpcodes 7.56h publishes matching CN/Global tables. The bundled
         // Matcha tables predate this patch; update both without changing its public ABI.
-        // FateInfo and WorldVisitQueue are not published in the verified 7.56h table.
-        // Omitting them is safer than retaining stale keys that now identify other packets.
+        // Matcha upstream 3e4ecb4 (2026-09-17) also verifies FateInfo/WorldVisitQueue
+        // for both regions; replacing the tables removes their obsolete keys as well.
         foreach (var region in new[] { "Global", "China" })
         {
             var field = storageType.GetField(region, BindingFlags.Public | BindingFlags.Static)
