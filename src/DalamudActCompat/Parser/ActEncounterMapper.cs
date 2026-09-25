@@ -23,6 +23,7 @@ public static class ActEncounterMapper
             combatants, Array.Empty<DamageEvent>(), Array.Empty<HealEvent>(),
             Array.Empty<DeathEvent>(), Array.Empty<ActionSummary>(), jobs)
         {
+            TimeAnchor = source.TimeAnchor,
             CombatDuration = source.CombatDuration,
             IsTransitioning = source.IsTransitioning,
             PartyCapacity = Math.Max(0, source.PartyCapacity),

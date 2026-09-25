@@ -7,6 +7,7 @@ internal sealed partial class CloudClientService
     private readonly SharedAccountStore? sharedAccountStore;
     private long sharedRevision;
     private long operationSharedRevision;
+    private SharedAuthenticationState? operationSharedAuthentication;
     private int sharedMonitorStarted;
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -31,10 +32,18 @@ internal sealed partial class CloudClientService
         }
         catch (Exception ex)
         {
-            DropLocalSharedSession("共用登录暂不可用：" + ex.GetBaseException().Message);
+            DropLocalSharedSession(SharedAccountFailureMessage(ex));
         }
         finally
         {
+            // A remembered legacy token marks startup busy before the shared file
+            // is read. A failed read never enters FinishOperation; release that
+            // startup state without clearing another operation's busy flag.
+            if (operationGate.Wait(0))
+            {
+                try { SetSnapshot(Snapshot with { IsBusy = false }); }
+                finally { operationGate.Release(); }
+            }
             if (Interlocked.Exchange(ref sharedMonitorStarted, 1) == 0)
                 lock (monitorLock) monitorTasks.Add(Task.Run(() => MonitorSharedAccountAsync(monitorShutdown.Token)));
         }
@@ -53,9 +62,14 @@ internal sealed partial class CloudClientService
                     await ImportSharedAccountAsync(shared, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
-            catch (Exception ex) { DropLocalSharedSession("共用登录同步失败：" + ex.GetBaseException().Message); }
+            catch (Exception ex) { DropLocalSharedSession(SharedAccountFailureMessage(ex)); }
         }
     }
+
+    private static string SharedAccountFailureMessage(Exception error)
+        => SharedAccountStore.IsUnreadable(error)
+            ? "本机共用登录状态已失效，请重新登录。"
+            : "共用登录同步失败：" + error.GetBaseException().Message;
 
     private async Task ImportSharedAccountAsync(SharedAccountState shared, CancellationToken cancellationToken)
     {

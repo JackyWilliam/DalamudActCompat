@@ -13,6 +13,11 @@ public sealed record Encounter(
     IReadOnlyList<ActionSummary> ActionSummaries,
     IReadOnlyList<JobSummary> JobSummaries)
 {
+    // Process timestamps must never be persisted or reused after a restart.
+    [System.Text.Json.Serialization.JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
+    public DalamudActCompat.ActRuntime.EncounterTimeAnchor? TimeAnchor { get; init; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     public Encounter? FflogsRankingEncounter { get; init; }
 
@@ -38,7 +43,7 @@ public sealed record Encounter(
     {
         get
         {
-            var elapsed = (EndTime ?? DateTimeOffset.UtcNow) - StartTime;
+            var elapsed = (EndTime ?? TimeAnchor?.Now ?? DateTimeOffset.UtcNow) - StartTime;
             // ACT timestamps and the local wall clock can briefly disagree after a pull
             // resumes. A duration is elapsed time, so exposing a negative value is invalid.
             return elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed;

@@ -243,7 +243,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 registrationMessage,
                 authentication.PersistenceWarning is not null,
                 recoveryKey);
-        }, cancellationToken);
+        }, cancellationToken, authenticate: true);
 
     public Task LoginAsync(
         string username,
@@ -323,7 +323,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 invitations,
                 loginMessage,
                 loginWarning is not null);
-        }, cancellationToken);
+        }, cancellationToken, authenticate: true);
 
     public Task ResetPasswordAsync(
         string username,
@@ -384,7 +384,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 invitations,
                 resetMessage,
                 authentication.PersistenceWarning is not null);
-        }, cancellationToken);
+        }, cancellationToken, authenticate: true);
 
     public Task LogoutAsync(CancellationToken cancellationToken)
         => RunExclusiveAsync("正在退出登录…", async token =>
@@ -705,9 +705,10 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
     private async Task RunExclusiveAsync(
         string operationMessage,
         Func<CancellationToken, Task> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool authenticate = false)
     {
-        if (!await TryBeginOperationAsync(operationMessage, cancellationToken).ConfigureAwait(false))
+        if (!await TryBeginOperationAsync(operationMessage, cancellationToken, authenticate).ConfigureAwait(false))
         {
             return;
         }
@@ -766,7 +767,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
 
     private async Task<bool> TryBeginOperationAsync(
         string message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool authenticate = false)
     {
         if (!await operationGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
@@ -776,7 +778,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         {
             // A revoked token may invalidate locally before the next shared-store poll.
             // An explicit new login starts against the actual current shared revision.
-            operationSharedRevision = sharedAccountStore?.Read().Revision ?? sharedRevision;
+            operationSharedAuthentication = authenticate ? sharedAccountStore?.PrepareAuthentication() : null;
+            operationSharedRevision = operationSharedAuthentication?.Revision ?? sharedAccountStore?.Read().Revision ?? sharedRevision;
             SetSnapshot(Snapshot with
             {
                 IsBusy = true,
@@ -861,7 +864,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             recoveryKey);
         if (sharedAccountStore is not null)
         {
-            var published = sharedAccountStore.Publish(operationSharedRevision,
+            var published = sharedAccountStore.PublishAuthenticated(
+                operationSharedAuthentication ?? new SharedAuthenticationState(operationSharedRevision),
                 ToSharedAccount(saved), rememberLogin);
             Interlocked.Exchange(ref sharedRevision, published.Revision);
         }
