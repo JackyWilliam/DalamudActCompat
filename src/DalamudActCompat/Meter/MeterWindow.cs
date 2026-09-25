@@ -61,6 +61,7 @@ public sealed class MeterWindow : Window
     private float heightAnimationElapsedSeconds;
     private float heightAnimationStart;
     private float heightAnimationTarget;
+    private float? submittedWindowHeight;
     private bool locateOnNextDraw;
     private long locatePreviewExpiresAt;
 
@@ -195,6 +196,7 @@ public sealed class MeterWindow : Window
         var encounter = meterService.DisplayEncounter;
         using var fontScale = new FontScaleScope(settings.FontScale);
 
+        submittedWindowHeight = null;
         AdvanceWindowHeightAnimation();
         SynchronizeCompactMode(settings);
         if (!settings.EffectiveClassicCompact)
@@ -732,7 +734,9 @@ public sealed class MeterWindow : Window
             return;
         }
 
-        var currentHeight = ImGui.GetWindowSize().Y;
+        // SetWindowSize updates ImGui's next size; GetWindowSize still reports the
+        // frame's old size. Reusing it here restarts a just-completed animation.
+        var currentHeight = submittedWindowHeight ?? ImGui.GetWindowSize().Y;
         if (!float.IsFinite(currentHeight) ||
             Math.Abs(currentHeight - targetHeight) <= 0.5f)
         {
@@ -776,6 +780,7 @@ public sealed class MeterWindow : Window
 
         var currentSize = ImGui.GetWindowSize();
         ImGui.SetWindowSize(new Vector2(currentSize.X, height), ImGuiCond.Always);
+        submittedWindowHeight = height;
     }
 
     private void DrawCompactModeToggle(

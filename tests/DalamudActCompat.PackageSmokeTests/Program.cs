@@ -51,6 +51,8 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    await FeedbackRegressionSmokeTests.RunAsync(testRoot, args.Contains("--feedback-regression-only", StringComparer.Ordinal));
+    if (args.Contains("--feedback-regression-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--directory-reset-only", StringComparer.Ordinal))
     {
         await CactbotDirectorySmokeTests.RunAsync(testRoot);

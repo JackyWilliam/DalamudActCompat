@@ -84,6 +84,7 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly RaidDpsEstimator raidDpsEstimator;
     private readonly EffectiveDamageLedger effectiveDamageLedger;
     private readonly EncounterDurationTracker encounterDurationTracker;
+    private readonly EncounterEventClock eventClock = new();
     private int effectiveDamageEventCursor;
     private EncounterData? effectiveDamageEncounter;
     private readonly FflogsParityDiagnosticRecorder parityDiagnosticRecorder = new();
@@ -686,6 +687,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     private void DispatchEncounter(ActEncounterSnapshot snapshot, bool finished, bool statisticsOnly = false)
     {
+        snapshot = snapshot with { TimeAnchor = eventClock.Capture() };
         if (!statisticsOnly) PluginCombatStateChanged?.Invoke(finished);
         EncounterChanged?.Invoke(snapshot, finished);
     }
@@ -1873,6 +1875,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             raidDpsEstimator.Reset();
             effectiveDamageLedger.Reset();
             encounterDurationTracker.Reset();
+            eventClock.Reset();
             statisticsResetTimer.Reset();
             statisticsSegments.Reset();
             effectiveDamageEventCursor = 0;
@@ -1945,6 +1948,9 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             return;
         }
+
+        if (EncounterEventClock.IsNetworkEvent(logInfo.originalLogLine))
+            eventClock.Observe(new DateTimeOffset(logInfo.detectedTime));
 
         if (parityDiagnosticsEnabled())
         {
@@ -2097,6 +2103,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         if (!IncludesParserEvent(actor, target)) return null;
 
+        // Chat-only damage can create a fallback encounter without an ACT swing.
+        eventClock.Observe(now);
+
         ActEncounterSnapshot? completedEncounter = null;
         if (chatEncounterId == Guid.Empty || now - chatLastDamage > TimeSpan.FromSeconds(30))
         {
@@ -2210,7 +2219,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             // Production samples time after acquiring the encounter lock; replay tests
             // supply a frame time so grace boundaries do not depend on machine speed.
-            var now = frameTime ?? DateTimeOffset.Now;
+            var now = frameTime ?? eventClock.Now;
             if (chatEncounterId != Guid.Empty && chatLastDamage != default)
             {
                 chatEncounterObservedInCombat |= inCombat;
@@ -2301,12 +2310,12 @@ public sealed class SelfHostedActRuntime : IDisposable
                         : "Failed to end the local open-world ACT encounter.");
                 lock (encounterSync)
                 {
-                    lastRelevantCombatAction = DateTimeOffset.Now;
+                    lastRelevantCombatAction = eventClock.Now;
                 }
             }
         }
 
-        var resetAt = frameTime ?? DateTimeOffset.Now;
+        var resetAt = frameTime ?? eventClock.Now;
         lock (statisticsLifecycleLock)
         {
             // Serialize the expiry decision with ACT actions so a hit arriving at
@@ -2346,7 +2355,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         var elapsedSeconds = Math.Max(
             1,
-            ((finished ? chatLastDamage : DateTimeOffset.Now) - chatEncounterStart).TotalSeconds);
+            ((finished ? chatLastDamage : eventClock.Now) - chatEncounterStart).TotalSeconds);
         var combatants = chatDamageTotals
             .Select(pair =>
             {
@@ -2453,8 +2462,9 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         var victimIdentity = ActPlayerIdentityResolver.Resolve(identities, swing.Victim);
         var actionTime = swing.Time == default
-            ? DateTimeOffset.Now
+            ? eventClock.Now
             : new DateTimeOffset(swing.Time);
+        eventClock.Observe(actionTime);
         lock (encounterSync)
         {
             if (!ReferenceEquals(effectiveDamageEncounter, encounter))
@@ -2667,7 +2677,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         if (activeEncounterRelevantStart == default)
                         {
                             activeEncounterRelevantStart = encounter.StartTime == DateTime.MaxValue
-                                ? DateTimeOffset.Now
+                                ? eventClock.Now
                                 : new DateTimeOffset(encounter.StartTime);
                         }
                         if (!continuesChatEncounter)
@@ -2679,17 +2689,17 @@ public sealed class SelfHostedActRuntime : IDisposable
 
                     var startTime = activeEncounterRelevantStart == default
                         ? encounter.StartTime == DateTime.MaxValue
-                            ? DateTimeOffset.Now
+                            ? eventClock.Now
                             : new DateTimeOffset(encounter.StartTime)
                         : activeEncounterRelevantStart;
                     DateTimeOffset? endTime = finished
                         ? lastRelevantCombatAction == default
                             ? encounter.EndTime == DateTime.MinValue
-                                ? DateTimeOffset.Now
+                                ? eventClock.Now
                                 : new DateTimeOffset(encounter.EndTime)
                             : lastRelevantCombatAction
                         : null;
-                    var measurementEndTime = endTime ?? DateTimeOffset.Now;
+                    var measurementEndTime = endTime ?? eventClock.Now;
                     var damageMetricDuration = encounterDurationTracker
                         .ResolveDamageMetricDurationSeconds(
                             measurementEndTime,

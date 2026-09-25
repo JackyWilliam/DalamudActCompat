@@ -209,7 +209,7 @@ public sealed class IinactAdapter : IParserEngine
         lock (encounterModeTransitionLock)
         {
             encounterCallbacksSuppressed = true;
-            FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: true);
+            FinalizeAccumulatedEncounter(dutySession.CurrentTime, completeFolder: true);
         }
         try
         {
@@ -402,7 +402,7 @@ public sealed class IinactAdapter : IParserEngine
                 displayEncounter = dutySession.Update(
                     encounter,
                     finished,
-                    DateTimeOffset.UtcNow,
+                    encounter.TimeAnchor?.Now ?? DateTimeOffset.UtcNow,
                     snapshot.CurrentPartyMemberIds,
                     snapshot.PartyCapacity);
             }
@@ -413,7 +413,7 @@ public sealed class IinactAdapter : IParserEngine
             // Disabling timed reset outdoors returns to normal ACT boundaries
             // after the current segment, without resurrecting earlier totals.
             if (finished && segmentMode == EncounterMode.OpenWorld && !timedReset)
-                FinalizeAccumulatedEncounter(encounter.EndTime ?? DateTimeOffset.UtcNow, completeFolder: true);
+                FinalizeAccumulatedEncounter(encounter.EndTime ?? dutySession.CurrentTime, completeFolder: true);
             return;
         }
 
@@ -498,7 +498,7 @@ public sealed class IinactAdapter : IParserEngine
             accumulatedMode == EncounterMode.OpenWorld &&
             (previousGameState.Mode != gameState.Mode || previousGameState.TerritoryId != gameState.TerritoryId))
         {
-            FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: true);
+            FinalizeAccumulatedEncounter(dutySession.CurrentTime, completeFolder: true);
         }
 
         if (gameState.Mode == EncounterMode.DutyAttempt)
@@ -514,7 +514,7 @@ public sealed class IinactAdapter : IParserEngine
             {
                 // Only an observed all-party death creates the next pull. Ordinary combat
                 // flag drops keep accumulating exactly like the original meter behavior.
-                FinalizeAccumulatedEncounter(DateTimeOffset.UtcNow, completeFolder: false);
+                FinalizeAccumulatedEncounter(dutySession.CurrentTime, completeFolder: false);
             }
             return;
         }

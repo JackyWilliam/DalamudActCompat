@@ -23,6 +23,8 @@ internal sealed class DutyEncounterAccumulator
 
     public bool HasData => latestSegment is not null || completedCombatants.Count > 0;
 
+    public DateTimeOffset CurrentTime => latestSegment?.TimeAnchor?.Now ?? DateTimeOffset.UtcNow;
+
     public string ZoneName => zoneName;
 
     public IReadOnlyCollection<Guid> SegmentIds => segmentIds;
@@ -265,6 +267,7 @@ internal sealed class DutyEncounterAccumulator
             // FFLogs comparisons must use a concrete ACT record, never the pull folder
             // aggregate that can span several phase records.
             FflogsRankingEncounter = activeSegment ?? latestSegment,
+            TimeAnchor = (activeSegment ?? latestSegment)?.TimeAnchor,
             TerritoryId = territoryId,
             IsTransitioning = (activeSegment ?? latestSegment)?.IsTransitioning == true,
             PartyCapacity = partyCapacity,

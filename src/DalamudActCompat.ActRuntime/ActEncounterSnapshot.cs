@@ -8,6 +8,8 @@ public sealed record ActEncounterSnapshot(
     string EnemyName,
     IReadOnlyList<ActCombatantSnapshot> Combatants)
 {
+    public EncounterTimeAnchor? TimeAnchor { get; init; }
+
     public TimeSpan? CombatDuration { get; init; }
 
     public bool IsTransitioning { get; init; }
