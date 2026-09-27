@@ -56,10 +56,10 @@ internal sealed class FriendsIncomingNotifications
         return incoming.Count > 0;
     }
 
-    internal static IReadOnlyList<string> Replies(CloudChatMessage message) => message.Sender.IsOfficial ? [] : message.QuickMessageId switch
+    internal static IReadOnlyList<string> Replies(CloudChatMessage message, UiText? text = null) => message.Sender.IsOfficial ? [] : message.QuickMessageId switch
     {
-        CloudChatPolicy.InviteNext => ["好，下把叫你", "这次不方便"],
-        CloudChatPolicy.WhenFinished => ["快结束了", "还要一会儿"],
+        CloudChatPolicy.InviteNext => [text?.Get("好，下把叫你", "Sure, next time") ?? "好，下把叫你", text?.Get("这次不方便", "Not this time") ?? "这次不方便"],
+        CloudChatPolicy.WhenFinished => [text?.Get("快结束了", "Almost done") ?? "快结束了", text?.Get("还要一会儿", "A little longer") ?? "还要一会儿"],
         _ => [],
     };
 }

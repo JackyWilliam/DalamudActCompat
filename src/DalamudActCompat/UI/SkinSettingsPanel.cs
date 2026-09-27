@@ -167,7 +167,9 @@ internal sealed class SkinSettingsPanel
         DrawPreview(Discovered(skin, settings) ? skin.Id : null, ImGui.GetCursorScreenPos(), size, text, false);
         ImGui.Dummy(size);
         ImGui.Spacing();
-        ImGui.TextWrapped(Discovered(skin, settings) && skin.Id == SkinCatalog.LiquidGlass
+        ImGui.TextWrapped(Discovered(skin, settings) && skin.Id == SkinCatalog.RainyWindow
+            ? text.Get("灰蓝雨窗，朦胧景色映在水珠里，偶有雨滴沿着玻璃滑落。", "A blue-gray window with a misty view, refracting droplets and slow trails down the glass.")
+            : Discovered(skin, settings) && skin.Id == SkinCatalog.LiquidGlass
             ? text.Get("偏白的半透玻璃与墨色文字，圆润边缘折射流光。", "Milky translucent glass, dark lettering and luminous refractive edges.")
             : Discovered(skin, settings) && skin.Id == SkinCatalog.Obsidian
             ? text.Get("纯黑底色与灰白细节，让内容安静而清晰。", "Pure black surfaces with quiet, clear grayscale details.")
@@ -211,7 +213,8 @@ internal sealed class SkinSettingsPanel
 
         var unit = size.Y / 190f;
         var game = palette.Light ? DactTheme.GameAssets : null;
-        if (palette.Glass) DactTheme.DrawGlassSurface(draw, min, max, 10 * unit, palette.Surface);
+        if (palette.Rain) RainWindowRenderer.Draw(draw, min, max, unit, ImGui.GetTime());
+        else if (palette.Glass) DactTheme.DrawGlassSurface(draw, min, max, 10 * unit, palette.Surface);
         else if (game?.Window(min, max, unit) != true)
         {
             draw.AddRectFilled(min, max, ImGui.GetColorU32(palette.Surface), 7 * unit);

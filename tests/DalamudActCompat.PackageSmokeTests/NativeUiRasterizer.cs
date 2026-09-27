@@ -100,7 +100,7 @@ internal sealed class NativeUiRasterizer
         }
         return Vector4.Lerp(Vector4.Lerp(At(x, y), At(x + 1, y), fx), Vector4.Lerp(At(x, y + 1), At(x + 1, y + 1), fx), fy);
     }
-    private static void WritePng(string path, byte[] pixels, int width, int height)
+    internal static void WritePng(string path, byte[] pixels, int width, int height)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         using var file = File.Create(path); file.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });

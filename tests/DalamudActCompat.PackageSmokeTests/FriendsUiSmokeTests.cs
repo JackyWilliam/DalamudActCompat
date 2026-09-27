@@ -309,6 +309,9 @@ internal static partial class FriendsUiSmokeTests
             AdministratorSmokeTests.LoadIcon(raster, "SponsorCrown.png", 1000);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             var anchor = new Vector2(60, 120); var mainSize = new Vector2(920, 720);
+            var liveConfiguration = (DalamudActCompat.Plugin.PluginConfiguration)typeof(FriendsUiManager)
+                .GetField("configuration", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ui)!;
+            var nativeText = new UiText(liveConfiguration);
             var drag = new WindowDragController(); var texture = new EmptyTexture();
             void Frame(bool focusGame = false)
             {
@@ -321,11 +324,11 @@ internal static partial class FriendsUiSmokeTests
                 ImGui.PushStyleColor(ImGuiCol.WindowBg, ControlCenterWindow.Navy);
                 ImGui.Begin("isolated-dact-header", DactTheme.WindowFlags(ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoDecoration));
                 ui.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), 1, ImGuiP.GetCurrentWindow().ID);
-                BrandedWindowChrome.Draw(drag, texture, "主页", "运行中", Vector4.One, "0.4.0.4", "friend-native",
-                    helpAction: () => { }, statusAction: () => { }, statusLabel: "● 云同步", friendsAction: () => ui.ToggleDrawer(),
-                    onlineFriends: controller.Snapshot.Friends?.OnlineCount ?? 0, friendsUnread: controller.Snapshot.HasUnreadMessages);
-                ImGui.SetCursorPos(new(28, 110)); DactTheme.TextColored(new Vector4(.42f, .78f, .96f, 1), "DACT · 原生界面验证");
-                ImGui.SetCursorPos(new(28, 146)); ImGui.TextUnformatted("主窗口占位内容；右侧好友抽屉、图标和聊天使用实际插件代码绘制。");
+                BrandedWindowChrome.Draw(drag, texture, nativeText.Get("主页", "Home"), nativeText.Get("运行中", "Running"), Vector4.One, "0.4.5.2", "friend-native",
+                    helpAction: () => { }, statusAction: () => { }, statusLabel: nativeText.Get("● 云同步", "● Cloud sync"), friendsAction: () => ui.ToggleDrawer(),
+                    onlineFriends: controller.Snapshot.Friends?.OnlineCount ?? 0, friendsUnread: controller.Snapshot.HasUnreadMessages, text: nativeText);
+                ImGui.SetCursorPos(new(28, 110)); DactTheme.TextColored(new Vector4(.42f, .78f, .96f, 1), nativeText.Get("DACT · 原生界面验证", "DACT · Native UI preview"));
+                ImGui.SetCursorPos(new(28, 146)); ImGui.TextWrapped(nativeText.Get("主窗口占位内容；右侧好友抽屉、图标和聊天使用实际插件代码绘制。", "Preview with synthetic accounts. The friend drawer, icons and chat use the actual plugin UI."));
                 ImGui.End(); ImGui.PopStyleColor();
                 ui.Draw(true, true); ImGui.Render();
                 Check(ImGui.GetDrawData().TotalVtxCount > 0, "Native UI emitted no draw data.");
@@ -522,6 +525,45 @@ internal static partial class FriendsUiSmokeTests
                 }
                 io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             }
+            // Change the live config on the existing views, keeping their Chinese
+            // account names, notes and message bodies to catch accidental translation.
+            liveConfiguration.UiLanguage = "en";
+            liveConfiguration.Appearance.SelectedSkin = SkinCatalog.RainyWindow;
+            liveConfiguration.Appearance.UnlockedEasterEggs.Add(SkinCatalog.RainyWindow);
+            DactTheme.SetCurrent(liveConfiguration.Appearance, false, 0);
+            foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
+            {
+                ui.Hide(); ui.ToggleDrawer(); io.FontGlobalScale = scale; io.DisplaySize = new(1120, 840);
+                anchor = new(30, 40); mainSize = new(650, 760);
+                for (var i = 0; i < 12; i++) Frame();
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-en-{scale * 100:0}.png"));
+                var layout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, scale);
+                Click(layout.Position + new Vector2(40 * scale, 54 * scale + 20)); Frame(); Frame();
+                var englishPopup = context.NavWindow;
+                Check((englishPopup.Flags & ImGuiWindowFlags.Popup) != 0 && !englishPopup.ScrollbarX && englishPopup.Pos.X >= 0 &&
+                    englishPopup.Pos.X + englishPopup.Size.X <= io.DisplaySize.X && englishPopup.Pos.Y + englishPopup.Size.Y <= io.DisplaySize.Y,
+                    "English status popup overflowed or became unreachable.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-status-en-{scale * 100:0}.png"));
+                io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+                typeof(FriendsUiManager).GetField("remarkRelationId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, "native-friend");
+                typeof(FriendsUiManager).GetField("remarkDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, "English note");
+                typeof(FriendsUiManager).GetField("openRemarkEditor", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, true);
+                Frame(); Frame(); Frame();
+                englishPopup = context.NavWindow;
+                Check((englishPopup.Flags & ImGuiWindowFlags.Popup) != 0 && englishPopup.ScrollMax.X == 0 &&
+                    englishPopup.Pos.X + englishPopup.Size.X <= io.DisplaySize.X && englishPopup.Pos.Y + englishPopup.Size.Y <= io.DisplaySize.Y,
+                    "English note editor overflowed its viewport.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-note-en-{scale * 100:0}.png"));
+                Key(ImGuiKey.Escape); Key(ImGuiKey.Escape);
+                if (scale == 1)
+                {
+                    typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
+                    Frame(); Frame();
+                    if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-chat-en.png"));
+                }
+            }
+            liveConfiguration.UiLanguage = "zh-CN";
+            DactTheme.SetCurrent(new(), false, 0);
             if (runNotifications)
             {
                 BubbleBounds(raster, output);
@@ -544,7 +586,7 @@ internal static partial class FriendsUiSmokeTests
                 var message = new CloudChatMessage(1, "native", new(kind == "official" ? "official" : "user", "user", "旅行者 · 多行消息"), "peer", 1, Guid.NewGuid(),
                     "今晚刷坐骑，这是一条会自动换行的中文消息，用于验证每一行文字与气泡左右边缘都有足够距离。\nSecond line with a long unbroken URL: https://example.test/abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789", null, "history", DateTimeOffset.Now, null);
                 var list = ImGui.GetWindowDrawList(); var before = list.VtxBuffer.Size;
-                method.Invoke(null, [message, kind == "own", null, null, null]);
+                method.Invoke(null, [message, kind == "own", null, null, null, null]);
                 var after = list.VtxBuffer.Size;
                 var textColors = new[] { ImGui.GetColorU32(Vector4.One), ImGui.GetColorU32(new Vector4(.42f, .78f, .96f, 1)), ImGui.GetColorU32(new Vector4(.62f, .69f, .75f, 1)) };
                 // Actual emitted ink vertices must remain inside the emitted bubble

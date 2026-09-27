@@ -138,7 +138,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                         pending.Count,
                         installTask is not null,
                         showPermissionChoice,
-                        showTtsProChoice)))
+                        showTtsProChoice), text: text))
             {
                 IsOpen = false;
             }

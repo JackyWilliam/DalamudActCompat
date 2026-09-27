@@ -896,7 +896,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
-        liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || settingsWindow.NeedsGlassPreview);
+        liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || DactTheme.Palette.Rain || settingsWindow.NeedsGlassPreview);
         cloudAdministratorNotice.Update(cloudClient.Snapshot);
         // Serialize the two celebrations so their windows and confirmation buttons
         // never overlap. The queued animation starts only when it becomes visible.

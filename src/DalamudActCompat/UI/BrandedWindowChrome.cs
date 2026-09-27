@@ -34,7 +34,8 @@ internal static class BrandedWindowChrome
         int onlineFriends = 0,
         bool friendsUnread = false,
         Action? logoAction = null,
-        Action? versionAction = null)
+        Action? versionAction = null,
+        UiText? text = null)
     {
         DactTheme.DrawGameWindow();
         const float height = 40;
@@ -177,7 +178,10 @@ internal static class BrandedWindowChrome
             drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
                 ImGui.GetColorU32(DactTheme.Palette.Text), Math.Max(0, onlineFriends).ToString());
             if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip($"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text?.Get(
+                $"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}",
+                $"Friends · {Math.Max(0, onlineFriends)} online{(friendsUnread ? " · Unread messages" : "")}")
+                ?? $"好友 · {Math.Max(0, onlineFriends)} 人在线");
         }
         if (helpAction is not null)
         {
@@ -210,7 +214,7 @@ internal static class BrandedWindowChrome
             closeRequested = DactTheme.IconButton(
                 $"close-{id}", GameSkinIcon.Close, "×",
                 new Vector2(actionButtonSize, actionButtonSize));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("关闭窗口 / Close window");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text?.Get("关闭窗口", "Close window") ?? "关闭窗口 / Close window");
             ImGui.PopStyleColor(3);
         }
         ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));

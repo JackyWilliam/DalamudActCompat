@@ -4,7 +4,7 @@ using Dalamud.Bindings.ImGui;
 namespace DalamudActCompat.UI;
 
 internal sealed record SkinPalette(Vector4 Surface, Vector4 Raised, Vector4 Hover,
-    Vector4 Gold, Vector4 Accent, Vector4 Text, Vector4 Muted, Vector4 Border, bool Light = false, bool Glass = false);
+    Vector4 Gold, Vector4 Accent, Vector4 Text, Vector4 Muted, Vector4 Border, bool Light = false, bool Glass = false, bool Rain = false);
 
 internal static class DactTheme
 {
@@ -63,6 +63,8 @@ internal static class DactTheme
         // Keep the canvas genuinely black; only interactive states lift into gray.
         SkinCatalog.Obsidian => new(Rgb(0x000000), Rgb(0x0C0C0C), Rgb(0x252525), Rgb(0xE1E1E1),
             Rgb(0xFFFFFF), Rgb(0xF5F5F5), Rgb(0xA3A3A3), Rgb(0x383838)),
+        SkinCatalog.RainyWindow => new(Rgb(0x1D2C38), Rgb(0x2A3D4B) with { W = .92f }, Rgb(0x3C5666), Rgb(0xC6D9E1),
+            Rgb(0x9CCAD9), Rgb(0xEDF4F7), Rgb(0xB0C4CE), Rgb(0x58717F), Rain: true),
         _ => DefaultPalette,
     };
 
@@ -85,7 +87,7 @@ internal static class DactTheme
 
     public static void PushStyleColor(ImGuiCol slot, Vector4 original)
         // Page containers must not stack opaque sheets over the glass window.
-        => ImGui.PushStyleColor(slot, Palette.Glass && slot == ImGuiCol.ChildBg && SameRgb(original, Palette.Surface)
+        => ImGui.PushStyleColor(slot, (Palette.Glass || Palette.Rain) && slot == ImGuiCol.ChildBg && SameRgb(original, Palette.Surface)
             ? Vector4.Zero
             : CurrentSkin == SkinCatalog.Default || original.W == 0 || IsPaletteColor(original) ? original : Color(slot, original));
 
@@ -99,7 +101,7 @@ internal static class DactTheme
     {
         var color = slot switch
         {
-            ImGuiCol.ChildBg when Palette.Glass => Vector4.Zero,
+            ImGuiCol.ChildBg when Palette.Glass || Palette.Rain => Vector4.Zero,
             // Menus need their own contrast scrim above a busy game scene.
             ImGuiCol.PopupBg when Palette.Glass => Palette.Surface with { W = .96f },
             ImGuiCol.WindowBg or ImGuiCol.ChildBg or ImGuiCol.PopupBg => Palette.Surface,
@@ -132,7 +134,7 @@ internal static class DactTheme
         ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, Palette.Light ? 1 : 0);
         if (Palette.Glass) ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 14 * Math.Max(.75f, ImGui.GetFontSize() / 17f));
         var extraColors = 0;
-        if (Palette.Glass || CurrentSkin == SkinCatalog.Obsidian)
+        if (Palette.Glass || Palette.Rain || CurrentSkin == SkinCatalog.Obsidian)
         {
             foreach (var slot in new[] { ImGuiCol.TitleBg, ImGuiCol.TitleBgActive, ImGuiCol.ScrollbarBg })
                 ImGui.PushStyleColor(slot, Palette.Surface);
@@ -158,6 +160,16 @@ internal static class DactTheme
 
     public static bool DrawGameWindow()
     {
+        if (Palette.Rain)
+        {
+            var rainMin = ImGui.GetWindowPos();
+            var rainMax = rainMin + ImGui.GetWindowSize();
+            var rainDraw = ImGui.GetWindowDrawList();
+            rainDraw.PushClipRect(rainMin, rainMax, false);
+            RainWindowRenderer.Draw(rainDraw, rainMin, rainMax, Math.Max(.75f, ImGui.GetFontSize() / 17f), ImGui.GetTime());
+            rainDraw.PopClipRect();
+            return true;
+        }
         if (!Palette.Glass) return Palette.Light && GameAssets?.Window() == true;
         var min = ImGui.GetWindowPos();
         var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
@@ -214,12 +226,12 @@ internal static class DactTheme
     public static void DrawGamePopupFrame()
     {
         if (Palette.Light) GameAssets?.PopupFrame();
-        else if (Palette.Glass) DrawGameWindow();
+        else if (Palette.Glass || Palette.Rain) DrawGameWindow();
     }
 
     public static bool BeginCombo(string label, string preview, ImGuiComboFlags flags = ImGuiComboFlags.None)
     {
-        if (Palette.Glass && GlassRenderer?.Ready == true)
+        if (Palette.Rain || Palette.Glass && GlassRenderer?.Ready == true)
         {
             ImGui.PushStyleColor(ImGuiCol.PopupBg, Vector4.Zero);
             ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 14 * Math.Max(.75f, ImGui.GetFontSize() / 17f));
@@ -246,7 +258,7 @@ internal static class DactTheme
 
     public static bool Combo(string label, ref int selected, string[] items, int count)
     {
-        if (!Palette.Light && !Palette.Glass) return ImGui.Combo(label, ref selected, items, count);
+        if (!Palette.Light && !Palette.Glass && !Palette.Rain) return ImGui.Combo(label, ref selected, items, count);
         var changed = false;
         if (BeginCombo(label, selected >= 0 && selected < count ? items[selected] : ""))
         {
@@ -265,7 +277,7 @@ internal static class DactTheme
     public static ImGuiWindowFlags WindowFlags(ImGuiWindowFlags flags)
         // Keep the normal background until asynchronous textures are available.
         // Once ready, only the original rounded window sprite owns the border.
-        => Palette.Glass && GlassRenderer?.Ready == true || Palette.Light && GameAssets?.HasWindowTextures == true
+        => Palette.Rain || Palette.Glass && GlassRenderer?.Ready == true || Palette.Light && GameAssets?.HasWindowTextures == true
             ? flags | ImGuiWindowFlags.NoBackground : flags & ~ImGuiWindowFlags.NoBackground;
 
     public static bool IconButton(string id, GameSkinIcon icon, string fallback, Vector2 size)

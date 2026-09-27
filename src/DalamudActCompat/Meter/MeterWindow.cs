@@ -294,7 +294,7 @@ public sealed class MeterWindow : Window
         var start = ImGui.GetCursorScreenPos();
         var toggleStart = new Vector2(start.X + width - CompactToggleSize - 6, start.Y + 9);
         var toggleEnd = toggleStart + new Vector2(CompactToggleSize, CompactToggleSize);
-        var rankingButtonWidth = Math.Max(54, ImGui.CalcTextSize("HPS 榜").X + 14);
+        var rankingButtonWidth = Math.Max(54, ImGui.CalcTextSize(text.Get("HPS 榜", "HPS")).X + 14);
         var audienceButtonWidth = Math.Max(58, ImGui.CalcTextSize(text.Get("24 人本", "24-player")).X + 18);
         var audienceEnd = new Vector2(toggleStart.X - 5, toggleEnd.Y);
         var audienceStart = new Vector2(audienceEnd.X - audienceButtonWidth, toggleStart.Y);

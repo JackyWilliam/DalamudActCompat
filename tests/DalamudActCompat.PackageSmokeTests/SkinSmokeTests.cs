@@ -42,6 +42,7 @@ internal static class SkinSmokeTests
         for (var i = 0; i < 5; i++) discoveries.ClickAppearanceTitle(config.Appearance, i * 100);
         for (var i = 0; i < 6; i++) discoveries.ClickAppearanceBreadcrumb(config.Appearance, i * 100);
         for (var i = 0; i < 7; i++) discoveries.ClickAppearanceHint(config.Appearance, i * 100);
+        for (var i = 0; i < 8; i++) discoveries.ClickCloudStatus(config.Appearance, i * 100);
         await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(config));
         var unlocked = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
             Path.Combine(root, "skin-cloud-unlocked.enc"), key, default);
@@ -194,7 +195,8 @@ internal static class SkinSmokeTests
         Check(DactTheme.For(SkinCatalog.NeonPink).Accent == new Vector4(254 / 255f, 20 / 255f, 147 / 255f, 1),
             "Neon pink no longer matches the user's FE1493 swatch.");
         foreach (var (id, count, click) in new (string, int, Func<UiSkinSettings, long, string?>)[]
-                 { (SkinCatalog.LiquidGlass, 6, discoveries.ClickAppearanceBreadcrumb), (SkinCatalog.Obsidian, 7, discoveries.ClickAppearanceHint) })
+                 { (SkinCatalog.LiquidGlass, 6, discoveries.ClickAppearanceBreadcrumb), (SkinCatalog.Obsidian, 7, discoveries.ClickAppearanceHint),
+                   (SkinCatalog.RainyWindow, 8, discoveries.ClickCloudStatus) })
         {
             config.Appearance.SelectedSkin = id;
             Check(SkinCatalog.Resolve(config.Appearance, true, 99) == SkinCatalog.Default, "New mystery skin bypassed discovery.");
@@ -273,6 +275,7 @@ internal static class SkinSmokeTests
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
             GlassCards(raster, output);
+            RainGeometry();
             var config = new PluginConfiguration();
             config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
             var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(3) };
@@ -305,11 +308,12 @@ internal static class SkinSmokeTests
                     ImGui.SetNextWindowPos(new(30, 30)); ImGui.SetNextWindowSize(windowSize);
                     ImGui.PushStyleColor(ImGuiCol.WindowBg, DactTheme.Palette.Surface);
                     ImGui.Begin("skin-components", DactTheme.WindowFlags(ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings));
-                    closed |= BrandedWindowChrome.Draw(drag, logo, "设置&账号", "运行中", DactTheme.Palette.Accent, "0.4.3.1", "skin-test",
+                    closed |= BrandedWindowChrome.Draw(drag, logo, text.Get("设置&账号", "Settings & Account"), text.Get("运行中", "Running"), DactTheme.Palette.Accent, "0.4.5.2", "skin-test",
                         helpAction: () => { }, friendsAction: () => { }, onlineFriends: 2,
                         logoAction: () => { if (discoveries.ClickLogo(config.Appearance, Environment.TickCount64) is not null) unlockCount++; });
                     closeHit = new(ImGui.GetItemRectMin(), ImGui.GetItemRectMax().X, ImGui.GetItemRectMax().Y);
-                    BrandedWindowChrome.DrawNavigationRail("skin-preview-tabs", ["概览", "战斗统计", "悬浮窗", "扩展", "云同步", "设置&账号"], 5);
+                    BrandedWindowChrome.DrawNavigationRail("skin-preview-tabs", [text.Get("概览", "Overview"), text.Get("战斗统计", "Combat meter"),
+                        text.Get("悬浮窗", "Overlays"), text.Get("扩展", "Extensions"), text.Get("云同步", "Cloud sync"), text.Get("设置&账号", "Settings & Account")], 5);
                     ImGui.BeginChild("control-center-page-content", new Vector2(-1, ControlCenterWindow.PageContentHeight()), true,
                         (skins.IsOpen ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None) |
                         (DactTheme.Palette.Light ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None));
@@ -334,6 +338,21 @@ internal static class SkinSmokeTests
             {
                 config.Appearance.SelectedSkin = skin.Id; skins.Open(config.Appearance, account); Frame(); Frame();
                 if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"skin-{skin.Id}.png"));
+            }
+            if (output is not null)
+            {
+                config.Appearance.SelectedSkin = SkinCatalog.RainyWindow;
+                config.UiLanguage = "en";
+                skins.Open(config.Appearance, account);
+                var delta = io.DeltaTime;
+                io.DeltaTime = .2f;
+                for (var frame = 0; frame < 16; frame++)
+                {
+                    Frame();
+                    raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"rain-motion-{frame:00}.png"));
+                }
+                io.DeltaTime = delta;
+                config.UiLanguage = "zh-CN";
             }
             void Click(Vector2 position)
             {
@@ -433,14 +452,30 @@ internal static class SkinSmokeTests
             {
                 using var gpu = new LiquidGlassSmokeTests();
                 gpu.Run(); gpu.Install(raster);
-                foreach (var id in new[] { SkinCatalog.LiquidGlass, SkinCatalog.Obsidian })
+                foreach (var id in new[] { SkinCatalog.LiquidGlass, SkinCatalog.Obsidian, SkinCatalog.RainyWindow })
                 {
                     config.Appearance.UnlockedEasterEggs.Add(id); config.Appearance.SelectedSkin = id;
                     skins.Open(config.Appearance, account);
-                    gpu.Renderer.BeginFrame(gpu.Device, id == SkinCatalog.LiquidGlass); Frame(); Frame();
+                    if (id == SkinCatalog.RainyWindow)
+                    {
+                        config.UiLanguage = "en";
+                        raster.PaintBackdrop = LiquidGlassSmokeTests.PaintRainBackdrop;
+                    }
+                    gpu.Renderer.BeginFrame(gpu.Device, id is SkinCatalog.LiquidGlass or SkinCatalog.RainyWindow); Frame(); Frame();
                     if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"skin-{id}-gpu.png"));
                     if (id == SkinCatalog.LiquidGlass && output is not null)
                         Check(gpu.Renderer.RenderedSurfaces > 5, "Native UI did not execute the real glass callbacks.");
+                    if (id == SkinCatalog.RainyWindow && output is not null)
+                    {
+                        Check(gpu.Renderer.RenderedSurfaces >= 2, "Rain window/preview did not execute the GPU compositor.");
+                        var delta = io.DeltaTime; io.DeltaTime = .16f;
+                        for (var frame = 0; frame < 24; frame++)
+                        {
+                            gpu.Renderer.BeginFrame(gpu.Device, true); Frame();
+                            raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"rain-ui-{frame:00}.png"));
+                        }
+                        io.DeltaTime = delta; config.UiLanguage = "zh-CN";
+                    }
                 }
                 raster.RenderCallback = null; raster.PaintBackdrop = null;
             }
@@ -462,6 +497,34 @@ internal static class SkinSmokeTests
             EmptyMeterEditorSummary(raster, output, logo);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
+    }
+
+    private static unsafe void RainGeometry()
+    {
+        var io = ImGui.GetIO();
+        foreach (var size in new[] { new Vector2(320, 240), new Vector2(900, 620), new Vector2(1060, 780) })
+        foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
+        {
+            var hashes = new List<string>();
+            foreach (var time in new[] { 17d, 18d, 17d })
+            {
+                ImGui.NewFrame(); ImGui.SetNextWindowPos(new(20, 20)); ImGui.SetNextWindowSize(size);
+                ImGui.Begin("rain-geometry", ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDecoration);
+                var draw = ImGui.GetWindowDrawList(); var first = draw.VtxBuffer.Size;
+                var item = ImGui.GetCurrentContext().LastItemData.ID;
+                RainWindowRenderer.Draw(draw, new(20, 20), new Vector2(20) + size, scale, time);
+                Check(ImGui.GetCurrentContext().LastItemData.ID == item, "Rain decoration created an input target.");
+                var count = draw.VtxBuffer.Size - first;
+                Check(count is > 0 and < 15000, "Rain geometry is missing or unbounded.");
+                for (var i = first; i < draw.VtxBuffer.Size; i++)
+                    Check(float.IsFinite(draw.VtxBuffer[i].Pos.X) && float.IsFinite(draw.VtxBuffer[i].Pos.Y), "Rain produced invalid coordinates.");
+                hashes.Add(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    new ReadOnlySpan<byte>(draw.VtxBuffer.Data + first, count * sizeof(ImDrawVert)))));
+                ImGui.End(); ImGui.Render();
+            }
+            Check(hashes[0] != hashes[1] && hashes[0] == hashes[2], "Rain is static or depends on hidden simulation state.");
+        }
+        Console.WriteLine("Rain: animated deterministic trails, bounded geometry and no input targets passed at three widths and four scales.");
     }
 
     private static unsafe void GlassCards(NativeUiRasterizer raster, string? output)
@@ -696,7 +759,9 @@ internal static class SkinSmokeTests
         void Field(string name, object value) => typeof(ControlCenterWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(center, value);
         var snapshot = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-user", StatusMessage = "已刷新，共 2 个云端版本。",
             Backups = [new("preview", DateTimeOffset.Now, 1234, "preview")] };
-        Field("configuration", config); Field("text", text); Field("saveConfiguration", (Action)(() => { }));
+        var saves = 0;
+        Field("configuration", config); Field("text", text); Field("saveConfiguration", (Action)(() => saves++));
+        Field("skinDiscoveries", new SkinDiscoveries());
         Field("cloud", new CloudUiBridge(() => snapshot, _ => { }, _ => { }, _ => { }, () => { }, () => { }, _ => { }, () => { }, _ => { }, _ => { }, () => { }));
         var popup = typeof(ControlCenterWindow).GetMethod("DrawCloudQuickPopup", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var context = ImGui.GetCurrentContext(); var io = ImGui.GetIO();
@@ -734,6 +799,20 @@ internal static class SkinSmokeTests
                 raster.Save(ImGui.GetDrawData(), Path.Combine(output, "cloud-popup-pink-no-scrollbar.png"));
             io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
         }
+        config.UiLanguage = "en"; io.FontGlobalScale = 1;
+        config.Appearance.UnlockedEasterEggs.Remove(SkinCatalog.RainyWindow);
+        var chosen = config.Appearance.SelectedSkin;
+        Field("cloudQuickPopupRequested", true); Frame(); Frame();
+        var rainPopup = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
+        var heading = rainPopup.Pos + rainPopup.WindowPadding + new Vector2(50, 8);
+        for (var count = 0; count < 7; count++) Click(heading);
+        Check(!config.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.RainyWindow), "Rain unlocked before its eighth heading click.");
+        Click(heading); Click(heading);
+        Check(saves == 1 && config.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.RainyWindow) &&
+            config.Appearance.SelectedSkin == chosen, "Native cloud heading did not unlock rain once without changing the selected skin.");
+        if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "cloud-status-en-rain-discovery.png"));
+        io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
+        config.UiLanguage = "zh-CN";
         // Real overflow must remain scrollable; simply hiding the bar would make
         // the lower actions inaccessible on a small viewport or a long status.
         io.FontGlobalScale = 1.4f; io.DisplaySize = new(800, 360);
@@ -780,7 +859,7 @@ internal static class SkinSmokeTests
         config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
         var store = new EncounterStateStore();
         var encounter = (Encounter)typeof(MeterStyleEditorWindow)
-            .GetMethod("CreatePreviewEncounter", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, null)!;
+            .GetMethod("CreatePreviewEncounter", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [new UiText(config)])!;
         // A completed fixture keeps elapsed time and all row values stable between frames.
         store.UpdateCurrent(encounter with { EndTime = encounter.StartTime.AddMinutes(3) });
         var service = new MeterService(store, config.Meter);

@@ -119,7 +119,7 @@ public sealed class StatusWindow : Window
                     stateColor,
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(StatusWindow).Assembly.GetName().Version),
-                    "runtime-status"))
+                    "runtime-status", text: text))
             {
                 IsOpen = false;
             }

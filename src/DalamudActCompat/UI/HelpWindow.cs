@@ -106,7 +106,7 @@ public sealed class HelpWindow : Window
                     IceBlue,
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(HelpWindow).Assembly.GetName().Version),
-                    "help-window"))
+                    "help-window", text: text))
             {
                 IsOpen = false;
             }

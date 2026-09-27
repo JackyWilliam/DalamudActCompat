@@ -44,6 +44,7 @@ internal static class SkinCatalog
     public const string NeonPink = "neon-pink";
     public const string LiquidGlass = "liquid-glass";
     public const string Obsidian = "obsidian";
+    public const string RainyWindow = "rainy-window";
 
     public static IReadOnlyList<SkinDefinition> All { get; } =
     [
@@ -55,6 +56,7 @@ internal static class SkinCatalog
         new(NeonPink, "绯梦霓光", "Neon Reverie", EasterEgg: true),
         new(LiquidGlass, "澄光流璃", "Lucent Glass", EasterEgg: true),
         new(Obsidian, "无相玄墨", "Obsidian Void", EasterEgg: true),
+        new(RainyWindow, "听雨窗", "Rain on Glass", EasterEgg: true),
     ];
 
     public static bool IsEasterEgg(string id) => All.Any(skin => skin.Id == id && skin.EasterEgg);
@@ -78,11 +80,13 @@ internal sealed class SkinDiscoveries
     private int appearanceClicks;
     private int breadcrumbClicks;
     private int hintClicks;
+    private int cloudStatusClicks;
     private long lastLogoClick = long.MinValue;
     private long lastVersionClick = long.MinValue;
     private long lastAppearanceClick = long.MinValue;
     private long lastBreadcrumbClick = long.MinValue;
     private long lastHintClick = long.MinValue;
+    private long lastCloudStatusClick = long.MinValue;
     private int visitedPages;
 
     public string? ClickLogo(UiSkinSettings settings, long now)
@@ -99,6 +103,9 @@ internal sealed class SkinDiscoveries
 
     public string? ClickAppearanceHint(UiSkinSettings settings, long now)
         => Click(settings, SkinCatalog.Obsidian, 7, now, ref hintClicks, ref lastHintClick);
+
+    public string? ClickCloudStatus(UiSkinSettings settings, long now)
+        => Click(settings, SkinCatalog.RainyWindow, 8, now, ref cloudStatusClicks, ref lastCloudStatusClick);
 
     public string? VisitPage(UiSkinSettings settings, int page)
     {

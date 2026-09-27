@@ -23,8 +23,9 @@ public sealed class MeterStyleEditorWindow : Window
     private readonly HorizontalMeterWindow horizontalMeterWindow;
     private readonly RoleSplitMeterWindow roleSplitDamageWindow;
     private readonly RoleSplitMeterWindow roleSplitHealerWindow;
-    private readonly Encounter previewEncounter;
-    private readonly IReadOnlyList<CombatantRow> previewRows;
+    private Encounter previewEncounter;
+    private IReadOnlyList<CombatantRow> previewRows;
+    private bool previewChinese;
     private readonly UiText text;
     private readonly WindowDragController headerDrag = new();
     private readonly Action saveConfiguration;
@@ -57,7 +58,8 @@ public sealed class MeterStyleEditorWindow : Window
         this.roleSplitHealerWindow = roleSplitHealerWindow;
         this.text = text;
         this.saveConfiguration = saveConfiguration;
-        previewEncounter = CreatePreviewEncounter();
+        previewChinese = text.IsChinese;
+        previewEncounter = CreatePreviewEncounter(text);
         previewRows = CreatePreviewRows(previewEncounter);
         Size = new Vector2(1040, 690);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -129,6 +131,14 @@ public sealed class MeterStyleEditorWindow : Window
 
     public override void Draw()
     {
+        // Preview actors are synthetic UI content, not user combat logs. Refresh
+        // them when language changes without touching the edited meter settings.
+        if (previewChinese != text.IsChinese)
+        {
+            previewChinese = text.IsChinese;
+            previewEncounter = CreatePreviewEncounter(text);
+            previewRows = CreatePreviewRows(previewEncounter);
+        }
         WindowName = text.Get(
             "战斗统计布局编辑器###DalamudActCompatMeterStyleEditor",
             "Combat Meter Layout Editor###DalamudActCompatMeterStyleEditor");
@@ -140,7 +150,7 @@ public sealed class MeterStyleEditorWindow : Window
                 KindLabel(selectedKind),
                 IceBlue,
                 $"v{version}",
-                "meter-style-editor"))
+                "meter-style-editor", text: text))
         {
             RequestExitConfirmation();
         }
@@ -684,7 +694,7 @@ public sealed class MeterStyleEditorWindow : Window
         }
     }
 
-    private static Encounter CreatePreviewEncounter()
+    private static Encounter CreatePreviewEncounter(UiText text)
     {
         string[] jobs =
         [
@@ -698,7 +708,7 @@ public sealed class MeterStyleEditorWindow : Window
             var isHealer = JobRoleClassifier.IsHealer(job);
             return new Combatant(
                 $"preview-{index + 1}",
-                index == 0 ? "自己" : $"队友 {index:00}",
+                index == 0 ? text.Get("自己", "You") : text.Get($"队友 {index:00}", $"Party member {index:00}"),
                 job,
                 index == 0,
                 dps * 180L,
@@ -712,7 +722,7 @@ public sealed class MeterStyleEditorWindow : Window
                 CriticalDirectHits: 18 + (index / 2),
                 Rdps: dps + 240,
                 DirectHits: 43 + index,
-                HighestDamageAction: index % 2 == 0 ? "爆发击" : "强力技能",
+                HighestDamageAction: index % 2 == 0 ? text.Get("爆发击", "Burst strike") : text.Get("强力技能", "Powerful ability"),
                 HighestDamage: 128_000 - (index * 1_700L),
                 PartyGroup: (index / 8) + 1);
         }).ToArray();
@@ -721,8 +731,8 @@ public sealed class MeterStyleEditorWindow : Window
             Guid.Parse("7b2b7ff6-1a44-4d5e-8ec7-14053c7d2224"),
             now.AddMinutes(-3),
             null,
-            "预览副本",
-            "预览战斗",
+            text.Get("预览副本", "Preview duty"),
+            text.Get("预览战斗", "Preview encounter"),
             combatants,
             [],
             [],

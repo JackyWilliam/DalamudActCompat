@@ -600,7 +600,7 @@ public sealed class ControlCenterWindow : Window
                 onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
                 friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false,
                 logoAction: () => DiscoverSkin(skinDiscoveries.ClickLogo(configuration.Appearance, Environment.TickCount64)),
-                versionAction: () => DiscoverSkin(skinDiscoveries.ClickVersion(configuration.Appearance, Environment.TickCount64))))
+                versionAction: () => DiscoverSkin(skinDiscoveries.ClickVersion(configuration.Appearance, Environment.TickCount64)), text: text))
         {
             HideAnimated();
         }
@@ -2433,7 +2433,8 @@ public sealed class ControlCenterWindow : Window
                 CloudQuickPopupId,
                 ImGuiWindowFlags.AlwaysAutoResize |
                 ImGuiWindowFlags.NoResize |
-                ImGuiWindowFlags.NoMove))
+                ImGuiWindowFlags.NoMove |
+                (DactTheme.Palette.Rain ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None)))
         {
             ImGui.PopStyleColor(2);
             ImGui.PopStyleVar(3);
@@ -2446,6 +2447,7 @@ public sealed class ControlCenterWindow : Window
         var closeSize = new Vector2(24 * scale);
         var closeX = heading.X + ImGui.GetContentRegionAvail().X - closeSize.X;
         DactTheme.TextColored(Gold, text.Get("云同步状态", "Cloud sync status"));
+        if (ImGui.IsItemClicked()) DiscoverSkin(skinDiscoveries.ClickCloudStatus(configuration.Appearance, Environment.TickCount64));
         ImGui.SameLine();
         ImGui.SetCursorPos(new Vector2(closeX, heading.Y));
         if (DactTheme.IconButton("close-cloud-status", GameSkinIcon.Close, "×", closeSize)) ImGui.CloseCurrentPopup();
@@ -2454,7 +2456,7 @@ public sealed class ControlCenterWindow : Window
         DactTheme.TextColored(statusColor, $"● {statusLabel}");
         if (!string.IsNullOrWhiteSpace(snapshot.StatusMessage))
         {
-            ImGui.TextWrapped(snapshot.StatusMessage);
+            ImGui.TextWrapped(text.SystemMessage(snapshot.StatusMessage));
         }
         ImGui.Spacing();
         ImGui.Separator();
@@ -2945,8 +2947,8 @@ public sealed class ControlCenterWindow : Window
     private void DrawAuthenticationStatus(CloudClientSnapshot snapshot)
     {
         var statusMessage = snapshot.IsBusy
-            ? $"{snapshot.StatusMessage}  {text.Get("处理中…", "Working…")}"
-            : snapshot.StatusMessage;
+            ? $"{text.SystemMessage(snapshot.StatusMessage)}  {text.Get("处理中…", "Working…")}"
+            : text.SystemMessage(snapshot.StatusMessage);
         if (string.IsNullOrWhiteSpace(statusMessage))
         {
             return;
@@ -3039,8 +3041,8 @@ public sealed class ControlCenterWindow : Window
     private void DrawCloudSummaryCard(CloudClientSnapshot snapshot)
     {
         var statusMessage = snapshot.IsBusy
-            ? $"{snapshot.StatusMessage}  {text.Get("处理中…", "Working…")}"
-            : snapshot.StatusMessage;
+            ? $"{text.SystemMessage(snapshot.StatusMessage)}  {text.Get("处理中…", "Working…")}"
+            : text.SystemMessage(snapshot.StatusMessage);
         var wrapWidth = Math.Max(
             1,
             ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().WindowPadding.X * 2));
@@ -3506,8 +3508,9 @@ public sealed class ControlCenterWindow : Window
         return changed;
     }
 
-    internal bool NeedsGlassPreview => skinSettings.IsOpen && skinSettings.PreviewSkinId == SkinCatalog.LiquidGlass &&
-        configuration.Appearance.UnlockedEasterEggs.Contains(SkinCatalog.LiquidGlass);
+    internal bool NeedsGlassPreview => skinSettings.IsOpen &&
+        skinSettings.PreviewSkinId is SkinCatalog.LiquidGlass or SkinCatalog.RainyWindow &&
+        configuration.Appearance.UnlockedEasterEggs.Contains(skinSettings.PreviewSkinId);
 
     private bool DrawDiagnostics()
     {

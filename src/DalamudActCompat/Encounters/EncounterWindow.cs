@@ -127,7 +127,7 @@ public sealed class EncounterWindow : Window
                     pageLabel,
                     IceBlue,
                     ControlCenterWindow.FormatVersionLabel(typeof(EncounterWindow).Assembly.GetName().Version),
-                    "combat-history"))
+                    "combat-history", text: text))
             {
                 IsOpen = false;
             }

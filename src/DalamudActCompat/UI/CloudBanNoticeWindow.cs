@@ -118,7 +118,7 @@ internal sealed class CloudBanNoticeWindow : Window
                 ControlCenterWindow.FormatVersionLabel(
                     typeof(CloudBanNoticeWindow).Assembly.GetName().Version),
                 "cloud-ban-notice",
-                showCloseButton: false);
+                showCloseButton: false, text: text);
 
             if (BrandedWindowChrome.BeginGoldCard(
                     "cloud-ban-notice-card",
