@@ -220,7 +220,7 @@ internal sealed partial class FriendsUiManager : IDisposable
                     if (view.PendingSend is { } pending)
                     {
                         var preview = pending.Text ?? (pending.QuickMessageId == CloudChatPolicy.InviteNext ? uiText.Get("下把邀我", "Invite me next time") : uiText.Get("你什么时候结束", "When will you finish?"));
-                        ImGui.TextWrapped(uiText.Get($"待确认：{(preview.Length > 60 ? preview[..60] + "…" : preview)}", $"Unconfirmed: {(preview.Length > 60 ? preview[..60] + "…" : preview)}"));
+                        ImGui.TextWrapped(uiText.Format($"待确认：{(preview.Length > 60 ? preview[..60] + "…" : preview)}", $"Unconfirmed: {(preview.Length > 60 ? preview[..60] + "…" : preview)}"));
                         if (preview.Length > 60 && ImGui.IsItemHovered())
                         {
                             ImGui.BeginTooltip(); ImGui.PushTextWrapPos(ImGui.GetFontSize() * 28);

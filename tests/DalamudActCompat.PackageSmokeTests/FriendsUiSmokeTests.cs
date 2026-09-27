@@ -300,7 +300,7 @@ internal static partial class FriendsUiSmokeTests
             io.DisplaySize = new(1920, 1080); io.DeltaTime = 1f / 60;
             // The common Chinese preset omits some product words and U+25CF.
             // Include the real font's CJK/punctuation/symbol ranges for evidence.
-            ushort* ranges = stackalloc ushort[] { 0x20, 0xff, 0x2000, 0x30ff, 0x31f0, 0x31ff, 0x4e00, 0x9fff, 0xff00, 0xffef, 0 };
+            ushort* ranges = stackalloc ushort[] { 0x20, 0x024f, 0x2000, 0x30ff, 0x31f0, 0x31ff, 0x4e00, 0x9fff, 0xff00, 0xffef, 0 };
             io.Fonts.AddFontFromFileTTF(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "msyh.ttc"), 17, default, ranges);
             Check(io.Fonts.Build(), "Native test font atlas failed.");
             var raster = new NativeUiRasterizer(io.Fonts);
@@ -527,23 +527,24 @@ internal static partial class FriendsUiSmokeTests
             }
             // Change the live config on the existing views, keeping their Chinese
             // account names, notes and message bodies to catch accidental translation.
-            liveConfiguration.UiLanguage = "en";
             liveConfiguration.Appearance.SelectedSkin = SkinCatalog.RainyWindow;
             liveConfiguration.Appearance.UnlockedEasterEggs.Add(SkinCatalog.RainyWindow);
             DactTheme.SetCurrent(liveConfiguration.Appearance, false, 0);
+            foreach (var language in UiLanguages.All)
             foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
             {
+                liveConfiguration.UiLanguage = language.Id;
                 ui.Hide(); ui.ToggleDrawer(); io.FontGlobalScale = scale; io.DisplaySize = new(1120, 840);
                 anchor = new(30, 40); mainSize = new(650, 760);
                 for (var i = 0; i < 12; i++) Frame();
-                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-en-{scale * 100:0}.png"));
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-{language.Id}-{scale * 100:0}.png"));
                 var layout = FriendsWindowLayout.Drawer(anchor, mainSize, Vector2.Zero, io.DisplaySize, scale);
                 Click(layout.Position + new Vector2(40 * scale, 54 * scale + 20)); Frame(); Frame();
                 var englishPopup = context.NavWindow;
                 Check((englishPopup.Flags & ImGuiWindowFlags.Popup) != 0 && !englishPopup.ScrollbarX && englishPopup.Pos.X >= 0 &&
                     englishPopup.Pos.X + englishPopup.Size.X <= io.DisplaySize.X && englishPopup.Pos.Y + englishPopup.Size.Y <= io.DisplaySize.Y,
-                    "English status popup overflowed or became unreachable.");
-                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-status-en-{scale * 100:0}.png"));
+                    "Localized status popup overflowed or became unreachable.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-status-{language.Id}-{scale * 100:0}.png"));
                 io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
                 typeof(FriendsUiManager).GetField("remarkRelationId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, "native-friend");
                 typeof(FriendsUiManager).GetField("remarkDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ui, "English note");
@@ -552,14 +553,14 @@ internal static partial class FriendsUiSmokeTests
                 englishPopup = context.NavWindow;
                 Check((englishPopup.Flags & ImGuiWindowFlags.Popup) != 0 && englishPopup.ScrollMax.X == 0 &&
                     englishPopup.Pos.X + englishPopup.Size.X <= io.DisplaySize.X && englishPopup.Pos.Y + englishPopup.Size.Y <= io.DisplaySize.Y,
-                    "English note editor overflowed its viewport.");
-                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-note-en-{scale * 100:0}.png"));
+                    "Localized note editor overflowed its viewport.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-note-{language.Id}-{scale * 100:0}.png"));
                 Key(ImGuiKey.Escape); Key(ImGuiKey.Escape);
                 if (scale == 1)
                 {
                     typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
                     Frame(); Frame();
-                    if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-chat-en.png"));
+                    if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-chat-{language.Id}.png"));
                 }
             }
             liveConfiguration.UiLanguage = "zh-CN";

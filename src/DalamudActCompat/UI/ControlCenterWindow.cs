@@ -551,7 +551,7 @@ public sealed class ControlCenterWindow : Window
         {
             CactbotOperationState.Checking => text.Get("正在检查资源…", "Checking assets…"),
             CactbotOperationState.Installing => text.Get("正在安装资源…", "Installing assets…"),
-            CactbotOperationState.Error => text.Get(
+            CactbotOperationState.Error => text.Format(
                 $"安装失败：{status.ErrorMessage}",
                 $"Installation failed: {status.ErrorMessage}"),
             _ when isCactbotInstalled() => text.Get("资源已安装", "Assets installed"),
@@ -632,7 +632,7 @@ public sealed class ControlCenterWindow : Window
         if (discoveredSkin is { } id && Environment.TickCount64 < discoveryNoticeUntil)
         {
             var skin = SkinCatalog.All.First(item => item.Id == id);
-            DactTheme.TextColored(IceBlue, text.Get($"发现隐藏配色「{skin.ChineseName}」！可在设置&账号中使用。", $"Discovered {skin.EnglishName}! Apply it in Settings & Account."));
+            DactTheme.TextColored(IceBlue, text.Format($"发现隐藏配色「{skin.ChineseName}」！可在设置&账号中使用。", $"Discovered {text.Get(skin.ChineseName, skin.EnglishName)}! Apply it in Settings & Account."));
         }
     }
 
@@ -932,7 +932,7 @@ public sealed class ControlCenterWindow : Window
         ImGui.TextWrapped(text.Get(
             "这会清空当前战斗统计，但不会删除已经保存的历史记录。确认后才能执行。",
             "This clears the current encounter but does not delete saved history. It runs only after confirmation."));
-        ImGui.TextDisabled(text.Get(
+        ImGui.TextDisabled(text.Format(
             $"确认窗口将在 {secondsRemaining} 秒后自动关闭。",
             $"This confirmation closes automatically in {secondsRemaining} seconds."));
         ImGui.Spacing();
@@ -2105,7 +2105,7 @@ public sealed class ControlCenterWindow : Window
         }
 
         DactTheme.TextColored(Gold, text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"));
-        ImGui.TextWrapped(text.Get(
+        ImGui.TextWrapped(text.Format(
             $"确定删除 {genericPluginToDeleteName} 吗？插件文件会先备份，相关扩展会短暂重启。",
             $"Delete {genericPluginToDeleteName}? Plugin files will be backed up first, and related extensions will briefly restart."));
         if (DactTheme.Button(text.Get("确认删除", "Delete"), new Vector2(140, 34)))
@@ -2170,7 +2170,7 @@ public sealed class ControlCenterWindow : Window
             .Where(id => !plugins.Any(plugin => plugin.Manifest.Id == id && plugin.Enabled)).ToArray();
         if (missing.Length > 0)
         {
-            ImGui.TextWrapped(text.Get(
+            ImGui.TextWrapped(text.Format(
                 $"请先安装并启用：{string.Join(", ", missing)}。",
                 $"Install and enable first: {string.Join(", ", missing)}."));
         }
@@ -2202,7 +2202,7 @@ public sealed class ControlCenterWindow : Window
             {
                 DactTheme.TextColored(
                     IceBlue,
-                    text.Get(
+                    text.Format(
                         $"下载中...{resourceStatus.ProgressPercent}%",
                         $"Downloading...{resourceStatus.ProgressPercent}%"));
                 ImGui.SameLine();
@@ -2272,7 +2272,7 @@ public sealed class ControlCenterWindow : Window
         }
 
         // Keep the signed-off manifest visible for diagnosis without presenting it as the loaded DLL version.
-        ImGui.SetTooltip(text.Get(
+        ImGui.SetTooltip(text.Format(
             $"实际 DLL 版本为 {plugin.DisplayVersion}；安装清单记录为 {plugin.Manifest.Version}。",
             $"The DLL version is {plugin.DisplayVersion}; the install manifest records {plugin.Manifest.Version}."));
     }
@@ -2735,7 +2735,7 @@ public sealed class ControlCenterWindow : Window
         DrawAuthenticationMutedText(text.Get(
             "DACT 和激活码均免费，请勿购买或转售。",
             "DACT and activation keys are free. Do not buy or resell them."));
-        DrawAuthenticationMutedText(text.Get(
+        DrawAuthenticationMutedText(text.Format(
             $"加入 QQ 群 {ActivationQqGroup} 或 Discord，联系群主或频道主获取激活码。",
             $"Join QQ group {ActivationQqGroup} or Discord and contact the group/server owner for an activation key."));
 
@@ -3266,11 +3266,10 @@ public sealed class ControlCenterWindow : Window
             if (snapshot.RestorePreview is { } preview &&
                 cloudPreviewRequestedBackupId == selectedCloudBackupId)
             {
-                ImGui.TextWrapped(text.Get(
+                ImGui.TextWrapped(text.Format(
                     $"将新增 {preview.AddedFiles}、修改 {preview.ChangedFiles}、删除 {preview.RemovedFiles} 个文件；" +
                     $"共 {preview.FileCount} 个文件。新电脑的日志目录和 ACT 插件目录会保留。",
-                    $"Adds {preview.AddedFiles}, changes {preview.ChangedFiles}, and removes {preview.RemovedFiles} files; " +
-                    $"{preview.FileCount} files total. This PC's log and ACT plugin paths are preserved."));
+                    $"Adds {preview.AddedFiles}, changes {preview.ChangedFiles}, and removes {preview.RemovedFiles} files; {preview.FileCount} files total. This PC's log and ACT plugin paths are preserved."));
                 foreach (var scope in preview.Scopes)
                 {
                     ImGui.BulletText(
@@ -3359,8 +3358,8 @@ public sealed class ControlCenterWindow : Window
                 DactTheme.TextColored(
                     IceBlue,
                     invitations.IsAdmin
-                        ? text.Get($"管理员 · 无限生成 · 已生成 {invitations.Used} 个", $"Administrator · Unlimited · {invitations.Used} created")
-                        : text.Get(
+                        ? text.Format($"管理员 · 无限生成 · 已生成 {invitations.Used} 个", $"Administrator · Unlimited · {invitations.Used} created")
+                        : text.Format(
                             $"已使用 {invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} · 剩余 {invitations.Remaining}",
                             $"{invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} used · {invitations.Remaining} remaining"));
                 DrawAuthenticationMutedText(text.Get(
@@ -3438,7 +3437,7 @@ public sealed class ControlCenterWindow : Window
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip(text.Get(
+                ImGui.SetTooltip(text.Format(
                     $"在浏览器中打开爱发电。\n赞助后请联系管理员核对账号并开通等级；{SkinCatalog.EorzeaSponsorTier} 级永久解锁艾欧泽亚皮肤。",
                     $"Open Afdian in your browser.\nAfter sponsoring, contact the administrator to verify your account; tier {SkinCatalog.EorzeaSponsorTier} permanently unlocks the Eorzea skin."));
             }
@@ -3478,7 +3477,7 @@ public sealed class ControlCenterWindow : Window
         else ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
         if (snapshot.SessionExpiresAt is { } expiresAt)
         {
-            ImGui.TextDisabled(text.Get(
+            ImGui.TextDisabled(text.Format(
                 $"登录有效期至 {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}",
                 $"Session expires {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}"));
         }
@@ -3583,20 +3582,7 @@ public sealed class ControlCenterWindow : Window
         var changed = false;
         ImGui.Spacing();
         ImGui.Separator();
-        if (DactTheme.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
-        {
-            if (ImGui.Selectable("简体中文", text.IsChinese))
-            {
-                configuration.UiLanguage = "zh-CN";
-                changed = true;
-            }
-            if (ImGui.Selectable("English", !text.IsChinese))
-            {
-                configuration.UiLanguage = "en";
-                changed = true;
-            }
-            ImGui.EndCombo();
-        }
+        changed |= UiLanguageSelector.Draw(configuration, text);
         changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);
         if (configuration.DebugMode)
         {
@@ -3721,7 +3707,7 @@ public sealed class ControlCenterWindow : Window
         {
             var report = buildDiagnosticReport();
             ImGui.SetClipboardText(report);
-            diagnosticCopyFeedback = text.Get(
+            diagnosticCopyFeedback = text.Format(
                 $"已复制诊断日志（{report.Length:N0} 字符），可直接粘贴到问题反馈。",
                 $"Diagnostic log copied ({report.Length:N0} characters); paste it into the issue report.");
             diagnosticCopyFeedbackIsError = false;
@@ -4018,7 +4004,7 @@ public sealed class ControlCenterWindow : Window
             ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd")
             : "--";
         var partitionLabel = reference.Partition?.ToString() ?? text.Get("最新", "Latest");
-        ImGui.TextDisabled(text.Get(
+        ImGui.TextDisabled(text.Format(
             $"区域 {reference.Region} · 分区 {partitionLabel} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
             $"Region {reference.Region} · Partition {partitionLabel} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
 
@@ -4218,7 +4204,7 @@ public sealed class ControlCenterWindow : Window
                 ? status.Message : string.Empty;
 
         var retry = status.RetryAt is { } retryAt
-            ? text.Get($"下次请求不早于 {retryAt.ToLocalTime():MM-dd HH:mm:ss}。", $"Next request no earlier than {retryAt.ToLocalTime():MM-dd HH:mm:ss}.")
+            ? text.Format($"下次请求不早于 {retryAt.ToLocalTime():MM-dd HH:mm:ss}。", $"Next request no earlier than {retryAt.ToLocalTime():MM-dd HH:mm:ss}.")
             : string.Empty;
         var action = status.State == FflogsEstimateState.RequestsPaused
             ? text.Get("修正配置后或点击“测试并刷新”重试。", "Correct the settings or click Test and refresh to retry.")

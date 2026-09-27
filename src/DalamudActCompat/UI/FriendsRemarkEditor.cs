@@ -40,15 +40,18 @@ internal sealed partial class FriendsUiManager
         var enter = ImGui.InputTextWithHint("##friend-remark", uiText.Get("留空可清除备注", "Leave empty to clear the note"), ref remarkDraft, 256, ImGuiInputTextFlags.EnterReturnsTrue);
         var normalized = remarkDraft.Trim();
         var valid = FriendRemark.IsValid(normalized);
-        ImGui.TextDisabled(uiText.Get($"{normalized.EnumerateRunes().Count()}/{FriendRemark.MaximumLength} 字", $"{normalized.EnumerateRunes().Count()}/{FriendRemark.MaximumLength} characters"));
+        ImGui.TextDisabled(uiText.Format($"{normalized.EnumerateRunes().Count()}/{FriendRemark.MaximumLength} 字", $"{normalized.EnumerateRunes().Count()}/{FriendRemark.MaximumLength} characters"));
         if (!valid) ImGui.TextWrapped(uiText.Get("备注最多 40 字，不能包含换行或控制字符。", "Use up to 40 characters, without line breaks or control characters."));
         if (remarkError.Length > 0) ImGui.TextWrapped(uiText.SystemMessage(remarkError));
+        var right = ImGui.GetCursorScreenPos().X + ImGui.GetContentRegionAvail().X;
+        var clear = uiText.Get("清除备注", "Clear note");
+        var cancel = uiText.Get("取消", "Cancel");
         ImGui.BeginDisabled(!valid);
         if ((DactTheme.Button(uiText.Get("保存备注", "Save note")) || enter) && valid) Submit(normalized);
-        ImGui.EndDisabled(); ImGui.SameLine();
-        if (DactTheme.Button(uiText.Get("清除备注", "Clear note"))) Submit("");
-        ImGui.EndDisabled(); ImGui.SameLine();
-        if (DactTheme.Button(uiText.Get("取消", "Cancel")) || ImGui.IsKeyPressed(ImGuiKey.Escape))
+        ImGui.EndDisabled(); ContinueButtonRow(clear, right);
+        if (DactTheme.Button(clear)) Submit("");
+        ImGui.EndDisabled(); ContinueButtonRow(cancel, right);
+        if (DactTheme.Button(cancel) || ImGui.IsKeyPressed(ImGuiKey.Escape))
         { remarkRelationId = null; submittedRemark = null; ImGui.CloseCurrentPopup(); }
         ImGui.EndPopup();
 

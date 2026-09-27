@@ -362,7 +362,7 @@ public sealed class EncounterWindow : Window
         if (encounter.SegmentRecords.Count > 0)
         {
             DactTheme.TextColored(Gold, LocalizeEncounterTitle(encounter));
-            ImGui.TextDisabled(text.Get(
+            ImGui.TextDisabled(text.Format(
                 $"本次副本包含 {encounter.SegmentRecords.Count} 把战斗，请在近期战斗中选择其中一把。",
                 $"This duty contains {encounter.SegmentRecords.Count} pulls; select one under Recent encounters."));
             ImGui.Spacing();
@@ -398,7 +398,7 @@ public sealed class EncounterWindow : Window
         ImGui.Spacing();
         DactTheme.TextColored(Gold, text.Get("队伍表现", "Party performance"));
         ImGui.SameLine();
-        ImGui.TextDisabled(text.Get(
+        ImGui.TextDisabled(text.Format(
             $"职业显示：{JobDisplayFormatter.Label(configuration.Meter.JobDisplayStyle, text)}（跟随战斗统计）",
             $"Job display: {JobDisplayFormatter.Label(configuration.Meter.JobDisplayStyle, text)} (follows Combat Meter)"));
 
@@ -498,7 +498,7 @@ public sealed class EncounterWindow : Window
             ImGui.GetColorU32(selected ? IceBlue : Vector4.One),
             TrimToWidth(prefix + EncounterTitle(encounter), width - 20));
         var recordCount = isFolder
-            ? text.Get($"{encounter.SegmentRecords.Count} 条记录  ·  ", $"{encounter.SegmentRecords.Count} records  ·  ")
+            ? text.Format($"{encounter.SegmentRecords.Count} 条记录  ·  ", $"{encounter.SegmentRecords.Count} records  ·  ")
             : string.Empty;
         var displayDuration = isFolder ? encounter.Duration : encounter.EffectiveDuration;
         var deaths = isFolder
@@ -546,7 +546,7 @@ public sealed class EncounterWindow : Window
                 ImDrawFlags.None,
                 1.25f);
         }
-        var title = text.Get(
+        var title = text.Format(
             $"记录 {index + 1} · {EncounterTitle(segment)}",
             $"Record {index + 1} · {EncounterTitle(segment)}");
         drawList.AddText(
@@ -670,7 +670,7 @@ public sealed class EncounterWindow : Window
             DrawRight($"FFLogs {fflogsEstimate.Score}", fflogsEstimate.Color);
         }
 
-        DrawRight(text.Get($"死亡 {combatant.Deaths}", $"KO {combatant.Deaths}"), new Vector4(0.78f, 0.80f, 0.84f, 1));
+        DrawRight(text.Format($"死亡 {combatant.Deaths}", $"KO {combatant.Deaths}"), new Vector4(0.78f, 0.80f, 0.84f, 1));
         DrawRight($"{performance.Percent:N1}%", new Vector4(0.72f, 0.78f, 0.84f, 1));
         DrawRight($"{(MeterSortModeOptions.Normalize(configuration.Meter.SortMode) == MeterSortMode.Hps ? "HPS" : DpsRateLabel())} {performance.Rate:N0}", MeterWindow.PrimaryRateColor(combatant.IsLocalPlayer));
 
@@ -684,7 +684,7 @@ public sealed class EncounterWindow : Window
             TrimToWidth(name, Math.Max(20, right - x - 6)));
         if (hovered && fflogsEstimate is not null)
         {
-            ImGui.SetTooltip(text.Get(
+            ImGui.SetTooltip(text.Format(
                 $"DPS Parse 预估：{fflogsEstimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{fflogsEstimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
                 $"Estimated DPS Parse: {fflogsEstimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {fflogsEstimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }

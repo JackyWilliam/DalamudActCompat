@@ -110,20 +110,7 @@ public sealed class SettingsWindow : Window
     {
         var changed = false;
         var hostConfigurationChanged = false;
-        if (DactTheme.BeginCombo(text.Get("界面语言", "UI language"), text.IsChinese ? "简体中文" : "English"))
-        {
-            if (ImGui.Selectable("简体中文", text.IsChinese))
-            {
-                configuration.UiLanguage = "zh-CN";
-                changed = true;
-            }
-            if (ImGui.Selectable("English", !text.IsChinese))
-            {
-                configuration.UiLanguage = "en";
-                changed = true;
-            }
-            ImGui.EndCombo();
-        }
+        changed |= UiLanguageSelector.Draw(configuration, text);
         WindowName = text.Get("ACT 兼容设置###DalamudActCompatSettings", "ACT Compat Settings###DalamudActCompatSettings");
         GameRegionSelector.Draw(text, getGameRegionSelection(), setGameRegionMode);
         changed |= ParserScopeSelector.Draw(text, configuration);
@@ -489,7 +476,7 @@ public sealed class SettingsWindow : Window
             CactbotOperationState.Installing => text.Get(
                 "正在安装 Cactbot 资源…",
                 "Installing Cactbot assets…"),
-            CactbotOperationState.Error => text.Get(
+            CactbotOperationState.Error => text.Format(
                 $"Cactbot 安装失败：{status.ErrorMessage}",
                 $"Cactbot installation failed: {status.ErrorMessage}"),
             _ when isCactbotInstalled() => text.Get(

@@ -23,6 +23,7 @@
       <Private>false</Private>
     </Reference>
     <EmbeddedResource Include="UI/LiquidGlass.hlsl" LogicalName="DACT.LiquidGlass.hlsl" />
+    <EmbeddedResource Include="UI/Locales/*.json" LogicalName="DACT.Locales.%(Filename).json" />
     <ProjectReference Include="../DalamudActCompat.Host/DalamudActCompat.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../DalamudActCompat.Protocol/DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />

@@ -267,10 +267,11 @@ internal static class SkinSmokeTests
         {
             var io = ImGui.GetIO(); io.IniFilename = null; io.LogFilename = null;
             io.DisplaySize = new(1120, 840); io.DeltaTime = 1f / 60;
-            ushort* ranges = stackalloc ushort[] { 0x20, 0xff, 0x2000, 0x30ff, 0x4e00, 0x9fff, 0xff00, 0xffef, 0 };
+            ushort* ranges = stackalloc ushort[] { 0x20, 0x024f, 0x2000, 0x30ff, 0x4e00, 0x9fff, 0xff00, 0xffef, 0 };
             io.Fonts.AddFontFromFileTTF(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "msyh.ttc"), 17, default, ranges);
             Check(io.Fonts.Build(), "Skin font atlas failed.");
             var raster = new NativeUiRasterizer(io.Fonts);
+            LanguageSelector();
             LoadGameTextures(raster);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
@@ -312,8 +313,8 @@ internal static class SkinSmokeTests
                         helpAction: () => { }, friendsAction: () => { }, onlineFriends: 2,
                         logoAction: () => { if (discoveries.ClickLogo(config.Appearance, Environment.TickCount64) is not null) unlockCount++; });
                     closeHit = new(ImGui.GetItemRectMin(), ImGui.GetItemRectMax().X, ImGui.GetItemRectMax().Y);
-                    BrandedWindowChrome.DrawNavigationRail("skin-preview-tabs", [text.Get("概览", "Overview"), text.Get("战斗统计", "Combat meter"),
-                        text.Get("悬浮窗", "Overlays"), text.Get("扩展", "Extensions"), text.Get("云同步", "Cloud sync"), text.Get("设置&账号", "Settings & Account")], 5);
+                    BrandedWindowChrome.DrawNavigationRail("skin-preview-tabs", [text.Get("概览", "Overview"), text.Get("战斗统计", "Combat Meter"),
+                        text.Get("悬浮窗", "Overlays"), text.Get("扩展", "Extensions"), text.Get("云同步", "Cloud Sync"), text.Get("设置&账号", "Settings & Account")], 5);
                     ImGui.BeginChild("control-center-page-content", new Vector2(-1, ControlCenterWindow.PageContentHeight()), true,
                         (skins.IsOpen ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None) |
                         (DactTheme.Palette.Light ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None));
@@ -334,6 +335,16 @@ internal static class SkinSmokeTests
                 ImGui.Render();
                 Check(context.ColorStack.Size == 0 && context.StyleVarStack.Size == 0, "Skin leaked ImGui style state.");
             }
+            foreach (var language in UiLanguages.All)
+            foreach (var fontScale in new[] { 1f, 1.4f })
+            {
+                config.UiLanguage = language.Id; io.FontGlobalScale = fontScale; windowSize = new(760, 520);
+                config.Appearance.SelectedSkin = SkinCatalog.RainyWindow; skins.Open(config.Appearance, account);
+                Frame(); Frame();
+                Check(applyButtonPosition.X < 790 && applyButtonPosition.Y < 550, "Localized skin actions escaped the small window.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"skin-locale-{language.Id}-{fontScale * 100:0}.png"));
+            }
+            config.UiLanguage = "zh-CN"; io.FontGlobalScale = 1; windowSize = new(1060, 780);
             foreach (var skin in SkinCatalog.All)
             {
                 config.Appearance.SelectedSkin = skin.Id; skins.Open(config.Appearance, account); Frame(); Frame();
@@ -497,6 +508,38 @@ internal static class SkinSmokeTests
             EmptyMeterEditorSummary(raster, output, logo);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
+    }
+
+    private static unsafe void LanguageSelector()
+    {
+        var config = new PluginConfiguration(); var text = new UiText(config);
+        var io = ImGui.GetIO(); var context = ImGui.GetCurrentContext();
+        var saves = 0; var hit = Vector2.Zero;
+        void Frame()
+        {
+            ImGui.NewFrame(); ImGui.SetNextWindowPos(new(30)); ImGui.SetNextWindowSize(new(520, 300));
+            ImGui.Begin("language-selector-native", ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDecoration);
+            if (UiLanguageSelector.Draw(config, text)) saves++;
+            hit = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) * .5f;
+            ImGui.End(); ImGui.Render();
+        }
+        void Click(Vector2 position)
+        {
+            io.AddMousePosEvent(position.X, position.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame();
+            io.AddMouseButtonEvent(0, false); Frame();
+        }
+        Frame(); Frame();
+        for (var index = 0; index < UiLanguages.All.Length; index++)
+        {
+            Click(hit); Frame(); Frame();
+            Check(context.OpenPopupStack.Size > 0, "Localized language selector could not be reopened.");
+            var popup = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
+            Click(popup.Pos + popup.WindowPadding + new Vector2(50, (index + .5f) * ImGui.GetTextLineHeightWithSpacing()));
+            Check(text.Language == UiLanguages.All[index].Id && context.OpenPopupStack.Size == 0,
+                "Actual language selection did not update and dismiss the menu.");
+        }
+        Check(saves == UiLanguages.All.Length, "Selecting a language did not save exactly once.");
+        Console.WriteLine("Languages native: all six autonyms selectable with stable IDs and one save per click.");
     }
 
     private static unsafe void RainGeometry()

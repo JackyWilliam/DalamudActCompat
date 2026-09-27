@@ -65,7 +65,7 @@ internal sealed partial class FriendsUiManager
                 FriendsGlyph.Draw(ImGui.GetWindowDrawList(), start, 23 * scale, ImGui.GetColorU32(Blue));
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 31 * scale);
                 DactTheme.TextColored(Blue, uiText.Get("好友", "Friends")); ImGui.SameLine();
-                ImGui.TextDisabled(uiText.Get($"{(state.State == "ready" ? state.Friends?.OnlineCount ?? 0 : 0)} 人在线", $"{(state.State == "ready" ? state.Friends?.OnlineCount ?? 0 : 0)} online"));
+                ImGui.TextDisabled(uiText.Format($"{(state.State == "ready" ? state.Friends?.OnlineCount ?? 0 : 0)} 人在线", $"{(state.State == "ready" ? state.Friends?.OnlineCount ?? 0 : 0)} online"));
                 ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
                 DrawOwnPresenceMenu(state, scale);
                 ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
@@ -228,7 +228,7 @@ internal sealed partial class FriendsUiManager
         if (ImGui.InputTextWithHint("##my-status-text", uiText.Get("加一句话，例如：今晚刷坐骑", "Add a status, e.g. mount farming tonight"), ref text, 320))
         { editingSettings = editingSettings with { Text = text }; settingsDirty = true; }
         var textLength = text.EnumerateRunes().Count();
-        if (textLength > 80) DactTheme.TextColored(Gold, uiText.Get($"状态文字最多 80 字（当前 {textLength} 字）", $"Status limit: 80 characters ({textLength} entered)"));
+        if (textLength > 80) DactTheme.TextColored(Gold, uiText.Format($"状态文字最多 80 字（当前 {textLength} 字）", $"Status limit: 80 characters ({textLength} entered)"));
         ImGui.BeginDisabled(!settingsDirty || textLength > 80);
         var desired = editingSettings with { ShareDuty = current.ShareDuty };
         if (DactTheme.Button(uiText.Get("保存状态", "Save status")) && controller.UpdatePresence(desired))
@@ -253,7 +253,7 @@ internal sealed partial class FriendsUiManager
         else if (!settingsDirty)
         {
             DactTheme.PushStyleColor(ImGuiCol.Text, new Vector4(.60f, .68f, .75f, 1));
-            ImGui.TextWrapped(uiText.Get($"已保存：{StatusName(current.Status)}{(string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text)}", $"Saved: {StatusName(current.Status)}{(string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text)}"));
+            ImGui.TextWrapped(uiText.Format($"已保存：{StatusName(current.Status)}{(string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text)}", $"Saved: {StatusName(current.Status)}{(string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text)}"));
             ImGui.PopStyleColor();
         }
     }
@@ -376,7 +376,7 @@ internal sealed partial class FriendsUiManager
     {
         if (removeId is not null) ImGui.OpenPopup("remove-friend-confirmation");
         if (!ImGui.BeginPopup("remove-friend-confirmation")) return;
-        ImGui.TextWrapped(uiText.Get($"解除与 {removeName} 的好友关系后，双方会话和保留消息将被删除。", $"Removing {removeName} will delete the conversation and retained messages for both people."));
+        ImGui.TextWrapped(uiText.Format($"解除与 {removeName} 的好友关系后，双方会话和保留消息将被删除。", $"Removing {removeName} will delete the conversation and retained messages for both people."));
         ImGui.BeginDisabled(state.Busy);
         if (DactTheme.Button(uiText.Get("确认解除", "Confirm removal"))) { controller.Remove(removeId!); removeId = null; ImGui.CloseCurrentPopup(); }
         ImGui.EndDisabled(); ImGui.SameLine();

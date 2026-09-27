@@ -25,7 +25,7 @@ public sealed class MeterStyleEditorWindow : Window
     private readonly RoleSplitMeterWindow roleSplitHealerWindow;
     private Encounter previewEncounter;
     private IReadOnlyList<CombatantRow> previewRows;
-    private bool previewChinese;
+    private string previewLanguage;
     private readonly UiText text;
     private readonly WindowDragController headerDrag = new();
     private readonly Action saveConfiguration;
@@ -58,7 +58,7 @@ public sealed class MeterStyleEditorWindow : Window
         this.roleSplitHealerWindow = roleSplitHealerWindow;
         this.text = text;
         this.saveConfiguration = saveConfiguration;
-        previewChinese = text.IsChinese;
+        previewLanguage = text.Language;
         previewEncounter = CreatePreviewEncounter(text);
         previewRows = CreatePreviewRows(previewEncounter);
         Size = new Vector2(1040, 690);
@@ -133,9 +133,9 @@ public sealed class MeterStyleEditorWindow : Window
     {
         // Preview actors are synthetic UI content, not user combat logs. Refresh
         // them when language changes without touching the edited meter settings.
-        if (previewChinese != text.IsChinese)
+        if (previewLanguage != text.Language)
         {
-            previewChinese = text.IsChinese;
+            previewLanguage = text.Language;
             previewEncounter = CreatePreviewEncounter(text);
             previewRows = CreatePreviewRows(previewEncounter);
         }
@@ -708,7 +708,7 @@ public sealed class MeterStyleEditorWindow : Window
             var isHealer = JobRoleClassifier.IsHealer(job);
             return new Combatant(
                 $"preview-{index + 1}",
-                index == 0 ? text.Get("自己", "You") : text.Get($"队友 {index:00}", $"Party member {index:00}"),
+                index == 0 ? text.Get("自己", "You") : text.Format($"队友 {index:00}", $"Party member {index:00}"),
                 job,
                 index == 0,
                 dps * 180L,

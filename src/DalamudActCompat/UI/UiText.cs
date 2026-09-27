@@ -5,13 +5,21 @@ namespace DalamudActCompat.UI;
 
 public sealed class UiText(PluginConfiguration configuration)
 {
-    public bool IsChinese => !string.Equals(configuration.UiLanguage, "en", StringComparison.OrdinalIgnoreCase);
+    public string Language => UiLanguages.Normalize(configuration.UiLanguage);
+    public bool IsChinese => Language is "zh-CN" or "zh-TW";
 
-    public string Get(string chinese, string english) => IsChinese ? chinese : english;
+    public string Get(string chinese, string english)
+        => Language == "zh-CN" ? chinese : UiTranslations.Get(Language, english);
+
+    // Keep arguments separate from the translation key. Names, paths and user
+    // content must never enter the catalog or be changed by translation rules.
+    public string Format(string chinese, FormattableString english)
+        => Language == "zh-CN" ? chinese : string.Format(System.Globalization.CultureInfo.CurrentCulture,
+            UiTranslations.Get(Language, english.Format), english.GetArguments());
 
     // Only application-owned status messages pass through this boundary. Account
     // names, notes, chat text, and announcement bodies must retain their original text.
-    internal string SystemMessage(string message) => IsChinese ? message : SystemStatusText.English(message);
+    internal string SystemMessage(string message) => Language == "zh-CN" ? message : SystemStatusText.Localize(message, Language);
 
     internal string MessageBody(CloudChatMessage message) => message.QuickMessageId switch
     {

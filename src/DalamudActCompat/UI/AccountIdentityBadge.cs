@@ -35,7 +35,7 @@ internal static class AccountIdentityBadge
             if (sponsorIcon is not null)
                 list.AddImage(sponsorIcon.GetWrapOrEmpty().Handle, start + new Vector2(4, 0), start + new Vector2(4 + badgeSize, badgeSize));
             list.AddText(start + new Vector2(badgeSize + 8, 0), ImGui.GetColorU32(new Vector4(1, .86f, .6f, 1)), tier);
-            if (ImGui.IsMouseHoveringRect(start, end)) ImGui.SetTooltip(text?.Get($"赞助者 · {sponsorTier} 级 · 永久", $"Sponsor · Tier {sponsorTier} · Permanent") ?? $"赞助者 · {sponsorTier} 级 · 永久");
+            if (ImGui.IsMouseHoveringRect(start, end)) ImGui.SetTooltip(text?.Format($"赞助者 · {sponsorTier} 级 · 永久", $"Sponsor · Tier {sponsorTier} · Permanent") ?? $"赞助者 · {sponsorTier} 级 · 永久");
             start.X = end.X + 4;
         }
         if (hasBadge)

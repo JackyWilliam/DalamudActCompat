@@ -445,33 +445,28 @@ public sealed class StatusWindow : Window
     private string LocalizeValue(object? value)
     {
         var raw = value?.ToString() ?? "-";
-        if (!text.IsChinese)
-        {
-            return raw;
-        }
-
         return raw.ToLowerInvariant() switch
         {
-            "stopped" => "已停止",
-            "starting" => "启动中",
-            "running" => "运行中",
-            "stopping" => "停止中",
-            "faulted" => "故障",
-            "circuitopen" or "circuit-open" => "熔断中",
-            "connecting" => "连接中",
-            "connected" => "已连接",
-            "suspect" => "连接可疑",
-            "healthy" => "正常",
-            "degraded" => "降级",
-            "disabled" => "已禁用",
-            "normal" => "正常",
-            "monitoring" => "观察中",
-            "deferredforcombat" => "等待脱战",
-            "emergencycountdown" => "紧急倒计时",
-            "recycling" => "平滑重启中",
-            "ignored" => "本次已忽略",
-            "ready" => "就绪",
-            "initializing" => "初始化中",
+            "stopped" => text.Get("已停止", "Stopped"),
+            "starting" => text.Get("启动中", "Starting"),
+            "running" => text.Get("运行中", "Running"),
+            "stopping" => text.Get("停止中", "Stopping"),
+            "faulted" => text.Get("故障", "Faulted"),
+            "circuitopen" or "circuit-open" => text.Get("熔断中", "Circuit open"),
+            "connecting" => text.Get("连接中", "Connecting"),
+            "connected" => text.Get("已连接", "Connected"),
+            "suspect" => text.Get("连接可疑", "Suspect"),
+            "healthy" => text.Get("正常", "Healthy"),
+            "degraded" => text.Get("降级", "Degraded"),
+            "disabled" => text.Get("已禁用", "Disabled"),
+            "normal" => text.Get("正常", "Normal"),
+            "monitoring" => text.Get("观察中", "Monitoring"),
+            "deferredforcombat" => text.Get("等待脱战", "Waiting for combat to end"),
+            "emergencycountdown" => text.Get("紧急倒计时", "Emergency countdown"),
+            "recycling" => text.Get("平滑重启中", "Restarting gracefully"),
+            "ignored" => text.Get("本次已忽略", "Ignored for this session"),
+            "ready" => text.Get("就绪", "Ready"),
+            "initializing" => text.Get("初始化中", "Initializing"),
             _ => raw,
         };
     }
@@ -506,7 +501,7 @@ public sealed class StatusWindow : Window
         if (snapshot.CountdownEndsAt is { } countdownEndsAt)
         {
             var seconds = Math.Max(0, Math.Ceiling((countdownEndsAt - DateTimeOffset.UtcNow).TotalSeconds));
-            return text.Get(
+            return text.Format(
                 $"{detail} 剩余约 {seconds:0} 秒，可选择本次忽略。",
                 $"{detail} About {seconds:0} seconds remain; recovery can be ignored for this session.");
         }

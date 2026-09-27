@@ -1495,7 +1495,7 @@ public sealed class MeterWindow : Window
             var updated = reference.LatestDataUpdatedAt is { } date
                 ? date.ToLocalTime().ToString("yyyy/MM/dd")
                 : "--";
-            ImGui.SetTooltip(text.Get(
+            ImGui.SetTooltip(text.Format(
                 $"DPS Parse 预估\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{updated}",
                 $"Estimated DPS Parse\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {updated}"));
         }
@@ -1760,7 +1760,7 @@ public sealed class MeterWindow : Window
                 new Vector2(start.X + highestDamage.Offset + highestDamage.Width, end.Y));
             if (highestDamageHovered && row.HighestDamage > 0)
             {
-                ImGui.SetTooltip(text.Get(
+                ImGui.SetTooltip(text.Format(
                     $"最高单次：{row.HighestDamageAction} {row.HighestDamage:N0}",
                     $"Highest hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
             }
@@ -1818,7 +1818,7 @@ public sealed class MeterWindow : Window
 
         if (estimate is not null && hovered && !highestDamageHovered)
         {
-            ImGui.SetTooltip(text.Get(
+            ImGui.SetTooltip(text.Format(
                 $"DPS Parse 预估：{estimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
                 $"Estimated DPS Parse: {estimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }

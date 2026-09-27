@@ -73,6 +73,7 @@ try
         Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
     EnglishLocalizationSmokeTests.Run();
+    UiLanguageSmokeTests.Run();
     if (args.Contains("--localization-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--liquid-glass-only", StringComparer.Ordinal))
     {

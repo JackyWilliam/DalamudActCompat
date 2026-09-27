@@ -122,7 +122,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
         {
             CompleteInstallWhenReady();
             var noticeState = pending.Count > 0
-                ? text.Get($"待确认 {pending.Count} 项", $"{pending.Count} pending")
+                ? text.Format($"待确认 {pending.Count} 项", $"{pending.Count} pending")
                 : text.Get("声明已确认", "Notices acknowledged");
             if (BrandedWindowChrome.Draw(
                     headerDrag,
@@ -331,7 +331,7 @@ public sealed class ThirdPartyPluginNoticeWindow : Window
                 ? text.Get(
                     "内置 DLL 已安装/更新，告知记录已保存。",
                     "Bundled DLLs were installed/updated and the notice acknowledgement was saved.")
-                : text.Get(
+                : text.Format(
                     $"内置 DLL 和告知记录已保存；兼容 Host 正在后台恢复：{outcome.RuntimeWarning}",
                     $"Bundled DLLs and acknowledgements were saved; the compatibility Host is recovering in the background: {outcome.RuntimeWarning}");
             if (shouldPromptForPermissions())

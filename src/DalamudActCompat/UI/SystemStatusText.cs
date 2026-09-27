@@ -194,19 +194,20 @@ internal static class SystemStatusText
         new(@"备注同步未确认：(.*)", "Note sync is unconfirmed: {0}", true),
     ];
 
-    internal static string English(string message) => Translate(message, 0);
+    internal static string English(string message) => Translate(message, 0, "en");
+    internal static string Localize(string message, string language) => Translate(message, 0, language);
 
-    private static string Translate(string message, int depth)
+    private static string Translate(string message, int depth, string language)
     {
-        if (Messages.TryGetValue(message, out var translated)) return translated;
+        if (Messages.TryGetValue(message, out var translated)) return UiTranslations.Get(language, translated);
         if (depth >= 4 || !message.Any(c => c is >= '\u4e00' and <= '\u9fff')) return message;
         foreach (var rule in Rules)
         {
             var match = rule.Matcher.Match(message);
             if (!match.Success) continue;
             var values = match.Groups.Cast<Group>().Skip(1).Select(group => group.Value).ToArray();
-            if (rule.TranslateFirst) values[0] = Translate(values[0], depth + 1);
-            return string.Format(System.Globalization.CultureInfo.InvariantCulture, rule.Format, values);
+            if (rule.TranslateFirst) values[0] = Translate(values[0], depth + 1, language);
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture, UiTranslations.Get(language, rule.Format), values);
         }
         return message;
     }
