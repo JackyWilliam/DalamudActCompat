@@ -58,7 +58,8 @@ internal sealed partial class FriendsUiManager
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(2 * scale, 0));
             // Let the textured owner supply the paper and bottom rim instead of
             // covering its last pixels with a solid child background.
-            var contentFlags = gameFrame ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None;
+            var contentFlags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse |
+                (gameFrame ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None);
             if (ImGui.BeginChild("drawer-content", new(layout.Size.X - 42 * scale, layout.Size.Y - (gameFrame ? 28 : 24) * scale), false, contentFlags))
             {
                 var start = ImGui.GetCursorScreenPos();
@@ -77,20 +78,33 @@ internal sealed partial class FriendsUiManager
                 // their right edge flush against the navigation container.
                 var contentPadding = Math.Max(3, 3 * scale);
                 ImGui.SetCursorPosY(ImGui.GetCursorPosY() + contentPadding);
-                ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(contentPadding));
-                if (ImGui.BeginTable("friend-section-content", 1, ImGuiTableFlags.NoSavedSettings))
+                // Keep identity and navigation fixed while each section remembers
+                // its own scroll position. A wheel at the list edge must not move
+                // the whole drawer or leave the Add tab scrolled past its input.
+                ImGui.PushID(friendSection);
+                ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarSize, 8 * scale);
+                ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarRounding, 4 * scale);
+                ImGui.PushStyleColor(ImGuiCol.ScrollbarBg, Vector4.Zero);
+                if (ImGui.BeginChild("friend-section-scroll", new(0, Math.Max(1, ImGui.GetContentRegionAvail().Y)), false, ImGuiWindowFlags.NoBackground))
                 {
-                    ImGui.TableNextRow(); ImGui.TableSetColumnIndex(0);
-                    ImGui.PushTextWrapPos(0);
-                    switch (friendSection)
+                    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(contentPadding));
+                    if (ImGui.BeginTable("friend-section-content", 1, ImGuiTableFlags.NoSavedSettings))
                     {
-                        case 0: DrawFriendRows(state, scale); break;
-                        case 1: DrawFriendRequests(state); break;
-                        case 2: DrawAddFriend(state); break;
+                        ImGui.TableNextRow(); ImGui.TableSetColumnIndex(0);
+                        ImGui.PushTextWrapPos(0);
+                        switch (friendSection)
+                        {
+                            case 0: DrawFriendRows(state, scale); break;
+                            case 1: DrawFriendRequests(state); break;
+                            case 2: DrawAddFriend(state); break;
+                        }
+                        ImGui.PopTextWrapPos(); ImGui.EndTable();
                     }
-                    ImGui.PopTextWrapPos(); ImGui.EndTable();
+                    ImGui.PopStyleVar();
+                    ImGui.Spacing(); ImGui.Separator();
+                    ImGui.TextDisabled(uiText.Get("消息使用须知", "Messaging guidelines")); ImGui.TextWrapped(uiText.Get(CloudChatPolicy.Notice, "Do not use messaging for money laundering, fake transactions, fraud, or other prohibited activities. Administrators may review suspected violations."));
                 }
-                ImGui.PopStyleVar();
+                ImGui.EndChild(); ImGui.PopStyleColor(); ImGui.PopStyleVar(2); ImGui.PopID();
                 DrawRemoveConfirmation(state);
                 // The drawer intentionally has no vertical padding; editing popups
                 // need their own inset so text and controls clear the themed frame.
@@ -99,8 +113,6 @@ internal sealed partial class FriendsUiManager
                 DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
                 DrawRemarkEditor(state, scale);
                 ImGui.PopStyleColor(); ImGui.PopStyleVar(2);
-                ImGui.Spacing(); ImGui.Separator();
-                ImGui.TextDisabled(uiText.Get("消息使用须知", "Messaging guidelines")); ImGui.TextWrapped(uiText.Get(CloudChatPolicy.Notice, "Do not use messaging for money laundering, fake transactions, fraud, or other prohibited activities. Administrators may review suspected violations."));
             }
             ImGui.EndChild(); ImGui.PopStyleVar(); ImGui.PopClipRect();
             // Preserve the main window's original right edge throughout both

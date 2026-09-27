@@ -487,6 +487,8 @@ internal static partial class FriendsUiSmokeTests
                 for (var i = 0; i < context.Windows.Size; i++)
                 {
                     var window = context.Windows[i]; var name = Marshal.PtrToStringUTF8((nint)window.Name) ?? "";
+                    // Inactive tabs retain the geometry from the previous viewport.
+                    if (!window.Active) continue;
                     if (!name.Contains("##DACTFriendsDrawer") && !name.Contains("###DACTFriendChat-")) continue;
                     if (name == "##DACTFriendsDrawer") drawerFound = true;
                     Check(window.Pos.X >= 0 && window.Pos.Y >= 0 && window.Pos.X + window.Size.X <= surface.X && window.Pos.Y + window.Size.Y <= surface.Y,
@@ -564,6 +566,56 @@ internal static partial class FriendsUiSmokeTests
                 }
             }
             liveConfiguration.UiLanguage = "zh-CN";
+            // Drive the real wheel with overflowing content. Header geometry and
+            // per-tab scroll state must survive reaching both ends of the list.
+            ui.Hide(); ui.ToggleDrawer();
+            var sectionField = typeof(FriendsUiManager).GetField("friendSection", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            ImGuiWindowPtr DrawerChild(string part)
+            {
+                for (var i = 0; i < context.Windows.Size; i++)
+                {
+                    var window = context.Windows[i];
+                    var name = Marshal.PtrToStringUTF8((nint)window.Name) ?? "";
+                    if (window.Active && name.Contains(part, StringComparison.Ordinal)) return window;
+                }
+                throw new Exception("Missing active drawer child: " + part);
+            }
+            foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Eorzea, SkinCatalog.LiquidGlass })
+            foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
+            {
+                liveConfiguration.Appearance.SelectedSkin = skin;
+                liveConfiguration.Appearance.UnlockedEasterEggs.Add(SkinCatalog.LiquidGlass);
+                DactTheme.SetCurrent(liveConfiguration.Appearance, true, 3);
+                io.FontGlobalScale = scale; io.DisplaySize = new(1440, 920);
+                anchor = new(30, 40); mainSize = new(650, Math.Min(740, 450 * scale));
+                sectionField.SetValue(ui, 0);
+                for (var i = 0; i < 12; i++) Frame();
+                var body = DrawerChild("friend-section-scroll");
+                var shell = body.ParentWindow;
+                var bodyPosition = body.Pos;
+                Check(body.ScrollbarY && body.ScrollMax.Y > 0 && !body.ScrollbarX && !shell.ScrollbarY && shell.Scroll.Y == 0,
+                    $"Drawer scrolling was not confined to the list: {skin}/{scale}.");
+                Check(body.Pos.Y > shell.Pos.Y + 100 * scale, "Scrollbar still extends through the friend header.");
+                io.AddMousePosEvent(body.Pos.X + 35 * scale, body.Pos.Y + 15); Frame();
+                io.AddMouseWheelEvent(0, -100); for (var i = 0; i < 6; i++) Frame();
+                Check(body.Scroll.Y == body.ScrollMax.Y && shell.Scroll.Y == 0 && body.Pos == bodyPosition,
+                    "Wheel at the list bottom moved its fixed header or could not reach the end.");
+                var scroll = body.Scroll.Y;
+                if (output is not null && scale == 1)
+                    raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-list-scroll-{skin}-bottom.png"));
+                sectionField.SetValue(ui, 2); Frame(); Frame();
+                var add = DrawerChild("friend-section-scroll");
+                Check(add.ID != body.ID && add.Scroll.Y == 0, "Add tab inherited the friends' scroll offset.");
+                sectionField.SetValue(ui, 0); Frame(); Frame();
+                Check(body.Scroll.Y == scroll, "Returning to friends lost its scroll position.");
+                io.AddMousePosEvent(body.Pos.X + 35 * scale, body.Pos.Y + 15); Frame();
+                io.AddMouseWheelEvent(0, 100); for (var i = 0; i < 6; i++) Frame();
+                Check(body.Scroll.Y == 0 && shell.Scroll.Y == 0 && body.Pos == bodyPosition,
+                    "Wheel at the list top moved its fixed header or could not return to the first friend.");
+                if (output is not null && scale == 1)
+                    raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-list-scroll-{skin}-top.png"));
+            }
+            Console.WriteLine("Friend drawer scroll: fixed header, wheel limits and independent tabs passed for three skins at 75/100/150/200% fonts.");
             DactTheme.SetCurrent(new(), false, 0);
             if (runNotifications)
             {
