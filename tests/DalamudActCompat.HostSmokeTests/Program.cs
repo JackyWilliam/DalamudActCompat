@@ -18,6 +18,12 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Newtonsoft.Json.Linq;
 
+if (args.Length is 2 or 3 && args[0] == "--foxtts-layout")
+{
+    FoxTtsLayoutSmokeTests.Run(args[1], args.Length == 3 ? args[2] : null);
+    return;
+}
+
 if (args.Length == 3 && args[0] == "--simulant")
 {
     SimulantSmokeTests.RunOriginal(args[1], args[2]);
@@ -106,6 +112,7 @@ if (u7bProbe || u7bOrderingProbe)
 await ValidateHandshakeCommandBoundaryAndShutdownAsync();
 ValidateForegroundNotificationRouting();
 ValidateFoxTtsDefaultConfiguration();
+FoxTtsLayoutSmokeTests.Run(Path.Combine(FindProjectRoot(), "vendor", "BundledActPlugins", "act.foxtts", "ACT.FoxTTS.dll"));
 ValidateTriggernometryConfigurationRecovery();
 await ValidateSequenceRegressionTerminatesHostAsync();
 await ValidateExpiredMessageIsDroppedAsync();
@@ -143,7 +150,7 @@ var matchaPackage = Path.Combine(
     "vendor",
     "BundledActPlugins",
     "matcha",
-    "Cafe.Matcha-26.8.12.1622-dact4.zip");
+    "Cafe.Matcha-26.9.26.1753-dact5.zip");
 if (File.Exists(matchaPackage))
 {
     ValidateMatchaAssemblyContract(matchaPackage);
@@ -3393,7 +3400,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
         var originalHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assemblyPath)));
         Assert(
-            originalHash == "3DF088E73DD8A314A08A1B302A2FEFE9BFEFC1A52FCE54032F719421CF7810FA",
+            originalHash == "73606BAABD1E8386E5900BEC074DB7D5FE898A26109F79C921A5187C222CA9BD",
             "The bundled Matcha entry DLL does not match its disclosed fixed hash.");
         Assert(
             Convert.ToHexString(
@@ -3545,6 +3552,11 @@ void ValidateMatchaAssemblyContract(string packagePath)
             [0x01C4] = "PlayerSpawn",
             [0x038A] = "SubmarineStatusList",
             [0x01E8] = "WorldVisitQueue",
+            [0x01C6] = "EventPlay4",
+            [0x00A8] = "SystemLogMessage",
+            [0x0110] = "FishCaught",
+            [0x0083] = "StatusEffectList",
+            [0x8187] = "ClientTrigger",
         };
         foreach (var region in new[] { "Global", "China" })
         {
@@ -3671,6 +3683,7 @@ static void ValidateMatchaEventPackets(Assembly assembly)
         foreach (var region in new[] { "China", "Global" })
         {
             regionProperty.SetValue(config, Enum.Parse(regionType, region));
+            MatchaFishingSmokeTests.Run(assembly, region);
             object Packet(ushort opcode, uint first, uint second, uint third, bool client = false)
             {
                 var bytes = new byte[56];
@@ -3678,7 +3691,7 @@ static void ValidateMatchaEventPackets(Assembly assembly)
                 BitConverter.GetBytes(first).CopyTo(bytes, 32);
                 BitConverter.GetBytes(second).CopyTo(bytes, 40);
                 BitConverter.GetBytes(third).CopyTo(bytes, 48);
-                return Activator.CreateInstance(packetType, Enum.Parse(senderType, client ? "Client" : "Server"), bytes)!;
+                return Activator.CreateInstance(packetType, Enum.Parse(senderType, client ? "Client" : "Server"), bytes, 1700000000000L)!;
             }
             fates.GetType().GetMethod("Clear")!.Invoke(fates, null);
             var fate = Packet(0x0154, 1234, 1700000000, 900);
@@ -4412,7 +4425,7 @@ async Task ValidateMatchaLoadsOutOfProcessAsync(string packagePath)
             {
                 id = "matcha",
                 name = "Cafe.Matcha",
-                version = "26.8.12.1622",
+                version = "26.9.26.1753",
                 entryAssembly = Path.GetRelativePath(matchaInstallRoot, entryAssembly),
                 entryType = "Cafe.Matcha.MatchaInit",
                 hostApiVersion = 1,

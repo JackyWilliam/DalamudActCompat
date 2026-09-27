@@ -5274,7 +5274,7 @@ static void ValidateExternalPluginLogLineFormat()
         ?? throw new InvalidOperationException(
             "The external plugin log-line parser was not found.");
     const string timestampText = "2026-09-03T20:50:53.5243638+08:00";
-    const string payload = "0|Matcha#26.8.12.1622#chs-Test|{\"ok\":true}";
+    const string payload = "0|Matcha#26.9.26.1753#chs-Test|{\"ok\":true}";
     var arguments = new object?[]
     {
         $"00|{timestampText}|{payload}",
@@ -5931,15 +5931,15 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
     Assert(
         pending.Any(plugin =>
             plugin.Id == "matcha" &&
-            plugin.Version == "26.8.12.1622" &&
+            plugin.Version == "26.9.26.1753" &&
             plugin.License == "AGPL-3.0" &&
             plugin.DisableOnlineUpdates &&
             plugin.EnableAfterInstall &&
             plugin.SourceUrl.EndsWith(
-                "/6cf242b59475aa77e4c2deee61e1b9191be5ba13",
+                "/d4fffc60399549b9e9b8af9d6ca9bfec7378c7ff",
                 StringComparison.Ordinal) &&
-            plugin.PackageSha256 == "e9bbe09870dd3102603342d972ed8e1fd06637449e8e15de6ff6992f7905639f" &&
-            plugin.Sha256 == "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa" &&
+            plugin.PackageSha256 == "aac2fbaf31e37e932bc04e210e2a73c8824662ce30b90295875d14389b14e613" &&
+            plugin.Sha256 == "73606baabd1e8386e5900bec074db7d5fe898a26109f79c921a5187c222ca9bd" &&
             File.Exists(plugin.PackagePath)),
         "Matcha source commit, AGPL notice, fixed hashes, default-enable flag, or complete package is missing.");
 
@@ -12232,7 +12232,7 @@ static void ValidateLegacyResourceRuntimeDependencies()
         "BundledActPlugins/act.foxtts/LICENSE.txt",
         "BundledActPlugins/postnamazu/PostNamazu.dll",
         "BundledActPlugins/silverdasher/SilverDasher-0.6.0.4-cafe.zip",
-        "BundledActPlugins/matcha/Cafe.Matcha-26.8.12.1622-dact4.zip",
+        "BundledActPlugins/matcha/Cafe.Matcha-26.9.26.1753-dact5.zip",
         "BundledActPlugins/matcha/LICENSE.txt",
         "BundledActPlugins/matcha/BUILD.md",
         "BundledActPlugins/matcha/dact-compat.patch",

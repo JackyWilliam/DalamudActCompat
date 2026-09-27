@@ -172,14 +172,14 @@ if (-not (Test-Path -LiteralPath $silverPackage) -or
 
 # Matcha updates require a source-diff and license review, so sync only verifies
 # the audited local package instead of replacing it from an ephemeral artifact.
-$matchaPackage = Join-Path $destinationRoot "matcha/Cafe.Matcha-26.8.12.1622-dact4.zip"
-$matchaPackageSha256 = "e9bbe09870dd3102603342d972ed8e1fd06637449e8e15de6ff6992f7905639f"
+$matchaPackage = Join-Path $destinationRoot "matcha/Cafe.Matcha-26.9.26.1753-dact5.zip"
+$matchaPackageSha256 = "aac2fbaf31e37e932bc04e210e2a73c8824662ce30b90295875d14389b14e613"
 $matchaAssemblyPath = "Plugins/Cafe.Matcha/Cafe.Matcha.dll"
-$matchaAssemblySha256 = "3df088e73dd8a314a08a1b302a2fefe9bfefc1a52fce54032f719421cf7810fa"
+$matchaAssemblySha256 = "73606baabd1e8386e5900bec074db7d5fe898a26109f79c921a5187c222ca9bd"
 if (-not (Test-Path -LiteralPath $matchaPackage) -or
     (Get-Sha256 $matchaPackage) -ne $matchaPackageSha256 -or
     (Get-ZipEntrySha256 $matchaPackage $matchaAssemblyPath) -ne $matchaAssemblySha256) {
-    throw "The bundled Matcha 26.8.12.1622 DACT3 package no longer matches its fixed hashes."
+    throw "The bundled Matcha 26.9.26.1753 DACT5 package no longer matches its fixed hashes."
 }
 
 $triggerDllUrl = "https://1824544011.v.123pan.cn/1824544011/Triggernometry_Release_CN/Triggernometry.dll"
@@ -295,18 +295,18 @@ $plugins = @(
     [ordered]@{
         id = "matcha"
         name = "抹茶 / Cafe.Matcha"
-        version = "26.8.12.1622"
+        version = "26.9.26.1753"
         author = "FFCafe / The Waking Sands"
         maintainer = "The Waking Sands contributors; DACT compatibility build maintained by DalamudActCompat"
         copyright = "Copyright © FFCafe and Cafe.Matcha contributors"
         projectUrl = "https://github.com/thewakingsands/matcha"
-        downloadUrl = "https://github.com/thewakingsands/matcha/actions/runs/31370163458"
-        sourceUrl = "https://github.com/thewakingsands/matcha/tree/6cf242b59475aa77e4c2deee61e1b9191be5ba13"
+        downloadUrl = "https://github.com/thewakingsands/matcha/tree/d4fffc60399549b9e9b8af9d6ca9bfec7378c7ff"
+        sourceUrl = "https://github.com/thewakingsands/matcha/tree/d4fffc60399549b9e9b8af9d6ca9bfec7378c7ff"
         license = "AGPL-3.0"
         licenseFile = "matcha/LICENSE.txt"
         relativeAssembly = $matchaAssemblyPath
         sha256 = $matchaAssemblySha256
-        relativePackage = "matcha/Cafe.Matcha-26.8.12.1622-dact4.zip"
+        relativePackage = "matcha/Cafe.Matcha-26.9.26.1753-dact5.zip"
         packageSha256 = $matchaPackageSha256
         disableOnlineUpdates = $true
         enableAfterInstall = $true

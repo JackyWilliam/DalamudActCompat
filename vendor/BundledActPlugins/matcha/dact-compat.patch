@@ -9,8 +9,10 @@ index fe154ab..b1568a6 100644
 @@ -17 +18,2 @@
 -    <Version>$([System.DateTime]::UtcNow.ToString("yy.M.d.Hmm"))</Version>
 +    <Version Condition="'$(DactCompatBuild)' != 'true'">$([System.DateTime]::UtcNow.ToString("yy.M.d.Hmm"))</Version>
-+    <Version Condition="'$(DactCompatBuild)' == 'true'">26.8.12.1622</Version>
-@@ -139 +141 @@
++    <Version Condition="'$(DactCompatBuild)' == 'true'">26.9.26.1753</Version>
+@@ -57,0 +60 @@
++      <HintPath Condition="Exists('$(DactWindowsContractPath)')">$(DactWindowsContractPath)</HintPath>
+@@ -139 +142 @@
 -  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
 +  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DactCompatBuild)' != 'true'">
 diff --git a/Cafe.Matcha/Config.cs b/Cafe.Matcha/Config.cs
