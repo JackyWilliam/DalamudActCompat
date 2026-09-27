@@ -67,15 +67,15 @@ is enabled after installation and starts last in its own dedicated Host process.
   - The supplied package contains no license file. Redistribution of this
     bundled version was authorized by the upstream maintainer through direct
     communication on 2026-08-10.
-- Cafe.Matcha 26.8.12.1622
+- Cafe.Matcha 26.9.26.1753 (DACT5)
   - Author/copyright: FFCafe and Cafe.Matcha contributors
   - Project: <https://github.com/thewakingsands/matcha>
-  - Exact source commit: <https://github.com/thewakingsands/matcha/tree/6cf242b59475aa77e4c2deee61e1b9191be5ba13>
-  - Upstream Actions run: <https://github.com/thewakingsands/matcha/actions/runs/31370163458>
+  - Exact source commit: <https://github.com/thewakingsands/matcha/tree/d4fffc60399549b9e9b8af9d6ca9bfec7378c7ff>
+  - Retained runtime-constant companion (2026-08-12): <https://github.com/thewakingsands/matcha/actions/runs/31370163458>
   - DACT compatibility patch/build instructions:
     `vendor/BundledActPlugins/matcha/dact-compat.patch` and `BUILD.md`
-  - Complete package SHA-256: `DA2037D3FB75914FD980F72978DEBF83FC761F693ADFFF939DBF386F0196A89B`
-  - Entry DLL SHA-256: `3DF088E73DD8A314A08A1B302A2FEFE9BFEFC1A52FCE54032F719421CF7810FA`
+  - Complete package SHA-256: `AAC2FBAF31E37E932BC04E210E2A73C8824662CE30B90295875D14389B14E613`
+  - Entry DLL SHA-256: `73606BAABD1E8386E5900BEC074DB7D5FE898A26109F79C921A5187C222CA9BD`
   - Hash-pinned upstream Actions companion SHA-256:
     `EF485B027FE84150768A8498331BEFCE5C997047FADF7B38B766EC9703818ED6`
   - License: AGPL-3.0; the license text is included with the bundled package.

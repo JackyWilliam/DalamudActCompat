@@ -1,23 +1,22 @@
 # Cafe.Matcha DACT compatibility build
 
 The bundled `Cafe.Matcha.dll` is built from upstream commit
-`6cf242b59475aa77e4c2deee61e1b9191be5ba13` under AGPL-3.0, with only the
+`d4fffc60399549b9e9b8af9d6ca9bfec7378c7ff` under AGPL-3.0, with only the
 changes recorded in `dact-compat.patch`.
 
-Package revision **DACT4** keeps those binaries unchanged and replaces only
-`data/dynamic-event.json`, `data/fate.json`, `data/instance.json`, and `data/world.json`
-with their exact upstream bytes from
-[`3e4ecb486d20a801a3e537dde71807320c4a26ca`](https://github.com/thewakingsands/matcha/tree/3e4ecb486d20a801a3e537dde71807320c4a26ca).
-The only C# difference between that revision and the DLL's source is the opcode
-table, which the Host already replaces in memory. The Host now also applies
-the newly verified FateInfo `0x0154` and WorldVisitQueue `0x01E8` for both regions.
-This keeps the tested compatibility bridge and runtime constants intact.
+Package revision **DACT5**, DLL version `26.9.26.1753`, includes the upstream
+2026-09-26 fishing lifecycle events. The Host preserves all 28 verified CN and
+Global opcode mappings, including EventPlay4 `0x01C6`, SystemLogMessage `0x00A8`,
+FishCaught `0x0110`, StatusEffectList `0x0083`, and client-direction ClientTrigger
+`0x8187`. The legacy FishBite event remains available. Parser timestamps pass
+through the existing Host network bridge unchanged.
 
-`Cafe.Matcha-26.8.12.1622-dact4.zip` SHA-256:
-`e9bbe09870dd3102603342d972ed8e1fd06637449e8e15de6ff6992f7905639f`.
-To reproduce its contents, take the preceding DACT3 package and replace only
-those four files under `Plugins/Cafe.Matcha/data/`. The displayed DLL version
-remains `26.8.12.1622`; archive identity distinguishes the data refresh.
+`Cafe.Matcha-26.9.26.1753-dact5.zip` SHA-256:
+`aac2fbaf31e37e932bc04e210e2a73c8824662ce30b90295875d14389b14e613`.
+To reproduce its contents, take DACT4 and replace only
+`Plugins/Cafe.Matcha/Cafe.Matcha.dll` with the build below. The data, manifest,
+upstream companion, and sealed runtime constants remain byte-for-byte unchanged.
+This source revision has no changes to the runtime constants or resource files.
 
 The patch adds a small reflection bridge used only when the DLL runs in the
 dedicated DalamudActCompat Host. Configuration and bundled data stay confined
@@ -37,17 +36,27 @@ Build prerequisites and dependency versions are the same as upstream
 - FFXIV ACT Plugin SDK 2.0.7.0
 - .NET Framework 4.8 targeting pack
 - a current .NET SDK/MSBuild installation
+- Windows SDK UniversalApiContract metadata (an installed SDK or the NuGet
+  `Microsoft.Windows.SDK.NET.Ref` 10.0.17763.57 `winmd` directory)
 
 From a clean checkout at the commit above:
 
 ```powershell
 git apply --unidiff-zero dact-compat.patch
-dotnet restore Cafe.Matcha.sln
-dotnet msbuild Cafe.Matcha.sln -p:Configuration=Release -p:DactCompatBuild=true -m
+dotnet restore Cafe.Matcha/Cafe.Matcha.csproj
+dotnet build Cafe.Matcha/Cafe.Matcha.csproj -c Release -t:Rebuild -p:DactCompatBuild=true -p:DebugType=none -p:DebugSymbols=false
 ```
 
+Normalize source and patch line endings to LF before applying if the checkout
+uses CRLF. On a machine without a Windows SDK at the upstream hardcoded paths,
+build `Cafe.Matcha/Cafe.Matcha.csproj` and pass
+`-p:DactWindowsContractPath=<absolute-path-to-Windows.Foundation.UniversalApiContract.winmd>`.
+DACT5 was built with .NET SDK 10.0.401. Source/style analyzer warnings are present;
+the build completed with no errors. The declared version is fixed to the source
+commit time instead of changing on every local build.
+
 The expected entry DLL SHA-256 is
-`3DF088E73DD8A314A08A1B302A2FEFE9BFEFC1A52FCE54032F719421CF7810FA`.
+`73606BAABD1E8386E5900BEC074DB7D5FE898A26109F79C921A5187C222CA9BD`.
 
 The complete package also keeps the unmodified upstream Actions DLL as
 `Plugins/Cafe.Matcha/upstream/Cafe.Matcha.Upstream.dll` (SHA-256

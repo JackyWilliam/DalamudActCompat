@@ -1113,6 +1113,7 @@ internal sealed class LegacyPluginHandle : IDisposable
 
                 if (id == "act.foxtts")
                 {
+                    FoxTtsLayoutCompatibility.Apply(tab);
                     if (!status.Text.StartsWith("Init Success", StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidOperationException(

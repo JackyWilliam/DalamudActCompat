@@ -190,12 +190,17 @@ public static partial class LegacyAssemblyRewriter
             [0x01C4] = "PlayerSpawn",
             [0x038A] = "SubmarineStatusList",
             [0x01E8] = "WorldVisitQueue",
+            [0x01C6] = "EventPlay4",
+            [0x00A8] = "SystemLogMessage",
+            [0x0110] = "FishCaught",
+            [0x0083] = "StatusEffectList",
+            [0x8187] = "ClientTrigger",
         };
 
-        // FFXIVOpcodes 7.56h publishes matching CN/Global tables. The bundled
-        // Matcha tables predate this patch; update both without changing its public ABI.
-        // Matcha upstream 3e4ecb4 (2026-09-17) also verifies FateInfo/WorldVisitQueue
-        // for both regions; replacing the tables removes their obsolete keys as well.
+        // FFXIVOpcodes 7.56h publishes matching CN/Global tables. Normalize older
+        // installed builds as well as the bundled DLL without changing its public ABI.
+        // Matcha d4fffc6 (2026-09-26) adds fishing events for both regions. The
+        // ClientTrigger high bit encodes direction and must survive normalization.
         foreach (var region in new[] { "Global", "China" })
         {
             var field = storageType.GetField(region, BindingFlags.Public | BindingFlags.Static)
@@ -205,7 +210,8 @@ public static partial class LegacyAssemblyRewriter
             opcodes.Clear();
             foreach (var (opcode, name) in verified)
             {
-                opcodes.Add(opcode, Enum.Parse(opcodeType, name));
+                // Older manually installed DACT builds do not expose the fishing enum members.
+                if (Enum.IsDefined(opcodeType, name)) opcodes.Add(opcode, Enum.Parse(opcodeType, name));
             }
         }
     }
