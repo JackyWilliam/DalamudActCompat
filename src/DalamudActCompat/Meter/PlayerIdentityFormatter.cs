@@ -38,36 +38,36 @@ public static class PlayerIdentityFormatter
     public static string FormatJob(string job, UiText text)
     {
         var normalized = job.Trim().ToUpperInvariant();
-        if (!text.IsChinese)
+        if (!text.IsChinese && text.Language != "ja")
         {
-            return string.IsNullOrWhiteSpace(normalized) ? "Unknown" : normalized;
+            return string.IsNullOrWhiteSpace(normalized) ? text.Get("未知职业", "Unknown job") : normalized;
         }
 
         return normalized switch
         {
-            "PLD" => "骑士",
-            "WAR" => "战士",
-            "DRK" => "暗黑骑士",
-            "GNB" => "绝枪战士",
-            "WHM" => "白魔法师",
-            "SCH" => "学者",
-            "AST" => "占星术士",
-            "SGE" => "贤者",
-            "MNK" => "武僧",
-            "DRG" => "龙骑士",
-            "NIN" => "忍者",
-            "SAM" => "武士",
-            "RPR" => "钐镰客",
-            "VPR" => "蝰蛇剑士",
-            "BRD" => "吟游诗人",
-            "MCH" => "机工士",
-            "DNC" => "舞者",
-            "BLM" => "黑魔法师",
-            "SMN" => "召唤师",
-            "RDM" => "赤魔法师",
-            "PCT" => "绘灵法师",
-            "BLU" => "青魔法师",
-            _ => string.IsNullOrWhiteSpace(normalized) ? "未知职业" : normalized,
+            "PLD" => text.Get("骑士", "Job: PLD"),
+            "WAR" => text.Get("战士", "Job: WAR"),
+            "DRK" => text.Get("暗黑骑士", "Job: DRK"),
+            "GNB" => text.Get("绝枪战士", "Job: GNB"),
+            "WHM" => text.Get("白魔法师", "Job: WHM"),
+            "SCH" => text.Get("学者", "Job: SCH"),
+            "AST" => text.Get("占星术士", "Job: AST"),
+            "SGE" => text.Get("贤者", "Job: SGE"),
+            "MNK" => text.Get("武僧", "Job: MNK"),
+            "DRG" => text.Get("龙骑士", "Job: DRG"),
+            "NIN" => text.Get("忍者", "Job: NIN"),
+            "SAM" => text.Get("武士", "Job: SAM"),
+            "RPR" => text.Get("钐镰客", "Job: RPR"),
+            "VPR" => text.Get("蝰蛇剑士", "Job: VPR"),
+            "BRD" => text.Get("吟游诗人", "Job: BRD"),
+            "MCH" => text.Get("机工士", "Job: MCH"),
+            "DNC" => text.Get("舞者", "Job: DNC"),
+            "BLM" => text.Get("黑魔法师", "Job: BLM"),
+            "SMN" => text.Get("召唤师", "Job: SMN"),
+            "RDM" => text.Get("赤魔法师", "Job: RDM"),
+            "PCT" => text.Get("绘灵法师", "Job: PCT"),
+            "BLU" => text.Get("青魔法师", "Job: BLU"),
+            _ => string.IsNullOrWhiteSpace(normalized) ? text.Get("未知职业", "Unknown job") : normalized,
         };
     }
 

@@ -107,7 +107,7 @@ internal sealed class CloudRoleNotice(UiText text, ISharedImmediateTexture icon,
             if (kind == CloudRoleNoticeKind.Sponsor)
             {
                 Center(text.Get("感谢您成为 DACT 赞助者", "Thank you for supporting DACT!"), 148, 24, Gold);
-                Center(text.Get($"赞助等级 {snapshot.Sponsor!.Tier} · 永久身份", $"Sponsor level {snapshot.Sponsor!.Tier} · Permanent"), 199, 16, Vector4.One);
+                Center(text.Format($"赞助等级 {snapshot.Sponsor!.Tier} · 永久身份", $"Sponsor level {snapshot.Sponsor!.Tier} · Permanent"), 199, 16, Vector4.One);
                 Center(text.Get("专属皇冠等级标识与红色名字已解锁", "Your crown badge and red account name are unlocked."), 229, 14, Ice);
             }
             else

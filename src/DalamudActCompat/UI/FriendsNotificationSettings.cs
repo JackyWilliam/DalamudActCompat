@@ -15,7 +15,7 @@ internal static class FriendsNotificationSettings
         ImGui.BeginDisabled(!enabled);
         var side = configuration.FriendNotificationsOnRight ? 1 : 0;
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 9);
-        if (DactTheme.Combo(text.Get("来信气泡位置", "Bubble position"), ref side, text.IsChinese ? ["左侧", "右侧"] : ["Left", "Right"], 2))
+        if (DactTheme.Combo(text.Get("来信气泡位置", "Bubble position"), ref side, [text.Get("左侧", "Left"), text.Get("右侧", "Right")], 2))
         { configuration.FriendNotificationsOnRight = side == 1; changed = true; }
         var transparency = Math.Clamp(configuration.FriendNotificationBackgroundTransparency, 0, 100);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 12);
@@ -29,7 +29,7 @@ internal static class FriendsNotificationSettings
         var selected = Math.Clamp(configuration.FriendNotificationSound, 0, 3);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 9);
         if (DactTheme.Combo(text.Get("提示音", "Notification sound"), ref selected,
-            text.IsChinese ? ["提示音 1", "提示音 2", "提示音 3", "提示音 4"] : ["Sound 1", "Sound 2", "Sound 3", "Sound 4"], 4))
+            [text.Get("提示音 1", "Sound 1"), text.Get("提示音 2", "Sound 2"), text.Get("提示音 3", "Sound 3"), text.Get("提示音 4", "Sound 4")], 4))
         { configuration.FriendNotificationSound = selected; changed = true; }
         ImGui.SameLine();
         if (DactTheme.Button(text.Get("试听", "Preview"))) previewSound?.Invoke(selected);

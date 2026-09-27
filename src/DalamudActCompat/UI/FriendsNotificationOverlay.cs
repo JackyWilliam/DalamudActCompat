@@ -24,7 +24,7 @@ internal sealed partial class FriendsUiManager
         var viewport = ImGui.GetMainViewport();
         var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
         var padding = Math.Max(3, 10 * scale); var gap = 8 * scale;
-        var expandWidth = ImGui.CalcTextSize("全部展开").X + padding * 2;
+        var expandWidth = ImGui.CalcTextSize(uiText.Get("全部展开", "Open chat")).X + padding * 2;
         var totalWidth = Math.Min(320 * scale + gap + expandWidth, viewport.WorkSize.X - 16);
         var bodyWidth = Math.Max(1, totalWidth - gap - expandWidth);
         var textWidth = Math.Max(1, bodyWidth - padding * 2);
@@ -33,8 +33,8 @@ internal sealed partial class FriendsUiManager
         var layouts = new List<IncomingLayout>(); var totalHeight = 0f;
         foreach (var entry in incoming.Visible)
         {
-            var body = FriendsMessagePreview.Ellipsize(entry.Message.Text, lineHeight * 3, s => ImGui.CalcTextSize(s, false, textWidth).Y);
-            var hasReplies = FriendsIncomingNotifications.Replies(entry.Message).Count > 0;
+            var body = FriendsMessagePreview.Ellipsize(uiText.MessageBody(entry.Message), lineHeight * 3, s => ImGui.CalcTextSize(s, false, textWidth).Y);
+            var hasReplies = FriendsIncomingNotifications.Replies(entry.Message, uiText).Count > 0;
             var height = padding * 2 + lineHeight + gap + ImGui.CalcTextSize(body, false, textWidth).Y + (hasReplies ? buttonHeight + gap : 0);
             if (layouts.Count > 0 && totalHeight + gap + height > viewport.WorkSize.Y - 16) break;
             layouts.Add(new(entry, body, height)); totalHeight += height + (layouts.Count > 1 ? gap : 0);
@@ -69,16 +69,16 @@ internal sealed partial class FriendsUiManager
                 var list = ImGui.GetWindowDrawList();
                 var background = Navy; background.W = 1 - Math.Clamp(configuration.FriendNotificationBackgroundTransparency, 0, 100) / 100f;
                 list.AddRectFilled(bodyPosition, bodyPosition + new Vector2(bodyWidth, layout.Height), ImGui.GetColorU32(background), 9 * scale);
-                var author = entry.Message.Sender.IsOfficial ? "DACT 官方通知" : state.FriendDisplayName(entry.Message.Sender.UserId, entry.Message.Sender.Name);
+                var author = entry.Message.Sender.IsOfficial ? uiText.Get("DACT 官方通知", "DACT announcements") : state.FriendDisplayName(entry.Message.Sender.UserId, entry.Message.Sender.Name);
                 author = FriendsMessagePreview.Ellipsize(author, textWidth, s => ImGui.CalcTextSize(s).X);
                 var origin = bodyPosition + new Vector2(padding);
                 AccountIdentityBadge.DrawName(administratorIcon, author,
                     !entry.Message.Sender.IsOfficial && state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.IsAdmin == true,
                     origin, textWidth, entry.Message.Sender.IsOfficial ? Gold : Blue, sponsorIcon,
-                    entry.Message.Sender.IsOfficial ? 0 : state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.SponsorTier ?? entry.Message.Sender.SponsorTier);
+                    entry.Message.Sender.IsOfficial ? 0 : state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.SponsorTier ?? entry.Message.Sender.SponsorTier, text: uiText);
                 origin.Y += lineHeight + gap;
                 list.AddText(ImGui.GetFont(), ImGui.GetFontSize(), origin, ImGui.GetColorU32(DactTheme.Palette.Text), layout.Body, textWidth);
-                if (FriendsIncomingNotifications.Replies(entry.Message).Count > 0)
+                if (FriendsIncomingNotifications.Replies(entry.Message, uiText).Count > 0)
                 {
                     var status = NotificationReplyStatus(entry, state);
                     if (status is not null)
@@ -94,7 +94,7 @@ internal sealed partial class FriendsUiManager
             if (ImGui.Begin(NotificationPrefix + id + "-expand", NotificationFlags))
             {
                 ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
-                if (DactTheme.Button("全部展开", new(expandWidth, buttonHeight)) && controller.Snapshot.Session == state.Session)
+                if (DactTheme.Button(uiText.Get("全部展开", "Open chat"), new(expandWidth, buttonHeight)) && controller.Snapshot.Session == state.Session)
                 { OpenChat(entry.Message.ConversationId); entry.ExpiresAt = now; }
             }
             ImGui.End(); ImGui.PopStyleVar(3);
@@ -123,14 +123,14 @@ internal sealed partial class FriendsUiManager
         if (context.ActiveId != 0 && IsNotification(context.ActiveIdWindow)) ImGui.SetNextFrameWantCaptureKeyboard(false);
     }
 
-    private static string? NotificationReplyStatus(FriendIncomingNotification entry, FriendsChatSnapshot state)
+    private string? NotificationReplyStatus(FriendIncomingNotification entry, FriendsChatSnapshot state)
     {
         if (entry.ReplyOperation is not { } operation) return null;
         var view = state.Conversations.GetValueOrDefault(entry.Message.ConversationId);
-        if (view is null) return "会话已关闭";
-        if (view.Chat.History.Concat(view.Chat.Pending).Any(m => m.OperationId == operation && m.Sender.UserId == state.Friends?.User?.Id)) return "已回复";
+        if (view is null) return uiText.Get("会话已关闭", "Conversation closed");
+        if (view.Chat.History.Concat(view.Chat.Pending).Any(m => m.OperationId == operation && m.Sender.UserId == state.Friends?.User?.Id)) return uiText.Get("已回复", "Reply sent");
         if (view.PendingSend?.OperationId == operation && !state.Busy) return null;
-        return state.Busy ? "正在回复…" : "未能确认，请展开聊天查看";
+        return state.Busy ? uiText.Get("正在回复…", "Sending reply…") : uiText.Get("未能确认，请展开聊天查看", "Unconfirmed. Open the chat to check.");
     }
 
     private static bool NotificationButton(string id, string label, Vector2 position, Vector2 size, bool enabled)
@@ -158,13 +158,13 @@ internal sealed partial class FriendsUiManager
         {
             if (view.PendingSend?.OperationId == operation && !state.Busy)
             {
-                var retrySize = new Vector2(ImGui.CalcTextSize("重试原回复").X + ImGui.GetStyle().FramePadding.X * 2, buttonHeight);
-                if (NotificationButton(id + "-retry", "重试原回复", position, retrySize, true) && controller.Retry(entry.Message.ConversationId, state.Session, operation))
+                var retrySize = new Vector2(ImGui.CalcTextSize(uiText.Get("重试原回复", "Retry original reply")).X + ImGui.GetStyle().FramePadding.X * 2, buttonHeight);
+                if (NotificationButton(id + "-retry", uiText.Get("重试原回复", "Retry original reply"), position, retrySize, true) && controller.Retry(entry.Message.ConversationId, state.Session, operation))
                     entry.ExpiresAt = Math.Max(entry.ExpiresAt, now + 3000);
             }
             return;
         }
-        var replies = FriendsIncomingNotifications.Replies(entry.Message);
+        var replies = FriendsIncomingNotifications.Replies(entry.Message, uiText);
         for (var i = 0; i < replies.Count; i++)
         {
             var buttonWidth = (width - ImGui.GetStyle().ItemSpacing.X) / replies.Count;

@@ -82,7 +82,85 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         HighFrequencyBlur();
         WhiteBody();
         Benchmark();
+        RainGlass();
+        Benchmark(rain: true);
         Console.WriteLine("Liquid glass GPU: real shader compile/render, blur, bevel refraction, center preservation, rounded/parent clipping, hover, fade, resize and re-enable passed.");
+    }
+
+    private void RainGlass()
+    {
+        const int w = 640, h = 400;
+        var source = new byte[w * h * 3]; PaintBackdrop(source, w, h);
+        var request = new LiquidGlassRenderer.Request { Min = new(20), Max = new(w - 20, h - 20),
+            Clip = new(20, 20, w - 20, h - 20), Radius = 14, Alpha = 1, Scale = 1, Blur = 6, Rain = 1, Time = 17 };
+        byte[] Render(LiquidGlassRenderer.Request value, byte[]? backdrop = null)
+        {
+            var result = (byte[])(backdrop ?? source).Clone();
+            Process(result, w, h, () => Renderer.Render(value));
+            return result;
+        }
+        var still = Render(request); var later = Render(request with { Time = 19 });
+        Assert(still.SequenceEqual(Render(request)), "Rain depends on hidden simulation state.");
+        var changed = still.Zip(later).Count(pair => pair.First != pair.Second);
+        Assert(changed > 100 && changed < still.Length * .25, "Rain should move a few drops while most stay attached.");
+        Assert(Render(request with { Alpha = 0 }).SequenceEqual(source), "Rain ignored window fade.");
+        var offset = new Vector2(310, 190);
+        Assert(still.SequenceEqual(Render(request with { Origin = offset, Min = request.Min + offset, Max = request.Max + offset,
+            Clip = request.Clip + new Vector4(offset, offset.X, offset.Y) })), "Rain moved inside a detached viewport.");
+        var clipped = Render(request with { Clip = new(20, 20, 300, h - 20) });
+        for (var y = 0; y < h; y++) for (var x = 0; x < w; x++)
+        {
+            if (x >= 20 && x < 300 && y >= 20 && y < h - 20 && !(x < 23 && y < 23)) continue;
+            var i = (y * w + x) * 3;
+            Assert(clipped.AsSpan(i, 3).SequenceEqual(source.AsSpan(i, 3)), "Rain escaped its rounded or parent clip.");
+        }
+        var dark = Render(request, new byte[source.Length]);
+        var bright = Render(request, Enumerable.Repeat((byte)255, source.Length).ToArray());
+        Assert(!dark.SequenceEqual(bright), "Rain is an opaque texture rather than a refractive backdrop.");
+        foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
+            Assert(!Render(request with { Scale = scale }).SequenceEqual(source), "Rain disappeared after scaling.");
+        Renderer.BeginFrame(Device, false); Renderer.BeginFrame(Device, true);
+        // A recreated capture can have a smaller allocation; normalized bilinear
+        // coordinates may round by one UNORM level without a visible change.
+        Assert(still.Zip(Render(request)).All(pair => Math.Abs(pair.First - pair.Second) <= 1),
+            "Rain changed after releasing and recreating its GPU resources.");
+        var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
+        if (output is not null)
+        {
+            // A generated landscape keeps this visual fixture independent of
+            // copyrighted photographs and makes its synthetic origin explicit.
+            PaintRainBackdrop(source, w, h);
+            for (var frame = 0; frame < 24; frame++)
+                NativeUiRasterizer.WritePng(Path.Combine(output, $"rain-lens-{frame:00}.png"),
+                    Render(request with { Time = 17 + frame * .16f }), w, h);
+        }
+        Console.WriteLine("Rain GPU: real shader, stationary/animated drops, backdrop response, scale, fade, viewport, clipping and resource recreation passed.");
+    }
+
+    internal static void PaintRainBackdrop(byte[] pixels, int w, int h)
+    {
+        var lights = new[] { new Vector2(.38f, .77f), new Vector2(.72f, .82f) };
+        for (var y = 0; y < h; y++) for (var x = 0; x < w; x++)
+        {
+            var u = (float)x / w; var v = (float)y / h;
+            var color = Vector3.Lerp(new(.55f, .64f, .67f), new(.17f, .25f, .26f), v);
+            var trees = MathF.Exp(-MathF.Pow((u - .16f) * 4, 2)) * Math.Clamp(2 - v * 2, 0, 1);
+            color = Vector3.Lerp(color, new(.045f, .10f, .075f), trees * .94f);
+            var building = Math.Clamp((u - .42f) * 35, 0, 1) * Math.Clamp((.81f - u) * 35, 0, 1) *
+                Math.Clamp((v - .21f) * 30, 0, 1) * Math.Clamp((.72f - v) * 30, 0, 1);
+            color = Vector3.Lerp(color, new(.38f, .38f, .34f), building);
+            var road = Math.Clamp((v - .73f) * 8, 0, 1);
+            color = Vector3.Lerp(color, new(.42f, .52f, .56f), road);
+            foreach (var light in lights)
+            {
+                var q = (new Vector2(u, v) - light) * new Vector2(20, 26);
+                color += new Vector3(.20f, .17f, .10f) * MathF.Exp(-q.LengthSquared());
+            }
+            var i = (y * w + x) * 3;
+            pixels[i] = (byte)(Math.Clamp(color.X, 0, 1) * 255);
+            pixels[i + 1] = (byte)(Math.Clamp(color.Y, 0, 1) * 255);
+            pixels[i + 2] = (byte)(Math.Clamp(color.Z, 0, 1) * 255);
+        }
     }
 
     private void WhiteBody()
@@ -177,7 +255,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
         finally { context->Unmap((ID3D11Resource*)staging, 0); }
     }
 
-    private void Benchmark()
+    private void Benchmark(bool rain = false)
     {
         ID3D11Query* begin = null; ID3D11Query* end = null; ID3D11Query* disjoint = null;
         try
@@ -191,7 +269,8 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
             Process(pixels, w, h, () =>
             {
                 var request = new LiquidGlassRenderer.Request { Min = new(30), Max = new(1090, 810), Radius = 14, Clip = new(30, 30, 1090, 810),
-                    Alpha = 1, Scale = 1, Scrim = .56f, Refraction = 24, Dispersion = 2, Blur = 3 };
+                    Alpha = 1, Scale = 1, Scrim = .56f, Refraction = 24, Dispersion = 2, Blur = rain ? 6 : 3,
+                    Rain = rain ? 1 : 0, Time = 17 };
                 Renderer.Render(request);
                 context->Begin((ID3D11Asynchronous*)disjointQuery); context->End((ID3D11Asynchronous*)beginQuery);
                 for (var i = 0; i < iterations; i++) Renderer.Render(request);
@@ -203,7 +282,7 @@ internal sealed unsafe class LiquidGlassSmokeTests : IDisposable
             Check(context->GetData((ID3D11Asynchronous*)disjoint, &timing, (uint)sizeof(D3D11_QUERY_DATA_TIMESTAMP_DISJOINT), 0));
             Assert(!timing.Disjoint && timing.Frequency > 0 && endTime > startTime, "GPU timestamp measurement was unavailable.");
             var milliseconds = (endTime - startTime) * 1000d / timing.Frequency / iterations;
-            Console.WriteLine($"Liquid glass GPU timing: 1060x780 pane, capture + two-pass continuous Gaussian blur + refractive bevel, {milliseconds:F3} ms average over {iterations} passes (local hardware; excludes CPU test readback).");
+            Console.WriteLine($"{(rain ? "Rain on glass" : "Liquid glass")} GPU timing: 1060x780 pane, capture + blur + refraction, {milliseconds:F3} ms average over {iterations} passes (local hardware; excludes CPU test readback).");
         }
         finally { if (begin != null) begin->Release(); if (end != null) end->Release(); if (disjoint != null) disjoint->Release(); }
     }

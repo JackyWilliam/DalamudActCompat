@@ -106,7 +106,7 @@ public sealed class HelpWindow : Window
                     IceBlue,
                     ControlCenterWindow.FormatVersionLabel(
                         typeof(HelpWindow).Assembly.GetName().Version),
-                    "help-window"))
+                    "help-window", text: text))
             {
                 IsOpen = false;
             }
@@ -255,7 +255,7 @@ public sealed class HelpWindow : Window
             .ToArray();
         DrawPageHeader(
             text.Get("搜索结果", "Search results"),
-            text.Get(
+            text.Format(
                 $"找到 {results.Length} 条相关说明。点击结果可跳转到对应章节。",
                 $"Found {results.Length} relevant entries. Select one to jump to its section."));
         if (results.Length == 0)
@@ -933,7 +933,7 @@ public sealed class HelpWindow : Window
                 sectionId,
                 text.Get(chineseTitle, englishTitle),
                 text.Get(chineseSummary, englishSummary),
-                $"{chineseTitle} {englishTitle} {chineseSummary} {englishSummary} {keywords}");
+                $"{text.Get(chineseTitle, englishTitle)} {text.Get(chineseSummary, englishSummary)} {chineseTitle} {englishTitle} {chineseSummary} {englishSummary} {keywords}");
 
         return
         [

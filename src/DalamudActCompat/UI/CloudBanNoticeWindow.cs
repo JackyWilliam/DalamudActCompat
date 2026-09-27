@@ -118,7 +118,7 @@ internal sealed class CloudBanNoticeWindow : Window
                 ControlCenterWindow.FormatVersionLabel(
                     typeof(CloudBanNoticeWindow).Assembly.GetName().Version),
                 "cloud-ban-notice",
-                showCloseButton: false);
+                showCloseButton: false, text: text);
 
             if (BrandedWindowChrome.BeginGoldCard(
                     "cloud-ban-notice-card",
@@ -158,20 +158,20 @@ internal sealed class CloudBanNoticeWindow : Window
                 "Your account and associated devices have been banned")
             : text.Get("您的账号已经被封禁", "Your account has been banned"));
         ImGui.Separator();
-        ImGui.TextUnformatted(text.Get(
+        ImGui.TextUnformatted(text.Format(
             $"封禁时间：{current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
             $"Banned at: {current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"));
         ImGui.TextUnformatted(current.BanExpiresAt is { } expiresAt
-            ? text.Get(
+            ? text.Format(
                 $"封禁结束：{expiresAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
                 $"Ends at: {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}")
             : text.Get("封禁结束：永久", "Ends at: permanent"));
-        ImGui.TextUnformatted(text.Get(
+        ImGui.TextUnformatted(text.Format(
             $"封禁方式：{FormatBanType(current.BanType, chinese: true)}",
             $"Ban type: {FormatBanType(current.BanType, chinese: false)}"));
         if (!string.IsNullOrWhiteSpace(current.BanReason))
         {
-            ImGui.TextWrapped(text.Get(
+            ImGui.TextWrapped(text.Format(
                 $"封禁原因：{current.BanReason}",
                 $"Reason: {current.BanReason}"));
         }
@@ -198,7 +198,7 @@ internal sealed class CloudBanNoticeWindow : Window
                 "The server confirmed that this account is no longer banned."));
         if (current is not null)
         {
-            ImGui.TextDisabled(text.Get(
+            ImGui.TextDisabled(text.Format(
                 $"原封禁时间：{current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}",
                 $"Previous ban time: {current.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"));
         }

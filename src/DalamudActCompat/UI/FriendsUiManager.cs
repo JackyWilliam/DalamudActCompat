@@ -28,6 +28,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     private readonly FriendsChatController controller;
     private readonly Action openMain;
     private readonly PluginConfiguration configuration;
+    private readonly UiText uiText;
     private readonly Func<long> clock;
     private readonly Action? playNotificationSound, stopNotificationSound;
     private readonly FriendsIncomingNotifications incoming = new();
@@ -63,6 +64,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         this.administratorIcon = administratorIcon;
         this.sponsorIcon = sponsorIcon;
         this.configuration = configuration ?? new(); this.clock = clock ?? (() => Environment.TickCount64);
+        uiText = new UiText(this.configuration);
         this.playNotificationSound = playNotificationSound; this.stopNotificationSound = stopNotificationSound;
         // Recreating a view against an already-live controller is not a new arrival.
         incoming.Update(controller.Snapshot, false, this.clock());
@@ -74,7 +76,7 @@ internal sealed partial class FriendsUiManager : IDisposable
     public void DrawAccountName(CloudClientSnapshot account)
         => AccountIdentityBadge.Text(administratorIcon, account.Username ?? string.Empty,
             account.IsSignedIn && account.Administrator?.IsAdmin == true, DactTheme.Palette.Text,
-            sponsorIcon, account.IsSignedIn ? account.Sponsor?.Tier ?? 0 : 0);
+            sponsorIcon, account.IsSignedIn ? account.Sponsor?.Tier ?? 0 : 0, text: uiText);
     public bool AnyOpen => drawerOpen || drawerProgress > 0 || windows.Values.Any(w => w.Open);
     public void SetAnchor(Vector2 position, Vector2 size, float alpha = 1, uint windowId = 0)
     { anchor = position; anchorSize = size; anchorAlpha = alpha; anchorWindowId = windowId; }
@@ -127,7 +129,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (window.SubmittedOperation is { } submitted && view?.LastPreparedOperation == submitted)
         { window.Draft = ""; window.SubmittedOperation = null; }
         var official = view?.Chat.Kind == "official";
-        var title = official ? "DACT 官方通知" : view is null ? "好友聊天" : state.FriendDisplayName(view.Chat.Peer.Id, view.Chat.Peer.Username);
+        var title = official ? uiText.Get("DACT 官方通知", "DACT announcements") : view is null ? uiText.Get("好友聊天", "Friend chat") : state.FriendDisplayName(view.Chat.Peer.Id, view.Chat.Peer.Username);
         var viewport = ImGui.GetMainViewport(); var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
         var maximum = viewport.WorkSize - new Vector2(16);
         ImGui.SetNextWindowSizeConstraints(Vector2.Min(new Vector2(320, 340) * scale, maximum), maximum);
@@ -164,30 +166,40 @@ internal sealed partial class FriendsUiManager : IDisposable
                 var inset = new Vector2(8 * scale);
                 // The opaque fill belongs to the game sprite. Glass must sample
                 // the actual scene here, before chat content is drawn.
-                if (!DactTheme.Palette.Glass)
+                if (!DactTheme.Palette.Glass && !DactTheme.Palette.Rain)
                     ImGui.GetWindowDrawList().AddRectFilled(window.Position + inset,
                         window.Position + window.Size - inset, ImGui.GetColorU32(Navy));
                 DactTheme.DrawGamePopupFrame();
             }
             DrawChatHeader(window, title, official, view?.Chat.Peer, scale);
             var focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
-            if (view is null) { ImGui.TextWrapped("会话正在同步，或好友关系已解除。"); }
+            if (view is null) { ImGui.TextWrapped(uiText.Get("会话正在同步，或好友关系已解除。", "This conversation is syncing, or the friendship has ended.")); }
             else
             {
-                if (state.State != "ready") ImGui.TextWrapped(state.Status);
+                if (state.State != "ready") ImGui.TextWrapped(uiText.SystemMessage(state.Status));
                 var contentWidth = ImGui.GetContentRegionAvail().X;
-                var statusHeight = string.IsNullOrEmpty(view.SendStatus) ? 0 : ImGui.CalcTextSize(view.SendStatus, false, contentWidth).Y;
+                var sendStatus = uiText.SystemMessage(view.SendStatus);
+                var statusHeight = string.IsNullOrEmpty(sendStatus) ? 0 : ImGui.CalcTextSize(sendStatus, false, contentWidth).Y;
+                var sendLabel = uiText.Get("发送", "Send");
+                var inviteLabel = uiText.Get("下把邀我", "Invite me next time");
+                var finishLabel = uiText.Get("你什么时候结束", "When will you finish?");
+                var retryLabel = uiText.Get("重试原消息", "Retry original message");
+                var discardLabel = uiText.Get("放弃此发送…", "Discard this send…");
+                // Measure wrapped action rows before history takes its space, so
+                // longer translations keep the input and retry controls reachable.
+                var extraFooter = ExtraButtonRowHeight(contentWidth, sendLabel, inviteLabel, finishLabel) +
+                    (view.PendingSend is null ? 0 : ExtraButtonRowHeight(contentWidth, retryLabel, discardLabel));
                 // The usage notice lives once in the friend drawer. Reclaim its
                 // former footer space here while keeping official/read-only identity.
-                var footer = official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight;
+                var footer = official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight + extraFooter;
                 var historyHeight = Math.Max(90 * scale, ImGui.GetContentRegionAvail().Y - footer);
                 if (ImGui.BeginChild("messages", new Vector2(-1, historyHeight), false))
                 {
                     var messages = view.Chat.History.Concat(view.Chat.Pending).OrderBy(m => m.Id).ToArray();
                     foreach (var message in messages)
                         DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon,
-                            message.Sender.IsOfficial ? null : state.FriendDisplayName(message.Sender.UserId, message.Sender.Name));
-                    if (messages.Length == 0) ImGui.TextDisabled("暂无消息。");
+                            message.Sender.IsOfficial ? null : state.FriendDisplayName(message.Sender.UserId, message.Sender.Name), uiText);
+                    if (messages.Length == 0) ImGui.TextDisabled(uiText.Get("暂无消息。", "No messages yet."));
                     var last = messages.LastOrDefault()?.Id ?? 0;
                     // Explicitly entering from a notification also reopens an old
                     // scrolled view. Read only once its latest content is visible.
@@ -202,40 +214,45 @@ internal sealed partial class FriendsUiManager : IDisposable
                     }
                 }
                 ImGui.EndChild();
-                if (official) ImGui.TextWrapped("这里接收 DACT 官方通知，不支持回复。");
+                if (official) ImGui.TextWrapped(uiText.Get("这里接收 DACT 官方通知，不支持回复。", "DACT announcements appear here. Replies are disabled."));
                 else
                 {
                     if (view.PendingSend is { } pending)
                     {
-                        var preview = pending.Text ?? (pending.QuickMessageId == CloudChatPolicy.InviteNext ? "下把邀我" : "你什么时候结束");
-                        ImGui.TextWrapped($"待确认：{(preview.Length > 60 ? preview[..60] + "…" : preview)}");
+                        var preview = pending.Text ?? (pending.QuickMessageId == CloudChatPolicy.InviteNext ? uiText.Get("下把邀我", "Invite me next time") : uiText.Get("你什么时候结束", "When will you finish?"));
+                        ImGui.TextWrapped(uiText.Format($"待确认：{(preview.Length > 60 ? preview[..60] + "…" : preview)}", $"Unconfirmed: {(preview.Length > 60 ? preview[..60] + "…" : preview)}"));
                         if (preview.Length > 60 && ImGui.IsItemHovered())
                         {
                             ImGui.BeginTooltip(); ImGui.PushTextWrapPos(ImGui.GetFontSize() * 28);
                             ImGui.TextUnformatted(preview); ImGui.PopTextWrapPos(); ImGui.EndTooltip();
                         }
                         ImGui.BeginDisabled(state.Busy);
-                        if (DactTheme.Button("重试原消息")) controller.Retry(id);
-                        ImGui.SameLine(); if (DactTheme.Button("放弃此发送…")) ImGui.OpenPopup("discard-pending");
+                        var retryRowRight = ImGui.GetCursorScreenPos().X + contentWidth;
+                        if (DactTheme.Button(retryLabel)) controller.Retry(id);
+                        ContinueButtonRow(discardLabel, retryRowRight);
+                        if (DactTheme.Button(discardLabel)) ImGui.OpenPopup("discard-pending");
                         ImGui.EndDisabled();
                         if (ImGui.BeginPopup("discard-pending"))
                         {
-                            ImGui.TextWrapped("原消息可能已送达。放弃后请先查看会话记录，再决定是否重新输入发送。");
-                            if (DactTheme.Button("确认放弃")) { controller.Discard(id); ImGui.CloseCurrentPopup(); }
+                            ImGui.TextWrapped(uiText.Get("原消息可能已送达。放弃后请先查看会话记录，再决定是否重新输入发送。", "The original message may have arrived. After discarding, check the conversation before composing another message."));
+                            if (DactTheme.Button(uiText.Get("确认放弃", "Confirm discard"))) { controller.Discard(id); ImGui.CloseCurrentPopup(); }
                             ImGui.EndPopup();
                         }
                     }
                     ImGui.BeginDisabled(state.Busy || view.PendingSend is not null);
                     ImGui.SetNextItemWidth(-1);
-                    var enter = ImGui.InputTextWithHint("##chat-draft", "输入消息，按回车发送", ref window.Draft, 4000, ImGuiInputTextFlags.EnterReturnsTrue);
+                    var enter = ImGui.InputTextWithHint("##chat-draft", uiText.Get("输入消息，按回车发送", "Type a message; press Enter to send"), ref window.Draft, 4000, ImGuiInputTextFlags.EnterReturnsTrue);
                     if (enter && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } enterOperation)
                         window.SubmittedOperation = enterOperation;
-                    if (DactTheme.Button("发送") && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } buttonOperation)
+                    var buttonRowRight = ImGui.GetCursorScreenPos().X + contentWidth;
+                    if (DactTheme.Button(sendLabel) && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } buttonOperation)
                         window.SubmittedOperation = buttonOperation;
-                    ImGui.SameLine(); if (DactTheme.Button("下把邀我")) controller.Send(id, "", CloudChatPolicy.InviteNext);
-                    ImGui.SameLine(); if (DactTheme.Button("你什么时候结束")) controller.Send(id, "", CloudChatPolicy.WhenFinished);
+                    ContinueButtonRow(inviteLabel, buttonRowRight);
+                    if (DactTheme.Button(inviteLabel)) controller.Send(id, "", CloudChatPolicy.InviteNext);
+                    ContinueButtonRow(finishLabel, buttonRowRight);
+                    if (DactTheme.Button(finishLabel)) controller.Send(id, "", CloudChatPolicy.WhenFinished);
                     ImGui.EndDisabled();
-                    if (!string.IsNullOrEmpty(view.SendStatus)) ImGui.TextWrapped(view.SendStatus);
+                    if (!string.IsNullOrEmpty(sendStatus)) ImGui.TextWrapped(sendStatus);
                 }
             }
         }
@@ -255,7 +272,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(title);
         AccountIdentityBadge.DrawName(administratorIcon, title, !official && peer?.IsAdmin == true,
             start + new Vector2(4 * scale, 7 * scale), dragWidth - 8 * scale, official ? Gold : Blue,
-            sponsorIcon, official ? 0 : peer?.SponsorTier ?? 0);
+            sponsorIcon, official ? 0 : peer?.SponsorTier ?? 0, text: uiText);
         ImGui.SameLine();
         var close = ImGui.GetCursorScreenPos();
         if (ImGui.InvisibleButton("##chat-close", new Vector2(height))) { window.Open = false; window.Drag.Cancel(); }
@@ -263,7 +280,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (ImGui.IsItemHovered())
         {
             list.AddRectFilled(close, close + new Vector2(height), ImGui.GetColorU32(DactTheme.Palette.Surface), 4 * scale);
-            ImGui.SetTooltip("关闭聊天");
+            ImGui.SetTooltip(uiText.Get("关闭聊天", "Close chat"));
         }
         var inset = height * .34f;
         var color = ImGui.GetColorU32(DactTheme.Palette.Text);
@@ -271,20 +288,39 @@ internal sealed partial class FriendsUiManager : IDisposable
         list.AddLine(close + new Vector2(height - inset, inset), close + new Vector2(inset, height - inset), color, 1.5f * scale);
         list.AddLine(start + new Vector2(0, height), start + new Vector2(width, height), ImGui.GetColorU32(Blue), scale);
     }
-    private static void DrawBubble(CloudChatMessage message, bool own, ISharedImmediateTexture? administratorIcon = null,
-        ISharedImmediateTexture? sponsorIcon = null, string? displayName = null)
+    private static float ExtraButtonRowHeight(float available, params ReadOnlySpan<string> labels)
     {
+        var used = 0f; var rows = 0;
+        foreach (var label in labels)
+        {
+            var width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2;
+            if (used > 0 && used + ImGui.GetStyle().ItemSpacing.X + width > available) { rows++; used = 0; }
+            used += (used > 0 ? ImGui.GetStyle().ItemSpacing.X : 0) + width;
+        }
+        return rows * ImGui.GetFrameHeightWithSpacing();
+    }
+
+    private static void ContinueButtonRow(string nextLabel, float right)
+    {
+        var width = ImGui.CalcTextSize(nextLabel).X + ImGui.GetStyle().FramePadding.X * 2;
+        if (ImGui.GetItemRectMax().X + ImGui.GetStyle().ItemSpacing.X + width <= right) ImGui.SameLine();
+    }
+
+    private static void DrawBubble(CloudChatMessage message, bool own, ISharedImmediateTexture? administratorIcon = null,
+        ISharedImmediateTexture? sponsorIcon = null, string? displayName = null, UiText? uiText = null)
+    {
+        uiText ??= new UiText(new PluginConfiguration());
         var available = ImGui.GetContentRegionAvail().X;
         var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
         var padding = Math.Max(3, 10 * scale);
         var vertical = 8 * scale;
         var width = Math.Min(available, Math.Max(100 * scale, available * .85f));
         var textWidth = Math.Max(1, width - padding * 2);
-        var author = message.Sender.IsOfficial ? "DACT 官方" : displayName ?? message.Sender.Name;
-        var timestamp = $"{message.CreatedAt.ToLocalTime():MM-dd HH:mm}{(message.State == "pending" ? " · 待上线接收" : "")}";
+        var author = message.Sender.IsOfficial ? uiText.Get("DACT 官方", "DACT team") : displayName ?? message.Sender.Name;
+        var timestamp = $"{message.CreatedAt.ToLocalTime():MM-dd HH:mm}{(message.State == "pending" ? uiText.Get(" · 待上线接收", " · Waiting for recipient") : "")}";
         var hasIdentity = !message.Sender.IsOfficial && (message.Sender.IsAdmin || message.Sender.SponsorTier > 0);
         var authorHeight = hasIdentity ? ImGui.GetTextLineHeight() : ImGui.CalcTextSize(author, false, textWidth).Y;
-        var bodyHeight = ImGui.CalcTextSize(message.Text, false, textWidth).Y;
+        var bodyHeight = ImGui.CalcTextSize(uiText.MessageBody(message), false, textWidth).Y;
         var timeHeight = ImGui.CalcTextSize(timestamp, false, textWidth).Y;
         var start = ImGui.GetCursorScreenPos() + new Vector2(own ? Math.Max(0, available - width) : 0, 0);
         var gap = 5 * scale;
@@ -298,10 +334,10 @@ internal sealed partial class FriendsUiManager : IDisposable
         var origin = start + new Vector2(padding, vertical);
         if (hasIdentity)
             AccountIdentityBadge.DrawName(administratorIcon, author, message.Sender.IsAdmin, origin, textWidth, Blue,
-                sponsorIcon, message.Sender.SponsorTier);
+                sponsorIcon, message.Sender.SponsorTier, text: uiText);
         else list.AddText(font, fontSize, origin, ImGui.GetColorU32(message.Sender.IsOfficial ? Gold : Blue), author, textWidth);
         origin.Y += authorHeight + gap;
-        list.AddText(font, fontSize, origin, ImGui.GetColorU32(DactTheme.Palette.Text), message.Text, textWidth);
+        list.AddText(font, fontSize, origin, ImGui.GetColorU32(DactTheme.Palette.Text), uiText.MessageBody(message), textWidth);
         origin.Y += bodyHeight + gap;
         list.AddText(font, fontSize, origin, ImGui.GetColorU32(DactTheme.Palette.Muted), timestamp, textWidth);
         ImGui.Dummy(new Vector2(available, height + 8 * scale));
@@ -314,7 +350,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (ImGui.Begin("##DACTFriendNotification", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoDecoration |
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav))
         {
-            if (DactTheme.SmallButton("● 新好友申请 · 点击查看"))
+            if (DactTheme.SmallButton(uiText.Get("● 新好友申请 · 点击查看", "● New friend request · View")))
             { openMain(); drawerOpen = true; toastUntil = 0; }
         }
         ImGui.End();

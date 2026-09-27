@@ -65,7 +65,7 @@ public sealed class CoreResourceDownloadWindow : Window
 
         if (status.State == ResourcePackOperationState.Downloading)
         {
-            ImGui.TextUnformatted(text.Get(
+            ImGui.TextUnformatted(text.Format(
                 $"下载中...{status.ProgressPercent}%",
                 $"Downloading...{status.ProgressPercent}%"));
             ImGui.ProgressBar(status.ProgressPercent / 100f, new Vector2(-1, 22));

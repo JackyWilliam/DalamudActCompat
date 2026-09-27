@@ -62,7 +62,7 @@ internal static class GameRegionSelector
         {
             GameRegionMode.Chinese => text.Get("国服（手动）", "China (manual)"),
             GameRegionMode.Global => text.Get("国际服（手动）", "Global (manual)"),
-            _ => text.Get(
+            _ => text.Format(
                 $"自动检测（{FormatRegion(text, region)}）",
                 $"Auto ({FormatRegion(text, region)})"),
         };
@@ -89,19 +89,19 @@ internal static class GameRegionSelector
         if (!selection.HasDetectedRegion)
         {
             return selection.IsManualOverride
-                ? text.Get(
+                ? text.Format(
                     $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 无法读取游戏区域 · 语言：{language}",
                     $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Game region unavailable · Language: {language}")
-                : text.Get(
+                : text.Format(
                     $"无法读取游戏区域，暂按国际服处理 · 可手动选择 · 语言：{language}",
                     $"Game region unavailable; using Global · Manual selection is available · Language: {language}");
         }
 
         return selection.IsManualOverride
-            ? text.Get(
+            ? text.Format(
                 $"当前：{FormatRegion(text, selection.EffectiveRegion)}（手动） · 自动检测：{FormatRegion(text, selection.DetectedRegion)}（游戏客户端） · 语言：{language}",
                 $"Current: {FormatRegion(text, selection.EffectiveRegion)} (manual) · Detected: {FormatRegion(text, selection.DetectedRegion)} (game client) · Language: {language}")
-            : text.Get(
+            : text.Format(
                 $"已自动检测：{FormatRegion(text, selection.EffectiveRegion)}（游戏客户端） · 语言：{language}",
                 $"Detected: {FormatRegion(text, selection.EffectiveRegion)} (game client) · Language: {language}");
     }

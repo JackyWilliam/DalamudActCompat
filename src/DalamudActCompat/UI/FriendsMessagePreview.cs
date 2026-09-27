@@ -5,14 +5,14 @@ namespace DalamudActCompat.UI;
 
 internal static class FriendsMessagePreview
 {
-    internal static string LastMessage(CloudChatConversation chat, string? selfId)
+    internal static string LastMessage(CloudChatConversation chat, string? selfId, UiText? uiText = null)
     {
         // The server's monotonic ID orders both sides and pending/history together.
         // Unread flags and delivery ACKs must never change the conversation preview.
         var latest = chat.History.Concat(chat.Pending).MaxBy(message => message.Id);
         if (latest is null) return "";
-        var text = string.Join(" ", latest.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return (latest.Sender.UserId == selfId ? "我：" : "") + text;
+        var text = string.Join(" ", (uiText?.MessageBody(latest) ?? latest.Text).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return (latest.Sender.UserId == selfId ? uiText?.Get("我：", "Me: ") ?? "我：" : "") + text;
     }
 
     internal static string Ellipsize(string text, float width, Func<string, float> measure)

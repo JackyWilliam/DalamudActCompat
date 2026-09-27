@@ -49,13 +49,13 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
     {
         public Vector2 Min, Max, Origin, Pointer;
         public Vector4 Clip;
-        public float Radius, Scrim, Alpha, Hover, Scale, Refraction, Dispersion, Blur;
+        public float Radius, Scrim, Alpha, Hover, Scale, Refraction, Dispersion, Blur, Rain, Time;
     }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Parameters
     {
-        public Vector4 Bounds, Capture, Optics, Material, PointerClip, BlurPass;
+        public Vector4 Bounds, Capture, Optics, Material, PointerClip, BlurPass, Effect;
         public fixed float BlurTaps[25 * 4];
     }
 
@@ -85,7 +85,8 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
         }
     }
 
-    internal bool Enqueue(ImDrawListPtr list, Vector2 min, Vector2 max, float radius, float scrim, bool interactive)
+    internal bool Enqueue(ImDrawListPtr list, Vector2 min, Vector2 max, float radius, float scrim, bool interactive,
+        bool rain = false, double time = 0, float rainScale = 1)
     {
         lock (gate)
         {
@@ -100,8 +101,9 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
                 Min = min, Max = max, Origin = viewport.Pos, Pointer = ImGui.GetIO().MousePos,
                 Clip = new(clipMin.X, clipMin.Y, clipMax.X, clipMax.Y), Radius = radius,
                 Scrim = scrim, Alpha = ImGui.GetStyle().Alpha, Hover = interactive ? 1 : 0,
-                Scale = Math.Max(.75f, ImGui.GetFontSize() / 17f),
-                Refraction = 24, Dispersion = 2, Blur = 3,
+                Scale = rain ? rainScale : Math.Max(.75f, ImGui.GetFontSize() / 17f),
+                Refraction = 24, Dispersion = 2, Blur = rain ? 6 : 3,
+                Rain = rain ? 1 : 0, Time = (float)time,
             };
             list.AddCallback(Callback, request);
             return true;
@@ -163,6 +165,7 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
                 Optics = new(request.Radius, request.Refraction * request.Scale, request.Dispersion * request.Scale, request.Blur * request.Scale),
                 Material = new(request.Scrim, request.Alpha, request.Hover, 0),
                 PointerClip = new(pointer.X, pointer.Y, right - left, bottom - top),
+                Effect = new(request.Rain, request.Time, Math.Max(.1f, request.Scale), 0),
             };
             context->IASetInputLayout(null);
             context->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

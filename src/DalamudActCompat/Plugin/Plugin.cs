@@ -896,7 +896,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
-        liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || settingsWindow.NeedsGlassPreview);
+        liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || DactTheme.Palette.Rain || settingsWindow.NeedsGlassPreview);
         cloudAdministratorNotice.Update(cloudClient.Snapshot);
         // Serialize the two celebrations so their windows and confirmation buttons
         // never overlap. The queued animation starts only when it becomes visible.
@@ -1176,9 +1176,9 @@ public sealed class Plugin : IDalamudPlugin
             services.NotificationManager.AddNotification(new()
             {
                 Title = string.Equals(notice.BanType, "device", StringComparison.Ordinal)
-                    ? "DACT 账号与关联机器已禁用"
-                    : "DACT 已被禁用",
-                Content = BuildCloudBanSummary(notice),
+                    ? text.Get("DACT 账号与关联机器已禁用", "DACT account and linked devices disabled")
+                    : text.Get("DACT 已被禁用", "DACT disabled"),
+                Content = BuildCloudBanSummary(notice, text),
                 Type = NotificationType.Error,
             });
         });
@@ -1205,10 +1205,10 @@ public sealed class Plugin : IDalamudPlugin
                 requiresRestart: requiresRestart);
             services.NotificationManager.AddNotification(new()
             {
-                Title = "DACT 封禁已解除",
+                Title = text.Get("DACT 封禁已解除", "DACT restriction lifted"),
                 Content = requiresRestart
-                    ? "请重启游戏或重载 DACT，然后重新登录以恢复功能。"
-                    : "服务器已确认解封，本次登录已经生效。",
+                    ? text.Get("请重启游戏或重载 DACT，然后重新登录以恢复功能。", "Restart the game or reload DACT, then sign in again to restore access.")
+                    : text.Get("服务器已确认解封，本次登录已经生效。", "The server confirmed the restriction was lifted. This sign-in is active."),
             });
         });
     }
@@ -1367,10 +1367,10 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private static string BuildCloudBanSummary(CloudBanNotice notice)
+    private static string BuildCloudBanSummary(CloudBanNotice notice, UiText text)
         => string.IsNullOrWhiteSpace(notice.BanReason)
-            ? $"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}"
-            : $"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}；原因：{notice.BanReason}";
+            ? text.Format($"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}", $"Banned at: {notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}")
+            : text.Format($"封禁时间：{notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}；原因：{notice.BanReason}", $"Banned at: {notice.BannedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}; reason: {notice.BanReason}");
 
     private void OpenConfigUi()
     {
@@ -1881,7 +1881,7 @@ public sealed class Plugin : IDalamudPlugin
                 "Bundled ACT plugin resources are unavailable; DACT remains loaded and " +
                 $"only bundled extensions are disabled: {ex.GetBaseException().Message}");
             await TryNotifyResourcePackFailureAsync(
-                    "ACT 扩展资源下载失败；DACT 基础解析和界面仍可使用，可稍后重启重试。",
+                    text.Get("ACT 扩展资源下载失败；DACT 基础解析和界面仍可使用，可稍后重启重试。", "ACT extension resources could not be downloaded. DACT parsing and UI remain available; restart later to retry."),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -1938,7 +1938,7 @@ public sealed class Plugin : IDalamudPlugin
                 "Compatibility Host resources are unavailable; DACT remains loaded and " +
                 $"traditional ACT extensions stay disabled: {ex.GetBaseException().Message}");
             await TryNotifyResourcePackFailureAsync(
-                    "兼容 Host 资源下载失败；DACT 基础解析和界面仍可使用，传统 ACT 扩展暂不可用。",
+                    text.Get("兼容 Host 资源下载失败；DACT 基础解析和界面仍可使用，传统 ACT 扩展暂不可用。", "Compatibility Host resources could not be downloaded. DACT parsing and UI remain available; traditional ACT extensions are unavailable."),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -2084,7 +2084,7 @@ public sealed class Plugin : IDalamudPlugin
             await services.Framework.RunOnFrameworkThread(() =>
                 services.NotificationManager.AddNotification(new Notification
                 {
-                    Title = "ACT 兼容资源不可用",
+                    Title = text.Get("ACT 兼容资源不可用", "ACT compatibility resources unavailable"),
                     Content = content,
                     Type = NotificationType.Warning,
                 })).ConfigureAwait(false);
@@ -2276,8 +2276,8 @@ public sealed class Plugin : IDalamudPlugin
                         cancellationToken,
                         () => services.NotificationManager.AddNotification(new()
                         {
-                            Title = "ACT 兼容",
-                            Content = "Cactbot 资源已安装。重启解析器以加载 OverlayPlugin 事件源。",
+                            Title = text.Get("ACT 兼容", "ACT Compat"),
+                            Content = text.Get("Cactbot 资源已安装。重启解析器以加载 OverlayPlugin 事件源。", "Cactbot resources installed. Restart the parser to load the OverlayPlugin event source."),
                         }));
                 }));
         }
@@ -2932,13 +2932,13 @@ public sealed class Plugin : IDalamudPlugin
         var content = status.State switch
         {
             ThirdPartyPluginInstallState.AwaitingPermission =>
-                $"{status.DisplayName} 预检完成，请查看权限并决定是否启用。",
+                text.Format($"{status.DisplayName} 预检完成，请查看权限并决定是否启用。", $"{status.DisplayName} passed preflight. Review permissions and decide whether to enable it."),
             ThirdPartyPluginInstallState.Ready =>
-                $"{status.DisplayName} 已通过运行时预检并启用。",
+                text.Format($"{status.DisplayName} 已通过运行时预检并启用。", $"{status.DisplayName} passed runtime preflight and is enabled."),
             ThirdPartyPluginInstallState.Removed =>
-                $"{status.DisplayName} 已删除，原文件保存在备份目录。",
+                text.Format($"{status.DisplayName} 已删除，原文件保存在备份目录。", $"{status.DisplayName} removed. Original files are saved in the backup directory."),
             ThirdPartyPluginInstallState.Failed =>
-                $"{status.DisplayName} 操作失败：{status.Detail}",
+                text.Format($"{status.DisplayName} 操作失败：{status.Detail}", $"{status.DisplayName} operation failed: {status.Detail}"),
             _ => null,
         };
         if (content is null)
@@ -2960,7 +2960,7 @@ public sealed class Plugin : IDalamudPlugin
 
                 services.NotificationManager.AddNotification(new Notification
                 {
-                    Title = "第三方 ACT 插件",
+                    Title = text.Get("第三方 ACT 插件", "Third-party ACT plugin"),
                     Content = content,
                     Type = status.State == ThirdPartyPluginInstallState.Failed
                         ? NotificationType.Error
@@ -3346,12 +3346,12 @@ public sealed class Plugin : IDalamudPlugin
                 logger.Warning(
                     $"Bundled ACT plugins were installed and acknowledged, but runtime recovery is pending: {runtimeRecoveryFailure.GetBaseException().Message}");
                 TryNotifyBundledPluginInstall(
-                    "第三方 DLL 和来源声明已保存；兼容 Host 未完全恢复，将由监督器继续重试。");
+                    text.Get("第三方 DLL 和来源声明已保存；兼容 Host 未完全恢复，将由监督器继续重试。", "Third-party DLLs and source notices saved. The compatibility Host has not fully recovered; the supervisor will retry."));
                 return BundledPluginInstallOutcome.RuntimeRecoveryPending(runtimeRecoveryFailure);
             }
 
             TryNotifyBundledPluginInstall(
-                "第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。");
+                text.Get("第三方 DLL 已按告知版本安装/更新；作者、版本和来源告知已记录。", "Third-party DLLs installed or updated to the disclosed versions; author, version, and source notices recorded."));
             return BundledPluginInstallOutcome.Ready;
         }
         finally
@@ -3366,7 +3366,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             services.NotificationManager.AddNotification(new()
             {
-                Title = "ACT 兼容",
+                Title = text.Get("ACT 兼容", "ACT Compat"),
                 Content = content,
             });
         }
@@ -3445,7 +3445,7 @@ public sealed class Plugin : IDalamudPlugin
                     .ToArray();
                 var message = BuildBundledPluginUpdateMessage(
                     check,
-                    pendingOnline.Length);
+                    pendingOnline.Length, text);
                 await services.Framework
                     .RunOnFrameworkThread(
                         () =>
@@ -3483,7 +3483,7 @@ public sealed class Plugin : IDalamudPlugin
                     .RunOnFrameworkThread(
                         () =>
                         {
-                            var message = $"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}";
+                            var message = text.Format($"DLL 在线更新检查失败；仍可使用安装包内版本：{ex.GetBaseException().Message}", $"Online DLL update check failed; bundled versions remain available: {ex.GetBaseException().Message}");
                             var pendingCount = bundledPluginManager
                                 .GetPendingDisclosures()
                                 .Count;
@@ -3514,18 +3514,18 @@ public sealed class Plugin : IDalamudPlugin
 
     private static string BuildBundledPluginUpdateMessage(
         BundledActPluginUpdateCheckResult check,
-        int pendingOnlineCount)
+        int pendingOnlineCount, UiText text)
     {
         var summary = pendingOnlineCount > 0
-            ? $"发现 {pendingOnlineCount} 项作者上游 DLL 更新；确认前这些 DLL 不会重新加载。"
-            : "DLL 作者上游检查完成，当前没有新的在线更新。";
+            ? text.Format($"发现 {pendingOnlineCount} 项作者上游 DLL 更新；确认前这些 DLL 不会重新加载。", $"Found {pendingOnlineCount} upstream DLL updates. These DLLs will not reload until acknowledged.")
+            : text.Get("DLL 作者上游检查完成，当前没有新的在线更新。", "Upstream DLL check complete. No new online updates are available.");
         if (check.Failures.Count == 0)
         {
             return summary;
         }
 
-        return $"{summary} {check.Failures.Count} 项来源检查失败：" +
-               string.Join("；", check.Failures);
+        return text.Format($"{summary} {check.Failures.Count} 项来源检查失败：{string.Join("；", check.Failures)}",
+            $"{summary} {check.Failures.Count} source checks failed: {string.Join("; ", check.Failures)}");
     }
 
     private void SelectPluginPackage()
@@ -3551,7 +3551,7 @@ public sealed class Plugin : IDalamudPlugin
     private void SelectCactbotPackage()
     {
         fileDialogManager.OpenFileDialog(
-            "选择 OverlayPlugin/cactbot 官方 Release ZIP",
+            text.Get("选择 OverlayPlugin/cactbot 官方 Release ZIP", "Select an official OverlayPlugin/cactbot release ZIP"),
             "Cactbot Release{.zip}",
             async (success, selectedPath) =>
             {
@@ -3980,8 +3980,8 @@ public sealed class Plugin : IDalamudPlugin
         logger.Warning($"ACT plugin '{pluginId}' is not running in its assigned Host.");
         services.NotificationManager.AddNotification(new()
         {
-            Title = "ACT 兼容",
-            Content = $"扩展 {pluginId} 未在分配的 Host 中成功加载，请重启对应 Host 并查看状态日志。",
+            Title = text.Get("ACT 兼容", "ACT Compat"),
+            Content = text.Format($"扩展 {pluginId} 未在分配的 Host 中成功加载，请重启对应 Host 并查看状态日志。", $"Extension {pluginId} failed to load in its assigned Host. Restart that Host and check its status logs."),
         });
     }
 
@@ -4323,8 +4323,8 @@ public sealed class Plugin : IDalamudPlugin
                     await services.Framework.RunOnFrameworkThread(() =>
                         services.NotificationManager.AddNotification(new()
                         {
-                            Title = "ACT 兼容",
-                            Content = "FoxTTS 已切换为 Cafe TTS Pro，兼容 Host 已重新启动。",
+                            Title = text.Get("ACT 兼容", "ACT Compat"),
+                            Content = text.Get("FoxTTS 已切换为 Cafe TTS Pro，兼容 Host 已重新启动。", "FoxTTS switched to Cafe TTS Pro and the compatibility Host restarted."),
                         })).ConfigureAwait(false);
                     return;
                 }
@@ -4423,8 +4423,8 @@ public sealed class Plugin : IDalamudPlugin
                     await services.Framework.RunOnFrameworkThread(() =>
                         services.NotificationManager.AddNotification(new()
                         {
-                            Title = "ACT 兼容",
-                            Content = $"FoxTTS 切换 Cafe TTS Pro 失败：{ex.GetBaseException().Message}",
+                            Title = text.Get("ACT 兼容", "ACT Compat"),
+                            Content = text.Format($"FoxTTS 切换 Cafe TTS Pro 失败：{ex.GetBaseException().Message}", $"FoxTTS could not switch to Cafe TTS Pro: {ex.GetBaseException().Message}"),
                         })).ConfigureAwait(false);
                 }
             }
@@ -5043,22 +5043,22 @@ public sealed class Plugin : IDalamudPlugin
                 var content = snapshot.State switch
                 {
                     HostMemoryProtectionState.Monitoring =>
-                        $"共享 ACT Host 私有内存已到 {snapshot.PrivateBytes / (1024d * 1024d * 1024d):0.00} GiB，正在确认是否持续增长；不会立即结束进程。",
+                        text.Format($"共享 ACT Host 私有内存已到 {snapshot.PrivateBytes / (1024d * 1024d * 1024d):0.00} GiB，正在确认是否持续增长；不会立即结束进程。", $"Shared ACT Host private memory reached {snapshot.PrivateBytes / (1024d * 1024d * 1024d):0.00} GiB. Monitoring sustained growth; the process will not be stopped immediately."),
                     HostMemoryProtectionState.DeferredForCombat =>
-                        "共享 ACT Host 已持续超过 3 GiB。当前仍在战斗，自动回收会等到脱战。",
+                        text.Get("共享 ACT Host 已持续超过 3 GiB。当前仍在战斗，自动回收会等到脱战。", "Shared ACT Host memory remained above 3 GiB. Automatic recovery will wait for combat to end."),
                     HostMemoryProtectionState.EmergencyCountdown =>
-                        "共享 ACT Host 内存已进入紧急区间，10 秒后将尝试平滑重启；可在状态窗口选择本次忽略。",
+                        text.Get("共享 ACT Host 内存已进入紧急区间，10 秒后将尝试平滑重启；可在状态窗口选择本次忽略。", "Shared ACT Host memory reached an emergency level. A graceful restart will be attempted in 10 seconds; you can ignore this session in the status window."),
                     HostMemoryProtectionState.Recycling =>
-                        "正在平滑重启共享 ACT Host。Triggernometry、鲶鱼精邮差与 FoxTTS 会短暂停止，未执行的延时动作或发送队列可能丢失。",
+                        text.Get("正在平滑重启共享 ACT Host。Triggernometry、鲶鱼精邮差与 FoxTTS 会短暂停止，未执行的延时动作或发送队列可能丢失。", "The shared ACT Host is restarting gracefully. Triggernometry, PostNamazu, and FoxTTS will pause briefly; pending delayed actions or send queues may be lost."),
                     HostMemoryProtectionState.Ignored =>
-                        "本次 Host 会话已忽略自动内存回收；请留意系统剩余内存，手动重启 Host 后保护会恢复。",
+                        text.Get("本次 Host 会话已忽略自动内存回收；请留意系统剩余内存，手动重启 Host 后保护会恢复。", "Automatic memory recovery is ignored for this Host session. Watch available system memory; protection resumes after a manual Host restart."),
                     HostMemoryProtectionState.CircuitOpen =>
-                        "十分钟内已自动恢复两次，本次已停止共享 ACT Host 且不再自动重启。请查看状态与日志后手动启动。",
+                        text.Get("十分钟内已自动恢复两次，本次已停止共享 ACT Host 且不再自动重启。请查看状态与日志后手动启动。", "Two automatic recoveries occurred within ten minutes. The shared ACT Host has stopped and will not restart automatically. Review the status and logs before starting it manually."),
                     _ => snapshot.Detail,
                 };
                 services.NotificationManager.AddNotification(new Notification
                 {
-                    Title = "共享 ACT Host 内存保护",
+                    Title = text.Get("共享 ACT Host 内存保护", "Shared ACT Host memory protection"),
                     Content = content,
                     Type = snapshot.State == HostMemoryProtectionState.CircuitOpen
                         ? NotificationType.Error
@@ -5659,7 +5659,7 @@ public sealed class Plugin : IDalamudPlugin
             services.NotificationManager.AddNotification(new()
             {
                 Title = text.Get("游戏区域已切换", "Game region changed"),
-                Content = text.Get(
+                Content = text.Format(
                     $"已切换为 {FormatGameRegion(appliedSelection.EffectiveRegion)}；解析器和正在运行的扩展 Host 已刷新。",
                     $"Switched to {FormatGameRegion(appliedSelection.EffectiveRegion)}; the parser and active extension Hosts were refreshed."),
             })).ConfigureAwait(false);

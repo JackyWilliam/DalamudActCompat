@@ -34,7 +34,8 @@ internal static class BrandedWindowChrome
         int onlineFriends = 0,
         bool friendsUnread = false,
         Action? logoAction = null,
-        Action? versionAction = null)
+        Action? versionAction = null,
+        UiText? text = null)
     {
         DactTheme.DrawGameWindow();
         const float height = 40;
@@ -177,7 +178,10 @@ internal static class BrandedWindowChrome
             drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
                 ImGui.GetColorU32(DactTheme.Palette.Text), Math.Max(0, onlineFriends).ToString());
             if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip($"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text?.Format(
+                $"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}",
+                $"Friends · {Math.Max(0, onlineFriends)} online{(friendsUnread ? text.Get(" · 有未读消息", " · Unread messages") : "")}")
+                ?? $"好友 · {Math.Max(0, onlineFriends)} 人在线");
         }
         if (helpAction is not null)
         {
@@ -210,7 +214,7 @@ internal static class BrandedWindowChrome
             closeRequested = DactTheme.IconButton(
                 $"close-{id}", GameSkinIcon.Close, "×",
                 new Vector2(actionButtonSize, actionButtonSize));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("关闭窗口 / Close window");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text?.Get("关闭窗口", "Close window") ?? "关闭窗口 / Close window");
             ImGui.PopStyleColor(3);
         }
         ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));
@@ -302,9 +306,13 @@ internal static class BrandedWindowChrome
                 clickedIndex = index;
             }
 
-            var labelSize = ImGui.CalcTextSize(labels[index]);
+            // Translations and larger fonts can exceed an equal-width tab. Keep
+            // its click target and full tooltip while clipping at grapheme edges.
+            var caption = FriendsMessagePreview.Ellipsize(labels[index], Math.Max(0, segmentWidth - 16), value => ImGui.CalcTextSize(value).X);
+            if (caption != labels[index] && ImGui.IsItemHovered()) ImGui.SetTooltip(labels[index]);
+            var labelSize = ImGui.CalcTextSize(caption);
             var labelPosition = texturedTab
-                ? DactTheme.CenteredTextPosition(labels[index], itemMin, itemMin + new Vector2(segmentWidth, height - 2))
+                ? DactTheme.CenteredTextPosition(caption, itemMin, itemMin + new Vector2(segmentWidth, height - 2))
                 : new Vector2(
                     itemMin.X + ((segmentWidth - labelSize.X) * 0.5f),
                     itemMin.Y + ((height - labelSize.Y) * 0.5f));
@@ -313,7 +321,7 @@ internal static class BrandedWindowChrome
                 ImGui.GetColorU32(texturedTab
                     ? Vector4.One
                     : index == selectedIndex ? NavigationAccent : NavigationText),
-                labels[index]);
+                caption);
             if (index == notificationIndex)
             {
                 var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);

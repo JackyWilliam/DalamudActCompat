@@ -38,7 +38,7 @@ internal sealed class SkinSettingsPanel
             DrawPreview(current.Id, start, new Vector2(130, 78) * scale, text, true);
             ImGui.SetCursorScreenPos(start + new Vector2(145 * scale, 0));
             ImGui.BeginGroup();
-            ImGui.TextUnformatted(text.Get($"当前：{current.ChineseName}", $"Current: {current.EnglishName}"));
+            ImGui.TextUnformatted(text.Format($"当前：{current.ChineseName}", $"Current: {text.Get(current.ChineseName, current.EnglishName)}"));
             ImGui.TextDisabled(text.Get("预览皮肤、查看权益与探索配色", "Preview skins, benefits and discoveries"));
             if (DactTheme.Button(text.Get("管理皮肤", "Manage skins"), new Vector2(145 * scale, 0))) Open(settings, account);
             ImGui.EndGroup();
@@ -152,7 +152,7 @@ internal sealed class SkinSettingsPanel
             draw.AddText(ImGui.GetFont(), ImGui.GetFontSize(), labelMin, ImGui.GetColorU32(DactTheme.Palette.Text), Name(skin, settings, text), labelWidth);
             var status = active == skin.Id ? text.Get("● 正在使用", "● In use")
                 : Available(skin, settings, account) ? text.Get("已解锁", "Unlocked")
-                : skin.EasterEgg ? text.Get("等待发现", "Undiscovered") : text.Get($"赞助 {skin.SponsorTier} 级解锁", $"Sponsor tier {skin.SponsorTier}");
+                : skin.EasterEgg ? text.Get("等待发现", "Undiscovered") : text.Format($"赞助 {skin.SponsorTier} 级解锁", $"Sponsor tier {skin.SponsorTier}");
             draw.AddText(ImGui.GetFont(), ImGui.GetFontSize() * .85f, min + new Vector2(labelX, 65 * scale),
                 ImGui.GetColorU32(active == skin.Id ? DactTheme.Palette.Accent : DactTheme.Palette.Muted), status, labelWidth);
             ImGui.PopID();
@@ -167,7 +167,9 @@ internal sealed class SkinSettingsPanel
         DrawPreview(Discovered(skin, settings) ? skin.Id : null, ImGui.GetCursorScreenPos(), size, text, false);
         ImGui.Dummy(size);
         ImGui.Spacing();
-        ImGui.TextWrapped(Discovered(skin, settings) && skin.Id == SkinCatalog.LiquidGlass
+        ImGui.TextWrapped(Discovered(skin, settings) && skin.Id == SkinCatalog.RainyWindow
+            ? text.Get("灰蓝雨窗，朦胧景色映在水珠里，偶有雨滴沿着玻璃滑落。", "A blue-gray window with a misty view, refracting droplets and slow trails down the glass.")
+            : Discovered(skin, settings) && skin.Id == SkinCatalog.LiquidGlass
             ? text.Get("偏白的半透玻璃与墨色文字，圆润边缘折射流光。", "Milky translucent glass, dark lettering and luminous refractive edges.")
             : Discovered(skin, settings) && skin.Id == SkinCatalog.Obsidian
             ? text.Get("纯黑底色与灰白细节，让内容安静而清晰。", "Pure black surfaces with quiet, clear grayscale details.")
@@ -181,7 +183,7 @@ internal sealed class SkinSettingsPanel
         {
             ImGui.TextWrapped(Available(skin, settings, account)
                 ? text.Get("当前账号已永久解锁。", "Permanently unlocked for this account.")
-                : text.Get($"需要赞助 {skin.SponsorTier} 级。赞助后联系管理员核对账号并开通等级。", $"Requires sponsor tier {skin.SponsorTier}. Contact the administrator after sponsoring to activate your account benefit."));
+                : text.Format($"需要赞助 {skin.SponsorTier} 级。赞助后联系管理员核对账号并开通等级。", $"Requires sponsor tier {skin.SponsorTier}. Contact the administrator after sponsoring to activate your account benefit."));
             ImGui.BeginDisabled(account.IsBusy || !SignedIn(account));
             if (DactTheme.SmallButton(text.Get("刷新权益", "Refresh benefits"))) refresh();
             ImGui.EndDisabled();
@@ -211,7 +213,8 @@ internal sealed class SkinSettingsPanel
 
         var unit = size.Y / 190f;
         var game = palette.Light ? DactTheme.GameAssets : null;
-        if (palette.Glass) DactTheme.DrawGlassSurface(draw, min, max, 10 * unit, palette.Surface);
+        if (palette.Rain) RainWindowRenderer.Draw(draw, min, max, unit, ImGui.GetTime());
+        else if (palette.Glass) DactTheme.DrawGlassSurface(draw, min, max, 10 * unit, palette.Surface);
         else if (game?.Window(min, max, unit) != true)
         {
             draw.AddRectFilled(min, max, ImGui.GetColorU32(palette.Surface), 7 * unit);

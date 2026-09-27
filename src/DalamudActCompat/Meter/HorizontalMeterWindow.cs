@@ -170,14 +170,14 @@ public sealed class HorizontalMeterWindow : Window
         var start = ImGui.GetCursorScreenPos();
         var lineHeight = Math.Max(20, ImGui.GetTextLineHeight() + 4);
         var dpsWidth = DrawModeButton(
-            "DPS 榜",
+            text.Get("DPS 榜", "DPS"),
             MeterSortMode.Dps,
             start,
             lineHeight,
             persistChanges: !embeddedPreview);
         var hpsStart = start + new Vector2(dpsWidth + 10, 0);
         var hpsWidth = DrawModeButton(
-            "HPS 榜",
+            text.Get("HPS 榜", "HPS"),
             MeterSortMode.Hps,
             hpsStart,
             lineHeight,
@@ -477,7 +477,7 @@ public sealed class HorizontalMeterWindow : Window
             ImGui.GetColorU32(new Vector4(IceBlue.X, IceBlue.Y, IceBlue.Z, 0.35f)));
         if (ImGui.IsMouseHoveringRect(start, start + new Vector2(width, height)) && row.HighestDamage > 0)
         {
-            ImGui.SetTooltip(text.Get(
+            ImGui.SetTooltip(text.Format(
                 $"最高单次：{row.HighestDamageAction} {row.HighestDamage:N0}",
                 $"Highest hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
         }
