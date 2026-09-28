@@ -66,6 +66,10 @@ public sealed class MeterWindowProfile
 
     public float BackgroundOpacity { get; set; } = 0.85f;
 
+    // Missing in older backups. Migration captures the old bar strength once,
+    // after legacy background migrations, so later background edits are independent.
+    public float? DataBarOpacity { get; set; }
+
     public Vector3? BackgroundColor { get; set; }
 
     public float ItemWidth { get; set; } = 210;
@@ -91,6 +95,11 @@ public sealed class MeterWindowProfile
         }
         var normalizedFontScale = ClampFinite(FontScale, 0.65f, 2, 1);
         var normalizedBackgroundOpacity = ClampFinite(BackgroundOpacity, 0, 1, 0.85f);
+        if (DataBarOpacity is { } opacity)
+        {
+            var normalized = ClampFinite(opacity, 0, 1, MeterBackground.DefaultDataBarOpacity);
+            if (DataBarOpacity != normalized) { DataBarOpacity = normalized; changed = true; }
+        }
         var normalizedItemWidth = ClampFinite(ItemWidth, 140, 420, 210);
         if (FontScale != normalizedFontScale ||
             BackgroundOpacity != normalizedBackgroundOpacity ||

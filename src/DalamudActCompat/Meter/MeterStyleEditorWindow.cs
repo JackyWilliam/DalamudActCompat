@@ -826,30 +826,47 @@ public sealed class MeterStyleEditorWindow : Window
             if (profile.BackgroundOpacity == 0) profile.BackgroundOpacity = 0.85f;
             changed = true;
         }
+        var buttonsRight = ImGui.GetCursorScreenPos().X + ImGui.GetContentRegionAvail().X;
+        var transparentPanel = text.Get("底板全透明", "Transparent panel");
         if (DactTheme.SmallButton(text.Get("恢复默认背景", "Reset background")))
         {
             profile.BackgroundColor = null;
             profile.BackgroundOpacity = selectedKind == MeterWindowKind.Horizontal ? 0 : 0.85f;
             changed = true;
         }
-        ImGui.SameLine();
-        if (DactTheme.SmallButton(text.Get("完全透明", "Fully transparent")))
+        // Long localized buttons must remain reachable in the narrow properties pane.
+        if (ImGui.GetItemRectMax().X + ImGui.GetStyle().ItemSpacing.X + ImGui.CalcTextSize(transparentPanel).X + ImGui.GetStyle().FramePadding.X * 2 <= buttonsRight)
+            ImGui.SameLine();
+        if (DactTheme.SmallButton(transparentPanel))
         {
             profile.BackgroundOpacity = 0;
             changed = true;
         }
         {
-            var backgroundOpacity = profile.BackgroundOpacity;
+            var backgroundOpacity = profile.BackgroundOpacity * 100;
             if (DrawLabeledSlider(
                     "profile-background-opacity",
-                    text.Get("背景不透明度", "Background opacity"),
-                    text.Get("0 为完全透明，1 为完全不透明；经典榜、横版、D/T 和 H 分别保存。", "0 is fully transparent and 1 is opaque. Classic, Horizontal, D/T and H each save their own background."),
+                    text.Get("底板不透明度", "Panel opacity"),
+                    text.Get("只调整窗口和行底色，不影响彩条。各统计模板分别保存；0% 为全透明，100% 为不透明。", "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque."),
                     ref backgroundOpacity,
                     0,
-                    1,
-                    "%.2f"))
+                    100,
+                    "%.0f%%"))
             {
-                profile.BackgroundOpacity = backgroundOpacity;
+                profile.BackgroundOpacity = backgroundOpacity / 100;
+                changed = true;
+            }
+        }
+        if (selectedKind != MeterWindowKind.Horizontal)
+        {
+            var dataBarOpacity = MeterBackground.DataBarOpacity(profile) * 100;
+            if (DrawLabeledSlider(
+                    "profile-data-bar-opacity",
+                    text.Get("彩色数据条不透明度", "Data bar opacity"),
+                    text.Get("独立调整彩条浓度，不影响底板和文字；0% 隐藏彩条。自己的强调色仍可单独调整。", "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable."),
+                    ref dataBarOpacity, 0, 100, "%.0f%%"))
+            {
+                profile.DataBarOpacity = dataBarOpacity / 100;
                 changed = true;
             }
         }
@@ -1029,7 +1046,10 @@ public sealed class MeterStyleEditorWindow : Window
         float maximum,
         string format)
     {
-        ImGui.TextUnformatted(label);
+        var helpWidth = ImGui.CalcTextSize("(?)").X + ImGui.GetStyle().ItemSpacing.X;
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(ImGui.GetFontSize() * 3, ImGui.GetContentRegionAvail().X - helpWidth));
+        ImGui.TextWrapped(label);
+        ImGui.PopTextWrapPos();
         DrawInlineHelp(hint);
         ImGui.SetNextItemWidth(-1);
         return ImGui.SliderFloat($"##{id}", ref value, minimum, maximum, format);

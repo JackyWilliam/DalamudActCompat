@@ -461,6 +461,7 @@ public sealed class RoleSplitMeterWindow : Window
                 IsLocked = Profile.IsLocked,
                 ClickThroughWhenLocked = Profile.ClickThroughWhenLocked,
                 BackgroundOpacity = Profile.BackgroundOpacity,
+                DataBarOpacity = Profile.DataBarOpacity,
                 BackgroundColor = Profile.BackgroundColor,
                 FontScale = Profile.FontScale,
                 SortMode = useHealing ? MeterSortMode.Hps : MeterSortMode.Dps,

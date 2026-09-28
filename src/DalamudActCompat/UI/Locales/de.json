@@ -1460,5 +1460,10 @@
   "● In use": "● Im Einsatz",
   "● New friend request · View": "● Neue Freundschaftsanfrage · Anzeigen",
   "● Waiting for encounter data": "● Warten auf Begegnungsdaten",
-  "✓ Current DPS ranking metric": "✓ Aktuelle DPS-Ranking-Metrik"
+  "✓ Current DPS ranking metric": "✓ Aktuelle DPS-Ranking-Metrik",
+  "Transparent panel": "Hintergrund transparent",
+  "Panel opacity": "Deckkraft des Hintergrunds",
+  "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "Ändert den Fenster- und Zeilenhintergrund, ohne die Datenbalken zu beeinflussen. Wird pro Anzeigevorlage gespeichert; 0% ist transparent, 100% ist deckend.",
+  "Data bar opacity": "Deckkraft der Datenbalken",
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "Passt die Stärke der Datenbalken unabhängig von Hintergrund und Text an. 0% blendet die Balken aus. Die eigene Hervorhebungsfarbe bleibt separat einstellbar."
 }

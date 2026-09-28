@@ -1460,5 +1460,10 @@
   "● In use": "●使用中",
   "● New friend request · View": "● 新規フレンドリクエスト・閲覧",
   "● Waiting for encounter data": "●エンカウントデータ待ち",
-  "✓ Current DPS ranking metric": "✓ 現在の DPS ランキング指標"
+  "✓ Current DPS ranking metric": "✓ 現在の DPS ランキング指標",
+  "Transparent panel": "背景を透明に",
+  "Panel opacity": "背景の不透明度",
+  "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "ウィンドウと各行の背景を調整します。データバーには影響しません。メーターのテンプレートごとに保存されます。0% は透明、100% は不透明です。",
+  "Data bar opacity": "データバーの不透明度",
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "背景や文字とは別にデータバーの濃さを調整します。0% でバーを非表示にします。自分の強調色は引き続き個別に調整できます。"
 }

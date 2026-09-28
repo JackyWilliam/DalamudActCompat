@@ -6,6 +6,19 @@ namespace DalamudActCompat.Meter;
 internal static class MeterBackground
 {
     public static readonly Vector3 DefaultColor = new(0.035f, 0.055f, 0.09f);
+    internal const float LegacyDataBarOpacity = .20f;
+    internal const float DefaultDataBarOpacity = LegacyDataBarOpacity * .85f;
+
+    public static float DataBarOpacity(MeterWindowProfile profile)
+        => Channel(profile.DataBarOpacity ?? DefaultDataBarOpacity, DefaultDataBarOpacity);
+
+    public static Vector4 Bar(MeterWindowProfile profile, Vector4 color)
+    {
+        // Preserve the stronger local-player accent and compact-view shading.
+        // The reference bar's alpha is now controlled independently of the panel.
+        color.W = Math.Clamp(color.W / LegacyDataBarOpacity * DataBarOpacity(profile), 0, 1);
+        return color;
+    }
 
     public static Vector3 Normalize(Vector3 color)
         => new(Channel(color.X, DefaultColor.X), Channel(color.Y, DefaultColor.Y), Channel(color.Z, DefaultColor.Z));

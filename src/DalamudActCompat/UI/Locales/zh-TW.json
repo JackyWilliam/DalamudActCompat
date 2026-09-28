@@ -1460,5 +1460,10 @@
   "● In use": "● 正在使用",
   "● New friend request · View": "● 新好友申請 · 點選檢視",
   "● Waiting for encounter data": "● 等待戰鬥資料",
-  "✓ Current DPS ranking metric": "✓目前DPS排名指標"
+  "✓ Current DPS ranking metric": "✓目前DPS排名指標",
+  "Transparent panel": "底板全透明",
+  "Panel opacity": "底板不透明度",
+  "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "僅調整視窗與各列底色，不影響彩條。各統計範本分別儲存；0% 為全透明，100% 為不透明。",
+  "Data bar opacity": "彩色資料條不透明度",
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "獨立調整彩條濃度，不影響底板與文字；0% 隱藏彩條。自己的強調色仍可單獨調整。"
 }

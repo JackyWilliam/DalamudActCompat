@@ -1460,5 +1460,10 @@
   "● In use": "● En cours d' utilisation",
   "● New friend request · View": "● Nouvelle demande d'ami · Voir",
   "● Waiting for encounter data": "● En attente de données de rencontre",
-  "✓ Current DPS ranking metric": "✓ Indicateur de classement actuel DPS"
+  "✓ Current DPS ranking metric": "✓ Indicateur de classement actuel DPS",
+  "Transparent panel": "Fond transparent",
+  "Panel opacity": "Opacité du fond",
+  "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "Modifie le fond de la fenêtre et des lignes sans affecter les barres de données. Réglage enregistré par modèle : 0% est transparent, 100% est opaque.",
+  "Data bar opacity": "Opacité des barres de données",
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "Règle l’intensité des barres indépendamment du fond et du texte. 0% masque les barres. La couleur de mise en évidence de votre personnage reste réglable séparément."
 }

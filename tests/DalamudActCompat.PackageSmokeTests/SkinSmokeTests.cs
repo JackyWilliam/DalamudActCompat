@@ -16,7 +16,7 @@ using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using Newtonsoft.Json;
 
-internal static class SkinSmokeTests
+internal static partial class SkinSmokeTests
 {
     public static async Task CloudAsync(string root)
     {
@@ -234,6 +234,7 @@ internal static class SkinSmokeTests
         Check(background.BackgroundColor == new Vector3(MeterBackground.DefaultColor.X, 0, 1), "Invalid background channels reached the renderer.");
         config.ResetToDefaults("logs");
         Check(config.Appearance.SelectedSkin == SkinCatalog.Default && config.Appearance.UnlockedEasterEggs.Count == 0, "Factory reset retained skin preferences.");
+        MeterOpacityConfiguration();
         if (native) Native();
         Console.WriteLine("Skins: permissions, discoveries, migration, serialization, independent backgrounds and requested native checks passed.");
     }
@@ -505,6 +506,7 @@ internal static class SkinSmokeTests
             PopupSurfaces(raster, output, config, text, logo);
             MeterSkinIsolation(raster, output, logo);
             MeterEditor(raster, output, logo, config, text);
+            MeterOpacityNative(raster, output, logo);
             EmptyMeterEditorSummary(raster, output, logo);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }

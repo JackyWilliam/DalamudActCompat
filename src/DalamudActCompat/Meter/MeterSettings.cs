@@ -333,6 +333,18 @@ public sealed class MeterSettings
         };
     }
 
+    internal bool MigrateIndependentDataBarOpacity()
+    {
+        var changed = false;
+        foreach (var profile in new[] { ClassicWindow, HorizontalWindow, RoleSplitWindow, RoleSplitDamageWindow, RoleSplitHealerWindow })
+        {
+            if (profile.DataBarOpacity is not null) continue;
+            profile.DataBarOpacity = MeterBackground.LegacyDataBarOpacity * MeterWindow.NormalizeBackgroundOpacity(profile.BackgroundOpacity);
+            changed = true;
+        }
+        return changed;
+    }
+
     internal bool MigratePlayerIdentitySlots()
     {
         var changed = MergePlayerIdentity(ClassicWindow.Slots);
@@ -537,6 +549,7 @@ public sealed class MeterSettings
         destination.ShowHeader = source.ShowHeader;
         destination.FontScale = source.FontScale;
         destination.BackgroundOpacity = source.BackgroundOpacity;
+        destination.DataBarOpacity = source.DataBarOpacity;
         destination.BackgroundColor = source.BackgroundColor;
         destination.ItemWidth = source.ItemWidth;
         destination.SortMode = source.SortMode;
