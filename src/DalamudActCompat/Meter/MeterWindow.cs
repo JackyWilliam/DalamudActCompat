@@ -1049,9 +1049,8 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             start + new Vector2(size.X * ratio, size.Y),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(
-                new Vector4(jobColor.X, jobColor.Y, jobColor.Z, row.IsLocalPlayer ? 0.32f : 0.17f),
-                settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Bar(settings.ClassicWindow,
+                new Vector4(jobColor.X, jobColor.Y, jobColor.Z, row.IsLocalPlayer ? 0.32f : 0.17f))),
             6);
 
         var displayName = MeterSlotPresentation.DisplayName(row, encounter, settings, text);
@@ -1542,7 +1541,7 @@ public sealed class MeterWindow : Window
         drawList.AddRectFilled(
             start,
             new Vector2(start.X + width * ratio, end.Y),
-            ImGui.GetColorU32(ApplyBackgroundOpacity(barColor, settings.ClassicWindow.BackgroundOpacity)),
+            ImGui.GetColorU32(MeterBackground.Bar(settings.ClassicWindow, barColor)),
             5);
         if (row.IsLocalPlayer)
         {
@@ -1613,9 +1612,8 @@ public sealed class MeterWindow : Window
             drawList.AddRectFilled(
                 new Vector2(currentX, textY - 1),
                 new Vector2(currentX, textY - 1) + badgeSize,
-                ImGui.GetColorU32(ApplyBackgroundOpacity(
-                    new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f),
-                    settings.ClassicWindow.BackgroundOpacity)),
+                ImGui.GetColorU32(MeterBackground.Bar(settings.ClassicWindow,
+                    new Vector4(jobColor.X, jobColor.Y, jobColor.Z, 0.55f))),
                 4);
             MeterBackground.AddText(drawList,
                 new Vector2(currentX + (badgeSize.X - jobSize.X) * 0.5f, textY + 1),

@@ -333,6 +333,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
             changed = true;
         }
 
+        changed |= Meter.MigrateIndependentDataBarOpacity();
         return changed;
     }
 

@@ -2517,6 +2517,7 @@ static void ValidateMeterRows()
         !previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "A post-migration manual SilverDasher enable choice was overwritten.");
     var manuallyEnabledSilverDasher = new PluginConfiguration();
+    manuallyEnabledSilverDasher.ApplyMigrations();
     manuallyEnabledSilverDasher.DisabledActPluginIds.Remove("silverdasher");
     var coldStartedSilverDasher = Newtonsoft.Json.JsonConvert.DeserializeObject<
                                       PluginConfiguration>(
