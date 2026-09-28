@@ -6,7 +6,7 @@
   " · Waiting for recipient": " · 待上線接收",
   "+ Add slot": "＋ 新增槽位",
   "-- means no usable distribution, unresolved job/encounter mapping, or no valid DPS yet. It does not mean a zero parse.": "顯示 -- 表示當前沒有可用分佈、職業/副本無法對映，或本場尚無有效 DPS；這不是零分。",
-  "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT, DH, and CDH rates. CRIT counts critical hits, DH counts direct hits, and CDH counts hits that were both critical and direct. None is a character-sheet probability.": "-- 表示當前還沒有有效值，不等於 0。戰鬥中新命中持續加入樣本，DPS、百分比、暴擊率、直擊率和直暴率會自然變化。暴擊率統計暴擊命中，直擊率統計直擊命中，直暴率統計同時暴擊並直擊的命中；它們都不是角色面板機率。",
+  "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT, DH, and CDH rates. CRIT counts critical hits, DH counts direct hits, and CDH counts hits that were both critical and direct. None of these are the rates shown on your character sheet.": "-- 表示當前還沒有有效值，不等於 0。戰鬥中新命中持續加入樣本，DPS、百分比、暴擊率、直擊率和直暴率會自然變化。暴擊率統計暴擊命中，直擊率統計直擊命中，直暴率統計同時暴擊並直擊的命中；它們都不是角色面板機率。",
   "/actcompat toggles the control center, /actcompat on always opens it, and /actcompat off always closes it; /actcompat status opens runtime status. Every command can be copied from the Commands page.": "/actcompat 切換控制中心的開啟與關閉，/actcompat on 始終開啟，/actcompat off 始終關閉；/actcompat status 開啟執行狀態；所有命令都可在“宏指令”頁一鍵複製。",
   "0 is fully transparent and 1 is opaque. Classic, Horizontal, D/T and H each save their own background.": "0 為完全透明，1 為完全不透明；經典榜、橫版、D/T 和 H 分別儲存。",
   "0% is opaque; 100% is transparent. Text and buttons stay clear.": "0% 為不透明，100% 為全透明；文字和按鈕保持清晰。",

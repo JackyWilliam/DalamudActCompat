@@ -871,7 +871,7 @@ public sealed class HelpWindow : Window
         {
             ImGui.TextWrapped(text.Get(
                 "-- 表示当前还没有有效值，不等于 0。战斗中新命中持续加入样本，DPS、百分比、暴击率、直击率和直暴率会自然变化。暴击率统计暴击命中，直击率统计直击命中，直暴率统计同时暴击并直击的命中；它们都不是角色面板概率。",
-                "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT, DH, and CDH rates. CRIT counts critical hits, DH counts direct hits, and CDH counts hits that were both critical and direct. None is a character-sheet probability."));
+                "-- means no valid value yet, not zero. New hits continuously change DPS, percentages, CRIT, DH, and CDH rates. CRIT counts critical hits, DH counts direct hits, and CDH counts hits that were both critical and direct. None of these are the rates shown on your character sheet."));
         });
         DrawCard("help-faq-upload", text.Get("DACT 会自动上传战斗或个人信息吗？", "Does DACT automatically upload combat or personal data?"), 170, () =>
         {
