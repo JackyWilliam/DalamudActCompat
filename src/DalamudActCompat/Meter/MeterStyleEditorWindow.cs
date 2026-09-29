@@ -773,6 +773,11 @@ public sealed class MeterStyleEditorWindow : Window
                 ExtDps: combatant.ExtDps)).ToArray();
     }
 
+    private string CollapseDirectionLabel(MeterCollapseDirection direction)
+        => direction == MeterCollapseDirection.Downward
+            ? text.Get("向下", "Downward")
+            : text.Get("向上", "Upward");
+
     private bool DrawSlotProperties(
         MeterWindowProfile profile,
         List<MeterSlotDefinition> slots)
@@ -875,6 +880,27 @@ public sealed class MeterStyleEditorWindow : Window
         {
             configuration.Meter.LocalPlayerColor = localPlayerColor;
             changed = true;
+        }
+        if (selectedKind != MeterWindowKind.Horizontal)
+        {
+            ImGui.TextUnformatted(text.Get("收起方向", "Collapse direction"));
+            ImGui.SetNextItemWidth(-1);
+            if (DactTheme.BeginCombo("##profile-collapse-direction", CollapseDirectionLabel(profile.CollapseDirection)))
+            {
+                foreach (var direction in Enum.GetValues<MeterCollapseDirection>())
+                {
+                    if (ImGui.Selectable(CollapseDirectionLabel(direction), profile.CollapseDirection == direction))
+                    {
+                        profile.CollapseDirection = direction;
+                        changed = true;
+                    }
+                }
+                ImGui.EndCombo();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(text.Get(
+                    "向上收起时固定顶部；向下收起时固定底部，展开时向上恢复。",
+                    "Upward keeps the top edge fixed. Downward keeps the bottom edge fixed and expands upward."));
         }
         ImGui.Separator();
 

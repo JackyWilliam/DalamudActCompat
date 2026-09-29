@@ -1,4 +1,8 @@
 {
+  "Collapse direction": "Einklapprichtung",
+  "Upward": "Nach oben",
+  "Downward": "Nach unten",
+  "Upward keeps the top edge fixed. Downward keeps the bottom edge fixed and expands upward.": "Nach oben hält den oberen Rand fest. Nach unten hält den unteren Rand fest und klappt nach oben auf.",
   "\nIn duty: ": "\nIm Inhalt: ",
   "\nRight-click to edit a note or manage this friend": "\nKlicken Sie mit der rechten Maustaste, um eine Notiz zu bearbeiten oder diesen Freund zu verwalten",
   " · Locked": " · Gesperrt",

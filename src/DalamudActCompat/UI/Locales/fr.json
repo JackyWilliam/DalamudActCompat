@@ -1,4 +1,8 @@
 {
+  "Collapse direction": "Sens de réduction",
+  "Upward": "Vers le haut",
+  "Downward": "Vers le bas",
+  "Upward keeps the top edge fixed. Downward keeps the bottom edge fixed and expands upward.": "Vers le haut conserve le bord supérieur. Vers le bas conserve le bord inférieur et déploie le panneau vers le haut.",
   "\nIn duty: ": "\nEn instance : ",
   "\nRight-click to edit a note or manage this friend": "\nFaites un clic droit pour modifier une note ou gérer cet ami",
   " · Locked": " · Verrouillé",

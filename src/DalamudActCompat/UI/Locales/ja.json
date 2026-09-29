@@ -1,4 +1,8 @@
 {
+  "Collapse direction": "折りたたむ方向",
+  "Upward": "上へ",
+  "Downward": "下へ",
+  "Upward keeps the top edge fixed. Downward keeps the bottom edge fixed and expands upward.": "上へ折りたたむと上端が固定されます。下へ折りたたむと下端が固定され、展開時は上へ広がります。",
   "\nIn duty: ": "\n参加中：",
   "\nRight-click to edit a note or manage this friend": "\n右クリックしてメモを編集するか、このフレンドを管理します",
   " · Locked": " ・ロック済み",

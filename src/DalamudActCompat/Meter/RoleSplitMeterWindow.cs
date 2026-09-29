@@ -27,6 +27,7 @@ public sealed class RoleSplitMeterWindow : Window
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
     private readonly WindowDragController headerDrag = new();
+    private readonly MeterHeightAnchor heightAnchor = new();
     private readonly MeterWindow classicRenderer;
     private readonly Action saveConfiguration;
     private readonly RoleSplitGroup group;
@@ -37,6 +38,7 @@ public sealed class RoleSplitMeterWindow : Window
     private float heightAnimationElapsedSeconds;
     private float heightAnimationStart;
     private float heightAnimationTarget;
+    private float? submittedWindowHeight;
     private bool observedFollowScope;
 
     public RoleSplitMeterWindow(
@@ -119,6 +121,7 @@ public sealed class RoleSplitMeterWindow : Window
 
     public override void PreDraw()
     {
+        heightAnchor.PrepareNextWindow(Profile.CollapseDirection, locateOnNextDraw);
         headerDrag.PrepareNextWindow(!Profile.IsLocked && Profile.ShowHeader && !locateOnNextDraw);
         SizeConstraints = new WindowSizeConstraints
         {
@@ -173,6 +176,7 @@ public sealed class RoleSplitMeterWindow : Window
 
     public override void Draw()
     {
+        submittedWindowHeight = null;
         using var fontScale = new MeterFontScaleScope(Profile.FontScale);
         if (observedFollowScope != configuration.Meter.FollowsParserScope)
         {
@@ -270,7 +274,7 @@ public sealed class RoleSplitMeterWindow : Window
         }
         if (!embeddedPreview && !configuration.Meter.FollowsParserScope && toggleHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
-            if (!Compact)
+            if (!Compact && !isHeightAnimationActive && !submittedWindowHeight.HasValue)
             {
                 expandedHeight = Math.Max(190, ImGui.GetWindowSize().Y);
             }
@@ -279,6 +283,7 @@ public sealed class RoleSplitMeterWindow : Window
             {
                 BeginWindowHeightAnimation(expandedHeight);
             }
+            headerDrag.Cancel();
             saveConfiguration();
         }
 
@@ -314,7 +319,7 @@ public sealed class RoleSplitMeterWindow : Window
             toggleEnd,
             ImGui.GetColorU32(group == RoleSplitGroup.Healer ? HealingGreen : Gold),
             4);
-        DrawChevron(drawList, toggleStart, toggleEnd, Compact);
+        DrawChevron(drawList, toggleStart, toggleEnd, Compact != (Profile.CollapseDirection == MeterCollapseDirection.Downward));
         if (!embeddedPreview && toggleHovered)
         {
             ImGui.SetTooltip(text.Get(
@@ -360,7 +365,8 @@ public sealed class RoleSplitMeterWindow : Window
 
     private void CaptureExpandedHeight()
     {
-        if (!Compact && !isHeightAnimationActive)
+        // The final submitted height is visible to GetWindowSize on the next frame.
+        if (!Compact && !isHeightAnimationActive && !submittedWindowHeight.HasValue)
         {
             expandedHeight = Math.Max(190, ImGui.GetWindowSize().Y);
         }
@@ -374,7 +380,7 @@ public sealed class RoleSplitMeterWindow : Window
             return;
         }
 
-        var currentHeight = ImGui.GetWindowSize().Y;
+        var currentHeight = submittedWindowHeight ?? ImGui.GetWindowSize().Y;
         if (!float.IsFinite(currentHeight) || Math.Abs(currentHeight - targetHeight) <= 0.5f)
         {
             isHeightAnimationActive = false;
@@ -415,8 +421,8 @@ public sealed class RoleSplitMeterWindow : Window
             isHeightAnimationActive = false;
         }
 
-        var currentSize = ImGui.GetWindowSize();
-        ImGui.SetWindowSize(new Vector2(currentSize.X, height), ImGuiCond.Always);
+        heightAnchor.SetHeight(height, Profile.CollapseDirection);
+        submittedWindowHeight = height;
     }
 
     private void DrawSection(

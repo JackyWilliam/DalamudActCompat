@@ -157,6 +157,16 @@ internal static partial class SkinSmokeTests
             io.AddMousePosEvent(position.X, position.Y); EditorFrame();
             io.AddMouseButtonEvent(0, true); EditorFrame(); io.AddMouseButtonEvent(0, false); EditorFrame(); EditorFrame();
         }
+        void SelectCollapseDirection(MeterCollapseDirection direction)
+        {
+            Click(new(1020, 545));
+            var comboContext = ImGui.GetCurrentContext();
+            Check(comboContext.OpenPopupStack.Size == 1, "Collapse direction menu did not open.");
+            var combo = new ImGuiWindowPtr(comboContext.OpenPopupStack[0].Window);
+            Click(combo.Pos + combo.WindowPadding + new Vector2(40, ((int)direction + .5f) * ImGui.GetTextLineHeightWithSpacing()));
+            Check(config.Meter.ClassicWindow.CollapseDirection == direction && comboContext.OpenPopupStack.Size == 0,
+                "The actual collapse direction selector did not update the profile.");
+        }
         // Hit the actual editor controls at the fixed native preview dimensions.
         // These clicks are queued only to this isolated cimgui context.
         Click(new(1020, 407));
@@ -167,10 +177,16 @@ internal static partial class SkinSmokeTests
         Check(barValue is > .65f and < .8f && config.Meter.ClassicWindow.BackgroundOpacity == panelValue, "Bar slider changed the panel or did not respond.");
         Click(new(1022, 356));
         Check(config.Meter.ClassicWindow.BackgroundOpacity == 0 && config.Meter.ClassicWindow.DataBarOpacity == barValue, "Transparent panel button hid the bars.");
+        SelectCollapseDirection(MeterCollapseDirection.Downward);
         Click(new(980, 835));
         Check(saves == 1 && config.Meter.ClassicWindow.DataBarOpacity == barValue, "Editor save lost the independent bar opacity.");
+        Check(config.Meter.ClassicWindow.CollapseDirection == MeterCollapseDirection.Downward &&
+            config.Meter.RoleSplitDamageWindow.CollapseDirection == MeterCollapseDirection.Upward &&
+            config.Meter.RoleSplitHealerWindow.CollapseDirection == MeterCollapseDirection.Upward,
+            "Editor Save lost the collapse direction or changed another profile.");
         editor.Open(); EditorFrame(); EditorFrame(); Click(new(935, 461));
         Check(config.Meter.ClassicWindow.DataBarOpacity != barValue, "Cancel fixture did not edit the bar value.");
+        SelectCollapseDirection(MeterCollapseDirection.Upward);
         Click(new(1100, 835));
         var context = ImGui.GetCurrentContext();
         Check(context.OpenPopupStack.Size == 1, "Cancel bypassed the existing unsaved-changes confirmation.");
@@ -178,7 +194,10 @@ internal static partial class SkinSmokeTests
         Click(popup.Pos + new Vector2(popup.Size.X / 2, popup.Size.Y - popup.WindowPadding.Y - DactTheme.ButtonHeight / 2));
         Check(config.Meter.ClassicWindow.DataBarOpacity == barValue && config.Meter.ClassicWindow.BackgroundOpacity == 0 && saves == 2,
             "Exit without saving failed to restore and persist the original values.");
+        Check(config.Meter.ClassicWindow.CollapseDirection == MeterCollapseDirection.Downward,
+            "Cancel failed to restore the saved collapse direction.");
         Console.WriteLine("Meter opacity native: Classic 8/24, D/T and H real bar vertices independent of panel, zero bars, text preserved and six-language editor rendered.");
         Console.WriteLine("Meter opacity editor: both actual sliders, transparent-panel button, Save and Cancel passed.");
+        Console.WriteLine("Meter collapse editor: actual direction selector, independent profile, Save and Cancel passed.");
     }
 }

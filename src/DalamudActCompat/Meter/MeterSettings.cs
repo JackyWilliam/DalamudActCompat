@@ -547,6 +547,7 @@ public sealed class MeterSettings
         destination.ClickThroughWhenLocked = source.ClickThroughWhenLocked;
         destination.AutoHideOutOfCombat = source.AutoHideOutOfCombat;
         destination.ShowHeader = source.ShowHeader;
+        destination.CollapseDirection = source.CollapseDirection;
         destination.FontScale = source.FontScale;
         destination.BackgroundOpacity = source.BackgroundOpacity;
         destination.DataBarOpacity = source.DataBarOpacity;
