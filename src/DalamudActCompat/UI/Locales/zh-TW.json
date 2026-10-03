@@ -1,4 +1,8 @@
 {
+  "Collapse direction": "收起方向",
+  "Upward": "向上",
+  "Downward": "向下",
+  "Upward keeps the top edge fixed. Downward keeps the bottom edge fixed and expands upward.": "向上收起時固定頂部；向下收起時固定底部，展開時向上恢復。",
   "\nIn duty: ": "\n正在進行：",
   "\nRight-click to edit a note or manage this friend": "\n右鍵設定備註或管理好友",
   " · Locked": " · 未解鎖",

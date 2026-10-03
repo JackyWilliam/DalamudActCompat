@@ -50,6 +50,13 @@ public enum MeterWindowKind
     RoleSplit,
 }
 
+public enum MeterCollapseDirection
+{
+    // Zero preserves the existing top-anchored behavior in older configuration files.
+    Upward,
+    Downward,
+}
+
 public sealed class MeterWindowProfile
 {
     public bool IsEnabled { get; set; }
@@ -61,6 +68,8 @@ public sealed class MeterWindowProfile
     public bool AutoHideOutOfCombat { get; set; }
 
     public bool ShowHeader { get; set; } = true;
+
+    public MeterCollapseDirection CollapseDirection { get; set; } = MeterCollapseDirection.Upward;
 
     public float FontScale { get; set; } = 1;
 
@@ -88,6 +97,11 @@ public sealed class MeterWindowProfile
     internal bool Normalize(IReadOnlyList<MeterSlotDefinition> defaults)
     {
         var changed = false;
+        if (!Enum.IsDefined(CollapseDirection))
+        {
+            CollapseDirection = MeterCollapseDirection.Upward;
+            changed = true;
+        }
         if (BackgroundColor is { } color && MeterBackground.Normalize(color) != color)
         {
             BackgroundColor = MeterBackground.Normalize(color);

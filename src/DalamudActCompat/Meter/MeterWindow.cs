@@ -57,6 +57,7 @@ public sealed class MeterWindow : Window
     private readonly Action saveConfiguration;
     private bool isHeightAnimationActive;
     private readonly WindowDragController headerDrag = new();
+    private readonly MeterHeightAnchor heightAnchor = new();
     private bool observedCompactMode;
     private float heightAnimationElapsedSeconds;
     private float heightAnimationStart;
@@ -125,6 +126,7 @@ public sealed class MeterWindow : Window
 
     public override void PreDraw()
     {
+        heightAnchor.PrepareNextWindow(configuration.Meter.ClassicWindow.CollapseDirection, locateOnNextDraw);
         headerDrag.PrepareNextWindow(!configuration.Meter.IsLocked && !locateOnNextDraw);
         if (locateOnNextDraw)
         {
@@ -648,9 +650,10 @@ public sealed class MeterWindow : Window
         saveConfiguration();
     }
 
-    private static void CaptureExpandedWindowSize(MeterSettings settings, Vector2 size)
+    private void CaptureExpandedWindowSize(MeterSettings settings, Vector2 size)
     {
-        if (!IsValidExpandedWindowSize(size))
+        // Intermediate animation sizes must not replace the user's expanded size.
+        if (isHeightAnimationActive || submittedWindowHeight.HasValue || !IsValidExpandedWindowSize(size))
         {
             return;
         }
@@ -778,8 +781,7 @@ public sealed class MeterWindow : Window
             isHeightAnimationActive = false;
         }
 
-        var currentSize = ImGui.GetWindowSize();
-        ImGui.SetWindowSize(new Vector2(currentSize.X, height), ImGuiCond.Always);
+        heightAnchor.SetHeight(height, configuration.Meter.ClassicWindow.CollapseDirection);
         submittedWindowHeight = height;
     }
 
@@ -821,7 +823,7 @@ public sealed class MeterWindow : Window
             drawList,
             start,
             end,
-            pointsDown: compact,
+            pointsDown: compact != (settings.ClassicWindow.CollapseDirection == MeterCollapseDirection.Downward),
             hovered ? MeterBackground.CurrentText : accent);
         if (hovered)
         {

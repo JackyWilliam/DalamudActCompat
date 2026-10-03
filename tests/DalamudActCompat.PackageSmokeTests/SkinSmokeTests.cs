@@ -235,6 +235,7 @@ internal static partial class SkinSmokeTests
         config.ResetToDefaults("logs");
         Check(config.Appearance.SelectedSkin == SkinCatalog.Default && config.Appearance.UnlockedEasterEggs.Count == 0, "Factory reset retained skin preferences.");
         MeterOpacityConfiguration();
+        MeterCollapseConfiguration();
         if (native) Native();
         Console.WriteLine("Skins: permissions, discoveries, migration, serialization, independent backgrounds and requested native checks passed.");
     }
@@ -507,6 +508,7 @@ internal static partial class SkinSmokeTests
             MeterSkinIsolation(raster, output, logo);
             MeterEditor(raster, output, logo, config, text);
             MeterOpacityNative(raster, output, logo);
+            MeterCollapseNative(raster, output, logo);
             EmptyMeterEditorSummary(raster, output, logo);
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
