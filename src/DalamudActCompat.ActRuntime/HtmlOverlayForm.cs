@@ -2040,7 +2040,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private async void OnInputProxyMouseClick(object? sender, MouseEventArgs args)
     {
-        if (args.Button != MouseButtons.Left || settings?.IsClickThrough != false ||
+        if (args.Button is not (MouseButtons.Left or MouseButtons.Right) || settings?.IsClickThrough != false ||
             inputProxy is null || webView?.CoreWebView2 is not { } core ||
             interaction != OverlayInteraction.None)
         {
@@ -2063,6 +2063,10 @@ internal sealed class HtmlOverlayForm : IDisposable
                 args.Location);
             form?.Activate();
             webView.Focus();
+            // Templates use DOM contextmenu to open settings; forward a real right-click
+            // through Chromium even though the default browser context menu is disabled.
+            var button = args.Button == MouseButtons.Right ? "right" : "left";
+            var pressedButtons = args.Button == MouseButtons.Right ? 2 : 1;
             await DispatchBrowserMouseEventAsync(
                 core,
                 "mouseMoved",
@@ -2074,18 +2078,18 @@ internal sealed class HtmlOverlayForm : IDisposable
                 core,
                 "mousePressed",
                 point,
-                "left",
-                1,
+                button,
+                pressedButtons,
                 Math.Max(1, args.Clicks));
             await DispatchBrowserMouseEventAsync(
                 core,
                 "mouseReleased",
                 point,
-                "left",
+                button,
                 0,
                 Math.Max(1, args.Clicks));
             log.Debug(
-                $"{title} forwarded input-proxy click to browser at " +
+                $"{title} forwarded input-proxy {button} click to browser at " +
                 $"{point.X:0.##},{point.Y:0.##}.");
         }
         catch (Exception) when (disposing)

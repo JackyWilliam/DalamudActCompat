@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--webview-input-only", StringComparer.Ordinal))
+    {
+        await ValidateLiveHtmlOverlayInputAsync(testRoot);
+        return 0;
+    }
     await FeedbackRegressionSmokeTests.RunAsync(testRoot, args.Contains("--feedback-regression-only", StringComparer.Ordinal));
     if (args.Contains("--feedback-regression-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--directory-reset-only", StringComparer.Ordinal))
@@ -11295,10 +11300,31 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
           <div id="panel" style="position:absolute;left:20px;top:20px;width:200px;height:100px;
                                  overflow:auto;background:rgba(20,30,40,.9)">
             <button id="probe" style="position:absolute;left:20px;top:20px;width:120px;height:50px"
-                    onclick="document.documentElement.dataset.clicked='true'">Click</button>
+                    onclick="document.documentElement.dataset.clicked='true'; window.leftClicks++">Click</button>
             <div style="height:600px"></div>
           </div>
           <script>
+            window.leftClicks = 0;
+            window.contextMenus = 0;
+            const probe = document.getElementById('probe');
+            for (const type of ['mousedown', 'mouseup']) {
+              probe.addEventListener(type, event => {
+                if (event.button === 2) {
+                  window[type] = { button: event.button, buttons: event.buttons, trusted: event.isTrusted };
+                }
+              });
+            }
+            // Overlay templates open settings from contextmenu and share their browser profile.
+            probe.addEventListener('contextmenu', event => {
+              event.preventDefault();
+              window.contextMenus++;
+              window.configPopup = window.open('about:blank', 'DACT Input Smoke Config', 'width=300,height=200');
+              if (window.configPopup) {
+                window.configPopup.document.body.textContent = 'Overlay settings smoke test';
+                window.configPopup.localStorage.setItem('right-click-smoke', 'saved');
+                window.configPopup.focus();
+              }
+            });
             window.collapseProbe = () => {
               const panel = document.getElementById('panel');
               panel.style.width = '60px';
@@ -11497,6 +11523,37 @@ static async Task ValidateLiveHtmlOverlayInputAsync(string testRoot)
         }
 
         Assert(clicked, "A physical proxy click did not reach the live WebView2 button.");
+
+        NativeInputProbe.SetCursorPos(clickPoint.X, clickPoint.Y);
+        NativeInputProbe.MouseEvent(NativeInputProbe.RightDown, 0, 0, 0, UIntPtr.Zero);
+        await Task.Delay(80);
+        NativeInputProbe.MouseEvent(NativeInputProbe.RightUp, 0, 0, 0, UIntPtr.Zero);
+
+        var rightClicked = false;
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            rightClicked = await ExecuteBrowserScriptAsync(liveWebView, """
+                window.contextMenus === 1 && window.leftClicks === 1 &&
+                window.mousedown?.button === 2 && window.mousedown?.buttons === 2 && window.mousedown?.trusted &&
+                window.mouseup?.button === 2 && window.mouseup?.buttons === 0 && window.mouseup?.trusted &&
+                !!window.configPopup && !window.configPopup.closed && window.configPopup.opener === window &&
+                window.configPopup.document.body.textContent === 'Overlay settings smoke test' &&
+                localStorage.getItem('right-click-smoke') === 'saved'
+                """) == "true";
+            if (rightClicked)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        // Close the test popup before exercising physical drag/resize on the overlay.
+        await ExecuteBrowserScriptAsync(liveWebView, "window.configPopup?.close(); true");
+        Assert(
+            rightClicked,
+            "A physical proxy right-click did not deliver trusted mouse events and open a settings popup with shared storage.");
 
         var onMouseWheel = typeof(Control).GetMethod(
                                "OnMouseWheel",
@@ -14170,6 +14227,8 @@ internal static class NativeInputProbe
     public const int GwlExStyle = -20;
     public const uint LeftDown = 0x0002;
     public const uint LeftUp = 0x0004;
+    public const uint RightDown = 0x0008;
+    public const uint RightUp = 0x0010;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct Point
