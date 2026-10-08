@@ -51,6 +51,8 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    OverlayConnectionUriSmokeTests.Run();
+    if (args.Contains("--overlay-uri-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--webview-input-only", StringComparer.Ordinal))
     {
         await ValidateLiveHtmlOverlayInputAsync(testRoot);
