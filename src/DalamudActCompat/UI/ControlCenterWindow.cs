@@ -3353,7 +3353,11 @@ public sealed partial class ControlCenterWindow : Window
 
     private static void PushOpenWindowButtonStyle()
     {
-        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
+        // Keep an already-open window distinguishable from a normal action in
+        // solid skins; closing on hover still uses the existing red feedback.
+        if (DactTheme.UsesSolidControls)
+            ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Lerp(DactTheme.Palette.Hover, DactTheme.Palette.Accent, .24f));
+        else DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.11f, 0.29f, 0.38f, 1));
         DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
         DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
         DactTheme.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
