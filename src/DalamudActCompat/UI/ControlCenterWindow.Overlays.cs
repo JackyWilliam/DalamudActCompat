@@ -108,9 +108,9 @@ public sealed partial class ControlCenterWindow
             ImGui.TextWrapped(FormatCactbotStatus());
             ImGui.TableNextColumn();
             if (DactTheme.Button(labels[0])) openCactbotSettings();
-            OverlaySameLineIfFits(ImGui.CalcTextSize(labels[1]).X + 24 * OverlayScale);
+            OverlaySameLineIfFits(ImGui.CalcTextSize(labels[1]).X + ImGui.GetStyle().FramePadding.X * 2);
             if (DactTheme.Button(labels[1])) selectCactbotPackage();
-            OverlaySameLineIfFits(ImGui.CalcTextSize(labels[2]).X + 24 * OverlayScale);
+            OverlaySameLineIfFits(ImGui.CalcTextSize(labels[2]).X + ImGui.GetStyle().FramePadding.X * 2);
             if (DactTheme.Button(labels[2])) OpenUrl("https://github.com/OverlayPlugin/cactbot");
             ImGui.EndTable();
         }
