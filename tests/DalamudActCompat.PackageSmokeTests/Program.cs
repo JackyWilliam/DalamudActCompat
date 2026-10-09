@@ -51,6 +51,12 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--overlay-hotkeys-only", StringComparer.Ordinal))
+    {
+        OverlayHotkeySmokeTests.Run();
+        await DisplayOptionsSmokeTests.RunAsync();
+        return 0;
+    }
     if (args.Contains("--drawing-lifetime-only", StringComparer.Ordinal) || args.Contains("--drawing-fault-only", StringComparer.Ordinal))
     {
         DrawingLifetimeSmokeTests.Run(args.Contains("--drawing-fault-only", StringComparer.Ordinal));
@@ -203,6 +209,7 @@ try
     ValidateOverlayInitialStateEvents();
     await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
+    OverlayHotkeySmokeTests.Run();
     await DisplayOptionsSmokeTests.RunAsync();
     if (string.Equals(
             Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),

@@ -1469,5 +1469,16 @@
   "Panel opacity": "底板不透明度",
   "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "僅調整視窗與各列底色，不影響彩條。各統計範本分別儲存；0% 為全透明，100% 為不透明。",
   "Data bar opacity": "彩色資料條不透明度",
-  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "獨立調整彩條濃度，不影響底板與文字；0% 隱藏彩條。自己的強調色仍可單獨調整。"
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "獨立調整彩條濃度，不影響底板與文字；0% 隱藏彩條。自己的強調色仍可單獨調整。",
+  "Hotkeys": "快捷鍵",
+  "Hide overlay": "隱藏懸浮窗",
+  "Press a shortcut (Esc cancels)": "請按組合鍵（Esc 取消）",
+  "Set hotkey": "設定快捷鍵",
+  "This shortcut is unavailable or used by another application. Choose another combination.": "快捷鍵無法使用或已被其他程式占用，請換一個組合鍵。",
+  "Add hotkey": "新增快捷鍵",
+  "Show/hide keeps the page running; open/close follows the button above. Hotkeys also work while the game is in the background.": "顯示／隱藏會保留網頁執行；開啟／關閉與上方按鈕相同。遊戲在背景時快捷鍵仍會生效。",
+  "Toggle overlay open/closed": "切換懸浮窗 開啟／關閉",
+  "Toggle click-through": "切換滑鼠穿透",
+  "Toggle position lock": "切換位置鎖定",
+  "Toggle overlay shown/hidden": "切換懸浮窗 顯示／隱藏"
 }

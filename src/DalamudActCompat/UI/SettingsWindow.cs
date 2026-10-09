@@ -14,6 +14,7 @@ namespace DalamudActCompat.UI;
 
 public sealed class SettingsWindow : Window
 {
+    internal OverlayHotkeyEditor? HotkeyEditor { get; set; }
     private readonly PluginConfiguration configuration;
     private readonly IParserEngine parserEngine;
     private readonly PluginPaths paths;
@@ -818,6 +819,7 @@ public sealed class SettingsWindow : Window
         ImGui.TextDisabled(text.Get(
             "悬浮窗始终无边框透明置顶；需要操作网页时关闭穿透，需要操作游戏时打开穿透。",
             "Overlays stay borderless, transparent, and topmost. Turn click-through off for the page, or on to pass mouse input to the game."));
+        changed |= HotkeyEditor?.Draw(name, settings, text) ?? false;
         return changed;
     }
 

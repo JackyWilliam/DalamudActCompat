@@ -124,6 +124,8 @@ public sealed class Plugin : IDalamudPlugin
     private int silverDasherEventsEnabled;
     private int matchaEventsEnabled;
     private readonly PictoActOverlayService pictoActOverlay;
+    private readonly HtmlOverlayHotkeyService overlayHotkeys;
+    private readonly OverlayHotkeyEditor overlayHotkeyEditor;
     private readonly TriggernometryNativeBridgeService triggernometryNativeBridge;
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
@@ -595,6 +597,9 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             text,
             logoTexture);
+        overlayHotkeys = new HtmlOverlayHotkeyService();
+        overlayHotkeyEditor = new OverlayHotkeyEditor(overlayHotkeys);
+        overlayHotkeys.Configure(configuration.OverlayWindows);
         advancedSettingsWindow = new SettingsWindow(
             configuration,
             parserEngine,
@@ -772,6 +777,8 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(meterStyleEditorWindow);
         windowSystem.AddWindow(simplifiedHomeWindow);
         windowSystem.AddWindow(encounterWindow);
+        settingsWindow.HotkeyEditor = overlayHotkeyEditor;
+        advancedSettingsWindow.HotkeyEditor = overlayHotkeyEditor;
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(helpWindow);
         windowSystem.AddWindow(advancedSettingsWindow);
@@ -871,6 +878,7 @@ public sealed class Plugin : IDalamudPlugin
         cloudClient.BanLifted -= OnCloudBanLifted;
         triggernometryNativeBridge.Dispose();
         pictoActOverlay.Dispose();
+        overlayHotkeys.Dispose();
         settingsWindow.Detach();
         advancedSettingsWindow.Detach();
         statusWindow.Detach();
@@ -893,6 +901,13 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void Draw()
+    {
+        overlayHotkeyEditor.BeginFrame();
+        try { DrawCore(); }
+        finally { overlayHotkeyEditor.EndFrame(); }
+    }
+
+    private void DrawCore()
     {
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
@@ -1689,6 +1704,7 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             services.PluginInterface.SavePluginConfig(configuration);
+            overlayHotkeys?.Configure(configuration.OverlayWindows);
             return true;
         }
         catch (Exception ex)
@@ -4004,7 +4020,12 @@ public sealed class Plugin : IDalamudPlugin
         {
             if (actRuntime.ShowHtmlOverlay(name))
             {
-                configuration.RegisterOverlayWindow(name).OpenOnStartup = true;
+                var settings = configuration.RegisterOverlayWindow(name);
+                settings.OpenOnStartup = true;
+                // Explicit Open must recover a window hidden by a shortcut. Parser
+                // startup uses the runtime directly and preserves the saved preference.
+                settings.IsUserHidden = false;
+                actRuntime.ApplyOverlayWindowSettings(name);
                 var template = actRuntime.OverlayTemplates.FirstOrDefault(candidate =>
                     string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (template?.IsCactbot == true)
@@ -4040,6 +4061,26 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         configuration.GetOverlayWindowSettings(name).OpenOnStartup = false;
+        SaveConfiguration();
+    }
+
+    private void HandleOverlayHotkey(string name, OverlayHotkeyAction action)
+    {
+        if (!IsDactAccessAllowed() || !configuration.OverlayWindows.TryGetValue(name, out var settings)) return;
+        if (action == OverlayHotkeyAction.ToggleOpen)
+        {
+            if (settings.IsVisible) CloseHtmlOverlay(name);
+            else OpenHtmlOverlay(name);
+            return;
+        }
+        switch (action)
+        {
+            case OverlayHotkeyAction.ToggleVisibility: settings.IsUserHidden = !settings.IsUserHidden; break;
+            case OverlayHotkeyAction.ToggleClickThrough: settings.SetClickThrough(!settings.IsClickThrough); break;
+            case OverlayHotkeyAction.ToggleLock: settings.SetLocked(!settings.IsLocked); break;
+            default: return;
+        }
+        actRuntime.ApplyOverlayWindowSettings(name);
         SaveConfiguration();
     }
 
@@ -4898,6 +4939,7 @@ public sealed class Plugin : IDalamudPlugin
                 cloudClient.SetFriendDutyActivity(sharingSession, friendDutyProvider.Read(services.ClientState, services.Condition));
         }
         TryStopParserForCloudBanOnFrameworkThread();
+        overlayHotkeys.DispatchPending(HandleOverlayHotkey);
         if (!IsDactAccessAllowed())
         {
             return;

@@ -22,6 +22,7 @@ namespace DalamudActCompat.UI;
 
 public sealed class ControlCenterWindow : Window
 {
+    internal OverlayHotkeyEditor? HotkeyEditor { get; set; }
     internal Action<int>? PreviewFriendNotificationSound { get; set; }
 
     private enum VisibilityTransition
@@ -3825,6 +3826,7 @@ public sealed class ControlCenterWindow : Window
             : text.Get(
                 "位置编辑时会暂时关闭穿透与锁定；完成后会恢复。",
                 "Position editing temporarily disables click-through and locking; finishing restores them."));
+        changed |= HotkeyEditor?.Draw(name, settings, text) ?? false;
         ImGui.PopID();
 
         if (changed)

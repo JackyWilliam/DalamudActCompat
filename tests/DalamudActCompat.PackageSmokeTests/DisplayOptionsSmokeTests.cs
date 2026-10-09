@@ -85,12 +85,25 @@ internal static class DisplayOptionsSmokeTests
         Check(!first.Form.Visible, "Finishing editing did not restore combat hiding.");
         first.Settings.AutoHideOutOfCombat = false; first.Overlay.ApplySettings(); Pump();
         Check(first.Form.Visible, "Disabling combat hiding did not restore the open overlay.");
+        first.Settings.IsUserHidden = true; first.Overlay.ApplySettings(); Pump();
+        Check(!first.Form.Visible && first.Settings.IsVisible && first.Settings.OpenOnStartup && second.Form.Visible,
+            "Manual hide changed open/startup state or another window.");
+        first.Overlay.SetCombatState(true); first.Overlay.SetTemporarilyHidden(true);
+        first.Overlay.SetTemporarilyHidden(false); Pump();
+        Check(!first.Form.Visible, "Focus/combat updates overrode manual hiding.");
+        first.Settings.IsUserHidden = false; first.Overlay.ApplySettings(); Pump();
+        Check(first.Form.Visible, "Clearing manual hiding failed to restore the same window.");
+        first.Settings.IsUserHidden = true; first.Settings.SetEditing(true); first.Overlay.ApplySettings(); Pump();
+        Check(first.Form.Visible && !first.Settings.IsUserHidden, "Editing cannot recover a manually hidden window.");
+        first.Settings.SetEditing(false);
         first.Settings.AutoHideOutOfCombat = true; first.Overlay.ApplySettings();
         first.Overlay.SetCombatState(true); first.Overlay.SetCombatState(false); Pump();
         Check(!first.Form.Visible, "Queued combat changes replayed stale visibility.");
         first.Overlay.Hide(); first.Overlay.SetCombatState(true); Pump();
+        first.Settings.IsUserHidden = true; first.Overlay.ApplySettings();
+        first.Settings.IsUserHidden = false; first.Overlay.ApplySettings(); Pump();
         Check(!first.Form.Visible && !first.Settings.IsVisible,
-            "Entering combat reopened a manually closed overlay.");
+            "Combat/manual visibility updates reopened a manually closed overlay.");
     }
 
     private static void Pump() => Application.DoEvents();

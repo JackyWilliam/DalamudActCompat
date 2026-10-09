@@ -521,7 +521,8 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     // Editing must remain visible even between battles; foreground suppression still wins.
     private bool EffectiveHidden
-        => temporarilyHidden || (settings is { AutoHideOutOfCombat: true, IsEditing: false } && !inCombat);
+        => temporarilyHidden || settings?.IsUserHidden == true ||
+           (settings is { AutoHideOutOfCombat: true, IsEditing: false } && !inCombat);
     private bool disposing;
     private bool applyingSettings;
     private bool loaderAcquired;

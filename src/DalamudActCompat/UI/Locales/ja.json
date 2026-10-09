@@ -1469,5 +1469,16 @@
   "Panel opacity": "背景の不透明度",
   "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "ウィンドウと各行の背景を調整します。データバーには影響しません。メーターのテンプレートごとに保存されます。0% は透明、100% は不透明です。",
   "Data bar opacity": "データバーの不透明度",
-  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "背景や文字とは別にデータバーの濃さを調整します。0% でバーを非表示にします。自分の強調色は引き続き個別に調整できます。"
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "背景や文字とは別にデータバーの濃さを調整します。0% でバーを非表示にします。自分の強調色は引き続き個別に調整できます。",
+  "Hotkeys": "ホットキー",
+  "Hide overlay": "オーバーレイを非表示",
+  "Press a shortcut (Esc cancels)": "キーを入力（Esc でキャンセル）",
+  "Set hotkey": "ホットキーを設定",
+  "This shortcut is unavailable or used by another application. Choose another combination.": "このキーの組み合わせは使用できないか、他のアプリが使用中です。別の組み合わせを選択してください。",
+  "Add hotkey": "ホットキーを追加",
+  "Show/hide keeps the page running; open/close follows the button above. Hotkeys also work while the game is in the background.": "表示／非表示ではページの実行を継続します。開く／閉じるは上のボタンと同じ動作です。ゲームが背面にあってもホットキーは有効です。",
+  "Toggle overlay open/closed": "オーバーレイを開く／閉じる",
+  "Toggle click-through": "クリック透過を切り替え",
+  "Toggle position lock": "位置の固定を切り替え",
+  "Toggle overlay shown/hidden": "オーバーレイの表示／非表示"
 }

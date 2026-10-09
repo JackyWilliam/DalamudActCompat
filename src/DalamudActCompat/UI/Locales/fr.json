@@ -1469,5 +1469,16 @@
   "Panel opacity": "Opacité du fond",
   "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "Modifie le fond de la fenêtre et des lignes sans affecter les barres de données. Réglage enregistré par modèle : 0% est transparent, 100% est opaque.",
   "Data bar opacity": "Opacité des barres de données",
-  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "Règle l’intensité des barres indépendamment du fond et du texte. 0% masque les barres. La couleur de mise en évidence de votre personnage reste réglable séparément."
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "Règle l’intensité des barres indépendamment du fond et du texte. 0% masque les barres. La couleur de mise en évidence de votre personnage reste réglable séparément.",
+  "Hotkeys": "Raccourcis clavier",
+  "Hide overlay": "Masquer l’overlay",
+  "Press a shortcut (Esc cancels)": "Appuyez sur les touches (Échap : annuler)",
+  "Set hotkey": "Définir un raccourci",
+  "This shortcut is unavailable or used by another application. Choose another combination.": "Ce raccourci est indisponible ou utilisé par une autre application. Choisissez une autre combinaison.",
+  "Add hotkey": "Ajouter un raccourci",
+  "Show/hide keeps the page running; open/close follows the button above. Hotkeys also work while the game is in the background.": "Afficher/masquer laisse la page active. Ouvrir/fermer correspond au bouton ci-dessus. Les raccourcis fonctionnent aussi lorsque le jeu est en arrière-plan.",
+  "Toggle overlay open/closed": "Ouvrir/fermer l’overlay",
+  "Toggle click-through": "Basculer le passage des clics",
+  "Toggle position lock": "Basculer le verrouillage de position",
+  "Toggle overlay shown/hidden": "Afficher/masquer l’overlay"
 }

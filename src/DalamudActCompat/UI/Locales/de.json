@@ -1469,5 +1469,16 @@
   "Panel opacity": "Deckkraft des Hintergrunds",
   "Changes the window and row backgrounds without affecting data bars. Saved per meter template; 0% is transparent and 100% is opaque.": "Ändert den Fenster- und Zeilenhintergrund, ohne die Datenbalken zu beeinflussen. Wird pro Anzeigevorlage gespeichert; 0% ist transparent, 100% ist deckend.",
   "Data bar opacity": "Deckkraft der Datenbalken",
-  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "Passt die Stärke der Datenbalken unabhängig von Hintergrund und Text an. 0% blendet die Balken aus. Die eigene Hervorhebungsfarbe bleibt separat einstellbar."
+  "Adjusts data bar strength independently of the panel and text; 0% hides the bars. The local player accent remains adjustable.": "Passt die Stärke der Datenbalken unabhängig von Hintergrund und Text an. 0% blendet die Balken aus. Die eigene Hervorhebungsfarbe bleibt separat einstellbar.",
+  "Hotkeys": "Tastenkürzel",
+  "Hide overlay": "Overlay ausblenden",
+  "Press a shortcut (Esc cancels)": "Tastenkürzel drücken (Esc: Abbrechen)",
+  "Set hotkey": "Tastenkürzel festlegen",
+  "This shortcut is unavailable or used by another application. Choose another combination.": "Dieses Tastenkürzel ist nicht verfügbar oder wird von einer anderen Anwendung verwendet. Wähle eine andere Kombination.",
+  "Add hotkey": "Tastenkürzel hinzufügen",
+  "Show/hide keeps the page running; open/close follows the button above. Hotkeys also work while the game is in the background.": "Beim Ein-/Ausblenden läuft die Seite weiter. Öffnen/Schließen entspricht der Schaltfläche oben. Tastenkürzel funktionieren auch, wenn das Spiel im Hintergrund ist.",
+  "Toggle overlay open/closed": "Overlay öffnen/schließen",
+  "Toggle click-through": "Klickdurchlässigkeit umschalten",
+  "Toggle position lock": "Positionssperre umschalten",
+  "Toggle overlay shown/hidden": "Overlay ein-/ausblenden"
 }
