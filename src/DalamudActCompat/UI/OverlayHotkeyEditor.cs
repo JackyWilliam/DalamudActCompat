@@ -54,6 +54,11 @@ internal sealed class OverlayHotkeyEditor(HtmlOverlayHotkeyService service, Func
         foreach (var binding in settings.Hotkeys.ToArray())
         {
             ImGui.PushID(binding.Id.ToString());
+            var width = ImGui.GetContentRegionAvail().X;
+            var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+            // A details pane may be narrower than the old full-width page.
+            // Wrap actions instead of letting Delete or the recorder disappear.
+            var stacked = width < 570 * scale;
             var enabled = binding.Enabled;
             if (ImGui.Checkbox(text.Get("启用", "Enabled"), ref enabled))
             {
@@ -64,15 +69,20 @@ internal sealed class OverlayHotkeyEditor(HtmlOverlayHotkeyService service, Func
             var label = ReferenceEquals(recording, binding)
                 ? text.Get("请按组合键（Esc 取消）", "Press a shortcut (Esc cancels)")
                 : HtmlOverlayHotkey.Format(binding.Key, binding.Modifiers);
-            if (DactTheme.Button(string.IsNullOrEmpty(label) ? text.Get("设置快捷键", "Set hotkey") : label))
+            label = string.IsNullOrEmpty(label) ? text.Get("设置快捷键", "Set hotkey") : label;
+            var keyWidth = Math.Max(90 * scale, Math.Min(210 * scale, ImGui.GetContentRegionAvail().X));
+            var caption = FriendsMessagePreview.Ellipsize(label, Math.Max(1, keyWidth - ImGui.GetStyle().FramePadding.X * 2), s => ImGui.CalcTextSize(s).X);
+            if (DactTheme.Button(caption + "##record", new(keyWidth, 0)))
             {
                 service.Suspend(true);
                 releaseKey = 0;
                 recording = binding;
                 previousKeys = ReadKeys();
             }
-            ImGui.SameLine();
-            ImGui.SetNextItemWidth(230);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+            if (!stacked) ImGui.SameLine();
+            var deleteWidth = ImGui.CalcTextSize(text.Get("删除", "Delete")).X + ImGui.GetStyle().FramePadding.X * 2;
+            ImGui.SetNextItemWidth(Math.Max(80 * scale, ImGui.GetContentRegionAvail().X - deleteWidth - ImGui.GetStyle().ItemSpacing.X));
             if (DactTheme.BeginCombo("##action", ActionLabel(binding.Action, text)))
             {
                 foreach (var action in Enum.GetValues<OverlayHotkeyAction>())
