@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--drawing-lifetime-only", StringComparer.Ordinal) || args.Contains("--drawing-fault-only", StringComparer.Ordinal))
+    {
+        DrawingLifetimeSmokeTests.Run(args.Contains("--drawing-fault-only", StringComparer.Ordinal));
+        return 0;
+    }
     OverlayConnectionUriSmokeTests.Run();
     if (args.Contains("--overlay-uri-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--webview-input-only", StringComparer.Ordinal))
@@ -216,6 +221,7 @@ try
     ValidateIndependentMeterWindows();
     ValidateWindowDragContinuity();
     ValidatePictoActOverlayCommands();
+    DrawingLifetimeSmokeTests.Run();
     PictoCleanupScopeSmokeTests.Run();
     PictoOnlineResourceSmokeTests.Run();
     ValidateEmptyEncounterFiltering();

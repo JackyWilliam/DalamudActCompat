@@ -158,6 +158,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
         {
             var stored = shapes[key];
             stored.Shape = ApplyPatch(stored.Shape, command.Patch!);
+            // A Change can replace the failed entity binding with fixed coordinates;
+            // that shape will no longer visit RefreshDynamicShapes to recover itself.
+            stored.DynamicRefreshFailed &= stored.Shape.RequiresDynamicRefresh;
             stored.NativeShapes = null;
             stored.NativeDirty = stored.NativeHandles.Count > 0;
         }
@@ -216,14 +219,6 @@ internal sealed partial class PictoActOverlayService : IDisposable
         lock (syncRoot)
         {
             ProcessPending(now);
-            if (now >= nextDynamicRefreshAt)
-            {
-                RefreshDynamicShapes();
-                // Upstream PictoACT samples moving entities at roughly 100 ms. Matching that
-                // cadence avoids needless object-table scans without changing visible behavior.
-                nextDynamicRefreshAt = now.AddMilliseconds(100);
-            }
-
             DrainNativeRemovals();
             foreach (var expired in shapes
                          .Where(pair => pair.Value.Shape.ExpiresAt <= now)
@@ -234,8 +229,18 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 shapes.Remove(expired);
             }
 
+            // Expired drawings must not resolve vanished or invalid entities before
+            // cleanup: a failing refresh used to prevent its own expiry indefinitely.
+            if (now >= nextDynamicRefreshAt)
+            {
+                RefreshDynamicShapes();
+                // Upstream PictoACT samples moving entities at roughly 100 ms.
+                nextDynamicRefreshAt = now.AddMilliseconds(100);
+            }
+
             DrainNativeRemovals();
-            foreach (var stored in shapes.Values.Where(value => value.Shape.StartsAt <= now))
+            foreach (var stored in shapes.Values.Where(value =>
+                         !value.DynamicRefreshFailed && value.Shape.StartsAt <= now))
             {
                 ActivateOrUpdateNative(stored);
                 if (ShouldDrawScreenFallback(
@@ -359,10 +364,28 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         foreach (var stored in shapes.Values.Where(value => value.Shape.RequiresDynamicRefresh))
         {
-            var refreshed = RefreshDynamicShape(
-                stored.Shape,
-                ResolveEntityPosition,
-                ResolveEntityHeading);
+            PictoActShape refreshed;
+            try
+            {
+                refreshed = RefreshDynamicShape(
+                    stored.Shape,
+                    ResolveEntityPosition,
+                    ResolveEntityHeading);
+            }
+            catch (InvalidDataException ex)
+            {
+                // Entity movement can invalidate an initially valid _d expression.
+                // Hide only that drawing, retry at the normal cadence, and avoid
+                // showing a stale safe spot or poisoning every other shape's update.
+                QueueNativeRemovals(stored.NativeHandles);
+                stored.NativeHandles.Clear();
+                if (!stored.DynamicRefreshFailed)
+                    log?.Warning(ex, "PictoACT dynamic drawing {Tag} suspended until its entity parameters are valid.", stored.SemanticTag);
+                stored.DynamicRefreshFailed = true;
+                continue;
+            }
+
+            stored.DynamicRefreshFailed = false;
             var renderStateChanged = !HasEquivalentRenderState(stored.Shape, refreshed);
             stored.Shape = refreshed;
             if (!renderStateChanged)
@@ -3159,4 +3182,6 @@ internal sealed class StoredPictoActShape(string semanticTag, PictoActShape shap
     internal bool NativeDirty { get; set; }
 
     internal bool NativeCreationFailed { get; set; }
+
+    internal bool DynamicRefreshFailed { get; set; }
 }

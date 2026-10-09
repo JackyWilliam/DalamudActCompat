@@ -42,12 +42,13 @@ var mapEffectProbe = string.Equals(
 var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringComparison.Ordinal);
 var u7bOrderingProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-ordering", StringComparison.Ordinal);
 var drawingProbe = string.Equals(focusedProbe, "--probe-drawing-diagnostics", StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe ? args[1..] : args;
+var drawingSoakProbe = string.Equals(focusedProbe, "--probe-drawing-soak", StringComparison.Ordinal);
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe || drawingSoakProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering or --probe-drawing-diagnostics " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-drawing-diagnostics or --probe-drawing-soak " +
         "with the three-path form for a focused probe.");
 }
 
@@ -72,6 +73,12 @@ ValidateFfxivEntityDeltaRepository();
 ValidateFfxivRegionContext();
 TriggernometryActorControlTests.Run();
 DrawingDiagnosticTests.Run();
+
+if (drawingSoakProbe)
+{
+    await ValidateDrawingSoakAsync();
+    return;
+}
 
 if (drawingProbe)
 {
@@ -2654,6 +2661,170 @@ async Task ValidateDrawingDiagnosticProbeAsync()
             if (!host.HasExited) { host.Kill(entireProcessTree: true); await host.WaitForExitAsync(); }
         }
     }
+}
+
+async Task ValidateDrawingSoakAsync()
+{
+    if (pluginRoot is null || configRoot is null)
+        throw new ArgumentException("Drawing soak requires Host.exe, plugin-root and an isolated config-root.");
+    await PrepareLegacySmokeConfigurationAsync();
+    var path = Path.Combine(configRoot, "Config", "Triggernometry.config.xml");
+    var config = XDocument.Load(path);
+    var root = config.Root!.Element("Root")!;
+    // Retain the existing real 'place' fixture, but avoid TTS and unrelated actions.
+    var place = new XElement(root.Descendants("Trigger").Single(x =>
+        (string?)x.Attribute("RegularExpression") == "ACTCOMPAT_PLACE_LINE"));
+    root.RemoveNodes();
+    root.Add(new XElement("Triggers", place, XElement.Parse("""
+        <Trigger Enabled="true" Id="de843d23-862b-478c-8fc6-5f45a6a55d24" Name="Drawing lifetime cycle"
+                 RegularExpression="^DACT_SOAK:(?&lt;iteration&gt;[0-9]+)$" Source="Log" Sequential="True">
+          <Actions>
+            <Action ActionType="NamedCallback" OrderNumber="1" NamedCallbackName="PictoACT" NamedCallbackParam="Omen: Circle&#10;Tag: DACT_SOAK_${iteration}&#10;Pos: ${_me.Pos}&#10;Scale: 1&#10;t: 30" />
+            <Action ActionType="NamedCallback" OrderNumber="2" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Change&#10;Tag: DACT_SOAK_${iteration}&#10;Pos: ${_me.Pos}&#10;Angle: ${_me.Heading}" />
+            <Action ActionType="NamedCallback" OrderNumber="3" NamedCallbackName="PictoACT" NamedCallbackParam="Action: Remove&#10;Tag: DACT_SOAK_${iteration}" />
+          </Actions>
+        </Trigger>
+        """)));
+    config.Save(path);
+    var timer = Stopwatch.StartNew();
+    var completed = 0;
+    var sample = CreateTestFfxivSnapshot();
+    for (var generation = 0; generation < 3; generation++)
+    {
+        // A new process uses the same on-disk test configuration, as a UI Host restart
+        // does. No game process or user's installed configuration is touched.
+        var (host, pipe, session) = await StartConnectedHostAsync(loadPlugins: true);
+        await using (pipe)
+        using (host)
+        {
+            try
+            {
+                _ = await ReadWithTimeoutAsync(pipe);
+                var sequence = 1L;
+                async Task SendAsync<T>(string type, HostMessagePriority priority, T payload, string? correlation = null)
+                    => await HostFrameCodec.WriteAsync(pipe.Writer,
+                        HostEnvelope.Create(session, sequence++, type, priority, payload, correlation), CancellationToken.None);
+                await SendAsync(HostMessageTypes.Hello, HostMessagePriority.Control,
+                    new HostHello("drawing-soak", "1", Environment.ProcessId, [HostProtocol.CurrentVersion]));
+                await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+                await SendAsync(HostMessageTypes.Permissions, HostMessagePriority.Control,
+                    new HostPermissionSnapshot(new Dictionary<string, IReadOnlyList<string>>
+                    {
+                        ["triggernometry"] = ["ReadCombatLogs", "ReadLocalConfiguration"],
+                        ["postnamazu"] = ["ReadCombatLogs", "ReadLocalConfiguration", "GameCommand"],
+                    }, ["triggernometry", "postnamazu"]));
+                var ready = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
+                Assert(ready.Payload.Deserialize<HostHealth>()?.State == "plugins.ready", "Soak plugins not ready.");
+                HostFfxivEntitySnapshot? baseline = null;
+                var territory = 1363u;
+                for (var iteration = 0; iteration < 400; iteration++)
+                {
+                    if (iteration % 100 == 0)
+                    {
+                        territory = iteration % 200 == 0 ? 1363u : 1325u;
+                        await SendAsync(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical,
+                            new HostZoneEvent(territory, "Drawing lifetime test", DateTimeOffset.UtcNow));
+                        baseline = null;
+                    }
+                    var player = sample.Combatants[0] with
+                    {
+                        PosX = 80 + iteration % 40 + generation,
+                        PosY = generation + iteration % 3,
+                        PosZ = 85 + iteration % 30,
+                        Heading = (iteration % 4) * MathF.PI / 2,
+                    };
+                    var snapshot = sample with { TerritoryId = territory, Timestamp = DateTimeOffset.UtcNow, Combatants = [player] };
+                    if (baseline is null || iteration % 10 == 0)
+                    {
+                        await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State, snapshot);
+                        baseline = snapshot;
+                    }
+                    else await SendAsync(HostMessageTypes.FfxivEntityDelta, HostMessagePriority.State,
+                        new HostFfxivEntityDelta(territory, snapshot.CurrentPlayerId, baseline.Timestamp, snapshot.Timestamp, [player], []));
+                    await SendAsync(HostMessageTypes.CombatStarted, HostMessagePriority.Critical,
+                        new HostCombatEvent(true, DateTimeOffset.UtcNow));
+                    var tag = $"DACT_SOAK_{generation * 400 + iteration}";
+                    var line = $"DACT_SOAK:{generation * 400 + iteration}";
+                    await SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data, new[]
+                    {
+                        new HostLogEvent(DateTimeOffset.UtcNow, line, false, line),
+                        new HostLogEvent(DateTimeOffset.UtcNow, "ACTCOMPAT_PLACE_LINE", false, "ACTCOMPAT_PLACE_LINE"),
+                    });
+                    var seen = new HashSet<string>();
+                    for (var commandIndex = 0; commandIndex < 4; commandIndex++)
+                    {
+                        var envelope = await ReadTriggerCommandAsync(pipe).WaitAsync(TimeSpan.FromSeconds(10));
+                        var request = envelope.Payload.Deserialize<HostCommandRequest>()!;
+                        var payload = request.Arguments["payload"];
+                        Assert(request.PluginId == "postnamazu", "Soak callback lost plugin identity.");
+                        if (request.Command == "postnamazu.place")
+                        {
+                            using var marks = JsonDocument.Parse(payload);
+                            var mark = marks.RootElement.GetProperty("A");
+                            Assert(mark.GetProperty("X").GetSingle() == player.PosX &&
+                                mark.GetProperty("Y").GetSingle() == player.PosY &&
+                                mark.GetProperty("Z").GetSingle() == player.PosZ,
+                                $"Waymark coordinates stopped updating at {tag}: {payload}");
+                            Assert(seen.Add("place"), "Duplicate waymark callback.");
+                        }
+                        else
+                        {
+                            Assert(request.Command == "postnamazu.pictoact" &&
+                                payload.Split('\n').Any(x => x.Trim() == "Tag: " + tag),
+                                $"Drawing callback retained an old pull at {tag}: {payload}");
+                            var kind = payload.StartsWith("Action: Change") ? "change" : payload.StartsWith("Action: Remove") ? "remove" : "create";
+                            if (kind != "remove")
+                            {
+                                var positionLine = payload.Split('\n').Single(x => x.StartsWith("Pos:"));
+                                var coordinates = positionLine[4..].Trim().Trim('<', '>').Split(',')
+                                    .Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+                                // Triggernometry/PictoACT Pos is X, horizontal Y, height;
+                                // the protocol combatant uses the game's X, height, Z.
+                                Assert(coordinates.SequenceEqual(new[] { player.PosX, player.PosZ, player.PosY }),
+                                    $"PictoACT coordinates stopped updating at {tag}: {payload}");
+                            }
+                            Assert(seen.Add(kind), "Duplicate drawing callback: " + kind);
+                        }
+                        // This acknowledges the game-side boundary only. Real game memory
+                        // placement and native VFX rendering are outside this offline test.
+                        await SendAsync(HostMessageTypes.CommandResult, HostMessagePriority.Control,
+                            new HostCommandResult(true, "completed", "offline-soak"), envelope.CorrelationId);
+                        completed++;
+                    }
+                    Assert(seen.SetEquals(["create", "change", "remove", "place"]), "Incomplete drawing cycle.");
+                    await SendAsync(HostMessageTypes.CombatEnded, HostMessagePriority.Critical,
+                        new HostCombatEvent(false, DateTimeOffset.UtcNow));
+                    // Let heartbeat/timer/action workers run between cycles at the
+                    // drawing resolver's normal cadence, instead of only testing bursts.
+                    await Task.Delay(100);
+                    if ((iteration + 1) % 100 == 0)
+                        Console.WriteLine($"Host generation {generation + 1}: {iteration + 1}/400 cycles passed.");
+                }
+                await SendAsync(HostMessageTypes.Shutdown, HostMessagePriority.Control,
+                    new HostHealth("stopping", "drawing soak restart", DateTimeOffset.UtcNow));
+                await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert(host.ExitCode == 0, "Soak Host did not shut down cleanly.");
+            }
+            catch
+            {
+                if (!host.HasExited) host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                var log = ReadProcessLog(host);
+                Console.Error.WriteLine($"Drawing soak stdout:\n{log.Output}\nstderr:\n{log.Error}");
+                throw;
+            }
+            finally
+            {
+                if (!host.HasExited)
+                {
+                    host.Kill(entireProcessTree: true);
+                    await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
+        }
+    }
+    Console.WriteLine($"PASS 1200 real Host drawing/waymark cycles, {completed} callbacks, 3 processes / 2 restarts, full+delta entity updates, 12 zone entries; wall={timer.Elapsed.TotalSeconds:F1}s at 100 ms cadence (not an hours-long soak).");
 }
 
 async Task ValidateTriggernometryU7bProbeAsync(bool validateOrdering = false)
