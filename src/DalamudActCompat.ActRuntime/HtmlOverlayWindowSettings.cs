@@ -33,6 +33,11 @@ public sealed class HtmlOverlayWindowSettings
 
     public bool AutoHideOutOfCombat { get; set; }
 
+    // Manual hiding keeps the page and its subscriptions alive independently of
+    // opening/closing, combat suppression and focus suppression.
+    public bool IsUserHidden { get; set; }
+    public List<HtmlOverlayHotkey> Hotkeys { get; set; } = [];
+
     [System.Text.Json.Serialization.JsonIgnore]
     [Newtonsoft.Json.JsonIgnore]
     public bool IsEditing { get; private set; }
@@ -68,6 +73,7 @@ public sealed class HtmlOverlayWindowSettings
     public void SetEditing(bool editing)
     {
         IsEditing = editing;
+        if (editing) IsUserHidden = false;
 
         // Editing is temporary: finishing must restore both passive overlay settings
         // so the window cannot keep intercepting game input or resemble an editor.
@@ -111,6 +117,8 @@ public sealed class HtmlOverlayWindowSettings
         IsClickThrough = true;
         IsLocked = true;
         AutoHideOutOfCombat = false;
+        IsUserHidden = false;
+        Hotkeys = [];
         ZoomFactor = 1.0f;
         DisplayName = string.Empty;
         SourceUrl = string.Empty;

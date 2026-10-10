@@ -51,6 +51,26 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--overlay-manager-only", StringComparer.Ordinal))
+    {
+        OverlayManagerSmokeTests.Run(Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
+        OverlayHotkeySmokeTests.Run();
+        await DisplayOptionsSmokeTests.RunAsync();
+        return 0;
+    }
+    if (args.Contains("--overlay-hotkeys-only", StringComparer.Ordinal))
+    {
+        OverlayHotkeySmokeTests.Run();
+        await DisplayOptionsSmokeTests.RunAsync();
+        return 0;
+    }
+    if (args.Contains("--drawing-lifetime-only", StringComparer.Ordinal) || args.Contains("--drawing-fault-only", StringComparer.Ordinal))
+    {
+        DrawingLifetimeSmokeTests.Run(args.Contains("--drawing-fault-only", StringComparer.Ordinal));
+        return 0;
+    }
+    OverlayConnectionUriSmokeTests.Run();
+    if (args.Contains("--overlay-uri-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--webview-input-only", StringComparer.Ordinal))
     {
         await ValidateLiveHtmlOverlayInputAsync(testRoot);
@@ -196,6 +216,7 @@ try
     ValidateOverlayInitialStateEvents();
     await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
+    OverlayHotkeySmokeTests.Run();
     await DisplayOptionsSmokeTests.RunAsync();
     if (string.Equals(
             Environment.GetEnvironmentVariable("ACTCOMPAT_WEBVIEW_INPUT_SMOKE"),
@@ -214,6 +235,7 @@ try
     ValidateIndependentMeterWindows();
     ValidateWindowDragContinuity();
     ValidatePictoActOverlayCommands();
+    DrawingLifetimeSmokeTests.Run();
     PictoCleanupScopeSmokeTests.Run();
     PictoOnlineResourceSmokeTests.Run();
     ValidateEmptyEncounterFiltering();
@@ -3578,7 +3600,9 @@ static void ValidateIndependentMeterWindows()
         controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal) &&
-        Regex.Matches(controlCenterSource, "游戏失去焦点时隐藏网页悬浮窗").Count >= 2 &&
+        controlCenterSource.Contains("游戏失去焦点时隐藏网页悬浮窗", StringComparison.Ordinal) &&
+        File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Overlays.cs"))
+            .Contains("setHideHtmlOverlaysWhenUnfocused(hide)", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
         !settingsSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("DrawMeterKindRadio", StringComparison.Ordinal) &&
@@ -5167,7 +5191,8 @@ static void ValidateControlCenterPresentation()
         .Select(match => match.Value)
         .ToHashSet(StringComparer.Ordinal);
     var controlCenterConfigurationPaths = configurationPathPattern
-        .Matches(controlCenterSource)
+        .Matches(controlCenterSource + File.ReadAllText(Path.Combine(FindProjectRoot(),
+            "src", "DalamudActCompat", "UI", "ControlCenterWindow.Overlays.cs")))
         .Select(match => match.Value)
         .ToHashSet(StringComparer.Ordinal);
     var missingLegacyPaths = legacyConfigurationPaths
@@ -10292,18 +10317,8 @@ static void ValidateHtmlOverlayDefaults()
         "DalamudActCompat",
         "UI",
         "LauncherWindow.cs"));
-    var createdOverlayIndex = controlCenterSource.IndexOf(
-        "changed |= DrawCreatedHtmlOverlays();",
-        StringComparison.Ordinal);
-    var templateOverlayIndex = controlCenterSource.IndexOf(
-        "从模板创建",
-        StringComparison.Ordinal);
-    var usedCactbotIndex = controlCenterSource.IndexOf(
-        "打开过的 Cactbot 悬浮窗",
-        StringComparison.Ordinal);
-    var availableCactbotIndex = controlCenterSource.IndexOf(
-        "从本地模板添加",
-        StringComparison.Ordinal);
+    var overlayManagerSource = File.ReadAllText(Path.Combine(FindProjectRoot(),
+        "src", "DalamudActCompat", "UI", "ControlCenterWindow.Overlays.cs"));
     var settingsWindowSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -10395,33 +10410,16 @@ static void ValidateHtmlOverlayDefaults()
         englishReadmeSource.Contains("## Troubleshooting", StringComparison.Ordinal) &&
         englishReadmeSource.Contains("## License", StringComparison.Ordinal),
         "The bilingual README install, preview, usage, or support contract regressed.");
-    Assert(
-        createdOverlayIndex >= 0 && templateOverlayIndex > createdOverlayIndex &&
-        usedCactbotIndex >= 0 && availableCactbotIndex > usedCactbotIndex &&
-        controlCenterSource.Contains("HTML 悬浮窗", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("从网址创建", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("html-overlay-create-tabs", StringComparison.Ordinal) &&
-        controlCenterSource.Contains(
-            "BrandedWindowChrome.DrawNavigationRail(",
-            StringComparison.Ordinal) &&
-        !controlCenterSource.Contains("BeginTabBar(\"html-overlay-create-tabs\")", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("ResolveOverlayDisplayName", StringComparison.Ordinal) &&
+    // Behavioural checks replace the obsolete two-list ordering contract.
+    OverlayManagerSmokeTests.Run();
+    Assert(overlayManagerSource.Contains("selectCactbotPackage();", StringComparison.Ordinal) &&
+        overlayManagerSource.Contains("openCactbotSettings();", StringComparison.Ordinal) &&
+        overlayManagerSource.Contains("FormatCactbotStatus()", StringComparison.Ordinal) &&
+        overlayManagerSource.Contains("deleteHtmlOverlay(name)", StringComparison.Ordinal) &&
         controlCenterSource.Contains("保存名称", StringComparison.Ordinal) &&
         controlCenterSource.Contains("只添加你信任的悬浮窗页面", StringComparison.Ordinal) &&
-        controlCenterSource.Contains(
-            ".Where(static template => template.IsCactbot)",
-            StringComparison.Ordinal) &&
-        controlCenterSource.Contains(
-            "!SelfHostedActRuntime.IsCactbotOverlayName(name)",
-            StringComparison.Ordinal) &&
-        controlCenterSource.Contains(
-            "pair.Value.HasBeenOpened",
-            StringComparison.Ordinal) &&
-        controlCenterSource.Contains("deleteHtmlOverlay(selectedName)", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("打开过的 Cactbot 悬浮窗", StringComparison.Ordinal) &&
-        settingsWindowSource.Contains("从本地模板添加", StringComparison.Ordinal) &&
         settingsWindowSource.Contains("settings.HasBeenOpened", StringComparison.Ordinal),
-        "Cactbot usage/history or created/custom HTML overlay list ordering regressed.");
+        "Unified overlay management lost an existing Cactbot or custom overlay entry point.");
     Assert(
         controlCenterSource.Contains(
             "var helpAction = cloudSnapshot.IsSignedIn ? openHelp : null;",

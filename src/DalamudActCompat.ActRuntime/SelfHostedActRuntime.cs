@@ -1131,7 +1131,12 @@ public sealed class SelfHostedActRuntime : IDisposable
         var separator = !string.IsNullOrEmpty(fragment)
             ? fragment.Contains('?') ? "&" : "?"
             : string.IsNullOrEmpty(pageUri.Query) ? "?" : "&";
-        return new Uri($"{pageUri.AbsoluteUri}{separator}{parameter}={value}");
+        // Some pages initialize a hash router before reading the socket URL with
+        // /[?&]OVERLAY_WS=([^&]+)/ (or HOST_PORT). Terminate the query value so a
+        // later-added #/ cannot become part of the socket address. Existing hash
+        // routes already precede the parameter and must keep their routing intact.
+        var terminator = string.IsNullOrEmpty(fragment) ? "&" : string.Empty;
+        return new Uri($"{pageUri.AbsoluteUri}{separator}{parameter}={value}{terminator}");
     }
 
     internal static bool TryBuildCustomOverlayUri(

@@ -35,6 +35,7 @@ internal static class DactTheme
     public static LiquidGlassRenderer? GlassRenderer { get; set; }
     public static string CurrentSkin { get; private set; } = SkinCatalog.Default;
     public static SkinPalette Palette { get; private set; } = DefaultPalette;
+    internal static bool UsesSolidControls => CurrentSkin != SkinCatalog.Default && !Palette.Light && !Palette.Glass && !Palette.Rain;
     private static readonly ImGuiCol[] FrameSlots = [ImGuiCol.WindowBg, ImGuiCol.ChildBg, ImGuiCol.PopupBg, ImGuiCol.Border, ImGuiCol.Separator,
         ImGuiCol.FrameBg, ImGuiCol.FrameBgHovered, ImGuiCol.FrameBgActive, ImGuiCol.Button,
         ImGuiCol.ButtonHovered, ImGuiCol.ButtonActive, ImGuiCol.Header, ImGuiCol.HeaderHovered,
@@ -86,10 +87,20 @@ internal static class DactTheme
     public static void TextColored(Vector4 color, string text) => ImGui.TextColored(Foreground(color), text);
 
     public static void PushStyleColor(ImGuiCol slot, Vector4 original)
+    {
+        // Cards use Raised, so button overrides must resolve by control role
+        // even when callers have already supplied a color from this palette.
+        if (UsesSolidControls && slot is ImGuiCol.Button or ImGuiCol.ButtonHovered or ImGuiCol.ButtonActive)
+        {
+            var danger = !IsPaletteColor(original) && original.X > original.Y * 1.7f && original.X > original.Z * 1.7f;
+            ImGui.PushStyleColor(slot, original.W == 0 || danger ? original : Color(slot, original));
+            return;
+        }
         // Page containers must not stack opaque sheets over the glass window.
-        => ImGui.PushStyleColor(slot, (Palette.Glass || Palette.Rain) && slot == ImGuiCol.ChildBg && SameRgb(original, Palette.Surface)
+        ImGui.PushStyleColor(slot, (Palette.Glass || Palette.Rain) && slot == ImGuiCol.ChildBg && SameRgb(original, Palette.Surface)
             ? Vector4.Zero
             : CurrentSkin == SkinCatalog.Default || original.W == 0 || IsPaletteColor(original) ? original : Color(slot, original));
+    }
 
     private static bool IsPaletteColor(Vector4 color)
         => SameRgb(color, Palette.Surface) || SameRgb(color, Palette.Raised) || SameRgb(color, Palette.Hover) ||
@@ -106,6 +117,9 @@ internal static class DactTheme
             ImGuiCol.PopupBg when Palette.Glass => Palette.Surface with { W = .96f },
             ImGuiCol.WindowBg or ImGuiCol.ChildBg or ImGuiCol.PopupBg => Palette.Surface,
             ImGuiCol.Border or ImGuiCol.Separator => Palette.Border,
+            ImGuiCol.Button when UsesSolidControls => Vector4.Lerp(Palette.Hover, Palette.Accent, .08f),
+            ImGuiCol.ButtonHovered when UsesSolidControls => Vector4.Lerp(Palette.Hover, Palette.Accent, .20f),
+            ImGuiCol.ButtonActive when UsesSolidControls => Vector4.Lerp(Palette.Hover, Palette.Accent, .30f),
             ImGuiCol.FrameBg or ImGuiCol.Button => Palette.Raised,
             ImGuiCol.FrameBgHovered or ImGuiCol.ButtonHovered or ImGuiCol.HeaderHovered => Palette.Hover,
             ImGuiCol.FrameBgActive or ImGuiCol.ButtonActive or ImGuiCol.HeaderActive => Palette.Hover,
@@ -131,7 +145,7 @@ internal static class DactTheme
             ImGui.PushStyleColor(ImGuiCol.ResizeGripActive, Vector4.Zero);
         }
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, Palette.Light || Palette.Glass ? 12 : 5);
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, Palette.Light ? 1 : 0);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, Palette.Light || UsesSolidControls ? 1 : 0);
         if (Palette.Glass) ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 14 * Math.Max(.75f, ImGui.GetFontSize() / 17f));
         var extraColors = 0;
         if (Palette.Glass || Palette.Rain || CurrentSkin == SkinCatalog.Obsidian)
@@ -338,7 +352,18 @@ internal static class DactTheme
             if (ImGui.IsItemFocused()) glassDraw.AddRect(glassMin, glassMax, ImGui.GetColorU32(Palette.Accent), (glassMax.Y - glassMin.Y) * .5f);
             return clicked;
         }
-        if (!Palette.Light) return small ? ImGui.SmallButton(label) : ImGui.Button(label, size);
+        if (!Palette.Light)
+        {
+            // A fine edge keeps disabled buttons recognizable after ImGui applies
+            // its alpha fade. Transparent titlebar icons retain their original shape.
+            var outlined = UsesSolidControls && ImGui.GetStyle().Colors[(int)ImGuiCol.Button].W > 0;
+            if (UsesSolidControls) ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, outlined ? 1 : 0);
+            if (outlined) ImGui.PushStyleColor(ImGuiCol.Border, Vector4.Lerp(Palette.Border, Palette.Accent, .45f));
+            var clicked = small ? ImGui.SmallButton(label) : ImGui.Button(label, size);
+            if (outlined) ImGui.PopStyleColor();
+            if (UsesSolidControls) ImGui.PopStyleVar();
+            return clicked;
+        }
         ImGui.PushStyleColor(ImGuiCol.Text, Vector4.Zero);
         ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, Vector4.Zero);

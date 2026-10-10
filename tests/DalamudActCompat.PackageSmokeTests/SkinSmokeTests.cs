@@ -277,6 +277,7 @@ internal static partial class SkinSmokeTests
             LoadGameTextures(raster);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
+            SolidButtons(raster, output);
             GlassCards(raster, output);
             RainGeometry();
             var config = new PluginConfiguration();
