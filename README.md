@@ -204,4 +204,6 @@ GitHub Actions 会在 Windows runner 上构建完整 solution，并执行 Packag
 
 ## 许可证
 
+Copyright (C) 2026 DalamudActCompat contributors.
+
 Dalamud ACT Compat 以 [GPL-3.0](LICENSE.md) 发布。随包第三方组件分别遵循各自许可证；详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和发布包内的 `LICENSES/` 目录。

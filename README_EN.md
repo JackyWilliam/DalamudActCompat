@@ -202,4 +202,6 @@ Implementation and release documentation:
 
 ## License
 
+Copyright (C) 2026 DalamudActCompat contributors.
+
 Dalamud ACT Compat is distributed under [GPL-3.0](LICENSE.md). Bundled third-party components remain under their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the `LICENSES/` directory in release archives.
