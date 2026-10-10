@@ -18,6 +18,12 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Newtonsoft.Json.Linq;
 
+if (args.Length == 3 && args[0] == "--manual-plugins")
+{
+    ManualPluginSmokeTests.Run(args[1], args[2]);
+    return;
+}
+
 if (args.Length is 2 or 3 && args[0] == "--foxtts-layout")
 {
     FoxTtsLayoutSmokeTests.Run(args[1], args.Length == 3 ? args[2] : null);
@@ -3946,7 +3952,7 @@ async Task ValidateGenericPluginLoadsOnlyAfterConsentAsync()
                         "game-bridge",
                         "1",
                         Environment.ProcessId,
-                        [HostProtocol.CurrentVersion])),
+                        [HostProtocol.CurrentVersion], CombatLogDirectory: temporaryRoot)),
                 CancellationToken.None);
             await ReadUntilAsync(pipe, HostMessageTypes.HelloAck);
             await HostFrameCodec.WriteAsync(
@@ -3963,6 +3969,7 @@ async Task ValidateGenericPluginLoadsOnlyAfterConsentAsync()
                             [
                                 "ReadCombatLogs",
                                 "ReadLocalConfiguration",
+                                "TextToSpeech",
                             ],
                         },
                         ["community.allowed"])),
@@ -3992,11 +3999,31 @@ async Task ValidateGenericPluginLoadsOnlyAfterConsentAsync()
                     stage.State == "success"),
                 "Untrusted generic plugin entered the shared Host's successful stage set.");
 
+            var sequence = 2L;
+            async Task Send(string type, object payload)
+                => await HostFrameCodec.WriteAsync(pipe.Writer,
+                    HostEnvelope.Create(session, ++sequence, type, HostMessagePriority.Control, payload), CancellationToken.None);
+            async Task ExpectLog(string text, bool imported, string path, bool combat)
+            {
+                await Send(HostMessageTypes.LogBatch, new[] { new HostLogEvent(DateTimeOffset.UtcNow, "raw", imported, text) });
+                var reply = (await ReadUntilAsync(pipe, HostMessageTypes.MatchaTtsRequest, 10)).Payload.Deserialize<HostTtsRequest>();
+                Assert(reply is { Source: "generic" } && reply.Text == $"{text}|{imported}|Generic Zone|{combat}|{path}",
+                    "Generic Host lost ACT-formatted logs, import flag, zone/combat state, directory or TTS: " + reply);
+            }
+            // The fixture subscribes only to OnLogLineRead, reproducing the original
+            // missing-before-subscriber failure in the real out-of-process Host.
+            await Send(HostMessageTypes.CombatStarted, new HostCombatEvent(true, DateTimeOffset.UtcNow));
+            await Send(HostMessageTypes.ZoneChanged, new HostZoneEvent(1, "Generic Zone", DateTimeOffset.UtcNow));
+            await ExpectLog("generic-probe:first", false, temporaryRoot, true);
+            await Send(HostMessageTypes.CombatLogDirectory, temporaryConfigRoot);
+            await Send(HostMessageTypes.CombatEnded, new HostCombatEvent(false, DateTimeOffset.UtcNow));
+            await ExpectLog("generic-probe:second", true, temporaryConfigRoot, false);
+
             await HostFrameCodec.WriteAsync(
                 pipe.Writer,
                 HostEnvelope.Create(
                     session,
-                    3,
+                    ++sequence,
                     HostMessageTypes.Shutdown,
                     HostMessagePriority.Control,
                     new HostHealth(
@@ -5637,10 +5664,19 @@ public sealed class GenericActPluginHostFixture : IActPluginV1
     {
         pluginScreenSpace.Text = "Generic Host fixture";
         pluginStatusText.Text = "generic ready";
+        ActGlobals.oFormActMain.OnLogLineRead += OnLog;
+    }
+
+    private static void OnLog(bool imported, LogLineEventArgs args)
+    {
+        if (!args.logLine.StartsWith("generic-probe:", StringComparison.Ordinal)) return;
+        var act = ActGlobals.oFormActMain;
+        act.TTS($"{args.logLine}|{imported}|{act.CurrentZone}|{act.InCombat}|{HostPluginBridge.ResolveUploaderLogDirectory(null)}");
     }
 
     public void DeInitPlugin()
     {
+        ActGlobals.oFormActMain.OnLogLineRead -= OnLog;
     }
 }
 

@@ -386,7 +386,9 @@ public sealed class Plugin : IDalamudPlugin
             stateStore,
             logger,
             BuildGenericHostPermissionSnapshot,
-            GetHostGameContext);
+            GetHostGameContext,
+            ResolveActiveCombatLogDirectory,
+            expectedTtsSource: "generic");
         genericHostSupervisor = new ActHostSupervisor(
             paths.HostDirectory,
             paths.ActPluginDirectory,
@@ -4858,7 +4860,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnGenericTtsRequested(object? sender, HostTtsRequest request)
     {
-        if (!IsDactAccessAllowed())
+        // Permission changes restart the full-trust Host. Reject queued speech from
+        // the old session immediately while that restart is still in progress.
+        if (!IsDactAccessAllowed() || request.Source != "generic" ||
+            !CreateGenericHostPermissionSnapshot().AllowedCapabilities.Values.Any(
+                allowed => allowed.Contains(nameof(ActCapability.TextToSpeech))))
         {
             return;
         }

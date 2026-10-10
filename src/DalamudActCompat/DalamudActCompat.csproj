@@ -34,6 +34,7 @@
     <Content Include="../../vendor/IINACT/machina/LICENSE.md" Link="LICENSES/Machina-LICENSE.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/dnlib-LICENSE.txt" Link="LICENSES/dnlib-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/WindowsCommunityToolkit-LICENSE.md" Link="LICENSES/WindowsCommunityToolkit-MIT.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/ThirdParty/ClearScript-LICENSE.txt" Link="LICENSES/ClearScript-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/BundledActPlugins/**/*"
              Link="BundledActPlugins/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />

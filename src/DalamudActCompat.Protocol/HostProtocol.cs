@@ -34,6 +34,7 @@ public static class HostMessageTypes
     public const string Heartbeat = "heartbeat";
     public const string Health = "health";
     public const string LogBatch = "event.log.batch";
+    public const string CombatLogDirectory = "state.combat-log-directory";
     public const string ZoneChanged = "event.zone";
     public const string CombatStarted = "event.combat.start";
     public const string CombatEnded = "event.combat.end";
@@ -118,7 +119,8 @@ public sealed record HostHello(
     string Version,
     int ProcessId,
     IReadOnlyList<int> SupportedProtocolVersions,
-    HostGameContext? GameContext = null);
+    HostGameContext? GameContext = null,
+    string? CombatLogDirectory = null);
 
 public sealed record HostHeartbeat(
     long LastReceivedSequence,

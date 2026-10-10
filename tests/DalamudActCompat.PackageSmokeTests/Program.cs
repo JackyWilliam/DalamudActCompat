@@ -51,6 +51,8 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    await ManualPluginPackageSmokeTests.RunAsync(testRoot);
+    if (args.Contains("--manual-plugins-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--account-recovery-only", StringComparer.Ordinal))
     {
         await CloudAccountRecoverySmokeTests.RunAsync(testRoot);

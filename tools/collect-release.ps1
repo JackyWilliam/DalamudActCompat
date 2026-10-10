@@ -163,6 +163,14 @@ New-Item -ItemType Directory -Force -Path $validationDir | Out-Null
 Expand-Archive -Path $destination -DestinationPath $validationDir -Force
 
 $packagedFiles = @(Get-ChildItem -LiteralPath $validationDir -Recurse -File)
+# These adapters accept user-supplied plugins; a local import must never become
+# an accidental redistribution through a stale build/output directory.
+$manualOnlyFiles = @($packagedFiles | Where-Object {
+    $_.Name -match '^(ACTLogsUploader.*|ACT\.JSB_5\.dll|神兵科技\.dll|ClearScriptV8\.win-x64\.dll|ClearScript\.V8\.ICUData\.dll)$'
+})
+if ($manualOnlyFiles.Count -gt 0) {
+    throw "Plugin ZIP contains manual-only extension files: $($manualOnlyFiles.Name -join ', ')"
+}
 $debugSymbols = @($packagedFiles | Where-Object { $_.Extension -ieq ".pdb" })
 if ($debugSymbols.Count -gt 0) {
     $relativeDebugSymbols = @($debugSymbols | ForEach-Object {
@@ -339,6 +347,7 @@ $requiredRuntimeFiles = @(
     "LICENSES/IINACT-GPL-3.0.txt",
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
     "LICENSES/WindowsCommunityToolkit-MIT.md",
+    "LICENSES/ClearScript-LICENSE.txt",
     "THIRD_PARTY_NOTICES.md",
     "BundledActPlugins/bundled-plugins.lock.json",
     "BundledActPlugins/triggernometry/zh-CN.triglations.xml",

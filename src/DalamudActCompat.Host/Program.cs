@@ -184,6 +184,7 @@ internal static class Program
                             // Keep the established process registration entry point intact for
                             // extensions that discover it by reflection; region is additive.
                             HostPluginBridge.ConfigureGameProcess(hello.ProcessId);
+                            HostPluginBridge.ConfigureCombatLogDirectory(hello.CombatLogDirectory);
                             if (hello.GameContext is not null)
                             {
                                 HostPluginBridge.ConfigureGameContext(hello.GameContext);
@@ -359,6 +360,9 @@ internal static class Program
                     case HostMessageTypes.SilverDasherLogBatch:
                         HostPluginBridge.PublishSilverDasherLogs(
                             envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? []);
+                        break;
+                    case HostMessageTypes.CombatLogDirectory:
+                        HostPluginBridge.ConfigureCombatLogDirectory(envelope.Payload.Deserialize<string>());
                         break;
                     case HostMessageTypes.ZoneChanged:
                         if (envelope.Payload.Deserialize<HostZoneEvent>() is { } zone)

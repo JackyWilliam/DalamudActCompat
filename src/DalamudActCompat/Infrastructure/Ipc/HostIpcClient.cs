@@ -17,6 +17,9 @@ public sealed class HostIpcClient : IAsyncDisposable
     private readonly PluginLogger logger;
     private readonly Func<HostPermissionSnapshot> permissionSnapshot;
     private readonly Func<HostGameContext?> gameContext;
+    private readonly Func<string?> combatLogDirectory;
+    private string? publishedCombatLogDirectory;
+    private readonly string expectedTtsSource;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly BoundedHostMessageQueue outbound = new();
     private readonly ConcurrentQueue<HostDiagnostic> diagnostics = new();
@@ -48,7 +51,9 @@ public sealed class HostIpcClient : IAsyncDisposable
         EncounterStateStore stateStore,
         PluginLogger logger,
         Func<HostPermissionSnapshot>? permissionSnapshot = null,
-        Func<HostGameContext?>? gameContext = null)
+        Func<HostGameContext?>? gameContext = null,
+        Func<string?>? combatLogDirectory = null,
+        string expectedTtsSource = "matcha")
     {
         this.stateStore = stateStore;
         this.logger = logger;
@@ -57,6 +62,8 @@ public sealed class HostIpcClient : IAsyncDisposable
                                        new Dictionary<string, IReadOnlyList<string>>(),
                                        []));
         this.gameContext = gameContext ?? (static () => null);
+        this.combatLogDirectory = combatLogDirectory ?? (static () => null);
+        this.expectedTtsSource = expectedTtsSource;
     }
 
     public event EventHandler<Exception>? Faulted;
@@ -170,7 +177,8 @@ public sealed class HostIpcClient : IAsyncDisposable
                         typeof(HostIpcClient).Assembly.GetName().Version?.ToString() ?? "unknown",
                         Environment.ProcessId,
                         [HostProtocol.CurrentVersion],
-                        gameContext())))
+                        gameContext(),
+                        publishedCombatLogDirectory = combatLogDirectory())))
             {
                 throw new InvalidOperationException("Host control queue rejected the hello message.");
             }
@@ -398,6 +406,12 @@ public sealed class HostIpcClient : IAsyncDisposable
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
+            // Follow the parser's actual writer, including a failed folder change that
+            // leaves the old writer active. A coalesced state frame cannot flood IPC.
+            var directory = combatLogDirectory();
+            if (!string.Equals(directory, publishedCombatLogDirectory, StringComparison.Ordinal) &&
+                TryEnqueue(HostMessageTypes.CombatLogDirectory, HostMessagePriority.State, directory))
+                publishedCombatLogDirectory = directory;
             var elapsed = DateTimeOffset.UtcNow -
                           new DateTimeOffset(Volatile.Read(ref lastHeartbeatTicks), TimeSpan.Zero);
             if (elapsed >= HostProtocol.DeadAfter)
@@ -594,11 +608,11 @@ public sealed class HostIpcClient : IAsyncDisposable
             case HostMessageTypes.MatchaTtsRequest:
                 var matchaTts = envelope.Payload.Deserialize<HostTtsRequest>();
                 if (matchaTts is null ||
-                    !string.Equals(matchaTts.Source, "matcha", StringComparison.Ordinal) ||
+                    !string.Equals(matchaTts.Source, expectedTtsSource, StringComparison.Ordinal) ||
                     string.IsNullOrWhiteSpace(matchaTts.Text) ||
                     matchaTts.Text.Length > 2000)
                 {
-                    logger.Warning("Matcha Host sent an invalid TTS request; request denied.");
+                    logger.Warning("ACT Host sent an invalid TTS request; request denied.");
                     break;
                 }
 

@@ -104,6 +104,14 @@ public sealed partial class ActPluginPackageInstaller
             {
                 var entryAssembly = Path.Combine(stagingDirectory, manifest.EntryAssembly);
                 ValidateGenericEntryPoint(manifest, stagingDirectory);
+                if (string.Equals(manifest.Id, "actlogsuploader", StringComparison.OrdinalIgnoreCase))
+                {
+                    // These dynamically loaded files are invisible to metadata dependency
+                    // traversal. Fail before replacing a working install with an incomplete one.
+                    foreach (var companion in new[] { "ClearScript.V8.ICUData.dll", "ClearScriptV8.win-x64.dll" })
+                        if (!File.Exists(Path.Combine(Path.GetDirectoryName(entryAssembly)!, companion)))
+                            throw new InvalidDataException($"ACTLogsUploader 缺少 {companion}，请导入完整 ZIP，或将 DLL 与原包依赖放在同一目录后重新导入。");
+                }
                 manifest.RequestedCapabilities = GetRequestedCapabilities(manifest)
                     .Concat(InferCapabilities(entryAssembly))
                     .Distinct()
@@ -402,7 +410,7 @@ public sealed partial class ActPluginPackageInstaller
         var generatedManifest = new ActPluginManifest
         {
             Id = CreatePluginId(candidate.AssemblyName),
-            Name = candidate.AssemblyName,
+            Name = candidate.AssemblyName == "ACT.JSB_5" ? "繁华的绝神兵泰坦工具" : candidate.AssemblyName,
             Version = candidate.Version,
             SourceSha256 = ComputeSha256(candidate.AssemblyPath),
             HostApiVersion = 1,
@@ -432,6 +440,14 @@ public sealed partial class ActPluginPackageInstaller
         File.Copy(dllPath, Path.Combine(stagingDirectory, fileName));
         var sourceDirectory = Path.GetDirectoryName(dllPath)!;
         CopyManagedDependencies(dllPath, sourceDirectory, stagingDirectory);
+        // ClearScript loads its native engine and ICU data dynamically, so assembly
+        // references alone do not preserve the complete user-supplied uploader package.
+        if (string.Equals(fileName, "ACTLogsUploader.dll", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var companion in new[] { "ClearScript.V8.ICUData.dll", "ClearScriptV8.win-x64.dll" })
+                if (!File.Exists(Path.Combine(stagingDirectory, companion)))
+                    CopyCompanionWhenPresent(sourceDirectory, stagingDirectory, companion);
+        }
         CopyCompanionWhenPresent(sourceDirectory, stagingDirectory, $"{fileName}.config");
         CopyCompanionWhenPresent(
             sourceDirectory,
@@ -642,6 +658,17 @@ public sealed partial class ActPluginPackageInstaller
         using var stream = File.OpenRead(assemblyPath);
         using var peReader = new PEReader(stream);
         var metadata = peReader.GetMetadataReader();
+        var assemblyName = metadata.GetString(metadata.GetAssemblyDefinition().Name);
+        if (assemblyName == "ACT.JSB_5")
+        {
+            inferred.Add(ActCapability.GameCommand);
+            inferred.Add(ActCapability.TextToSpeech);
+        }
+        if (assemblyName == "ACTLogsUploader")
+        {
+            inferred.Add(ActCapability.HighRiskScript);
+            inferred.Add(ActCapability.NativeSystemAccess);
+        }
         var referencedTypes = metadata.TypeReferences
             .Select(handle => GetTypeName(metadata, handle))
             .ToArray();
@@ -660,7 +687,7 @@ public sealed partial class ActPluginPackageInstaller
         }
 
         if (referencedTypes.Any(static name => name.StartsWith("System.Speech.", StringComparison.Ordinal)) ||
-            referencedMembers.Any(static name => name.Contains("PlayTts", StringComparison.OrdinalIgnoreCase)))
+            referencedMembers.Any(static name => name.Contains("PlayTts", StringComparison.OrdinalIgnoreCase) || name == "TTS"))
         {
             inferred.Add(ActCapability.TextToSpeech);
         }
