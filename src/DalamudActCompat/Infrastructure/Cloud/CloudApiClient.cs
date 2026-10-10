@@ -65,7 +65,11 @@ internal sealed record CloudAdministratorStatus(
     bool AdminNoticePending = false);
 
 internal sealed record CloudSponsorStatus(int Tier = 0, string? SponsorGrantId = null, bool SponsorNoticePending = false);
-internal sealed record CloudAccountStatus(CloudAdministratorStatus? Administrator = null, CloudSponsorStatus? Sponsor = null);
+internal sealed record CloudAccountStatus(CloudAdministratorStatus? Administrator = null, CloudSponsorStatus? Sponsor = null,
+    CloudRecoveryStatus? Recovery = null);
+internal sealed record CloudRecoveryStatus(bool Available = false, bool Protected = false, bool DiscordBound = false,
+    int BindingLimit = 3, int BoundAccounts = 0, bool DiscordAvailable = false);
+internal sealed record CloudDiscordLinkCode(string Code, DateTimeOffset ExpiresAt);
 
 internal sealed record CloudCreatedInvitation(
     string Id,
@@ -126,7 +130,7 @@ internal sealed partial class CloudApiClient : IDisposable
     private readonly bool ownsClient;
 
     public CloudApiClient()
-        : this(new HttpClient { BaseAddress = DefaultBaseAddress }, ownsClient: true)
+        : this(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = DefaultBaseAddress }, ownsClient: true)
     {
     }
 
@@ -177,14 +181,22 @@ internal sealed partial class CloudApiClient : IDisposable
         string resetCode,
         string newPassword,
         string deviceId,
-        CloudKeyEnvelope keyEnvelope,
+        CloudKeyEnvelope? keyEnvelope,
         CancellationToken cancellationToken)
         => SendJsonAsync<CloudAuthenticationResponse>(
             HttpMethod.Post,
             "api/v1/auth/reset-password",
-            new { username, resetCode, newPassword, deviceId, keyEnvelope },
+            new { username, resetCode, newPassword, deviceId, keyEnvelope, recoverCloudKey = keyEnvelope is null },
             null,
             cancellationToken);
+
+    public Task<CloudRecoveryStatus> ProtectRecoveryKeyAsync(string token, string recoveryKey, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudRecoveryStatus>(HttpMethod.Put, "api/v1/auth/recovery-protection",
+            new { recoveryKey }, token, cancellationToken);
+
+    public Task<CloudDiscordLinkCode> CreateDiscordLinkCodeAsync(string token, string recoveryVerifier, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudDiscordLinkCode>(HttpMethod.Post, "api/v1/auth/discord/link-code",
+            new { recoveryVerifier }, token, cancellationToken);
 
     public Task<CloudAuthenticationResponse> ResetPasswordWithRecoveryAsync(
         string username,

@@ -39,7 +39,9 @@ public sealed class CloudUiBridge
         Action upload,
         Action<string> previewRestore,
         Action<string> restore,
-        Action rollback)
+        Action rollback,
+        Action? createDiscordLinkCode = null,
+        Func<string, bool>? hasRecoveryKeyFor = null)
     {
         GetSnapshot = getSnapshot;
         Register = register;
@@ -52,6 +54,8 @@ public sealed class CloudUiBridge
         PreviewRestore = previewRestore;
         Restore = restore;
         Rollback = rollback;
+        CreateDiscordLinkCode = createDiscordLinkCode ?? (() => { });
+        HasRecoveryKeyFor = hasRecoveryKeyFor ?? (_ => false);
     }
 
     internal Func<CloudClientSnapshot> GetSnapshot { get; }
@@ -65,4 +69,6 @@ public sealed class CloudUiBridge
     internal Action<string> PreviewRestore { get; }
     internal Action<string> Restore { get; }
     internal Action Rollback { get; }
+    internal Action CreateDiscordLinkCode { get; }
+    internal Func<string, bool> HasRecoveryKeyFor { get; }
 }

@@ -180,7 +180,8 @@ public sealed partial class ControlCenterWindow : Window
     private string cloudRecoveryKey = string.Empty;
     private string cloudInviteeContact = string.Empty;
     private bool cloudRememberLogin = true;
-    private CloudPasswordResetMethod cloudPasswordResetMethod;
+    private CloudPasswordResetMethod cloudPasswordResetMethod = CloudPasswordResetMethod.AdministratorCode;
+    private string? cloudAuthenticationPreviousStatus;
     private string? selectedCloudBackupId;
     private string? cloudPreviewRequestedBackupId;
     private bool confirmCloudRestore;
@@ -2140,6 +2141,13 @@ public sealed partial class ControlCenterWindow : Window
             authenticationPages,
             (int)cloudAuthenticationPage,
             height: 34);
+        if (cloudAuthenticationPage != (CloudAuthenticationPage)selectedAuthenticationPage)
+        {
+            // An error belongs to the submitted form, not the next form the user
+            // opens. Clear password/code inputs while retaining their account name.
+            cloudAuthenticationPreviousStatus = snapshot.StatusMessage;
+            ClearCloudSecrets();
+        }
         cloudAuthenticationPage = (CloudAuthenticationPage)selectedAuthenticationPage;
         ImGui.Spacing();
 
@@ -2151,8 +2159,8 @@ public sealed partial class ControlCenterWindow : Window
             CloudAuthenticationPage.ResetPassword => (
                 text.Get("重设账号密码", "Reset account password"),
                 text.Get(
-                    "使用注册时保存的恢复密钥可自行改密；没有恢复密钥时再联系管理员。",
-                    "Use the recovery key saved at registration to reset the password yourself, or contact an administrator for help.")),
+                    "已绑定 Discord：向 DACT 机器人使用 /dact-reset，复制重置码到下方。旧账号也可使用原恢复密钥。",
+                    "Linked Discord: use /dact-reset with the DACT bot and paste its reset code below. Legacy accounts can still use their recovery key.")),
             _ => (
                 text.Get("欢迎回来", "Welcome back"),
                 text.Get("输入账号和密码，继续使用 DACT。", "Enter your username and password to continue.")),
@@ -2160,7 +2168,11 @@ public sealed partial class ControlCenterWindow : Window
         DactTheme.TextColored(IceBlue, pageTitle);
         DrawAuthenticationMutedText(pageDescription);
         ImGui.Spacing();
-        DrawAuthenticationStatus(snapshot);
+        if (snapshot.IsBusy || snapshot.StatusMessage != cloudAuthenticationPreviousStatus)
+        {
+            cloudAuthenticationPreviousStatus = null;
+            DrawAuthenticationStatus(snapshot);
+        }
         ImGui.Spacing();
 
         DrawAuthenticationInput(
@@ -2179,7 +2191,7 @@ public sealed partial class ControlCenterWindow : Window
                 DrawCloudRegistrationForm(busy);
                 break;
             case CloudAuthenticationPage.ResetPassword:
-                DrawCloudPasswordResetForm(busy, snapshot.HasSavedRecoveryKey);
+                DrawCloudPasswordResetForm(busy, cloud.HasRecoveryKeyFor(cloudUsername));
                 break;
         }
     }
@@ -2310,22 +2322,22 @@ public sealed partial class ControlCenterWindow : Window
     {
         var resetMethods = new[]
         {
+            text.Get("Discord 机器人 / 重置码", "Discord bot / reset code"),
             text.Get("恢复密钥自助改密", "Reset with recovery key"),
-            text.Get("管理员协助", "Administrator help"),
         };
         var selectedResetMethod = BrandedWindowChrome.DrawNavigationRail(
             "cloud-password-reset-method",
             resetMethods,
-            (int)cloudPasswordResetMethod,
+            cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode ? 0 : 1,
             height: 32);
-        cloudPasswordResetMethod = (CloudPasswordResetMethod)selectedResetMethod;
+        cloudPasswordResetMethod = selectedResetMethod == 0 ? CloudPasswordResetMethod.AdministratorCode : CloudPasswordResetMethod.RecoveryKey;
         ImGui.Spacing();
 
         if (cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode)
         {
             DrawAuthenticationInput(
-                text.Get("管理员一次性重置码（必填）", "Administrator one-time reset code (required)"),
-                text.Get("输入管理员提供的一次性重置码", "Enter the one-time code from an administrator"),
+                text.Get("一次性重置码（必填）", "One-time reset code (required)"),
+                text.Get("输入机器人或管理员提供的重置码", "Enter the code from the bot or an administrator"),
                 "cloud-reset-code",
                 ref cloudResetCode,
                 96);
@@ -2344,13 +2356,20 @@ public sealed partial class ControlCenterWindow : Window
             ref cloudPasswordConfirmation,
             128,
             ImGuiInputTextFlags.Password);
+        if (cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode)
+        {
+            DrawAuthenticationMutedText(text.Get(
+                "已建立恢复保护的账号不需要填写密钥，原有云备份会继续保留。",
+                "Protected accounts need no recovery key; existing cloud backups stay available."));
+        }
         if (hasLocalRecoveryKey)
         {
             DrawAuthenticationMutedText(text.Get(
                 "已检测到本机保存的恢复密钥，将自动用于改密和解锁原有云备份。",
                 "The saved recovery key on this PC will reset the password and unlock existing cloud backups."));
         }
-        else
+        else if (cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey ||
+                 ImGui.CollapsingHeader(text.Get("旧账号：手动填写恢复密钥（可选）", "Legacy account: enter recovery key (optional)")))
         {
             DrawAuthenticationInput(
                 text.Get("恢复密钥（必填）", "Recovery key (required)"),
@@ -2377,7 +2396,9 @@ public sealed partial class ControlCenterWindow : Window
         if (DrawAuthenticationPrimaryButton(
                 text.Get("确认重置密码", "Reset password"),
                 !busy && passwordsMatch && resetCredentialIsValid &&
-                (hasLocalRecoveryKey || !string.IsNullOrWhiteSpace(cloudRecoveryKey))))
+                !string.IsNullOrWhiteSpace(cloudUsername) &&
+                (cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode ||
+                 hasLocalRecoveryKey || !string.IsNullOrWhiteSpace(cloudRecoveryKey))))
         {
             cloud.ResetPassword(new CloudPasswordResetRequest(
                 cloudUsername,
@@ -2566,6 +2587,8 @@ public sealed partial class ControlCenterWindow : Window
     private void DrawSignedInCloud(CloudClientSnapshot snapshot)
     {
         DrawCloudSummaryCard(snapshot);
+        ImGui.Spacing();
+        DrawCloudDiscordRecovery(snapshot);
 
         if (!string.IsNullOrWhiteSpace(snapshot.RecoveryKeyToSave))
         {

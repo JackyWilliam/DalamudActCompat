@@ -735,7 +735,9 @@ public sealed class Plugin : IDalamudPlugin
                 backupId => StartCloudOperation(
                     token => cloudClient.PreviewRestoreAsync(backupId, token)),
                 StartCloudRestore,
-                StartCloudRollback));
+                StartCloudRollback,
+                () => StartCloudOperation(cloudClient.CreateDiscordLinkCodeAsync),
+                cloudClient.HasRecoveryKeyFor));
         friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
         friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
             playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),

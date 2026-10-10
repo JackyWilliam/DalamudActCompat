@@ -51,6 +51,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--account-recovery-only", StringComparer.Ordinal))
+    {
+        await CloudAccountRecoverySmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--cactbot-render-only", StringComparer.Ordinal) ||
         args.Contains("--cactbot-frame-only", StringComparer.Ordinal))
     {
@@ -285,6 +290,7 @@ try
     await ValidateRealConfigurationBackupFixtureAsync(testRoot);
     ValidateCloudKeyEnvelopeAndCredentialProtection(testRoot);
     await CloudOperationGuardSmokeTests.RunAsync(FindProjectRoot());
+    await CloudAccountRecoverySmokeTests.RunAsync(testRoot);
     ValidateCloudActivationKeyHelp();
     await ValidateCloudApiContractAsync(testRoot);
     await AdministratorSmokeTests.RunAsync(testRoot);
@@ -4821,7 +4827,7 @@ static void ValidateControlCenterPresentation()
         Regex.Matches(controlCenterSource, "ref cloudRememberLogin\\);").Count == 1 &&
         !controlCenterSource.Contains("重置后自动登录", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复密钥自助改密", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("管理员一次性重置码（必填）", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("一次性重置码（必填）", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复密钥（必填）", StringComparison.Ordinal) &&
         controlCenterSource.Contains("将自动用于改密和解锁原有云备份", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&

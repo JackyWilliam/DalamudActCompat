@@ -20,7 +20,9 @@ internal sealed record CloudClientSnapshot(
     CloudBanNotice? ActiveBan = null,
     bool HasSavedRecoveryKey = false,
     CloudAdministratorStatus? Administrator = null,
-    CloudSponsorStatus? Sponsor = null)
+    CloudSponsorStatus? Sponsor = null,
+    CloudRecoveryStatus? Recovery = null,
+    CloudDiscordLinkCode? DiscordLinkCode = null)
 {
     public static CloudClientSnapshot SignedOut(string message = "请登录或注册账号。")
         => new(
@@ -335,16 +337,20 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         CancellationToken cancellationToken)
         => RunExclusiveAsync("正在重置密码…", async token =>
         {
-            var effectiveRecoveryKey = ResolveRecoveryKey(username, recoveryKey);
-            var envelope = envelopeService.Create(effectiveRecoveryKey, newPassword);
+            // A bot/support code authorizes recovery of the protected original key.
+            // Only the legacy key flow requires a locally available key up front.
+            var effectiveRecoveryKey = method == CloudPasswordResetMethod.RecoveryKey ||
+                                       !string.IsNullOrWhiteSpace(recoveryKey) || HasRecoveryKeyFor(username)
+                ? ResolveRecoveryKey(username, recoveryKey) : null;
+            var envelope = effectiveRecoveryKey is null ? null : envelopeService.Create(effectiveRecoveryKey, newPassword);
             var deviceId = machineIdentity.GetDeviceId();
             var response = method == CloudPasswordResetMethod.RecoveryKey
                 ? await apiClient.ResetPasswordWithRecoveryAsync(
                         username.Trim(),
-                        envelopeService.CreateRecoveryVerifier(effectiveRecoveryKey),
+                        envelopeService.CreateRecoveryVerifier(effectiveRecoveryKey!),
                         newPassword,
                         deviceId,
-                        envelope,
+                        envelope!,
                         token)
                     .ConfigureAwait(false)
                 : await apiClient.ResetPasswordAsync(
@@ -355,6 +361,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                         envelope,
                         token)
                     .ConfigureAwait(false);
+            if (effectiveRecoveryKey is null)
+                effectiveRecoveryKey = envelopeService.Open(response.KeyEnvelope ??
+                    throw new InvalidOperationException("服务器未返回原有云备份的恢复凭据，无法完成登录。"), newPassword);
             ValidateReturnedEnvelope(response, newPassword, effectiveRecoveryKey);
             var authentication = SaveAuthentication(
                 response,
@@ -806,7 +815,8 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             return;
         }
         if (exception is CloudApiException unauthorized &&
-            unauthorized.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            unauthorized.StatusCode == System.Net.HttpStatusCode.Unauthorized &&
+            unauthorized.Code is "unauthorized" or "session_expired")
         {
             InvalidateSessionPreservingRecoveryKey("登录已失效，请重新登录。", isError: true);
             return;
@@ -897,7 +907,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             credentials = saved;
             // A fresh authentication must fetch its own grant, even when the
             // username is unchanged (the administrator may have revoked it).
-            snapshot = snapshot with { Sponsor = null };
+            snapshot = snapshot with { Sponsor = null, Recovery = null, DiscordLinkCode = null };
             friendsSessionGeneration++;
             storedAccount = persisted ? saved : null;
             persistCurrentAccount = persisted;
@@ -936,7 +946,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 return candidate.RecoveryKey;
             }
         }
-        throw new InvalidOperationException("请输入注册时保存的恢复密钥。旧备份无法由服务器解密。");
+        throw new InvalidOperationException("此方式需要原恢复密钥；已绑定 Discord 的账号也可以使用机器人重置码找回。");
     }
 
     private CloudStoredCredentials RequireCredentials()
@@ -1092,6 +1102,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         CancellationToken cancellationToken)
     {
         await Task.WhenAll(
+                RunRecoveryProtectionMonitorAsync(current, cancellationToken),
                 RunEventMonitorAsync(current, cancellationToken),
                 RunHeartbeatMonitorAsync(current, cancellationToken),
                 RunFriendConnectionAsync(current, cancellationToken))
@@ -1167,6 +1178,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 // Old servers grant no sponsor skins. Apply both authorities under
                 // the same token/version guard so a late response cannot cross accounts.
                 ApplyAccountStatus(current, status.Administrator ?? new(), roleVersion, status.Sponsor ?? new());
+                ApplyRecoveryStatus(current, status.Recovery);
             }
             catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
             {
@@ -1405,7 +1417,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 storedAccount is not null,
                 invitations?.Administrator ?? (snapshot.Username == current.Username ? snapshot.Administrator : null),
                 invitations is not null ? invitations.Sponsor ?? new() :
-                    snapshot.Username == current.Username ? snapshot.Sponsor : null);
+                    snapshot.Username == current.Username ? snapshot.Sponsor : null,
+                snapshot.Username == current.Username ? snapshot.Recovery : null,
+                snapshot.Username == current.Username ? snapshot.DiscordLinkCode : null);
         }
     }
 
