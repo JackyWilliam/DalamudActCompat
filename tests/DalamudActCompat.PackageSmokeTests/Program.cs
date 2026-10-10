@@ -51,6 +51,17 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--cactbot-render-only", StringComparer.Ordinal) ||
+        args.Contains("--cactbot-frame-only", StringComparer.Ordinal))
+    {
+        await CactbotRenderRecoverySmokeTests.RunLiveAsync(testRoot,
+            Path.Combine(FindProjectRoot(), "src", "DalamudActCompat.ActRuntime", "bin", "Release",
+                "net10.0-windows", "win-x64", "WebView2Loader.dll"),
+            args.Contains("--cactbot-frame-only", StringComparer.Ordinal));
+        CactbotRenderRecoverySmokeTests.Run();
+        return 0;
+    }
+    CactbotRenderRecoverySmokeTests.Run();
     if (args.Contains("--overlay-manager-only", StringComparer.Ordinal))
     {
         OverlayManagerSmokeTests.Run(Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });

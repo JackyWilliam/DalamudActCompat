@@ -33,6 +33,7 @@ internal sealed class HtmlOverlayForm : IDisposable
     private const int WindowMessageNonClientHitTest = 0x0084;
     private const int HitTestTransparent = -1;
     private const string CactbotRenderMessagePrefix = "dalamud-act-compat:cactbot-render:";
+    private const string CactbotFrameMessagePrefix = "dalamud-act-compat:cactbot-frame:";
     private const string InputRegionMessagePrefix = "dalamud-act-compat:input-regions:";
     private const string InputRegionDiagnosticMessagePrefix =
         "dalamud-act-compat:input-region-diagnostic:";
@@ -117,10 +118,12 @@ internal sealed class HtmlOverlayForm : IDisposable
               state.width > 0 &&
               state.height > 0;
             let reportedHealthyAlert = false;
-            const inspectAlert = (alert) => requestAnimationFrame(() => {
+            // Layout repair must still run when Chromium stops delivering animation frames.
+            // Removed alerts can otherwise arrive much later and look like invisible live text.
+            const inspectAlert = (alert) => {
               const container = document.getElementById('container');
               const popup = document.getElementById('popup-text-container');
-              if (!container || !popup || !alert)
+              if (!container || !popup || !alert?.isConnected || !popup.contains(alert))
                 return;
 
               const alertsDisabled = container.classList.contains('hide-alerts');
@@ -147,7 +150,7 @@ internal sealed class HtmlOverlayForm : IDisposable
                 report(detail);
                 reportedHealthyAlert = true;
               }
-            });
+            };
             for (const holder of document.querySelectorAll('#popup-text-container .holder')) {
               new MutationObserver((mutations) => {
                 for (const mutation of mutations) {
@@ -163,6 +166,42 @@ internal sealed class HtmlOverlayForm : IDisposable
             document.addEventListener('DOMContentLoaded', install, { once: true });
           else
             install();
+        })();
+        """;
+    internal const string CactbotFrameHealthScript =
+        """
+        (() => {
+          if (window.top !== window || window.__dalamudActCompatFrameHealthInstalled)
+            return;
+          window.__dalamudActCompatFrameHealthInstalled = true;
+          let pending = false;
+          let stalled = false;
+          const report = (state) => window.chrome?.webview?.postMessage(
+            'dalamud-act-compat:cactbot-frame:' + state);
+          // A timer can remain alive (including TTS) while animation frames stop.
+          // Probe sparsely instead of adding another per-frame loop to every overlay.
+          setInterval(() => {
+            if (pending)
+              return;
+            pending = true;
+            const started = performance.now();
+            const frame = requestAnimationFrame(() => {
+              clearTimeout(timeout);
+              pending = false;
+              if (stalled)
+                report('resumed');
+              stalled = false;
+            });
+            const timeout = setTimeout(() => {
+              cancelAnimationFrame(frame);
+              pending = false;
+              // Sleep/debugger pauses delay both clocks; wait for a fresh probe afterwards.
+              if (performance.now() - started > 10000)
+                return;
+              stalled = true;
+              report('stalled');
+            }, 5000);
+          }, 2000);
         })();
         """;
     internal const string OverlayInputRegionScript =
@@ -531,6 +570,8 @@ internal sealed class HtmlOverlayForm : IDisposable
     private string browserStateDetail = string.Empty;
     private int recoveryScheduled;
     private int browserRecoveryCount;
+    private readonly CactbotFrameRecoveryPolicy frameRecoveryPolicy = new();
+    private bool awaitingRecoveredFrame;
     private int disposeStarted;
     private int shutdownFinalized;
     private int resetLayoutPending;
@@ -1343,6 +1384,10 @@ internal sealed class HtmlOverlayForm : IDisposable
             {
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(
                     CactbotResponsiveAlertLayoutScript);
+                if (overlayMode)
+                {
+                    await core.AddScriptToExecuteOnDocumentCreatedAsync(CactbotFrameHealthScript);
+                }
             }
 
             SetBrowserState(BrowserState.Ready, "浏览器已就绪");
@@ -1454,11 +1499,15 @@ internal sealed class HtmlOverlayForm : IDisposable
 
     private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args)
     {
-        log.Error($"HTML overlay browser process failed: {args.ProcessFailedKind}; {args.Reason}");
+        log.Error($"HTML overlay browser process failed: {args.ProcessFailedKind}; {args.Reason}; " +
+                  $"window={title}; exitCode={args.ExitCode}");
         if (disposing)
         {
             return;
         }
+
+        // WebView2 restarts its GPU process itself. The frame probe restores a stalled
+        // visible surface without reloading the page and losing the active encounter.
 
         if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
         {
@@ -1570,6 +1619,12 @@ internal sealed class HtmlOverlayForm : IDisposable
             return;
         }
 
+        if (message.StartsWith(CactbotFrameMessagePrefix, StringComparison.Ordinal))
+        {
+            HandleCactbotFrameHealth(message[CactbotFrameMessagePrefix.Length..]);
+            return;
+        }
+
         if (debugMode &&
             message.StartsWith(InputRegionDiagnosticMessagePrefix, StringComparison.Ordinal))
         {
@@ -1613,6 +1668,48 @@ internal sealed class HtmlOverlayForm : IDisposable
                 0,
                 0,
                 SwpNoSize | SwpNoMove | SwpNoActivate);
+        }
+    }
+
+    private void HandleCactbotFrameHealth(string state)
+    {
+        if (disposing || !overlayMode || !IsCactbotRaidbossPage(pageUri))
+        {
+            return;
+        }
+
+        if (state == "resumed")
+        {
+            if (awaitingRecoveredFrame)
+            {
+                awaitingRecoveredFrame = false;
+                log.Information($"Cactbot animation frames resumed: {title}.");
+            }
+            return;
+        }
+
+        if (state != "stalled" || !desiredVisible || EffectiveHidden ||
+            browserState != BrowserState.Loaded ||
+            form is not { Visible: true, WindowState: FormWindowState.Normal } ||
+            webView is not { Visible: true, IsDisposed: false } ||
+            !frameRecoveryPolicy.TryRecover(Environment.TickCount64))
+        {
+            return;
+        }
+
+        try
+        {
+            // Re-synchronize the existing controller's visibility. Replacing the WebView
+            // or reloading would discard Cactbot's in-memory timeline and trigger state.
+            webView.Visible = false;
+            webView.Visible = true;
+            webView.Invalidate();
+            awaitingRecoveredFrame = true;
+            log.Warning($"Cactbot animation frames stalled; refreshed the existing browser surface: {title}.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, $"Could not refresh the stalled Cactbot browser surface: {title}.");
         }
     }
 
