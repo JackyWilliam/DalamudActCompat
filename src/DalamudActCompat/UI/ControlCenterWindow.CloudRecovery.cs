@@ -5,10 +5,22 @@ namespace DalamudActCompat.UI;
 
 public sealed partial class ControlCenterWindow
 {
+    private const string CloudDiscordInstallUrl = "https://discord.com/oauth2/authorize?client_id=1558610952998359170&integration_type=1&scope=applications.commands";
+
+    private void DrawCloudDiscordEntry()
+    {
+        // Keep the bot reachable even after logout, without putting an account
+        // identifier or a one-time recovery code into the external URL.
+        if (DactTheme.Button(text.Get("打开 Discord 机器人", "Open Discord bot")))
+            OpenUrl(CloudDiscordInstallUrl);
+        ImGui.TextWrapped(text.Get("添加 DACT 后，在私聊中输入 /dact 查看命令。", "Add DACT, then type /dact in a private chat to see its commands."));
+    }
+
     private void DrawCloudDiscordRecovery(CloudClientSnapshot snapshot)
     {
         ImGui.Separator();
         ImGui.TextUnformatted(text.Get("Discord 账号找回", "Discord account recovery"));
+        DrawCloudDiscordEntry();
         var recovery = snapshot.Recovery;
         ImGui.TextWrapped(recovery?.Protected == true
             ? text.Get("云备份恢复保护已开启：改密后可继续读取原备份。", "Cloud recovery protection is ready: password resets preserve existing backups.")

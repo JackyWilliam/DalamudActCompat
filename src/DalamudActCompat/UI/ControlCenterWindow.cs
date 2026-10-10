@@ -2335,6 +2335,8 @@ public sealed partial class ControlCenterWindow : Window
 
         if (cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode)
         {
+            DrawCloudDiscordEntry();
+            ImGui.Spacing();
             DrawAuthenticationInput(
                 text.Get("一次性重置码（必填）", "One-time reset code (required)"),
                 text.Get("输入机器人或管理员提供的重置码", "Enter the code from the bot or an administrator"),
