@@ -21,6 +21,7 @@ public sealed class HostIpcClient : IAsyncDisposable
     private string? publishedCombatLogDirectory;
     private readonly string expectedTtsSource;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
+    private readonly object statusLock = new();
     private readonly BoundedHostMessageQueue outbound = new();
     private readonly ConcurrentQueue<HostDiagnostic> diagnostics = new();
     private CancellationTokenSource? sessionCancellation;
@@ -159,16 +160,23 @@ public sealed class HostIpcClient : IAsyncDisposable
                     bridgeOutput.ConnectAsync(TimeSpan.FromSeconds(10), cancellationToken))
                 .ConfigureAwait(false);
             sessionCancellation = new CancellationTokenSource();
+            // A quick stop/reconnect may replace the fields before Task.Run starts.
+            // Each loop must retain the stream and token of its own session.
+            var input = bridgeInput;
+            var output = bridgeOutput;
+            var token = sessionCancellation.Token;
+            // Publish Connected before loops can report a fault, so startup cannot
+            // overwrite an immediate disconnect with a healthy-looking status.
+            status = HostConnectionStatus.Connected;
             writerLoop = Task.Run(
-                () => WriteLoopAsync(bridgeOutput, sessionCancellation.Token),
+                () => ObserveLoopAsync(() => WriteLoopAsync(output, token), token),
                 CancellationToken.None);
             readerLoop = Task.Run(
-                () => ReadLoopAsync(bridgeInput, sessionCancellation.Token),
+                () => ReadLoopAsync(input, token),
                 CancellationToken.None);
             watchdogLoop = Task.Run(
-                () => WatchdogLoopAsync(sessionCancellation.Token),
+                () => ObserveLoopAsync(() => WatchdogLoopAsync(token), token),
                 CancellationToken.None);
-            status = HostConnectionStatus.Connected;
             if (!TryEnqueue(
                     HostMessageTypes.Hello,
                     HostMessagePriority.Control,
@@ -259,12 +267,12 @@ public sealed class HostIpcClient : IAsyncDisposable
                     }
                 }
             }
-
-            await StopUnlockedAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            lifecycleLock.Release();
+            // Cancelling the graceful ACK wait must not cancel mandatory pipe cleanup.
+            try { await StopUnlockedAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally { lifecycleLock.Release(); }
         }
     }
 
@@ -358,6 +366,18 @@ public sealed class HostIpcClient : IAsyncDisposable
         }
     }
 
+    private async Task ObserveLoopAsync(Func<Task> loop, CancellationToken cancellationToken)
+    {
+        try { await loop().ConfigureAwait(false); }
+        catch (Exception) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            // A serialization/write or watchdog failure can leave incoming heartbeats
+            // healthy forever. Report it immediately so the supervisor can recover.
+            MarkFaulted(ex);
+        }
+    }
+
     private async Task ReadLoopAsync(Stream source, CancellationToken cancellationToken)
     {
         try
@@ -392,7 +412,7 @@ public sealed class HostIpcClient : IAsyncDisposable
                 ApplyMessage(envelope);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
@@ -406,6 +426,7 @@ public sealed class HostIpcClient : IAsyncDisposable
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (Status == HostConnectionStatus.Faulted) return;
             // Follow the parser's actual writer, including a failed folder change that
             // leaves the old writer active. A coalesced state frame cannot flood IPC.
             var directory = combatLogDirectory();
@@ -437,9 +458,15 @@ public sealed class HostIpcClient : IAsyncDisposable
                 return;
             }
 
-            status = elapsed >= HostProtocol.SuspectAfter
-                ? HostConnectionStatus.Suspect
-                : HostConnectionStatus.Connected;
+            lock (statusLock)
+            {
+                // A writer may fail during this tick. A healthy heartbeat must not
+                // undo that terminal fault or admit more unsendable messages.
+                if (Status == HostConnectionStatus.Faulted) return;
+                status = elapsed >= HostProtocol.SuspectAfter
+                    ? HostConnectionStatus.Suspect
+                    : HostConnectionStatus.Connected;
+            }
         }
     }
 
@@ -623,12 +650,11 @@ public sealed class HostIpcClient : IAsyncDisposable
 
     private void MarkFaulted(Exception exception)
     {
-        if (Status == HostConnectionStatus.Faulted)
+        lock (statusLock)
         {
-            return;
+            if (Status == HostConnectionStatus.Faulted) return;
+            status = HostConnectionStatus.Faulted;
         }
-
-        status = HostConnectionStatus.Faulted;
         logger.Error(exception, "ACT Host IPC faulted; FFXIV remains isolated.");
         Faulted?.Invoke(this, exception);
     }

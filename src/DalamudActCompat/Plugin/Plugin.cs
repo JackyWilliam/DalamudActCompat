@@ -362,7 +362,8 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1,
             enableMemoryProtection: true,
-            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null);
+            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
+            pluginDirectoryProvider: () => paths.ActPluginDirectory);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
@@ -378,7 +379,8 @@ public sealed class Plugin : IDalamudPlugin
             matchaIpcClient,
             logger,
             matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1,
-            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null);
+            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
+            pluginDirectoryProvider: () => paths.ActPluginDirectory);
         matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
@@ -395,7 +397,8 @@ public sealed class Plugin : IDalamudPlugin
             paths.ConfigDirectory,
             genericIpcClient,
             logger,
-            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null);
+            packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
+            pluginDirectoryProvider: () => paths.ActPluginDirectory);
         genericHostSupervisor.MatchaTtsRequested += OnGenericTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),
@@ -3256,7 +3259,7 @@ public sealed class Plugin : IDalamudPlugin
         if (!IsDactAccessAllowed()) return;
         var target = GetInstalledPluginHost(pluginId);
         if (target == genericHostSupervisor)
-            await StartGenericHostAsync(cancellationToken).ConfigureAwait(false);
+            await StartGenericHostAsync(cancellationToken, userRequested: true).ConfigureAwait(false);
         else
         {
             if (target == hostSupervisor)
@@ -3265,7 +3268,8 @@ public sealed class Plugin : IDalamudPlugin
                 await hostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
             }
             if (hostSupervisor.Snapshot.State == HostSupervisorState.Running)
-                await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true).ConfigureAwait(false);
+                await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true,
+                    userRequested: target == matchaHostSupervisor).ConfigureAwait(false);
         }
     }
 
@@ -4151,12 +4155,17 @@ public sealed class Plugin : IDalamudPlugin
             {
                 return;
             }
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(45));
-            await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
-            await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
-            await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
-            await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+            await HostStartupSequence.StartAsync(
+                async token =>
+                {
+                    if (!await hostSupervisor.StartAutomaticallyAsync(token).ConfigureAwait(false)) return false;
+                    await hostSupervisor.WaitForPluginStartupAsync(token).ConfigureAwait(false);
+                    return true;
+                },
+                token => StartMatchaAfterSharedHostAsync(token, throwOnFailure: true),
+                token => StartGenericHostAsync(token),
+                (role, ex) => logger.Error(ex, $"ACT Host '{role}' startup failed; other independent roles may continue."),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -4180,7 +4189,8 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StartMatchaAfterSharedHostAsync(
         CancellationToken cancellationToken,
-        bool throwOnFailure = false)
+        bool throwOnFailure = false,
+        bool userRequested = false)
     {
         if (!IsDactAccessAllowed())
         {
@@ -4209,7 +4219,14 @@ public sealed class Plugin : IDalamudPlugin
                 actRuntime.SetNetworkSentCaptureEnabled(false);
                 return;
             }
-            await matchaHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+            if (userRequested)
+                await matchaHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+            else if (!await matchaHostSupervisor.StartAutomaticallyAsync(cancellationToken).ConfigureAwait(false))
+            {
+                Volatile.Write(ref matchaEventsEnabled, 0);
+                actRuntime.SetNetworkSentCaptureEnabled(false);
+                return;
+            }
             await matchaHostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
             logger.Information(
                 "Matcha dedicated Host started after the shared ACT Host completed plugin initialization.");
@@ -4228,7 +4245,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private async Task StartGenericHostAsync(CancellationToken cancellationToken)
+    private async Task StartGenericHostAsync(CancellationToken cancellationToken, bool userRequested = false)
     {
         if (!IsDactAccessAllowed())
         {
@@ -4244,7 +4261,10 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        await genericHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (userRequested)
+            await genericHostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+        else if (!await genericHostSupervisor.StartAutomaticallyAsync(cancellationToken).ConfigureAwait(false))
+            return;
         await genericHostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
         logger.Information(
             "Generic ACT Host is running for user-installed non-specialized plugins.");
@@ -4299,7 +4319,7 @@ public sealed class Plugin : IDalamudPlugin
                 }
 
                 await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
-                await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+                await StartMatchaAfterSharedHostAsync(timeout.Token, userRequested: true).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -4327,7 +4347,7 @@ public sealed class Plugin : IDalamudPlugin
                     await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
                 }
 
-                await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                await StartGenericHostAsync(timeout.Token, userRequested: true).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -4488,7 +4508,7 @@ public sealed class Plugin : IDalamudPlugin
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                await hostSupervisor.StopAsync(timeout.Token, userRequested: true).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -4511,7 +4531,7 @@ public sealed class Plugin : IDalamudPlugin
                 Volatile.Write(ref matchaEventsEnabled, 0);
                 actRuntime.SetNetworkSentCaptureEnabled(false);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                await matchaHostSupervisor.StopAsync(timeout.Token, userRequested: true).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -4532,7 +4552,7 @@ public sealed class Plugin : IDalamudPlugin
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                await genericHostSupervisor.StopAsync(timeout.Token, userRequested: true).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

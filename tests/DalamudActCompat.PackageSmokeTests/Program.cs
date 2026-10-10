@@ -46,11 +46,21 @@ using RainbowMage.OverlayPlugin.MemoryProcessors.InCombat;
 using RainbowMage.OverlayPlugin.MemoryProcessors.Party;
 using RainbowMage.OverlayPlugin.WebSocket;
 
+if (args.Contains("--host-stubborn-child", StringComparer.Ordinal))
+{
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return 0;
+}
 var testRoot = Path.Combine(Path.GetTempPath(), $"DalamudActCompat-{Guid.NewGuid():N}");
 Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--host-lifecycle-only", StringComparer.Ordinal))
+    {
+        await HostLifecycleSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     await ManualPluginPackageSmokeTests.RunAsync(testRoot);
     if (args.Contains("--manual-plugins-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--account-recovery-only", StringComparer.Ordinal))
@@ -206,6 +216,7 @@ try
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
     ValidateHostMemoryProtectionPolicy();
+    await HostLifecycleSmokeTests.RunAsync(testRoot);
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     await ValidateResourcePackLifecycleAsync(testRoot);
     ValidateSilverDasherPermissionIsolation();
@@ -566,7 +577,13 @@ finally
 {
     if (Directory.Exists(testRoot))
     {
-        Directory.Delete(testRoot, true);
+        // Exited Windows child processes can briefly retain their executable image.
+        for (var attempt = 0; ; attempt++)
+        {
+            try { Directory.Delete(testRoot, true); break; }
+            catch (Exception ex) when (attempt < 9 && ex is IOException or UnauthorizedAccessException)
+            { await Task.Delay(100); }
+        }
     }
 }
 
