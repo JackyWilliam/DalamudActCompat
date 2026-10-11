@@ -131,6 +131,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IObjectTable objectTable;
     private readonly IPartyList partyList;
     private readonly IPlayerState playerState;
+    private readonly UltimateClearState ultimateClearState;
     private readonly Channel<HostCommandInvocation> hostCommandQueue =
         Channel.CreateBounded<HostCommandInvocation>(new BoundedChannelOptions(64)
         {
@@ -492,6 +493,10 @@ public sealed class Plugin : IDalamudPlugin
 
         text = new UiText(configuration);
         DactTheme.GameAssets = new GameSkinAssets(textureProvider, dataManager);
+        DactTheme.UltimateAssets = new UltimateSkinAssets(icon =>
+            textureProvider.GetFromGameIcon(new GameIconLookup(icon)).TryGetWrap(out var wrap, out _) ? wrap : null);
+        ultimateClearState = new UltimateClearState(clientState, playerState);
+        SkinCatalog.UltimateUnlocked = () => cloudClient.Snapshot is { IsSignedIn: true, ActiveBan: null, UltimateSkinsUnlocked: true };
         liquidGlass = new LiquidGlassRenderer(error => logger.Error(error, "Liquid glass rendering failed; using the fallback surface."));
         DactTheme.GlassRenderer = liquidGlass;
         var assetDirectory = Path.Combine(
@@ -880,6 +885,8 @@ public sealed class Plugin : IDalamudPlugin
         DactTheme.GlassRenderer = null;
         liquidGlass.Dispose();
         DactTheme.GameAssets = null;
+        DactTheme.UltimateAssets = null;
+        SkinCatalog.UltimateUnlocked = () => false;
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
@@ -5099,6 +5106,10 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         SynchronizeCloudAuthenticationState();
+        var skinAccount = cloudClient.Snapshot;
+        if (skinAccount is { CanUseDact: true, UltimateSkinsUnlocked: false, SkinAccountId: { } skinAccountId } &&
+            ultimateClearState.CompletedDuty() is > 0 and var completedUltimate)
+            cloudClient.ObserveUltimateClear(skinAccountId, completedUltimate);
         if (Environment.TickCount64 >= nextFriendDutyCheck)
         {
             nextFriendDutyCheck = Environment.TickCount64 + 500;

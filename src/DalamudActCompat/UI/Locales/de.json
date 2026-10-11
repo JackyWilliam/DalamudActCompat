@@ -1514,5 +1514,17 @@
   "This template is already listed; select it to view or open it.": "Diese Vorlage ist bereits aufgelistet. Wähle sie zum Anzeigen oder Öffnen aus.",
   "Back": "Zurück",
   "Parser: {0}": "Parser: {0}",
-  "New messages · Jump to latest": "Neue Nachrichten · Zum Ende"
+  "New messages · Jump to latest": "Neue Nachrichten · Zum Ende",
+  "The Unending Coil of Bahamut": "The Unending Coil of Bahamut",
+  "The Weapon's Refrain": "The Weapon's Refrain",
+  "The Epic of Alexander": "The Epic of Alexander",
+  "Dragonsong's Reprise": "Dragonsong's Reprise",
+  "The Omega Protocol": "The Omega Protocol",
+  "Futures Rewritten": "Futures Rewritten",
+  "Clear any ultimate to unlock": "Schließen Sie einen beliebigen fatalen Raid ab, um freizuschalten",
+  "Drawn from this ultimate's adventurer plate: colors, emblem and buttons, with the plate's backdrop behind the Control Center.": "Basierend auf der Abenteurerplakette dieses fatalen Raids: Farben, Emblem und Schaltflächen, mit dem Plakettenhintergrund hinter dem Kontrollzentrum.",
+  "Clearing any one ultimate unlocks all six.": "Der Abschluss eines beliebigen fatalen Raids schaltet alle sechs frei.",
+  "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "Melde dich mit einem Charakter an, der einen ultimativen Kampf abgeschlossen hat, um alle sechs Designs dauerhaft für dieses Konto freizuschalten.",
+  "Unlocked on this device. Syncing to your account for use on other devices.": "Auf diesem Gerät freigeschaltet. Wird mit deinem Konto synchronisiert, damit du es auf anderen Geräten nutzen kannst.",
+  "The unlock has not finished syncing. It will retry automatically.": "Die Freischaltung wurde noch nicht synchronisiert. Ein neuer Versuch erfolgt automatisch."
 }

@@ -431,6 +431,11 @@ public sealed partial class ControlCenterWindow : Window
         try
         {
             var cloudSnapshot = cloud.GetSnapshot();
+            // Only the control centre carries the plate ornaments; they stay anchored to this
+            // window (not the friends drawer) and follow its fade through the style alpha.
+            if (DactTheme.Palette.Ultimate is { } ultimate)
+                UltimateSkins.DrawOrnaments(ImGui.GetBackgroundDrawList(), ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(),
+                    ultimate, Math.Max(.75f, ImGui.GetFontSize() / 17f), ImGui.GetTime(), DactTheme.UltimateAssets);
             Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), ImGui.GetStyle().Alpha, ImGuiP.GetCurrentWindow().ID);
             DrawWindowChrome(cloudSnapshot);
             DrawCloudQuickPopup(cloudSnapshot);
@@ -595,7 +600,8 @@ public sealed partial class ControlCenterWindow : Window
                 onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
                 friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false,
                 logoAction: () => DiscoverSkin(skinDiscoveries.ClickLogo(configuration.Appearance, Environment.TickCount64)),
-                versionAction: () => DiscoverSkin(skinDiscoveries.ClickVersion(configuration.Appearance, Environment.TickCount64)), text: text))
+                versionAction: () => DiscoverSkin(skinDiscoveries.ClickVersion(configuration.Appearance, Environment.TickCount64)), text: text,
+                centerRunning: parserStatus.State == ParserState.Running))
         {
             HideAnimated();
         }
@@ -703,7 +709,7 @@ public sealed partial class ControlCenterWindow : Window
             }
             if (meterVisible)
             {
-                ImGui.PopStyleColor(4);
+                PopOpenWindowButtonStyle();
             }
             ImGui.SameLine();
             if (DactTheme.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
@@ -2852,7 +2858,7 @@ public sealed partial class ControlCenterWindow : Window
 
         if (visible)
         {
-            ImGui.PopStyleColor(4);
+            PopOpenWindowButtonStyle();
         }
     }
 
@@ -2866,6 +2872,14 @@ public sealed partial class ControlCenterWindow : Window
         DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.56f, 0.16f, 0.18f, 1));
         DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
         DactTheme.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
+        // Ultimate skins draw open-window buttons with their lit state, not a recoloured fill.
+        DactTheme.OpenButtonDepth++;
+    }
+
+    private static void PopOpenWindowButtonStyle()
+    {
+        DactTheme.OpenButtonDepth--;
+        ImGui.PopStyleColor(4);
     }
 
     private static string BuildVersionLabel()

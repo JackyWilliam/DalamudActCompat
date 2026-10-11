@@ -1514,5 +1514,17 @@
   "This template is already listed; select it to view or open it.": "Ce modèle figure déjà dans la liste ; sélectionnez-le pour le consulter ou l’ouvrir.",
   "Back": "Retour",
   "Parser: {0}": "Analyseur : {0}",
-  "New messages · Jump to latest": "Nouveaux messages · Voir la fin"
+  "New messages · Jump to latest": "Nouveaux messages · Voir la fin",
+  "The Unending Coil of Bahamut": "The Unending Coil of Bahamut",
+  "The Weapon's Refrain": "The Weapon's Refrain",
+  "The Epic of Alexander": "The Epic of Alexander",
+  "Dragonsong's Reprise": "Dragonsong's Reprise",
+  "The Omega Protocol": "The Omega Protocol",
+  "Futures Rewritten": "Futures Rewritten",
+  "Clear any ultimate to unlock": "Terminez n'importe quel défi fatal pour débloquer",
+  "Drawn from this ultimate's adventurer plate: colors, emblem and buttons, with the plate's backdrop behind the Control Center.": "Inspiré de la plaque d'aventurier de ce défi fatal : couleurs, emblème et boutons, avec le fond de la plaque derrière le centre de contrôle.",
+  "Clearing any one ultimate unlocks all six.": "Terminer un seul défi fatal débloque les six.",
+  "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "Connectez-vous avec un personnage ayant terminé un combat fatal pour débloquer définitivement les six thèmes pour ce compte.",
+  "Unlocked on this device. Syncing to your account for use on other devices.": "Débloqué sur cet appareil. Synchronisation avec votre compte pour les autres appareils.",
+  "The unlock has not finished syncing. It will retry automatically.": "Le déblocage n’a pas encore été synchronisé. Une nouvelle tentative sera effectuée automatiquement."
 }

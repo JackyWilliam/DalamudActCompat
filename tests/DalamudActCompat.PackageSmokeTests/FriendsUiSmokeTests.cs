@@ -580,7 +580,9 @@ internal static partial class FriendsUiSmokeTests
                 }
                 throw new Exception("Missing active drawer child: " + part);
             }
-            foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Eorzea, SkinCatalog.LiquidGlass })
+            // Ultimate drawers add a crown above the header; the list must still own all scrolling.
+            SkinCatalog.UltimateUnlocked = () => true;
+            foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Eorzea, SkinCatalog.LiquidGlass }.Concat(SkinCatalog.All.Where(s => s.Ultimate).Select(s => s.Id)))
             foreach (var scale in new[] { .75f, 1f, 1.5f, 2f })
             {
                 liveConfiguration.Appearance.SelectedSkin = skin;
@@ -615,7 +617,8 @@ internal static partial class FriendsUiSmokeTests
                 if (output is not null && scale == 1)
                     raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-list-scroll-{skin}-top.png"));
             }
-            Console.WriteLine("Friend drawer scroll: fixed header, wheel limits and independent tabs passed for three skins at 75/100/150/200% fonts.");
+            SkinCatalog.UltimateUnlocked = () => false;
+            Console.WriteLine("Friend drawer scroll: fixed header, wheel limits and independent tabs passed for nine skins at 75/100/150/200% fonts.");
             DactTheme.SetCurrent(new(), false, 0);
             if (runNotifications)
             {
@@ -623,7 +626,7 @@ internal static partial class FriendsUiSmokeTests
                 ui.Hide(); ChatScrollFrames(raster, output); NotificationFrames(api, controller, raster, output);
             }
         }
-        finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
+        finally { DactTheme.GameAssets = null; SkinCatalog.UltimateUnlocked = () => false; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
     }
     private static void BubbleBounds(NativeUiRasterizer raster, string? output)
     {
