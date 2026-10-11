@@ -35,7 +35,8 @@ internal static class BrandedWindowChrome
         bool friendsUnread = false,
         Action? logoAction = null,
         Action? versionAction = null,
-        UiText? text = null)
+        UiText? text = null,
+        bool? centerRunning = null)
     {
         DactTheme.DrawGameWindow();
         const float height = 40;
@@ -51,8 +52,23 @@ internal static class BrandedWindowChrome
         var actionRight = availableWidth - (DactTheme.Palette.Glass ? 10 * Math.Max(.75f, ImGui.GetFontSize() / 17f) : 0);
         var screenEnd = screenStart + new Vector2(availableWidth, height);
         var drawList = ImGui.GetWindowDrawList();
+        var ultimate = DactTheme.Palette.Ultimate;
+        var chromeScale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
         if (DactTheme.Palette.Glass)
             DactTheme.DrawGlassSurface(drawList, screenStart, screenEnd, 12, NavyRaised);
+        else if (ultimate is not null)
+        {
+            // The plate's title strip runs to the window edges, so paint over the
+            // window padding and redraw the rim the fill covered.
+            var windowMin = ImGui.GetWindowPos();
+            var windowMax = windowMin + ImGui.GetWindowSize();
+            var rounding = ImGui.GetStyle().WindowRounding;
+            drawList.PushClipRect(windowMin, windowMax, false);
+            UltimateSkins.DrawTitle(drawList, windowMin, new(windowMax.X, screenEnd.Y), rounding, ultimate);
+            UltimateSkins.DrawBand(drawList, new(windowMin.X, screenEnd.Y), new(windowMax.X, screenEnd.Y + 6), ultimate, chromeScale);
+            drawList.AddRect(windowMin, windowMax, ImGui.GetColorU32(ultimate.Frame), rounding);
+            drawList.PopClipRect();
+        }
         else if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             screenStart,
             screenEnd,
@@ -61,7 +77,15 @@ internal static class BrandedWindowChrome
             ImDrawFlags.RoundCornersTop);
 
         var logoTop = screenStart.Y + ((height - logoSize) * 0.5f);
-        var logoLeft = screenStart.X + horizontalPadding;
+        // Ultimate skins mount their emblem on the window corner; the logo moves aside for it.
+        var logoLeft = screenStart.X + horizontalPadding + (ultimate is null ? 0 : 12 * chromeScale);
+        if (ultimate is not null)
+        {
+            var viewport = ImGui.GetWindowViewport();
+            drawList.PushClipRect(viewport.Pos, viewport.Pos + viewport.Size, false);
+            UltimateSkins.DrawEmblem(drawList, new(ImGui.GetWindowPos().X + 1, logoTop + logoSize * .5f), 30 * chromeScale, ultimate);
+            drawList.PopClipRect();
+        }
         // Clip the texture itself so its square corners do not remain visible
         // over the rounded title chrome; the discovery hit target stays unchanged.
         drawList.AddImageRounded(
@@ -100,14 +124,23 @@ internal static class BrandedWindowChrome
                             statusWidth +
                             statusTrailingGap + friendsWidth + friendsGap;
         var versionSize = ImGui.CalcTextSize(versionLabel);
-        var centerSize = ImGui.CalcTextSize(centerLabel);
+        // Ultimate skins replace the leading dot with their running-state gauge.
+        var gauge = ultimate is not null && centerRunning is not null;
+        if (gauge) centerLabel = centerLabel.TrimStart('●', ' ');
+        var gaugeWidth = gauge ? UltimateSkins.StatusGaugeWidth(ultimate!, chromeScale) + 7 * chromeScale : 0;
+        var centerSize = ImGui.CalcTextSize(centerLabel) + new Vector2(gaugeWidth, 0);
         var centerLeft = screenStart.X + ((availableWidth - centerSize.X) * 0.5f);
         var versionLeft = screenStart.X + actionRight - trailingWidth - versionSize.X - 12;
         // On narrow/scaled windows preserve clickable controls and omit the optional
         // middle status instead of drawing it over the version or friend button.
         if (centerLeft > titleLeft + ImGui.CalcTextSize(title).X + ImGui.CalcTextSize(sectionLabel).X + 24 &&
             centerLeft + centerSize.X < versionLeft - 8)
-            drawList.AddText(new Vector2(centerLeft, textTop), ImGui.GetColorU32(DactTheme.Foreground(centerColor)), centerLabel);
+        {
+            var labelLeft = centerLeft;
+            if (gauge)
+                labelLeft += UltimateSkins.DrawStatusGauge(drawList, new(centerLeft, screenStart.Y), height, centerRunning == true, ultimate!, chromeScale, ImGui.GetTime()) + 7 * chromeScale;
+            drawList.AddText(new Vector2(labelLeft, textTop), ImGui.GetColorU32(gauge ? DactTheme.Palette.Text : DactTheme.Foreground(centerColor)), centerLabel);
+        }
         drawList.AddText(
             new Vector2(
                 versionLeft,
@@ -152,12 +185,17 @@ internal static class BrandedWindowChrome
             DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.12f, 0.29f, 0.38f, 0.96f));
             DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.16f, 0.39f, 0.50f, 1));
             DactTheme.PushStyleColor(ImGuiCol.Text, statusColor ?? NavigationText);
-            if (DactTheme.Button(
-                    $"{statusLabel}##status-{id}",
-                    new Vector2(statusWidth, actionButtonSize)))
+            DactTheme.PlainButtonDepth++;
+            try
             {
-                statusAction();
+                if (DactTheme.Button(
+                        $"{statusLabel}##status-{id}",
+                        new Vector2(statusWidth, actionButtonSize)))
+                {
+                    statusAction();
+                }
             }
+            finally { DactTheme.PlainButtonDepth--; }
             ImGui.PopStyleColor(4);
             if (!string.IsNullOrWhiteSpace(statusTooltip) && ImGui.IsItemHovered())
             {
@@ -240,8 +278,15 @@ internal static class BrandedWindowChrome
         var segmentWidth = width / labels.Count;
         var screenEnd = screenStart + new Vector2(width, height);
         var drawList = ImGui.GetWindowDrawList();
+        var ultimate = DactTheme.Palette.Ultimate;
+        var railScale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
 
-        if (DactTheme.Palette.Glass)
+        if (ultimate is not null)
+        {
+            drawList.AddRectFilled(screenStart, screenEnd, ImGui.GetColorU32(ultimate.Groove), 6);
+            drawList.AddRect(screenStart, screenEnd, ImGui.GetColorU32(ultimate.Line), 6);
+        }
+        else if (DactTheme.Palette.Glass)
             DactTheme.DrawGlassSurface(drawList, screenStart, screenEnd, height * .5f, DactTheme.Palette.Raised);
         else if (!DactTheme.Palette.Light) drawList.AddRectFilled(
             screenStart,
@@ -262,15 +307,16 @@ internal static class BrandedWindowChrome
 
         var indicatorMin = new Vector2(screenStart.X + (segmentWidth * indicatorPosition), screenStart.Y);
         var indicatorMax = indicatorMin + new Vector2(segmentWidth, height);
-        if (DactTheme.Palette.Glass)
+        // Ultimate tabs each carry their own mark instead of one sliding indicator.
+        if (ultimate is null && DactTheme.Palette.Glass)
             DactTheme.DrawGlassSurface(drawList, indicatorMin + new Vector2(2, 1), indicatorMax - new Vector2(2, 1), height * .5f,
                 DactTheme.Palette.Raised, true);
-        else if (!DactTheme.Palette.Light) drawList.AddRectFilled(
+        else if (ultimate is null && !DactTheme.Palette.Light) drawList.AddRectFilled(
             indicatorMin,
             indicatorMax,
             ImGui.GetColorU32(NavigationSelected),
             6);
-        if (!DactTheme.Palette.Light && !DactTheme.Palette.Glass) drawList.AddRectFilled(
+        if (ultimate is null && !DactTheme.Palette.Light && !DactTheme.Palette.Glass) drawList.AddRectFilled(
             new Vector2(indicatorMin.X + 8, indicatorMax.Y - 2),
             new Vector2(indicatorMax.X - 8, indicatorMax.Y),
             ImGui.GetColorU32(NavigationAccent),
@@ -291,6 +337,13 @@ internal static class BrandedWindowChrome
                 var tabTop = (height - tabHeight) * .5f;
                 texturedTab = DactTheme.DrawGameTab(drawList, itemMin + new Vector2(1, tabTop),
                     itemMin + new Vector2(segmentWidth - 2, tabTop + tabHeight), index == selectedIndex, ImGui.IsItemHovered());
+            }
+            else if (ultimate is not null)
+            {
+                if (index == selectedIndex)
+                    drawList.AddRectFilledMultiColor(itemMin + new Vector2(2, 2), itemMin + new Vector2(segmentWidth - 2, height - 2),
+                        ImGui.GetColorU32(DactTheme.Palette.Gold with { W = .09f }), ImGui.GetColorU32(DactTheme.Palette.Gold with { W = .09f }),
+                        ImGui.GetColorU32(DactTheme.Palette.Gold with { W = 0 }), ImGui.GetColorU32(DactTheme.Palette.Gold with { W = 0 }));
             }
             else if (ImGui.IsItemHovered())
             {
@@ -316,11 +369,23 @@ internal static class BrandedWindowChrome
                 : new Vector2(
                     itemMin.X + ((segmentWidth - labelSize.X) * 0.5f),
                     itemMin.Y + ((height - labelSize.Y) * 0.5f));
+            if (ultimate is not null)
+            {
+                // Label and mark are centred together; small rails tighten the gap first.
+                var markHeight = UltimateSkins.TabMarkHeight(railScale);
+                var gap = Math.Clamp(height - labelSize.Y - markHeight - 4, 1, 6 * railScale);
+                var top = itemMin.Y + (height - labelSize.Y - gap - markHeight) * .5f;
+                labelPosition.Y = top;
+                UltimateSkins.DrawTabMark(drawList, new(itemMin.X + segmentWidth * .5f, top + labelSize.Y + gap + markHeight * .5f),
+                    index == selectedIndex, ImGui.IsItemHovered(), ultimate, railScale);
+            }
             drawList.AddText(
                 labelPosition,
                 ImGui.GetColorU32(texturedTab
                     ? Vector4.One
-                    : index == selectedIndex ? NavigationAccent : NavigationText),
+                    : ultimate is not null
+                        ? index == selectedIndex || ImGui.IsItemHovered() ? DactTheme.Palette.Text : DactTheme.Palette.Muted
+                        : index == selectedIndex ? NavigationAccent : NavigationText),
                 caption);
             if (index == notificationIndex)
             {
@@ -356,9 +421,19 @@ internal static class BrandedWindowChrome
         var parentDraw = ImGui.GetWindowDrawList();
         var parentClipMin = parentDraw.GetClipRectMin();
         var parentClipMax = parentDraw.GetClipRectMax();
-        DactTheme.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
-        DactTheme.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
-        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
+        var ultimate = DactTheme.Palette.Ultimate;
+        if (ultimate is not null)
+        {
+            // Cards are slightly lighter than the page so they read as panels on the plate.
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, ultimate.Panel);
+            ImGui.PushStyleColor(ImGuiCol.Border, ultimate.Frame with { W = .62f });
+        }
+        else
+        {
+            DactTheme.PushStyleColor(ImGuiCol.ChildBg, GoldCardBackground);
+            DactTheme.PushStyleColor(ImGuiCol.Border, GoldCardBorder);
+        }
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, ultimate is null ? 8 : 6);
         var flags = allowScrolling
             ? ImGuiWindowFlags.None
             : ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
@@ -375,6 +450,16 @@ internal static class BrandedWindowChrome
             // rounded rim within the parent's clip, then restore content clipping.
             draw.PushClipRect(Vector2.Max(min, parentClipMin), Vector2.Min(max, parentClipMax), false);
             DactTheme.DrawGlassSurface(draw, min, max, 8, DactTheme.Palette.Raised);
+            draw.PopClipRect();
+        }
+        if (visible && ultimate is not null)
+        {
+            // The mark sits on the left rim at the title line, outside the child's own clip.
+            var draw = ImGui.GetWindowDrawList();
+            var min = ImGui.GetWindowPos();
+            draw.PushClipRect(parentClipMin, parentClipMax, false);
+            UltimateSkins.DrawCardMark(draw, new(min.X + .5f, min.Y + ImGui.GetStyle().WindowPadding.Y + ImGui.GetTextLineHeight() * .5f),
+                Math.Max(.75f, ImGui.GetFontSize() / 17f), ultimate);
             draw.PopClipRect();
         }
         return visible;

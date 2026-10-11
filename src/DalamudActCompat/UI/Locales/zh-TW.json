@@ -1514,5 +1514,17 @@
   "This template is already listed; select it to view or open it.": "此範本已在清單中，可直接查看與開啟。",
   "Back": "返回",
   "Parser: {0}": "解析器：{0}",
-  "New messages · Jump to latest": "有新訊息 · 回到最下方"
+  "New messages · Jump to latest": "有新訊息 · 回到最下方",
+  "The Unending Coil of Bahamut": "巴哈姆特絕境戰",
+  "The Weapon's Refrain": "究極神兵絕境戰",
+  "The Epic of Alexander": "亞歷山大絕境戰",
+  "Dragonsong's Reprise": "幻想龍詩絕境戰",
+  "The Omega Protocol": "歐米茄絕境驗證戰",
+  "Futures Rewritten": "光暗未來絕境戰",
+  "Clear any ultimate to unlock": "通關任一絕境戰即可解鎖",
+  "Drawn from this ultimate's adventurer plate: colors, emblem and buttons, with the plate's backdrop behind the Control Center.": "取自這場絕境戰的冒險者銘牌：配色、徽記與按鈕，控制中心背後顯示銘牌背景。",
+  "Clearing any one ultimate unlocks all six.": "通關任一絕境戰即可解鎖全部六款。",
+  "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "登入已通關任一絕境戰的角色，即可為目前帳號永久解鎖全部六款。",
+  "Unlocked on this device. Syncing to your account for use on other devices.": "已在本機解鎖，正在同步至帳號；完成後其他裝置也可使用。",
+  "The unlock has not finished syncing. It will retry automatically.": "解鎖紀錄尚未完成同步，將自動重試。"
 }

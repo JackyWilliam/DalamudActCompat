@@ -152,6 +152,7 @@ internal sealed class SkinSettingsPanel
             draw.AddText(ImGui.GetFont(), ImGui.GetFontSize(), labelMin, ImGui.GetColorU32(DactTheme.Palette.Text), Name(skin, settings, text), labelWidth);
             var status = active == skin.Id ? text.Get("● 正在使用", "● In use")
                 : Available(skin, settings, account) ? text.Get("已解锁", "Unlocked")
+                : skin.Ultimate ? text.Get("通关任意绝境战解锁", "Clear any ultimate to unlock")
                 : skin.EasterEgg ? text.Get("等待发现", "Undiscovered") : text.Format($"赞助 {skin.SponsorTier} 级解锁", $"Sponsor tier {skin.SponsorTier}");
             draw.AddText(ImGui.GetFont(), ImGui.GetFontSize() * .85f, min + new Vector2(labelX, 65 * scale),
                 ImGui.GetColorU32(active == skin.Id ? DactTheme.Palette.Accent : DactTheme.Palette.Muted), status, labelWidth);
@@ -173,6 +174,9 @@ internal sealed class SkinSettingsPanel
             ? text.Get("偏白的半透玻璃与墨色文字，圆润边缘折射流光。", "Milky translucent glass, dark lettering and luminous refractive edges.")
             : Discovered(skin, settings) && skin.Id == SkinCatalog.Obsidian
             ? text.Get("纯黑底色与灰白细节，让内容安静而清晰。", "Pure black surfaces with quiet, clear grayscale details.")
+            : skin.Ultimate
+            ? text.Get("取自这一绝境战的冒险者铭牌：配色、徽记与按钮，控制中心背后显示铭牌背景。",
+                "Drawn from this ultimate's adventurer plate: colors, emblem and buttons, with the plate's backdrop behind the Control Center.")
             : skin.SponsorTier > 0
             ? text.Get("浅色面板，沿用游戏原版标签、按钮和图标。", "Light panels with original game tabs, buttons and icons.")
             : skin.EasterEgg ? Discovered(skin, settings)
@@ -187,6 +191,16 @@ internal sealed class SkinSettingsPanel
             ImGui.BeginDisabled(account.IsBusy || !SignedIn(account));
             if (DactTheme.SmallButton(text.Get("刷新权益", "Refresh benefits"))) refresh();
             ImGui.EndDisabled();
+        }
+        if (skin.Ultimate)
+        {
+            ImGui.TextWrapped(Available(skin, settings, account)
+                ? text.Get("当前账号已永久解锁。", "Permanently unlocked for this account.")
+                : text.Get("登录已通关任意绝境战的角色，即可为当前账号永久解锁全部六款。", "Log in with a character who has cleared any ultimate to permanently unlock all six for this account."));
+            if (account.UltimateSkinSyncPending)
+                ImGui.TextWrapped(text.Get("已在本机解锁，正在同步到账号；完成后其他设备也可使用。", "Unlocked on this device. Syncing to your account for use on other devices."));
+            if (account.SkinSyncError is not null)
+                ImGui.TextWrapped(text.Get("解锁记录暂未完成同步，将自动重试。", "The unlock has not finished syncing. It will retry automatically."));
         }
         if (ActiveSkin(settings, account) != settings.SelectedSkin)
             ImGui.TextWrapped(text.Get("原选皮肤暂未获当前账号授权，现使用默认外观。", "Your saved skin is unavailable to this account; the default is active."));
@@ -224,7 +238,8 @@ internal sealed class SkinSettingsPanel
         var font = ImGui.GetFont();
         var fontSizeNormal = Math.Clamp(14 * unit, 8, ImGui.GetFontSize());
         var titleY = min.Y + 9 * unit;
-        draw.AddCircleFilled(new Vector2(min.X + pad + 5 * unit, titleY + 7 * unit), 5 * unit, ImGui.GetColorU32(palette.Accent));
+        if (palette.Ultimate is { } ultimate) UltimateSkins.DrawEmblem(draw, new Vector2(min.X + pad + 5 * unit, titleY + 7 * unit), 15 * unit, ultimate);
+        else draw.AddCircleFilled(new Vector2(min.X + pad + 5 * unit, titleY + 7 * unit), 5 * unit, ImGui.GetColorU32(palette.Accent));
         draw.AddText(font, fontSizeNormal, new Vector2(min.X + pad + 16 * unit, titleY), ImGui.GetColorU32(palette.Text), "DACT");
         var closeMin = new Vector2(max.X - 28 * unit, min.Y + 6 * unit);
         if (game?.Icon(GameSkinIcon.Close, closeMin, 20 * unit) != true)

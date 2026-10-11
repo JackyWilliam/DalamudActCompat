@@ -143,6 +143,12 @@ try
     {
         await SkinSmokeTests.CloudAsync(testRoot);
         await CloudDefaultConfigurationSmokeTests.RunAsync(testRoot);
+        await UltimateSkinCloudSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
+    if (args.Contains("--ultimate-skins-api-only", StringComparer.Ordinal))
+    {
+        await UltimateSkinCloudSmokeTests.ApiAsync(testRoot);
         return 0;
     }
     if (args.Contains("--skins-api-only", StringComparer.Ordinal))
@@ -156,6 +162,7 @@ try
         return 0;
     }
     SkinSmokeTests.Run();
+    await UltimateSkinCloudSmokeTests.RunAsync(testRoot);
     if (args.Contains("--display-options-only", StringComparer.Ordinal))
     {
         await DisplayOptionsSmokeTests.RunAsync();

@@ -66,7 +66,8 @@ internal sealed record CloudAdministratorStatus(
 
 internal sealed record CloudSponsorStatus(int Tier = 0, string? SponsorGrantId = null, bool SponsorNoticePending = false);
 internal sealed record CloudAccountStatus(CloudAdministratorStatus? Administrator = null, CloudSponsorStatus? Sponsor = null,
-    CloudRecoveryStatus? Recovery = null);
+    CloudRecoveryStatus? Recovery = null, CloudApiUser? User = null, CloudSkinUnlockStatus? Skins = null);
+internal sealed record CloudSkinUnlockStatus(bool Ultimate = false, DateTimeOffset? UltimateUnlockedAt = null);
 internal sealed record CloudRecoveryStatus(bool Available = false, bool Protected = false, bool DiscordBound = false,
     int BindingLimit = 3, int BoundAccounts = 0, bool DiscordAvailable = false);
 internal sealed record CloudDiscordLinkCode(string Code, DateTimeOffset ExpiresAt);
@@ -236,6 +237,10 @@ internal sealed partial class CloudApiClient : IDisposable
 
     public Task<CloudAccountStatus> GetAccountStatusAsync(string token, CancellationToken cancellationToken)
         => SendJsonAsync<CloudAccountStatus>(HttpMethod.Get, "api/v1/auth/me", null, token, cancellationToken);
+
+    public Task<CloudSkinUnlockStatus> UnlockUltimateSkinsAsync(string token, uint instanceContentId, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudSkinUnlockStatus>(HttpMethod.Put, "api/v1/auth/skins/ultimate",
+            new { instanceContentId }, token, cancellationToken);
 
     public Task<CloudAdministratorStatus> AcknowledgeAdministratorAsync(
         string token, string adminGrantId, CancellationToken cancellationToken)

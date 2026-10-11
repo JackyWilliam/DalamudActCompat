@@ -1514,5 +1514,17 @@
   "This template is already listed; select it to view or open it.": "このテンプレートは登録済みです。選択して表示・設定できます。",
   "Back": "戻る",
   "Parser: {0}": "パーサー：{0}",
-  "New messages · Jump to latest": "新着メッセージ · 最新へ"
+  "New messages · Jump to latest": "新着メッセージ · 最新へ",
+  "The Unending Coil of Bahamut": "絶バハムート討滅戦",
+  "The Weapon's Refrain": "絶アルテマウェポン破壊作戦",
+  "The Epic of Alexander": "絶アレキサンダー討滅戦",
+  "Dragonsong's Reprise": "絶竜詩戦争",
+  "The Omega Protocol": "絶オメガ検証戦",
+  "Futures Rewritten": "絶もうひとつの未来",
+  "Clear any ultimate to unlock": "いずれかの絶をクリアで解放",
+  "Drawn from this ultimate's adventurer plate: colors, emblem and buttons, with the plate's backdrop behind the Control Center.": "この絶の冒険者プレートをもとにした配色・紋章・ボタン。コントロールセンターの背後にプレートの背景を表示します。",
+  "Clearing any one ultimate unlocks all six.": "いずれかの絶をクリアすると6種類すべてが解放されます。",
+  "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "いずれかの絶をクリアしたキャラクターでログインすると、このアカウントで全6種類が永久に解放されます。",
+  "Unlocked on this device. Syncing to your account for use on other devices.": "この端末で解放済みです。他の端末でも使えるようアカウントに同期しています。",
+  "The unlock has not finished syncing. It will retry automatically.": "解放情報の同期が完了していません。自動的に再試行します。"
 }

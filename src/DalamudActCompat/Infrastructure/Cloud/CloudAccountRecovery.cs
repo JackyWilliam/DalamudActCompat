@@ -35,7 +35,9 @@ internal sealed partial class CloudClientService
         timeout.CancelAfter(TimeSpan.FromSeconds(8));
         try
         {
-            var status = (await apiClient.GetAccountStatusAsync(current.Token, timeout.Token).ConfigureAwait(false)).Recovery;
+            var account = await apiClient.GetAccountStatusAsync(current.Token, timeout.Token).ConfigureAwait(false);
+            ApplySkinUnlockStatus(current, account);
+            var status = account.Recovery;
             if (status?.Available == true && !status.Protected)
             {
                 var enrolled = await apiClient.ProtectRecoveryKeyAsync(current.Token, current.RecoveryKey, timeout.Token).ConfigureAwait(false);

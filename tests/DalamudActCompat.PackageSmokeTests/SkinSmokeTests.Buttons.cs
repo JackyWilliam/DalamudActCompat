@@ -74,6 +74,7 @@ internal static partial class SkinSmokeTests
         Set("setGameRegionMode", (Action<GameRegionMode>)(_ => { }));
         var overview = typeof(ControlCenterWindow).GetMethod("DrawOverview", flags)!;
         var selectedStyle = typeof(ControlCenterWindow).GetMethod("PushOpenWindowButtonStyle", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var selectedStylePop = typeof(ControlCenterWindow).GetMethod("PopOpenWindowButtonStyle", BindingFlags.Static | BindingFlags.NonPublic)!;
         var io = ImGui.GetIO(); var context = ImGui.GetCurrentContext();
         var previousSize = io.DisplaySize; io.DisplaySize = new(1100, 900);
         var normal = Vector4.Zero; var hovered = Vector4.Zero; var active = Vector4.Zero;
@@ -101,7 +102,7 @@ internal static partial class SkinSmokeTests
                     normal = colors[(int)ImGuiCol.Button]; hovered = colors[(int)ImGuiCol.ButtonHovered]; active = colors[(int)ImGuiCol.ButtonActive];
                     if (DactTheme.Button("普通按钮", new(160, 36))) clicks++;
                     buttonCenter = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) / 2;
-                    ImGui.SameLine(); selectedStyle.Invoke(null, null); DactTheme.Button("关闭已打开窗口", new(160, 36)); ImGui.PopStyleColor(4);
+                    ImGui.SameLine(); selectedStyle.Invoke(null, null); DactTheme.Button("关闭已打开窗口", new(160, 36)); selectedStylePop.Invoke(null, null);
                     ImGui.SameLine();
                     DactTheme.PushStyleColor(ImGuiCol.Button, new(.48f, .10f, .12f, 1));
                     DactTheme.Button("删除", new(100, 36)); ImGui.PopStyleColor();

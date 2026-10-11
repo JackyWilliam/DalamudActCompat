@@ -51,16 +51,22 @@ internal sealed partial class FriendsUiManager
             // Slide the complete content behind the owner's right divider. The
             // outer window is only its visible clip, not a growing form layout.
             var contentPosition = outside ? layout.Position - new Vector2(layout.Size.X - visibleWidth, 0) : position;
-            ImGui.SetCursorScreenPos(contentPosition + new Vector2(14 * scale, 12 * scale));
+            // Ultimate skins crown the drawer like the plate's tall side window; the
+            // header moves down under the crown and the list loses the same height.
+            var ultimate = DactTheme.Palette.Ultimate;
+            var crown = ultimate is null ? 0 : UltimateSkins.CrownHeight(scale) - 6 * scale;
+            ImGui.SetCursorScreenPos(contentPosition + new Vector2(14 * scale, 12 * scale + crown));
             // Child backgrounds also move behind the seam, so constrain their
             // inherited clip by one pixel to keep the owner's divider visible.
             ImGui.PushClipRect(position + new Vector2(1, 0), end - new Vector2(1, 0), true);
+            if (ultimate is not null)
+                UltimateSkins.DrawCrown(list, contentPosition + new Vector2(10 * scale, 4 * scale), layout.Size.X - 42 * scale, scale, ultimate);
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(2 * scale, 0));
             // Let the textured owner supply the paper and bottom rim instead of
             // covering its last pixels with a solid child background.
             var contentFlags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse |
                 (gameFrame ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None);
-            if (ImGui.BeginChild("drawer-content", new(layout.Size.X - 42 * scale, layout.Size.Y - (gameFrame ? 28 : 24) * scale), false, contentFlags))
+            if (ImGui.BeginChild("drawer-content", new(layout.Size.X - 42 * scale, layout.Size.Y - (gameFrame ? 28 : 24) * scale - crown), false, contentFlags))
             {
                 var start = ImGui.GetCursorScreenPos();
                 FriendsGlyph.Draw(ImGui.GetWindowDrawList(), start, 23 * scale, ImGui.GetColorU32(Blue));

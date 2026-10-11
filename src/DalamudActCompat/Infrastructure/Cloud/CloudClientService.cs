@@ -23,7 +23,12 @@ internal sealed record CloudClientSnapshot(
     CloudSponsorStatus? Sponsor = null,
     CloudRecoveryStatus? Recovery = null,
     CloudDiscordLinkCode? DiscordLinkCode = null,
-    string? RecoveryStatusError = null)
+    string? RecoveryStatusError = null,
+    string? SkinAccountId = null,
+    bool UltimateSkinsUnlocked = false,
+    bool UltimateSkinsConfirmed = false,
+    bool UltimateSkinSyncPending = false,
+    string? SkinSyncError = null)
 {
     // A remembered login proves identity, not Discord ownership. Only a status
     // returned for this session may release the runtime and its functional UI.
@@ -90,6 +95,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         SharedAccountStore? sharedAccountStore = null)
     {
         this.paths = paths;
+        skinUnlockStore = new CloudSkinUnlockStore(Path.Combine(paths.ConfigDirectory, "account-skin-unlocks"));
         this.apiClient = apiClient;
         this.credentialStore = credentialStore;
         this.banStore = banStore;
@@ -185,6 +191,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             var recoveryVersion = NextRecoveryStatusRequest();
             var accountStatus = await apiClient.GetAccountStatusAsync(current.Token, token).ConfigureAwait(false);
             ApplyRecoveryStatus(current, accountStatus.Recovery, recoveryVersion);
+            ApplySkinUnlockStatus(current, accountStatus);
             var recoveryWarning = await TryEnableRecoveryResetAsync(current, token)
                 .ConfigureAwait(false);
             StartSessionMonitor(current);
@@ -715,6 +722,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         sessionMonitorCancellation?.Dispose();
         monitorShutdown.Dispose();
         operationGate.Dispose();
+        skinSyncGate.Dispose();
         apiClient.Dispose();
     }
 
@@ -914,7 +922,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             credentials = saved;
             // A fresh authentication must fetch its own grant, even when the
             // username is unchanged (the administrator may have revoked it).
-            snapshot = snapshot with { Sponsor = null, Recovery = null, DiscordLinkCode = null, RecoveryStatusError = null };
+            snapshot = snapshot with { Sponsor = null, Recovery = null, DiscordLinkCode = null, RecoveryStatusError = null,
+                SkinAccountId = null, UltimateSkinsUnlocked = false, UltimateSkinsConfirmed = false,
+                UltimateSkinSyncPending = false, SkinSyncError = null };
             friendsSessionGeneration++;
             storedAccount = persisted ? saved : null;
             persistCurrentAccount = persisted;
@@ -1110,6 +1120,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
     {
         await Task.WhenAll(
                 RunRecoveryProtectionMonitorAsync(current, cancellationToken),
+                RunSkinUnlockMonitorAsync(current, cancellationToken),
                 RunEventMonitorAsync(current, cancellationToken),
                 RunHeartbeatMonitorAsync(current, cancellationToken),
                 RunFriendConnectionAsync(current, cancellationToken))
@@ -1187,6 +1198,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 // the same token/version guard so a late response cannot cross accounts.
                 ApplyAccountStatus(current, status.Administrator ?? new(), roleVersion, status.Sponsor ?? new());
                 ApplyRecoveryStatus(current, status.Recovery, recoveryVersion);
+                ApplySkinUnlockStatus(current, status);
             }
             catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
             {
@@ -1431,7 +1443,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 // remembered login finishes loading backups and publishes its name.
                 snapshot.Recovery,
                 snapshot.DiscordLinkCode,
-                snapshot.RecoveryStatusError);
+                snapshot.RecoveryStatusError,
+                snapshot.SkinAccountId, snapshot.UltimateSkinsUnlocked, snapshot.UltimateSkinsConfirmed,
+                snapshot.UltimateSkinSyncPending, snapshot.SkinSyncError);
         }
     }
 

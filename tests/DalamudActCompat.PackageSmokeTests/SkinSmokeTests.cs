@@ -98,7 +98,35 @@ internal static partial class SkinSmokeTests
         ApplyAndSave();
         Check(live.Appearance.SelectedSkin == SkinCatalog.Default && live.Appearance.UnlockedEasterEggs.Count == 0,
             "A pre-skin cloud snapshot no longer restores with default appearance.");
-        Console.WriteLine("Skin cloud: unlock/selection content IDs, encrypted cross-machine restore, live apply/save/cold reload, rollback, old backups and sponsor authority passed (offline).");
+        var previousUnlock = SkinCatalog.UltimateUnlocked;
+        var contentIds = new HashSet<string>();
+        try
+        {
+            foreach (var skin in SkinCatalog.All.Where(skin => skin.Ultimate))
+            {
+                var selected = new PluginConfiguration(); selected.ApplyMigrations();
+                selected.Appearance.SelectedSkin = skin.Id;
+                await File.WriteAllTextAsync(sourceFile, JsonConvert.SerializeObject(selected));
+                var packed = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
+                    Path.Combine(root, skin.Id + ".enc"), key, default);
+                Check(!packed.IsDefaultConfiguration && contentIds.Add(packed.ContentId), "A skin-only preference was skipped or deduplicated incorrectly.");
+                var same = await backups.ExportEncryptedAsync(sourcePaths.ConfigDirectory,
+                    Path.Combine(root, skin.Id + "-same.enc"), key, default);
+                Check(same.ContentId == packed.ContentId, "Unchanged skin failed content deduplication.");
+                await backups.RestoreEncryptedAsync(packed.ArchivePath, destinationPaths.ConfigDirectory,
+                    Path.Combine(root, skin.Id + "-rollback.enc"), key, default);
+                SkinCatalog.UltimateUnlocked = () => false;
+                ApplyAndSave();
+                var cold = JsonConvert.DeserializeObject<PluginConfiguration>(await File.ReadAllTextAsync(destinationFile))!;
+                cold.ApplyMigrations();
+                Check(cold.Appearance.SelectedSkin == skin.Id && SkinCatalog.Resolve(cold.Appearance, true, 0) == SkinCatalog.Default,
+                    "Restore granted a skin or erased its selection.");
+                SkinCatalog.UltimateUnlocked = () => true;
+                Check(SkinCatalog.Resolve(cold.Appearance, true, 0) == skin.Id, "An unlocked account lost its restored skin.");
+            }
+        }
+        finally { SkinCatalog.UltimateUnlocked = previousUnlock; }
+        Console.WriteLine("Skin cloud: six ultimate selections, content IDs, encrypted restore, apply/save/cold reload, rollback, old backups and account authority passed (offline).");
     }
 
     public static async Task ApiAsync(string root)
@@ -236,6 +264,7 @@ internal static partial class SkinSmokeTests
         Check(config.Appearance.SelectedSkin == SkinCatalog.Default && config.Appearance.UnlockedEasterEggs.Count == 0, "Factory reset retained skin preferences.");
         MeterOpacityConfiguration();
         MeterCollapseConfiguration();
+        UltimateUnlock();
         if (native) Native();
         Console.WriteLine("Skins: permissions, discoveries, migration, serialization, independent backgrounds and requested native checks passed.");
     }
@@ -275,6 +304,9 @@ internal static partial class SkinSmokeTests
             var raster = new NativeUiRasterizer(io.Fonts);
             LanguageSelector();
             LoadGameTextures(raster);
+            LoadUltimateTextures(raster);
+            // Native fixtures render every catalogue skin; ultimate ones need a live clear.
+            SkinCatalog.UltimateUnlocked = () => true;
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
             ButtonFocus(raster, output);
@@ -513,8 +545,13 @@ internal static partial class SkinSmokeTests
             MeterOpacityNative(raster, output, logo);
             MeterCollapseNative(raster, output, logo);
             EmptyMeterEditorSummary(raster, output, logo);
+            UltimateNative(raster, output, logo);
         }
-        finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
+        finally
+        {
+            DactTheme.GameAssets = null; DactTheme.UltimateAssets = null; SkinCatalog.UltimateUnlocked = () => false;
+            DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context);
+        }
     }
 
     private static unsafe void LanguageSelector()

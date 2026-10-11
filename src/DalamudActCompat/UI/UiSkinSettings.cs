@@ -29,7 +29,7 @@ public sealed class UiSkinSettings
     }
 }
 
-internal sealed record SkinDefinition(string Id, string ChineseName, string EnglishName, int SponsorTier = 0, bool EasterEgg = false);
+internal sealed record SkinDefinition(string Id, string ChineseName, string EnglishName, int SponsorTier = 0, bool EasterEgg = false, bool Ultimate = false);
 
 internal static class SkinCatalog
 {
@@ -45,6 +45,16 @@ internal static class SkinCatalog
     public const string LiquidGlass = "liquid-glass";
     public const string Obsidian = "obsidian";
     public const string RainyWindow = "rainy-window";
+    public const string UltimateBahamut = "ultimate-ucob";
+    public const string UltimateWeapon = "ultimate-uwu";
+    public const string UltimateAlexander = "ultimate-tea";
+    public const string UltimateDragonsong = "ultimate-dsr";
+    public const string UltimateOmega = "ultimate-top";
+    public const string UltimateFutures = "ultimate-fru";
+
+    // The active account owns a permanent reward. CloudClientService merges server
+    // grants and its account-bound outbox; restoring ordinary preferences grants nothing.
+    internal static Func<bool> UltimateUnlocked { get; set; } = () => false;
 
     public static IReadOnlyList<SkinDefinition> All { get; } =
     [
@@ -57,14 +67,22 @@ internal static class SkinCatalog
         new(LiquidGlass, "澄光流璃", "Lucent Glass", EasterEgg: true),
         new(Obsidian, "无相玄墨", "Obsidian Void", EasterEgg: true),
         new(RainyWindow, "听雨窗", "Rain on Glass", EasterEgg: true),
+        new(UltimateBahamut, "巴哈姆特绝境战", "The Unending Coil of Bahamut", Ultimate: true),
+        new(UltimateWeapon, "究极神兵绝境战", "The Weapon's Refrain", Ultimate: true),
+        new(UltimateAlexander, "亚历山大绝境战", "The Epic of Alexander", Ultimate: true),
+        new(UltimateDragonsong, "幻想龙诗绝境战", "Dragonsong's Reprise", Ultimate: true),
+        new(UltimateOmega, "欧米茄绝境验证战", "The Omega Protocol", Ultimate: true),
+        new(UltimateFutures, "光暗未来绝境战", "Futures Rewritten", Ultimate: true),
     ];
 
     public static bool IsEasterEgg(string id) => All.Any(skin => skin.Id == id && skin.EasterEgg);
+    public static bool IsUltimate(string id) => All.Any(skin => skin.Id == id && skin.Ultimate);
 
     public static bool IsAvailable(string id, UiSkinSettings settings, bool signedIn, int sponsorTier)
         => All.FirstOrDefault(skin => skin.Id == id) is { } skin &&
            (!skin.EasterEgg || settings.UnlockedEasterEggs.Contains(id)) &&
-           (skin.SponsorTier == 0 || signedIn && sponsorTier >= skin.SponsorTier);
+           (skin.SponsorTier == 0 || signedIn && sponsorTier >= skin.SponsorTier) &&
+           (!skin.Ultimate || signedIn && UltimateUnlocked());
 
     // Keep the user's choice during a logout/reconnect, but render the default
     // until the current account is verified. An administrator role grants no skin.
