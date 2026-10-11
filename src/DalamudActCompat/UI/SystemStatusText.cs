@@ -54,6 +54,7 @@ internal static class SystemStatusText
         ["操作已取消。"] = "Operation cancelled.",
         ["云服务返回了不匹配的账号加密密钥。"] = "The cloud service returned an encryption key for a different account.",
         ["请输入注册时保存的恢复密钥。旧备份无法由服务器解密。"] = "Enter the recovery key saved during registration. The server cannot decrypt old backups.",
+        ["此方式需要原恢复密钥；已绑定 Discord 的账号也可以使用机器人重置码找回。"] = "This method needs the original recovery key. Discord-linked accounts can also recover using a code from the bot.",
         ["请选择仍存在的云端版本。"] = "Select an available cloud backup.",
         ["无法删除本机保存的云账号凭据。"] = "Could not remove the saved cloud credentials on this PC.",
         ["您的账号及关联机器已经被封禁"] = "Your account and linked devices have been banned",

@@ -21,7 +21,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private readonly Func<bool> silverDasherEventsEnabled;
     private readonly Func<bool> matchaEventsEnabled;
     private readonly string hostExecutable;
-    private readonly string pluginDirectory;
+    private readonly Func<string> pluginDirectory;
     private readonly string configDirectory;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly ConcurrentQueue<HostLogEvent> pendingLogs = new();
@@ -32,6 +32,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private readonly Timer logFlushTimer;
     private readonly Queue<DateTimeOffset> restartHistory = new();
     private readonly Queue<DateTimeOffset> memoryRecoveryHistory = new();
+    private readonly object recoveryTasksLock = new();
+    private readonly List<Task> recoveryTasks = new();
+    private bool disposing;
     private readonly HostMemoryProtectionPolicy? memoryProtectionPolicy;
     private CancellationTokenSource lifetime = new();
     private string sessionId = string.Empty;
@@ -42,7 +45,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private long droppedMatchaNetworkEvents;
     private int restartScheduled;
     private int memoryRecoveryScheduled;
+    private int stopRequests;
     private volatile bool manuallyStopped = true;
+    private volatile bool automaticStartBlocked;
     private volatile bool memoryProtectionInCombat;
     private volatile HostSupervisorState state = HostSupervisorState.Stopped;
     private bool combatState;
@@ -58,7 +63,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         Func<bool>? silverDasherEventsEnabled = null,
         Func<bool>? matchaEventsEnabled = null,
         bool enableMemoryProtection = false,
-        string? packagedHostDirectory = null)
+        string? packagedHostDirectory = null,
+        Func<string>? pluginDirectoryProvider = null)
     {
         assets = new CompatibilityHostAssets(hostDirectory, logger, packagedHostDirectory);
         process = new CompatibilityHostProcess(logger);
@@ -74,7 +80,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         hostExecutable = Path.Combine(
             assets.TargetDirectory,
             "DalamudActCompat.Host.exe");
-        this.pluginDirectory = pluginDirectory;
+        this.pluginDirectory = pluginDirectoryProvider ?? (() => pluginDirectory);
         this.configDirectory = configDirectory;
         ipc.Faulted += OnIpcFaulted;
         ipc.CommandRequested += OnCommandRequested;
@@ -156,10 +162,20 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     public event EventHandler<HostMemoryProtectionEventArgs>? MemoryProtectionChanged;
 
     public async Task StartAsync(CancellationToken cancellationToken)
+        => _ = await StartCoreAsync(cancellationToken, automatic: false).ConfigureAwait(false);
+
+    public Task<bool> StartAutomaticallyAsync(CancellationToken cancellationToken)
+        => StartCoreAsync(cancellationToken, automatic: true);
+
+    private async Task<bool> StartCoreAsync(CancellationToken cancellationToken, bool automatic)
     {
         await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Initial configuration and maintenance stops may auto-start; an explicit
+            // UI pause or opened circuit requires an explicit Start/Restart instead.
+            if (automatic && automaticStartBlocked) return false;
+            if (!automatic) automaticStartBlocked = false;
             if (manuallyStopped || state == HostSupervisorState.CircuitOpen)
             {
                 lock (restartHistory)
@@ -174,6 +190,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
             manuallyStopped = false;
             await StartUnlockedAsync(cancellationToken).ConfigureAwait(false);
+            return !await StopIfRequestedDuringStartAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -181,20 +198,22 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    public Task StopAsync(CancellationToken cancellationToken)
+        => StopAsync(cancellationToken, userRequested: false);
+
+    public async Task StopAsync(CancellationToken cancellationToken, bool userRequested)
     {
+        // Publish the intent before waiting. Recovery can hold the lock longer than the
+        // caller's deadline; a cancelled wait must not let it start the Host again.
+        Interlocked.Increment(ref stopRequests);
+        manuallyStopped = true;
+        if (userRequested) automaticStartBlocked = true;
         await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            automaticStartBlocked |= userRequested;
             manuallyStopped = true;
-            state = HostSupervisorState.Stopping;
-            logFlushTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            await ipc.StopAsync(cancellationToken).ConfigureAwait(false);
-            await process.StopAsync(cancellationToken).ConfigureAwait(false);
-            ClearPendingLogs();
-            ClearPendingSilverDasherNetwork();
-            ClearPendingMatchaNetwork();
-            state = HostSupervisorState.Stopped;
+            await StopOwnedSessionAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -204,6 +223,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     public async Task<bool> RestartAsync(CancellationToken cancellationToken)
     {
+        // manuallyStopped also marks this restart's own stop phase, so it cannot tell an
+        // external StopAsync apart; the request count can.
+        var observedStopRequests = Volatile.Read(ref stopRequests);
         await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -213,29 +235,65 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             }
 
             manuallyStopped = true;
-            state = HostSupervisorState.Stopping;
-            logFlushTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            await ipc.StopAsync(cancellationToken).ConfigureAwait(false);
-            await process.StopAsync(cancellationToken).ConfigureAwait(false);
-            ClearPendingLogs();
-            ClearPendingSilverDasherNetwork();
-            ClearPendingMatchaNetwork();
-            state = HostSupervisorState.Stopped;
+            await StopOwnedSessionAsync(cancellationToken).ConfigureAwait(false);
+            if (Volatile.Read(ref stopRequests) != observedStopRequests)
+            {
+                return false;
+            }
 
             manuallyStopped = false;
             await StartUnlockedAsync(cancellationToken).ConfigureAwait(false);
-            return true;
+            return !await StopIfRequestedDuringStartAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A cancelled refresh must not resurrect a process it just stopped.
+            throw;
         }
         catch
         {
-            manuallyStopped = false;
-            state = HostSupervisorState.Faulted;
+            // Undo only the restart's own stop; an external stop keeps the state it published.
+            if (Volatile.Read(ref stopRequests) == observedStopRequests)
+            {
+                manuallyStopped = false;
+                state = HostSupervisorState.Faulted;
+            }
             throw;
         }
         finally
         {
             lifecycleLock.Release();
         }
+    }
+
+    private async Task StopOwnedSessionAsync(CancellationToken cancellationToken)
+    {
+        state = HostSupervisorState.Stopping;
+        logFlushTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        try { await ipc.StopAsync(cancellationToken).ConfigureAwait(false); }
+        finally
+        {
+            // The caller's deadline bounds graceful shutdown, not our responsibility
+            // to terminate the child. CompatibilityHostProcess has its own exit bound.
+            try { await process.StopAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally
+            {
+                ClearPendingLogs();
+                ClearPendingSilverDasherNetwork();
+                ClearPendingMatchaNetwork();
+                state = process.IsRunning ? HostSupervisorState.Faulted : HostSupervisorState.Stopped;
+            }
+        }
+    }
+
+    // Callers hold lifecycleLock. A stop that timed out while waiting for that lock has
+    // already set manuallyStopped, so the session started meanwhile is closed here.
+    private async Task<bool> StopIfRequestedDuringStartAsync()
+    {
+        if (!manuallyStopped) return false;
+        await StopOwnedSessionAsync(CancellationToken.None).ConfigureAwait(false);
+        logger.Information("ACT Host start was superseded by a stop request.");
+        return true;
     }
 
     public void PublishLog(
@@ -365,6 +423,14 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        Task[] pendingRecoveries;
+        lock (recoveryTasksLock)
+        {
+            // Close scheduling before taking the snapshot: an IPC callback racing
+            // cancellation must not create work outside this disposal's ownership.
+            disposing = true;
+            pendingRecoveries = recoveryTasks.ToArray();
+        }
         lifetime.Cancel();
         silverDasherNetworkEvents.Writer.TryComplete();
         matchaNetworkEvents.Writer.TryComplete();
@@ -382,15 +448,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         catch (OperationCanceledException)
         {
         }
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        try
-        {
-            await StopAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.Warning("ACT Host supervisor disposal exceeded two seconds.");
-        }
+        // Recovery owns mandatory child cleanup beyond its cancellation point.
+        // Joining it prevents concurrent process disposal and releasing a disposed lock.
+        await Task.WhenAll(pendingRecoveries).ConfigureAwait(false);
+        await StopAsync(CancellationToken.None).ConfigureAwait(false);
 
         ipc.Faulted -= OnIpcFaulted;
         ipc.CommandRequested -= OnCommandRequested;
@@ -400,7 +461,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         ipc.MatchaLogLineRequested -= OnMatchaLogLineRequested;
         ipc.MatchaTtsRequested -= OnMatchaTtsRequested;
         ipc.ResourceSampleReceived -= OnResourceSampleReceived;
-        logFlushTimer.Dispose();
+        await logFlushTimer.DisposeAsync().ConfigureAwait(false);
         await ipc.DisposeAsync().ConfigureAwait(false);
         await process.DisposeAsync().ConfigureAwait(false);
         lifetime.Dispose();
@@ -558,32 +619,41 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
 
         state = HostSupervisorState.Starting;
-        memoryProtectionPolicy?.ResetForNewSession();
-        assets.EnsureExtracted();
-        sessionId = Guid.NewGuid().ToString("N");
-        pipeName = $"DalamudActCompat-{Environment.ProcessId}-{sessionId}";
-        await process.StartAsync(
-                HostLaunchSpec.ForExecutable(hostExecutable),
-                [
-                    "--pipe", pipeName,
-                    "--session", sessionId,
-                    "--plugin-root", pluginDirectory,
-                    "--config-root", configDirectory,
-                ],
-                lifetime.Token)
-            .ConfigureAwait(false);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            memoryProtectionPolicy?.ResetForNewSession();
+            assets.EnsureExtracted();
+            sessionId = Guid.NewGuid().ToString("N");
+            pipeName = $"DalamudActCompat-{Environment.ProcessId}-{sessionId}";
+            await process.StartAsync(
+                    HostLaunchSpec.ForExecutable(hostExecutable),
+                    [
+                        "--pipe", pipeName,
+                        "--session", sessionId,
+                        "--plugin-root", Path.GetFullPath(pluginDirectory()),
+                        "--config-root", configDirectory,
+                    ],
+                    lifetime.Token)
+                .ConfigureAwait(false);
             await ipc.ConnectAsync(pipeName, sessionId, cancellationToken).ConfigureAwait(false);
+            state = HostSupervisorState.Running;
+            if (ipc.Status == HostConnectionStatus.Faulted)
+                throw new IOException("ACT Host connection failed during startup.");
         }
         catch
         {
-            await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
-            state = HostSupervisorState.Faulted;
+            try { await StopOwnedSessionAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally
+            {
+                // A failed start that a stop request superseded is stopped, not faulted.
+                state = manuallyStopped && !process.IsRunning
+                    ? HostSupervisorState.Stopped
+                    : HostSupervisorState.Faulted;
+            }
             throw;
         }
 
-        state = HostSupervisorState.Running;
         PublishMemoryProtectionChanged();
         RepublishCriticalState();
         logFlushTimer.Change(TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(20));
@@ -645,20 +715,33 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
     private void OnIpcFaulted(object? sender, Exception exception)
     {
-        state = HostSupervisorState.Faulted;
-        if (manuallyStopped || lifetime.IsCancellationRequested ||
-            Interlocked.Exchange(ref restartScheduled, 1) != 0)
+        lock (recoveryTasksLock)
         {
-            return;
+            if (disposing || manuallyStopped || lifetime.IsCancellationRequested) return;
+            state = HostSupervisorState.Faulted;
+            if (Interlocked.Exchange(ref restartScheduled, 1) != 0) return;
+            var failedSession = sessionId;
+            ScheduleRecovery(() => RestartAfterFaultAsync(exception, failedSession));
         }
+    }
 
-        _ = Task.Run(() => RestartAfterFaultAsync(exception), CancellationToken.None);
+    private bool ScheduleRecovery(Func<Task> recovery)
+    {
+        lock (recoveryTasksLock)
+        {
+            if (disposing) return false;
+            // Keep only unfinished work; fault recovery can queue its successor
+            // from finally before the preceding task has fully returned.
+            recoveryTasks.RemoveAll(static task => task.IsCompleted);
+            recoveryTasks.Add(Task.Run(recovery, CancellationToken.None));
+            return true;
+        }
     }
 
     private void OnResourceSampleReceived(object? sender, HostResourceSample sample)
     {
         var policy = memoryProtectionPolicy;
-        if (policy is null || manuallyStopped || state != HostSupervisorState.Running)
+        if (policy is null || lifetime.IsCancellationRequested || manuallyStopped || state != HostSupervisorState.Running)
         {
             return;
         }
@@ -675,12 +758,14 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             return;
         }
 
-        _ = Task.Run(
-            () => RecoverFromMemoryPressureAsync(sample),
-            CancellationToken.None);
+        var triggeringSession = sessionId;
+        if (!ScheduleRecovery(() => RecoverFromMemoryPressureAsync(sample, triggeringSession)))
+            Interlocked.Exchange(ref memoryRecoveryScheduled, 0);
     }
 
-    private async Task RecoverFromMemoryPressureAsync(HostResourceSample triggeringSample)
+    private async Task RecoverFromMemoryPressureAsync(
+        HostResourceSample triggeringSample,
+        string triggeringSession)
     {
         try
         {
@@ -688,7 +773,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             try
             {
                 var policy = memoryProtectionPolicy;
-                if (policy is null || manuallyStopped ||
+                // A restart queued ahead of this task may already have replaced the session
+                // that exceeded the limit. Its successor must keep running and its budget.
+                if (policy is null || manuallyStopped || sessionId != triggeringSession ||
                     policy.Snapshot.State == HostMemoryProtectionState.Ignored ||
                     state != HostSupervisorState.Running)
                 {
@@ -726,14 +813,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
                 // Host shutdown drains PostNamazu's own queues before disposal. The process
                 // boundary remains the final fallback if a legacy callback refuses to return.
-                await ipc.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                ClearPendingLogs();
-                ClearPendingSilverDasherNetwork();
-                ClearPendingMatchaNetwork();
+                await StopOwnedSessionAsync(CancellationToken.None).ConfigureAwait(false);
 
                 if (openCircuit)
                 {
+                    automaticStartBlocked = true;
                     manuallyStopped = true;
                     state = HostSupervisorState.CircuitOpen;
                     policy.MarkCircuitOpen(
@@ -747,12 +831,25 @@ public sealed class ActHostSupervisor : IAsyncDisposable
                 }
 
                 state = HostSupervisorState.Stopped;
+                // A stop requested while draining was already honored by the cleanup above.
+                if (manuallyStopped) return;
                 await StartUnlockedAsync(lifetime.Token).ConfigureAwait(false);
-                using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                using var linkedStartup = CancellationTokenSource.CreateLinkedTokenSource(
-                    lifetime.Token,
-                    startupTimeout.Token);
-                await WaitForPluginStartupAsync(linkedStartup.Token).ConfigureAwait(false);
+                try
+                {
+                    using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    using var linkedStartup = CancellationTokenSource.CreateLinkedTokenSource(
+                        lifetime.Token,
+                        startupTimeout.Token);
+                    await WaitForPluginStartupAsync(linkedStartup.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Plugin startup can outlast a UI stop deadline. Close the recovered
+                    // session for that stop even when this wait itself failed.
+                    await StopIfRequestedDuringStartAsync().ConfigureAwait(false);
+                }
+
+                if (manuallyStopped) return;
                 logger.Warning(
                     $"Shared ACT Host automatically recovered after private memory reached " +
                     $"{triggeringSample.PrivateBytes / (1024d * 1024d * 1024d):0.00} GiB. " +
@@ -768,8 +865,9 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            state = HostSupervisorState.Faulted;
             logger.Error(exception, "Shared ACT Host memory recovery failed.");
+            // OnIpcFaulted marks the fault and schedules recovery unless a stop was requested;
+            // a requested stop keeps the Stopped state its cleanup published.
             OnIpcFaulted(this, exception);
         }
         finally
@@ -843,45 +941,52 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         HostTtsRequest request)
         => MatchaTtsRequested?.Invoke(this, request);
 
-    private async Task RestartAfterFaultAsync(Exception exception)
+    private async Task RestartAfterFaultAsync(Exception exception, string failedSession)
     {
         try
         {
-            var now = DateTimeOffset.UtcNow;
             bool openCircuit;
             int attempts;
-            lock (restartHistory)
-            {
-                while (restartHistory.TryPeek(out var oldest) &&
-                       now - oldest > TimeSpan.FromMinutes(10))
-                {
-                    restartHistory.Dequeue();
-                }
-
-                restartHistory.Enqueue(now);
-                attempts = restartHistory.Count;
-                openCircuit = attempts > 3;
-            }
 
             // Cleanup precedes the restart budget decision. A faulted pipe must never leave
             // the Supervisor-owned process running after the circuit opens.
             await lifecycleLock.WaitAsync(lifetime.Token).ConfigureAwait(false);
             try
             {
-                await ipc.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                ClearPendingLogs();
-                ClearPendingSilverDasherNetwork();
-                ClearPendingMatchaNetwork();
-                if (openCircuit)
+                // A manual restart can finish while this recovery is waiting for
+                // the lock. Never tear down the replacement session on its behalf.
+                if (manuallyStopped || sessionId != failedSession) return;
+
+                var now = DateTimeOffset.UtcNow;
+                lock (restartHistory)
                 {
-                    state = HostSupervisorState.CircuitOpen;
-                    manuallyStopped = true;
+                    while (restartHistory.TryPeek(out var oldest) &&
+                           now - oldest > TimeSpan.FromMinutes(10))
+                    {
+                        restartHistory.Dequeue();
+                    }
+
+                    restartHistory.Enqueue(now);
+                    attempts = restartHistory.Count;
+                    openCircuit = attempts > 3;
                 }
-                else
+                try
                 {
-                    state = HostSupervisorState.Stopped;
+                    await StopOwnedSessionAsync(CancellationToken.None).ConfigureAwait(false);
                 }
+                finally
+                {
+                    // Apply the budget even when cleanup throws (for example a child that
+                    // outlives Kill); otherwise each failure reschedules and the circuit never opens.
+                    if (openCircuit)
+                    {
+                        automaticStartBlocked = true;
+                        state = HostSupervisorState.CircuitOpen;
+                        manuallyStopped = true;
+                    }
+                }
+
+                if (!openCircuit) state = HostSupervisorState.Stopped;
             }
             finally
             {
@@ -914,12 +1019,13 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             await lifecycleLock.WaitAsync(lifetime.Token).ConfigureAwait(false);
             try
             {
-                if (manuallyStopped)
+                if (manuallyStopped || sessionId != failedSession)
                 {
                     return;
                 }
 
                 await StartUnlockedAsync(lifetime.Token).ConfigureAwait(false);
+                await StopIfRequestedDuringStartAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -932,13 +1038,16 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         catch (Exception restartError)
         {
             logger.Error(restartError, "ACT Host automatic restart failed.");
-            Interlocked.Exchange(ref restartScheduled, 0);
-            OnIpcFaulted(this, restartError);
-            return;
+            // An opened circuit or a requested stop already published its final state.
+            if (!manuallyStopped) state = HostSupervisorState.Faulted;
         }
         finally
         {
             Interlocked.Exchange(ref restartScheduled, 0);
+            // A fresh session can fault before this recovery task releases its slot.
+            // Preserve that failure instead of silently losing the next recovery.
+            if (!manuallyStopped && !lifetime.IsCancellationRequested && state == HostSupervisorState.Faulted)
+                OnIpcFaulted(this, exception);
         }
     }
 

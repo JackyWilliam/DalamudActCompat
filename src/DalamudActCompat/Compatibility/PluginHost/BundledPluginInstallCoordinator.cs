@@ -14,7 +14,8 @@ internal static class BundledPluginInstallCoordinator
         Func<CancellationToken, Task> startParser,
         Func<bool> shouldResume,
         CancellationToken cancellationToken,
-        TimeSpan resumeTimeout)
+        TimeSpan resumeTimeout,
+        CancellationToken resumeCancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stopHost);
         ArgumentNullException.ThrowIfNull(stopParser);
@@ -50,12 +51,19 @@ internal static class BundledPluginInstallCoordinator
         List<Exception>? resumeFailures = null;
         if (shouldResume())
         {
-            using var resumeCancellation = new CancellationTokenSource(resumeTimeout);
+            // resumeCancellationToken ends with the sign-in session that started the install,
+            // so a sign-out (or a quick re-sign-in) cannot be followed by this old resume.
+            using var resumeCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(resumeCancellationToken);
+            resumeCancellation.CancelAfter(resumeTimeout);
             if (hostPauseAttempted)
             {
                 try
                 {
                     await startHost(resumeCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (resumeCancellationToken.IsCancellationRequested)
+                {
                 }
                 catch (Exception ex)
                 {
@@ -63,11 +71,15 @@ internal static class BundledPluginInstallCoordinator
                 }
             }
 
-            if (parserPauseAttempted)
+            // Authorization can end while the Host restarts; check again before the parser.
+            if (parserPauseAttempted && !resumeCancellationToken.IsCancellationRequested && shouldResume())
             {
                 try
                 {
                     await startParser(resumeCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (resumeCancellationToken.IsCancellationRequested)
+                {
                 }
                 catch (Exception ex)
                 {

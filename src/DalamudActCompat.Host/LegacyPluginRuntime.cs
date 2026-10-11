@@ -223,9 +223,13 @@ internal sealed class LegacyPluginRuntime : IDisposable
         }
         if (genericOnly)
         {
-            LoadManifestPlugins();
+            // NotACT requires a BeforeLogLineRead subscriber before it dispatches
+            // OnLogLineRead. This Host has no local parser, and imported plugins may
+            // subscribe only to the latter (for example the Titan tool).
+            actMain!.BeforeLogLineRead += OnGenericLogLine;
             HostPluginBridge.ConfigureTtsWriter(null);
-            actMain!.PlayTtsMethod = HostPluginBridge.SendGenericTts;
+            actMain.PlayTtsMethod = HostPluginBridge.SendGenericTts;
+            LoadManifestPlugins();
             StartDiagnosticPolling();
             return;
         }
@@ -286,6 +290,11 @@ internal sealed class LegacyPluginRuntime : IDisposable
                 string.IsNullOrEmpty(log.ActLine) ? log.Line : log.ActLine);
             Interlocked.Increment(ref acceptedLogLines);
         }
+    }
+
+    private static void OnGenericLogLine(bool isImport, LogLineEventArgs log)
+    {
+        // The game-side parser has already produced this ACT-formatted line.
     }
 
     public void ChangeZone(uint territoryId, string zoneName)
@@ -403,6 +412,10 @@ internal sealed class LegacyPluginRuntime : IDisposable
         if (matchaOnly && actMain is not null)
         {
             actMain.BeforeLogLineRead -= OnMatchaLogLine;
+        }
+        if (genericOnly && actMain is not null)
+        {
+            actMain.BeforeLogLineRead -= OnGenericLogLine;
         }
         var snapshot = PluginSnapshot;
         Volatile.Write(ref pluginSnapshot, []);
@@ -1047,7 +1060,9 @@ internal sealed class LegacyPluginHandle : IDisposable
                                 ? LegacyAssemblyRewriter.LoadMatcha(assemblyPath, loadContext)
                                 : id == "simulant"
                                     ? LegacyAssemblyRewriter.LoadSimulant(assemblyPath, loadContext)
-                                    : loadContext.LoadFromAssemblyPath(assemblyPath);
+                                    : id is "actlogsuploader" or "act.jsb_5"
+                                        ? LegacyAssemblyRewriter.LoadManualPlugin(id, assemblyPath, loadContext)
+                                        : loadContext.LoadFromAssemblyPath(assemblyPath);
                 var entryType = assembly.GetType(entryTypeName, throwOnError: true)!;
                 instance = Activator.CreateInstance(entryType)
                            ?? throw new InvalidOperationException($"Could not create {entryTypeName}.");

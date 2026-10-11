@@ -56,7 +56,7 @@ internal sealed partial class CloudClientService
         get
         {
             lock (stateLock)
-                return new(friendsSessionGeneration, snapshot.IsSignedIn && credentials is not null && activeBan is null, credentials?.Username);
+                return new(friendsSessionGeneration, snapshot.CanUseDact && credentials is not null && activeBan is null, credentials?.Username);
         }
     }
 
@@ -114,8 +114,8 @@ internal sealed partial class CloudClientService
         CloudStoredCredentials current;
         lock (stateLock)
         {
-            if (!snapshot.IsSignedIn || credentials is null)
-                throw new InvalidOperationException("请先登录云账号。");
+            if (!snapshot.CanUseDact || credentials is null)
+                throw new InvalidOperationException("请先登录并完成 Discord 绑定。");
             // Capture credentials under the same lock as the expected UI generation;
             // a switch between controller validation and dispatch cannot use a new account.
             if (expectedSession is { } expected && expected != FriendsSession)
@@ -142,15 +142,15 @@ internal sealed partial class CloudClientService
     {
         try
         {
+            // The account monitor still detects revocation while binding is pending;
+            // social presence must not advertise an account that cannot enter DACT.
+            while (IsCurrentSession(current) && !Snapshot.CanUseDact)
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
             CloudFriendsSession expected;
             lock (stateLock)
             {
                 if (!IsCurrentSession(current)) return;
-                // Auto-login starts revocation monitoring after token validation
-                // but before its final UI snapshot. Bind the stable generation to
-                // its signed-in state; activity stays null until that state is real,
-                // while the initial heartbeat can still detect a revoked token.
-                expected = FriendsSession with { IsSignedIn = true };
+                expected = FriendsSession;
             }
             await CloudFriendConnection.RunAsync(apiClient, current.Token, cancellationToken,
                 presence: () => FriendHeartbeat(expected), received: value => ApplyFriendPresenceSettings(value.Settings, expected)).ConfigureAwait(false);

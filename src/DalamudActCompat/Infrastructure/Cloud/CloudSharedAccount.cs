@@ -41,7 +41,7 @@ internal sealed partial class CloudClientService
             // startup state without clearing another operation's busy flag.
             if (operationGate.Wait(0))
             {
-                try { SetSnapshot(Snapshot with { IsBusy = false }); }
+                try { UpdateSnapshot(value => value with { IsBusy = false }); }
                 finally { operationGate.Release(); }
             }
             if (Interlocked.Exchange(ref sharedMonitorStarted, 1) == 0)

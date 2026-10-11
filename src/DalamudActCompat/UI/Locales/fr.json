@@ -1513,5 +1513,6 @@
   "View existing overlay": "Voir l’overlay existant",
   "This template is already listed; select it to view or open it.": "Ce modèle figure déjà dans la liste ; sélectionnez-le pour le consulter ou l’ouvrir.",
   "Back": "Retour",
-  "Parser: {0}": "Analyseur : {0}"
+  "Parser: {0}": "Analyseur : {0}",
+  "New messages · Jump to latest": "Nouveaux messages · Voir la fin"
 }

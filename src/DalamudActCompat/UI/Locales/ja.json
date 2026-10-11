@@ -1513,5 +1513,6 @@
   "View existing overlay": "既存のオーバーレイを表示",
   "This template is already listed; select it to view or open it.": "このテンプレートは登録済みです。選択して表示・設定できます。",
   "Back": "戻る",
-  "Parser: {0}": "パーサー：{0}"
+  "Parser: {0}": "パーサー：{0}",
+  "New messages · Jump to latest": "新着メッセージ · 最新へ"
 }

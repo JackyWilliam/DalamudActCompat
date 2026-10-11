@@ -41,9 +41,11 @@ public sealed class FactoryResetService
         this.saveConfiguration = saveConfiguration;
     }
 
+    // runtimeResumeToken is cancelled by plugin unload or by the requesting session's
+    // sign-out. It only gates restarting the parser; the file rollback always completes.
     public async Task<string> ResetAsync(
         CancellationToken cancellationToken,
-        CancellationToken pluginShutdownToken = default)
+        CancellationToken runtimeResumeToken = default)
     {
         var configurationSnapshot = configuration.CreateSnapshot();
         var parserWasRunning = parserEngine.Status.State == ParserState.Running;
@@ -137,12 +139,12 @@ public sealed class FactoryResetService
                 }
             }
 
-            if (stopAttempted && parserWasRunning && !pluginShutdownToken.IsCancellationRequested)
+            if (stopAttempted && parserWasRunning && !runtimeResumeToken.IsCancellationRequested)
             {
                 try
                 {
                     using var recoveryTimeout = CancellationTokenSource.CreateLinkedTokenSource(
-                        pluginShutdownToken);
+                        runtimeResumeToken);
                     recoveryTimeout.CancelAfter(TimeSpan.FromSeconds(10));
                     await parserEngine.StartAsync(recoveryTimeout.Token).ConfigureAwait(false);
                 }

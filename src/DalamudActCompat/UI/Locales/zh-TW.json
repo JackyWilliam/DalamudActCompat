@@ -1513,5 +1513,6 @@
   "View existing overlay": "查看現有懸浮窗",
   "This template is already listed; select it to view or open it.": "此範本已在清單中，可直接查看與開啟。",
   "Back": "返回",
-  "Parser: {0}": "解析器：{0}"
+  "Parser: {0}": "解析器：{0}",
+  "New messages · Jump to latest": "有新訊息 · 回到最下方"
 }

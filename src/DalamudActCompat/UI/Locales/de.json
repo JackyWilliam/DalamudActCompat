@@ -1513,5 +1513,6 @@
   "View existing overlay": "Vorhandenes Overlay anzeigen",
   "This template is already listed; select it to view or open it.": "Diese Vorlage ist bereits aufgelistet. Wähle sie zum Anzeigen oder Öffnen aus.",
   "Back": "Zurück",
-  "Parser: {0}": "Parser: {0}"
+  "Parser: {0}": "Parser: {0}",
+  "New messages · Jump to latest": "Neue Nachrichten · Zum Ende"
 }

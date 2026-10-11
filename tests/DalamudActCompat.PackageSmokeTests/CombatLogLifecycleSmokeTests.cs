@@ -349,6 +349,7 @@ internal static class CombatLogLifecycleSmokeTests
         public PluginPaths Paths { get; }
         public PluginLogger Logger { get; }
         public SyntheticParser Parser { get; }
+        private DalamudActCompat.Infrastructure.Cloud.CloudClientService Account { get; }
         public LogLifecycleConfigSaveProxy SaveProxy { get; }
         public ConcurrentQueue<(bool Success, string Message)> Feedback { get; } = new();
 
@@ -374,6 +375,8 @@ internal static class CombatLogLifecycleSmokeTests
             Set("backgroundOperationLock", new object());
             Set("backgroundOperations", tasks);
             Set("cloudRuntimeAuthorized", 1);
+            Account = DiscordBindingSmokeTests.BoundFixture(Paths);
+            Set("cloudClient", Account);
             Parser = new SyntheticParser(Resolve);
             Set("parserEngine", Parser);
             pluginInterface.SavePluginConfig(Configuration);
@@ -395,6 +398,7 @@ internal static class CombatLogLifecycleSmokeTests
             Parser.PauseBeforeRestart?.TrySetResult();
             DrainAsync().GetAwaiter().GetResult();
             Parser.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            Account.Dispose();
         }
     }
 

@@ -180,7 +180,8 @@ public sealed partial class ControlCenterWindow : Window
     private string cloudRecoveryKey = string.Empty;
     private string cloudInviteeContact = string.Empty;
     private bool cloudRememberLogin = true;
-    private CloudPasswordResetMethod cloudPasswordResetMethod;
+    private CloudPasswordResetMethod cloudPasswordResetMethod = CloudPasswordResetMethod.AdministratorCode;
+    private string? cloudAuthenticationPreviousStatus;
     private string? selectedCloudBackupId;
     private string? cloudPreviewRequestedBackupId;
     private bool confirmCloudRestore;
@@ -433,14 +434,16 @@ public sealed partial class ControlCenterWindow : Window
             Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), ImGui.GetStyle().Alpha, ImGuiP.GetCurrentWindow().ID);
             DrawWindowChrome(cloudSnapshot);
             DrawCloudQuickPopup(cloudSnapshot);
-            if (!cloudSnapshot.IsSignedIn)
+            if (!cloudSnapshot.IsSignedIn || cloudSnapshot.CanUseDact) cloudDiscordCodeRequestedFor = null;
+            if (!cloudSnapshot.CanUseDact)
             {
                 skinSettings.Close();
                 ImGui.Spacing();
                 if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, PageContentHeight()), false,
                         DactTheme.Palette.Light ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None))
                 {
-                    DrawAuthenticationGate(cloudSnapshot);
+                    if (cloudSnapshot.IsSignedIn) DrawDiscordBindingGate(cloudSnapshot);
+                    else DrawAuthenticationGate(cloudSnapshot);
                 }
                 ImGui.EndChild();
                 return;
@@ -573,7 +576,7 @@ public sealed partial class ControlCenterWindow : Window
         var (cloudStatusLabel, cloudStatusColor) = ResolveCloudStatus(cloudSnapshot);
         // The guide documents authenticated runtime controls, so hiding its entry before
         // sign-in avoids presenting a button that the authentication gate cannot open.
-        var helpAction = cloudSnapshot.IsSignedIn ? openHelp : null;
+        var helpAction = cloudSnapshot.CanUseDact ? openHelp : null;
         if (BrandedWindowChrome.Draw(
                 headerDrag,
                 logoTexture,
@@ -588,7 +591,7 @@ public sealed partial class ControlCenterWindow : Window
                 statusLabel: $"● {cloudStatusLabel}",
                 statusColor: cloudStatusColor,
                 statusTooltip: text.Get("查看云同步状态", "View cloud sync status"),
-                friendsAction: cloudSnapshot.IsSignedIn && Friends is { } friends ? friends.ToggleDrawer : null,
+                friendsAction: cloudSnapshot.CanUseDact && Friends is { } friends ? friends.ToggleDrawer : null,
                 onlineFriends: Friends?.Snapshot is { State: "ready" } friendSnapshot ? friendSnapshot.Friends?.OnlineCount ?? 0 : 0,
                 friendsUnread: Friends?.Snapshot.HasUnreadMessages ?? false,
                 logoAction: () => DiscoverSkin(skinDiscoveries.ClickLogo(configuration.Appearance, Environment.TickCount64)),
@@ -2002,7 +2005,7 @@ public sealed partial class ControlCenterWindow : Window
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        if (snapshot.IsSignedIn && Friends is not null)
+        if (snapshot.CanUseDact && Friends is not null)
         {
             ImGui.TextDisabled(text.Get("账号", "Account"));
             ImGui.SameLine();
@@ -2061,511 +2064,11 @@ public sealed partial class ControlCenterWindow : Window
         ImGui.TextUnformatted(value);
     }
 
-    private void DrawAuthenticationGate(CloudClientSnapshot snapshot)
-    {
-        if (string.IsNullOrWhiteSpace(cloudUsername) &&
-            !string.IsNullOrWhiteSpace(snapshot.Username))
-        {
-            cloudUsername = snapshot.Username;
-        }
-
-        var available = ImGui.GetContentRegionAvail();
-        // At the minimum supported window width, two columns leave the credential
-        // fields too narrow to scan safely, so the brand panel becomes a compact banner.
-        var stackAuthenticationLayout = available.X < 820;
-        if (stackAuthenticationLayout)
-        {
-            if (BeginAuthenticationPanel(
-                    "account-authentication-hero",
-                    new Vector2(-1, 142),
-                    hero: true,
-                    allowScrolling: false))
-            {
-                DrawAuthenticationHero(compact: true);
-            }
-            EndAuthenticationPanel();
-            ImGui.Spacing();
-            if (BeginAuthenticationPanel(
-                    "account-authentication-card",
-                    new Vector2(-1, -1),
-                    hero: false,
-                    allowScrolling: true))
-            {
-                DrawCloudAuthentication(snapshot);
-            }
-            EndAuthenticationPanel();
-            return;
-        }
-
-        const float panelGap = 14;
-        var heroWidth = Math.Clamp(available.X * 0.37f, 292, 342);
-        if (BeginAuthenticationPanel(
-                "account-authentication-hero",
-                new Vector2(heroWidth, -1),
-                hero: true,
-                allowScrolling: false))
-        {
-            DrawAuthenticationHero(compact: false);
-        }
-        EndAuthenticationPanel();
-        ImGui.SameLine(0, panelGap);
-        if (BeginAuthenticationPanel(
-                "account-authentication-card",
-                new Vector2(-1, -1),
-                hero: false,
-                allowScrolling: true))
-        {
-            DrawCloudAuthentication(snapshot);
-        }
-        EndAuthenticationPanel();
-    }
-
-    private void DrawCloudAuthentication(CloudClientSnapshot snapshot)
-    {
-        var busy = snapshot.IsBusy;
-        DactTheme.TextColored(Gold, text.Get("账号入口", "ACCOUNT ACCESS"));
-        DrawAuthenticationMutedText(text.Get(
-            "验证账号后进入 DACT 控制中心",
-            "Verify your account to enter the DACT control center"));
-        ImGui.Spacing();
-
-        var authenticationPages = new[]
-        {
-            text.Get("登录", "Login"),
-            text.Get("注册", "Register"),
-            text.Get("重置密码", "Reset password"),
-        };
-        var selectedAuthenticationPage = BrandedWindowChrome.DrawNavigationRail(
-            "account-authentication-navigation",
-            authenticationPages,
-            (int)cloudAuthenticationPage,
-            height: 34);
-        cloudAuthenticationPage = (CloudAuthenticationPage)selectedAuthenticationPage;
-        ImGui.Spacing();
-
-        var (pageTitle, pageDescription) = cloudAuthenticationPage switch
-        {
-            CloudAuthenticationPage.Register => (
-                text.Get("创建 DACT 账号", "Create a DACT account"),
-                text.Get("使用一次性激活码完成注册并绑定本机。", "Register with a one-time activation key and bind this PC.")),
-            CloudAuthenticationPage.ResetPassword => (
-                text.Get("重设账号密码", "Reset account password"),
-                text.Get(
-                    "使用注册时保存的恢复密钥可自行改密；没有恢复密钥时再联系管理员。",
-                    "Use the recovery key saved at registration to reset the password yourself, or contact an administrator for help.")),
-            _ => (
-                text.Get("欢迎回来", "Welcome back"),
-                text.Get("输入账号和密码，继续使用 DACT。", "Enter your username and password to continue.")),
-        };
-        DactTheme.TextColored(IceBlue, pageTitle);
-        DrawAuthenticationMutedText(pageDescription);
-        ImGui.Spacing();
-        DrawAuthenticationStatus(snapshot);
-        ImGui.Spacing();
-
-        DrawAuthenticationInput(
-            text.Get("用户名", "Username"),
-            text.Get("请输入账号名", "Enter your username"),
-            "cloud-username",
-            ref cloudUsername,
-            32);
-
-        switch (cloudAuthenticationPage)
-        {
-            case CloudAuthenticationPage.Login:
-                DrawCloudLoginForm(busy);
-                break;
-            case CloudAuthenticationPage.Register:
-                DrawCloudRegistrationForm(busy);
-                break;
-            case CloudAuthenticationPage.ResetPassword:
-                DrawCloudPasswordResetForm(busy, snapshot.HasSavedRecoveryKey);
-                break;
-        }
-    }
-
-    private void DrawCloudLoginForm(bool busy)
-    {
-        DrawAuthenticationInput(
-            text.Get("密码", "Password"),
-            text.Get("请输入密码", "Enter your password"),
-            "cloud-password",
-            ref cloudPassword,
-            128,
-            ImGuiInputTextFlags.Password);
-        if (ImGui.CollapsingHeader(text.Get(
-                "管理员改密后的恢复选项###cloud-login-recovery-options",
-                "Recovery after an administrator reset###cloud-login-recovery-options")))
-        {
-            DrawAuthenticationInput(
-                text.Get("恢复密钥", "Recovery key"),
-                text.Get("通常无需填写", "Normally not required"),
-                "cloud-login-recovery-key",
-                ref cloudRecoveryKey,
-                96,
-                ImGuiInputTextFlags.Password);
-            DrawAuthenticationMutedText(text.Get(
-                "仅当管理员直接重置过密码，且本机没有保存账号密钥时才需要。",
-                "Only required after a direct administrator reset when this PC has no saved account key."));
-        }
-        DrawAuthenticationPersistenceOption();
-        if (DrawAuthenticationPrimaryButton(text.Get("登录 DACT", "Sign in to DACT"), !busy))
-        {
-            cloud.Login(new CloudLoginRequest(
-                cloudUsername,
-                cloudPassword,
-                cloudRecoveryKey,
-                cloudRememberLogin));
-            cloudPassword = string.Empty;
-            cloudRecoveryKey = string.Empty;
-        }
-    }
-
-    private void DrawCloudRegistrationForm(bool busy)
-    {
-        DrawAuthenticationInput(
-            text.Get("密码", "Password"),
-            text.Get("至少 10 位", "At least 10 characters"),
-            "cloud-register-password",
-            ref cloudPassword,
-            128,
-            ImGuiInputTextFlags.Password);
-        DrawAuthenticationInput(
-            text.Get("确认密码", "Confirm password"),
-            text.Get("再次输入密码", "Enter your password again"),
-            "cloud-register-confirm",
-            ref cloudPasswordConfirmation,
-            128,
-            ImGuiInputTextFlags.Password);
-        DrawAuthenticationInput(
-            text.Get("一次性激活码", "One-time activation key"),
-            text.Get("输入管理员或好友发放的激活码", "Enter an activation key from an administrator or friend"),
-            "cloud-activation-key",
-            ref cloudActivationKey,
-            96);
-        DrawCloudActivationKeyHelp();
-        var passwordsMatch = cloudPassword.Length >= 10 &&
-                             cloudPassword == cloudPasswordConfirmation;
-        DrawAuthenticationPersistenceOption();
-        if (DrawAuthenticationPrimaryButton(
-                text.Get("注册并绑定本机", "Register and bind this PC"),
-                !busy && passwordsMatch))
-        {
-            cloud.Register(new CloudRegistrationRequest(
-                cloudUsername,
-                cloudPassword,
-                cloudActivationKey,
-                cloudRememberLogin));
-            ClearCloudSecrets();
-        }
-        if (!string.IsNullOrEmpty(cloudPasswordConfirmation) && !passwordsMatch)
-        {
-            DactTheme.TextColored(
-                new Vector4(0.96f, 0.42f, 0.38f, 1),
-                text.Get("两次密码不一致，或密码不足 10 位。", "Passwords differ or contain fewer than 10 characters."));
-        }
-        DrawAuthenticationMutedText(text.Get(
-            "注册必须同时提供用户名、密码和有效的一次性激活码。",
-            "Registration requires a username, password, and valid one-time activation key."));
-    }
-
-    private void DrawCloudActivationKeyHelp()
-    {
-        // New users cannot reach the signed-in help page; keep the free-key
-        // channels visible beside registration instead of behind another tab.
-        DrawAuthenticationMutedText(text.Get(
-            "DACT 和激活码均免费，请勿购买或转售。",
-            "DACT and activation keys are free. Do not buy or resell them."));
-        DrawAuthenticationMutedText(text.Format(
-            $"加入 QQ 群 {ActivationQqGroup} 或 Discord，联系群主或频道主获取激活码。",
-            $"Join QQ group {ActivationQqGroup} or Discord and contact the group/server owner for an activation key."));
-
-        var qqLabel = text.Get("复制 QQ 群号", "Copy QQ group");
-        var discordLabel = text.Get("打开 Discord", "Open Discord");
-        var availableWidth = ImGui.GetContentRegionAvail().X;
-        var buttonsWidth = ImGui.CalcTextSize(qqLabel).X + ImGui.CalcTextSize(discordLabel).X +
-                           ImGui.GetStyle().FramePadding.X * 4 + ImGui.GetStyle().ItemSpacing.X;
-        if (DactTheme.Button(qqLabel))
-        {
-            ImGui.SetClipboardText(ActivationQqGroup);
-        }
-        // At narrow widths or large font scales, stack the buttons inside the
-        // existing scrollable authentication card instead of overflowing it.
-        if (availableWidth >= buttonsWidth)
-        {
-            ImGui.SameLine();
-        }
-        if (DactTheme.Button(discordLabel))
-        {
-            OpenUrl(ActivationDiscordUrl);
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip(ActivationDiscordUrl);
-        }
-        ImGui.Spacing();
-    }
-
-    private void DrawCloudPasswordResetForm(bool busy, bool hasLocalRecoveryKey)
-    {
-        var resetMethods = new[]
-        {
-            text.Get("恢复密钥自助改密", "Reset with recovery key"),
-            text.Get("管理员协助", "Administrator help"),
-        };
-        var selectedResetMethod = BrandedWindowChrome.DrawNavigationRail(
-            "cloud-password-reset-method",
-            resetMethods,
-            (int)cloudPasswordResetMethod,
-            height: 32);
-        cloudPasswordResetMethod = (CloudPasswordResetMethod)selectedResetMethod;
-        ImGui.Spacing();
-
-        if (cloudPasswordResetMethod == CloudPasswordResetMethod.AdministratorCode)
-        {
-            DrawAuthenticationInput(
-                text.Get("管理员一次性重置码（必填）", "Administrator one-time reset code (required)"),
-                text.Get("输入管理员提供的一次性重置码", "Enter the one-time code from an administrator"),
-                "cloud-reset-code",
-                ref cloudResetCode,
-                96);
-        }
-        DrawAuthenticationInput(
-            text.Get("新密码", "New password"),
-            text.Get("至少 10 位", "At least 10 characters"),
-            "cloud-new-password",
-            ref cloudPassword,
-            128,
-            ImGuiInputTextFlags.Password);
-        DrawAuthenticationInput(
-            text.Get("确认新密码", "Confirm new password"),
-            text.Get("再次输入新密码", "Enter the new password again"),
-            "cloud-new-password-confirm",
-            ref cloudPasswordConfirmation,
-            128,
-            ImGuiInputTextFlags.Password);
-        if (hasLocalRecoveryKey)
-        {
-            DrawAuthenticationMutedText(text.Get(
-                "已检测到本机保存的恢复密钥，将自动用于改密和解锁原有云备份。",
-                "The saved recovery key on this PC will reset the password and unlock existing cloud backups."));
-        }
-        else
-        {
-            DrawAuthenticationInput(
-                text.Get("恢复密钥（必填）", "Recovery key (required)"),
-                text.Get("输入注册时保存的 dact1_ 密钥", "Enter the dact1_ key saved at registration"),
-                "cloud-recovery-key",
-                ref cloudRecoveryKey,
-                96,
-                ImGuiInputTextFlags.Password);
-            DrawAuthenticationMutedText(text.Get(
-                cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey
-                    ? "恢复密钥会验证账号归属，并在改密后继续解锁原有云备份。"
-                    : "管理员重置码授权改密；恢复密钥用于继续解锁原有云备份。",
-                cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey
-                    ? "The recovery key verifies account ownership and keeps existing cloud backups readable."
-                    : "The administrator code authorizes the reset; the recovery key keeps existing cloud backups readable."));
-        }
-
-        var passwordsMatch = cloudPassword.Length >= 10 &&
-                             cloudPassword == cloudPasswordConfirmation;
-        var resetCredentialIsValid =
-            cloudPasswordResetMethod == CloudPasswordResetMethod.RecoveryKey ||
-            !string.IsNullOrWhiteSpace(cloudResetCode);
-        DrawAuthenticationPersistenceOption();
-        if (DrawAuthenticationPrimaryButton(
-                text.Get("确认重置密码", "Reset password"),
-                !busy && passwordsMatch && resetCredentialIsValid &&
-                (hasLocalRecoveryKey || !string.IsNullOrWhiteSpace(cloudRecoveryKey))))
-        {
-            cloud.ResetPassword(new CloudPasswordResetRequest(
-                cloudUsername,
-                cloudResetCode,
-                cloudPassword,
-                cloudRecoveryKey,
-                cloudRememberLogin,
-                cloudPasswordResetMethod));
-            ClearCloudSecrets();
-        }
-    }
-
-    private void DrawAuthenticationHero(bool compact)
-    {
-        var wrap = logoTexture.GetWrapOrEmpty();
-        if (compact)
-        {
-            ImGui.Image(wrap.Handle, new Vector2(48));
-            ImGui.SameLine();
-            ImGui.BeginGroup();
-            DactTheme.TextColored(Gold, "DACT");
-            DactTheme.TextColored(IceBlue, text.Get("账号与云服务", "ACCOUNT & CLOUD"));
-            ImGui.EndGroup();
-            ImGui.Spacing();
-            DrawAuthenticationMutedText(text.Get(
-                "账号验证后启用解析器、悬浮窗与扩展 · Windows 加密自动登录 · 配置本地加密后上传",
-                "Account-gated runtime · Windows-protected auto-login · Locally encrypted cloud backups"));
-            return;
-        }
-
-        const float logoSize = 82;
-        var logoOffset = Math.Max(0, (ImGui.GetContentRegionAvail().X - logoSize) * 0.5f);
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + logoOffset);
-        ImGui.Image(wrap.Handle, new Vector2(logoSize));
-        ImGui.Spacing();
-        DrawCenteredAuthenticationText("DACT", Gold);
-        DrawCenteredAuthenticationText(text.Get("账号与云服务", "ACCOUNT & CLOUD"), IceBlue);
-        ImGui.Dummy(new Vector2(0, 16));
-        DrawAuthenticationMutedText(text.Get(
-            "连接你的 DACT 工作区，在一处管理解析器、悬浮窗、扩展与加密配置。",
-            "Connect your DACT workspace and manage parsers, overlays, extensions, and encrypted settings in one place."));
-        ImGui.Dummy(new Vector2(0, 18));
-        DrawAuthenticationFeature(
-            text.Get("账号验证后启用", "Enabled after verification"),
-            text.Get("未登录时 DACT 功能保持关闭。", "DACT features stay off while signed out."));
-        DrawAuthenticationFeature(
-            text.Get("安全自动登录", "Protected auto-login"),
-            text.Get("登录状态由 Windows 当前用户加密。", "Windows protects the session for the current user."));
-        DrawAuthenticationFeature(
-            text.Get("加密云同步", "Encrypted cloud sync"),
-            text.Get("配置在本地加密后才会上传。", "Settings are encrypted locally before upload."));
-    }
-
-    private static bool BeginAuthenticationPanel(
-        string id,
-        Vector2 size,
-        bool hero,
-        bool allowScrolling)
-    {
-        DactTheme.PushStyleColor(
-            ImGuiCol.ChildBg,
-            hero ? AuthenticationHeroBackground : AuthenticationCardBackground);
-        DactTheme.PushStyleColor(
-            ImGuiCol.Border,
-            hero
-                ? new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f)
-                : AuthenticationBorder);
-        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 11);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(22, 20));
-        var flags = allowScrolling
-            ? ImGuiWindowFlags.None
-            : ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
-        return ImGui.BeginChild(id, size, true, flags);
-    }
-
-    private static void EndAuthenticationPanel()
-    {
-        ImGui.EndChild();
-        ImGui.PopStyleVar(2);
-        ImGui.PopStyleColor(2);
-    }
-
-    private void DrawAuthenticationFeature(string title, string description)
-    {
-        DactTheme.TextColored(IceBlue, "◆");
-        ImGui.SameLine();
-        ImGui.BeginGroup();
-        DactTheme.TextColored(new Vector4(0.90f, 0.94f, 0.98f, 1), title);
-        DrawAuthenticationMutedText(description);
-        ImGui.EndGroup();
-        ImGui.Dummy(new Vector2(0, 9));
-    }
-
-    private static void DrawCenteredAuthenticationText(string value, Vector4 color)
-    {
-        var offset = Math.Max(0, (ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize(value).X) * 0.5f);
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + offset);
-        DactTheme.TextColored(color, value);
-    }
-
-    private static void DrawAuthenticationMutedText(string value)
-    {
-        DactTheme.PushStyleColor(ImGuiCol.Text, AuthenticationMutedText);
-        ImGui.TextWrapped(value);
-        ImGui.PopStyleColor();
-    }
-
-    private void DrawAuthenticationStatus(CloudClientSnapshot snapshot)
-    {
-        var statusMessage = snapshot.IsBusy
-            ? $"{text.SystemMessage(snapshot.StatusMessage)}  {text.Get("处理中…", "Working…")}"
-            : text.SystemMessage(snapshot.StatusMessage);
-        if (string.IsNullOrWhiteSpace(statusMessage))
-        {
-            return;
-        }
-
-        var statusTextColor = snapshot.StatusIsError
-            ? new Vector4(1, 0.52f, 0.48f, 1)
-            : new Vector4(0.58f, 0.86f, 1, 1);
-        var statusBackground = snapshot.StatusIsError
-            ? new Vector4(0.30f, 0.075f, 0.075f, 0.70f)
-            : new Vector4(0.07f, 0.18f, 0.24f, 0.78f);
-        var wrapWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - 42);
-        var statusHeight = Math.Max(40, ImGui.CalcTextSize(statusMessage, false, wrapWidth).Y + 16);
-        DactTheme.PushStyleColor(ImGuiCol.ChildBg, statusBackground);
-        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 6);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10, 8));
-        if (ImGui.BeginChild(
-                "account-authentication-status",
-                new Vector2(-1, statusHeight),
-                false,
-                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
-        {
-            DactTheme.TextColored(statusTextColor, snapshot.StatusIsError ? "!" : "●");
-            ImGui.SameLine();
-            DactTheme.PushStyleColor(ImGuiCol.Text, statusTextColor);
-            ImGui.TextWrapped(statusMessage);
-            ImGui.PopStyleColor();
-        }
-        ImGui.EndChild();
-        ImGui.PopStyleVar(2);
-        ImGui.PopStyleColor();
-    }
-
-    private void DrawAuthenticationInput(
-        string label,
-        string hint,
-        string id,
-        ref string value,
-        int maxLength,
-        ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
-    {
-        ImGui.TextDisabled(label);
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputTextWithHint($"##{id}", hint, ref value, maxLength, flags);
-    }
-
-    private void DrawAuthenticationPersistenceOption()
-    {
-        ImGui.Spacing();
-        DactTheme.Checkbox(
-            text.Get("记住登录状态（下次自动登录）", "Remember sign-in (auto-login next time)"),
-            ref cloudRememberLogin);
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip(text.Get(
-                "登录状态使用 Windows 当前用户加密，并在重启游戏或电脑后恢复。",
-                "Windows protects the saved session for this user and restores it after a game or PC restart."));
-        }
-    }
-
-    private static bool DrawAuthenticationPrimaryButton(string label, bool enabled)
-    {
-        ImGui.BeginDisabled(!enabled);
-        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.10f, 0.36f, 0.50f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.14f, 0.48f, 0.64f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.56f, 0.72f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.Text, new Vector4(0.94f, 0.98f, 1, 1));
-        var clicked = DactTheme.Button(label, new Vector2(-1, 38));
-        ImGui.PopStyleColor(4);
-        ImGui.EndDisabled();
-        return enabled && clicked;
-    }
-
     private void DrawSignedInCloud(CloudClientSnapshot snapshot)
     {
         DrawCloudSummaryCard(snapshot);
+        ImGui.Spacing();
+        DrawCloudDiscordRecovery(snapshot);
 
         if (!string.IsNullOrWhiteSpace(snapshot.RecoveryKeyToSave))
         {
@@ -2988,6 +2491,8 @@ public sealed partial class ControlCenterWindow : Window
 
     private void ClearCloudSecrets()
     {
+        cloudShowPassword = false;
+        cloudResetPasswordStep = false;
         cloudPassword = string.Empty;
         cloudPasswordConfirmation = string.Empty;
         cloudActivationKey = string.Empty;

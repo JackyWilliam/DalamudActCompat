@@ -18,6 +18,7 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
 
     public Task StartAsync(HostLaunchSpec launchSpec, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (IsRunning)
         {
             return Task.CompletedTask;
@@ -56,21 +57,34 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
             return;
         }
 
-        if (!current.HasExited)
+        try
         {
-            try
+            if (!current.HasExited)
             {
-                await current.WaitForExitAsync(cancellationToken)
-                    .WaitAsync(GracefulExitWindow, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                logger.Warning(
-                    "Compatibility Host did not exit after the three-second graceful shutdown window; terminating it.");
-            }
-            catch (OperationCanceledException)
-            {
+                try
+                {
+                    await current.WaitForExitAsync(cancellationToken)
+                        .WaitAsync(GracefulExitWindow, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    logger.Warning(
+                        "Compatibility Host did not exit after the three-second graceful shutdown window; terminating it.");
+                }
+                catch (OperationCanceledException)
+                {
+                    if (!current.HasExited)
+                    {
+                        current.Kill(entireProcessTree: true);
+                        await current.WaitForExitAsync(CancellationToken.None)
+                            .WaitAsync(TimeSpan.FromSeconds(1))
+                            .ConfigureAwait(false);
+                    }
+
+                    throw;
+                }
+
                 if (!current.HasExited)
                 {
                     current.Kill(entireProcessTree: true);
@@ -78,20 +92,19 @@ public sealed class CompatibilityHostProcess : IAsyncDisposable
                         .WaitAsync(TimeSpan.FromSeconds(1))
                         .ConfigureAwait(false);
                 }
-
-                throw;
-            }
-
-            if (!current.HasExited)
-            {
-                current.Kill(entireProcessTree: true);
-                await current.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             }
         }
-
-        current.Dispose();
-        process = null;
-        logger.Information("Compatibility host process stopped.");
+        finally
+        {
+            // A cancellation can kill the child and rethrow. Release the exited
+            // process handle in that path too, without losing a still-live child.
+            if (current.HasExited)
+            {
+                current.Dispose();
+                process = null;
+                logger.Information("Compatibility host process stopped.");
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
