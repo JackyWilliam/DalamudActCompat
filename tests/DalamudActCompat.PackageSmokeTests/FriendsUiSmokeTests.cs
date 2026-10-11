@@ -620,7 +620,7 @@ internal static partial class FriendsUiSmokeTests
             if (runNotifications)
             {
                 BubbleBounds(raster, output);
-                ui.Hide(); NotificationFrames(api, controller, raster, output);
+                ui.Hide(); ChatScrollFrames(raster, output); NotificationFrames(api, controller, raster, output);
             }
         }
         finally { DactTheme.GameAssets = null; DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }

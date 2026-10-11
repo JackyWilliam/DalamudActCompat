@@ -17,6 +17,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         public bool ScrollToLatest = true;
         public readonly WindowDragController Drag = new();
         public long LastMessage;
+        public float LastScroll;
         public string Draft = "";
         public Guid? SubmittedOperation;
         public Vector2 Position;
@@ -121,7 +122,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (!windows.TryGetValue(id, out var window)) windows[id] = window = new();
         window.Open = true; window.Focus = true; window.ScrollToLatest = true;
     }
-    private void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
+    private unsafe void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
     {
         var view = state.Conversations.GetValueOrDefault(id);
         // A queued command may fail before it can prepare a durable send. Keep the
@@ -191,29 +192,51 @@ internal sealed partial class FriendsUiManager : IDisposable
                     (view.PendingSend is null ? 0 : ExtraButtonRowHeight(contentWidth, retryLabel, discardLabel));
                 // The usage notice lives once in the friend drawer. Reclaim its
                 // former footer space here while keeping official/read-only identity.
-                var footer = official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight + extraFooter;
+                var showLatest = !window.AtBottom && view.UnreadCount > 0;
+                var footer = (official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight + extraFooter) +
+                    (showLatest ? ImGui.GetFrameHeightWithSpacing() : 0);
                 var historyHeight = Math.Max(90 * scale, ImGui.GetContentRegionAvail().Y - footer);
                 if (ImGui.BeginChild("messages", new Vector2(-1, historyHeight), false))
                 {
+                    var history = ImGuiP.GetCurrentWindow();
+                    var scroll = ImGui.GetScrollY();
+                    var bottomBeforeDraw = scroll >= ImGui.GetScrollMaxY() - 4;
+                    var wheel = ImGui.IsWindowHovered() && ImGui.GetIO().MouseWheel != 0;
+                    var scrollbar = ImGui.GetCurrentContext().ActiveId == ImGuiP.GetWindowScrollbarID(history, ImGuiAxis.Y);
+                    // User scrolling takes precedence over a pending follow. A
+                    // shorter retained history can clamp Y too, without user input.
+                    if (wheel || scrollbar || !window.ScrollToLatest && scroll < window.LastScroll - 1 && ImGui.GetScrollMaxY() >= window.LastScroll)
+                    { window.ScrollToLatest = false; window.AtBottom = bottomBeforeDraw; }
                     var messages = view.Chat.History.Concat(view.Chat.Pending).OrderBy(m => m.Id).ToArray();
+                    if (messages.Any(m => m.Id > window.LastMessage && m.Sender.UserId == state.Friends?.User?.Id))
+                        window.ScrollToLatest = true;
                     foreach (var message in messages)
                         DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon,
                             message.Sender.IsOfficial ? null : state.FriendDisplayName(message.Sender.UserId, message.Sender.Name), uiText);
                     if (messages.Length == 0) ImGui.TextDisabled(uiText.Get("暂无消息。", "No messages yet."));
                     var last = messages.LastOrDefault()?.Id ?? 0;
-                    // Explicitly entering from a notification also reopens an old
-                    // scrolled view. Read only once its latest content is visible.
-                    if (window.ScrollToLatest || window.AtBottom && last != window.LastMessage) ImGui.SetScrollHereY(1);
-                    window.ScrollToLatest = false;
+                    // Scroll targets and content extents settle on later frames.
+                    // Keep following through wrapping/footer/resize changes, and
+                    // mark read only after the newly drawn tail is actually visible.
+                    var tailVisible = ImGui.GetItemRectMax().Y <= history.InnerRect.Max.Y - history.WindowPadding.Y + 4;
+                    if (window.ScrollToLatest || window.AtBottom)
+                    {
+                        window.ScrollToLatest = !tailVisible;
+                        if (window.ScrollToLatest) ImGui.SetScrollHereY(1);
+                        window.AtBottom = true;
+                    }
+                    else window.AtBottom = bottomBeforeDraw && tailVisible;
                     window.LastMessage = last;
-                    window.AtBottom = ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4;
-                    if (focused && window.AtBottom)
+                    window.LastScroll = scroll;
+                    if (focused && window.AtBottom && tailVisible)
                     {
                         var incoming = messages.Where(m => m.RecipientId == state.Friends?.User?.Id).Select(m => m.Id).DefaultIfEmpty().Max();
                         controller.MarkRead(id, incoming);
                     }
                 }
                 ImGui.EndChild();
+                if (showLatest && DactTheme.Button(uiText.Get("有新消息 · 回到底部", "New messages · Jump to latest"), new(-1, 0)))
+                    window.ScrollToLatest = true;
                 if (official) ImGui.TextWrapped(uiText.Get("这里接收 DACT 官方通知，不支持回复。", "DACT announcements appear here. Replies are disabled."));
                 else
                 {

@@ -22,8 +22,13 @@ internal sealed record CloudClientSnapshot(
     CloudAdministratorStatus? Administrator = null,
     CloudSponsorStatus? Sponsor = null,
     CloudRecoveryStatus? Recovery = null,
-    CloudDiscordLinkCode? DiscordLinkCode = null)
+    CloudDiscordLinkCode? DiscordLinkCode = null,
+    string? RecoveryStatusError = null)
 {
+    // A remembered login proves identity, not Discord ownership. Only a status
+    // returned for this session may release the runtime and its functional UI.
+    public bool CanUseDact => IsSignedIn && ActiveBan is null && Recovery?.DiscordBound == true;
+
     public static CloudClientSnapshot SignedOut(string message = "请登录或注册账号。")
         => new(
             false,
@@ -177,7 +182,9 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 ClearCredentials("登录已过期，请重新登录。", isError: false);
                 return;
             }
-            await apiClient.ValidateSessionAsync(current.Token, token).ConfigureAwait(false);
+            var recoveryVersion = NextRecoveryStatusRequest();
+            var accountStatus = await apiClient.GetAccountStatusAsync(current.Token, token).ConfigureAwait(false);
+            ApplyRecoveryStatus(current, accountStatus.Recovery, recoveryVersion);
             var recoveryWarning = await TryEnableRecoveryResetAsync(current, token)
                 .ConfigureAwait(false);
             StartSessionMonitor(current);
@@ -475,7 +482,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             var status = await apiClient.AcknowledgeAdministratorAsync(current.Token, grantId, token).ConfigureAwait(false);
             ApplyAdministratorStatus(current, status);
             if (IsCurrentSession(current))
-                SetSnapshot(Snapshot with { StatusMessage = "管理员通知已确认。", StatusIsError = false });
+                UpdateSnapshot(value => value with { StatusMessage = "管理员通知已确认。", StatusIsError = false });
         }, cancellationToken);
 
     public Task AcknowledgeSponsorAsync(string username, string grantId, CancellationToken cancellationToken)
@@ -488,7 +495,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             // so a late heartbeat cannot bring back an acknowledged celebration.
             ApplyAccountStatus(current, null, null, status);
             if (IsCurrentSession(current))
-                SetSnapshot(Snapshot with { StatusMessage = "赞助者通知已确认。", StatusIsError = false });
+                UpdateSnapshot(value => value with { StatusMessage = "赞助者通知已确认。", StatusIsError = false });
         }, cancellationToken);
 
     private void ApplyAdministratorStatus(CloudStoredCredentials current, CloudAdministratorStatus status, long? expectedVersion = null)
@@ -610,7 +617,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                         current.RecoveryKey,
                         token)
                     .ConfigureAwait(false);
-                SetSnapshot(Snapshot with
+                UpdateSnapshot(value => value with
                 {
                     IsBusy = true,
                     RestorePreview = preview,
@@ -642,7 +649,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                         current.RecoveryKey,
                         token)
                     .ConfigureAwait(false);
-                SetSnapshot(Snapshot with
+                UpdateSnapshot(value => value with
                 {
                     IsBusy = true,
                     RestorePreview = null,
@@ -675,7 +682,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                     current.RecoveryKey,
                     token)
                 .ConfigureAwait(false);
-            SetSnapshot(Snapshot with
+            UpdateSnapshot(value => value with
             {
                 IsBusy = true,
                 RestorePreview = null,
@@ -789,7 +796,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             // An explicit new login starts against the actual current shared revision.
             operationSharedAuthentication = authenticate ? sharedAccountStore?.PrepareAuthentication() : null;
             operationSharedRevision = operationSharedAuthentication?.Revision ?? sharedAccountStore?.Read().Revision ?? sharedRevision;
-            SetSnapshot(Snapshot with
+            UpdateSnapshot(value => value with
             {
                 IsBusy = true,
                 StatusMessage = message,
@@ -802,7 +809,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
 
     private void FinishOperation()
     {
-        SetSnapshot(Snapshot with { IsBusy = false });
+        UpdateSnapshot(value => value with { IsBusy = false });
         operationGate.Release();
     }
 
@@ -907,7 +914,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             credentials = saved;
             // A fresh authentication must fetch its own grant, even when the
             // username is unchanged (the administrator may have revoked it).
-            snapshot = snapshot with { Sponsor = null, Recovery = null, DiscordLinkCode = null };
+            snapshot = snapshot with { Sponsor = null, Recovery = null, DiscordLinkCode = null, RecoveryStatusError = null };
             friendsSessionGeneration++;
             storedAccount = persisted ? saved : null;
             persistCurrentAccount = persisted;
@@ -1172,13 +1179,14 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             // A slow heartbeat must not block logout or foreground operations.
             // Ignore its role response if a newer operation already updated it.
             var roleVersion = Interlocked.Read(ref administratorStateVersion);
+            var recoveryVersion = NextRecoveryStatusRequest();
             try
             {
                 var status = await apiClient.GetAccountStatusAsync(current.Token, cancellationToken).ConfigureAwait(false);
                 // Old servers grant no sponsor skins. Apply both authorities under
                 // the same token/version guard so a late response cannot cross accounts.
                 ApplyAccountStatus(current, status.Administrator ?? new(), roleVersion, status.Sponsor ?? new());
-                ApplyRecoveryStatus(current, status.Recovery);
+                ApplyRecoveryStatus(current, status.Recovery, recoveryVersion);
             }
             catch (CloudApiException ex) when (ex.ToBanNotice() is { } ban)
             {
@@ -1418,19 +1426,25 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 invitations?.Administrator ?? (snapshot.Username == current.Username ? snapshot.Administrator : null),
                 invitations is not null ? invitations.Sponsor ?? new() :
                     snapshot.Username == current.Username ? snapshot.Sponsor : null,
-                snapshot.Username == current.Username ? snapshot.Recovery : null,
-                snapshot.Username == current.Username ? snapshot.DiscordLinkCode : null);
+                // SaveAuthentication clears the old session's recovery state. A
+                // fast monitor may already have populated the new session before
+                // remembered login finishes loading backups and publishes its name.
+                snapshot.Recovery,
+                snapshot.DiscordLinkCode,
+                snapshot.RecoveryStatusError);
         }
     }
 
     private void SetFailure(string message, bool isError)
-        => SetSnapshot(Snapshot with { StatusMessage = message, StatusIsError = isError });
+        => UpdateSnapshot(value => value with { StatusMessage = message, StatusIsError = isError });
 
-    private void SetSnapshot(CloudClientSnapshot value)
+    private void UpdateSnapshot(Func<CloudClientSnapshot, CloudClientSnapshot> update)
     {
         lock (stateLock)
         {
-            snapshot = value;
+            // Merge UI status into the latest session: a late busy/error update
+            // must not overwrite concurrent binding confirmation or revocation.
+            snapshot = update(snapshot);
         }
     }
 

@@ -5,15 +5,50 @@ namespace DalamudActCompat.UI;
 
 public sealed partial class ControlCenterWindow
 {
-    private const string CloudDiscordInstallUrl = "https://discord.com/oauth2/authorize?client_id=1558610952998359170&integration_type=1&scope=applications.commands";
+    private string? cloudDiscordCodeRequestedFor;
 
     private void DrawCloudDiscordEntry()
     {
-        // Keep the bot reachable even after logout, without putting an account
-        // identifier or a one-time recovery code into the external URL.
-        if (DactTheme.Button(text.Get("打开 Discord 机器人", "Open Discord bot")))
-            OpenUrl(CloudDiscordInstallUrl);
-        ImGui.TextWrapped(text.Get("添加 DACT 后，在私聊中输入 /dact 查看命令。", "Add DACT, then type /dact in a private chat to see its commands."));
+        // The support server already contains the bot. An application-install
+        // consent page neither joins that server nor opens a conversation.
+        if (DactTheme.Button(text.Get("进入 DACT Discord 服务器", "Join the DACT Discord server")))
+            OpenUrl(ActivationDiscordUrl);
+        ImGui.TextWrapped(text.Get("在右侧成员列表的「Bot」分组找到 DACT，右键选择「发消息」，在私聊输入 /dact 并选择账号菜单。",
+            "Find DACT under Bot in the member list on the right, right-click and choose Message, then use /dact in the private chat."));
+    }
+
+    private void DrawCloudDiscordBindingAction(CloudClientSnapshot snapshot)
+    {
+        var ready = snapshot.Recovery is { Protected: true, DiscordAvailable: true, DiscordBound: false };
+        var validCode = snapshot.DiscordLinkCode is { } existing && existing.ExpiresAt > DateTimeOffset.UtcNow;
+        // Prepare once while the binding UI is visible; do not regenerate each
+        // frame or while the user is pasting a still-valid code in Discord.
+        if (ready && !snapshot.IsBusy && !validCode && cloudDiscordCodeRequestedFor != snapshot.Username)
+        {
+            cloudDiscordCodeRequestedFor = snapshot.Username;
+            cloud.CreateDiscordLinkCode();
+        }
+        ImGui.BeginDisabled(snapshot.IsBusy || !ready);
+        if (DactTheme.Button(validCode
+                ? text.Get("复制绑定码并前往 Discord", "Copy code and open Discord")
+                : text.Get("重新准备绑定码", "Retry preparing code")))
+        {
+            if (validCode)
+            {
+                // Only an explicit click touches the clipboard or opens the
+                // browser, and the one-time credential never enters the URL.
+                ImGui.SetClipboardText(snapshot.DiscordLinkCode!.Code);
+                OpenUrl(ActivationDiscordUrl);
+            }
+            else cloud.CreateDiscordLinkCode();
+        }
+        ImGui.EndDisabled();
+        if (validCode)
+        {
+            if (DactTheme.Button(text.Get("只复制绑定码", "Copy code only"))) ImGui.SetClipboardText(snapshot.DiscordLinkCode!.Code);
+            DrawAuthenticationMutedText(text.Format($"有效期至 {snapshot.DiscordLinkCode!.ExpiresAt.LocalDateTime:HH:mm}，请勿转发。",
+                $"Valid until {snapshot.DiscordLinkCode!.ExpiresAt.LocalDateTime:HH:mm}. Do not share this code."));
+        }
     }
 
     private void DrawCloudDiscordRecovery(CloudClientSnapshot snapshot)
@@ -31,18 +66,12 @@ public sealed partial class ControlCenterWindow
         if (recovery?.DiscordBound == true)
         {
             ImGui.TextUnformatted(text.Get($"已绑定 Discord · 已用名额 {recovery.BoundAccounts}/3", $"Discord linked · {recovery.BoundAccounts}/3 slots used"));
-            ImGui.TextWrapped(text.Get("忘记密码时，向机器人使用 /dact-reset 并填写账号名。", "If you forget your password, use /dact-reset with the bot and enter your account name."));
+            ImGui.TextWrapped(text.Get("忘记密码时，在 /dact 菜单点「找回密码」，再选择账号。", "To recover a password, choose Recover password in /dact, then select your account."));
             return;
         }
         if (recovery?.DiscordAvailable != true)
             ImGui.TextWrapped(text.Get("Discord 机器人尚未就绪。", "The Discord bot is not ready yet."));
-        ImGui.BeginDisabled(snapshot.IsBusy || recovery is not { Protected: true, DiscordAvailable: true });
-        if (ImGui.Button(text.Get("生成账号绑定码", "Generate account binding code"))) cloud.CreateDiscordLinkCode();
-        ImGui.EndDisabled();
-        if (snapshot.DiscordLinkCode is { } code && code.ExpiresAt > DateTimeOffset.UtcNow)
-        {
-            ImGui.TextWrapped(text.Get("复制绑定码，向 DACT 机器人使用 /dact-bind 并粘贴。10 分钟内有效，请勿转发。", "Copy the code and paste it into /dact-bind with the DACT bot. It expires in 10 minutes; do not share it."));
-            if (ImGui.Button(text.Get("复制绑定码", "Copy binding code"))) ImGui.SetClipboardText(code.Code);
-        }
+        DrawCloudDiscordBindingAction(snapshot);
+        ImGui.TextWrapped(text.Get("在 /dact 菜单点「绑定账号」，粘贴后提交。", "Choose Link account in /dact, paste your code, and submit."));
     }
 }

@@ -8,6 +8,7 @@ internal static class CloudAccountRecoverySmokeTests
     public static async Task RunAsync(string root)
     {
         await ValidateCredentialErrorsAsync(root);
+        await DiscordBindingSmokeTests.RunAsync(root);
         if (Environment.GetEnvironmentVariable("DACT_RECOVERY_TEST_URL") is { Length: > 0 } url)
             await ValidateRealRecoveryAsync(root, url);
         Console.WriteLine("Account recovery smoke tests passed.");
@@ -68,6 +69,15 @@ internal static class CloudAccountRecoverySmokeTests
             Check(remembered.Snapshot.IsSignedIn, "Automatic protection blocked remembered login.");
             await remembered.CreateDiscordLinkCodeAsync(default);
             Check(remembered.Snapshot.DiscordLinkCode is not null, "A protected account could not generate a binding code.");
+            Check(!remembered.Snapshot.CanUseDact, "Unbound real account escaped the runtime gate.");
+            Console.WriteLine("Waiting for isolated Discord binding.");
+            if (Environment.GetEnvironmentVariable("DACT_RECOVERY_TEST_BIND_WAIT") == "1")
+            {
+                using var bindingDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                while (!remembered.Snapshot.CanUseDact) await Task.Delay(20, bindingDeadline.Token);
+                Check(remembered.Snapshot.DiscordLinkCode is null, "Confirmed real binding kept its one-time code.");
+                Console.WriteLine("Discord binding automatically opened the real client gate.");
+            }
             Console.WriteLine("Remembered login automatically protected the original backup key.");
             return;
         }
@@ -87,6 +97,8 @@ internal static class CloudAccountRecoverySmokeTests
         Check(!client.HasRecoveryKeyFor("client_recovery"), "Reset fixture accidentally retained a local key.");
         await client.ResetPasswordAsync("client_recovery", code, "new-password-from-discord", "", true, CloudPasswordResetMethod.AdministratorCode, default);
         Check(client.Snapshot.IsSignedIn && !client.Snapshot.StatusIsError, "Code-only reset did not sign in: " + client.Snapshot.StatusMessage);
+        using (var bindingDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(8)))
+            while (!client.Snapshot.CanUseDact) await Task.Delay(20, bindingDeadline.Token);
         var recovered = store.Load()!;
         Check(recovered.RecoveryKey == key, "Reset rotated the original data key.");
         Check(client.Snapshot.Backups.Single().Id == uploaded.Id, "Reset lost the pre-existing backup.");

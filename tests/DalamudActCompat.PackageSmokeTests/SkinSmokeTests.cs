@@ -277,7 +277,9 @@ internal static partial class SkinSmokeTests
             LoadGameTextures(raster);
             var output = Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT");
             if (output is not null) Directory.CreateDirectory(output);
+            ButtonFocus(raster, output);
             SolidButtons(raster, output);
+            FilePicker(raster, output);
             GlassCards(raster, output);
             RainGeometry();
             var config = new PluginConfiguration();
@@ -789,6 +791,12 @@ internal static partial class SkinSmokeTests
                             DactTheme.Button(label, new((state == 0 ? 140 : 180) * scale, 28 * scale));
                             ImGui.EndDisabled(); ImGui.PopID();
                         }
+                        ImGui.SameLine();
+                        ImGui.PushID("auto");
+                        DactTheme.Button(label);
+                        Check(ImGui.GetItemRectSize().X - ImGui.CalcTextSize(label).X >= 26 * scale - 1,
+                            $"Eorzea auto-sized button has insufficient horizontal padding: {label}, {scale}.");
+                        ImGui.PopID();
                     }
                     ImGui.TextDisabled("同一文字在不同宽度与禁用状态下，按字形可见边界居中。");
                     ImGui.End();

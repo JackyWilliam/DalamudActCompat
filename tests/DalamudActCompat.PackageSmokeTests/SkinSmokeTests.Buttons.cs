@@ -9,6 +9,57 @@ using DalamudActCompat.UI;
 
 internal static partial class SkinSmokeTests
 {
+    private static unsafe void ButtonFocus(NativeUiRasterizer raster, string? output)
+    {
+        var io = ImGui.GetIO(); var previousFlags = io.ConfigFlags;
+        io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
+        var center = Vector2.Zero; var focused = false; var outlineVertices = 0; var clicks = 0;
+        void Frame()
+        {
+            ImGui.NewFrame();
+            using (DactTheme.PushFrame())
+            {
+                ImGui.SetNextWindowPos(new(30)); ImGui.SetNextWindowSize(new(540, 180));
+                ImGui.Begin("actual-custom-button-focus", ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDecoration);
+                DactTheme.DrawGameWindow();
+                var draw = ImGui.GetWindowDrawList(); var start = draw.VtxBuffer.Size;
+                if (DactTheme.Button("打开配置", new(160, 36))) clicks++;
+                center = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) / 2;
+                focused = ImGui.IsItemFocused();
+                ImGui.SameLine();
+                if (DactTheme.Button("保存", new(120, 36))) clicks++;
+                focused |= ImGui.IsItemFocused();
+                var accent = ImGui.GetColorU32(DactTheme.Palette.Accent); outlineVertices = 0;
+                for (var v = start; v < draw.VtxBuffer.Size; v++)
+                    if (draw.VtxBuffer[v].Col == accent) outlineVertices++;
+                ImGui.End();
+            }
+            ImGui.Render();
+        }
+        try
+        {
+            foreach (var skin in new[] { SkinCatalog.Eorzea, SkinCatalog.LiquidGlass })
+            {
+                DactTheme.SetCurrent(new() { SelectedSkin = skin, UnlockedEasterEggs = SkinCatalog.All.Where(s => s.EasterEgg).Select(s => s.Id).ToHashSet() }, true, 3);
+                io.AddMousePosEvent(-100, -100); Frame(); Frame();
+                var before = clicks;
+                io.AddMousePosEvent(center.X, center.Y); Frame();
+                io.AddMouseButtonEvent(0, true); Frame(); io.AddMouseButtonEvent(0, false); Frame();
+                io.AddMousePosEvent(-100, -100); Frame();
+                Check(focused && clicks == before + 1 && outlineVertices == 0,
+                    $"{skin}: mouse click left a persistent dark focus frame.");
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"button-mouse-focus-{skin}.png"));
+                io.AddKeyEvent(ImGuiKey.RightArrow, true); Frame(); io.AddKeyEvent(ImGuiKey.RightArrow, false); Frame(); Frame();
+                if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"button-keyboard-focus-{skin}.png"));
+                Check(focused && outlineVertices > 0, $"{skin}: keyboard navigation lost its visible focus cue (focused={focused}, outline={outlineVertices}, hidden={ImGui.GetCurrentContext().NavDisableHighlight}, nav={ImGui.GetCurrentContext().NavId}).");
+                io.AddKeyEvent(ImGuiKey.Space, true); Frame(); io.AddKeyEvent(ImGuiKey.Space, false); Frame();
+                Check(clicks == before + 2, $"{skin}: keyboard activation stopped working.");
+            }
+            Console.WriteLine("PASS custom buttons: mouse clicks leave no persistent dark frame; native directional focus and Space activation remain visible/working for Eorzea and glass.");
+        }
+        finally { io.ConfigFlags = previousFlags; DactTheme.SetCurrent(new(), false, 0); }
+    }
+
     private static unsafe void SolidButtons(NativeUiRasterizer raster, string? output)
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -69,7 +120,7 @@ internal static partial class SkinSmokeTests
         }
         try
         {
-            foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber, SkinCatalog.NeonPink, SkinCatalog.Obsidian })
+            foreach (var skin in new[] { SkinCatalog.Default, SkinCatalog.Jade, SkinCatalog.Amethyst, SkinCatalog.Amber, SkinCatalog.NeonPink, SkinCatalog.Obsidian, SkinCatalog.RainyWindow })
             {
                 config.Appearance.SelectedSkin = skin; io.AddMousePosEvent(-100, -100); Frame(false); Frame(false);
                 var palette = DactTheme.Palette;
@@ -99,7 +150,7 @@ internal static partial class SkinSmokeTests
                 Check(hasFill, $"{skin}: real homepage quick buttons did not render their distinct fill.");
                 if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"DACT-首页-{skin}.png"));
             }
-            Console.WriteLine("PASS solid skins: six actual homepages, distinct button states, text contrast, native clicks/disabled controls and balanced style scopes.");
+            Console.WriteLine("PASS solid/rain skins: seven actual homepages, distinct button states, text contrast, native clicks/disabled controls and balanced style scopes.");
         }
         finally { io.DisplaySize = previousSize; DactTheme.SetCurrent(new(), false, 0); }
     }

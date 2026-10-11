@@ -56,6 +56,11 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--account-native-only", StringComparer.Ordinal))
+    {
+        AccountNativeUiSmokeTests.Run();
+        return 0;
+    }
     if (args.Contains("--host-lifecycle-only", StringComparer.Ordinal))
     {
         await HostLifecycleSmokeTests.RunAsync(testRoot);
@@ -3473,7 +3478,7 @@ static void ValidateIndependentMeterWindows()
         "src",
         "DalamudActCompat",
         "UI",
-        "ControlCenterWindow.cs"));
+        "ControlCenterWindow.cs")) + File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Authentication.cs"));
     var settingsSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -4787,7 +4792,7 @@ static void ValidateControlCenterPresentation()
 
     var projectRoot = FindProjectRoot();
     var controlCenterSource = File.ReadAllText(Path.Combine(
-        projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+        projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs")) + File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Authentication.cs"));
     var meterWindowSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Meter", "MeterWindow.cs"));
     var historySource = File.ReadAllText(Path.Combine(
@@ -4838,7 +4843,7 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("account-authentication-gate", StringComparison.Ordinal) &&
         controlCenterSource.Contains("account-authentication-hero", StringComparison.Ordinal) &&
         controlCenterSource.Contains("account-authentication-card", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("stackAuthenticationLayout", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawDiscordBindingGate(cloudSnapshot)", StringComparison.Ordinal) &&
         controlCenterSource.Contains("account-authentication-navigation", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawAuthenticationGate(cloudSnapshot);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("private void DrawAccountSettings()", StringComparison.Ordinal) &&
@@ -4964,7 +4969,7 @@ static void ValidateControlCenterPresentation()
         !constructorSourceForAuthentication.Contains(
             "RestrictWindowsToAuthenticationGate(openGate: true);",
             StringComparison.Ordinal) &&
-        pluginSource.Contains("if (!cloudClient.Snapshot.IsSignedIn)", StringComparison.Ordinal) &&
+        pluginSource.Contains("if (!cloudClient.Snapshot.CanUseDact)", StringComparison.Ordinal) &&
         pluginSource.Contains("if (!IsDactAccessAllowed())", StringComparison.Ordinal) &&
         !hostResourceMethod.Contains("StartIndependentHostAsync", StringComparison.Ordinal),
         "Authentication no longer starts silently, gates DACT runtime startup, or keeps core resource download from starting a Host before login.");
@@ -6398,7 +6403,7 @@ static void ValidateFflogsConcurrencyBoundaries()
     var serviceSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Fflogs", "FflogsEstimateService.cs"));
     var controlCenterSource = File.ReadAllText(Path.Combine(
-        projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+        projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs")) + File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Authentication.cs"));
     var adapterSource = File.ReadAllText(Path.Combine(
         projectRoot, "src", "DalamudActCompat", "Parser", "IinactAdapter.cs"));
     Assert(
@@ -10328,7 +10333,7 @@ static void ValidateHtmlOverlayDefaults()
         "src",
         "DalamudActCompat",
         "UI",
-        "ControlCenterWindow.cs"));
+        "ControlCenterWindow.cs")) + File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Authentication.cs"));
     var meterWindowSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -10458,7 +10463,7 @@ static void ValidateHtmlOverlayDefaults()
         "Unified overlay management lost an existing Cactbot or custom overlay entry point.");
     Assert(
         controlCenterSource.Contains(
-            "var helpAction = cloudSnapshot.IsSignedIn ? openHelp : null;",
+            "var helpAction = cloudSnapshot.CanUseDact ? openHelp : null;",
             StringComparison.Ordinal) &&
         controlCenterSource.Contains("helpAction: helpAction", StringComparison.Ordinal) &&
         controlCenterSource.Contains("helpTooltip: text.Get(\"帮助\", \"Help\")", StringComparison.Ordinal) &&
@@ -13193,7 +13198,8 @@ static void ValidateNetworkLogSessionRotation(string testRoot)
 static void ValidateCloudActivationKeyHelp()
 {
     var projectRoot = FindProjectRoot();
-    var ui = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
+    var ui = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs")) +
+        File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.Authentication.cs"));
     var registration = ui[ui.IndexOf("private void DrawCloudRegistrationForm(", StringComparison.Ordinal)..
         ui.IndexOf("private void DrawCloudActivationKeyHelp(", StringComparison.Ordinal)];
     var help = ui[ui.IndexOf("private void DrawCloudActivationKeyHelp(", StringComparison.Ordinal)..

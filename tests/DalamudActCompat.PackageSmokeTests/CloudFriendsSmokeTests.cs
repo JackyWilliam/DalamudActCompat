@@ -113,7 +113,8 @@ internal static class CloudFriendsSmokeTests
                 return Task.FromResult(Json(new { online = true, onlineConnectionCount = 1, heartbeatIntervalSeconds = 25 }));
             }
             if (path.EndsWith("/friends")) { Interlocked.Increment(ref friendReads); return pending.Task; }
-            if (path.EndsWith("/auth/me") || path.EndsWith("/auth/logout")) return Task.FromResult(Json(new { }));
+            if (path.EndsWith("/auth/me")) return Task.FromResult(Json(new { recovery = new CloudRecoveryStatus(true, true, true, 3, 1, true) }));
+            if (path.EndsWith("/auth/logout")) return Task.FromResult(Json(new { }));
             if (path.EndsWith("/backups")) return Task.FromResult(Json(new { backups = Array.Empty<object>() }));
             if (path.EndsWith("/invitations")) return Task.FromResult(Json(new { quota = 3, used = 0, remaining = 3, invitations = Array.Empty<object>() }));
             return Task.FromResult(Json(new { error = "not_found", message = "isolated" }, HttpStatusCode.NotFound));
@@ -171,7 +172,8 @@ internal static class CloudFriendsSmokeTests
                 return Json(new { online = true, onlineConnectionCount = 1, heartbeatIntervalSeconds = 25 });
             }
             if (path.EndsWith("/friends")) return Json(new CloudFriendList([], 0, [], CloudChatPolicy.Notice, new("self", "isolated"), profile));
-            if (path.EndsWith("/auth/me") || path.EndsWith("/auth/logout")) return Json(new { });
+            if (path.EndsWith("/auth/me")) return Json(new { recovery = new CloudRecoveryStatus(true, true, true, 3, 1, true) });
+            if (path.EndsWith("/auth/logout")) return Json(new { });
             if (path.EndsWith("/backups")) return Json(new { backups = Array.Empty<object>() });
             if (path.EndsWith("/invitations")) return Json(new { quota = 3, used = 0, remaining = 3, invitations = Array.Empty<object>() });
             return Json(new { error = "not_found", message = "isolated" }, HttpStatusCode.NotFound);
@@ -285,12 +287,15 @@ internal static class CloudFriendsSmokeTests
             new PortableConfigurationBackupService().GenerateRecoveryKey()));
         var backups = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var rejected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var validations = 0;
         using var http = new HttpClient(new Handler((request, _) =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (path.EndsWith("/friends/presence"))
+            // While binding is pending there is intentionally no social presence.
+            // The independent account monitor must still revoke a slow login.
+            if (path.EndsWith("/auth/me") && Interlocked.Increment(ref validations) > 1)
             {
-                if (request.Method == HttpMethod.Delete) rejected.TrySetResult();
+                rejected.TrySetResult();
                 return Task.FromResult(Json(new { error = "unauthorized", message = "revoked" }, HttpStatusCode.Unauthorized));
             }
             if (path.EndsWith("/backups")) return backups.Task;

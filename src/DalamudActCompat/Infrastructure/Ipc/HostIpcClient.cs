@@ -13,6 +13,10 @@ namespace DalamudActCompat.Infrastructure.Ipc;
 
 public sealed class HostIpcClient : IAsyncDisposable
 {
+    // The Host reader also replays startup-buffered events and runs plugin callbacks, so a
+    // busy but healthy reader may hold a frame for a while. Match the Host's own 15 s plugin
+    // startup limit and fault only a reader that is genuinely stuck.
+    private static readonly TimeSpan ReaderStallLimit = TimeSpan.FromSeconds(15);
     private readonly EncounterStateStore stateStore;
     private readonly PluginLogger logger;
     private readonly Func<HostPermissionSnapshot> permissionSnapshot;
@@ -38,6 +42,7 @@ public sealed class HostIpcClient : IAsyncDisposable
     private long hostLastReceivedSequence;
     private long lastHeartbeatTicks;
     private long lastHostProgressTicks;
+    private long pendingWriteStartedTicks;
     private long hostWorkingSetBytes;
     private long hostPrivateBytes;
     private long availablePhysicalMemoryBytes;
@@ -136,6 +141,7 @@ public sealed class HostIpcClient : IAsyncDisposable
             hostLastReceivedSequence = 0;
             lastHeartbeatTicks = DateTimeOffset.UtcNow.UtcTicks;
             lastHostProgressTicks = lastHeartbeatTicks;
+            Volatile.Write(ref pendingWriteStartedTicks, 0);
             hostWorkingSetBytes = 0;
             hostPrivateBytes = 0;
             availablePhysicalMemoryBytes = 0;
@@ -351,8 +357,19 @@ public sealed class HostIpcClient : IAsyncDisposable
             {
                 Sequence = Interlocked.Increment(ref sendSequence),
             };
-            await HostFrameCodec.WriteAsync(target, envelope, cancellationToken)
-                .ConfigureAwait(false);
+            // The pipes have no buffer, so a write completes only when the Host reads it.
+            // While its reader is stuck in a plugin callback, this write stays pending and
+            // the acknowledged sequence keeps matching the written one; time the write itself.
+            Volatile.Write(ref pendingWriteStartedTicks, DateTimeOffset.UtcNow.UtcTicks);
+            try
+            {
+                await HostFrameCodec.WriteAsync(target, envelope, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                Volatile.Write(ref pendingWriteStartedTicks, 0);
+            }
             var previousWritten = Interlocked.Exchange(
                 ref lastWrittenSequence,
                 envelope.Sequence);
@@ -439,6 +456,18 @@ public sealed class HostIpcClient : IAsyncDisposable
             {
                 MarkFaulted(new TimeoutException(
                     $"ACT Host heartbeat missing for {elapsed.TotalSeconds:0.0} seconds."));
+                return;
+            }
+
+            var pendingWriteSince = Volatile.Read(ref pendingWriteStartedTicks);
+            var pendingWriteElapsed = pendingWriteSince == 0
+                ? TimeSpan.Zero
+                : DateTimeOffset.UtcNow - new DateTimeOffset(pendingWriteSince, TimeSpan.Zero);
+            if (pendingWriteElapsed >= ReaderStallLimit)
+            {
+                MarkFaulted(new TimeoutException(
+                    "ACT Host heartbeat is alive but it has not read the next IPC frame for " +
+                    $"{pendingWriteElapsed.TotalSeconds:0.0} seconds; its event reader is blocked."));
                 return;
             }
 

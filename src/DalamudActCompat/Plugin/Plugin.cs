@@ -114,6 +114,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ISharedImmediateTexture matchaWorldChangedIcon;
     private readonly ISharedImmediateTexture matchaDutyEnteredIcon;
     private readonly SemaphoreSlim hostTopologyLock = new(1, 1);
+    private string hostTopologyOwner = "none";
     private readonly object permissionSnapshotLock = new();
     private readonly object pluginInstallStatusLock = new();
     private string? activeHostPermissionFingerprint;
@@ -185,6 +186,7 @@ public sealed class Plugin : IDalamudPlugin
     // Cached authentication is restored asynchronously. Treat the initial signed-out
     // snapshot as already observed so normal game startup does not look like a logout.
     private int observedCloudAuthenticationState;
+    private bool discordBindingGatePresented;
     private int cloudRuntimeAuthorized;
     private bool cloudRuntimeInitialized;
     private Task cloudRuntimeTransitionTask = Task.CompletedTask;
@@ -742,7 +744,8 @@ public sealed class Plugin : IDalamudPlugin
                 StartCloudRestore,
                 StartCloudRollback,
                 () => StartCloudOperation(cloudClient.CreateDiscordLinkCodeAsync),
-                cloudClient.HasRecoveryKeyFor));
+                cloudClient.HasRecoveryKeyFor,
+                () => StartCloudOperation(cloudClient.RefreshRecoveryStatusAsync)));
         friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
         friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
             playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
@@ -919,10 +922,11 @@ public sealed class Plugin : IDalamudPlugin
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
         liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || DactTheme.Palette.Rain || settingsWindow.NeedsGlassPreview);
-        cloudAdministratorNotice.Update(cloudClient.Snapshot);
+        var noticeAccount = appearanceAccount.CanUseDact ? appearanceAccount : CloudClientSnapshot.SignedOut();
+        cloudAdministratorNotice.Update(noticeAccount);
         // Serialize the two celebrations so their windows and confirmation buttons
         // never overlap. The queued animation starts only when it becomes visible.
-        cloudSponsorNotice.Update(cloudAdministratorNotice.IsOpen ? CloudClientSnapshot.SignedOut() : cloudClient.Snapshot);
+        cloudSponsorNotice.Update(cloudAdministratorNotice.IsOpen ? CloudClientSnapshot.SignedOut() : noticeAccount);
         triggernometryNativeBridge.Update(DateTimeOffset.UtcNow);
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
@@ -930,7 +934,7 @@ public sealed class Plugin : IDalamudPlugin
             windowSystem.Draw();
             return;
         }
-        if (!cloudClient.Snapshot.IsSignedIn)
+        if (!cloudClient.Snapshot.CanUseDact)
         {
             // Authentication can be revoked by a network callback between Framework frames.
             // Close every functional window before this same UI frame is rendered.
@@ -967,19 +971,23 @@ public sealed class Plugin : IDalamudPlugin
         using var appearanceFrame = DactTheme.PushFrame();
         windowSystem.Draw();
         friendsUi.Draw(settingsWindow.IsOpen, services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
-        fileDialogManager.Draw();
+        DactTheme.DrawFileDialog(fileDialogManager);
         cloudAdministratorNotice.Draw(cloudClient.Snapshot);
         if (!cloudAdministratorNotice.IsOpen) cloudSponsorNotice.Draw(cloudClient.Snapshot);
     }
 
     private bool IsDactAccessAllowed()
         => Volatile.Read(ref cloudAccessBlocked) == 0 &&
-           Volatile.Read(ref cloudRuntimeAuthorized) != 0;
+           Volatile.Read(ref cloudRuntimeAuthorized) != 0 && cloudClient.Snapshot.CanUseDact;
 
     private void SynchronizeCloudAuthenticationState()
     {
-        var authenticated = cloudClient.Snapshot is { IsSignedIn: true, ActiveBan: null } &&
-                            Volatile.Read(ref cloudAccessBlocked) == 0;
+        var account = cloudClient.Snapshot;
+        var needsBinding = account.IsSignedIn && !account.CanUseDact && account.ActiveBan is null;
+        if (needsBinding && !discordBindingGatePresented)
+            RestrictWindowsToAuthenticationGate(openGate: true);
+        discordBindingGatePresented = needsBinding;
+        var authenticated = account.CanUseDact && Volatile.Read(ref cloudAccessBlocked) == 0;
         var nextState = authenticated ? 1 : 0;
         if (Interlocked.Exchange(ref observedCloudAuthenticationState, nextState) == nextState)
         {
@@ -1092,6 +1100,23 @@ public sealed class Plugin : IDalamudPlugin
         lock (cloudRuntimeCancellationLock)
         {
             cloudRuntimeCancellation?.Cancel();
+        }
+    }
+
+    private async Task EnterHostTopologyAsync(string operation, CancellationToken cancellationToken = default)
+    {
+        await hostTopologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Only the current holder writes this, so a long-waiting stop can name the operation.
+        Volatile.Write(ref hostTopologyOwner, $"{operation} (since {DateTimeOffset.Now:HH:mm:ss})");
+    }
+
+    // Host starts outside the sign-in path hold the topology lock for up to one deadline per
+    // role. Sign-out must cancel them, or the sign-out stop has to wait behind them.
+    private CancellationToken CurrentCloudRuntimeToken()
+    {
+        lock (cloudRuntimeCancellationLock)
+        {
+            return cloudRuntimeCancellation?.Token ?? new CancellationToken(canceled: true);
         }
     }
 
@@ -1272,23 +1297,38 @@ public sealed class Plugin : IDalamudPlugin
         await StopDactComponentAsync(reason, "parser", parserEngine.StopAsync)
             .ConfigureAwait(false);
 
-        await StopDactHostsAsync(reason).ConfigureAwait(false);
+        await StopDactHostsAsync(reason, stopParserUnderLock: true).ConfigureAwait(false);
     }
 
-    private async Task StopDactHostsAsync(string reason)
+    private async Task StopDactHostsAsync(string reason, bool stopParserUnderLock = false)
     {
         var lockAcquired = false;
         try
         {
-            using var lockTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await hostTopologyLock.WaitAsync(lockTimeout.Token).ConfigureAwait(false);
+            // Final stops must not be skipped because another topology operation is slow.
+            // Holders only have cooperative deadlines, which a synchronous parser stop or file
+            // call can outlast, so keep ownership of the stop and name the holder meanwhile.
+            while (!await hostTopologyLock.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false))
+            {
+                logger.Warning(
+                    $"{reason} is still waiting for '{Volatile.Read(ref hostTopologyOwner)}'; " +
+                    "ACT services will be stopped once it finishes.");
+            }
             lockAcquired = true;
+            Volatile.Write(ref hostTopologyOwner, $"{reason} stop (since {DateTimeOffset.Now:HH:mm:ss})");
             await StopDactComponentAsync(reason, "generic Host", genericHostSupervisor.StopAsync)
                 .ConfigureAwait(false);
             await StopDactComponentAsync(reason, "Matcha Host", matchaHostSupervisor.StopAsync)
                 .ConfigureAwait(false);
             await StopDactComponentAsync(reason, "shared Host", hostSupervisor.StopAsync)
                 .ConfigureAwait(false);
+            if (stopParserUnderLock)
+            {
+                // A maintenance operation that held this lock may have resumed the parser
+                // after the early stop above. Under the lock no resumer is still running.
+                await StopDactComponentAsync(reason, "parser", parserEngine.StopAsync)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -1400,7 +1440,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             return;
         }
-        if (!cloudClient.Snapshot.IsSignedIn)
+        if (!cloudClient.Snapshot.CanUseDact)
         {
             settingsWindow.LocateAnimated();
             return;
@@ -1486,7 +1526,7 @@ public sealed class Plugin : IDalamudPlugin
         else
         {
             RestoreWindowsAfterSimplifiedMode();
-            StartBackgroundOperation(() => StartIndependentHostAsync(CancellationToken.None));
+            StartBackgroundOperation(() => StartIndependentHostAsync(CurrentCloudRuntimeToken()));
         }
 
         UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
@@ -1541,7 +1581,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private async Task StopAllManagedHostsForSimplifiedModeAsync()
     {
-        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+        await EnterHostTopologyAsync("simplified mode stop").ConfigureAwait(false);
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -1567,7 +1607,7 @@ public sealed class Plugin : IDalamudPlugin
             logger.Warning("DACT command ignored because cloud access is banned.");
             return;
         }
-        if (!cloudClient.Snapshot.IsSignedIn)
+        if (!cloudClient.Snapshot.CanUseDact)
         {
             settingsWindow.LocateAnimated();
             logger.Warning("DACT command ignored until cloud authentication succeeds.");
@@ -2567,6 +2607,9 @@ public sealed class Plugin : IDalamudPlugin
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(3));
         await cloudRuntimeTransitionTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        // Captured after the sign-in transition has created its session: restarting the
+        // components this operation stops belongs to that session only.
+        var sessionToken = CurrentCloudRuntimeToken();
         // Finish all one-shot startup writers before taking the file-operation locks;
         // otherwise an early restore could be overwritten after this method releases them.
         await lifecycle.WaitForStartupAsync(timeout.Token).ConfigureAwait(false);
@@ -2578,7 +2621,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
             cactbotGateAcquired = true;
-            await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+            await EnterHostTopologyAsync("cloud file operation", timeout.Token).ConfigureAwait(false);
             hostTopologyAcquired = true;
             var parserWasRunning = parserEngine.Status.State == ParserState.Running;
             var sharedWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
@@ -2657,7 +2700,8 @@ public sealed class Plugin : IDalamudPlugin
                             sharedWasRunning,
                             matchaWasRunning,
                             genericWasRunning,
-                            shutdownToken)
+                            shutdownToken,
+                            sessionToken)
                         .ConfigureAwait(false);
                 }
             }
@@ -2675,7 +2719,8 @@ public sealed class Plugin : IDalamudPlugin
                                 sharedWasRunning,
                                 matchaWasRunning,
                                 genericWasRunning,
-                                shutdownToken)
+                                shutdownToken,
+                                sessionToken)
                             .ConfigureAwait(false);
                     }
                     catch (Exception recoveryFailure)
@@ -2707,60 +2752,75 @@ public sealed class Plugin : IDalamudPlugin
         bool sharedWasRunning,
         bool matchaWasRunning,
         bool genericWasRunning,
-        CancellationToken shutdownToken)
+        CancellationToken shutdownToken,
+        CancellationToken sessionToken)
     {
-        using var recoveryTimeout =
-            CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
-        // File/network work owns its own deadline. Recovery needs a fresh window so an
-        // operation timeout cannot prevent the components it stopped from restarting.
-        recoveryTimeout.CancelAfter(TimeSpan.FromMinutes(1));
-        await RestoreCloudOperationRuntimeAsync(
-                parserWasRunning,
-                sharedWasRunning,
-                matchaWasRunning,
-                genericWasRunning,
-                recoveryTimeout.Token)
-            .ConfigureAwait(false);
-    }
-
-    private async Task RestoreCloudOperationRuntimeAsync(
-        bool parserWasRunning,
-        bool sharedWasRunning,
-        bool matchaWasRunning,
-        bool genericWasRunning,
-        CancellationToken cancellationToken)
-    {
-        if (!IsDactAccessAllowed())
-        {
-            // A ban can arrive while a cloud snapshot owns the topology lock. Its
-            // finally path must never restart components after enforcement began.
-            return;
-        }
+        var failures = new List<Exception>();
         if (sharedWasRunning)
         {
-            if (!IsDactAccessAllowed())
+            await RestoreAsync(async token =>
             {
-                return;
-            }
-            await hostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
-            await hostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
+                await hostSupervisor.StartAsync(token).ConfigureAwait(false);
+                await hostSupervisor.WaitForPluginStartupAsync(token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
         }
         if (parserWasRunning)
         {
-            if (!IsDactAccessAllowed())
-            {
-                return;
-            }
-            await parserEngine.StartAsync(cancellationToken).ConfigureAwait(false);
+            await RestoreAsync(token => parserEngine.StartAsync(token)).ConfigureAwait(false);
         }
-        if (matchaWasRunning && sharedWasRunning)
+        if (matchaWasRunning && hostSupervisor.Snapshot.State == HostSupervisorState.Running)
         {
-            await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true)
+            await RestoreAsync(token => StartMatchaAfterSharedHostAsync(token, throwOnFailure: true))
                 .ConfigureAwait(false);
         }
         if (genericWasRunning)
         {
-            await StartGenericHostAsync(cancellationToken).ConfigureAwait(false);
+            await RestoreAsync(token => StartGenericHostAsync(token)).ConfigureAwait(false);
+        }
+
+        if (failures.Count == 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
+        if (failures.Count > 1)
+        {
+            throw new AggregateException(
+                "Several runtime components could not be restored after the cloud operation.",
+                failures);
+        }
+
+        // File/network work owns its own deadline, and so does every component here: one
+        // Host failing or using its whole window must not leave the parser or another Host
+        // stopped, because nothing restarts a maintenance-stopped Host automatically.
+        async Task RestoreAsync(Func<CancellationToken, Task> restore)
+        {
+            if (!IsDactAccessAllowed() || sessionToken.IsCancellationRequested)
+            {
+                // A ban or sign-out can arrive while a cloud snapshot owns the topology lock.
+                // Its finally path must never restart components after enforcement began, and
+                // a quick re-sign-in must not inherit this old session's restart.
+                return;
+            }
+
+            using var recoveryTimeout =
+                CancellationTokenSource.CreateLinkedTokenSource(shutdownToken, sessionToken);
+            recoveryTimeout.CancelAfter(TimeSpan.FromMinutes(1));
+            try
+            {
+                await restore(recoveryTimeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
+            {
+                // Sign-out owns the final stop; an interrupted restart is not a failure.
+            }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+            }
         }
     }
 
@@ -2782,15 +2842,26 @@ public sealed class Plugin : IDalamudPlugin
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
-        await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
-        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
-        var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
-        var matchaWasRunning =
-            matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
-        var genericWasRunning =
-            genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+        // Rollback of the reset's own files always runs; restarting the parser or Hosts
+        // afterwards is only allowed for the sign-in session that requested the reset.
+        using var runtimeResume = CancellationTokenSource.CreateLinkedTokenSource(
+            shutdownToken,
+            CurrentCloudRuntimeToken());
+        var fileGateAcquired = false;
+        var topologyAcquired = false;
         try
         {
+            // Each lock is released only if it was acquired: a deadline that expires while
+            // waiting for the topology lock must not leak the file-operation gate.
+            await cactbotFileOperationGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+            fileGateAcquired = true;
+            await EnterHostTopologyAsync("factory reset", timeout.Token).ConfigureAwait(false);
+            topologyAcquired = true;
+            var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var matchaWasRunning =
+                matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running;
+            var genericWasRunning =
+                genericHostSupervisor.Snapshot.State == HostSupervisorState.Running;
             try
             {
                 Volatile.Write(ref matchaEventsEnabled, 0);
@@ -2809,19 +2880,22 @@ public sealed class Plugin : IDalamudPlugin
                 }
 
                 return await factoryResetService
-                    .ResetAsync(timeout.Token, shutdownToken)
+                    .ResetAsync(timeout.Token, runtimeResume.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception resetFailure)
             {
                 var restoreFailures = new List<Exception>();
-                if (hostWasRunning && !shutdownToken.IsCancellationRequested &&
+                using var restore = CancellationTokenSource.CreateLinkedTokenSource(
+                    timeout.Token,
+                    runtimeResume.Token);
+                if (hostWasRunning && !runtimeResume.IsCancellationRequested &&
                     IsDactAccessAllowed())
                 {
                     try
                     {
-                        await hostSupervisor.StartAsync(timeout.Token).ConfigureAwait(false);
-                        await hostSupervisor.WaitForPluginStartupAsync(timeout.Token)
+                        await hostSupervisor.StartAsync(restore.Token).ConfigureAwait(false);
+                        await hostSupervisor.WaitForPluginStartupAsync(restore.Token)
                             .ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -2831,13 +2905,13 @@ public sealed class Plugin : IDalamudPlugin
                 }
                 if (matchaWasRunning &&
                     hostSupervisor.Snapshot.State == HostSupervisorState.Running &&
-                    !shutdownToken.IsCancellationRequested &&
+                    !runtimeResume.IsCancellationRequested &&
                     IsDactAccessAllowed())
                 {
                     try
                     {
                         await StartMatchaAfterSharedHostAsync(
-                                timeout.Token,
+                                restore.Token,
                                 throwOnFailure: true)
                             .ConfigureAwait(false);
                     }
@@ -2846,11 +2920,11 @@ public sealed class Plugin : IDalamudPlugin
                         restoreFailures.Add(ex);
                     }
                 }
-                if (genericWasRunning && !shutdownToken.IsCancellationRequested)
+                if (genericWasRunning && !runtimeResume.IsCancellationRequested)
                 {
                     try
                     {
-                        await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
+                        await StartGenericHostAsync(restore.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -2870,8 +2944,14 @@ public sealed class Plugin : IDalamudPlugin
         }
         finally
         {
-            hostTopologyLock.Release();
-            cactbotFileOperationGate.Release();
+            if (topologyAcquired)
+            {
+                hostTopologyLock.Release();
+            }
+            if (fileGateAcquired)
+            {
+                cactbotFileOperationGate.Release();
+            }
         }
     }
 
@@ -3078,12 +3158,12 @@ public sealed class Plugin : IDalamudPlugin
                 configuration.DisabledActPluginIds.Remove(pending.PluginId);
                 SaveConfiguration();
 
-                await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+                await EnterHostTopologyAsync("plugin approval preflight").ConfigureAwait(false);
                 try
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(35));
                     await StopPluginHostForPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
-                    await StartPluginHostAfterPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
+                    await StartPluginHostAfterPackageChangeAsync(pending.PluginId, userRequested: true, timeout.Token).ConfigureAwait(false);
                     if (!IsDactAccessAllowed())
                     {
                         return;
@@ -3123,14 +3203,14 @@ public sealed class Plugin : IDalamudPlugin
                 var cleanupDetail = string.Empty;
                 try
                 {
-                    await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+                    await EnterHostTopologyAsync("plugin preflight cleanup").ConfigureAwait(false);
                     try
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
                         // A failed InitPlugin can leave handlers behind, so only a fresh
                         // process may continue serving the other trusted generic plugins.
                         await StopPluginHostForPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
-                        await StartPluginHostAfterPackageChangeAsync(pending.PluginId, timeout.Token).ConfigureAwait(false);
+                        await StartPluginHostAfterPackageChangeAsync(pending.PluginId, userRequested: false, timeout.Token).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -3180,7 +3260,7 @@ public sealed class Plugin : IDalamudPlugin
             try
             {
                 string? backupDirectory;
-                await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+                await EnterHostTopologyAsync("plugin uninstall").ConfigureAwait(false);
                 try
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -3198,7 +3278,7 @@ public sealed class Plugin : IDalamudPlugin
                     }
                     finally
                     {
-                        await StartPluginHostAfterPackageChangeAsync(pluginId, timeout.Token).ConfigureAwait(false);
+                        await StartPluginHostAfterPackageChangeAsync(pluginId, userRequested: false, timeout.Token).ConfigureAwait(false);
                     }
                 }
                 finally
@@ -3254,22 +3334,30 @@ public sealed class Plugin : IDalamudPlugin
             await target.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task StartPluginHostAfterPackageChangeAsync(string pluginId, CancellationToken cancellationToken)
+    // Only consenting to a plugin is an explicit start. Removing one, or cleaning up after a
+    // failed preflight, restores the previous topology and must keep a user's Host pause.
+    private async Task StartPluginHostAfterPackageChangeAsync(
+        string pluginId,
+        bool userRequested,
+        CancellationToken cancellationToken)
     {
         if (!IsDactAccessAllowed()) return;
         var target = GetInstalledPluginHost(pluginId);
         if (target == genericHostSupervisor)
-            await StartGenericHostAsync(cancellationToken, userRequested: true).ConfigureAwait(false);
+            await StartGenericHostAsync(cancellationToken, userRequested).ConfigureAwait(false);
         else
         {
             if (target == hostSupervisor)
             {
-                await hostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+                if (userRequested)
+                    await hostSupervisor.StartAsync(cancellationToken).ConfigureAwait(false);
+                else if (!await hostSupervisor.StartAutomaticallyAsync(cancellationToken).ConfigureAwait(false))
+                    return;
                 await hostSupervisor.WaitForPluginStartupAsync(cancellationToken).ConfigureAwait(false);
             }
             if (hostSupervisor.Snapshot.State == HostSupervisorState.Running)
                 await StartMatchaAfterSharedHostAsync(cancellationToken, throwOnFailure: true,
-                    userRequested: target == matchaHostSupervisor).ConfigureAwait(false);
+                    userRequested: userRequested && target == matchaHostSupervisor).ConfigureAwait(false);
         }
     }
 
@@ -3279,9 +3367,13 @@ public sealed class Plugin : IDalamudPlugin
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             bundledUpdateCancellation.Token);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
-        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+        // Installing completes regardless of sign-out; resuming the parser and Hosts belongs
+        // to the session that paused them and ends with it.
+        var sessionToken = CurrentCloudRuntimeToken();
+        await EnterHostTopologyAsync("bundled plugin install", timeout.Token).ConfigureAwait(false);
         try
         {
+            using var resume = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, sessionToken);
             var hostWasRunning = hostSupervisor.Snapshot.State == HostSupervisorState.Running;
             var parserWasRunning = parserEngine.Status.State == ParserState.Running;
             var matchaWasRunning =
@@ -3315,9 +3407,11 @@ public sealed class Plugin : IDalamudPlugin
                         hostSupervisor.StartAsync,
                         parserEngine.StartAsync,
                         () => !bundledUpdateCancellation.IsCancellationRequested &&
+                              !sessionToken.IsCancellationRequested &&
                               IsDactAccessAllowed(),
                         timeout.Token,
-                        TimeSpan.FromSeconds(20))
+                        TimeSpan.FromSeconds(20),
+                        sessionToken)
                     .ConfigureAwait(false);
             }
             catch (Exception recoveryFailure) when (installCommitted)
@@ -3329,12 +3423,13 @@ public sealed class Plugin : IDalamudPlugin
                 try
                 {
                     if (matchaWasRunning &&
+                        !sessionToken.IsCancellationRequested &&
                         hostSupervisor.Snapshot.State == HostSupervisorState.Running)
                     {
-                        await hostSupervisor.WaitForPluginStartupAsync(timeout.Token)
+                        await hostSupervisor.WaitForPluginStartupAsync(resume.Token)
                             .ConfigureAwait(false);
                         await StartMatchaAfterSharedHostAsync(
-                                timeout.Token,
+                                resume.Token,
                                 throwOnFailure: true)
                             .ConfigureAwait(false);
                     }
@@ -3352,12 +3447,13 @@ public sealed class Plugin : IDalamudPlugin
 
             if (runtimeRecoveryFailure is null &&
                 hostWasRunning &&
+                !sessionToken.IsCancellationRequested &&
                 hostSupervisor.Snapshot.State == HostSupervisorState.Running)
             {
                 try
                 {
-                    await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
-                    await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
+                    await hostSupervisor.WaitForPluginStartupAsync(resume.Token).ConfigureAwait(false);
+                    await StartMatchaAfterSharedHostAsync(resume.Token).ConfigureAwait(false);
                 }
                 catch (Exception recoveryFailure)
                 {
@@ -4149,7 +4245,7 @@ public sealed class Plugin : IDalamudPlugin
         var lockAcquired = false;
         try
         {
-            await hostTopologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await EnterHostTopologyAsync("Host startup", cancellationToken).ConfigureAwait(false);
             lockAcquired = true;
             if (configuration.SimplifiedModeEnabled || !IsDactAccessAllowed())
             {
@@ -4169,7 +4265,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.Information("Independent ACT Host startup was cancelled during plugin shutdown.");
+            logger.Information("Independent ACT Host startup was cancelled by plugin shutdown or sign-out.");
         }
         catch (Exception ex)
         {
@@ -4274,7 +4370,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            await EnterHostTopologyAsync("shared Host UI restart").ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -4300,7 +4396,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            await EnterHostTopologyAsync("Matcha Host UI restart").ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -4338,7 +4434,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            await EnterHostTopologyAsync("generic Host UI restart").ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -4364,10 +4460,15 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            // The refresh runs up to one deadline per Host while holding the topology lock.
+            // Bind it to the sign-in session that requested it, so sign-out ends it at once
+            // instead of making the sign-out stop wait behind several deadlines.
+            var sessionToken = CurrentCloudRuntimeToken();
+            await EnterHostTopologyAsync("permission refresh").ConfigureAwait(false);
             try
             {
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 if (switchFoxTtsToPro)
                 {
                     await hostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
@@ -4407,74 +4508,112 @@ public sealed class Plugin : IDalamudPlugin
                     activeGeneric = activeGenericPermissionFingerprint;
                 }
 
-                if (IsDactAccessAllowed() &&
-                    !string.Equals(
-                        activeHost,
-                        BuildPermissionFingerprint(desiredHost),
-                        StringComparison.Ordinal) &&
-                    await hostSupervisor.RestartAsync(timeout.Token).ConfigureAwait(false))
-                {
-                    logger.Information("Shared ACT Host restarted after its configuration changed.");
-                }
-
                 var genericChanged = !string.Equals(
                     activeGeneric,
                     BuildPermissionFingerprint(desiredGeneric),
                     StringComparison.Ordinal);
-                if (!IsGenericHostConfiguredToRun())
-                {
-                    if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
-                    {
-                        await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
-                    }
-                }
-                else if (genericHostSupervisor.Snapshot.State == HostSupervisorState.Running &&
-                         genericChanged)
-                {
-                    await genericHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
-                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
-                }
-                else if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Running)
-                {
-                    await StartGenericHostAsync(timeout.Token).ConfigureAwait(false);
-                }
-
-                if (!IsMatchaConfiguredToRun())
-                {
-                    Volatile.Write(ref matchaEventsEnabled, 0);
-                    actRuntime.SetNetworkSentCaptureEnabled(false);
-                    if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
-                    {
-                        await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
-                    }
-                    logger.Information(
-                        "Matcha was disabled without restarting the shared ACT Host.");
-                    return;
-                }
-
-                if (hostSupervisor.Snapshot.State != HostSupervisorState.Running)
-                {
-                    logger.Warning(
-                        "Matcha configuration was saved, but its Host remains stopped because the shared ACT Host is not running.");
-                    return;
-                }
-
-                await hostSupervisor.WaitForPluginStartupAsync(timeout.Token).ConfigureAwait(false);
                 var matchaChanged = !string.Equals(
                     activeMatcha,
                     BuildPermissionFingerprint(desiredMatcha),
                     StringComparison.Ordinal);
-                if (matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running && matchaChanged)
+                var matchaConfigured = IsMatchaConfiguredToRun();
+                // A running Host keeps the capability snapshot it started with. Stop Matcha
+                // before any shared-Host dependency check, so a revocation always takes effect.
+                if (!matchaConfigured ||
+                    (matchaChanged && matchaHostSupervisor.Snapshot.State == HostSupervisorState.Running))
                 {
                     Volatile.Write(ref matchaEventsEnabled, 0);
                     actRuntime.SetNetworkSentCaptureEnabled(false);
-                    await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                        {
+                            await matchaHostSupervisor.StopAsync(timeout.Token).ConfigureAwait(false);
+                        }
+                        if (!matchaConfigured)
+                        {
+                            logger.Information(
+                                "Matcha was disabled without restarting the shared ACT Host.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error(ex, "Matcha Host could not be stopped for its permission refresh.");
+                    }
                 }
 
-                if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Running)
-                {
-                    await StartMatchaAfterSharedHostAsync(timeout.Token).ConfigureAwait(false);
-                }
+                // Each role gets its own deadline and error boundary, as at startup: a failed
+                // or slow shared restart must not leave generic grants unapplied.
+                await HostStartupSequence.StartAsync(
+                        async token =>
+                        {
+                            if (IsDactAccessAllowed() &&
+                                !string.Equals(
+                                    activeHost,
+                                    BuildPermissionFingerprint(desiredHost),
+                                    StringComparison.Ordinal) &&
+                                await hostSupervisor.RestartAsync(token).ConfigureAwait(false))
+                            {
+                                logger.Information("Shared ACT Host restarted after its configuration changed.");
+                            }
+
+                            if (hostSupervisor.Snapshot.State == HostSupervisorState.Running)
+                            {
+                                return true;
+                            }
+
+                            if (matchaConfigured &&
+                                matchaHostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                            {
+                                logger.Warning(
+                                    "Matcha configuration was saved, but its Host remains stopped because the shared ACT Host is not running.");
+                            }
+                            return false;
+                        },
+                        async token =>
+                        {
+                            if (!matchaConfigured)
+                            {
+                                return;
+                            }
+
+                            await hostSupervisor.WaitForPluginStartupAsync(token).ConfigureAwait(false);
+                            if (matchaHostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                            {
+                                await StartMatchaAfterSharedHostAsync(token).ConfigureAwait(false);
+                            }
+                        },
+                        async token =>
+                        {
+                            if (!IsGenericHostConfiguredToRun())
+                            {
+                                if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Stopped)
+                                {
+                                    await genericHostSupervisor.StopAsync(token).ConfigureAwait(false);
+                                }
+                            }
+                            else if (genericHostSupervisor.Snapshot.State == HostSupervisorState.Running &&
+                                     genericChanged)
+                            {
+                                await genericHostSupervisor.StopAsync(token).ConfigureAwait(false);
+                                await StartGenericHostAsync(token).ConfigureAwait(false);
+                            }
+                            else if (genericHostSupervisor.Snapshot.State != HostSupervisorState.Running)
+                            {
+                                await StartGenericHostAsync(token).ConfigureAwait(false);
+                            }
+                        },
+                        (role, ex) => logger.Error(
+                            ex,
+                            $"ACT Host '{role}' permission refresh failed; the other Hosts were refreshed independently."),
+                        sessionToken,
+                        TimeSpan.FromSeconds(20))
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
+            {
+                // Sign-out or unload owns the final stop of every Host once this lock is free.
+                logger.Information("ACT Host permission refresh was cancelled by sign-out or plugin shutdown.");
             }
             catch (Exception ex)
             {
@@ -4504,7 +4643,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            await EnterHostTopologyAsync("shared Host UI stop").ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -4525,7 +4664,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            await EnterHostTopologyAsync("Matcha Host UI stop").ConfigureAwait(false);
             try
             {
                 Volatile.Write(ref matchaEventsEnabled, 0);
@@ -4548,7 +4687,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         StartBackgroundOperation(async () =>
         {
-            await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+            await EnterHostTopologyAsync("generic Host UI stop").ConfigureAwait(false);
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -4746,7 +4885,7 @@ public sealed class Plugin : IDalamudPlugin
         await bundledActPluginInitializationTask.ConfigureAwait(false);
         await independentHostStartupTask.ConfigureAwait(false);
         independentHostStartupCancellation.Dispose();
-        await hostTopologyLock.WaitAsync().ConfigureAwait(false);
+        await EnterHostTopologyAsync("plugin unload").ConfigureAwait(false);
         try
         {
             await lifecycle.DisposeAsync().ConfigureAwait(false);
@@ -5676,7 +5815,7 @@ public sealed class Plugin : IDalamudPlugin
             await parserEngine.RestartAsync(timeout.Token).ConfigureAwait(false);
         }
 
-        await hostTopologyLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+        await EnterHostTopologyAsync("game region switch", timeout.Token).ConfigureAwait(false);
         try
         {
             if (!IsDactAccessAllowed())
