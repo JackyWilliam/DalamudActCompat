@@ -764,7 +764,8 @@ public sealed class Plugin : IDalamudPlugin
             GetHostResourceStatus,
             StartHostResourceDownload,
             CancelHostResourceDownload);
-        cloudBanNoticeWindow = new CloudBanNoticeWindow(text, logoTexture);
+        cloudBanNoticeWindow = new CloudBanNoticeWindow(text, logoTexture,
+            () => cloudClient.Snapshot, cloudClient.BeginBanRecheck);
         cloudAdministratorNotice = new CloudRoleNotice(text, administratorIcon, (username, grantId) =>
             StartCloudOperation(token => cloudClient.AcknowledgeAdministratorAsync(username, grantId, token)));
         cloudSponsorNotice = new CloudRoleNotice(text, sponsorIcon, (username, grantId) =>
@@ -1445,6 +1446,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
+            cloudBanNoticeWindow.Show(enforcedCloudBan, Volatile.Read(ref cloudBanLifted) != 0, requiresRestart: true);
             return;
         }
         if (!cloudClient.Snapshot.CanUseDact)
@@ -1611,6 +1613,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (Volatile.Read(ref cloudAccessBlocked) != 0)
         {
+            cloudBanNoticeWindow.Show(enforcedCloudBan, Volatile.Read(ref cloudBanLifted) != 0, requiresRestart: true);
             logger.Warning("DACT command ignored because cloud access is banned.");
             return;
         }

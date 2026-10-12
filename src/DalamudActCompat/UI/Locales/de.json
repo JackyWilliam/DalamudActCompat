@@ -1526,5 +1526,10 @@
   "Clearing any one ultimate unlocks all six.": "Der Abschluss eines beliebigen fatalen Raids schaltet alle sechs frei.",
   "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "Melde dich mit einem Charakter an, der einen ultimativen Kampf abgeschlossen hat, um alle sechs Designs dauerhaft für dieses Konto freizuschalten.",
   "Unlocked on this device. Syncing to your account for use on other devices.": "Auf diesem Gerät freigeschaltet. Wird mit deinem Konto synchronisiert, damit du es auf anderen Geräten nutzen kannst.",
-  "The unlock has not finished syncing. It will retry automatically.": "Die Freischaltung wurde noch nicht synchronisiert. Ein neuer Versuch erfolgt automatisch."
+  "The unlock has not finished syncing. It will retry automatically.": "Die Freischaltung wurde noch nicht synchronisiert. Ein neuer Versuch erfolgt automatisch.",
+  "After an administrator lifts the ban, verify your username and password here, then reload DACT or restart the game.": "Nach der Freigabe durch einen Administrator hier Benutzername und Passwort bestätigen. Danach DACT neu laden oder das Spiel neu starten.",
+  "Verify ban removal": "Freigabe prüfen",
+  "Verifying your account and ban removal…": "Konto und Freigabe werden geprüft…",
+  "The server did not return a valid verification session.": "Der Server hat keine gültige Bestätigungssitzung zurückgegeben.",
+  "The verification session is no longer valid. Please try again.": "Die Bestätigungssitzung ist abgelaufen. Bitte erneut versuchen."
 }

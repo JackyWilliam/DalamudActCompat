@@ -112,6 +112,9 @@ internal sealed class CloudBanStore(string path)
 
     public void Clear()
     {
+        // A non-file marker must not produce a successful unban that disappears
+        // on restart. Do not recursively remove an unexpected directory here.
+        if (Directory.Exists(path)) throw new IOException("无法清除本地封禁标记：该路径不是文件。");
         if (File.Exists(path))
         {
             File.Delete(path);

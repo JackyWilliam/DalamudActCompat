@@ -1526,5 +1526,10 @@
   "Clearing any one ultimate unlocks all six.": "通關任一絕境戰即可解鎖全部六款。",
   "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "登入已通關任一絕境戰的角色，即可為目前帳號永久解鎖全部六款。",
   "Unlocked on this device. Syncing to your account for use on other devices.": "已在本機解鎖，正在同步至帳號；完成後其他裝置也可使用。",
-  "The unlock has not finished syncing. It will retry automatically.": "解鎖紀錄尚未完成同步，將自動重試。"
+  "The unlock has not finished syncing. It will retry automatically.": "解鎖紀錄尚未完成同步，將自動重試。",
+  "After an administrator lifts the ban, verify your username and password here, then reload DACT or restart the game.": "管理員解封後，請在此輸入帳號密碼重新驗證，然後重新載入 DACT 或重新啟動遊戲。",
+  "Verify ban removal": "重新驗證解封",
+  "Verifying your account and ban removal…": "正在驗證帳號和解封狀態…",
+  "The server did not return a valid verification session.": "伺服器未傳回有效的驗證工作階段。",
+  "The verification session is no longer valid. Please try again.": "驗證工作階段已失效，請重試。"
 }

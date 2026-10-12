@@ -1526,5 +1526,10 @@
   "Clearing any one ultimate unlocks all six.": "いずれかの絶をクリアすると6種類すべてが解放されます。",
   "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "いずれかの絶をクリアしたキャラクターでログインすると、このアカウントで全6種類が永久に解放されます。",
   "Unlocked on this device. Syncing to your account for use on other devices.": "この端末で解放済みです。他の端末でも使えるようアカウントに同期しています。",
-  "The unlock has not finished syncing. It will retry automatically.": "解放情報の同期が完了していません。自動的に再試行します。"
+  "The unlock has not finished syncing. It will retry automatically.": "解放情報の同期が完了していません。自動的に再試行します。",
+  "After an administrator lifts the ban, verify your username and password here, then reload DACT or restart the game.": "管理者が制限を解除したら、ここでユーザー名とパスワードを確認し、DACT を再読み込みするかゲームを再起動してください。",
+  "Verify ban removal": "制限解除を確認",
+  "Verifying your account and ban removal…": "アカウントと制限解除を確認しています…",
+  "The server did not return a valid verification session.": "サーバーから有効な確認セッションが返されませんでした。",
+  "The verification session is no longer valid. Please try again.": "確認セッションが無効になりました。もう一度お試しください。"
 }
