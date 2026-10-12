@@ -16,17 +16,24 @@ internal sealed class CloudBanNoticeWindow : Window
     private readonly UiText text;
     private readonly WindowDragController headerDrag = new();
     private readonly ISharedImmediateTexture logoTexture;
+    private readonly Func<CloudClientSnapshot> getSnapshot;
+    private readonly Action<string, string> recheckBan;
+    private string username = string.Empty;
+    private string password = string.Empty;
     private CloudBanNotice? notice;
     private bool lifted;
     private bool requiresRestart;
     private bool locateOnNextDraw;
     private bool outerFrameStylePushed;
 
-    public CloudBanNoticeWindow(UiText text, ISharedImmediateTexture logoTexture)
+    public CloudBanNoticeWindow(UiText text, ISharedImmediateTexture logoTexture,
+        Func<CloudClientSnapshot> getSnapshot, Action<string, string> recheckBan)
         : base("账号安全###DalamudActCompatCloudBanNotice")
     {
         this.text = text;
         this.logoTexture = logoTexture;
+        this.getSnapshot = getSnapshot;
+        this.recheckBan = recheckBan;
         Size = new Vector2(610, 330);
         SizeCondition = ImGuiCond.Always;
         ShowCloseButton = false;
@@ -36,8 +43,6 @@ internal sealed class CloudBanNoticeWindow : Window
         Flags = ImGuiWindowFlags.NoTitleBar |
                 ImGuiWindowFlags.NoCollapse |
                 ImGuiWindowFlags.NoResize |
-                ImGuiWindowFlags.NoScrollbar |
-                ImGuiWindowFlags.NoScrollWithMouse |
                 ImGuiWindowFlags.NoSavedSettings |
                 ImGuiWindowFlags.NoNavInputs |
                 ImGuiWindowFlags.NoNavFocus |
@@ -52,6 +57,8 @@ internal sealed class CloudBanNoticeWindow : Window
         notice = nextNotice;
         this.lifted = lifted;
         this.requiresRestart = requiresRestart;
+        password = string.Empty;
+        Size = new Vector2(680, lifted ? 350 : 560);
         locateOnNextDraw = true;
         IsOpen = true;
     }
@@ -135,12 +142,15 @@ internal sealed class CloudBanNoticeWindow : Window
             }
             BrandedWindowChrome.EndGoldCard();
 
+            if (!lifted) DrawBanRecovery();
+
             ImGui.Spacing();
             const float buttonWidth = 132;
             var cursorX = ImGui.GetCursorPosX();
             ImGui.SetCursorPosX(Math.Max(cursorX, cursorX + ImGui.GetContentRegionAvail().X - buttonWidth));
             if (DactTheme.Button(text.Get("确认", "Confirm"), new Vector2(buttonWidth, 32)))
             {
+                password = string.Empty;
                 IsOpen = false;
             }
         }
@@ -148,6 +158,32 @@ internal sealed class CloudBanNoticeWindow : Window
         {
             PopTheme();
         }
+    }
+
+    private void DrawBanRecovery()
+    {
+        var snapshot = getSnapshot();
+        ImGui.Spacing();
+        ImGui.TextWrapped(text.Get("管理员解封后，请输入账号密码重新验证；验证成功后重载 DACT 或重启游戏。",
+            "After an administrator lifts the ban, verify your username and password here, then reload DACT or restart the game."));
+        ImGui.BeginDisabled(snapshot.IsBusy);
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##ban-username", text.Get("用户名", "Username"), ref username, 32);
+        ImGui.SetNextItemWidth(-1);
+        var submit = ImGui.InputTextWithHint("##ban-password", text.Get("密码", "Password"), ref password, 128,
+            ImGuiInputTextFlags.Password | ImGuiInputTextFlags.EnterReturnsTrue);
+        var ready = !string.IsNullOrWhiteSpace(username) && password.Length > 0;
+        ImGui.BeginDisabled(!ready);
+        submit |= DactTheme.Button(text.Get("重新验证解封", "Verify ban removal"));
+        ImGui.EndDisabled();
+        ImGui.EndDisabled();
+        if (submit && ready && !snapshot.IsBusy)
+        {
+            var submittedPassword = password;
+            password = string.Empty;
+            recheckBan(username, submittedPassword);
+        }
+        ImGui.TextWrapped(text.SystemMessage(snapshot.StatusMessage));
     }
 
     private void DrawBannedContent(CloudBanNotice current)

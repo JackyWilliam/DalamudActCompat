@@ -56,6 +56,16 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--ban-native-only", StringComparer.Ordinal))
+    {
+        BanRecoveryNativeSmokeTests.Run();
+        return 0;
+    }
+    if (args.Contains("--ban-recovery-only", StringComparer.Ordinal))
+    {
+        await CloudBanRecoverySmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--account-native-only", StringComparer.Ordinal))
     {
         AccountNativeUiSmokeTests.Run();
@@ -326,6 +336,7 @@ try
     await ValidateCloudRegistrationSurvivesVersionRefreshFailureAsync(testRoot);
     await ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(testRoot);
     await ValidateCloudBanResponseEnforcesMarkerAsync(testRoot);
+    await CloudBanRecoverySmokeTests.RunAsync(testRoot);
     var cloudIntegrationBaseUrl = Environment.GetEnvironmentVariable(
         "DACT_CLOUD_INTEGRATION_BASE_URL");
     var cloudIntegrationAdminToken = Environment.GetEnvironmentVariable(

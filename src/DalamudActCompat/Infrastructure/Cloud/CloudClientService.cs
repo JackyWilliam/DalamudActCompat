@@ -1243,7 +1243,12 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
             {
                 try
                 {
-                    banStore.EnsurePresent(ban);
+                    // Verification can clear the marker while this loop holds an old
+                    // snapshot. Never recreate that snapshot after confirmed removal.
+                    lock (stateLock)
+                    {
+                        if (activeBan == ban) banStore.EnsurePresent(ban);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1260,16 +1265,25 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                                 account.Token,
                                 cancellationToken)
                             .ConfigureAwait(false);
-                        if (access.Banned)
+                        if (await operationGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
                         {
-                            ApplyBan(ToBanNotice(access));
-                        }
-                        else if (access.WasBanRevoked)
-                        {
-                            LiftBanAfterServerConfirmation();
-                            InvalidateSessionPreservingRecoveryKey(
-                                "封禁已解除。请重启游戏或重载 DACT，然后重新登录。",
-                                isError: false);
+                            try
+                            {
+                                // Serialize with password verification/shared import without
+                                // holding stateLock while acquiring the shared-file mutex.
+                                if (ActiveBan == ban)
+                                {
+                                    if (access.Banned) ApplyBan(ToBanNotice(access));
+                                    else if (access.WasBanRevoked || access.SessionActive)
+                                    {
+                                        LiftBanAfterServerConfirmation();
+                                        InvalidateSessionPreservingRecoveryKey(
+                                            "封禁已解除。请重启游戏或重载 DACT，然后重新登录。",
+                                            isError: false);
+                                    }
+                                }
+                            }
+                            finally { operationGate.Release(); }
                         }
                     }
                     catch (CloudApiException ex) when (

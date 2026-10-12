@@ -1526,5 +1526,10 @@
   "Clearing any one ultimate unlocks all six.": "Terminer un seul défi fatal débloque les six.",
   "Log in with a character who has cleared any ultimate to permanently unlock all six for this account.": "Connectez-vous avec un personnage ayant terminé un combat fatal pour débloquer définitivement les six thèmes pour ce compte.",
   "Unlocked on this device. Syncing to your account for use on other devices.": "Débloqué sur cet appareil. Synchronisation avec votre compte pour les autres appareils.",
-  "The unlock has not finished syncing. It will retry automatically.": "Le déblocage n’a pas encore été synchronisé. Une nouvelle tentative sera effectuée automatiquement."
+  "The unlock has not finished syncing. It will retry automatically.": "Le déblocage n’a pas encore été synchronisé. Une nouvelle tentative sera effectuée automatiquement.",
+  "After an administrator lifts the ban, verify your username and password here, then reload DACT or restart the game.": "Après la levée du bannissement par un administrateur, vérifiez ici votre identifiant et votre mot de passe, puis rechargez DACT ou redémarrez le jeu.",
+  "Verify ban removal": "Vérifier la levée du bannissement",
+  "Verifying your account and ban removal…": "Vérification du compte et de la levée du bannissement…",
+  "The server did not return a valid verification session.": "Le serveur n’a pas renvoyé de session de vérification valide.",
+  "The verification session is no longer valid. Please try again.": "La session de vérification n’est plus valide. Veuillez réessayer."
 }
