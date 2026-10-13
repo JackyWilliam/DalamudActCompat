@@ -2569,7 +2569,13 @@ async Task ValidateDrawingDiagnosticProbeAsync()
         new XAttribute("Enabled", "true"), new XAttribute("Id", Guid.NewGuid()), new XAttribute("Name", name),
         new XAttribute("RegularExpression", "^" + name + "$"), new XElement("Actions",
             new XElement("Action", new XAttribute("ActionType", "ExecuteScript"), new XAttribute("ExecScriptExpression", script))));
+    // Force the restore to finish after the sender's short log delay. Its unique marker
+    // must be observed; the initial setup's old output cannot establish readiness here.
+    var restoreSetup = setup.Replace("var plugin = RealPlugin.Instance;",
+        "System.Threading.Thread.Sleep(750); var plugin = RealPlugin.Instance;", StringComparison.Ordinal)
+        .Replace("DACT_DRAW_SETUP_DONE", "DACT_DRAW_RESTORE_DONE", StringComparison.Ordinal);
     root.Add(new XElement("Triggers", ScriptTrigger("DACT_DRAW_SETUP", setup),
+        ScriptTrigger("DACT_DRAW_RESTORE", restoreSetup),
         ScriptTrigger("DACT_DRAW_OFF", "Triggernometry.Core.Scripting.ScriptHelper.SetDictVariable(true, \"U7a_cfg\", new Triggernometry.Core.Variables.VariableDictionary(new System.Collections.Generic.Dictionary<string,string> { {\"P1光轮缩放on\", \"0\"} })); System.Console.WriteLine(\"DACT_DRAW_OFF_DONE\");"),
         ScriptTrigger("DACT_DRAW_THROW", "Triggernometry.Core.Scripting.ScriptHelper.SetScalarVariable(false, \"DACT_DRAW_THROW\", 1); System.Console.WriteLine(\"DACT_DRAW_THROW_DONE\");")));
     configuration.Save(path);
@@ -2628,9 +2634,23 @@ async Task ValidateDrawingDiagnosticProbeAsync()
             await Task.Delay(9500); // Exercise the original 8.4-second delayed callback too.
             await Setup("DACT_DRAW_OFF", "DACT_DRAW_OFF_DONE");
             await Line(OrbLine("21:00:20.000"));
-            await Setup("DACT_DRAW_SETUP", "DACT_DRAW_SETUP_DONE");
+            await Setup("DACT_DRAW_RESTORE", "DACT_DRAW_RESTORE_DONE");
             await Line(OrbLine("21:00:30.000", "40FF0002"));
-            await Task.Delay(300);
+            bool MissingEntityCallback(JsonElement record) =>
+                record.GetProperty("stage").GetString() == "callback-enter" &&
+                record.GetProperty("event").GetProperty("Actor").GetString() == "40FF0002" &&
+                !record.GetProperty("state").GetProperty("snapshot").GetProperty("present").GetBoolean();
+            // The fixture requires the callback to see an absent entity. Waiting for
+            // that observation prevents a faster state frame from invalidating the scenario.
+            var missingEntityDeadline = DateTime.UtcNow.AddSeconds(15);
+            // ReadProcessLog waits for exit, so use the live log snapshot while the
+            // Host must remain available to receive the late entity frame.
+            while (!DrawingDiagnosticTests.ParseRecords(processLogs[host.Id].Snapshot().Output).Any(MissingEntityCallback))
+            {
+                Assert(DateTime.UtcNow < missingEntityDeadline, "Missing-entity fixture did not reach its callback before the late snapshot.");
+                await Task.Delay(50);
+            }
+            Console.WriteLine("Drawing probe: missing-entity callback observed.");
             await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
                 baseline with { Timestamp = DateTimeOffset.UtcNow, Combatants = [.. baseline.Combatants, orb, orb with { Id = 0x40FF0002, Address = 0x12350000 }] });
             await Task.Delay(9500);
@@ -2649,7 +2669,7 @@ async Task ValidateDrawingDiagnosticProbeAsync()
             Assert(!Stage("observer-error"), "Observer failed during U7a chain.");
             Assert(records.Any(r => r.GetProperty("stage").GetString() == "condition-blocked" && r.GetProperty("blocked").GetBoolean()), "Disabled feature condition not recorded.");
             Assert(!records.Any(r => r.GetProperty("stage").GetString() == "callback-enter" && r.GetProperty("event").GetProperty("Time").GetString() == "[21:00:20.000]"), "Diagnostics bypassed a disabled feature.");
-            Assert(records.Any(r => r.GetProperty("stage").GetString() == "callback-enter" && r.GetProperty("event").GetProperty("Actor").GetString() == "40FF0002" && !r.GetProperty("state").GetProperty("snapshot").GetProperty("present").GetBoolean()), "Missing entity prerequisite not recorded at invocation.");
+            Assert(records.Any(MissingEntityCallback), "Missing entity prerequisite not recorded at invocation.");
             Assert(records.Any(r => r.TryGetProperty("state", out var state) && state.TryGetProperty("variables", out var variables) && variables.ValueKind == JsonValueKind.Object && variables.GetProperty("U7a1_光轮_is火safe").GetString() == "1"), "Original cast did not produce observed fire-safe variable.");
             Assert(!string.Join('\n', records.Select(r => r.GetRawText())).Contains("PRIVATE_"), "Player/NPC labels leaked into new diagnostics.");
             var output = Environment.GetEnvironmentVariable("ACTCOMPAT_DRAWING_PROBE_OUTPUT");
