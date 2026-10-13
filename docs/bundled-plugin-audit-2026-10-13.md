@@ -1,4 +1,4 @@
-# 7.57 网络兼容修复（0.4.5.12 候选）
+# 7.57 网络兼容修复（0.4.5.12）
 
 用户在国服更新后遇到 `Parser initialization failed`，缺失签名为
 `E8 ?? ?? ?? ?? 4C 8B 4F 10 8B 47 1C 45`。0.4.5.11 仍使用 7.56h
@@ -6,7 +6,7 @@
 
 ## 来源和改动
 
-| 环节 | 当前候选 | 固定依据 |
+| 环节 | 本次版本 | 固定依据 |
 | --- | --- | --- |
 | IINACT | 2.10.3.10，保留 DACT 修改 | [官方版本差异](https://github.com/marzent/IINACT/compare/v2.10.3.8...v2.10.3.10) |
 | 接收签名 | 7.57 两个精确编译变体；旧客户端保留旧签名 | IINACT [9fc6047](https://github.com/marzent/IINACT/commit/9fc6047ee2f882186c7522f238d4a0f647484b56) 与 Unscrambler [d00b565](https://github.com/perchbirdd/unscrambler/commit/d00b565b26f42aa64fc733fb3645b5c7132a04e7)，均选择第三个接收调用，不接受不足三个匹配 |
@@ -26,7 +26,7 @@ IINACT 2.10.3.10 本身仍引用 Unscrambler 7.56.1；其 Machina 提交的 CN/K
 告警行为保留。
 
 本轮仅修复游戏更新所需的兼容面。Cactbot 正式包仍为 0.37.5；上游未发布
-提交、抹茶新增钓鱼统计功能和 Triggernometry 的新数学函数没有纳入候选。
+提交、抹茶新增钓鱼统计功能和 Triggernometry 的新数学函数没有纳入本次版本。
 
 ## 验证与边界
 
@@ -42,4 +42,6 @@ IINACT 2.10.3.10 本身仍引用 Unscrambler 7.56.1；其 Machina 提交的 CN/K
 - 本机 `D:/FFXIV` 在核查时仍为 `2026.09.15.0000.0000`，未取得新版国服或
   国际服实际游戏验收。离线回归不代表实际 FFLogs 排名校验通过。
 
-当前为本地候选。正式发布、订阅更新与游戏安装须以实际执行结果为准。
+正式发布从合并后的主线重新构建，并核对公开附件与原订阅源；游戏内自然验收
+仍待反馈。发布状态以 [Release](https://github.com/JackyWilliam/DalamudActCompat/releases/tag/v0.4.5.12)
+为准，正式发布不代表已覆盖本机安装。
