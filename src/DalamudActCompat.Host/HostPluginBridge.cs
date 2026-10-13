@@ -252,11 +252,11 @@ public static partial class HostPluginBridge
         var replacements = new Dictionary<string, (string Chinese, string Global)>(
             StringComparer.Ordinal)
         {
-            ["InitZone"] = ("0x032B", "0x032B"),
-            // Matcha upstream 3e4ecb4 verifies this value for CN and Global; the bundled
-            // SilverDasher table predates 7.56h and cannot safely be used unchanged.
-            ["FateInfo"] = ("0x0154", "0x0154"),
-            ["ActorControlSelf"] = ("0x0204", "0x0204"),
+            ["InitZone"] = ("0x02CC", "0x02CC"),
+            // Matcha upstream 0a5fb86 verifies this value for CN and Global; the bundled
+            // SilverDasher table predates 7.57 and cannot safely be used unchanged.
+            ["FateInfo"] = ("0x0259", "0x0259"),
+            ["ActorControlSelf"] = ("0x01E6", "0x01E6"),
         };
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in data.OfType<JObject>())
@@ -278,7 +278,7 @@ public static partial class HostPluginBridge
             return payload;
         }
 
-        root["version"] = "20260917";
+        root["version"] = "20261013";
         return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 

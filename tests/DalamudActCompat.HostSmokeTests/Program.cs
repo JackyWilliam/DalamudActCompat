@@ -3706,41 +3706,41 @@ void ValidateMatchaAssemblyContract(string packagePath)
                                 "Cafe.Matcha.Constant.OpcodeStorage");
         var expectedGlobalOpcodes = new Dictionary<ushort, string>
         {
-            [0x025F] = "ActorControl",
-            [0x0204] = "ActorControlSelf",
-            [0x031E] = "CEDirector",
-            [0x006C] = "CompanyAirshipStatus",
-            [0x01EC] = "CompanySubmersibleStatus",
-            [0x0333] = "ContentFinderNotifyPop",
-            [0x024D] = "ResumeEventScene32",
-            [0x01FD] = "EventPlay",
-            [0x02E1] = "EventStart",
-            [0x01F2] = "Examine",
-            [0x0154] = "FateInfo",
-            [0x032B] = "InitZone",
-            [0x023A] = "InventoryTransaction",
-            [0x0084] = "ItemInfo",
-            [0x034D] = "MarketBoardItemListing",
-            [0x00C0] = "MarketBoardItemListingCount",
-            [0x0241] = "MarketBoardItemListingHistory",
-            [0x8320] = "MarketBoardRequestItemListingInfo",
-            [0x020C] = "NpcSpawn",
-            [0x0093] = "PlayerSetup",
-            [0x01C4] = "PlayerSpawn",
-            [0x038A] = "SubmarineStatusList",
-            [0x01E8] = "WorldVisitQueue",
-            [0x01C6] = "EventPlay4",
-            [0x00A8] = "SystemLogMessage",
-            [0x0110] = "FishCaught",
-            [0x0083] = "StatusEffectList",
-            [0x8187] = "ClientTrigger",
+            [0x0198] = "ActorControl",
+            [0x01E6] = "ActorControlSelf",
+            [0x020A] = "CEDirector",
+            [0x0178] = "CompanyAirshipStatus",
+            [0x039C] = "CompanySubmersibleStatus",
+            [0x028A] = "ContentFinderNotifyPop",
+            [0x01FE] = "ResumeEventScene32",
+            [0x0256] = "EventPlay",
+            [0x0286] = "EventStart",
+            [0x019C] = "Examine",
+            [0x0259] = "FateInfo",
+            [0x02CC] = "InitZone",
+            [0x032D] = "InventoryTransaction",
+            [0x00D1] = "ItemInfo",
+            [0x0234] = "MarketBoardItemListing",
+            [0x010D] = "MarketBoardItemListingCount",
+            [0x011E] = "MarketBoardItemListingHistory",
+            [0x8248] = "MarketBoardRequestItemListingInfo",
+            [0x0114] = "NpcSpawn",
+            [0x0302] = "PlayerSetup",
+            [0x0265] = "PlayerSpawn",
+            [0x0367] = "SubmarineStatusList",
+            [0x007C] = "WorldVisitQueue",
+            [0x0324] = "EventPlay4",
+            [0x00EB] = "SystemLogMessage",
+            [0x03CB] = "FishCaught",
+            [0x02CE] = "StatusEffectList",
+            [0x8368] = "ClientTrigger",
         };
         foreach (var region in new[] { "Global", "China" })
         {
             var actual = (IDictionary)opcodeStorage.GetField(region, BindingFlags.Public | BindingFlags.Static)!.GetValue(null)!;
             Assert(actual.Count == expectedGlobalOpcodes.Count && expectedGlobalOpcodes.All(pair =>
                 string.Equals(actual[pair.Key]?.ToString(), pair.Value, StringComparison.Ordinal)),
-                $"Matcha {region} opcode storage was not normalized to the verified 7.56 table.");
+                $"Matcha {region} opcode storage was not normalized to the verified 7.57 table.");
         }
 
         var bridge = loadedAssembly.GetType(
@@ -3871,13 +3871,13 @@ static void ValidateMatchaEventPackets(Assembly assembly)
                 return Activator.CreateInstance(packetType, Enum.Parse(senderType, client ? "Client" : "Server"), bytes, 1700000000000L)!;
             }
             fates.GetType().GetMethod("Clear")!.Invoke(fates, null);
-            var fate = Packet(0x0154, 1234, 1700000000, 900);
+            var fate = Packet(0x0259, 1234, 1700000000, 900);
             Assert(handle.Invoke(monitor, [fate]) is true, $"Matcha {region} did not route FateInfo.");
             var parsed = fates.GetType().GetProperty("Item")!.GetValue(fates, [1234u])!;
             Assert((uint)parsed.GetType().GetField("StartTime")!.GetValue(parsed)! == 1700000000 &&
                 (uint)parsed.GetType().GetField("Duration")!.GetValue(parsed)! == 900,
                 $"Matcha {region} lost FATE time/duration.");
-            var visit = Packet(0x01E8, 1, 45, 0);
+            var visit = Packet(0x007C, 1, 45, 0);
             var bytes = (byte[])packetType.GetField("Bytes")!.GetValue(visit)!;
             BitConverter.GetBytes(7u).CopyTo(bytes, 36);
             events.Clear();
@@ -3888,7 +3888,7 @@ static void ValidateMatchaEventPackets(Assembly assembly)
                 (uint)payload.GetType().GetField("Order")!.GetValue(payload)! == 7 &&
                 (uint)payload.GetType().GetField("Time")!.GetValue(payload)! == 45,
                 $"Matcha {region} lost queue position/wait time.");
-            Assert(packetType.GetField("Known")!.GetValue(Packet(0x0154, 0, 0, 0, client: true)) is false &&
+            Assert(packetType.GetField("Known")!.GetValue(Packet(0x0259, 0, 0, 0, client: true)) is false &&
                 packetType.GetField("Known")!.GetValue(Packet(0xF009, 0, 0, 0)) is false &&
                 packetType.GetField("Known")!.GetValue(Packet(0x00E9, 0, 0, 0)) is false,
                 $"Matcha {region} accepted a stale or wrong-direction event opcode.");
@@ -4320,14 +4320,14 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         .Children<JObject>()
         .ToDictionary(item => item.Value<string>("name")!, StringComparer.Ordinal);
     Assert(
-        normalizedOpcodePayload.Value<string>("version") == "20260917" &&
-        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x032B" &&
-        normalizedOpcodes["InitZone"].Value<string>("global") == "0x032B" &&
-        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x0154" &&
-        normalizedOpcodes["FateInfo"].Value<string>("global") == "0x0154" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x0204" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x0204",
-        "SilverDasher opcode data was not normalized to Chinese / Global 7.56.");
+        normalizedOpcodePayload.Value<string>("version") == "20261013" &&
+        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x02CC" &&
+        normalizedOpcodes["InitZone"].Value<string>("global") == "0x02CC" &&
+        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x0259" &&
+        normalizedOpcodes["FateInfo"].Value<string>("global") == "0x0259" &&
+        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x01E6" &&
+        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x01E6",
+        "SilverDasher opcode data was not normalized to Chinese / Global 7.57.");
     var judge = rewrittenCore
                        .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
                        .GetMethod(
