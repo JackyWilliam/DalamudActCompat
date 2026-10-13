@@ -9,6 +9,7 @@ try
     ValidateFailureCleanup();
     ValidateOtherHandlesSurviveFinalization();
     ValidateProductionOwnership();
+    ZoneDownSignatureSmokeTests.Run();
     Console.WriteLine("Scanner resource smoke tests passed: 32,768 event handles survived; copy/rebase, repeated disposal, and failure cleanup passed.");
     return 0;
 }

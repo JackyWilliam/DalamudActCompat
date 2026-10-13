@@ -61,30 +61,17 @@ internal static class Patch756SmokeTests
                 expected.All(pair => regional.ObfuscatedOpcodes[pair.Key] == pair.Value),
             "CN 7.56h runtime constants lost opcodes or reused Global lookup tables.");
 
-        var mapping = new Dictionary<string, string>
-        {
-            ["PlayerSpawn"] = "PlayerSpawn", ["NpcSpawn"] = "NpcSpawn", ["NpcSpawn2"] = "NpcSpawn2",
-            ["ActionEffect01"] = "Ability1", ["ActionEffect08"] = "Ability8",
-            ["ActionEffect16"] = "Ability16", ["ActionEffect24"] = "Ability24", ["ActionEffect32"] = "Ability32",
-            ["StatusEffectList"] = "StatusEffectList", ["StatusEffectList3"] = "StatusEffectList3",
-            ["ActorControl"] = "ActorControl", ["ActorCast"] = "ActorCast",
-        };
         var previousRegion = OpcodeManager.Instance.GameRegion;
         try
         {
             ValidateInternationalPath(version, bundledPolicy, regional);
-            foreach (var region in new[] { GameRegion.Global, GameRegion.Chinese, GameRegion.Korean })
-            {
-                OpcodeManager.Instance.SetRegion(region);
-                Require(mapping.All(pair => regional.ObfuscatedOpcodes[pair.Key] == OpcodeManager.Instance.CurrentOpcodes[pair.Value]),
-                    $"Unscrambler and Machina disagree on {region} 7.56h packets.");
-            }
+            // Historical profile decoding remains supported; current Machina tables are checked by Patch757SmokeTests.
         }
         finally
         {
             OpcodeManager.Instance.SetRegion(previousRegion);
         }
-        Console.WriteLine("7.56h official resources, CN runtime keys, region/opcode alignment and fallback boundaries passed.");
+        Console.WriteLine("7.56h official resources, CN runtime keys, historical decoding and fallback boundaries passed.");
     }
 
     private static void ValidateInternationalPath(string version, MethodInfo bundledPolicy, VersionConstants regional)

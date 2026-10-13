@@ -148,11 +148,11 @@ public static partial class LegacyAssemblyRewriter
             writable: false);
         var assembly = loadContext.LoadFromStream(assemblyImage);
         ApplyMatchaUpstreamSecrets(assembly, secrets);
-        ApplyMatcha756Opcodes(assembly);
+        ApplyMatcha757Opcodes(assembly);
         return assembly;
     }
 
-    private static void ApplyMatcha756Opcodes(Assembly assembly)
+    private static void ApplyMatcha757Opcodes(Assembly assembly)
     {
         var storageType = assembly.GetType(
                               "Cafe.Matcha.Constant.OpcodeStorage",
@@ -166,40 +166,40 @@ public static partial class LegacyAssemblyRewriter
                              "Matcha opcode enum is missing.");
         var verified = new Dictionary<ushort, string>
         {
-            [0x025F] = "ActorControl",
-            [0x0204] = "ActorControlSelf",
-            [0x031E] = "CEDirector",
-            [0x006C] = "CompanyAirshipStatus",
-            [0x01EC] = "CompanySubmersibleStatus",
-            [0x0333] = "ContentFinderNotifyPop",
+            [0x0198] = "ActorControl",
+            [0x01E6] = "ActorControlSelf",
+            [0x020A] = "CEDirector",
+            [0x0178] = "CompanyAirshipStatus",
+            [0x039C] = "CompanySubmersibleStatus",
+            [0x028A] = "ContentFinderNotifyPop",
             // Matcha uses this legacy name for MiniCactpotInit, not EventPlay32.
-            [0x024D] = "ResumeEventScene32",
-            [0x01FD] = "EventPlay",
-            [0x02E1] = "EventStart",
-            [0x01F2] = "Examine",
-            [0x0154] = "FateInfo",
-            [0x032B] = "InitZone",
-            [0x023A] = "InventoryTransaction",
-            [0x0084] = "ItemInfo",
-            [0x034D] = "MarketBoardItemListing",
-            [0x00C0] = "MarketBoardItemListingCount",
-            [0x0241] = "MarketBoardItemListingHistory",
-            [0x8320] = "MarketBoardRequestItemListingInfo",
-            [0x020C] = "NpcSpawn",
-            [0x0093] = "PlayerSetup",
-            [0x01C4] = "PlayerSpawn",
-            [0x038A] = "SubmarineStatusList",
-            [0x01E8] = "WorldVisitQueue",
-            [0x01C6] = "EventPlay4",
-            [0x00A8] = "SystemLogMessage",
-            [0x0110] = "FishCaught",
-            [0x0083] = "StatusEffectList",
-            [0x8187] = "ClientTrigger",
+            [0x01FE] = "ResumeEventScene32",
+            [0x0256] = "EventPlay",
+            [0x0286] = "EventStart",
+            [0x019C] = "Examine",
+            [0x0259] = "FateInfo",
+            [0x02CC] = "InitZone",
+            [0x032D] = "InventoryTransaction",
+            [0x00D1] = "ItemInfo",
+            [0x0234] = "MarketBoardItemListing",
+            [0x010D] = "MarketBoardItemListingCount",
+            [0x011E] = "MarketBoardItemListingHistory",
+            [0x8248] = "MarketBoardRequestItemListingInfo",
+            [0x0114] = "NpcSpawn",
+            [0x0302] = "PlayerSetup",
+            [0x0265] = "PlayerSpawn",
+            [0x0367] = "SubmarineStatusList",
+            [0x007C] = "WorldVisitQueue",
+            [0x0324] = "EventPlay4",
+            [0x00EB] = "SystemLogMessage",
+            [0x03CB] = "FishCaught",
+            [0x02CE] = "StatusEffectList",
+            [0x8368] = "ClientTrigger",
         };
 
-        // FFXIVOpcodes 7.56h publishes matching CN/Global tables. Normalize older
+        // FFXIVOpcodes 7.57 publishes matching CN/Global tables. Normalize older
         // installed builds as well as the bundled DLL without changing its public ABI.
-        // Matcha d4fffc6 (2026-09-26) adds fishing events for both regions. The
+        // Values come from Matcha 0a5fb86 and FFXIVOpcodes be69b56. The
         // ClientTrigger high bit encodes direction and must survive normalization.
         foreach (var region in new[] { "Global", "China" })
         {
