@@ -187,7 +187,8 @@ public sealed class Plugin : IDalamudPlugin
     // Cached authentication is restored asynchronously. Treat the initial signed-out
     // snapshot as already observed so normal game startup does not look like a logout.
     private int observedCloudAuthenticationState;
-    private bool discordBindingGatePresented;
+    private readonly DiscordBindingNotifications discordBindingNotifications = new();
+    private IActiveNotification? discordBindingNotification;
     private int cloudRuntimeAuthorized;
     private bool cloudRuntimeInitialized;
     private Task cloudRuntimeTransitionTask = Task.CompletedTask;
@@ -803,9 +804,9 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(coreResourceDownloadWindow);
         windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
-        // Authentication still gates every functional window, but a cold game start must
-        // stay silent until the user explicitly opens DACT or a real logout is observed.
-        RestrictWindowsToAuthenticationGate(openGate: false);
+        // Authentication gates functional windows; account state changes only notify.
+        // The user owns opening the control centre, including its sign-in/binding page.
+        RestrictWindowsToAuthenticationGate();
 
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -946,7 +947,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             // Authentication can be revoked by a network callback between Framework frames.
             // Close every functional window before this same UI frame is rendered.
-            RestrictWindowsToAuthenticationGate(openGate: false);
+            RestrictWindowsToAuthenticationGate();
             using var signedOutAppearanceFrame = DactTheme.PushFrame();
             windowSystem.Draw();
             return;
@@ -991,10 +992,7 @@ public sealed class Plugin : IDalamudPlugin
     private void SynchronizeCloudAuthenticationState()
     {
         var account = cloudClient.Snapshot;
-        var needsBinding = account.IsSignedIn && !account.CanUseDact && account.ActiveBan is null;
-        if (needsBinding && !discordBindingGatePresented)
-            RestrictWindowsToAuthenticationGate(openGate: true);
-        discordBindingGatePresented = needsBinding;
+        ShowDiscordBindingNotification(account);
         var authenticated = account.CanUseDact && Volatile.Read(ref cloudAccessBlocked) == 0;
         var nextState = authenticated ? 1 : 0;
         if (Interlocked.Exchange(ref observedCloudAuthenticationState, nextState) == nextState)
@@ -1011,10 +1009,52 @@ public sealed class Plugin : IDalamudPlugin
         else
         {
             CancelCloudRuntimeSession();
-            RestrictWindowsToAuthenticationGate(openGate: true);
+            RestrictWindowsToAuthenticationGate();
         }
         cloudRuntimeTransitionTask =
             StartBackgroundOperation(ReconcileCloudRuntimeAsync) ?? Task.CompletedTask;
+    }
+
+    private void ShowDiscordBindingNotification(CloudClientSnapshot account)
+    {
+        if (discordBindingNotifications.Update(account) is not { } notice) return;
+        var content = notice switch
+        {
+            DiscordBindingNotice.Verifying => text.Get(
+                "正在验证 Discord 绑定状态，请稍候。",
+                "Verifying your Discord link. Please wait."),
+            DiscordBindingNotice.Verified => text.Get(
+                "Discord 绑定验证成功。",
+                "Discord link verification succeeded."),
+            DiscordBindingNotice.Unbound => text.Get(
+                "Discord 绑定验证未通过：账号尚未绑定。请使用 /dact 打开账号页面完成绑定。",
+                "Discord link verification failed: this account is not linked. Use /dact to open the account page and link Discord."),
+            _ => text.Get(
+                "Discord 绑定验证失败：暂时无法获取有效的服务器状态，将自动重试。可使用 /dact 查看详情。",
+                "Discord link verification failed: a valid server status is temporarily unavailable. DACT will retry. Use /dact for details."),
+        };
+        try
+        {
+            // Replace the progress notice with its result; contradictory states
+            // must not linger side by side while their default durations expire.
+            discordBindingNotification?.DismissNow();
+            discordBindingNotification = services.NotificationManager.AddNotification(new()
+            {
+                Title = text.Get("DACT · Discord 绑定验证", "DACT · Discord link verification"),
+                Content = content,
+                Type = notice switch
+                {
+                    DiscordBindingNotice.Verified => NotificationType.Success,
+                    DiscordBindingNotice.Verifying => NotificationType.Info,
+                    _ => NotificationType.Warning,
+                },
+            });
+        }
+        catch (Exception ex)
+        {
+            // Notification delivery must not interrupt authorization reconciliation.
+            logger.Error(ex, "Could not display Discord binding verification feedback.");
+        }
     }
 
     private async Task ReconcileCloudRuntimeAsync()
@@ -1128,7 +1168,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private void RestrictWindowsToAuthenticationGate(bool openGate)
+    private void RestrictWindowsToAuthenticationGate()
     {
         friendsUi.Hide();
         triggernometryNativeBridge.Clear();
@@ -1145,10 +1185,6 @@ public sealed class Plugin : IDalamudPlugin
         encounterWindow.IsOpen = false;
         meterStyleEditorWindow.IsOpen = false;
         simplifiedHomeWindow.IsOpen = false;
-        if (openGate)
-        {
-            settingsWindow.LocateAnimated();
-        }
     }
 
     private void RestoreWindowsAfterAuthenticationGate()
@@ -1165,7 +1201,7 @@ public sealed class Plugin : IDalamudPlugin
         TryStartAutomaticBundledPluginUpdateCheck();
         if (configuration.SimplifiedModeEnabled)
         {
-            ApplySimplifiedWindowVisibility();
+            ApplySimplifiedWindowVisibility(openHome: false);
         }
         UpdateHtmlOverlaySuppression(DateTimeOffset.UtcNow, force: true);
     }
@@ -1542,7 +1578,7 @@ public sealed class Plugin : IDalamudPlugin
         SaveConfiguration();
     }
 
-    private void ApplySimplifiedWindowVisibility()
+    private void ApplySimplifiedWindowVisibility(bool openHome = true)
     {
         simplifiedWindowSnapshot ??= new SimplifiedWindowSnapshot(
             settingsWindow.IsOpen,
@@ -1561,7 +1597,9 @@ public sealed class Plugin : IDalamudPlugin
         thirdPartyPluginNoticeWindow.IsOpen = false;
         encounterWindow.IsOpen = false;
         meterStyleEditorWindow.IsOpen = false;
-        simplifiedHomeWindow.IsOpen = true;
+        // Restoring account access should not open the simplified home either.
+        // Explicitly entering simplified mode still opens it via the default above.
+        simplifiedHomeWindow.IsOpen = openHome;
         meterWindow.IsOpen = configuration.Meter.IsVisible;
         horizontalMeterWindow.IsOpen = configuration.Meter.IsVisible;
         roleSplitDamageWindow.IsOpen = configuration.Meter.IsVisible;

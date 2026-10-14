@@ -5,12 +5,15 @@ using System.Runtime.CompilerServices;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Plugin;
+using Raynording.Accounts;
 
 internal static class DiscordBindingSmokeTests
 {
     private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
     internal static async Task RunAsync(string root)
     {
+        ValidateBindingNotifications();
+        await ValidateSharedLoginNotificationsAsync(root);
         var paths = new PluginPaths(Path.Combine(root, "discord-gate")); paths.EnsureCreated();
         var saved = new CloudStoredCredentials("binding_user", "fixture-session", DateTimeOffset.UtcNow.AddDays(1),
             new PortableConfigurationBackupService().GenerateRecoveryKey());
@@ -78,6 +81,85 @@ internal static class DiscordBindingSmokeTests
         typeof(CloudClientService).GetMethod("ApplyRecoveryStatus", Hidden)!.Invoke(client, [saved, status, long.MaxValue]);
         Check(!client.Snapshot.CanUseDact && client.Snapshot.Recovery is null, "A late old-session response restored access after logout.");
         Console.WriteLine("Discord gate: remembered login, unbound/code-only/manual bypass, offline/legacy server, confirmed link, friends/runtime and stale response passed.");
+    }
+
+    private static void ValidateBindingNotifications()
+    {
+        var notifications = new DiscordBindingNotifications();
+        var signedOut = CloudClientSnapshot.SignedOut();
+        Check(notifications.Update(signedOut) is null &&
+              notifications.Update(signedOut with { IsBusy = true }) is null,
+            "Automatic login produced an unrelated account notification.");
+        var account = signedOut with { IsSignedIn = true, Username = "fixture" };
+        Check(notifications.Update(account) == DiscordBindingNotice.Verifying && notifications.Update(account) is null,
+            "An unknown binding was treated as failure or repeated every frame.");
+        account = account with { Recovery = new(DiscordBound: false) };
+        Check(notifications.Update(account) == DiscordBindingNotice.Unbound && notifications.Update(account) is null,
+            "Confirmed missing binding did not produce one specific result notice.");
+        account = account with { RecoveryStatusError = "network unavailable" };
+        Check(notifications.Update(account) == DiscordBindingNotice.Failed && notifications.Update(account) is null,
+            "A network verification failure was hidden or repeated on every poll.");
+        account = account with { Recovery = null, RecoveryStatusError = null };
+        Check(notifications.Update(account) == DiscordBindingNotice.Verifying,
+            "A retry with unknown status claimed the account was unbound.");
+        account = account with { Recovery = new(DiscordBound: true) };
+        Check(notifications.Update(account) == DiscordBindingNotice.Verified && notifications.Update(account) is null,
+            "Binding verification success did not produce exactly one result notice.");
+        Check(notifications.Update(account with { Username = "other" }) == DiscordBindingNotice.Verified,
+            "A different account inherited the previous account's notification state.");
+        Check(notifications.Update(signedOut) is null, "Sign-out produced a binding notice.");
+    }
+
+    private static async Task ValidateSharedLoginNotificationsAsync(string root)
+    {
+        var paths = new PluginPaths(Path.Combine(root, "shared-binding-notifications")); paths.EnsureCreated();
+        var backup = new PortableConfigurationBackupService();
+        var shared = new SharedAccountStore(Path.Combine(paths.ConfigDirectory, "shared.dat"));
+        shared.Publish(0, new("fixture", "synthetic-token", DateTimeOffset.UtcNow.AddDays(1), backup.GenerateRecoveryKey()), true);
+        var followupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var accountRequests = 0;
+        using var handler = new Handler(async (request, ct) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/auth/me"))
+            {
+                // The shared importer first validates identity, then fetches binding
+                // asynchronously. Hold that second response across Framework polls.
+                if (Interlocked.Increment(ref accountRequests) > 1)
+                {
+                    followupStarted.TrySetResult();
+                    await release.Task.WaitAsync(ct);
+                }
+                return Json(new { user = new { id = "fixture", username = "fixture" },
+                    recovery = new CloudRecoveryStatus(true, true, true, 3, 1, true) });
+            }
+            if (path.EndsWith("/backups")) return Json(new { backups = Array.Empty<object>() });
+            if (path.EndsWith("/invitations")) return Json(new { invitations = Array.Empty<object>() });
+            if (path.Contains("events") || path.Contains("friends") || path.Contains("presence"))
+                await Task.Delay(Timeout.Infinite, ct);
+            return Json(new { });
+        });
+        using var http = new HttpClient(handler) { BaseAddress = new("https://fixture.invalid/") };
+        using var api = new CloudApiClient(http);
+        using var client = new CloudClientService(paths, api, new(paths.CloudCredentialFile), new(paths.CloudBanFile),
+            new(paths.CloudDeviceFile), new(), backup, shared);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var notifications = new DiscordBindingNotifications();
+        Check(notifications.Update(client.Snapshot) is null, "Saved login was announced as a binding result.");
+        await client.InitializeAsync(timeout.Token);
+        await followupStarted.Task.WaitAsync(timeout.Token);
+        Check(client.Snapshot.IsSignedIn && client.Snapshot.Recovery is null && !client.Snapshot.CanUseDact,
+            "Shared-login fixture did not reach the pending binding state.");
+        Check(notifications.Update(client.Snapshot) == DiscordBindingNotice.Verifying &&
+              notifications.Update(client.Snapshot) is null,
+            "Shared login misreported pending verification as missing binding.");
+        release.TrySetResult();
+        await Until(() => client.Snapshot.CanUseDact);
+        Check(notifications.Update(client.Snapshot) == DiscordBindingNotice.Verified &&
+              notifications.Update(client.Snapshot) is null,
+            "Shared-login binding verification did not announce success once.");
+        Console.WriteLine("Discord notices: silent login, delayed shared verification, success/unbound/network failure/retry and duplicate suppression passed.");
     }
 
     internal static CloudClientService BoundFixture(PluginPaths paths)

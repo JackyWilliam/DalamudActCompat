@@ -1,4 +1,9 @@
 {
+  "DACT · Discord link verification": "DACT · Discord連携の確認",
+  "Verifying your Discord link. Please wait.": "Discordの連携状態を確認しています。しばらくお待ちください。",
+  "Discord link verification succeeded.": "Discordの連携を確認しました。",
+  "Discord link verification failed: this account is not linked. Use /dact to open the account page and link Discord.": "Discord連携の確認に失敗しました。このアカウントは未連携です。/dact でアカウント画面を開き、Discordと連携してください。",
+  "Discord link verification failed: a valid server status is temporarily unavailable. DACT will retry. Use /dact for details.": "Discord連携の確認に失敗しました。サーバーから有効な状態を取得できません。自動で再試行します。詳細は /dact で確認できます。",
   "Collapse direction": "折りたたむ方向",
   "Upward": "上へ",
   "Downward": "下へ",
