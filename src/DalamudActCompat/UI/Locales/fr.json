@@ -1,4 +1,9 @@
 {
+  "DACT · Discord link verification": "DACT · Vérification de la liaison Discord",
+  "Verifying your Discord link. Please wait.": "Vérification de votre liaison Discord en cours. Veuillez patienter.",
+  "Discord link verification succeeded.": "Votre liaison Discord a été vérifiée avec succès.",
+  "Discord link verification failed: this account is not linked. Use /dact to open the account page and link Discord.": "La vérification Discord a échoué : ce compte n’est pas lié. Utilisez /dact pour ouvrir la page du compte et le lier à Discord.",
+  "Discord link verification failed: a valid server status is temporarily unavailable. DACT will retry. Use /dact for details.": "La vérification Discord a échoué : aucun état valide du serveur n’est disponible pour le moment. DACT réessaiera automatiquement. Utilisez /dact pour les détails.",
   "Collapse direction": "Sens de réduction",
   "Upward": "Vers le haut",
   "Downward": "Vers le bas",

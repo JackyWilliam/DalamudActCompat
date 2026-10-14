@@ -1,4 +1,9 @@
 {
+  "DACT · Discord link verification": "DACT · Discord 綁定驗證",
+  "Verifying your Discord link. Please wait.": "正在驗證 Discord 綁定狀態，請稍候。",
+  "Discord link verification succeeded.": "Discord 綁定驗證成功。",
+  "Discord link verification failed: this account is not linked. Use /dact to open the account page and link Discord.": "Discord 綁定驗證未通過：帳號尚未綁定。請使用 /dact 開啟帳號頁面完成綁定。",
+  "Discord link verification failed: a valid server status is temporarily unavailable. DACT will retry. Use /dact for details.": "Discord 綁定驗證失敗：暫時無法取得有效的伺服器狀態，將自動重試。可使用 /dact 查看詳情。",
   "Collapse direction": "收起方向",
   "Upward": "向上",
   "Downward": "向下",

@@ -4983,15 +4983,20 @@ static void ValidateControlCenterPresentation()
             "private int observedCloudAuthenticationState;",
             StringComparison.Ordinal) &&
         constructorSourceForAuthentication.Contains(
-            "RestrictWindowsToAuthenticationGate(openGate: false);",
+            "RestrictWindowsToAuthenticationGate();",
             StringComparison.Ordinal) &&
-        !constructorSourceForAuthentication.Contains(
-            "RestrictWindowsToAuthenticationGate(openGate: true);",
-            StringComparison.Ordinal) &&
+        !pluginSource.Contains("RestrictWindowsToAuthenticationGate(openGate:", StringComparison.Ordinal) &&
         pluginSource.Contains("if (!cloudClient.Snapshot.CanUseDact)", StringComparison.Ordinal) &&
         pluginSource.Contains("if (!IsDactAccessAllowed())", StringComparison.Ordinal) &&
         !hostResourceMethod.Contains("StartIndependentHostAsync", StringComparison.Ordinal),
         "Authentication no longer starts silently, gates DACT runtime startup, or keeps core resource download from starting a Host before login.");
+    var restrictedWindowsSource = pluginSource[pluginSource.IndexOf(
+        "private void RestrictWindowsToAuthenticationGate()", StringComparison.Ordinal)..pluginSource.IndexOf(
+        "private void RestoreWindowsAfterAuthenticationGate()", StringComparison.Ordinal)];
+    Assert(!restrictedWindowsSource.Contains("LocateAnimated", StringComparison.Ordinal) &&
+           !restrictedWindowsSource.Contains("IsOpen = true", StringComparison.Ordinal) &&
+           pluginSource.Contains("ApplySimplifiedWindowVisibility(openHome: false)", StringComparison.Ordinal),
+        "A background account transition can still open a main window without user intent.");
     Assert(
         historySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
         historySource.Contains("combat-history-navigation", StringComparison.Ordinal) &&
