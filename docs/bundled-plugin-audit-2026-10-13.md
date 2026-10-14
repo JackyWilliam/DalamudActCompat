@@ -45,3 +45,17 @@ IINACT 2.10.3.10 本身仍引用 Unscrambler 7.56.1；其 Machina 提交的 CN/K
 正式发布从合并后的主线重新构建，并核对公开附件与原订阅源；游戏内自然验收
 仍待反馈。发布状态以 [Release](https://github.com/JackyWilliam/DalamudActCompat/releases/tag/v0.4.5.12)
 为准，正式发布不代表已覆盖本机安装。
+
+## 0.4.5.13 发布前追加核对
+
+上游在 2026-10-13 20:52 UTC 发布 [FFXIV ACT Plugin 3.0.3.3](https://github.com/ravahn/FFXIV_ACT_Plugin/releases/tag/3.0.3.3)，
+明确补充 7.57 支持并保留繁中 7.25。0.4.5.13 首次正式流水线检测到
+3.0.3.1 已过期，在创建发布前停止；本次同步更新解析器和 SDK，并调整包级版本守卫。
+
+官方 ZIP SHA-256 为 `8254f003cb8018b7f6c66208400bd3191793d1c4a5cbd839e1331316a9351472`。
+IINACT updater 的 ZIP 省略 Deucalion，归档本身不同；其中原始
+`FFXIV_ACT_Plugin.dll` 与官方包逐字节一致，SHA-256 均为
+`af1031cdba8eeba8f53dd9d618e58d62d4919bfa77db9b31c568bd04cb359093`。
+继续使用已有 Costura 拆包和 IINACT 宿主补丁，实际日志头必须为
+`This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.3`。
+既有地区解析范围与绑定权限逻辑不变，实际游戏与 FFLogs 验收边界仍适用。
