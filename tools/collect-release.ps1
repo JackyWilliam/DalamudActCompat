@@ -21,7 +21,7 @@ param(
     [string] $ExpectedUnscramblerVersion = "7.57.0.0",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedFfxivActPluginVersion = "3.0.3.1",
+    [string] $ExpectedFfxivActPluginVersion = "3.0.3.3",
 
     [Parameter(Mandatory = $false)]
     [string] $ExpectedMachinaVersion = "2.3.1.3",

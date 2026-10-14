@@ -16,7 +16,7 @@
   "DownloadLinkTesting": null,
   "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.5.13/DalamudActCompat-core.zip",
   "LastUpdate": 1791948774536,
-  "Changelog": "修复启动时自动弹出控制中心或精简主页的问题。自动登录保持静默；Discord 绑定验证通过通知展示验证中、成功与失败，明确区分尚未绑定和暂时无法验证，避免重复提示。保留原有权限限制及 7.57 适配，使用 /dact 可主动打开主界面。",
+  "Changelog": "修复启动时自动弹出控制中心或精简主页的问题。自动登录保持静默；Discord 绑定验证通过通知展示验证中、成功与失败，明确区分尚未绑定和暂时无法验证，避免重复提示。同步 FFXIV ACT Plugin 3.0.3.3 的 7.57 支持，保留原有权限限制，使用 /dact 可主动打开主界面。",
   "CanUnloadAsync": true,
   "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
 },
