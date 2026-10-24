@@ -2863,8 +2863,10 @@ internal sealed partial class PictoActOverlayService : IDisposable
         }
     }
 
+    // Triggernometry's MathParser evaluates blank text as 0, so a resource line such as
+    // "delay: " still draws upstream instead of rejecting the whole payload.
     internal static double EvaluateNumericExpression(string value)
-        => new NumericExpressionParser(value).Parse();
+        => string.IsNullOrWhiteSpace(value) ? 0 : new NumericExpressionParser(value).Parse();
 
     private sealed class NumericExpressionParser(string text)
     {
@@ -3040,26 +3042,26 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         private double ParseTerm()
         {
-            var result = ParseUnary();
+            var result = ParseImplicitProduct();
             while (true)
             {
                 SkipWhiteSpace();
                 if (Take('*'))
                 {
-                    result *= ParseUnary();
+                    result *= ParseImplicitProduct();
                 }
                 else if (Take('/'))
                 {
-                    result /= ParseUnary();
+                    result /= ParseImplicitProduct();
                 }
                 else if (TakeString("%%"))
                 {
-                    var divisor = ParseUnary();
+                    var divisor = ParseImplicitProduct();
                     result = ((result % divisor) + divisor) % divisor;
                 }
                 else if (Take('%'))
                 {
-                    result %= ParseUnary();
+                    result %= ParseImplicitProduct();
                 }
                 else if (CanStartPrimary())
                 {
@@ -3070,6 +3072,23 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 {
                     return result;
                 }
+            }
+        }
+
+        private double ParseImplicitProduct()
+        {
+            var result = ParseUnary();
+            while (true)
+            {
+                SkipWhiteSpace();
+                // Triggernometry's lexer inserts its highest-priority " *" before '(' and '√',
+                // so "-${l} / 2√2" in online resources means -l / (2√2), not (-l / 2)√2.
+                if (Current is not ('(' or '√'))
+                {
+                    return result;
+                }
+
+                result *= ParseUnary();
             }
         }
 

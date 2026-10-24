@@ -34,10 +34,37 @@ internal static class PictoOnlineResourceSmokeTests
                 Check(!payload.Contains("${", StringComparison.Ordinal), $"{item.Name}: unresolved fixture variable.");
                 overlay.Apply(payload);
             }
+            // Some originals are delayed (U5a "delay: 2"); count them once they are due.
+            overlay.ProcessPending(DateTimeOffset.UtcNow.AddHours(1));
             Check(overlay.ShapeCount == item.Shapes, $"{item.Name}: lost shapes in a batch or with a shared tag.");
             if (item.Asset is not null)
                 Check(overlay.ShapeSnapshot.Count(s => s.VfxPath == item.Asset) == item.AssetCount,
                     $"{item.Name}: native asset changed.");
+            foreach (var expected in item.Positions ?? [])
+            {
+                var position = new Vector3(expected[0], expected[1], expected[2]);
+                Check(overlay.ShapeSnapshot.Any(s => Vector3.Distance(s.Position, position) < 1e-3f),
+                    $"{item.Name}: no shape at upstream position {position}; got " +
+                    string.Join("; ", overlay.ShapeSnapshot.Select(s => s.Position)));
+            }
+        }
+
+        var snapshot = Load<SnapshotCase[]>("PictoOnline221Samples.json");
+        foreach (var item in snapshot)
+            CheckSnapshot(item);
+
+        // Values from Triggernometry 2.2.1.0's MathParser: its implicit " *" before '(' and '√'
+        // outranks '/', and blank text is 0 (vc.xml writes "-${l} / 2√2" and "delay: ").
+        foreach (var (expression, expected) in new (string, double)[]
+        {
+            ("1/2√2", 0.35355339059327373), ("-100 / 2√2", -35.35533905932737), ("1/2 √2", 0.35355339059327373),
+            ("6/2(1+2)", 1), ("(1)(2)/2(2)", 0.5), ("3/2√(2+2)", 0.75), ("sin(0)(2)+1", 1),
+            ("-(1)(2)", -2), ("8/2*4", 16), ("", 0), ("  ", 0),
+        })
+        {
+            var actual = PictoActOverlayService.EvaluateNumericExpression(expression);
+            Check(Math.Abs(actual - expected) <= 1e-12 * Math.Max(1, Math.Abs(expected)),
+                $"Implicit multiplication or blank input drifted from upstream: '{expression}' = {actual:R}, expected {expected:R}.");
         }
 
         foreach (var (expression, expected) in new (string, bool)[]
@@ -88,7 +115,62 @@ internal static class PictoOnlineResourceSmokeTests
             }
             throw new InvalidOperationException($"Invalid bool expression was accepted: {invalid}");
         }
-        Console.WriteLine($"PASS online PictoACT: {expressions.Length} upstream expression samples, {commandCases.Length} original command cases, aliases/change/vector/rejection checks");
+        Console.WriteLine($"PASS online PictoACT: {expressions.Length} upstream expression samples, {commandCases.Length} original command cases, " +
+            $"{snapshot.Length} TN 2.2.1.0 snapshot samples, aliases/change/vector/rejection checks");
+    }
+
+    private static void CheckSnapshot(SnapshotCase item)
+    {
+        var where = $"{item.Source}/{item.Field} '{item.Expression}' (template '{item.Template}')";
+        switch (item.Kind)
+        {
+            case "scalar":
+                var actual = PictoActOverlayService.EvaluateNumericExpression(item.Expression);
+                Check(Math.Abs(actual - item.Expected!.Value) <= 1e-8 * Math.Max(1, Math.Abs(item.Expected.Value)),
+                    $"{where}: expected {item.Expected:R}, got {actual:R}.");
+                break;
+            case "coord":
+                var shape = PictoActOverlayService.Parse($"Omen: Circle\nScale: 1\nPos: {item.Expression}")[0].Shape!;
+                if (item.Dynamic)
+                {
+                    Check(shape.SourcePositionEntity is not null, $"{where}: upstream follows an entity, DACT drew a fixed point.");
+                }
+                else
+                {
+                    var position = new Vector3(item.Position![0], item.Position[1], item.Position[2]);
+                    Check(shape.SourcePositionEntity is null &&
+                          Vector3.Distance(shape.Position, position) <= 1e-4f * Math.Max(1, position.Length()),
+                        $"{where}: expected {position}, got {shape.Position}.");
+                }
+
+                break;
+            default:
+                var theta = PictoActOverlayService.Parse($"Omen: Circle\nScale: 1\nO: 100, 100\nθ: {item.Expression}")[0].Shape!;
+                if (item.Angle is { } angle)
+                {
+                    Check(theta.TransformRotationMode == PictoActTransformRotationMode.Fixed &&
+                          theta.TransformRotation is { } rotation &&
+                          Math.Abs(rotation - angle) <= 1e-5 * Math.Max(1, Math.Abs(angle)),
+                        $"{where}: expected angle {angle:R}, got {theta.TransformRotation:R}.");
+                }
+                else if (item.Dynamic)
+                {
+                    Check(theta.TransformRotationMode == PictoActTransformRotationMode.Target &&
+                          theta.TransformRotationTargetEntity is not null,
+                        $"{where}: upstream faces an entity, DACT did not.");
+                }
+                else
+                {
+                    var target = new Vector3(item.Target![0], item.Target[1], item.Target[2]);
+                    Check(theta.TransformRotationMode == PictoActTransformRotationMode.Target &&
+                          theta.TransformRotationTargetEntity is null &&
+                          theta.TransformRotationTarget is { } actualTarget &&
+                          Vector3.Distance(actualTarget, target) <= 1e-3f,
+                        $"{where}: expected to face {target}, got {theta.TransformRotationTarget}.");
+                }
+
+                break;
+        }
     }
 
     private static T Load<T>(string name)
@@ -101,5 +183,8 @@ internal static class PictoOnlineResourceSmokeTests
 
     private sealed record ExpressionCase(string Expression, double Expected, string Source, string Template, string Field);
     private sealed record CommandCase(string Name, string[] Payloads, Dictionary<string, string> Variables,
-        int Shapes, string? Asset, int AssetCount);
+        int Shapes, string? Asset, int AssetCount, float[][]? Positions);
+    // Positions and targets use Dalamud axes (x, height, ground y), converted by the audit harness.
+    private sealed record SnapshotCase(string Kind, string Expression, double? Expected, bool Dynamic,
+        float[]? Position, double? Angle, float[]? Target, string Source, string Field, string Template);
 }

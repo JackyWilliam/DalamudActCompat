@@ -274,5 +274,133 @@
     "Shapes": 2,
     "Asset": "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
     "AssetCount": 2
+  },
+  {
+    "Name": "U5a justice line polarDir8 (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a32_初始正义线\r\nt: 6.5\r\nOmen: m131om_setu0f\r\nO: 100, 100, 0\r\nTarget: polarDir8 18, ${!v:U5a32_b东正义} ? 7 : 1\r\nScale: 0.15, _d, 0.1\r\nColor: 1, 1, 1, 2\r\n---\r\nTag: U5a32_初始正义点\r\nt: 6.5\r\nOmen: m0532om_don01x\r\nO: 100, 100, 0\r\nPos: polarDir8 18, ${!v:U5a32_b东正义} ? 7 : 1, 0.05\r\nScale: 2, 2, 20\r\nColor: 1, 1, 5, 5"
+    ],
+    "Variables": {
+      "${!v:U5a32_b东正义}": "1"
+    },
+    "Shapes": 2,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "U5a divider polardirN8 (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a15_分界线\r\nt: 5.5\r\nOmen: m131om_setu0f\r\nO: 100, 100\r\nPos: polardirN8 20, 3, 0.01\r\nTarget: polardirN8 20, 7\r\nScale: 0.03, _d, 0.03\r\nColor: 1, 1, 1, 1"
+    ],
+    "Variables": {},
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "U5a offset point and line polardir4 (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a43_点2\r\ndelay: 2\r\nt: 8\r\nOmen: m0532om_don01x\r\nO: 100, 100, 0.05\r\nθ: ${!v:_b右下} ? π : 0\r\nPos: ${!v:_dxy} polardir4 8, ${!v:_dir4}\r\nScale: 1.9, 1.9, 20\r\nColor: 1,3,0.6,3",
+      "Tag: U5a43_线12\r\ndelay: 2\r\nt: 8\r\nOmen: m131om_setu0f\r\nO: 100, 100, 0.05\r\nθ: ${!v:_b右下} ? π : 0\r\nPos: ${!v:_dxy}\r\nTarget: ${!v:_dxy} polardir4 8, ${!v:_dir4}\r\nScale: 0.15, _d, 0.1\r\nColor: 1, 3, 1, 1"
+    ],
+    "Variables": {
+      "${!v:_b右下}": "1",
+      "${!v:_dxy}": "3, 4",
+      "${!v:_dir4}": "1"
+    },
+    "Shapes": 2,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "U5a caster target circle .Target (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a4_加重诛罚\r\nOmen: Circle\r\nt: 7.951\r\nPos: ${sid}.Target\r\nScale: 4\r\nColor: 1, 0.1, 0.1, 1"
+    ],
+    "Variables": {
+      "${sid}": "4000ABCD"
+    },
+    "Shapes": 1
+  },
+  {
+    "Name": "U5a cleave facing .Target (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a1_顺劈\r\nt: 3\r\nOmen: Fan90\r\nO: ${!v:_sid}\r\nθ: ${!v:_sid}.Target\r\nScale: ${type} == 水 ? 11.5 : 11.6\r\nColor: 0.6,0.1,0.1,1"
+    ],
+    "Variables": {
+      "${!v:_sid}": "4000ABCD",
+      "${type}": "水"
+    },
+    "Shapes": 1
+  },
+  {
+    "Name": "U5a farthest player from a point .FarPlayer1 (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a_末世宣言\r\n// 悬空的 Fan90\r\n\nOmen: z6r3_b4_fan90_k2\r\nt: 7.0\r\nO: ${x}, ${y}\r\nθ: ${x}, ${y}.FarPlayer1\r\nScale: 25.5\r\nColor: 1,0,0,1"
+    ],
+    "Variables": {
+      "${x}": "100",
+      "${y}": "100"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/z6r3_b4_fan90_k2.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "U5a poison tether z axis override (2.2.1.0)",
+    "Payloads": [
+      "Tag: U5a2_传毒连线_${type}\r\nt: 117.2\r\nOmen: m0830_laser_light_01k1\r\nPos: ${id1}, z=0\r\nTarget: ${id2}\r\nScale: 0.1, _d, 0.1\r\nColor: ${?l:\r\n  \"0.0, 0.7, 6.0, 3.0\",\r\n  \"1.2, 0.6, 0.0, 3.0\",\r\n  \"1.0, 0.0, 2.5, 3.0\",\r\n  \"0.0, 0.8, 0.1, 5.0\",\r\n  [${type}]\r\n}"
+    ],
+    "Variables": {
+      "${?l:\r\n  \"0.0, 0.7, 6.0, 3.0\",\r\n  \"1.2, 0.6, 0.0, 3.0\",\r\n  \"1.0, 0.0, 2.5, 3.0\",\r\n  \"0.0, 0.8, 0.1, 5.0\",\r\n  [${type}]\r\n}": "0.0, 0.7, 6.0, 3.0",
+      "${type}": "0",
+      "${id1}": "10001234",
+      "${id2}": "10005678"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/m0830_laser_light_01k1.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "vc carpet path with empty delay",
+    "Payloads": [
+      "// 路径\r\nOmen: m131om_setu0f\r\ndelay: \r\nt: ${?l: 11.5, 10.5, 9.5 [${!v:V7a3_冲1_线_n}]}\r\nO: ${sX}, ${sY}, ${env:Z0}\r\nθ: ${θ}\r\nScale: 0.5, ${d}, 0.05"
+    ],
+    "Variables": {
+      "${?l: 11.5, 10.5, 9.5 [${!v:V7a3_冲1_线_n}]}": "11.5",
+      "${sX}": "100",
+      "${sY}": "100",
+      "${env:Z0}": "0",
+      "${θ}": "0",
+      "${d}": "10"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/m131om_setu0f.avfx",
+    "AssetCount": 1
+  },
+  {
+    "Name": "vc minion safe box -l / 2√2",
+    "Payloads": [
+      "Tag: V6b1_小怪_安全区${n}\r\nt: 9.7\r\nOmen: z6r1_b4_ibox_01k1\r\nO: ${env:X0}, ${env:Y0}, ${env:Z0}\r\nDir8: ${dir8}\r\nPos: -${!v:_l} / 2√2, -${!v:_l} / 2√2\r\nAngle: 135°\r\nScale: ${!v:_l} / 2, ${!v:_l}\r\nColor: ${if: ${n} = 1 ? 0.3,1.5,10,1 : 0.3,2.5,5,0.6 }"
+    ],
+    "Variables": {
+      "${if: ${n} = 1 ? 0.3,1.5,10,1 : 0.3,2.5,5,0.6 }": "0.3,1.5,10,1",
+      "${n}": "1",
+      "${env:X0}": "100",
+      "${env:Y0}": "100",
+      "${env:Z0}": "0",
+      "${dir8}": "0",
+      "${!v:_l}": "10"
+    },
+    "Shapes": 1,
+    "Asset": "vfx/omen/eff/z6r1_b4_ibox_01k1.avfx",
+    "AssetCount": 1,
+    "Positions": [
+      [
+        96.464466,
+        0,
+        96.464466
+      ]
+    ]
   }
 ]
