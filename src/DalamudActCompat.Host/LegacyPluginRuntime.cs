@@ -1309,6 +1309,7 @@ internal sealed class LegacyPluginHandle : IDisposable
             "Runtime queues",
             "success",
             $"events={CountField(realPlugin, "EventQueue")}, " +
+            $"eventQueue={HostPluginBridge.DescribeTriggernometryEventQueue()}, " +
             $"actions={CountField(realPlugin, "ActionQueue")}, " +
             $"triggers={CountField(realPlugin, "Triggers")}, " +
             $"log={CountField(realPlugin, "ActiveTextTriggers")}, " +

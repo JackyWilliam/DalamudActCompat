@@ -36,6 +36,12 @@ if (args.Length == 3 && args[0] == "--simulant")
     return;
 }
 
+if (args.Length == 1 && args[0] == "--trigger-reliability")
+{
+    Environment.ExitCode = (await TriggerReliabilityTests.RunAsync()).Count == 0 ? 0 : 1;
+    return;
+}
+
 var focusedProbe = args.Length == 4 ? args[0] : null;
 var entityTimingProbe = string.Equals(
     focusedProbe,
@@ -49,12 +55,13 @@ var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringC
 var u7bOrderingProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-ordering", StringComparison.Ordinal);
 var drawingProbe = string.Equals(focusedProbe, "--probe-drawing-diagnostics", StringComparison.Ordinal);
 var drawingSoakProbe = string.Equals(focusedProbe, "--probe-drawing-soak", StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe || drawingSoakProbe ? args[1..] : args;
+var timingProbe = string.Equals(focusedProbe, "--probe-triggernometry-timing", StringComparison.Ordinal);
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe || drawingSoakProbe || timingProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-drawing-diagnostics or --probe-drawing-soak " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-triggernometry-timing, --probe-drawing-diagnostics or --probe-drawing-soak " +
         "with the three-path form for a focused probe.");
 }
 
@@ -122,6 +129,22 @@ if (u7bProbe || u7bOrderingProbe)
     return;
 }
 
+if (timingProbe)
+{
+    if (pluginRoot is null || configRoot is null)
+    {
+        throw new ArgumentException(
+            "The timing probe requires Host.exe, <plugin-root>, and <config-root>.");
+    }
+
+    await ValidateTriggernometryTimingProbeAsync();
+    return;
+}
+
+var reliabilityFailures = await TriggerReliabilityTests.RunAsync();
+Assert(
+    reliabilityFailures.Count == 0,
+    "Trigger reliability regressions failed: " + string.Join("; ", reliabilityFailures));
 await ValidateHandshakeCommandBoundaryAndShutdownAsync();
 ValidateForegroundNotificationRouting();
 ValidateFoxTtsDefaultConfiguration();
@@ -1095,6 +1118,7 @@ void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
         ValidateTriggernometryLaunchProcessPatch();
         var implementation = loadContext.Assemblies.Single(assembly => assembly.GetName().Name == "TriggernometryPlugin");
         DrawingDiagnosticTests.ValidateRewrittenAssembly(implementation);
+        ValidateTriggernometryEventTimePatch(patchedTriggernometryAssemblyPath);
         var transcriber = implementation.GetType("Triggernometry.FFXIV.LogTranscribe.LogTranscriber");
         if (transcriber is not null)
         {
@@ -1131,6 +1155,31 @@ void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
     {
         loadContext.Unload();
     }
+}
+
+void ValidateTriggernometryEventTimePatch(string assemblyPath)
+{
+    using var module = ModuleDefinition.ReadModule(assemblyPath);
+    bool CallsNow(MethodDefinition method) => method.Body.Instructions.Any(instruction =>
+        instruction.Operand is MethodReference { Name: "get_Now", DeclaringType.FullName: "System.DateTime" });
+    bool CallsBridge(MethodDefinition method, string name) => method.Body.Instructions.Any(instruction =>
+        instruction.Operand is MethodReference reference &&
+        reference.Name == name &&
+        reference.DeclaringType.Name == nameof(HostPluginBridge));
+    var plugin = module.GetType("Triggernometry.Core.RealPlugin");
+    var trigger = module.Types.SelectMany(EnumerateCecilTypes).Single(type =>
+        type.Name == "Trigger" && type.Methods.Any(method => method.Name == "UpdateFireTiming"));
+    var queuer = plugin.Methods.Single(method => method.Name == "LogLineQueuer" && method.Parameters.Count == 3);
+    var testTrigger = plugin.Methods.Single(method => method.Name == "TestTrigger" && method.Parameters.Count == 3);
+    var fireTiming = trigger.Methods
+        .Where(method => method.Name is "UpdateFireTiming" or "ComputeScheduleBaseTime")
+        .ToArray();
+    Assert(
+        !CallsNow(queuer) && CallsBridge(queuer, nameof(HostPluginBridge.ResolveTriggernometryLogTime)) &&
+        !CallsNow(testTrigger) && CallsBridge(testTrigger, nameof(HostPluginBridge.BeginTriggernometryFire)) &&
+        fireTiming.Length == 2 &&
+        fireTiming.All(method => !CallsNow(method) && CallsBridge(method, nameof(HostPluginBridge.TriggernometryFireNow))),
+        "The bundled Triggernometry still measures refire windows and action delays with Host receipt time.");
 }
 
 async Task ValidateSequenceRegressionTerminatesHostAsync()
@@ -2523,6 +2572,254 @@ async Task ValidateTriggernometryEntityTimingProbeAsync()
             Console.Error.WriteLine(
                 $"Entity timing Host output:{Environment.NewLine}{output}" +
                 $"{Environment.NewLine}Entity timing Host errors:{Environment.NewLine}{error}");
+            throw;
+        }
+        finally
+        {
+            if (!host.HasExited)
+            {
+                host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+}
+
+async Task ValidateTriggernometryTimingProbeAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    // Only the timing triggers are loaded, so no other closed-loop probe can add TTS noise.
+    const string timingConfiguration = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <Configuration DebugLevel="Verbose" LogNormalEvents="false" FfxivLogNetwork="false" ShowWelcome="false" WarnAdmin="true" UpdateNotifications="Yes" UpdateCheckMethod="External" UpdateExternalChannelUrl="http://127.0.0.1:1/should-not-run.xml" StartupTriggerType="Trigger" StartupTriggerId="00000000-0000-0000-0000-000000000000" TtsMethod="ACT" StartEndpointOnLaunch="false" AutosaveEnabled="false" Language="English (en)" PreviousNotifiedPluginVersion="2.1.1.2" PluginVersion="2.1.1.2">
+          <Root Id="2f6f2d0e-7a3e-4f71-9c0e-4d7f7d3c1a10" Enabled="true" Name="Timing probe">
+            <Triggers>
+              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b01" Name="Refire window in game time" RegularExpression="ACTCOMPAT_REFIRE_(?&lt;n&gt;\d+)" Source="Log" PeriodRefire="Deny" RefirePeriodExpression="1000">
+                <Actions>
+                  <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_REFIRE_FIRED_${n}" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b02" Name="Probe sentinel" RegularExpression="ACTCOMPAT_SENTINEL_(?&lt;n&gt;\d+)" Source="Log">
+                <Actions>
+                  <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_SENTINEL_${n}" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b03" Name="Startup replay" RegularExpression="ACTCOMPAT_REPLAY_STALE" Source="Log">
+                <Actions>
+                  <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_REPLAY_STALE" />
+                </Actions>
+              </Trigger>
+              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b04" Name="Entity referenced before its snapshot" RegularExpression="ACTCOMPAT_SPAWN:(?&lt;id&gt;4[0-9A-F]{7})" Source="Log">
+                <Actions>
+                  <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_SPAWN_SEEN">
+                    <Condition Enabled="true" Grouping="Or">
+                      <ConditionSingle Enabled="true" ExpressionL="${_entity[${id}].Exist}" ExpressionTypeL="String" ExpressionR="1" ExpressionTypeR="String" ConditionType="StringEqualCase" />
+                    </Condition>
+                  </Action>
+                </Actions>
+              </Trigger>
+            </Triggers>
+          </Root>
+          <RepositoryRoot Name="Remote triggers" Enabled="true">
+            <Repositories />
+          </RepositoryRoot>
+        </Configuration>
+        """;
+    await File.WriteAllTextAsync(
+        Path.Combine(configRoot!, "Config", "Triggernometry.config.xml"),
+        timingConfiguration.Trim());
+    // TN's brokered TTS needs FoxTTS as the isolated provider, and the bundled FoxTTS
+    // directory has no install manifest. Give the probe its own installed-style root.
+    var timingPluginRoot = Path.Combine(configRoot!, "timing-plugins");
+    foreach (var bundled in new[] { "triggernometry", "act.foxtts" })
+    {
+        var source = Path.Combine(pluginRoot!, bundled);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(timingPluginRoot, bundled, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
+    }
+
+    await File.WriteAllTextAsync(
+        Path.Combine(timingPluginRoot, "act.foxtts", "actcompat.plugin.json"),
+        JsonSerializer.Serialize(new
+        {
+            id = "act.foxtts",
+            name = "ACT.FoxTTS",
+            entryAssembly = "ACT.FoxTTS.dll",
+            entryType = "ACT.FoxTTS.FoxTTSPlugin",
+        }));
+    var (host, pipe, session) = await StartConnectedHostAsync(
+        loadPlugins: true,
+        faultInjection: true,
+        pluginRootOverride: timingPluginRoot);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            var clientSequence = 1L;
+            async Task SendAsync<T>(string type, HostMessagePriority priority, T payload, string? correlationId = null)
+                => await HostFrameCodec.WriteAsync(
+                    pipe.Writer,
+                    HostEnvelope.Create(session, clientSequence++, type, priority, payload, correlationId),
+                    CancellationToken.None);
+
+            // ACT and network forms carry the same game-side event time, as DACT publishes them.
+            HostLogEvent Line(string text, DateTimeOffset at)
+                => new(
+                    at,
+                    $"00|{at.ToLocalTime():yyyy-MM-ddTHH:mm:ss.fffffffzzz}|0000|{text}|",
+                    false,
+                    $"[{at.ToLocalTime():HH:mm:ss.fff}] 0 00:0000:{text}");
+            Task SendLinesAsync(params HostLogEvent[] lines)
+            {
+                Console.WriteLine($"TIMING_PROBE_SEND {DateTime.Now:HH:mm:ss.fff} {string.Join(",", lines.Select(line => line.ActLine))}");
+                return SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data, lines);
+            }
+
+            var spoken = new List<string>();
+            async Task<HostEnvelope> ReadRecordingAsync(Func<HostEnvelope, bool> done)
+            {
+                // Heartbeats arrive once per second, so this bounds each stage to about a minute.
+                for (var index = 0; index < 60; index++)
+                {
+                    var envelope = await ReadWithTimeoutAsync(pipe);
+                    if (envelope.Type == HostMessageTypes.CommandRequest &&
+                        envelope.Payload.Deserialize<HostCommandRequest>() is { Command: "tts" } request)
+                    {
+                        spoken.Add(request.Arguments.GetValueOrDefault("text") ?? string.Empty);
+                        Console.WriteLine($"TIMING_PROBE_TTS {DateTime.Now:HH:mm:ss.fff} {spoken[^1]}");
+                        await SendAsync(
+                            HostMessageTypes.CommandResult,
+                            HostMessagePriority.Control,
+                            new HostCommandResult(true, "completed", "timing-probe"),
+                            envelope.CorrelationId);
+                    }
+
+                    if (done(envelope))
+                    {
+                        return envelope;
+                    }
+                }
+
+                throw new InvalidOperationException(
+                    $"Timing probe did not observe its expected frame; spoken=[{string.Join(",", spoken)}].");
+            }
+
+            async Task<List<string>> SpeakUntilSentinelAsync(int sentinel)
+            {
+                var start = spoken.Count;
+                var marker = $"ACTCOMPAT_SENTINEL_{sentinel}";
+                await SendLinesAsync(Line(marker, DateTimeOffset.Now));
+                await ReadRecordingAsync(_ => spoken.Count > start && spoken[^1] == marker);
+                var stage = spoken.Skip(start).ToList();
+                Console.WriteLine($"TIMING_PROBE_STAGE {sentinel}: [{string.Join(",", stage)}]");
+                return stage;
+            }
+
+            await SendAsync(
+                HostMessageTypes.Hello,
+                HostMessagePriority.Control,
+                new HostHello("timing-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion]));
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            await SendAsync(
+                HostMessageTypes.Permissions,
+                HostMessagePriority.Control,
+                new HostPermissionSnapshot(
+                    new Dictionary<string, IReadOnlyList<string>>
+                    {
+                        ["triggernometry"] = ["ReadCombatLogs", "ReadLocalConfiguration", "TextToSpeech"],
+                    },
+                    // FoxTTS is the isolated speech provider that TN's brokered TTS requires.
+                    ["triggernometry", "act.foxtts"]),
+                "timing-permissions");
+            await SendAsync(
+                HostMessageTypes.ZoneChanged,
+                HostMessagePriority.Critical,
+                new HostZoneEvent(1, "Host Smoke Zone", DateTimeOffset.UtcNow));
+            var baseline = CreateTestFfxivSnapshot();
+            await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State, baseline);
+
+            // 4. A line received while plugins start is buffered; one minute later it is
+            // no longer a valid callout and must not be replayed as if it just happened.
+            await SendLinesAsync(Line("ACTCOMPAT_REPLAY_STALE", DateTimeOffset.Now.AddSeconds(-60)));
+            var health = (await ReadRecordingAsync(envelope => envelope.Type == HostMessageTypes.Health))
+                .Payload.Deserialize<HostHealth>();
+            Assert(
+                health?.State == "plugins.ready",
+                $"Timing probe plugins did not become ready: {health?.Detail}");
+            await SpeakUntilSentinelAsync(0);
+
+            // 3a. Two refire-denied events 1.5 s apart in game time arrive in one burst.
+            var origin = DateTimeOffset.Now.AddSeconds(-10);
+            await SendLinesAsync(
+                Line("ACTCOMPAT_REFIRE_1", origin),
+                Line("ACTCOMPAT_REFIRE_2", origin.AddMilliseconds(1_500)));
+            await SpeakUntilSentinelAsync(1);
+
+            // 3b. Two events 300 ms apart in game time arrive 1.2 s apart (a Host stall).
+            await Task.Delay(1_500);
+            await SendLinesAsync(Line("ACTCOMPAT_REFIRE_3", origin.AddSeconds(5)));
+            await Task.Delay(1_200);
+            await SendLinesAsync(Line("ACTCOMPAT_REFIRE_4", origin.AddMilliseconds(5_300)));
+            await SpeakUntilSentinelAsync(2);
+
+            // 2. The game logs an actor one frame before its snapshot reaches the Host.
+            await SendLinesAsync(Line("ACTCOMPAT_SPAWN:40001234:", DateTimeOffset.Now));
+            await Task.Delay(80);
+            var spawned = CreateTestFfxivSnapshot(includeTarget: true).Combatants
+                .Single(combatant => combatant.Id == 0x10005678) with { Id = 0x40001234 };
+            await SendAsync(
+                HostMessageTypes.FfxivEntityDelta,
+                HostMessagePriority.State,
+                new HostFfxivEntityDelta(
+                    baseline.TerritoryId,
+                    baseline.CurrentPlayerId,
+                    baseline.Timestamp,
+                    DateTimeOffset.UtcNow,
+                    [spawned],
+                    []));
+            await SpeakUntilSentinelAsync(3);
+
+            // Actions due at past game times and the sentinel's action can leave TN in either
+            // order within a millisecond, so count each trigger by name after a final drain.
+            var drainUntil = DateTime.UtcNow.AddSeconds(1.5);
+            await ReadRecordingAsync(_ => DateTime.UtcNow >= drainUntil);
+            int Fired(params int[] lines)
+                => spoken.Count(text => lines.Any(line => text == $"ACTCOMPAT_REFIRE_FIRED_{line}"));
+            var staleReplayed = spoken.Contains("ACTCOMPAT_REPLAY_STALE");
+            var burstFires = Fired(1, 2);
+            var stallFires = Fired(3, 4);
+            var spawnSeen = spoken.Contains("ACTCOMPAT_SPAWN_SEEN");
+
+            Console.WriteLine(
+                "TRIGGERNOMETRY_TIMING_RESULT " +
+                $"staleReplayed={staleReplayed} burstFires={burstFires} stallFires={stallFires} spawnSeen={spawnSeen}");
+            Assert(!staleReplayed, "A one-minute-old startup log was replayed into Triggernometry as a live callout.");
+            Assert(burstFires == 2, $"Refire suppression used Host receipt time: {burstFires} of 2 events 1.5 s apart fired.");
+            Assert(stallFires == 1, $"Refire suppression used Host receipt time: {stallFires} of 2 events 0.3 s apart fired.");
+            Assert(spawnSeen, "A log line that referenced an entity one frame before its snapshot was evaluated without the entity.");
+
+            await SendAsync(
+                HostMessageTypes.Shutdown,
+                HostMessagePriority.Control,
+                new HostHealth("stopping", "timing probe", DateTimeOffset.UtcNow),
+                "timing-shutdown");
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch
+        {
+            var (output, error) = processLogs.TryGetValue(host.Id, out var log)
+                ? log.Snapshot()
+                : (string.Empty, string.Empty);
+            Console.Error.WriteLine(
+                $"Timing probe Host output:{Environment.NewLine}{output}" +
+                $"{Environment.NewLine}Timing probe Host errors:{Environment.NewLine}{error}");
             throw;
         }
         finally

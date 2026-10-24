@@ -92,7 +92,13 @@ public static partial class HostPluginBridge
     internal static FfxivDataRepository FfxivRepository => FfxivRepositoryInstance;
 
     internal static string DescribeTtsBridgeState()
-        => $"sender={sender is not null},writer={Volatile.Read(ref ttsWriter) is not null},pending={TriggernometryTtsQueue.Count}";
+        => $"sender={sender is not null},writer={Volatile.Read(ref ttsWriter) is not null}," +
+           $"pending={TriggernometryTtsQueue.Count},dropped={TriggernometryTtsQueue.Dropped}";
+
+    // The bounded queue sheds TN's oldest events only when TN is far behind; the runtime
+    // status must show that loss instead of leaving it to a sparse stderr line.
+    internal static string DescribeTriggernometryEventQueue()
+        => $"dropped={Interlocked.Read(ref triggerEventDrops)}";
 
     internal static bool IsGameForeground()
         => GameForegroundDetector.IsGameForeground(FfxivRepositoryInstance.GetGameProcessId());

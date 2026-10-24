@@ -26,7 +26,7 @@ public sealed class HostIpcClient : IAsyncDisposable
     private readonly string expectedTtsSource;
     private readonly SemaphoreSlim lifecycleLock = new(1, 1);
     private readonly object statusLock = new();
-    private readonly BoundedHostMessageQueue outbound = new();
+    private readonly BoundedHostMessageQueue outbound;
     private readonly ConcurrentQueue<HostDiagnostic> diagnostics = new();
     private CancellationTokenSource? sessionCancellation;
     private NamedPipeClientStream? bridgeInput;
@@ -63,6 +63,8 @@ public sealed class HostIpcClient : IAsyncDisposable
     {
         this.stateStore = stateStore;
         this.logger = logger;
+        outbound = new BoundedHostMessageQueue(
+            type => logger.Warning($"Expired Host IPC message dropped: {type}."));
         this.permissionSnapshot = permissionSnapshot
                                    ?? (() => new HostPermissionSnapshot(
                                        new Dictionary<string, IReadOnlyList<string>>(),
@@ -349,7 +351,7 @@ public sealed class HostIpcClient : IAsyncDisposable
             var queued = await outbound.DequeueAsync(cancellationToken).ConfigureAwait(false);
             if (queued.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
             {
-                logger.Warning($"Expired Host IPC message dropped: {queued.Type}.");
+                outbound.RecordExpired(queued);
                 continue;
             }
 
@@ -709,11 +711,11 @@ public enum HostConnectionStatus
     Faulted,
 }
 
-internal sealed class BoundedHostMessageQueue : IDisposable
+internal sealed class BoundedHostMessageQueue(Action<string>? expired = null) : IDisposable
 {
     private readonly object syncRoot = new();
     private readonly Queue<HostEnvelope> control = new();
-    private readonly Queue<HostEnvelope> data = new();
+    private readonly LinkedList<HostEnvelope> data = new();
     private readonly Dictionary<string, HostEnvelope> state = new(StringComparer.Ordinal);
     private readonly Queue<HostEnvelope> silverDasherData = new();
     private readonly Dictionary<string, HostEnvelope> silverDasherState = new(StringComparer.Ordinal);
@@ -766,7 +768,11 @@ internal sealed class BoundedHostMessageQueue : IDisposable
         lock (syncRoot)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            switch (envelope.Priority)
+            if (IsOrderedState(envelope.Type))
+            {
+                added = EnqueueOrderedStateLocked(envelope);
+            }
+            else switch (envelope.Priority)
             {
                 case HostMessagePriority.Control:
                 case HostMessagePriority.Critical:
@@ -779,15 +785,8 @@ internal sealed class BoundedHostMessageQueue : IDisposable
                     added = true;
                     break;
                 case HostMessagePriority.State:
-                    var stateKey = envelope.Type is
-                        HostMessageTypes.CombatStarted or HostMessageTypes.CombatEnded
-                            ? "event.combat.state"
-                            : envelope.Type;
-                    // Combat start/end are two wire messages for one logical state. Using one
-                    // key preserves the latest transition when a noisy open-world encounter
-                    // produces faster than the isolated Host can consume.
-                    added = !state.ContainsKey(stateKey);
-                    state[stateKey] = envelope;
+                    added = !state.ContainsKey(envelope.Type);
+                    state[envelope.Type] = envelope;
                     break;
                 case HostMessagePriority.SilverDasherState:
                     added = !silverDasherState.ContainsKey(envelope.Type);
@@ -809,15 +808,14 @@ internal sealed class BoundedHostMessageQueue : IDisposable
                 default:
                     if (data.Count >= HostProtocol.DataQueueCapacity)
                     {
-                        data.Dequeue();
-                        Interlocked.Increment(ref droppedDataMessages);
+                        DropOldestDataLocked();
                     }
                     else
                     {
                         added = true;
                     }
 
-                    data.Enqueue(envelope);
+                    data.AddLast(envelope);
                     break;
             }
         }
@@ -830,6 +828,13 @@ internal sealed class BoundedHostMessageQueue : IDisposable
         return true;
     }
 
+    /// <summary>Counts a message discarded because its deadline passed before it was written.</summary>
+    public void RecordExpired(HostEnvelope envelope)
+    {
+        Interlocked.Increment(ref droppedDataMessages);
+        expired?.Invoke(envelope.Type);
+    }
+
     public async ValueTask<HostEnvelope> DequeueAsync(CancellationToken cancellationToken)
     {
         while (true)
@@ -837,36 +842,106 @@ internal sealed class BoundedHostMessageQueue : IDisposable
             await available.WaitAsync(cancellationToken).ConfigureAwait(false);
             lock (syncRoot)
             {
-                if (control.TryDequeue(out var controlMessage))
+                while (TryTakeLocked(out var envelope))
                 {
-                    return controlMessage;
-                }
+                    // Discard stale messages here, where they are counted, instead of letting
+                    // the writer skip them invisibly after a stalled Host read.
+                    if (envelope.Deadline is { } deadline && deadline < DateTimeOffset.UtcNow)
+                    {
+                        RecordExpired(envelope);
+                        continue;
+                    }
 
-                if (state.Count > 0)
-                {
-                    var pair = state.First();
-                    state.Remove(pair.Key);
-                    return pair.Value;
-                }
-
-                if (data.TryDequeue(out var dataMessage))
-                {
-                    return dataMessage;
-                }
-
-                if (silverDasherState.Count > 0)
-                {
-                    var pair = silverDasherState.First();
-                    silverDasherState.Remove(pair.Key);
-                    return pair.Value;
-                }
-
-                if (silverDasherData.TryDequeue(out var silverDasherMessage))
-                {
-                    return silverDasherMessage;
+                    return envelope;
                 }
             }
         }
+    }
+
+    private bool TryTakeLocked(out HostEnvelope envelope)
+    {
+        if (control.TryDequeue(out envelope!))
+        {
+            return true;
+        }
+
+        if (state.Count > 0)
+        {
+            var pair = state.First();
+            state.Remove(pair.Key);
+            envelope = pair.Value;
+            return true;
+        }
+
+        if (data.First is { } next)
+        {
+            data.RemoveFirst();
+            envelope = next.Value;
+            return true;
+        }
+
+        if (silverDasherState.Count > 0)
+        {
+            var pair = silverDasherState.First();
+            silverDasherState.Remove(pair.Key);
+            envelope = pair.Value;
+            return true;
+        }
+
+        return silverDasherData.TryDequeue(out envelope!);
+    }
+
+    // Triggernometry tags every log line with the zone and combat state current when the
+    // Host processes it, so these transitions travel in the log lane at their exact place.
+    private static bool IsOrderedState(string type)
+        => type is HostMessageTypes.ZoneChanged or HostMessageTypes.CombatStarted or HostMessageTypes.CombatEnded;
+
+    private static bool IsCombatState(string type)
+        => type is HostMessageTypes.CombatStarted or HostMessageTypes.CombatEnded;
+
+    private bool EnqueueOrderedStateLocked(HostEnvelope envelope)
+    {
+        if (IsCombatState(envelope.Type) && data.Last is { } tail && IsCombatState(tail.Value.Type))
+        {
+            if (tail.Value.Type == envelope.Type)
+            {
+                tail.Value = envelope;
+                return false;
+            }
+
+            // Back-to-back transitions with no logs between them come from noisy open-world
+            // combat detection. Collapse whole start/end cycles, but keep the first and the
+            // newest edge so TN still sees the end-then-start that resets per-pull state.
+            if (tail.Previous is { } middle && IsCombatState(middle.Value.Type) &&
+                middle.Previous is { } first && IsCombatState(first.Value.Type))
+            {
+                data.Remove(middle);
+                data.Remove(tail);
+            }
+        }
+
+        var added = true;
+        if (data.Count >= HostProtocol.DataQueueCapacity)
+        {
+            DropOldestDataLocked();
+            added = false;
+        }
+
+        data.AddLast(envelope);
+        return added;
+    }
+
+    private void DropOldestDataLocked()
+    {
+        // Ordered zone/combat state costs a few bytes and must never be shed for log volume.
+        var node = data.First;
+        while (node is not null && IsOrderedState(node.Value.Type))
+        {
+            node = node.Next;
+        }
+
+        data.Remove(node ?? data.First!);
+        Interlocked.Increment(ref droppedDataMessages);
     }
 
     public void Clear()

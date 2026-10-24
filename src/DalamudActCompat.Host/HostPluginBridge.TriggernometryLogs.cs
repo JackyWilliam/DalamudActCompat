@@ -93,7 +93,8 @@ public static partial class HostPluginBridge
                         Volatile.Write(ref awaitingInitialization, InitializationKey(match));
                 },
                 replayReady: () => !AwaitingInitialization,
-                cancelReplay: () => Volatile.Write(ref awaitingInitialization, null));
+                cancelReplay: () => Volatile.Write(ref awaitingInitialization, null),
+                entitySeen: FfxivRepositoryInstance.HasSeenEntity);
             // A missing object must expire even if no more snapshots or logs arrive.
             timer = new(_ => Pump(), null, Timeout.Infinite, Timeout.Infinite);
         }
