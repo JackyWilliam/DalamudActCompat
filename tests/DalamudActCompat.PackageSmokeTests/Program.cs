@@ -298,6 +298,7 @@ try
     DrawingLifetimeSmokeTests.Run();
     PictoCleanupScopeSmokeTests.Run();
     PictoOnlineResourceSmokeTests.Run();
+    PictoTn221SyntaxSmokeTests.Run();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
     ValidateDutyWipeTracking();
