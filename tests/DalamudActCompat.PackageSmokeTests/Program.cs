@@ -5496,7 +5496,7 @@ static void ValidateParserDependencyVersions()
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
-        "3.0.3.3",
+        "3.0.3.4",
         "FFXIV_ACT_Plugin");
     var logfileAssemblyPath = Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.Logfile.dll");
     Assert(
@@ -5539,7 +5539,7 @@ static void ValidateParserDependencyVersions()
     var logFormatType = logfileAssembly.GetType("FFXIV_ACT_Plugin.Logfile.LogFormat", throwOnError: true)!;
     var formatVersion = logFormatType.GetMethod("FormatVersion", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
     var header = (string)formatVersion.Invoke(Activator.CreateInstance(logFormatType, nonPublic: true), null)!;
-    Assert(header == "This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.3",
+    Assert(header == "This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4",
         $"The actual FFLogs version header is stale: {header}");
     Console.WriteLine($"Verified FFLogs version header: {header}");
 }
