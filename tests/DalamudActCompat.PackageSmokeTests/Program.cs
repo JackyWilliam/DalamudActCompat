@@ -225,6 +225,10 @@ try
         NotActStatisticsSmokeTests.Run();
         return 0;
     }
+    if (args.Contains("--trigger-ordering-only", StringComparer.Ordinal))
+    {
+        return (await TriggerEventOrderingSmokeTests.RunAsync(testRoot)).Count == 0 ? 0 : 1;
+    }
     ValidateSettingsSerializerMemberTypes();
     ValidateGameRegionSelection();
     ValidateActPluginDataCompatibility();
@@ -237,6 +241,10 @@ try
     ValidateFoxTtsBridge();
     ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
+    var orderingFailures = await TriggerEventOrderingSmokeTests.RunAsync(testRoot);
+    Assert(
+        orderingFailures.Count == 0,
+        "Trigger event ordering regressions failed: " + string.Join("; ", orderingFailures));
     ValidateHostMemoryProtectionPolicy();
     await HostLifecycleSmokeTests.RunAsync(testRoot);
     ValidateVersionedCompatibilityHostExtraction(testRoot);
@@ -290,6 +298,7 @@ try
     DrawingLifetimeSmokeTests.Run();
     PictoCleanupScopeSmokeTests.Run();
     PictoOnlineResourceSmokeTests.Run();
+    PictoTn221SyntaxSmokeTests.Run();
     ValidateEmptyEncounterFiltering();
     ValidateDutyEncounterAggregation();
     ValidateDutyWipeTracking();
@@ -2020,15 +2029,23 @@ static void ValidateBoundedHostQueue()
             "Combat state coalescing rejected a noisy transition.");
     }
 
-    var latestCombatState = queue.DequeueAsync(CancellationToken.None)
-        .AsTask()
-        .GetAwaiter()
-        .GetResult();
+    var combatStates = new List<string>();
+    while (queue.DataCount > 0)
+    {
+        combatStates.Add(queue.DequeueAsync(CancellationToken.None)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult()
+            .Type);
+    }
+
+    // Noise collapses to whole cycles, but TN must still observe one end and one start.
     Assert(
         queue.ControlCount == 0 &&
-        queue.DataCount == 0 &&
-        latestCombatState.Type == HostMessageTypes.CombatEnded,
-        "Alternating combat transitions were not coalesced to their single latest state.");
+        combatStates.Count is > 0 and <= 3 &&
+        combatStates.Contains(HostMessageTypes.CombatStarted) &&
+        combatStates[^1] == HostMessageTypes.CombatEnded,
+        $"Alternating combat transitions were not bounded to their latest state with both edges: {string.Join(",", combatStates)}.");
 }
 
 static void ValidateHostMemoryProtectionPolicy()

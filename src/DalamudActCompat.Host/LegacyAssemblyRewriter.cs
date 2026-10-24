@@ -1925,6 +1925,7 @@ public static partial class LegacyAssemblyRewriter
             loadParameters: true);
 
         WrapTriggernometryLogOrdering(module);
+        UseTriggernometryEventTime(module);
         ObserveTriggernometryDrawingPipeline(module);
 
         var repositoryUpdate = module.Types

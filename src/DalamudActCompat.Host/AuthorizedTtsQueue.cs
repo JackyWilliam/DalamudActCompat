@@ -14,6 +14,7 @@ internal sealed class AuthorizedTtsQueue : IAsyncDisposable
     private readonly Task worker;
     private readonly int capacity;
     private int count;
+    private long dropped;
 
     public AuthorizedTtsQueue(
         int capacity,
@@ -35,6 +36,9 @@ internal sealed class AuthorizedTtsQueue : IAsyncDisposable
     }
 
     public int Count => Volatile.Read(ref count);
+
+    /// <summary>Requests not spoken because the game side never authorized them in time.</summary>
+    public long Dropped => Interlocked.Read(ref dropped);
 
     public string Reserve(string text, DateTimeOffset requestedAt, DateTimeOffset deadline)
     {
@@ -105,12 +109,22 @@ internal sealed class AuthorizedTtsQueue : IAsyncDisposable
             var allowed = false;
             try
             {
-                var remaining = request.Deadline - DateTimeOffset.UtcNow;
-                if (remaining > TimeSpan.Zero)
+                var authorization = request.Authorization.Task;
+                // Complete() already rejected late answers. An answer that arrived in time
+                // stays valid even when a slow provider kept this request queued past it.
+                if (authorization.IsCompleted)
                 {
-                    allowed = await request.Authorization.Task
-                        .WaitAsync(remaining, lifetime.Token)
-                        .ConfigureAwait(false);
+                    allowed = await authorization.ConfigureAwait(false);
+                }
+                else
+                {
+                    var remaining = request.Deadline - DateTimeOffset.UtcNow;
+                    if (remaining > TimeSpan.Zero)
+                    {
+                        allowed = await authorization
+                            .WaitAsync(remaining, lifetime.Token)
+                            .ConfigureAwait(false);
+                    }
                 }
             }
             catch (TimeoutException)
@@ -124,6 +138,13 @@ internal sealed class AuthorizedTtsQueue : IAsyncDisposable
 
             if (!allowed)
             {
+                var total = Interlocked.Increment(ref dropped);
+                if ((total & (total - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"Triggernometry TTS was not authorized by the game side in time and was not spoken. Total={total}.");
+                }
+
                 continue;
             }
 

@@ -40,7 +40,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private string sessionId = string.Empty;
     private string pipeName = string.Empty;
     private int pendingLogCount;
-    private int logFlushActive;
+    private readonly object logFlushSync = new();
     private long droppedPendingLogs;
     private long droppedMatchaNetworkEvents;
     private int restartScheduled;
@@ -321,7 +321,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     public void PublishZone(uint territoryId, string zoneName)
     {
         lastZone = new HostZoneEvent(territoryId, zoneName, DateTimeOffset.UtcNow);
-        TryPublishState(HostMessageTypes.ZoneChanged, lastZone);
+        PublishOrderedState(HostMessageTypes.ZoneChanged, lastZone);
         PublishSilverDasherZone(lastZone);
     }
 
@@ -348,7 +348,7 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 
         combatState = nextCombatState;
         combatStateKnown = true;
-        TryPublishState(
+        PublishOrderedState(
             finished ? HostMessageTypes.CombatEnded : HostMessageTypes.CombatStarted,
             new HostCombatEvent(nextCombatState, DateTimeOffset.UtcNow));
     }
@@ -665,51 +665,85 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     private void FlushLogs()
     {
         if (state != HostSupervisorState.Running || pendingLogs.IsEmpty ||
-            Interlocked.Exchange(ref logFlushActive, 1) != 0)
+            !Monitor.TryEnter(logFlushSync))
         {
             return;
         }
 
         try
         {
-            var batch = new List<HostLogEvent>(MaximumLogBatchItems);
-            var characters = 0;
-            while (batch.Count < MaximumLogBatchItems &&
-                   pendingLogs.TryPeek(out var next) &&
-                   (batch.Count == 0 ||
-                    characters + next.Line.Length + (next.ActLine?.Length ?? 0) <= MaximumLogBatchCharacters) &&
-                   pendingLogs.TryDequeue(out next))
-            {
-                Interlocked.Decrement(ref pendingLogCount);
-                batch.Add(next);
-                characters += next.Line.Length + (next.ActLine?.Length ?? 0);
-            }
-
-            if (batch.Count == 0)
-            {
-                return;
-            }
-
-            if (!ipc.TryEnqueue(
-                    HostMessageTypes.LogBatch,
-                    HostMessagePriority.Data,
-                    batch,
-                    deadline: DateTimeOffset.UtcNow.AddSeconds(2)))
-            {
-                Interlocked.Add(ref droppedPendingLogs, batch.Count);
-            }
-
-            if (silverDasherEventsEnabled())
-            {
-                _ = ipc.TryEnqueue(
-                    HostMessageTypes.SilverDasherLogBatch,
-                    HostMessagePriority.SilverDasherData,
-                    batch);
-            }
+            FlushLogBatchLocked();
         }
         finally
         {
-            Volatile.Write(ref logFlushActive, 0);
+            Monitor.Exit(logFlushSync);
+        }
+    }
+
+    // Callers hold logFlushSync. Returns false once no buffered line remains.
+    private bool FlushLogBatchLocked()
+    {
+        var batch = new List<HostLogEvent>(MaximumLogBatchItems);
+        var characters = 0;
+        while (batch.Count < MaximumLogBatchItems &&
+               pendingLogs.TryPeek(out var next) &&
+               (batch.Count == 0 ||
+                characters + next.Line.Length + (next.ActLine?.Length ?? 0) <= MaximumLogBatchCharacters) &&
+               pendingLogs.TryDequeue(out next))
+        {
+            Interlocked.Decrement(ref pendingLogCount);
+            batch.Add(next);
+            characters += next.Line.Length + (next.ActLine?.Length ?? 0);
+        }
+
+        if (batch.Count == 0)
+        {
+            return false;
+        }
+
+        if (!ipc.TryEnqueue(
+                HostMessageTypes.LogBatch,
+                HostMessagePriority.Data,
+                batch,
+                deadline: DateTimeOffset.UtcNow.AddSeconds(2)))
+        {
+            Interlocked.Add(ref droppedPendingLogs, batch.Count);
+        }
+
+        if (silverDasherEventsEnabled())
+        {
+            _ = ipc.TryEnqueue(
+                HostMessageTypes.SilverDasherLogBatch,
+                HostMessagePriority.SilverDasherData,
+                batch);
+        }
+
+        return true;
+    }
+
+    private void PublishOrderedState<T>(string type, T payload)
+    {
+        if (state != HostSupervisorState.Running)
+        {
+            return;
+        }
+
+        lock (logFlushSync)
+        {
+            // Lines produced before a zone or combat transition must reach the Host first:
+            // the Host tags each line with the zone and combat state current when it runs.
+            while (FlushLogBatchLocked())
+            {
+            }
+
+            // No deadline: a lost transition would leave Triggernometry in the old zone or
+            // combat state until the next one, unlike a late log line that only expires.
+            if (!ipc.TryEnqueue(type, HostMessagePriority.Data, payload))
+            {
+                Interlocked.Increment(ref droppedPendingLogs);
+                logger.Warning(
+                    $"ACT Host state event '{type}' was not queued; latest state will be replayed after reconnect.");
+            }
         }
     }
 
@@ -1064,34 +1098,15 @@ public sealed class ActHostSupervisor : IAsyncDisposable
     {
         if (lastZone is not null)
         {
-            TryPublishState(HostMessageTypes.ZoneChanged, lastZone);
+            PublishOrderedState(HostMessageTypes.ZoneChanged, lastZone);
             PublishSilverDasherZone(lastZone);
         }
 
         if (combatStateKnown)
         {
-            TryPublishState(
+            PublishOrderedState(
                 combatState ? HostMessageTypes.CombatStarted : HostMessageTypes.CombatEnded,
                 new HostCombatEvent(combatState, DateTimeOffset.UtcNow));
-        }
-    }
-
-    private void TryPublishState<T>(string type, T payload)
-    {
-        if (state != HostSupervisorState.Running)
-        {
-            return;
-        }
-
-        if (!ipc.TryEnqueue(
-                type,
-                HostMessagePriority.State,
-                payload,
-                deadline: DateTimeOffset.UtcNow.AddSeconds(2)))
-        {
-            Interlocked.Increment(ref droppedPendingLogs);
-            logger.Warning(
-                $"ACT Host state event '{type}' was not queued; latest state will be replayed after reconnect.");
         }
     }
 

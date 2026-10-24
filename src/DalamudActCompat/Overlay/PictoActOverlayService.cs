@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text.RegularExpressions;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 
 namespace DalamudActCompat.Overlay;
@@ -9,6 +10,10 @@ namespace DalamudActCompat.Overlay;
 internal sealed partial class PictoActOverlayService : IDisposable
 {
     private const int CurveSegments = 72;
+    private const uint InvalidEntityId = 0xE0000000;
+    // Dalamud ObjectKind values, which match ACT's combatant Type for Pc and BattleNpc.
+    private const byte PlayerObjectKind = 1;
+    private const byte BattleNpcObjectKind = 2;
     private static readonly Vector4 DefaultColor = new(1f, 0.82f, 0.18f, 0.85f);
     private readonly IGameGui gameGui;
     private readonly IObjectTable? objectTable;
@@ -56,7 +61,12 @@ internal sealed partial class PictoActOverlayService : IDisposable
     internal void Apply(string payload)
     {
         var generation = Volatile.Read(ref clearGeneration);
-        var commands = Parse(payload, ResolveEntityPosition);
+        IReadOnlyList<PictoActEntity>? entities = null;
+        // Capture the object table at most once per payload, and only when a command
+        // references an entity, so all selectors in one transaction rank the same frame.
+        var commands = Parse(
+            payload,
+            value => ResolveEntityState(value, entities ??= CaptureEntities())?.Position);
         lock (syncRoot)
         {
             if (generation != clearGeneration)
@@ -362,6 +372,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             return;
         }
 
+        IReadOnlyList<PictoActEntity>? entities = null;
         foreach (var stored in shapes.Values.Where(value => value.Shape.RequiresDynamicRefresh))
         {
             PictoActShape refreshed;
@@ -369,8 +380,8 @@ internal sealed partial class PictoActOverlayService : IDisposable
             {
                 refreshed = RefreshDynamicShape(
                     stored.Shape,
-                    ResolveEntityPosition,
-                    ResolveEntityHeading);
+                    value => ResolveEntityState(value, entities ??= CaptureEntities())?.Position,
+                    value => ResolveEntityState(value, entities ??= CaptureEntities())?.Heading);
             }
             catch (InvalidDataException ex)
             {
@@ -1220,7 +1231,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             ? ParseScale(
                 scaleExpression,
                 scaleIsCylindrical,
-                DistanceTo(sourcePosition, sourceTarget))
+                TargetDistances(sourcePosition, sourceTarget))
             : (Vector3?)null;
         return shape with
         {
@@ -1309,7 +1320,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
             ? ParseScale(
                 shape.ScaleExpression,
                 shape.ScaleIsCylindrical,
-                DistanceTo(sourcePosition, sourceTarget))
+                TargetDistances(sourcePosition, sourceTarget))
             : new Vector3(shape.PrimaryScale, shape.SecondaryScale, shape.TertiaryScale);
         var polygon = shape.SourcePolygon?
             .Select(point => ResolveTransform(
@@ -1366,19 +1377,61 @@ internal sealed partial class PictoActOverlayService : IDisposable
         return first is not null && second is not null && first.SequenceEqual(second);
     }
 
-    private Vector3? ResolveEntityPosition(string value)
-        => ResolveEntityState(value)?.Position;
-
-    private float? ResolveEntityHeading(string value)
-        => ResolveEntityState(value)?.Heading;
-
-    private (Vector3 Position, float Heading)? ResolveEntityState(string value)
+    private IReadOnlyList<PictoActEntity> CaptureEntities()
     {
         if (objectTable is null)
         {
-            return null;
+            return [];
         }
 
+        var result = new List<PictoActEntity>();
+        foreach (var gameObject in objectTable)
+        {
+            var character = gameObject as ICharacter;
+            result.Add(new PictoActEntity(
+                gameObject.EntityId,
+                gameObject.Position,
+                gameObject.Rotation,
+                unchecked((byte)gameObject.ObjectKind),
+                character?.ClassJob.RowId ?? 0,
+                character?.CurrentHp ?? 0,
+                gameObject.OwnerId,
+                // Battle characters encode their target as a plain entity ID in the low
+                // half, matching the TargetID that the Host exposes to Triggernometry.
+                unchecked((uint)gameObject.TargetObjectId)));
+        }
+
+        return result;
+    }
+
+    internal static (Vector3 Position, float Heading)? ResolveEntityState(
+        string value,
+        IEnumerable<PictoActEntity> entities)
+    {
+        if (TryParseEntitySelector(value, out var selector))
+        {
+            if (SelectEntity(selector, entities) is not { } selected)
+            {
+                return null;
+            }
+
+            // Axis overrides replace the chosen entity's coordinates only after selection;
+            // Near/Far ranking still measures from the unmodified reference point.
+            return (
+                new Vector3(
+                    selector.OverrideX ?? selected.Position.X,
+                    selector.OverrideHeight ?? selected.Position.Y,
+                    selector.OverrideGroundY ?? selected.Position.Z),
+                selected.Heading);
+        }
+
+        return FindEntity(value, entities) is { } entity
+            ? (entity.Position, entity.Heading)
+            : null;
+    }
+
+    private static PictoActEntity? FindEntity(string value, IEnumerable<PictoActEntity> entities)
+    {
         var candidates = new HashSet<uint>();
         var normalized = value.Trim();
         if (uint.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out var decimalId))
@@ -1395,11 +1448,222 @@ internal sealed partial class PictoActOverlayService : IDisposable
             candidates.Add(hexId);
         }
 
-        var gameObject = objectTable
-            .FirstOrDefault(candidate => candidates.Contains(candidate.EntityId));
-        return gameObject is null
-            ? null
-            : (gameObject.Position, gameObject.Rotation);
+        foreach (var entity in entities)
+        {
+            if (candidates.Contains(entity.EntityId))
+            {
+                return entity;
+            }
+        }
+
+        return null;
+    }
+
+    private static PictoActEntity? FindEntity(uint entityId, IEnumerable<PictoActEntity> entities)
+    {
+        if (!IsSelectableEntityId(entityId))
+        {
+            return null;
+        }
+
+        foreach (var entity in entities)
+        {
+            if (entity.EntityId == entityId)
+            {
+                return entity;
+            }
+        }
+
+        return null;
+    }
+
+    private static PictoActEntity? SelectEntity(
+        PictoActEntitySelector selector,
+        IEnumerable<PictoActEntity> entities)
+    {
+        PictoActEntity? source = null;
+        if (selector.ReferenceEntity is { } reference)
+        {
+            source = FindEntity(reference, entities);
+            if (source is null)
+            {
+                return null;
+            }
+        }
+
+        switch (selector.Mode)
+        {
+            case PictoActEntitySelectMode.Direct:
+                return source;
+            case PictoActEntitySelectMode.Target:
+                return source is { } targeter
+                    ? FindEntity(targeter.TargetId, entities)
+                    : null;
+        }
+
+        // Triggernometry ranks on the ground plane from the reference entity's live
+        // position, or from an absolute coordinate that O/θ transforms do not affect.
+        var origin = source?.Position ?? selector.ReferencePoint;
+        var excludedId = source?.EntityId;
+        var eligible = entities
+            .Where(entity =>
+                IsSelectableEntityId(entity.EntityId) &&
+                entity.EntityId != excludedId &&
+                entity.CurrentHp > 0 &&
+                MatchesSelectType(entity, selector.Type))
+            // Actor transitions can briefly duplicate one object-table entry; upstream's
+            // entity map collapses those, so one actor must not occupy two ranks here.
+            .DistinctBy(entity => entity.EntityId)
+            .Select(entity => (
+                Entity: entity,
+                DistanceSquared: Vector2.DistanceSquared(
+                    new Vector2(entity.Position.X, entity.Position.Z),
+                    new Vector2(origin.X, origin.Z))));
+        var ordered = selector.Mode == PictoActEntitySelectMode.Near
+            ? eligible.OrderBy(pair => pair.DistanceSquared).ThenBy(pair => pair.Entity.EntityId)
+            : eligible.OrderByDescending(pair => pair.DistanceSquared).ThenBy(pair => pair.Entity.EntityId);
+        return ordered
+            .Skip(selector.Index - 1)
+            .Select(pair => (PictoActEntity?)pair.Entity)
+            .FirstOrDefault();
+    }
+
+    private static bool MatchesSelectType(PictoActEntity entity, PictoActEntitySelectType? type)
+    {
+        var role = JobRole(entity.ClassJob);
+        return type switch
+        {
+            PictoActEntitySelectType.Player => entity.ObjectKind == PlayerObjectKind,
+            PictoActEntitySelectType.Tank => role == PictoActJobRole.Tank,
+            PictoActEntitySelectType.Healer => role == PictoActJobRole.Healer,
+            PictoActEntitySelectType.NonTank =>
+                entity.ObjectKind == PlayerObjectKind && role != PictoActJobRole.Tank,
+            PictoActEntitySelectType.Dps => role == PictoActJobRole.Dps,
+            // ACT reports an unowned actor's owner as 0, while the client keeps the
+            // invalid-ID sentinel; both mean the BattleNpc is not a pet or summon.
+            PictoActEntitySelectType.Enemy =>
+                entity.ObjectKind == BattleNpcObjectKind &&
+                entity.OwnerId is 0 or InvalidEntityId,
+            _ => false,
+        };
+    }
+
+    // Mirrors Triggernometry 2.2.1.0 JobList roles, including its placeholder jobs 44/45,
+    // so Tank/Healer/DPS selectors classify the same actors as the upstream plugin.
+    private static PictoActJobRole JobRole(uint classJob)
+        => classJob switch
+        {
+            1 or 3 or 19 or 21 or 32 or 37 or 44 => PictoActJobRole.Tank,
+            6 or 24 or 28 or 33 or 40 => PictoActJobRole.Healer,
+            2 or 4 or 5 or 7 or 20 or 22 or 23 or 25 or 26 or 27 or 29 or 30 or 31 or
+                34 or 35 or 36 or 38 or 39 or 41 or 42 or 43 or 45 => PictoActJobRole.Dps,
+            _ => PictoActJobRole.None,
+        };
+
+    private static bool IsSelectableEntityId(uint entityId)
+        => entityId is not 0 and not InvalidEntityId;
+
+    private static bool TryParseEntitySelector(
+        string value,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PictoActEntitySelector? selector)
+    {
+        selector = null;
+        // Only split before axis assignments; any other comma still belongs to the
+        // coordinate or expression text, exactly like Triggernometry's DynamicCoordArg.
+        var parts = AxisOverrideSeparator().Split(value.Trim());
+        var source = parts[0].Trim();
+        string? referenceEntity = null;
+        var referencePoint = Vector3.Zero;
+        var mode = PictoActEntitySelectMode.Direct;
+        PictoActEntitySelectType? type = null;
+        var index = 1;
+        var match = EntitySelectorSuffix().Match(source);
+        if (match.Success)
+        {
+            var reference = source[..match.Index].Trim();
+            var isTarget = match.Groups["target"].Success;
+            if (TryParseEntityReference(reference, out var entityReference))
+            {
+                referenceEntity = entityReference;
+            }
+            else if (isTarget)
+            {
+                throw new InvalidDataException(
+                    "PictoACT Target selector requires an entity ID reference.");
+            }
+            else
+            {
+                referencePoint = ParseVector3(reference, "Selector");
+            }
+
+            if (isTarget)
+            {
+                mode = PictoActEntitySelectMode.Target;
+            }
+            else
+            {
+                mode = string.Equals(
+                    match.Groups["order"].Value,
+                    "Near",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? PictoActEntitySelectMode.Near
+                    : PictoActEntitySelectMode.Far;
+                type = Enum.Parse<PictoActEntitySelectType>(match.Groups["type"].Value, true);
+                if (!int.TryParse(
+                        match.Groups["index"].Value,
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out index) ||
+                    index <= 0)
+                {
+                    throw new InvalidDataException(
+                        "PictoACT entity distance rank must be a positive integer.");
+                }
+            }
+        }
+        else if (parts.Length > 1 && TryParseEntityReference(source, out var entityReference))
+        {
+            referenceEntity = entityReference;
+        }
+        else
+        {
+            // Plain IDs keep the established fast path; fixed coordinates ignore the split.
+            return false;
+        }
+
+        float? overrideX = null;
+        float? overrideGroundY = null;
+        float? overrideHeight = null;
+        for (var part = 1; part < parts.Length; part++)
+        {
+            var separator = parts[part].IndexOf('=');
+            var axis = parts[part][..separator].Trim();
+            var axisValue = ParseSingle(parts[part][(separator + 1)..], $"{axis} override");
+            // Triggernometry's axes are ACT log axes: x/y form the ground plane, z is height.
+            switch (char.ToLowerInvariant(axis[0]))
+            {
+                case 'x':
+                    overrideX = axisValue;
+                    break;
+                case 'y':
+                    overrideGroundY = axisValue;
+                    break;
+                default:
+                    overrideHeight = axisValue;
+                    break;
+            }
+        }
+
+        selector = new PictoActEntitySelector(
+            referenceEntity,
+            referencePoint,
+            mode,
+            type,
+            index,
+            overrideX,
+            overrideGroundY,
+            overrideHeight);
+        return true;
     }
 
     private static (Vector3 Position, float Angle) ResolveTransform(
@@ -1663,7 +1927,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
         var scale = ParseScale(
             scaleExpression ?? "1",
             scaleIsCylindrical,
-            DistanceTo(sourcePosition, sourceTarget));
+            TargetDistances(sourcePosition, sourceTarget));
         var colorText = Optional(values, "Color");
         var color = ParseColor(colorText);
         float? duration = null;
@@ -2033,6 +2297,18 @@ internal sealed partial class PictoActOverlayService : IDisposable
         }
         catch (InvalidDataException)
         {
+            if (TryParseEntitySelector(normalized, out _))
+            {
+                // Since 2.2.1.0 θ parses non-angle text as a dynamic coordinate, so the
+                // frame can face a selected entity such as "10ABCDEF.Target".
+                var selected = entityResolver?.Invoke(normalized) ?? Vector3.Zero;
+                return (
+                    DirectionTo(center, selected),
+                    selected,
+                    normalized,
+                    PictoActTransformRotationMode.Target);
+            }
+
             // Current PictoACT accepts a world coordinate here in addition to an angle
             // expression. Angle parsing runs first because expressions can contain commas.
             var target = ParseVector3(value, "Theta", entityResolver);
@@ -2206,6 +2482,15 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 entityReference);
         }
 
+        if (TryParseEntitySelector(normalized, out _))
+        {
+            // Triggernometry 2.2.1.0 selectors (.Target, .NearEnemy1, ", y=100") are
+            // re-resolved on every refresh, so the whole text is the dynamic reference.
+            return new PictoActCoordinateArg(
+                entityResolver?.Invoke(normalized) ?? Vector3.Zero,
+                normalized);
+        }
+
         return new PictoActCoordinateArg(
             ParseVector3(value, name, entityResolver),
             null);
@@ -2252,23 +2537,10 @@ internal sealed partial class PictoActOverlayService : IDisposable
             return entityPosition;
         }
 
-        var polarIndex = normalized.IndexOf("polar", StringComparison.OrdinalIgnoreCase);
-        if (polarIndex >= 0)
+        var keywords = CoordinateKeyword().Matches(normalized);
+        if (keywords.Count > 0)
         {
-            var baseText = normalized[..polarIndex].Trim().TrimEnd(',');
-            var basePosition = string.IsNullOrWhiteSpace(baseText)
-                ? Vector3.Zero
-                : ParseVector3(baseText, name, entityResolver);
-            var polar = ParseNumbers(normalized[(polarIndex + "polar".Length)..], 2, 3, name);
-            var radius = polar[0];
-            var angle = polar[1];
-            var height = polar.Length > 2 ? polar[2] : 0;
-            return ValidateCoordinate(
-                basePosition + new Vector3(
-                    MathF.Sin(angle) * radius,
-                    height,
-                    MathF.Cos(angle) * radius),
-                name);
+            return ParseCoordinateChain(normalized, keywords, name, entityResolver);
         }
 
         var numbers = ParseNumbers(normalized, 2, 3, name);
@@ -2277,6 +2549,66 @@ internal sealed partial class PictoActOverlayService : IDisposable
         var result = new Vector3(numbers[0], numbers.Length > 2 ? numbers[2] : 0, numbers[1]);
         return ValidateCoordinate(result, name);
     }
+
+    private static Vector3 ParseCoordinateChain(
+        string normalized,
+        MatchCollection keywords,
+        string name,
+        Func<string, Vector3?>? entityResolver)
+    {
+        // Triggernometry's XIVCoord sums keyword-delimited groups. The leading group keeps
+        // DACT's wider base syntax (entity IDs, wrappers, a trailing comma) unchanged.
+        var baseText = normalized[..keywords[0].Index].Trim().TrimEnd(',');
+        var result = string.IsNullOrWhiteSpace(baseText)
+            ? Vector3.Zero
+            : ParseVector3(baseText, name, entityResolver);
+        for (var index = 0; index < keywords.Count; index++)
+        {
+            var keyword = keywords[index];
+            var end = index + 1 < keywords.Count ? keywords[index + 1].Index : normalized.Length;
+            var group = ParseNumbers(
+                normalized[(keyword.Index + keyword.Length)..end].Trim().TrimEnd(','),
+                2,
+                3,
+                name);
+            var third = group.Length > 2 ? group[2] : 0;
+            if (keyword.Groups["segments"].Success)
+            {
+                if (!int.TryParse(
+                        keyword.Groups["segments"].Value,
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out var segments) ||
+                    segments <= 0)
+                {
+                    throw new InvalidDataException(
+                        $"PictoACT {name} polardir segment count must be a positive integer.");
+                }
+
+                // polardirN shifts the index by half a step, the same rule as DirN fields.
+                var direction = group[1] + (keyword.Groups["negative"].Success ? 0.5 : 0);
+                var angle = (float)(
+                    ((direction % segments) + segments) % segments / segments * Math.Tau - Math.PI);
+                result += PolarOffset(group[0], angle, third);
+                continue;
+            }
+
+            result += keyword.Groups["operation"].Value.ToLowerInvariant() switch
+            {
+                "plus" => new Vector3(group[0], third, group[1]),
+                "minus" => -new Vector3(group[0], third, group[1]),
+                "polar" => PolarOffset(group[0], group[1], third),
+                // Upstream negates a polar term by turning θ by π, which flips only the
+                // ground offset and still adds its height.
+                _ => PolarOffset(-group[0], group[1], third),
+            };
+        }
+
+        return ValidateCoordinate(result, name);
+    }
+
+    private static Vector3 PolarOffset(float radius, float angle, float height)
+        => new(MathF.Sin(angle) * radius, height, MathF.Cos(angle) * radius);
 
     private static string TrimCoordinateWrapper(string value)
     {
@@ -2342,18 +2674,21 @@ internal sealed partial class PictoActOverlayService : IDisposable
     private static Vector3 ParseScale(
         string value,
         bool cylindrical = false,
-        float? targetDistance = null)
+        (float Ground, float Spatial)? targetDistance = null)
     {
         if (value.Contains("_d", StringComparison.OrdinalIgnoreCase))
         {
-            if (!targetDistance.HasValue)
+            if (targetDistance is not { } distance)
             {
-                throw new InvalidDataException("PictoACT Scale uses _d without a Target.");
+                throw new InvalidDataException("PictoACT Scale uses _d or _d3 without a Target.");
             }
 
+            // Triggernometry 2.2.1.0 keeps _d on the ground plane and adds _d3 for the
+            // full Pos-Target distance, which matters for targets at a different height.
             value = DistanceToken().Replace(
                 value,
-                targetDistance.Value.ToString("R", CultureInfo.InvariantCulture));
+                match => (match.Groups["spatial"].Success ? distance.Spatial : distance.Ground)
+                    .ToString("R", CultureInfo.InvariantCulture));
         }
 
         var components = ParseNumbers(value, 1, cylindrical ? 2 : 3, "Scale");
@@ -2377,11 +2712,13 @@ internal sealed partial class PictoActOverlayService : IDisposable
         return scale;
     }
 
-    private static float? DistanceTo(Vector3 source, Vector3? target)
-        => target.HasValue
-            ? Vector2.Distance(
-                new Vector2(source.X, source.Z),
-                new Vector2(target.Value.X, target.Value.Z))
+    private static (float Ground, float Spatial)? TargetDistances(Vector3 source, Vector3? target)
+        => target is { } value
+            ? (
+                Vector2.Distance(
+                    new Vector2(source.X, source.Z),
+                    new Vector2(value.X, value.Z)),
+                Vector3.Distance(source, value))
             : null;
 
     private static float DirectionTo(Vector3 source, Vector3 target)
@@ -2526,8 +2863,10 @@ internal sealed partial class PictoActOverlayService : IDisposable
         }
     }
 
+    // Triggernometry's MathParser evaluates blank text as 0, so a resource line such as
+    // "delay: " still draws upstream instead of rejecting the whole payload.
     internal static double EvaluateNumericExpression(string value)
-        => new NumericExpressionParser(value).Parse();
+        => string.IsNullOrWhiteSpace(value) ? 0 : new NumericExpressionParser(value).Parse();
 
     private sealed class NumericExpressionParser(string text)
     {
@@ -2703,26 +3042,26 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
         private double ParseTerm()
         {
-            var result = ParseUnary();
+            var result = ParseImplicitProduct();
             while (true)
             {
                 SkipWhiteSpace();
                 if (Take('*'))
                 {
-                    result *= ParseUnary();
+                    result *= ParseImplicitProduct();
                 }
                 else if (Take('/'))
                 {
-                    result /= ParseUnary();
+                    result /= ParseImplicitProduct();
                 }
                 else if (TakeString("%%"))
                 {
-                    var divisor = ParseUnary();
+                    var divisor = ParseImplicitProduct();
                     result = ((result % divisor) + divisor) % divisor;
                 }
                 else if (Take('%'))
                 {
-                    result %= ParseUnary();
+                    result %= ParseImplicitProduct();
                 }
                 else if (CanStartPrimary())
                 {
@@ -2733,6 +3072,23 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 {
                     return result;
                 }
+            }
+        }
+
+        private double ParseImplicitProduct()
+        {
+            var result = ParseUnary();
+            while (true)
+            {
+                SkipWhiteSpace();
+                // Triggernometry's lexer inserts its highest-priority " *" before '(' and '√',
+                // so "-${l} / 2√2" in online resources means -l / (2√2), not (-l / 2)√2.
+                if (Current is not ('(' or '√'))
+                {
+                    return result;
+                }
+
+                result *= ParseUnary();
             }
         }
 
@@ -2879,6 +3235,10 @@ internal sealed partial class PictoActOverlayService : IDisposable
                     arguments[2] - arguments[0],
                     arguments[3] - arguments[1]),
                 ("roundir", 2) => RadiansToDirection(arguments[0], arguments[1]),
+                ("mod", 2) => PositiveModulo(arguments[0], arguments[1]),
+                // Triggernometry 2.2.1.0 mod(x, y, min) maps into [min, min + y), e.g. a
+                // direction index into -4..3 rather than 0..7.
+                ("mod", 3) => PositiveModulo(arguments[0] - arguments[2], arguments[1]) + arguments[2],
                 _ => throw new FormatException(
                     $"Unknown function '{name}' with {arguments.Count} arguments."),
             };
@@ -3022,8 +3382,23 @@ internal sealed partial class PictoActOverlayService : IDisposable
     [GeneratedRegex(@"^Dir(?<negative>N)?(?<divisions>\d{1,3})$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex DirectionField();
 
-    [GeneratedRegex(@"(?<![\p{L}\p{N}_])_d(?![\p{L}\p{N}_])", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\p{L}\p{N}_])_d(?<spatial>3)?(?![\p{L}\p{N}_])", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex DistanceToken();
+
+    // Letters must not touch a keyword, but digits may: older DACT accepted "0polar 5, 0".
+    [GeneratedRegex(
+        @"(?<![\p{L}_])(?:(?<operation>minuspolar|polar|plus|minus)|polardir(?<negative>N)?(?<segments>\d+))(?![\p{L}_])",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex CoordinateKeyword();
+
+    // Anchored at the end so decimal points inside the reference coordinate are not selectors.
+    [GeneratedRegex(
+        @"\.\s*(?:(?<target>Target)|(?<order>Near|Far)\s*(?<type>NonTank|Player|Tank|Healer|DPS|Enemy)\s*(?<index>\d+))$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex EntitySelectorSuffix();
+
+    [GeneratedRegex(@",\s*(?=[xyz]\s*=)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex AxisOverrideSeparator();
 }
 
 internal sealed record PictoActOverlayCommand(
@@ -3150,6 +3525,55 @@ internal sealed record PictoActShape(
 }
 
 internal sealed record PictoActCoordinateArg(Vector3 Value, string? EntityReference);
+
+// One object-table entry with only the fields PictoACT entity selectors read.
+// Position and the target's ground distance use Dalamud axes (X/Z ground, Y height).
+internal readonly record struct PictoActEntity(
+    uint EntityId,
+    Vector3 Position,
+    float Heading,
+    byte ObjectKind,
+    uint ClassJob,
+    uint CurrentHp,
+    uint OwnerId,
+    uint TargetId);
+
+// Override axes are named after Triggernometry's ACT axes: x/y ground and z height.
+internal sealed record PictoActEntitySelector(
+    string? ReferenceEntity,
+    Vector3 ReferencePoint,
+    PictoActEntitySelectMode Mode,
+    PictoActEntitySelectType? Type,
+    int Index,
+    float? OverrideX,
+    float? OverrideGroundY,
+    float? OverrideHeight);
+
+internal enum PictoActEntitySelectMode
+{
+    Direct,
+    Target,
+    Near,
+    Far,
+}
+
+internal enum PictoActEntitySelectType
+{
+    Player,
+    Tank,
+    Healer,
+    NonTank,
+    Dps,
+    Enemy,
+}
+
+internal enum PictoActJobRole
+{
+    None,
+    Tank,
+    Healer,
+    Dps,
+}
 
 internal enum PictoActTransformRotationMode
 {
