@@ -59,3 +59,25 @@ IINACT updater 的 ZIP 省略 Deucalion，归档本身不同；其中原始
 继续使用已有 Costura 拆包和 IINACT 宿主补丁，实际日志头必须为
 `This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.3`。
 既有地区解析范围与绑定权限逻辑不变，实际游戏与 FFLogs 验收边界仍适用。
+
+## 0.4.5.14 发布前追加核对
+
+上游在 2026-10-20 22:59 UTC 发布 [FFXIV ACT Plugin 3.0.3.4](https://github.com/ravahn/FFXIV_ACT_Plugin/releases/tag/3.0.3.4)，
+补充 7.57 热修支持并将 Deucalion 更新为 1.5.1。0.4.5.14 首次正式流水线检测到
+3.0.3.3 已过期，在创建发布前停止；本次同步更新解析器和 SDK，并调整包级版本守卫。
+
+官方 ZIP SHA-256 为 `089306e497dd4b8fb79290472f006b889fd21fc3d3816ce41ef9a0300feb2d11`，
+与 GitHub 资产摘要一致。IINACT updater 的 ZIP 只含解析器、省略 Deucalion，其中原始
+`FFXIV_ACT_Plugin.dll` 与官方包逐字节一致，SHA-256 均为
+`f7f0c8894ba1a152b6a453427773496f5948cf412171da773578d8671f643a81`。
+继续使用已有 Costura 拆包和 IINACT 宿主补丁，实际日志头必须为
+`This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4`。
+IINACT 子模块提交 `c9f34f6`（分支 `feature/parser-3-0-3-4`）。既有地区解析范围、
+绑定权限逻辑不变，实际游戏与 FFLogs 验收边界仍适用。
+
+同一次正式流水线的随包扩展门禁同时发现 Triggernometry 已过期：上游 CN 维护版发布 2.2.1.0，
+随包仍为 2.2.0.1。本次按 `tools/sync-bundled-act-plugins.ps1` 同步，仅 Triggernometry 变化，
+新 SHA-256 为 `9a3c430c00a82ca99f83b2a373adbe1ba0c365a7f06bbf517bc6b76cbd5bb37c`，与扩展更新器
+为用户安装的 2.2.1.0 逐字节一致；ACT.FoxTTS、PostNamazu、银山雀儿与抹茶保持不变。2.2.1.0 新增的
+PictoACT 写法已在本版游戏侧适配，并按真实 2.2.1.0 解析器做了差分回归；Host 侧 Triggernometry
+改写、U7b 顺序、事件时间与绘图诊断回归均改为在 2.2.1.0 上执行。
