@@ -1852,10 +1852,13 @@ public static partial class LegacyAssemblyRewriter
             patched++;
         }
 
-        if (patched != 24)
+        // The call count follows upstream refactors (24 in 2.2.1.0, 22 in 2.3.0.0), and users may
+        // still run either build until they accept the bundled update. Safety comes from rejecting
+        // unknown call shapes above and proving no legacy reference survives below.
+        if (patched == 0)
         {
             throw new InvalidOperationException(
-                $"Expected 24 Triggernometry JavaScriptSerializer calls, patched {patched}.");
+                "Triggernometry JavaScriptSerializer calls were not found; its JSON surface changed.");
         }
 
         var legacyTypeReferences = module.GetTypeReferences()

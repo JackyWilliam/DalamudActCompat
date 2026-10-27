@@ -28,8 +28,8 @@ internal static class PictoTn221SyntaxSmokeTests
         ValidateSpatialDistanceScale();
         ValidateModuloMinimum();
         Console.WriteLine(
-            "PASS PictoACT TN 2.2.1.0 syntax: axis overrides, Target/Near/Far selectors, " +
-            "polardir chains, _d3 and mod(x, y, min) match upstream; legacy forms unchanged");
+            "PASS PictoACT TN 2.2.1.0/2.3.0.0 syntax: axis overrides, Target/Near/Far selectors, " +
+            "polardir chains, minuspolar height, E0000000 θ, _d3 and mod(x, y, min) match upstream; legacy forms unchanged");
     }
 
     private static PictoActEntity[] Fixture() =>
@@ -194,6 +194,25 @@ internal static class PictoTn221SyntaxSmokeTests
             Near(thetaSelector.Position.X, 105) && Near(thetaSelector.Position.Z, 100),
             $"PictoACT θ selector did not face the selected entity: {thetaSelector.Position}.");
 
+        // Triggernometry 2.3.0.0 treats hex E0000000 ("no target") in θ as an entity, not an angle.
+        // The game-side resolver never matches it, so the shape must still draw.
+        foreach (var noTarget in new[] { "E0000000", "0xE0000000", "e0000000" })
+        {
+            var noTargetTheta = PictoActOverlayService.Parse(
+                $"Omen: Circle\nt: 5\nO: 100, 100\nθ: {noTarget}\nPos: 0, -5\nScale: 1",
+                _ => null).Single().Shape!;
+            Check(
+                noTargetTheta.TransformRotationMode == PictoActTransformRotationMode.Target &&
+                noTargetTheta.TransformRotationTargetEntity == noTarget,
+                $"PictoACT θ '{noTarget}' was not treated as an entity reference.");
+        }
+        // Upstream only reads that ID in hex; the same value in decimal stays an angle.
+        Check(
+            PictoActOverlayService.Parse(
+                "Omen: Circle\nt: 5\nO: 100, 100\nθ: 3758096384\nPos: 0, -5\nScale: 1",
+                _ => null).Single().Shape!.TransformRotationMode == PictoActTransformRotationMode.Fixed,
+            "PictoACT θ 3758096384 was misread as the E0000000 entity.");
+
         // Without θ, a dynamic O inherits the facing of whichever entity it selected.
         var centerSelector = PictoActOverlayService.Parse(
             "Omen: Circle\nt: 5\nO: 10000001.Target\nPos: 0, -5\nScale: 1",
@@ -254,7 +273,8 @@ internal static class PictoTn221SyntaxSmokeTests
             ("polardir4 5, 1, 2", new(-5, 2, 0)),
             ("polardir8 10, -1", new(7.0710678f, 0, -7.0710678f)),
             ("polardirN8 4, 7.5", new(0, 0, -4)),
-            ("100, 100 plus 1, 2, 3 minus 0.5, 0.5 polar 2, pi/2 minuspolar 1, pi/2, 4", new(101.5f, 7, 101.5f)),
+            // Triggernometry 2.3.0.0 subtracts a minuspolar height (3 - 4); 2.2.1.0 added it (7).
+            ("100, 100 plus 1, 2, 3 minus 0.5, 0.5 polar 2, pi/2 minuspolar 1, pi/2, 4", new(101.5f, -1, 101.5f)),
             ("100, 100, 0 polardirN8 3, 0, 1 polar 2, pi/2", new(100.85195f, 1, 97.22836f)),
             // Legacy forms must keep their previous results.
             ("10, 20 polar 5, 0", new(10, 0, 25)),
