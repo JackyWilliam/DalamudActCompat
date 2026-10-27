@@ -100,8 +100,8 @@
       },
       "Unscrambler.XIV": {
         "type": "Transitive",
-        "resolved": "7.57.0",
-        "contentHash": "rByPYFrzpJlVrYlATP0+2vWjkRo8heC5cAi7ogUwG0vdsYnSj0xn0jXISN9jkm2YGbKwfuGe5NaQ3RCHpJLlYw=="
+        "resolved": "7.57.1",
+        "contentHash": "6OpdDhDCAU2RZFCJ+06hLTcIb6d435Z0qi4Tc3sr6mJoQtMGt9fqL69DM7qgEyr6t/EJzWhKu08pj81UdgjW7g=="
       },
       "Advanced Combat Tracker": {
         "type": "Project"
@@ -110,7 +110,7 @@
         "type": "Project",
         "dependencies": {
           "DalamudActCompat.Protocol": "[1.0.0, )",
-          "IINACT": "[2.10.3.10, )"
+          "IINACT": "[2.10.3.11, )"
         }
       },
       "dalamudactcompat.protocol": {
@@ -128,9 +128,9 @@
           "Machina": "[2.3.1.3, )",
           "Machina.FFXIV": "[2.4.5.5, )",
           "NAudio": "[2.2.1, )",
-          "OverlayPlugin.Core": "[0.19.110, )",
+          "OverlayPlugin.Core": "[0.19.111, )",
           "System.Speech": "[10.0.0, )",
-          "Unscrambler.XIV": "[7.57.0, )"
+          "Unscrambler.XIV": "[7.57.1, )"
         }
       },
       "machina": {

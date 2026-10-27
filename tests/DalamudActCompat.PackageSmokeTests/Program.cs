@@ -191,6 +191,7 @@ try
     if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
     {
         UnnamedEntitySmokeTests.Run();
+        MissingStatusManagerSmokeTests.Run();
         return 0;
     }
     if (args.Contains("--friends-unread-only", StringComparer.Ordinal))
@@ -261,6 +262,7 @@ try
     ValidateReflectionActLoggerOverloads();
     ValidateFfxivEntityDeltaBuilder();
     UnnamedEntitySmokeTests.Run();
+    MissingStatusManagerSmokeTests.Run();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     FallbackCombatEventSmokeTests.Run();
@@ -288,6 +290,7 @@ try
     ValidateUnscramblerSupportPolicy();
     Patch756SmokeTests.Run();
     Patch757SmokeTests.Run();
+    Patch757HotfixSmokeTests.Run();
     ValidatePluginRepositoryMetadata();
     Validate757Opcodes();
     ValidateMeterRows();
@@ -5356,14 +5359,50 @@ static void Validate757Opcodes()
         ["Waymark"] = 0x0281,
         ["SystemLogMessage"] = 0x00EB,
     };
-    foreach (var region in new[] { GameRegion.Chinese, GameRegion.Global, GameRegion.Korean })
+    // Global's 7.57h hotfix reshuffled every Machina opcode (marzent/machina 06d9ab4,
+    // cross-checked against FFXIVOpcodes d85eaeb); CN and KR remain on 7.57.
+    var expectedGlobalHotfix = new Dictionary<string, ushort>
+    {
+        ["StatusEffectList"] = 0x00D4,
+        ["StatusEffectList2"] = 0x0387,
+        ["StatusEffectList3"] = 0x028E,
+        ["BossStatusEffectList"] = 0x014C,
+        ["StatusEffectListForay3"] = 0x02D0,
+        ["Ability1"] = 0x0363,
+        ["Ability8"] = 0x0262,
+        ["Ability16"] = 0x0299,
+        ["Ability24"] = 0x0245,
+        ["Ability32"] = 0x0385,
+        ["ActorCast"] = 0x007F,
+        ["EffectResult"] = 0x032C,
+        ["EffectResultBasic"] = 0x00EB,
+        ["ActorControl"] = 0x0229,
+        ["ActorControlSelf"] = 0x0101,
+        ["ActorControlTarget"] = 0x022B,
+        ["UpdateHpMpTp"] = 0x02A4,
+        ["PlayerSpawn"] = 0x017C,
+        ["NpcSpawn"] = 0x017D,
+        ["NpcSpawn2"] = 0x01AB,
+        ["ActorMove"] = 0x0136,
+        ["ActorSetPos"] = 0x0066,
+        ["ActorGauge"] = 0x0326,
+        ["PresetWaymark"] = 0x035E,
+        ["Waymark"] = 0x03DA,
+        ["SystemLogMessage"] = 0x0250,
+    };
+    foreach (var (region, table) in new[]
+             {
+                 (GameRegion.Chinese, expected),
+                 (GameRegion.Global, expectedGlobalHotfix),
+                 (GameRegion.Korean, expected),
+             })
     {
         OpcodeManager.Instance.SetRegion(region);
-        foreach (var pair in expected)
+        foreach (var pair in table)
         {
             Assert(
                 OpcodeManager.Instance.CurrentOpcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
-                $"{region} 7.57 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+                $"{region} opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
         }
     }
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
@@ -5478,11 +5517,11 @@ static void ValidatePostNamazuOverlayHandlerResponse()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 10),
-        "IINACT is not at 2.10.3.10.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 11),
+        "IINACT is not at 2.10.3.11.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 110, 0),
-        "OverlayPlugin Core is not at 0.19.110.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 111, 0),
+        "OverlayPlugin Core is not at 0.19.111.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -5492,7 +5531,7 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.57.0.0",
+        "7.57.1.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
@@ -5502,7 +5541,7 @@ static void ValidateParserDependencyVersions()
     Assert(
         FetchDependencies.LogFormatIdentity.Matches(
             logfileAssemblyPath,
-            new Version(2, 10, 3, 10)),
+            new Version(2, 10, 3, 11)),
         $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
@@ -5519,18 +5558,32 @@ static void ValidateParserDependencyVersions()
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
         });
-    foreach (var region in new[] { "Chinese", "Global", "Korean" })
+    var patch757 = new Dictionary<string, int>
     {
-        var opcodes = document.RootElement.GetProperty(region).GetProperty("2026.10.06.0000.0000");
-        var expected = new Dictionary<string, int>
-        {
-            ["MapEffect"] = 422, ["MapEffect4"] = 692, ["MapEffect8"] = 803,
-            ["MapEffect12"] = 311, ["CEDirector"] = 522, ["RSVData"] = 274,
-            ["NpcYell"] = 101, ["BattleTalk2"] = 162, ["Countdown"] = 420,
-            ["CountdownCancel"] = 371, ["ActorMove"] = 535, ["ActorSetPos"] = 992,
-        };
-        Assert(expected.All(pair => opcodes.GetProperty(pair.Key).GetProperty("opcode").GetInt32() == pair.Value),
-            $"OverlayPlugin {region} 7.57 opcodes are stale.");
+        ["MapEffect"] = 422, ["MapEffect4"] = 692, ["MapEffect8"] = 803,
+        ["MapEffect12"] = 311, ["CEDirector"] = 522, ["RSVData"] = 274,
+        ["NpcYell"] = 101, ["BattleTalk2"] = 162, ["Countdown"] = 420,
+        ["CountdownCancel"] = 371, ["ActorMove"] = 535, ["ActorSetPos"] = 992,
+    };
+    // OverlayPlugin looks opcodes up by exact game version. Global shipped the 7.57h
+    // hotfix with a full reshuffle; CN and KR are still on the 7.57 build.
+    var patch757Hotfix = new Dictionary<string, int>
+    {
+        ["MapEffect"] = 510, ["MapEffect4"] = 912, ["MapEffect8"] = 292,
+        ["MapEffect12"] = 269, ["CEDirector"] = 847, ["RSVData"] = 372,
+        ["NpcYell"] = 864, ["BattleTalk2"] = 997, ["Countdown"] = 587,
+        ["CountdownCancel"] = 683, ["ActorMove"] = 310, ["ActorSetPos"] = 102,
+    };
+    foreach (var (region, version, expected) in new[]
+             {
+                 ("Chinese", "2026.10.06.0000.0000", patch757),
+                 ("Global", "2026.10.16.0000.0000", patch757Hotfix),
+                 ("Korean", "2026.10.06.0000.0000", patch757),
+             })
+    {
+        Assert(document.RootElement.GetProperty(region).TryGetProperty(version, out var opcodes) &&
+               expected.All(pair => opcodes.GetProperty(pair.Key).GetProperty("opcode").GetInt32() == pair.Value),
+            $"OverlayPlugin {region} {version} opcodes are missing or stale.");
     }
 
     // Read the final runtime DLL and execute its formatter: a patched IL template alone
@@ -5539,7 +5592,7 @@ static void ValidateParserDependencyVersions()
     var logFormatType = logfileAssembly.GetType("FFXIV_ACT_Plugin.Logfile.LogFormat", throwOnError: true)!;
     var formatVersion = logFormatType.GetMethod("FormatVersion", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
     var header = (string)formatVersion.Invoke(Activator.CreateInstance(logFormatType, nonPublic: true), null)!;
-    Assert(header == "This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4",
+    Assert(header == "This is IINACT 2.10.3.11 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4",
         $"The actual FFLogs version header is stale: {header}");
     Console.WriteLine($"Verified FFLogs version header: {header}");
 }

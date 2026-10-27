@@ -148,11 +148,11 @@ public static partial class LegacyAssemblyRewriter
             writable: false);
         var assembly = loadContext.LoadFromStream(assemblyImage);
         ApplyMatchaUpstreamSecrets(assembly, secrets);
-        ApplyMatcha757Opcodes(assembly);
+        ApplyMatchaVerifiedOpcodes(assembly);
         return assembly;
     }
 
-    private static void ApplyMatcha757Opcodes(Assembly assembly)
+    private static void ApplyMatchaVerifiedOpcodes(Assembly assembly)
     {
         var storageType = assembly.GetType(
                               "Cafe.Matcha.Constant.OpcodeStorage",
@@ -164,7 +164,7 @@ public static partial class LegacyAssemblyRewriter
                              throwOnError: true)!
                          ?? throw new TypeLoadException(
                              "Matcha opcode enum is missing.");
-        var verified = new Dictionary<ushort, string>
+        var china757 = new Dictionary<ushort, string>
         {
             [0x0198] = "ActorControl",
             [0x01E6] = "ActorControlSelf",
@@ -196,12 +196,44 @@ public static partial class LegacyAssemblyRewriter
             [0x02CE] = "StatusEffectList",
             [0x8368] = "ClientTrigger",
         };
+        // Global's 7.57h hotfix (2026.10.16) reshuffled every opcode while CN stays on 7.57.
+        // Values come from FFXIVOpcodes d85eaeb under Matcha's names (AirshipTimers,
+        // SubmarineTimers, CFNotify and MiniCactpotInit there). FateInfo and WorldVisitQueue
+        // have no published 7.57h value; a stale 7.57 entry would parse unrelated packets.
+        var global757Hotfix = new Dictionary<ushort, string>
+        {
+            [0x0229] = "ActorControl",
+            [0x0101] = "ActorControlSelf",
+            [0x034F] = "CEDirector",
+            [0x032E] = "CompanyAirshipStatus",
+            [0x011A] = "CompanySubmersibleStatus",
+            [0x0117] = "ContentFinderNotifyPop",
+            [0x0146] = "ResumeEventScene32",
+            [0x00B4] = "EventPlay",
+            [0x0078] = "EventStart",
+            [0x019E] = "Examine",
+            [0x009C] = "InitZone",
+            [0x01C9] = "InventoryTransaction",
+            [0x0239] = "ItemInfo",
+            [0x0131] = "MarketBoardItemListing",
+            [0x00FF] = "MarketBoardItemListingCount",
+            [0x02DA] = "MarketBoardItemListingHistory",
+            [0x80F2] = "MarketBoardRequestItemListingInfo",
+            [0x017D] = "NpcSpawn",
+            [0x02A6] = "PlayerSetup",
+            [0x017C] = "PlayerSpawn",
+            [0x0166] = "SubmarineStatusList",
+            [0x0081] = "EventPlay4",
+            [0x0250] = "SystemLogMessage",
+            [0x006A] = "FishCaught",
+            [0x00D4] = "StatusEffectList",
+            [0x837D] = "ClientTrigger",
+        };
 
-        // FFXIVOpcodes 7.57 publishes matching CN/Global tables. Normalize older
-        // installed builds as well as the bundled DLL without changing its public ABI.
-        // Values come from Matcha 0a5fb86 and FFXIVOpcodes be69b56. The
+        // Normalize older installed builds as well as the bundled DLL without changing its
+        // public ABI. CN 7.57 values come from Matcha 0a5fb86 and FFXIVOpcodes be69b56. The
         // ClientTrigger high bit encodes direction and must survive normalization.
-        foreach (var region in new[] { "Global", "China" })
+        foreach (var (region, verified) in new[] { ("Global", global757Hotfix), ("China", china757) })
         {
             var field = storageType.GetField(region, BindingFlags.Public | BindingFlags.Static)
                         ?? throw new MissingFieldException(storageType.FullName, region);
@@ -643,6 +675,12 @@ public static partial class LegacyAssemblyRewriter
     }
 
     public static Assembly LoadSilverDasherManagedZodiark(string assemblyPath)
+        => LoadContentAddressedAssembly(
+            "silverdasher",
+            "SilverDasher.ManagedZodiark",
+            RewriteSilverDasherManagedZodiark(assemblyPath));
+
+    public static byte[] RewriteSilverDasherManagedZodiark(string assemblyPath)
     {
         using var input = File.OpenRead(assemblyPath);
         using var definition = AssemblyDefinition.ReadAssembly(input);
@@ -681,7 +719,14 @@ public static partial class LegacyAssemblyRewriter
                 instruction.Operand is int value &&
                 value == 0x001F0FFF)
             .ToArray();
-        if (enterDebugModeCalls.Length != 1 || allAccessConstants.Length != 1)
+        var respondingChecks = openProcess.Body.Instructions
+            .Where(instruction =>
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == typeof(Process).FullName &&
+                called.Name == "get_" + nameof(Process.Responding) &&
+                called.Parameters.Count == 0)
+            .ToArray();
+        if (enterDebugModeCalls.Length != 1 || allAccessConstants.Length != 1 || respondingChecks.Length != 1)
         {
             throw new InvalidOperationException(
                 "SilverDasher Zodiark privilege surface changed; refusing a broad process-access rewrite.");
@@ -692,6 +737,14 @@ public static partial class LegacyAssemblyRewriter
         // SilverDasher only scans the game process. Avoid PROCESS_ALL_ACCESS and
         // request exactly PROCESS_QUERY_INFORMATION | PROCESS_VM_READ.
         allAccessConstants[0].Operand = 0x0410;
+        // DACT starts SilverDasher while the game is still loading. Another plugin can block
+        // the game window long enough for Windows to report it hung; SilverDasher then fails
+        // its only initialization and stays silent until re-enabled. Reading memory needs no
+        // responsive window, so consume the Process and report it as responding.
+        var openProcessIl = openProcess.Body.GetILProcessor();
+        respondingChecks[0].OpCode = OpCodes.Pop;
+        respondingChecks[0].Operand = null;
+        openProcessIl.InsertAfter(respondingChecks[0], openProcessIl.Create(OpCodes.Ldc_I4_1));
 
         var checkPrivilege = zodiarkProcess.Methods.SingleOrDefault(method =>
             method.Name == "CheckSeDebugPrivilege" &&
@@ -717,10 +770,7 @@ public static partial class LegacyAssemblyRewriter
 
         using var output = new MemoryStream();
         definition.Write(output);
-        return LoadContentAddressedAssembly(
-            "silverdasher",
-            "SilverDasher.ManagedZodiark",
-            output.ToArray());
+        return output.ToArray();
     }
 
     private static void RewriteSilverDasherNotifications(ModuleDefinition module)

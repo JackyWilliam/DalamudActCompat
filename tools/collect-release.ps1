@@ -12,13 +12,13 @@ param(
     [int] $ExpectedDalamudApiLevel = 15,
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedIinactVersion = "2.10.3.10",
+    [string] $ExpectedIinactVersion = "2.10.3.11",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedOverlayPluginVersion = "0.19.110.0",
+    [string] $ExpectedOverlayPluginVersion = "0.19.111.0",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedUnscramblerVersion = "7.57.0.0",
+    [string] $ExpectedUnscramblerVersion = "7.57.1.0",
 
     [Parameter(Mandatory = $false)]
     [string] $ExpectedFfxivActPluginVersion = "3.0.3.4",

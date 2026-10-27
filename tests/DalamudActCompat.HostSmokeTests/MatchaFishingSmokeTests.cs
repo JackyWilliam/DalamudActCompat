@@ -3,7 +3,7 @@ using System.Reflection;
 
 internal static class MatchaFishingSmokeTests
 {
-    public static void Run(Assembly assembly, string region)
+    public static void Run(Assembly assembly, string region, MatchaFishingOpcodes opcodes)
     {
         var events = new List<object>();
         Action<object> receive = events.Add;
@@ -38,14 +38,14 @@ internal static class MatchaFishingSmokeTests
             => monitorType.GetMethod(client ? "HandleMessageSent" : "HandleMessageReceived")!
                 .Invoke(monitor, ["offline-fishing", timestamp, bytes]);
         byte[] Transition(uint kind, uint tug = 0, bool extended = false)
-            => Bytes(extended ? (ushort)0x0324 : (ushort)0x0256, extended ? 80 : 72,
+            => Bytes(extended ? opcodes.EventPlay4 : opcodes.EventPlay, extended ? 80 : 72,
                 (0, actor), (8, 0x00150001), (12, kind), (28, tug));
 
         // Exercise the original network entry points, including direction and parser timestamps,
         // while replacing only the callback so no telemetry, toast, or game command is sent.
-        Send(Bytes(0x01E6, 72, (0, 325), (4, 100)), start - 200);
-        Send(Bytes(0x02CE, 416, (20, 0x2fb)), start - 150);
-        Send(Bytes(0x0368, 44, (0, 0x2bd), (4, 0)), start - 100, client: true);
+        Send(Bytes(opcodes.ActorControlSelf, 72, (0, 325), (4, 100)), start - 200);
+        Send(Bytes(opcodes.StatusEffectList, 416, (20, 0x2fb)), start - 150);
+        Send(Bytes(opcodes.ClientTrigger, 44, (0, 0x2bd), (4, 0)), start - 100, client: true);
         Send(Transition(1, extended: true), start);
         Assert((string?)Field(Last(), "Action") == "cast" && (long?)Field(Last(), "CastTime") == start &&
             (uint?)Field(Last(), "BaitId") == 100 && Field(Last(), "Mooch") is false &&
@@ -55,7 +55,7 @@ internal static class MatchaFishingSmokeTests
         var count = events.Count;
         Send(Transition(1, extended: true), start);
         Assert(events.Count == count, "duplicate cast restarted the timer.");
-        Send(Bytes(0x00EB, 56, (0, 0x00150001), (4, 1110), (12, 42)), start + 1);
+        Send(Bytes(opcodes.SystemLogMessage, 56, (0, 0x00150001), (4, 1110), (12, 42)), start + 1);
         Assert((uint?)Field(Last(), "PlaceId") == 42, "SystemLogMessage did not update the fishing location.");
         Send(Transition(5, 294), start + 5000);
         Assert((string?)Field(Last(), "Action") == "bite" && (int?)Field(Last(), "Tug") == 3 &&
@@ -65,33 +65,51 @@ internal static class MatchaFishingSmokeTests
         Assert(events.Count(e => e.GetType().Name == "FishBiteDTO") == 1, "duplicate bite was emitted.");
         Send(Transition(6), start + 6000);
         Send(Transition(2), start + 6200);
-        Send(Bytes(0x03CB, 48, (0, 12345)), start + 6500);
+        Send(Bytes(opcodes.FishCaught, 48, (0, 12345)), start + 6500);
         Assert((string?)Field(Last(), "Action") == "catch" && (uint?)Field(Last(), "FishId") == 12345 &&
             Equals(Field(Last(), "CastId"), castId) && (long?)Field(Last(), "HookTime") == start + 6000,
             "hook/reel/catch did not retain the cast identity.");
 
         count = events.Count;
-        Send(Bytes(0x03CB, 48, (0, 12345)), start + 6500);
+        Send(Bytes(opcodes.FishCaught, 48, (0, 12345)), start + 6500);
         Send(Transition(4), start + 7000);
         Send(Transition(1)[..60], start + 7100);
         Send(Transition(1), start + 7200, client: true);
         Assert(events.Count == count, "duplicate catch, truncated, or wrong-direction packet emitted an event.");
 
         // Missing client-side information must remain unknown, not be guessed as ordinary bait.
-        Send(Bytes(0x0368, 44, (0, 0x2bd), (4, 0)), start + 7900);
+        Send(Bytes(opcodes.ClientTrigger, 44, (0, 0x2bd), (4, 0)), start + 7900);
         Send(Transition(1), start + 8000);
         Assert(Field(Last(), "Mooch") is null && Field(Last(), "BaitId") is null,
             "server-direction ClientTrigger was incorrectly accepted.");
-        Send(Bytes(0x00EB, 56, (0, 0x00150001), (4, 1121), (12, 777)), start + 8010);
+        Send(Bytes(opcodes.SystemLogMessage, 56, (0, 0x00150001), (4, 1121), (12, 777)), start + 8010);
         Assert(Field(Last(), "Mooch") is true && (uint?)Field(Last(), "BaitId") == 777,
             "server-confirmed mooch bait was lost.");
         Send(Transition(4), start + 9000);
         Assert((string?)Field(Last(), "Action") == "end", "ready did not finish the failed cast.");
         Send(Transition(3), start + 9500);
         Assert((string?)Field(Last(), "Action") == "quit", "fishing exit was lost.");
-        var reset = Activator.CreateInstance(packetType, Enum.Parse(senderType, "Server"), Bytes(0x02CC, 168), start + 10000)!;
+        var reset = Activator.CreateInstance(packetType, Enum.Parse(senderType, "Server"), Bytes(opcodes.InitZone, 168), start + 10000)!;
         Assert(handlerType.GetMethod("Handle")!.Invoke(handler, [reset]) is false &&
             (string?)Field(Last(), "Action") == "reset", "zone reset consumed the normal zone handler.");
         Console.WriteLine($"Matcha {region}: cast/bite/hook/reel/catch/end/quit/reset, bait/status/mooch, timestamps, duplicates, and direction passed.");
     }
+}
+
+// ClientTrigger is the raw client-direction opcode; Matcha's table stores it with the 0x8000 bit.
+internal sealed record MatchaFishingOpcodes(
+    ushort EventPlay,
+    ushort EventPlay4,
+    ushort ActorControlSelf,
+    ushort StatusEffectList,
+    ushort ClientTrigger,
+    ushort SystemLogMessage,
+    ushort FishCaught,
+    ushort InitZone)
+{
+    public static MatchaFishingOpcodes China757 { get; } =
+        new(0x0256, 0x0324, 0x01E6, 0x02CE, 0x0368, 0x00EB, 0x03CB, 0x02CC);
+
+    public static MatchaFishingOpcodes Global757Hotfix { get; } =
+        new(0x00B4, 0x0081, 0x0101, 0x00D4, 0x037D, 0x0250, 0x006A, 0x009C);
 }

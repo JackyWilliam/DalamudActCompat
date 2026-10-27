@@ -258,11 +258,13 @@ public static partial class HostPluginBridge
         var replacements = new Dictionary<string, (string Chinese, string Global)>(
             StringComparer.Ordinal)
         {
-            ["InitZone"] = ("0x02CC", "0x02CC"),
-            // Matcha upstream 0a5fb86 verifies this value for CN and Global; the bundled
-            // SilverDasher table predates 7.57 and cannot safely be used unchanged.
-            ["FateInfo"] = ("0x0259", "0x0259"),
-            ["ActorControlSelf"] = ("0x01E6", "0x01E6"),
+            // CN stays on 7.57; Global values follow the 7.57h hotfix (FFXIVOpcodes d85eaeb).
+            ["InitZone"] = ("0x02CC", "0x009C"),
+            // Matcha upstream 0a5fb86 verifies the CN value; the bundled SilverDasher table
+            // predates 7.57. Global 7.57h has no published value yet, so it keeps
+            // SilverDasher's own 0xF009 placeholder instead of parsing an unrelated packet.
+            ["FateInfo"] = ("0x0259", "0xF009"),
+            ["ActorControlSelf"] = ("0x01E6", "0x0101"),
         };
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in data.OfType<JObject>())
@@ -284,7 +286,7 @@ public static partial class HostPluginBridge
             return payload;
         }
 
-        root["version"] = "20261013";
+        root["version"] = "20261016";
         return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 
