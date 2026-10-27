@@ -110,3 +110,13 @@ Known differences outside every online resource: upstream also lets its implicit
 outrank `^` (`2(3)^2` = 36, DACT 18), applies `√` before `^` when chained after a
 coefficient (`2√2^2` = 8, DACT 4), and treats `- a %% b` as `-(a %% b)`. None occurs in
 either snapshot, so DACT keeps its existing grammar there.
+
+## 2026-10-27 parity check (Triggernometry 2.3.0.0)
+
+The 15 configured repositories were downloaded again on 2026-10-27; every file hash matched the
+2026-10-24 snapshot, so the 2.2.1.0 fixtures stay valid. The same reflection harness was run against
+the real bundled Triggernometry 2.3.0.0: all 2,519 samples still match DACT (15 rejected by both).
+Twenty-four synthetic samples cover the 2.3.0.0 changes (`minuspolar` height negation, hexadecimal
+`E0000000` as an entity in θ, hex and binary scalar fast paths); after the matching DACT change all
+match. Polygon triangulation with repeated, near-repeated and collinear points is covered by the
+package tests rather than this fixture.

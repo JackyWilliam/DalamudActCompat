@@ -962,7 +962,7 @@ internal sealed partial class PictoActOverlayService : IDisposable
         return [.. points, points[0]];
     }
 
-    private static IReadOnlyList<(Vector2 First, Vector2 Second, Vector2 Third)>
+    internal static IReadOnlyList<(Vector2 First, Vector2 Second, Vector2 Third)>
         TriangulatePolygon(IReadOnlyList<Vector2> closedPoints)
         => TriangulatePolygonIndices(closedPoints)
             .Select(indices => (
@@ -1061,6 +1061,16 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 var a = closedPoints[previous];
                 var b = closedPoints[current];
                 var c = closedPoints[next];
+                // Triggernometry 2.3.0.0 (3dc6f54) drops duplicate, near-duplicate and collinear
+                // vertices instead of skipping them. A repeated point otherwise blocks every ear
+                // that touches it and leaves part of the polygon unfilled.
+                if (IsDegenerateTriangle(a, b, c))
+                {
+                    indices.RemoveAt(index);
+                    clipped = true;
+                    break;
+                }
+
                 if (Cross(a, b, c) <= 0.00001f || indices.Any(candidate =>
                         candidate != previous && candidate != current && candidate != next &&
                         IsInsideTriangle(closedPoints[candidate], a, b, c)))
@@ -1082,13 +1092,26 @@ internal sealed partial class PictoActOverlayService : IDisposable
             }
         }
 
-        if (indices.Count == 3)
+        if (indices.Count == 3 &&
+            !IsDegenerateTriangle(
+                closedPoints[indices[0]],
+                closedPoints[indices[1]],
+                closedPoints[indices[2]]))
         {
             triangles.Add((indices[0], indices[1], indices[2]));
         }
 
         return triangles;
     }
+
+    // Matches Triggernometry's default 0.05 triangulation tolerance (squared).
+    private const float DegenerateEdgeSquared = 0.05f * 0.05f;
+
+    private static bool IsDegenerateTriangle(Vector2 a, Vector2 b, Vector2 c)
+        => Vector2.DistanceSquared(a, b) <= DegenerateEdgeSquared ||
+           Vector2.DistanceSquared(b, c) <= DegenerateEdgeSquared ||
+           Vector2.DistanceSquared(c, a) <= DegenerateEdgeSquared ||
+           MathF.Abs(Cross(a, b, c)) <= 0.00001f;
 
     private static float Cross(Vector2 a, Vector2 b, Vector2 c)
         => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
@@ -2502,12 +2525,15 @@ internal sealed partial class PictoActOverlayService : IDisposable
         var raw = entityReference.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
             ? entityReference[2..]
             : entityReference;
+        // Triggernometry 2.3.0.0 (ef2c917) also treats hex E0000000, the ID the game reports for
+        // "no target", as an entity so θ no longer misreads it as an angle. It never resolves to
+        // a game object, so the shape keeps its previous facing like any absent entity.
         if (uint.TryParse(
                 raw,
                 NumberStyles.HexNumber,
                 CultureInfo.InvariantCulture,
                 out var hexadecimalId) &&
-            IsPictoActEntityId(hexadecimalId))
+            (IsPictoActEntityId(hexadecimalId) || hexadecimalId == InvalidEntityId))
         {
             return true;
         }
@@ -2598,9 +2624,9 @@ internal sealed partial class PictoActOverlayService : IDisposable
                 "plus" => new Vector3(group[0], third, group[1]),
                 "minus" => -new Vector3(group[0], third, group[1]),
                 "polar" => PolarOffset(group[0], group[1], third),
-                // Upstream negates a polar term by turning θ by π, which flips only the
-                // ground offset and still adds its height.
-                _ => PolarOffset(-group[0], group[1], third),
+                // Triggernometry 2.3.0.0 (1ddaa44) negates the whole polar term, height included;
+                // 2.2.1.0 only turned θ by π and still added the height.
+                _ => -PolarOffset(group[0], group[1], third),
             };
         }
 

@@ -4021,7 +4021,7 @@ void ValidateMatchaAssemblyContract(string packagePath)
                                 throwOnError: true)!
                             ?? throw new TypeLoadException(
                                 "Cafe.Matcha.Constant.OpcodeStorage");
-        var expectedGlobalOpcodes = new Dictionary<ushort, string>
+        var expectedChinaOpcodes = new Dictionary<ushort, string>
         {
             [0x0198] = "ActorControl",
             [0x01E6] = "ActorControlSelf",
@@ -4052,12 +4052,43 @@ void ValidateMatchaAssemblyContract(string packagePath)
             [0x02CE] = "StatusEffectList",
             [0x8368] = "ClientTrigger",
         };
-        foreach (var region in new[] { "Global", "China" })
+        // Global 7.57h values come from FFXIVOpcodes d85eaeb. FateInfo and WorldVisitQueue
+        // have no published 7.57h value yet, so a stale 7.57 guess must not remain.
+        var expectedGlobalOpcodes = new Dictionary<ushort, string>
+        {
+            [0x0229] = "ActorControl",
+            [0x0101] = "ActorControlSelf",
+            [0x034F] = "CEDirector",
+            [0x032E] = "CompanyAirshipStatus",
+            [0x011A] = "CompanySubmersibleStatus",
+            [0x0117] = "ContentFinderNotifyPop",
+            [0x0146] = "ResumeEventScene32",
+            [0x00B4] = "EventPlay",
+            [0x0078] = "EventStart",
+            [0x019E] = "Examine",
+            [0x009C] = "InitZone",
+            [0x01C9] = "InventoryTransaction",
+            [0x0239] = "ItemInfo",
+            [0x0131] = "MarketBoardItemListing",
+            [0x00FF] = "MarketBoardItemListingCount",
+            [0x02DA] = "MarketBoardItemListingHistory",
+            [0x80F2] = "MarketBoardRequestItemListingInfo",
+            [0x017D] = "NpcSpawn",
+            [0x02A6] = "PlayerSetup",
+            [0x017C] = "PlayerSpawn",
+            [0x0166] = "SubmarineStatusList",
+            [0x0081] = "EventPlay4",
+            [0x0250] = "SystemLogMessage",
+            [0x006A] = "FishCaught",
+            [0x00D4] = "StatusEffectList",
+            [0x837D] = "ClientTrigger",
+        };
+        foreach (var (region, expected) in new[] { ("Global", expectedGlobalOpcodes), ("China", expectedChinaOpcodes) })
         {
             var actual = (IDictionary)opcodeStorage.GetField(region, BindingFlags.Public | BindingFlags.Static)!.GetValue(null)!;
-            Assert(actual.Count == expectedGlobalOpcodes.Count && expectedGlobalOpcodes.All(pair =>
+            Assert(actual.Count == expected.Count && expected.All(pair =>
                 string.Equals(actual[pair.Key]?.ToString(), pair.Value, StringComparison.Ordinal)),
-                $"Matcha {region} opcode storage was not normalized to the verified 7.57 table.");
+                $"Matcha {region} opcode storage was not normalized to its verified table.");
         }
 
         var bridge = loadedAssembly.GetType(
@@ -4174,10 +4205,14 @@ static void ValidateMatchaEventPackets(Assembly assembly)
     var originalRegion = regionProperty.GetValue(config);
     try
     {
-        foreach (var region in new[] { "China", "Global" })
+        foreach (var (region, fishingOpcodes) in new[]
+                 {
+                     ("China", MatchaFishingOpcodes.China757),
+                     ("Global", MatchaFishingOpcodes.Global757Hotfix),
+                 })
         {
             regionProperty.SetValue(config, Enum.Parse(regionType, region));
-            MatchaFishingSmokeTests.Run(assembly, region);
+            MatchaFishingSmokeTests.Run(assembly, region, fishingOpcodes);
             object Packet(ushort opcode, uint first, uint second, uint third, bool client = false)
             {
                 var bytes = new byte[56];
@@ -4187,6 +4222,18 @@ static void ValidateMatchaEventPackets(Assembly assembly)
                 BitConverter.GetBytes(third).CopyTo(bytes, 48);
                 return Activator.CreateInstance(packetType, Enum.Parse(senderType, client ? "Client" : "Server"), bytes, 1700000000000L)!;
             }
+            if (region == "Global")
+            {
+                // Global 7.57h has no published FateInfo/WorldVisitQueue opcode. The old 7.57
+                // values now belong to unrelated packets and must not be parsed as either.
+                Assert(packetType.GetField("Known")!.GetValue(Packet(0x0259, 1234, 1700000000, 900)) is false &&
+                    packetType.GetField("Known")!.GetValue(Packet(0x007C, 1, 45, 0)) is false &&
+                    packetType.GetField("Known")!.GetValue(Packet(0xF009, 0, 0, 0)) is false &&
+                    packetType.GetField("Known")!.GetValue(Packet(0x00E9, 0, 0, 0)) is false,
+                    "Matcha Global still parses stale 7.57 FateInfo/WorldVisitQueue opcodes.");
+                continue;
+            }
+
             fates.GetType().GetMethod("Clear")!.Invoke(fates, null);
             var fate = Packet(0x0259, 1234, 1700000000, 900);
             Assert(handle.Invoke(monitor, [fate]) is true, $"Matcha {region} did not route FateInfo.");
@@ -4593,6 +4640,8 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
     _ = LegacyAssemblyRewriter.LoadSilverDasher(loaderPath, AssemblyLoadContext.Default);
     var rewrittenCore = LegacyAssemblyRewriter.LoadSilverDasherCore(corePath);
     _ = LegacyAssemblyRewriter.LoadSilverDasherManagedZodiark(zodiarkPath);
+    ValidateSilverDasherZodiarkOpenProcess(
+        LegacyAssemblyRewriter.RewriteSilverDasherManagedZodiark(zodiarkPath));
 
     var configurePermissions = typeof(HostPluginBridge).GetMethod(
                                    "ConfigurePermissions",
@@ -4636,15 +4685,17 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
     var normalizedOpcodes = normalizedOpcodePayload["data"]!
         .Children<JObject>()
         .ToDictionary(item => item.Value<string>("name")!, StringComparer.Ordinal);
+    // Global 7.57h has no published FateInfo opcode; SilverDasher's own placeholder 0xF009
+    // keeps it disabled instead of decoding an unrelated packet as FATE data.
     Assert(
-        normalizedOpcodePayload.Value<string>("version") == "20261013" &&
+        normalizedOpcodePayload.Value<string>("version") == "20261016" &&
         normalizedOpcodes["InitZone"].Value<string>("cn") == "0x02CC" &&
-        normalizedOpcodes["InitZone"].Value<string>("global") == "0x02CC" &&
+        normalizedOpcodes["InitZone"].Value<string>("global") == "0x009C" &&
         normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x0259" &&
-        normalizedOpcodes["FateInfo"].Value<string>("global") == "0x0259" &&
+        normalizedOpcodes["FateInfo"].Value<string>("global") == "0xF009" &&
         normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x01E6" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x01E6",
-        "SilverDasher opcode data was not normalized to Chinese / Global 7.57.");
+        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x0101",
+        "SilverDasher opcode data was not normalized to Chinese 7.57 / Global 7.57h.");
     var judge = rewrittenCore
                        .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
                        .GetMethod(
@@ -4852,6 +4903,32 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
         Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(weaverPath))) == weaverHash,
         "SilverDasher runtime rewriting changed the user's original DLL files.");
+}
+
+static void ValidateSilverDasherZodiarkOpenProcess(byte[] rewrittenImage)
+{
+    // DACT starts SilverDasher while the game is still loading. A plugin that blocked the
+    // game window for 10 s made Process.Responding false, SilverDasher failed its only
+    // initialization and stayed silent until re-enabled. Reading memory needs no window.
+    using var definition = AssemblyDefinition.ReadAssembly(new MemoryStream(rewrittenImage));
+    var openProcess = definition.MainModule.GetType("Zodiark.ZodiarkProcess")!.Methods.Single(method =>
+        method.Name == "OpenProcess" && method.Parameters.Count == 1);
+    var processCalls = openProcess.Body.Instructions
+        .Select(instruction => instruction.Operand as MethodReference)
+        .Where(method => method?.DeclaringType.FullName == typeof(Process).FullName)
+        .Select(method => method!.Name)
+        .ToArray();
+    Assert(
+        !processCalls.Contains("get_Responding") &&
+        !processCalls.Contains(nameof(Process.EnterDebugMode)) &&
+        processCalls.Contains("get_MainModule"),
+        "SilverDasher Zodiark still requires a responsive game window or regained debug mode.");
+    Assert(
+        openProcess.Body.Instructions.Any(instruction =>
+            instruction.OpCode.Code == Code.Ldc_I4 && instruction.Operand is 0x0410) &&
+        !openProcess.Body.Instructions.Any(instruction =>
+            instruction.OpCode.Code == Code.Ldc_I4 && instruction.Operand is 0x001F0FFF),
+        "SilverDasher Zodiark process access widened beyond query information and VM read.");
 }
 
 void ValidateSilverDasherNotificationRouting()

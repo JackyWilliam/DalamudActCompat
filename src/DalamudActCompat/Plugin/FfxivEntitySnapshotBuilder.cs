@@ -97,14 +97,20 @@ internal static class FfxivEntitySnapshotBuilder
         var character = gameObject as ICharacter;
         var battleChara = gameObject as IBattleChara;
         var player = gameObject as IPlayerCharacter;
-        var statuses = battleChara?.StatusList
-            .Where(status => status.StatusId is > 0 and <= ushort.MaxValue)
-            .Select(status => new HostFfxivStatus(
-                unchecked((ushort)status.StatusId),
-                status.Param,
-                status.RemainingTime,
-                status.SourceId))
-            .ToArray() ?? [];
+        // Dalamud wraps GetStatusManager() without a null check. A battle object that is
+        // spawning or despawning has none yet, and enumerating it would throw and discard
+        // the whole frame's snapshot, so treat it as having no statuses.
+        var statusList = battleChara?.StatusList;
+        HostFfxivStatus[] statuses = statusList is null || statusList.Address == 0
+            ? []
+            : statusList
+                .Where(status => status.StatusId is > 0 and <= ushort.MaxValue)
+                .Select(status => new HostFfxivStatus(
+                    unchecked((ushort)status.StatusId),
+                    status.Param,
+                    status.RemainingTime,
+                    status.SourceId))
+                .ToArray();
         return new HostFfxivCombatant(
             gameObject.EntityId,
             gameObject.OwnerId,

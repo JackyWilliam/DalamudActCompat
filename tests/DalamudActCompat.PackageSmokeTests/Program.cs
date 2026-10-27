@@ -56,6 +56,16 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Length == 2 && args[0] == "--help-screenshots")
+    {
+        HelpScreenshotGenerator.Run(args[1]);
+        return 0;
+    }
+    if (args.Contains("--help-only", StringComparer.Ordinal))
+    {
+        HelpWindowSmokeTests.Run();
+        return 0;
+    }
     if (args.Contains("--ban-native-only", StringComparer.Ordinal))
     {
         BanRecoveryNativeSmokeTests.Run();
@@ -142,6 +152,7 @@ try
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
     EnglishLocalizationSmokeTests.Run();
     UiLanguageSmokeTests.Run();
+    HelpWindowSmokeTests.Run();
     if (args.Contains("--localization-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--liquid-glass-only", StringComparer.Ordinal))
     {
@@ -191,6 +202,7 @@ try
     if (args.Contains("--unnamed-entities-only", StringComparer.Ordinal))
     {
         UnnamedEntitySmokeTests.Run();
+        MissingStatusManagerSmokeTests.Run();
         return 0;
     }
     if (args.Contains("--friends-unread-only", StringComparer.Ordinal))
@@ -261,6 +273,7 @@ try
     ValidateReflectionActLoggerOverloads();
     ValidateFfxivEntityDeltaBuilder();
     UnnamedEntitySmokeTests.Run();
+    MissingStatusManagerSmokeTests.Run();
     ValidatePlayerIdentityResolution();
     ValidateCombatEventScoping();
     FallbackCombatEventSmokeTests.Run();
@@ -288,6 +301,7 @@ try
     ValidateUnscramblerSupportPolicy();
     Patch756SmokeTests.Run();
     Patch757SmokeTests.Run();
+    Patch757HotfixSmokeTests.Run();
     ValidatePluginRepositoryMetadata();
     Validate757Opcodes();
     ValidateMeterRows();
@@ -1683,6 +1697,25 @@ static void ValidatePictoActOverlayCommands()
         MathF.Abs(nativeTriangleArea - 12) < 0.001f,
         $"PictoACT concave Polygon native decomposition changed its filled area " +
         $"(parts={concaveNativeShapes.Count}, area={nativeTriangleArea:R}).");
+
+    // Triggernometry 2.3.0.0 fixed triangulation of repeated, near-repeated and collinear
+    // points. Before the matching DACT change a repeated vertex filled only part of the shape.
+    foreach (var (points, expectedArea) in new[]
+             {
+                 ("0, 0; 4, 0; 4, 0; 4, 4; 0, 4", 16f),
+                 ("0, 0; 4, 0; 4.01, 0.005; 4, 4; 0, 4", 16.02f),
+                 ("0, 0; 2, 0; 4, 0; 4, 4; 0, 4", 16f),
+                 ("0, 0; 4, 0; 4, 4; 0, 4; 0, 0; 0, 0", 16f),
+                 ("0, 0; 4, 0; 4, 1; 1, 1; 1, 1; 1, 4; 0, 4", 7f),
+             })
+    {
+        var degenerateShapes = PictoActOverlayService.BuildNativeShapes(PictoActOverlayService.Parse(
+            $"Action: Triangulate\nt: 8\nPoints: {points}").Single().Shape!);
+        var degenerateArea = degenerateShapes.Sum(shape => shape.PrimaryScale * shape.SecondaryScale / 2);
+        Assert(
+            MathF.Abs(degenerateArea - expectedArea) < 0.05f,
+            $"PictoACT Triangulate '{points}' filled {degenerateArea:R} instead of {expectedArea}.");
+    }
 
     var persistentPolygon = PictoActOverlayService.Parse(
         "Action: Triangulate\nt: 0\nPoints: 0,0; 4,0; 0,4").Single().Shape!;
@@ -5356,14 +5389,50 @@ static void Validate757Opcodes()
         ["Waymark"] = 0x0281,
         ["SystemLogMessage"] = 0x00EB,
     };
-    foreach (var region in new[] { GameRegion.Chinese, GameRegion.Global, GameRegion.Korean })
+    // Global's 7.57h hotfix reshuffled every Machina opcode (marzent/machina 06d9ab4,
+    // cross-checked against FFXIVOpcodes d85eaeb); CN and KR remain on 7.57.
+    var expectedGlobalHotfix = new Dictionary<string, ushort>
+    {
+        ["StatusEffectList"] = 0x00D4,
+        ["StatusEffectList2"] = 0x0387,
+        ["StatusEffectList3"] = 0x028E,
+        ["BossStatusEffectList"] = 0x014C,
+        ["StatusEffectListForay3"] = 0x02D0,
+        ["Ability1"] = 0x0363,
+        ["Ability8"] = 0x0262,
+        ["Ability16"] = 0x0299,
+        ["Ability24"] = 0x0245,
+        ["Ability32"] = 0x0385,
+        ["ActorCast"] = 0x007F,
+        ["EffectResult"] = 0x032C,
+        ["EffectResultBasic"] = 0x00EB,
+        ["ActorControl"] = 0x0229,
+        ["ActorControlSelf"] = 0x0101,
+        ["ActorControlTarget"] = 0x022B,
+        ["UpdateHpMpTp"] = 0x02A4,
+        ["PlayerSpawn"] = 0x017C,
+        ["NpcSpawn"] = 0x017D,
+        ["NpcSpawn2"] = 0x01AB,
+        ["ActorMove"] = 0x0136,
+        ["ActorSetPos"] = 0x0066,
+        ["ActorGauge"] = 0x0326,
+        ["PresetWaymark"] = 0x035E,
+        ["Waymark"] = 0x03DA,
+        ["SystemLogMessage"] = 0x0250,
+    };
+    foreach (var (region, table) in new[]
+             {
+                 (GameRegion.Chinese, expected),
+                 (GameRegion.Global, expectedGlobalHotfix),
+                 (GameRegion.Korean, expected),
+             })
     {
         OpcodeManager.Instance.SetRegion(region);
-        foreach (var pair in expected)
+        foreach (var pair in table)
         {
             Assert(
                 OpcodeManager.Instance.CurrentOpcodes.TryGetValue(pair.Key, out var actual) && actual == pair.Value,
-                $"{region} 7.57 opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
+                $"{region} opcode {pair.Key} was {actual:X}, expected {pair.Value:X}.");
         }
     }
     OpcodeManager.Instance.SetRegion(GameRegion.Chinese);
@@ -5478,11 +5547,11 @@ static void ValidatePostNamazuOverlayHandlerResponse()
 static void ValidateParserDependencyVersions()
 {
     Assert(
-        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 10),
-        "IINACT is not at 2.10.3.10.");
+        typeof(IINACT.Plugin).Assembly.GetName().Version == new Version(2, 10, 3, 11),
+        "IINACT is not at 2.10.3.11.");
     Assert(
-        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 110, 0),
-        "OverlayPlugin Core is not at 0.19.110.");
+        typeof(FFXIVMemory).Assembly.GetName().Version == new Version(0, 19, 111, 0),
+        "OverlayPlugin Core is not at 0.19.111.");
 
     var runtimeDirectory = Path.Combine(
         FindProjectRoot(),
@@ -5492,7 +5561,7 @@ static void ValidateParserDependencyVersions()
         "Release");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "Unscrambler.dll"),
-        "7.57.0.0",
+        "7.57.1.0",
         "Unscrambler.XIV");
     AssertFileVersion(
         Path.Combine(runtimeDirectory, "FFXIV_ACT_Plugin.dll"),
@@ -5502,7 +5571,7 @@ static void ValidateParserDependencyVersions()
     Assert(
         FetchDependencies.LogFormatIdentity.Matches(
             logfileAssemblyPath,
-            new Version(2, 10, 3, 10)),
+            new Version(2, 10, 3, 11)),
         $"FFXIV_ACT_Plugin.Logfile identifies a stale IINACT version: {FetchDependencies.LogFormatIdentity.ReadTemplate(logfileAssemblyPath)}");
 
     var overlayAssembly = typeof(FFXIVMemory).Assembly;
@@ -5519,18 +5588,32 @@ static void ValidateParserDependencyVersions()
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
         });
-    foreach (var region in new[] { "Chinese", "Global", "Korean" })
+    var patch757 = new Dictionary<string, int>
     {
-        var opcodes = document.RootElement.GetProperty(region).GetProperty("2026.10.06.0000.0000");
-        var expected = new Dictionary<string, int>
-        {
-            ["MapEffect"] = 422, ["MapEffect4"] = 692, ["MapEffect8"] = 803,
-            ["MapEffect12"] = 311, ["CEDirector"] = 522, ["RSVData"] = 274,
-            ["NpcYell"] = 101, ["BattleTalk2"] = 162, ["Countdown"] = 420,
-            ["CountdownCancel"] = 371, ["ActorMove"] = 535, ["ActorSetPos"] = 992,
-        };
-        Assert(expected.All(pair => opcodes.GetProperty(pair.Key).GetProperty("opcode").GetInt32() == pair.Value),
-            $"OverlayPlugin {region} 7.57 opcodes are stale.");
+        ["MapEffect"] = 422, ["MapEffect4"] = 692, ["MapEffect8"] = 803,
+        ["MapEffect12"] = 311, ["CEDirector"] = 522, ["RSVData"] = 274,
+        ["NpcYell"] = 101, ["BattleTalk2"] = 162, ["Countdown"] = 420,
+        ["CountdownCancel"] = 371, ["ActorMove"] = 535, ["ActorSetPos"] = 992,
+    };
+    // OverlayPlugin looks opcodes up by exact game version. Global shipped the 7.57h
+    // hotfix with a full reshuffle; CN and KR are still on the 7.57 build.
+    var patch757Hotfix = new Dictionary<string, int>
+    {
+        ["MapEffect"] = 510, ["MapEffect4"] = 912, ["MapEffect8"] = 292,
+        ["MapEffect12"] = 269, ["CEDirector"] = 847, ["RSVData"] = 372,
+        ["NpcYell"] = 864, ["BattleTalk2"] = 997, ["Countdown"] = 587,
+        ["CountdownCancel"] = 683, ["ActorMove"] = 310, ["ActorSetPos"] = 102,
+    };
+    foreach (var (region, version, expected) in new[]
+             {
+                 ("Chinese", "2026.10.06.0000.0000", patch757),
+                 ("Global", "2026.10.16.0000.0000", patch757Hotfix),
+                 ("Korean", "2026.10.06.0000.0000", patch757),
+             })
+    {
+        Assert(document.RootElement.GetProperty(region).TryGetProperty(version, out var opcodes) &&
+               expected.All(pair => opcodes.GetProperty(pair.Key).GetProperty("opcode").GetInt32() == pair.Value),
+            $"OverlayPlugin {region} {version} opcodes are missing or stale.");
     }
 
     // Read the final runtime DLL and execute its formatter: a patched IL template alone
@@ -5539,7 +5622,7 @@ static void ValidateParserDependencyVersions()
     var logFormatType = logfileAssembly.GetType("FFXIV_ACT_Plugin.Logfile.LogFormat", throwOnError: true)!;
     var formatVersion = logFormatType.GetMethod("FormatVersion", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
     var header = (string)formatVersion.Invoke(Activator.CreateInstance(logFormatType, nonPublic: true), null)!;
-    Assert(header == "This is IINACT 2.10.3.10 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4",
+    Assert(header == "This is IINACT 2.10.3.11 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4",
         $"The actual FFLogs version header is stale: {header}");
     Console.WriteLine($"Verified FFLogs version header: {header}");
 }
@@ -10525,47 +10608,35 @@ static void ValidateHtmlOverlayDefaults()
         brandedChromeSource.Contains("##status-{id}", StringComparison.Ordinal) &&
         typeof(HelpWindow).IsSubclassOf(typeof(Dalamud.Interface.Windowing.Window)) &&
         helpWindowSource.Contains("help-document-navigation", StringComparison.Ordinal) &&
+        // The usage notice is the user's own text and must stay on the first page.
         helpWindowSource.Contains("使用须知", StringComparison.Ordinal) &&
         helpWindowSource.Contains("不要去绿玩面前跳脸。", StringComparison.Ordinal) &&
         helpWindowSource.Contains("一经发现立刻踢出！", StringComparison.Ordinal) &&
+        Regex.IsMatch(helpWindowSource, @"enum HelpPage\s*\{\s*UsageNotice,") &&
         helpWindowSource.Contains("宏指令", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.SetClipboardText(command);", StringComparison.Ordinal) &&
         helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
         helpWindowSource.Contains("help-search-card", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.Dummy(new Vector2(0, 8))", StringComparison.Ordinal) &&
-        Regex.IsMatch(
-            helpWindowSource,
-            "\"help-search-card\",\\s*new Vector2\\(-1, 58\\),\\s*false") &&
         !helpWindowSource.Contains(
             "ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f))",
             StringComparison.Ordinal) &&
-        helpWindowSource.Contains("DactTheme.Button(\"Search\"", StringComparison.Ordinal) &&
+        // The search button follows the UI language instead of always reading "Search".
+        helpWindowSource.Contains("text.Get(\"搜索\", \"Search\")", StringComparison.Ordinal) &&
         helpWindowSource.Contains("searchDraft", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("text.Get(\"清除\", \"Clear\")", StringComparison.Ordinal) &&
         helpWindowSource.Contains("CreateSearchEntries", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("常见问题", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("控制中心五个页面怎么用", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("如何给扩展开权限", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("插件打不开、命令没反应或一直初始化", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("没有战斗统计、没有队员或窗口不见了", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("副本外结束后保留上一场结果", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("手动重置会立即清空", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("历史记录以“一次副本进入”为一个可展开文件夹", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("HPS 用本把从开怪到结束的完整经过时间计算", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("24 人本把所有玩家放在同一紧凑列表", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("总伤害、最高伤害和死亡", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("最高伤害使用紧凑宽度显示", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("三个模板互斥启用", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("页面预览直接复用真实悬浮窗渲染", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("后续刷新不会把旧数据带回", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("横版也支持背景颜色", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("只有存在未保存修改时", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("没有修改会直接关闭", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("职业 / ID 会先缩到两字", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("可分别开关 FFLogs、DPS、EncDPS、ExtDPS、rDPS、HPS", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("反馈问题时请提供什么", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("重启共享 Host", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("实际 FileVersion", StringComparison.Ordinal) &&
+        // Cards size to their content; fixed heights clipped text at larger font scales.
+        helpWindowSource.Contains("cardHeights[id] =", StringComparison.Ordinal) &&
+        !Regex.IsMatch(helpWindowSource, @"DrawCard\(""[^""]+"", [^,]+, \d+,") &&
+        new[]
+        {
+            "登录 DACT 账号", "绑定 Discord", "确认解析器在运行", "打一下木人",
+            "数值是怎么算的", "统计重置与历史", "FFLogs DPS Parse 预估",
+            "添加网页悬浮窗", "移动、缩放与鼠标穿透", "启用和打开配置", "ACT 插件权限边界",
+            "云同步", "找回账号", "好友", "先看运行状态", "重启对应的组件", "反馈问题",
+            "重启共享 Host", "重启抹茶 Host", "重启通用 Host",
+        }.All(section => helpWindowSource.Contains(section, StringComparison.Ordinal)) &&
         new[]
         {
             "/actcompat on",

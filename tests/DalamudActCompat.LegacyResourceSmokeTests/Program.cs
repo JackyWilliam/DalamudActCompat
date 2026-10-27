@@ -188,22 +188,27 @@ static void AssertSystemWebExtensionsWasReplaced(Assembly implementation)
             string.Join(", ", legacyTypeReferences.Select(reference => reference.Scope)));
     }
 
-    var indexMemberParser = definition.MainModule.Types
-        .SelectMany(EnumerateCecilTypes)
-        .Single(type =>
-            type.FullName ==
-            "Triggernometry.Expressions.String.Parsers.IndexMemberParser")
-        .Methods
-        .Single(method => method.Name == "TryParse");
-    var serializerLocal = indexMemberParser.Body.Variables
-        .Single(variable =>
-            variable.VariableType.FullName ==
-            typeof(LegacyJavaScriptSerializer).FullName);
-    if (serializerLocal.VariableType.Scope is not AssemblyNameReference scope ||
-        scope.Name != typeof(LegacyJavaScriptSerializer).Assembly.GetName().Name)
+    // Serializer storage changes across upstream refactors: 2.2.1.0 keeps one in an IndexMemberParser
+    // local, 2.3.0.0 only constructs serializers inline. Any typed local or field must bind to the
+    // DACT bridge; the bridged-call check below covers builds that store none.
+    var cecilTypes = definition.MainModule.Types.SelectMany(EnumerateCecilTypes).ToArray();
+    var serializerSlots = cecilTypes
+        .SelectMany(type => type.Methods)
+        .Where(method => method.HasBody)
+        .SelectMany(method => method.Body.Variables.Select(variable =>
+            (Owner: method.FullName, Type: variable.VariableType)))
+        .Concat(cecilTypes
+            .SelectMany(type => type.Fields)
+            .Select(field => (Owner: field.FullName, Type: field.FieldType)))
+        .Where(slot => slot.Type.FullName == typeof(LegacyJavaScriptSerializer).FullName)
+        .ToArray();
+    foreach (var (owner, type) in serializerSlots)
     {
-        throw new InvalidOperationException(
-            $"IndexMemberParser serializer local is bound to {serializerLocal.VariableType.Scope}.");
+        if (type.Scope is not AssemblyNameReference scope ||
+            scope.Name != typeof(LegacyJavaScriptSerializer).Assembly.GetName().Name)
+        {
+            throw new InvalidOperationException($"{owner} serializer is bound to {type.Scope}.");
+        }
     }
 
     var replacementCalls = 0;
@@ -234,10 +239,12 @@ static void AssertSystemWebExtensionsWasReplaced(Assembly implementation)
         }
     }
 
-    if (replacementCalls != 24)
+    // Upstream refactors change how many JSON calls exist (24 in 2.2.1.0, 22 in 2.3.0.0); the
+    // invariant is that calls were bridged and none still reach System.Web (checked above).
+    if (replacementCalls == 0)
     {
         throw new InvalidOperationException(
-            $"Expected 24 Triggernometry JavaScriptSerializer bridge calls, found {replacementCalls}.");
+            "Patched Triggernometry has no JavaScriptSerializer bridge calls.");
     }
 }
 

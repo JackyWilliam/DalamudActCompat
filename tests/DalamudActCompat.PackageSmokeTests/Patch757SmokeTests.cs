@@ -73,7 +73,8 @@ internal static class Patch757SmokeTests
         try
         {
             ValidateInternationalPath(version, bundledPolicy, regional);
-            foreach (var region in new[] { GameRegion.Global, GameRegion.Chinese, GameRegion.Korean })
+            // Global has moved on to 7.57h; Patch757HotfixSmokeTests owns its alignment.
+            foreach (var region in new[] { GameRegion.Chinese, GameRegion.Korean })
             {
                 OpcodeManager.Instance.SetRegion(region);
                 Require(mapping.All(pair => regional.ObfuscatedOpcodes[pair.Key] == OpcodeManager.Instance.CurrentOpcodes[pair.Value]),

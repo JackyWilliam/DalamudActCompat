@@ -658,6 +658,8 @@ public sealed class Plugin : IDalamudPlugin
         helpWindow = new HelpWindow(
             text,
             logoTexture,
+            Path.Combine(assetDirectory, "Help"),
+            path => textureProvider.GetFromFile(path),
             logger,
             () => statusWindow.IsOpen = true,
             OpenLogDirectory,

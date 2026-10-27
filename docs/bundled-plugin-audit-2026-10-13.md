@@ -81,3 +81,37 @@ IINACT 子模块提交 `c9f34f6`（分支 `feature/parser-3-0-3-4`）。既有�
 为用户安装的 2.2.1.0 逐字节一致；ACT.FoxTTS、PostNamazu、银山雀儿与抹茶保持不变。2.2.1.0 新增的
 PictoACT 写法已在本版游戏侧适配，并按真实 2.2.1.0 解析器做了差分回归；Host 侧 Triggernometry
 改写、U7b 顺序、事件时间与绘图诊断回归均改为在 2.2.1.0 上执行。
+
+## 0.4.5.15 发布前追加核对（2026-10-27）
+
+国际服在 2026-10-16 上线 7.57 热修（`2026.10.16.0000.0000`），全部操作码重排。上游
+[IINACT 2.10.3.11](https://github.com/marzent/IINACT/releases/tag/v2.10.3.11) 同日跟进：
+Unscrambler.XIV 7.57.1、OverlayPlugin 0.19.111（仅国际服 7.57h 操作码）、machina 国际服
+7.57h 网络事件表与 ApplicableVersion。DACT 0.4.5.14 只同步了解析器 3.0.3.4，自有接收签名版本门仍只认
+`2026.10.06`，国际服解析器启动即抛 `No supported zone receive signature`。
+
+- IINACT `0036e08`（`feature/parser-757h`）：接收签名版本门加入 `2026.10.16`，沿用 7.57 两种精确签名；
+  Unscrambler.XIV 7.57.1，锁文件 contentHash 与上游 2.10.3.11 一致，官方配置的密钥表
+  `0x232A700`/932 字节与反馈用户国际服客户端运行时扫描结果一致；OverlayPlugin 国际服操作码改为 7.57h；
+  IINACT 2.10.3.11，Logfile 身份重写为 `This is IINACT 2.10.3.11 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.4`。
+- machina `20b1d04`：国际服 26 项操作码取自上游 marzent/machina `06d9ab4`，其中 19 项与
+  [FFXIVOpcodes `d85eaeb`](https://github.com/karashiiro/FFXIVOpcodes/blob/d85eaebec24b08948550e09c005fe5860d17c3f2/opcodes.json)
+  一致、2 项与 Unscrambler 7.57.1 一致，无冲突。国服、韩服仍为 7.57。
+- 抹茶国际服 26 项映射改为 FFXIVOpcodes `d85eaeb` 的 7.57h 值，国服仍为 7.57；FateInfo 与 WorldVisitQueue
+  在国际服 7.57h 尚无公开值，不再沿用 7.57 旧值。银山雀儿国际服 InitZone `0x009C`、ActorControlSelf
+  `0x0101`，FateInfo 回到其自身占位 `0xF009`。
+
+随包扩展门禁同时发现 Triggernometry 已过期：上游 CN 维护版发布 2.3.0.0（上游提交 `8b89333`），随包仍为 2.2.1.0。
+按 `tools/sync-bundled-act-plugins.ps1` 同步后仅 Triggernometry 与其汉化变化，新 SHA-256 为
+`f40d4a838442d2618fe07b29292bde7988a1d69aa36e797f5b9be49b4ec89f55`；ACT.FoxTTS、PostNamazu、银山雀儿与抹茶不变。
+
+- 2.3.0.0 的 JSON 处理重构后，DACT 原先固定要求的 24 处 JavaScriptSerializer 调用变为 22 处，0.4.5.14 会拒绝加载
+  2.3.0.0。改为要求至少一处、拒绝未知调用形态并证明替换后不再残留 System.Web 引用；2.2.1.0 与 2.3.0.0 均通过
+  Host、Legacy Resource 与真实 TN 时间探针（`staleReplayed=False burstFires=2 stallFires=1 spawnSeen=True`）。
+- PictoACT 对齐 2.3.0.0：`minuspolar` 取反时高度一并取反（上游 `1ddaa44`），十六进制 `E0000000` 视为实体引用
+  （上游 `ef2c917`），多边形三角剖分移除重复、近重复（0.05）与共线顶点（上游 `3dc6f54`）。以真实 2.3.0.0 解析器
+  反射核对，15 个在线仓库 2519 个样本与 24 个合成样本全部一致。
+- 抹茶上游 thewakingsands/matcha 比随包源码 `d4fffc6` 多 19 个提交（钓鱼统计上传、Fishcake 导出、潜水艇部件等），
+  不在发布门禁内，本版未同步。银山雀儿仍无可证明版本的公开清单。
+
+实际国际服客户端尚未在本机验证（本机为国服），国际服解析、FF Logs 上传与抹茶、银山雀儿表现需反馈用户复测。

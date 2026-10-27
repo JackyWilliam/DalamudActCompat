@@ -6,19 +6,19 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.4.5.14",
+    [string] $ExpectedAssemblyVersion = "0.4.5.15",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedIinactVersion = "2.10.3.10",
+    [string] $ExpectedIinactVersion = "2.10.3.11",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedOverlayPluginVersion = "0.19.110.0",
+    [string] $ExpectedOverlayPluginVersion = "0.19.111.0",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedUnscramblerVersion = "7.57.0.0",
+    [string] $ExpectedUnscramblerVersion = "7.57.1.0",
 
     [Parameter(Mandatory = $false)]
     [string] $ExpectedFfxivActPluginVersion = "3.0.3.4",
@@ -243,6 +243,25 @@ if ($missingUiAssets.Count -gt 0) {
 }
 
 Write-Host "Validated UI assets: $($requiredUiAssets.Count)"
+
+# The help shows screenshots in the UI language; a missing file silently falls back to
+# another language, so the package must carry the full set.
+$helpImages = @(
+    "account-login", "account-discord", "control-overview", "control-meter", "control-overlays",
+    "control-extensions", "control-cloud", "control-diagnostics", "meter"
+)
+$helpLanguages = @("zh-CN", "zh-TW", "en", "ja", "de", "fr")
+$missingHelpImages = @(foreach ($language in $helpLanguages) {
+    foreach ($image in $helpImages) {
+        $relativePath = "Assets/Help/$language/$image.png"
+        if (-not (Test-Path (Join-Path $validationDir $relativePath))) { $relativePath }
+    }
+})
+if ($missingHelpImages.Count -gt 0) {
+    throw "Plugin ZIP is missing help screenshots: $($missingHelpImages -join ', ')"
+}
+
+Write-Host "Validated help screenshots: $($helpLanguages.Count * $helpImages.Count)"
 
 $jobIconRoot = Join-Path $validationDir "Assets/JobIcons"
 $jobCodes = @(
