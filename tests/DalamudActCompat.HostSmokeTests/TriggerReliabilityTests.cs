@@ -39,6 +39,11 @@ internal static class TriggerReliabilityTests
             LogTimeFollowsGameTime();
             return Task.CompletedTask;
         });
+        await Case("log-time-corrects-host-clock-offset", () =>
+        {
+            LogTimeCorrectsHostClockOffset();
+            return Task.CompletedTask;
+        });
         await Case("startup-replay-discards-stale-logs", () =>
         {
             StartupReplayDiscardsStaleLogs();
@@ -94,7 +99,10 @@ internal static class TriggerReliabilityTests
     private static void LogTimeFollowsGameTime()
     {
         var now = new DateTime(2026, 10, 24, 0, 0, 30, DateTimeKind.Local);
-        DateTime Resolve(string text) => HostPluginBridge.ResolveLogTime(text, now);
+        // A synced clock: packet lines arrive with no measurable offset.
+        var clock = new GameClockOffset();
+        clock.Observe(new DateTimeOffset(now), new DateTimeOffset(now));
+        DateTime Resolve(string text) => HostPluginBridge.ResolveLogTime(text, now, clock);
         Require(Resolve("[00:00:29.250] 0 00:0000:x") == now.Date + new TimeSpan(0, 0, 0, 29, 250),
             "the ACT line time was not used");
         Require(Resolve("[23:59:59.900] 0 00:0000:x") == new DateTime(2026, 10, 23, 23, 59, 59, 900, DateTimeKind.Local),
@@ -117,11 +125,78 @@ internal static class TriggerReliabilityTests
             "an event without a time did not fall back to the Host clock");
     }
 
+    private static void LogTimeCorrectsHostClockOffset()
+    {
+        // The reported M12S machine ran 8.5 s ahead of the game server. Every packet line then
+        // looked 8.5 s old, so each trigger delay up to 8.5 s fired the moment its line arrived.
+        var now = new DateTime(2026, 10, 29, 20, 29, 57, DateTimeKind.Local);
+        var ahead = TimeSpan.FromMilliseconds(8_520);
+        DateTime Resolve(GameClockOffset clock, DateTime stamped, string body)
+            => HostPluginBridge.ResolveLogTime($"[{stamped:HH:mm:ss.fff}] {body}", now, clock);
+        DalamudActCompat.Protocol.HostLogEvent Log(string type, DateTimeOffset stamped)
+            => new(stamped, $"{type}|{stamped:yyyy-MM-ddTHH:mm:ss.fffffffzzz}|10001234|Player|", false);
+        const string packet = "21 15:10001234:Player:9C1A:Hit:10005678:Other:";
+        const string chat = "0 00:0038::h1";
+
+        var unmeasured = new GameClockOffset();
+        Require(Resolve(unmeasured, now.AddSeconds(-1), packet) == now.AddSeconds(-1),
+            "before any packet line was measured, the line time must keep its previous meaning");
+
+        var clock = new GameClockOffset();
+        clock.Observe(
+            [
+                Log("21", new DateTimeOffset(now - ahead)),
+                Log("00", new DateTimeOffset(now)),
+                Log("26", new DateTimeOffset(now).AddTicks(1)),
+            ],
+            new DateTimeOffset(now));
+        Require(clock.Offset == ahead, $"chat or local-clock lines were taken as the packet clock offset: {clock.Offset}");
+        Require(Resolve(clock, now - ahead, packet) == now, "a packet line that just arrived was dated in the past");
+        Require(Resolve(clock, now - ahead - TimeSpan.FromMilliseconds(300), packet) == now.AddMilliseconds(-300),
+            "a packet line held 300 ms on the Host lost that compensation");
+        Require(Resolve(clock, now.AddMilliseconds(-100), chat) == now.AddMilliseconds(-100),
+            "a line stamped with the Host clock was shifted by the packet offset");
+        Require(Resolve(clock, now - ahead - TimeSpan.FromSeconds(60), packet) == now.AddSeconds(-60),
+            "a genuinely old packet line was dated as live");
+
+        var behind = new GameClockOffset();
+        behind.Observe(new DateTimeOffset(now.AddSeconds(5)), new DateTimeOffset(now));
+        Require(Resolve(behind, now.AddSeconds(5).AddMilliseconds(-200), packet) == now.AddMilliseconds(-200),
+            "a Host clock running behind discarded the 200 ms a packet line waited");
+        Require(Resolve(behind, now.AddMilliseconds(-100), chat) == now.AddMilliseconds(-100),
+            "a Host-clock line was shifted when the Host clock runs behind");
+
+        // Syncing the clock mid-session steps it back by the offset and is adopted at once; a
+        // step forward is adopted once the older half-window has aged out.
+        var stepped = new GameClockOffset();
+        stepped.Observe(new DateTimeOffset(now - ahead), new DateTimeOffset(now));
+        var synced = new DateTimeOffset(now.AddSeconds(16));
+        stepped.Observe(synced, synced);
+        Require(stepped.Offset == TimeSpan.Zero, "a corrected Host clock kept the old offset");
+        foreach (var seconds in new[] { 32, 48 })
+        {
+            var at = new DateTimeOffset(now.AddSeconds(seconds));
+            stepped.Observe(at - ahead, at);
+        }
+
+        Require(stepped.Offset == ahead, $"a Host clock stepped forward was never adopted: {stepped.Offset}");
+    }
+
     private static void StartupReplayDiscardsStaleLogs()
     {
         var now = DateTimeOffset.UtcNow;
         HostLogEventFactory log = (text, age) => new DalamudActCompat.Protocol.HostLogEvent(now.AddSeconds(-age), text, false);
-        var buffer = new StartupEventBuffer<List<string>>(8);
+        var aheadClock = new GameClockOffset();
+        aheadClock.Observe(now.AddSeconds(-8.5), now);
+        var ahead = new StartupEventBuffer<List<string>>(8, aheadClock);
+        ahead.AddLogs([log("live", 8.5 + 0.5), log("old", 8.5 + 60)]);
+        var aheadReplayed = new List<string>();
+        ahead.Replay(aheadReplayed, (target, logs) => target.AddRange(logs.Select(item => item.Line)), now,
+            exception => throw exception);
+        Require(aheadReplayed.SequenceEqual(["live"]),
+            $"a Host clock 8.5 s ahead made startup replay misjudge line age: [{string.Join(",", aheadReplayed)}]");
+
+        var buffer = new StartupEventBuffer<List<string>>(8, new GameClockOffset());
         buffer.AddLogs([log("stale", 60), log("fresh-1", 1)]);
         buffer.AddEvent(target => target.Add("zone"));
         buffer.AddLogs([log("fresh-2", 0.5)]);

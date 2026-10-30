@@ -2618,6 +2618,11 @@ async Task ValidateTriggernometryTimingProbeAsync()
                   </Action>
                 </Actions>
               </Trigger>
+              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b05" Name="Delay under a skewed packet clock" RegularExpression="ACTCOMPAT_DELAY_START" Source="Log">
+                <Actions>
+                  <Action ActionType="UseTTS" OrderNumber="1" ExecutionDelayExpression="2000" UseTTSTextExpression="ACTCOMPAT_DELAY_FIRED" />
+                </Actions>
+              </Trigger>
             </Triggers>
           </Root>
           <RepositoryRoot Name="Remote triggers" Enabled="true">
@@ -2785,6 +2790,28 @@ async Task ValidateTriggernometryTimingProbeAsync()
                     []));
             await SpeakUntilSentinelAsync(3);
 
+            // 5. A Host clock 8.5 s ahead of the game server: packet lines carry whole-millisecond
+            // server time and arrive looking 8.5 s old. Runs last, since the learned offset is
+            // process-wide. A 2 s action delay must still wait instead of firing on arrival.
+            DateTimeOffset ServerNow()
+            {
+                var at = DateTimeOffset.Now.AddMilliseconds(-8_500);
+                return at.AddTicks(-(at.Ticks % TimeSpan.TicksPerMillisecond));
+            }
+
+            HostLogEvent Packet(string text, DateTimeOffset at)
+                => new(
+                    at,
+                    $"21|{at.ToLocalTime():yyyy-MM-ddTHH:mm:ss.fffffffzzz}|10005678|Probe|07|Attack|10001234|Player|{text}|",
+                    false,
+                    $"[{at.ToLocalTime():HH:mm:ss.fff}] 21 15:10005678:Probe:07:Attack:10001234:Player:{text}:");
+            await SendLinesAsync(Packet("ACTCOMPAT_CLOCK", ServerNow()));
+            await Task.Delay(100);
+            var delaySentAt = DateTime.UtcNow;
+            await SendLinesAsync(Packet("ACTCOMPAT_DELAY_START", ServerNow()));
+            await ReadRecordingAsync(_ => spoken.Contains("ACTCOMPAT_DELAY_FIRED"));
+            var delayElapsed = DateTime.UtcNow - delaySentAt;
+
             // Actions due at past game times and the sentinel's action can leave TN in either
             // order within a millisecond, so count each trigger by name after a final drain.
             var drainUntil = DateTime.UtcNow.AddSeconds(1.5);
@@ -2798,11 +2825,15 @@ async Task ValidateTriggernometryTimingProbeAsync()
 
             Console.WriteLine(
                 "TRIGGERNOMETRY_TIMING_RESULT " +
-                $"staleReplayed={staleReplayed} burstFires={burstFires} stallFires={stallFires} spawnSeen={spawnSeen}");
+                $"staleReplayed={staleReplayed} burstFires={burstFires} stallFires={stallFires} spawnSeen={spawnSeen} " +
+                $"skewedDelayMs={delayElapsed.TotalMilliseconds:0}");
             Assert(!staleReplayed, "A one-minute-old startup log was replayed into Triggernometry as a live callout.");
             Assert(burstFires == 2, $"Refire suppression used Host receipt time: {burstFires} of 2 events 1.5 s apart fired.");
             Assert(stallFires == 1, $"Refire suppression used Host receipt time: {stallFires} of 2 events 0.3 s apart fired.");
             Assert(spawnSeen, "A log line that referenced an entity one frame before its snapshot was evaluated without the entity.");
+            Assert(
+                delayElapsed >= TimeSpan.FromSeconds(1.5),
+                $"A 2 s delay on a packet line from a clock 8.5 s ahead fired after {delayElapsed.TotalMilliseconds:0} ms.");
 
             await SendAsync(
                 HostMessageTypes.Shutdown,

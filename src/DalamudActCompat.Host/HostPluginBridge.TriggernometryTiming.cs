@@ -13,9 +13,9 @@ public static partial class HostPluginBridge
     [ThreadStatic] private static DateTime triggernometryFireTime;
     [ThreadStatic] private static long triggernometryFireRecordedAt;
 
-    /// <summary>Replaces TN's queue-time <c>DateTime.Now</c> with the line's game time.</summary>
+    /// <summary>Replaces TN's queue-time <c>DateTime.Now</c> with the line's game time on the Host clock.</summary>
     public static DateTime ResolveTriggernometryLogTime(string? text)
-        => ResolveLogTime(text, DateTime.Now);
+        => ResolveLogTime(text, DateTime.Now, GameClockOffset.Shared);
 
     /// <summary>Called on entry to TN's TestTrigger with the event being tested.</summary>
     public static void BeginTriggernometryFire(DateTime eventTime)
@@ -35,10 +35,19 @@ public static partial class HostPluginBridge
             : DateTime.Now;
     }
 
-    internal static DateTime ResolveLogTime(string? text, DateTime now)
-        => TryParseLogTime(text, now, out var parsed) && (now - parsed).Duration() <= MaximumEventTimeSkew
-            ? parsed < now ? parsed : now
-            : now;
+    internal static DateTime ResolveLogTime(string? text, DateTime now, GameClockOffset clock)
+    {
+        if (!TryParseLogTime(text, now, out var parsed) || (now - parsed).Duration() > MaximumEventTimeSkew)
+        {
+            return now;
+        }
+
+        // Packet lines carry server time. Read raw on a machine whose clock runs ahead, they
+        // look seconds old and every delayed action of their triggers fires that much early.
+        var eventTime = clock.ToHostTime(new DateTimeOffset(parsed), new DateTimeOffset(now))?.LocalDateTime
+                        ?? parsed;
+        return eventTime < now ? eventTime : now;
+    }
 
     private static bool TryParseLogTime(string? text, DateTime now, out DateTime parsed)
     {

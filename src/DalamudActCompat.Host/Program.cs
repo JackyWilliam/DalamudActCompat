@@ -316,6 +316,8 @@ internal static class Program
                         break;
                     case HostMessageTypes.LogBatch:
                         var logs = envelope.Payload.Deserialize<IReadOnlyList<HostLogEvent>>() ?? [];
+                        // Measure on arrival, before buffering or gating adds Host-side delay.
+                        GameClockOffset.Shared.Observe(logs, DateTimeOffset.Now);
                         lock (criticalStateSync)
                         {
                             if (Volatile.Read(ref pluginRuntimeReady) == 1)
