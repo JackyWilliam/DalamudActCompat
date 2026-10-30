@@ -3,12 +3,13 @@ using DalamudActCompat.Protocol;
 namespace DalamudActCompat.Host;
 
 /// <summary>Holds game events that arrive while the legacy plugins are still starting.</summary>
-internal sealed class StartupEventBuffer<TRuntime>(int logCapacity)
+internal sealed class StartupEventBuffer<TRuntime>(int logCapacity, GameClockOffset? clock = null)
 {
     // Live log batches expire after 2 s on the game side. Replaying an older buffered line
     // after a slow startup would announce a mechanic that has already resolved.
     internal static readonly TimeSpan MaximumReplayAge = TimeSpan.FromSeconds(2);
 
+    private readonly GameClockOffset gameClock = clock ?? GameClockOffset.Shared;
     private readonly LinkedList<(Action<TRuntime>? Event, IReadOnlyList<HostLogEvent>? Logs)> entries = new();
     private int logCount;
 
@@ -61,7 +62,11 @@ internal sealed class StartupEventBuffer<TRuntime>(int logCapacity)
                     continue;
                 }
 
-                var fresh = logs!.Where(log => now - log.Timestamp <= MaximumReplayAge).ToArray();
+                // Packet lines are dated in the game's clock; a Host clock running ahead
+                // would otherwise discard every line buffered during startup as stale.
+                var fresh = logs!
+                    .Where(log => now - (gameClock.ToHostTime(log.Timestamp, now) ?? log.Timestamp) <= MaximumReplayAge)
+                    .ToArray();
                 discarded += logs!.Count - fresh.Length;
                 if (fresh.Length != 0)
                 {
