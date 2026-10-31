@@ -127,3 +127,10 @@ FFXIV_ACT_Plugin 3.0.3.4（IINACT 2.10.3.11）、Cactbot 0.37.5 与随包 ACT �
 三项发布依赖门禁重新联网核对均通过：`sync-parser-dependencies.ps1 -Check` 确认 FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11；
 `sync-bundled-act-plugins.ps1 -Check` 确认随包 ACT 插件仍为当前版本（含 Triggernometry 2.3.0.0）；
 `sync-cactbot.ps1 -Check` 确认 Cactbot 0.37.5 与官方摘要一致。未同步上游依赖或修改锁文件。
+
+## 0.4.5.18 发布前核对（2026-10-30）
+
+本版修复 command 静默派发语义并增强 Redraw/108 诊断，不改变随包依赖。
+三项联网门禁重新通过：FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11、随包 ACT 插件（Triggernometry 2.3.0.0）和 Cactbot 0.37.5 均为当前版本；锁文件未变。
+完整 Release 构建使用正式参数，重新收集核心、Host 与三类资源目录，内容哈希由收集器根据实际文件生成。包校验、隐私检查、版本与 API 15 校验通过。
+命令入口和真实 TN 的诊断／清特效链隔离回放用于回归，不代表妖星指定 NPC 的实战清特效已确认。

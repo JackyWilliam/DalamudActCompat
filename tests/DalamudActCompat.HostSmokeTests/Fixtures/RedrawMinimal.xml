@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TriggernometryExport PluginVersion="2.2.0.1">
+  <!-- No BBY variables, scripts, delays or PostNamazu command calls: isolate Redraw. -->
+  <ExportedFolder Id="ec86929e-ac32-4665-9e93-bbf40db624d1" Enabled="true" Name="U7b Redraw 最小测试">
+    <Triggers>
+      <Trigger Enabled="true" Id="2ff66b71-e6e0-49e4-ae20-b7795c6369da" Name="自身 Redraw（/e dact_redraw_self）" RegularExpression="^.{15}\S+ 00:0038:: *dact_redraw_self *$" Sequential="True">
+        <Actions>
+          <Action OrderNumber="1" ActionType="NamedCallback" Asynchronous="False" NamedCallbackName="Redraw" NamedCallbackParam="${_me.Address}" />
+        </Actions>
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

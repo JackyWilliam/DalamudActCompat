@@ -1,0 +1,75 @@
+<?xml version='1.0' encoding='utf-8'?>
+<TriggernometryExport PluginVersion="2.2.0.1">
+  <!--Original U7b v1.0.6 clear-effect nodes and ancestor conditions; source SHA256 378e32f02e66150146d492563292d9c41ab9a143266ce6d4a7dac536b432aebf. Native Redraw is replaced only by the test harness.-->
+  <ExportedFolder Id="11cd4517-1f76-4ebf-9455-00862a617a35" Enabled="true" Name="U7b 绝妖星宝宝椅 v1.0.6" RawEnvironmentVariables="prefix = U7b&#13;&#10;alias = U7b,绝妖星&#13;&#10;zone = 1363&#13;&#10;version = 1.0.6&#13;&#10;CactbotTriggerSetName = DancingMadUltimate">
+    <Folders>
+      <Folder Id="334fe038-16ba-4463-a9ce-7e2b602df000" Enabled="true" Name="区域限制" FFXIVZoneFilterEnabled="True" FfxivZoneFilterRegularExpression="^1363$">
+        <Folders>
+          <Folder Id="6fd906af-078e-4fa1-8de3-5d3da7034501" Enabled="true" Name="杂项">
+            <Folders>
+              <Folder Id="22a6df34-8d57-494e-a7f9-438412306564" Enabled="true" Name="清除特效">
+                <Triggers>
+                  <Trigger Enabled="true" Id="ce8585bb-cb30-4d23-9b65-dffd8608c3d7" Name="P2 光之波动（塔）" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BABE):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="31001614-c5c9-4bcc-b29c-5fee4825ceaa" Name="P2 XX终结（超级跳）" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BAD[6789]):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="a99d03f8-f977-44b5-ae42-5f72185b7f59" Name="P3 黑洞" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BAFB):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="1000" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="d3e0f745-8822-4726-bf51-8e002dbd5ba1" Name="P3 深层痛楚" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BAF2):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="1000" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="4147b01e-5076-4639-b6b8-8c71c9dd29cb" Name="P2 遗弃末世" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BABC):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="2500" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="ede401ae-3e0d-4c5b-87c3-ebaa59aae061" Name="P5 洪水（直条）" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;C269):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="800" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="38c39aef-5f05-4e9b-8927-b61809aa2a6a" Name="P4 火月环" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BB23):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="1000" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="2171b0db-8464-4bb7-a179-1ab2c6c74461" Name="P4 海啸/烈焰" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BB2[01]):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="1500" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="36cab0f5-3182-48e3-9b72-035af1287129" Name="P3 地震" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;C572):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="2500" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="d58d68c2-008d-4679-a71e-cc3b720bddfa" Name="P5 混沌洪水（分摊）" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BB4F):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="fce2547b-d1d4-4fa1-8bcc-518f9aae8150" Name="P5 软狂暴" RegularExpression="^.{15}\S+ 108:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BB3[56]):">
+                    <Actions>
+                      <Action OrderNumber="1" ActionType="NamedCallback" ExecutionDelayExpression="1000" NamedCallbackName="Redraw" NamedCallbackParam="${_entity[${sid}].Address}" />
+                    </Actions>
+                  </Trigger>
+                </Triggers>
+              </Folder>
+            </Folders>
+          </Folder>
+        </Folders>
+      </Folder>
+    </Folders>
+  </ExportedFolder>
+</TriggernometryExport>

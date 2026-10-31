@@ -25,10 +25,10 @@ public static partial class HostPluginBridge
     ];
     private static readonly HashSet<string> DrawingCallbackNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ObjectScaling", "SetObjectScale", "SetOpacity", "SetStatusLoopVfx", "LockOn", "PictoACT", "AdvWm", "place",
+        "ObjectScaling", "SetObjectScale", "SetOpacity", "SetStatusLoopVfx", "Redraw", "LockOn", "PictoACT", "AdvWm", "place",
     };
     private static readonly HashSet<string> DrawingLogTypes = new(StringComparer.OrdinalIgnoreCase)
-    { "03", "04", "14", "1A", "1B", "1E", "23", "26", "35", "37", "107", "111", "1019D" };
+    { "03", "04", "14", "1A", "1B", "1E", "23", "26", "35", "37", "107", "108", "111", "1019D" };
 
     // Observe original return values and fields only. Re-evaluating a TN expression or
     // condition here could mutate variables, acquire a mutex, or hide the timing bug.
@@ -286,7 +286,9 @@ public static partial class HostPluginBridge
 
     internal static object SafeDrawingParameters(string name, string value)
     {
-        var native = name is "ObjectScaling" or "SetObjectScale" or "SetOpacity" or "SetStatusLoopVfx";
+        // Redraw takes an entity address; retaining that numeric value distinguishes
+        // a missing snapshot from a callback that returned without a visible redraw.
+        var native = name is "ObjectScaling" or "SetObjectScale" or "SetOpacity" or "SetStatusLoopVfx" or "Redraw";
         return new
         {
             length = value.Length, digest = DrawingEvent.Digest(value),
@@ -367,7 +369,7 @@ internal sealed record DrawingEvent(string Time, string Type, string Actor, stri
         if (fields.Length < 2 || fields[0].Length > 8) return null;
         var actor = fields[1];
         if (!uint.TryParse(actor, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _)) return null;
-        var detailIndex = fields[0] switch { "03" => 9, "14" => 3, "1B" => 5, "111" or "107" => 2, _ => -1 };
+        var detailIndex = fields[0] switch { "03" => 9, "14" => 3, "1B" => 5, "111" or "107" or "108" => 2, _ => -1 };
         var detail = detailIndex >= 0 && fields.Length > detailIndex ? fields[detailIndex] : null;
         if (detail?.Any(c => !Uri.IsHexDigit(c)) == true) detail = null;
         var time = text[..14];
