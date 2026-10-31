@@ -54,14 +54,15 @@ var mapEffectProbe = string.Equals(
 var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringComparison.Ordinal);
 var u7bOrderingProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-ordering", StringComparison.Ordinal);
 var drawingProbe = string.Equals(focusedProbe, "--probe-drawing-diagnostics", StringComparison.Ordinal);
+var clearProbe = string.Equals(focusedProbe, "--probe-u7b-clear-effects", StringComparison.Ordinal);
 var drawingSoakProbe = string.Equals(focusedProbe, "--probe-drawing-soak", StringComparison.Ordinal);
 var timingProbe = string.Equals(focusedProbe, "--probe-triggernometry-timing", StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe || drawingSoakProbe || timingProbe ? args[1..] : args;
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe || drawingSoakProbe || timingProbe || clearProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-triggernometry-timing, --probe-drawing-diagnostics or --probe-drawing-soak " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-triggernometry-timing, --probe-drawing-diagnostics, --probe-drawing-soak or --probe-u7b-clear-effects " +
         "with the three-path form for a focused probe.");
 }
 
@@ -86,6 +87,12 @@ ValidateFfxivEntityDeltaRepository();
 ValidateFfxivRegionContext();
 TriggernometryActorControlTests.Run();
 DrawingDiagnosticTests.Run();
+
+if (clearProbe)
+{
+    await ValidateU7bClearEffectsAsync();
+    return;
+}
 
 if (drawingSoakProbe)
 {
@@ -2860,6 +2867,153 @@ async Task ValidateTriggernometryTimingProbeAsync()
                 host.Kill(entireProcessTree: true);
                 await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
             }
+        }
+    }
+}
+
+async Task ValidateU7bClearEffectsAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    var path = Path.Combine(configRoot!, "Config", "Triggernometry.config.xml");
+    var configuration = XDocument.Load(path);
+    var root = configuration.Root!.Element("Root")!;
+    root.RemoveNodes();
+    var fixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "U7bClearEffects.xml"));
+    var folder = new XElement(fixture.Root!.Element("ExportedFolder")!);
+    folder.Name = "Folder";
+    root.Add(new XElement("Folders", folder));
+    // Keep the original conditions, regexes, delays and address expressions. The
+    // only substitute is the native effect sink, so replay cannot touch the game.
+    const string setup = """
+        using System;
+        using Triggernometry.Core;
+        RealPlugin.Instance.RegisterNamedCallback("Redraw", new Action<object,string>((_, value) =>
+            Console.WriteLine("DACT_CLEAR_CAPTURE " + value + " " + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())));
+        Console.WriteLine("DACT_CLEAR_READY");
+        """;
+    root.Add(new XElement("Triggers", new XElement("Trigger", new XAttribute("Enabled", "true"),
+        new XAttribute("Id", Guid.NewGuid()), new XAttribute("Name", "clear-probe setup"),
+        new XAttribute("RegularExpression", "^DACT_CLEAR_SETUP$"), new XElement("Actions",
+            new XElement("Action", new XAttribute("ActionType", "ExecuteScript"), new XAttribute("ExecScriptExpression", setup))))));
+    configuration.Save(path);
+    var (host, pipe, session) = await StartConnectedHostAsync(loadPlugins: true, faultInjection: true);
+    using var watchdog = new System.Threading.Timer(_ =>
+    {
+        try { if (!host.HasExited) host.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { }
+    }, null, TimeSpan.FromSeconds(90), Timeout.InfiniteTimeSpan);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            long sequence = 1;
+            async Task Send<T>(string type, HostMessagePriority priority, T payload) =>
+                await HostFrameCodec.WriteAsync(pipe.Writer, HostEnvelope.Create(session, sequence++, type, priority, payload), CancellationToken.None);
+            await Send(HostMessageTypes.Hello, HostMessagePriority.Control,
+                new HostHello("u7b-clear-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion]));
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            await Send(HostMessageTypes.Permissions, HostMessagePriority.Control,
+                new HostPermissionSnapshot(new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["triggernometry"] = ["ReadCombatLogs", "ReadLocalConfiguration", "HighRiskScript"],
+                    ["postnamazu"] = ["ReadCombatLogs", "ReadLocalConfiguration"],
+                }, ["triggernometry", "postnamazu"]));
+            await Send(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical,
+                new HostZoneEvent(1363, "Dancing Mad", DateTimeOffset.UtcNow));
+            var ready = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90);
+            Assert(ready.Payload.Deserialize<HostHealth>()?.State == "plugins.ready", "Clear probe plugins not ready.");
+            var baseline = CreateTestFfxivSnapshot() with { TerritoryId = 1363 };
+            string[] abilities = ["BABE", "BAD6", "BAFB", "BAF2", "BABC", "C269", "BB23", "BB20", "C572", "BB4F", "BB35"];
+            int[] delays = [0, 0, 1000, 1000, 2500, 800, 1000, 1500, 2500, 0, 1000];
+            var actors = abilities.Select((_, index) => baseline.Combatants[0] with
+            { Id = 0x400F0001u + (uint)index, Type = 2, Name = "CLEAR_PROBE_NPC", BNpcId = 19508, Address = 0x12340000 + index * 0x1000 }).ToArray();
+            async Task Snapshot(uint zone, IEnumerable<HostFfxivCombatant> npcs) =>
+                await Send(HostMessageTypes.FfxivEntities, HostMessagePriority.State,
+                    baseline with { TerritoryId = zone, Timestamp = DateTimeOffset.UtcNow, Combatants = [.. baseline.Combatants, .. npcs] });
+            async Task Line(string text) => await Send(HostMessageTypes.LogBatch, HostMessagePriority.Data,
+                new[] { new HostLogEvent(DateTimeOffset.UtcNow, text, false, text) });
+            string Ability(uint actor, string ability) => $"[{DateTime.Now:HH:mm:ss.fff}] 264 108:{actor:X8}:{ability}:00000001:1:100.000:100.000:0.000:0.000:E0000000";
+            (string Address, long At)[] Captures() => processLogs[host.Id].Snapshot().Output.Split('\n')
+                .Where(line => line.StartsWith("DACT_CLEAR_CAPTURE ", StringComparison.Ordinal))
+                .Select(line => line[19..].Trim().Split(' ')).Select(parts => (parts[0], long.Parse(parts[1]))).ToArray();
+            async Task WaitCount(int expected)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(7);
+                while (Captures().Length < expected && DateTime.UtcNow < deadline) await Task.Delay(25);
+                Assert(Captures().Length == expected, $"Clear callback count: expected {expected}, actual {Captures().Length}.");
+            }
+            await Snapshot(1363, actors);
+            await Line("DACT_CLEAR_SETUP");
+            await WaitForProcessOutputAsync(host, "DACT_CLEAR_READY", TimeSpan.FromSeconds(15));
+            var sent = new long[abilities.Length];
+            for (var i = 0; i < abilities.Length; i++)
+            {
+                sent[i] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                await Line(Ability(actors[i].Id, abilities[i]));
+            }
+            await WaitCount(11);
+            for (var i = 0; i < actors.Length; i++)
+            {
+                var hit = Captures().Single(record => record.Address == actors[i].Address.ToString());
+                var elapsed = hit.At - sent[i];
+                Assert(elapsed >= delays[i] - 150 && elapsed < delays[i] + 3000,
+                    $"Unexpected {abilities[i]} delay: {elapsed}ms, expected {delays[i]}ms.");
+                Console.WriteLine($"CLEAR_CASE {abilities[i]} address={hit.Address} expectedMs={delays[i]} actualMs={elapsed}");
+            }
+            var firstRecords = DrawingDiagnosticTests.ParseRecords(processLogs[host.Id].Snapshot().Output);
+            foreach (var node in folder.Descendants("Trigger"))
+                Assert(firstRecords.Any(record => record.GetProperty("stage").GetString() == "callback-return" &&
+                    record.GetProperty("nodeId").GetString() == node.Attribute("Id")!.Value), "Missing original-node Redraw return: " + node.Attribute("Name"));
+            // The real ancestor's zone filter must still block the same payload.
+            await Send(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical, new HostZoneEvent(134, "Outside", DateTimeOffset.UtcNow));
+            await Snapshot(134, actors);
+            await Task.Delay(100);
+            await Line(Ability(actors[0].Id, "BABE"));
+            await Task.Delay(350);
+            Assert(Captures().Length == 11, "Clear effects bypassed the original zone condition.");
+            await Send(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical, new HostZoneEvent(1363, "Dancing Mad", DateTimeOffset.UtcNow));
+            await Snapshot(1363, actors);
+            // Test a one-frame-late NPC separately from the pre-populated positive cases.
+            var late = actors[0] with { Id = 0x400F00E1, Address = 0x23450000 };
+            await Line(Ability(late.Id, "BAF2"));
+            await Task.Delay(100);
+            await Snapshot(1363, [.. actors, late]);
+            await WaitCount(12);
+            Assert(Captures().Last().Address == late.Address.ToString(), "Late NPC address was lost.");
+            var replayPath = Environment.GetEnvironmentVariable("ACTCOMPAT_CLEAR_EVENT_INPUT");
+            if (!string.IsNullOrEmpty(replayPath))
+            {
+                var payloads = JsonSerializer.Deserialize<string[]>(File.ReadAllText(replayPath))!;
+                var ids = payloads.Select(payload => Convert.ToUInt32(payload.Split(':')[1], 16)).Distinct().ToArray();
+                var replayActors = ids.Select((id, index) => actors[0] with { Id = id, Address = 0x34560000 + index * 0x1000 }).ToArray();
+                await Snapshot(1363, replayActors);
+                await Task.Delay(100);
+                foreach (var payload in payloads) await Line($"[{DateTime.Now:HH:mm:ss.fff}] 264 {payload}");
+                await WaitCount(12 + payloads.Length);
+                var actual = Captures().Skip(12).GroupBy(record => record.Address).ToDictionary(group => group.Key, group => group.Count());
+                foreach (var actor in replayActors)
+                    Assert(actual.GetValueOrDefault(actor.Address.ToString()) == payloads.Count(payload => payload.Split(':')[1] == actor.Id.ToString("X8")), "Replay actor/address count mismatch.");
+                Console.WriteLine($"CLEAR_REPLAY {payloads.Length} captured; original payloads, rebased receipt times, synthetic NPC addresses.");
+            }
+            await Send(HostMessageTypes.Shutdown, HostMessagePriority.Control, new HostHealth("stopping", "Clear probe", DateTimeOffset.UtcNow));
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var log = ReadProcessLog(host).Output;
+            var output = Environment.GetEnvironmentVariable("ACTCOMPAT_CLEAR_PROBE_OUTPUT");
+            if (!string.IsNullOrEmpty(output)) await File.WriteAllTextAsync(output, log);
+            Console.WriteLine("Clear effects: all 11 original nodes, resolved NPC addresses/delays, zone block and late NPC passed; native effects not executed.");
+        }
+        catch
+        {
+            var log = processLogs[host.Id].Snapshot();
+            Console.Error.WriteLine("Clear probe output:\n" + log.Output + "\n" + log.Error);
+            throw;
+        }
+        finally
+        {
+            if (!host.HasExited) { host.Kill(entireProcessTree: true); await host.WaitForExitAsync(); }
         }
     }
 }
