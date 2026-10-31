@@ -18,10 +18,15 @@ internal static class EncounterWindowAcceptance
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 
-    internal static unsafe void Run()
+    internal static unsafe void Run(bool nativeLibraryLoaded = false)
     {
-        var library = Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") ?? throw new InvalidOperationException("Native ImGui is required.");
-        File.Copy(library, Path.Combine(AppContext.BaseDirectory, "cimgui.dll"), true); NativeLibrary.Load(library);
+        // The combined suite already loaded cimgui for overlay acceptance. Windows
+        // locks that DLL until process exit, so only the standalone entry may copy it.
+        if (!nativeLibraryLoaded)
+        {
+            var library = Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") ?? throw new InvalidOperationException("Native ImGui is required.");
+            File.Copy(library, Path.Combine(AppContext.BaseDirectory, "cimgui.dll"), true); NativeLibrary.Load(library);
+        }
         var context = ImGui.CreateContext();
         var output = Path.Combine(Environment.GetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT")!, "history");
         Directory.CreateDirectory(output);
