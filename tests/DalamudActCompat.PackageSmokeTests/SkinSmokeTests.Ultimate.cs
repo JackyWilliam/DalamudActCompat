@@ -34,6 +34,13 @@ internal static partial class SkinSmokeTests
             saved.Normalize();
             Check(saved.SelectedSkin == SkinCatalog.UltimateOmega && saved.UnlockedEasterEggs.Count == 0 &&
                   SkinCatalog.Resolve(saved, true, 99) == SkinCatalog.Default, "A saved configuration granted an ultimate skin or lost its selection.");
+            // A newer client's skins arrive through the shared cloud backup before this build knows them.
+            var future = JsonConvert.DeserializeObject<UiSkinSettings>("""{"SelectedSkin":"future-skin","UnlockedEasterEggs":["future-egg","jade","ultimate-top",""]}""")!;
+            future.Normalize();
+            Check(future.SelectedSkin == "future-skin" && future.UnlockedEasterEggs.SetEquals(["future-egg", SkinCatalog.Jade]) &&
+                  !future.Normalize() && SkinCatalog.Resolve(future, true, 99) == SkinCatalog.Default &&
+                  JsonConvert.SerializeObject(future).Contains("\"future-egg\"", StringComparison.Ordinal),
+                "Normalization dropped a newer client's skin choice or kept an invalid discovery.");
             SkinCatalog.UltimateUnlocked = () => true;
             Check(ids.All(id => SkinCatalog.Resolve(new() { SelectedSkin = id }, true, 0) == id), "An account grant did not unlock all six ultimate skins.");
             Check(ids.All(id => SkinCatalog.Resolve(new() { SelectedSkin = id }, false, 0) == SkinCatalog.Default), "Signed-out UI inherited an account grant.");

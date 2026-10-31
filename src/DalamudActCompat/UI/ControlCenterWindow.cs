@@ -680,30 +680,44 @@ public sealed partial class ControlCenterWindow : Window
         BrandedWindowChrome.EndGoldCard();
 
         ImGui.Spacing();
+        var overviewScale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        var meterVisible = configuration.Meter.IsVisible;
+        var actionLabels = new[] {
+            meterVisible ? text.Get("关闭战斗统计", "Close Combat Meter") : text.Get("打开战斗统计", "Open Combat Meter"),
+            text.Get("战斗历史", "Encounter history"),
+            isStatusVisible() ? text.Get("关闭运行状态", "Close Runtime status") : text.Get("运行状态", "Runtime status"),
+            text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs") };
+        var actionWidths = actionLabels.Select((label, index) => Math.Min(cardContentWidth,
+            Math.Max((index == 3 ? 230 : 150) * overviewScale, ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2))).ToArray();
+        var actionHeight = Math.Max(36 * overviewScale, DactTheme.ButtonHeight);
+        var actionRows = 2; var rowWidth = actionWidths[0];
+        // Size the card from the same wrapping rule used by the buttons; fixed
+        // Chinese widths clipped translations and the extra rows at larger fonts.
+        for (var i = 1; i < 3; i++)
+        {
+            if (rowWidth + ImGui.GetStyle().ItemSpacing.X + actionWidths[i] > cardContentWidth)
+            { actionRows++; rowWidth = actionWidths[i]; }
+            else rowWidth += ImGui.GetStyle().ItemSpacing.X + actionWidths[i];
+        }
         var quickActionsCardHeight =
             (ImGui.GetStyle().WindowPadding.Y * 2) +
             ImGui.GetTextLineHeightWithSpacing() +
-            72 +
-            (ImGui.GetStyle().ItemSpacing.Y * 3) +
+            actionRows * (actionHeight + ImGui.GetStyle().ItemSpacing.Y) +
             (string.IsNullOrWhiteSpace(combatLogFolderFeedback)
                 ? 0
-                : ImGui.GetTextLineHeightWithSpacing());
+                : ImGui.CalcTextSize(combatLogFolderFeedback, false, cardContentWidth).Y + ImGui.GetStyle().ItemSpacing.Y);
         if (BrandedWindowChrome.BeginGoldCard(
                 "overview-quick-actions-card",
                 quickActionsCardHeight,
                 allowScrolling: false))
         {
             DactTheme.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
-            var meterVisible = configuration.Meter.IsVisible;
             if (meterVisible)
             {
                 PushOpenWindowButtonStyle();
             }
             if (DactTheme.Button(
-                    meterVisible
-                        ? text.Get("关闭战斗统计", "Close Combat Meter")
-                        : text.Get("打开战斗统计", "Open Combat Meter"),
-                    new Vector2(150, 36)))
+                    actionLabels[0], new Vector2(actionWidths[0], actionHeight)))
             {
                 setMeterVisible(!meterVisible);
             }
@@ -711,17 +725,16 @@ public sealed partial class ControlCenterWindow : Window
             {
                 PopOpenWindowButtonStyle();
             }
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("战斗历史", "Encounter history"), new Vector2(150, 36)))
+            OverlaySameLineIfFits(actionWidths[1]);
+            if (DactTheme.Button(actionLabels[1], new Vector2(actionWidths[1], actionHeight)))
             {
                 openHistory();
             }
-            ImGui.SameLine();
-            DrawStatusWindowToggleButton(new Vector2(150, 36));
+            OverlaySameLineIfFits(actionWidths[2]);
+            DrawStatusWindowToggleButton(new Vector2(actionWidths[2], actionHeight));
 
             if (DactTheme.Button(
-                    text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs"),
-                    new Vector2(230, 36)))
+                    actionLabels[3], new Vector2(actionWidths[3], actionHeight)))
             {
                 OpenCombatLogDirectoryForUpload();
             }
@@ -733,12 +746,13 @@ public sealed partial class ControlCenterWindow : Window
             }
             if (!string.IsNullOrWhiteSpace(combatLogFolderFeedback))
             {
-                ImGui.SameLine();
+                ImGui.PushTextWrapPos(0);
                 DactTheme.TextColored(
                     combatLogFolderFeedbackIsError
                         ? new Vector4(0.95f, 0.45f, 0.40f, 1)
                         : IceBlue,
                     combatLogFolderFeedback);
+                ImGui.PopTextWrapPos();
             }
         }
         BrandedWindowChrome.EndGoldCard();
@@ -789,7 +803,7 @@ public sealed partial class ControlCenterWindow : Window
                     "Keeps only parsing and the combat meter. Web overlays, extensions, and other DACT windows are temporarily closed. Use /actcompat simple off to exit."));
             }
             var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
-            if (DactTheme.Checkbox(
+            if (DactTheme.WrappedCheckbox(
                     text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
                     ref hideWhenUnfocused))
             {
@@ -799,7 +813,9 @@ public sealed partial class ControlCenterWindow : Window
                 text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
                 configuration.ShowLauncherButton,
                 value => configuration.ShowLauncherButton = value);
+            ImGui.PushTextWrapPos(0);
             ImGui.TextDisabled(generalHint);
+            ImGui.PopTextWrapPos();
         }
         BrandedWindowChrome.EndGoldCard();
 
@@ -970,9 +986,10 @@ public sealed partial class ControlCenterWindow : Window
     {
         var changed = false;
         ImGui.Spacing();
-        ImGui.SetNextItemWidth(280);
+        ImGui.TextUnformatted(text.Get("新名称###overlay-rename-value", "New name###overlay-rename-value").Split("##", 2)[0]);
+        ImGui.SetNextItemWidth(-1);
         ImGui.InputText(
-            text.Get("新名称###overlay-rename-value", "New name###overlay-rename-value"),
+            "###overlay-rename-value",
             ref overlayRenameValue,
             80);
         if (DactTheme.Button(text.Get("保存名称", "Save name")))
@@ -1005,7 +1022,7 @@ public sealed partial class ControlCenterWindow : Window
                 changed = true;
             }
         }
-        ImGui.SameLine();
+        OverlaySameLineIfFits(ImGui.CalcTextSize(text.Get("取消重命名", "Cancel rename")).X + ImGui.GetStyle().FramePadding.X * 2);
         if (DactTheme.Button(text.Get("取消重命名", "Cancel rename")))
         {
             CancelOverlayRename();
@@ -1056,19 +1073,25 @@ public sealed partial class ControlCenterWindow : Window
     private bool DrawCustomHtmlOverlayCreator()
     {
         var changed = false;
-        ImGui.SetNextItemWidth(280);
-        ImGui.InputText(
-            text.Get("名称###custom-overlay-name", "Name###custom-overlay-name"),
-            ref customOverlayName,
-            80);
+        // A full-width input leaves no room for an inline translated label.
+        // Separate labels preserve the old hidden IDs and remain readable at large fonts.
+        ImGui.TextUnformatted(text.Get("名称###custom-overlay-name", "Name###custom-overlay-name").Split("##", 2)[0]);
         ImGui.SetNextItemWidth(-1);
         ImGui.InputText(
-            text.Get("网址###custom-overlay-url", "URL###custom-overlay-url"),
+            "###custom-overlay-name",
+            ref customOverlayName,
+            80);
+        ImGui.TextUnformatted(text.Get("网址###custom-overlay-url", "URL###custom-overlay-url").Split("##", 2)[0]);
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText(
+            "###custom-overlay-url",
             ref customOverlayUrl,
             2048);
+        ImGui.PushTextWrapPos(0);
         ImGui.TextDisabled(text.Get(
             "支持 http、https 与 file 地址；只添加你信任的悬浮窗页面。",
             "Supports http, https, and file URLs. Only add overlay pages you trust."));
+        ImGui.PopTextWrapPos();
 
         if (DactTheme.Button(text.Get("创建并打开", "Create and open")))
         {
@@ -2827,7 +2850,9 @@ public sealed partial class ControlCenterWindow : Window
     private void DrawPageHeader(string title, string description, bool showDivider = true)
     {
         DactTheme.TextColored(Gold, title);
-        ImGui.TextDisabled(description);
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextWrapped(description);
+        ImGui.PopStyleColor();
         ImGui.Spacing();
         if (showDivider)
         {

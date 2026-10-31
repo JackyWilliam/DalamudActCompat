@@ -144,7 +144,7 @@ internal static class EncounterResetSmokeTests
                 null!, framework, null!, () => state, null!, null!, null!, _ => null, () => false, _ => new(),
                 () => new Dictionary<string, HtmlOverlayWindowSettings>(), () => { }, () => false, () => false, (_, _) => false);
             await using var adapter = new IinactAdapter(runtime, logger, store, history, () => paths.CombatLogDirectory,
-                framework, () => state, () => true, () => true, () => [], getEncounterResetOptions: () => new(config.EncounterResetMode, config.EncounterResetSeconds));
+                framework, () => state, () => true, () => true, getEncounterResetOptions: () => new(config.EncounterResetMode, config.EncounterResetSeconds));
             ActEncounterSnapshot Snapshot(Guid id, int at, long damage, bool finished) => new(id, At.AddSeconds(at), finished ? At.AddSeconds(at + 5) : null,
                 "Room", "Boss", [new("Self", "Self", "PLD", true, damage, 0, 0)])
                 { EncounterMode = mode, CombatDuration = TimeSpan.FromSeconds(5), TerritoryId = 134 };

@@ -19,8 +19,12 @@ public sealed class UiSkinSettings
             UnlockedEasterEggs = new(StringComparer.Ordinal);
             changed = true;
         }
-        changed |= UnlockedEasterEggs.RemoveWhere(id => !SkinCatalog.IsEasterEgg(id)) > 0;
-        if (!SkinCatalog.All.Any(skin => skin.Id == SelectedSkin))
+        // IDs this build has never heard of come from a newer client sharing the same
+        // cloud backup. Keep them so restoring here and uploading again cannot reset that
+        // device's choice; Resolve already renders the default for anything unavailable.
+        changed |= UnlockedEasterEggs.RemoveWhere(id =>
+            string.IsNullOrWhiteSpace(id) || SkinCatalog.IsKnown(id) && !SkinCatalog.IsEasterEgg(id)) > 0;
+        if (string.IsNullOrWhiteSpace(SelectedSkin))
         {
             SelectedSkin = SkinCatalog.Default;
             changed = true;
@@ -75,6 +79,7 @@ internal static class SkinCatalog
         new(UltimateFutures, "光暗未来绝境战", "Futures Rewritten", Ultimate: true),
     ];
 
+    public static bool IsKnown(string id) => All.Any(skin => skin.Id == id);
     public static bool IsEasterEgg(string id) => All.Any(skin => skin.Id == id && skin.EasterEgg);
     public static bool IsUltimate(string id) => All.Any(skin => skin.Id == id && skin.Ultimate);
 

@@ -332,6 +332,32 @@ internal static partial class DactTheme
         return pressed;
     }
 
+    // Native checkboxes accept multiline labels but do not wrap them. Keep the
+    // same hidden ID at every width so changing line breaks cannot reset focus.
+    public static bool WrappedCheckbox(string label, ref bool value)
+    {
+        var caption = label.Split("##", 2)[0];
+        var width = Math.Max(1, ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight() - ImGui.GetStyle().ItemInnerSpacing.X);
+        if (ImGui.CalcTextSize(caption).X <= width) return Checkbox(caption + "###" + label, ref value);
+        var lines = new List<string>(); var remaining = caption;
+        while (remaining.Length > 0)
+        {
+            var boundaries = System.Globalization.StringInfo.ParseCombiningCharacters(remaining);
+            var end = remaining.Length;
+            foreach (var boundary in boundaries.Skip(1))
+            {
+                if (ImGui.CalcTextSize(remaining[..boundary]).X > width) break;
+                end = boundary;
+            }
+            if (ImGui.CalcTextSize(remaining).X <= width) end = remaining.Length;
+            else if (end == remaining.Length) end = boundaries.Length > 1 ? boundaries[1] : remaining.Length;
+            var space = remaining.LastIndexOf(' ', Math.Max(0, end - 1), end);
+            if (end < remaining.Length && space > 0) end = space;
+            lines.Add(remaining[..end]); remaining = remaining[end..].TrimStart();
+        }
+        return Checkbox(string.Join("\n", lines) + "###" + label, ref value);
+    }
+
     public static bool Checkbox(string label, ref bool value)
     {
         if (Palette.Ultimate is { } ultimate)

@@ -11,8 +11,11 @@ internal static class GameRegionSelector
         GameRegionSelection selection,
         Action<GameRegionMode> setMode)
     {
+        var label = text.Get("游戏区域", "Game region");
+        ImGui.SetNextItemWidth(Math.Min(ImGui.CalcItemWidth(), Math.Max(1,
+            ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize(label).X - ImGui.GetStyle().ItemInnerSpacing.X)));
         if (DactTheme.BeginCombo(
-                text.Get("游戏区域", "Game region"),
+                label,
                 FormatMode(text, selection.Mode, selection.EffectiveRegion)))
         {
             foreach (var mode in Enum.GetValues<GameRegionMode>())
@@ -41,7 +44,9 @@ internal static class GameRegionSelector
 
         // Region chooses packet/opcode tables, while language continues to follow the client
         // so a manual override never changes localized action names or log parsing.
+        ImGui.PushTextWrapPos(0);
         ImGui.TextDisabled(FormatDetectionStatus(text, selection));
+        ImGui.PopTextWrapPos();
     }
 
     private static HostGameRegion ResolvePreviewRegion(

@@ -31,6 +31,7 @@ internal static class FeedbackRegressionSmokeTests
     internal static async Task RunAsync(string root, bool native = false)
     {
         Clock();
+        StrikingDummyWithoutEffectResults();
         foreach (var offset in new[] { -90d, 30.325, 3600 }) RuntimeClock(offset);
         SharedStore(root);
         foreach (var mode in new[] { "success", "wrong-password", "cancel", "concurrent-login" })
@@ -53,6 +54,68 @@ internal static class FeedbackRegressionSmokeTests
               EncounterEventClock.IsNetworkEvent("37|effect result"), "Local lines can reanchor the network clock.");
         clock.Reset(); clock.Observe(At.AddSeconds(-30));
         Check(clock.Now == At.AddSeconds(-30), "Parser restart retained its previous clock.");
+    }
+
+    // Striking dummies keep their HP (44/44 in the 2026-10-30 log), so the server sent an
+    // EffectResult for 2 of 67 hits and the confirmed-only ledger showed ~9.9k of ~1.06M.
+    // Only the first hit below gets a result, as on the real dummy.
+    private static void StrikingDummyWithoutEffectResults()
+    {
+        var hits = new (double Seconds, int Amount, bool Result)[] { (0, 20000, true), (5, 30000, false), (10, 25000, false) };
+        IEnumerable<string> RawLines(int index)
+        {
+            var (seconds, amount, result) = hits[index];
+            var at = At.AddSeconds(seconds);
+            var fields = Enumerable.Repeat("0", 47).ToArray();
+            fields[0] = "21"; fields[1] = at.ToString("O"); fields[2] = "10000001"; fields[3] = "Self";
+            fields[4] = "07"; fields[5] = "Attack"; fields[6] = "40000010"; fields[7] = "Dummy";
+            fields[8] = "3"; fields[9] = ((uint)amount << 16).ToString("X8");
+            fields[24] = "44"; fields[25] = "44"; fields[44] = (index + 1).ToString("X8");
+            yield return string.Join('|', fields);
+            if (result) yield return $"37|{at:O}|40000010|Dummy|{index + 1:X8}|44|";
+        }
+
+        var previous = ActGlobals.oFormActMain;
+        try
+        {
+            foreach (var mode in new[] { EncounterMode.OpenWorld, EncounterMode.DutyAttempt })
+            {
+                ActGlobals.Init();
+                var form = (FormActMain)RuntimeHelpers.GetUninitializedObject(typeof(FormActMain)); GC.SuppressFinalize(form);
+                ActGlobals.oFormActMain = form;
+                typeof(FormActMain).GetField("inCombat", Private)!.SetValue(form, true);
+                Advanced_Combat_Tracker.Resources.NotActMainFormatter.SetupEnvironment();
+                ActPlayerIdentity[] roster = [new("Self", "", "PLD", true, false) { EntityId = 0x10000001 }];
+                using var runtime = new SelfHostedActRuntime(null!, DispatchProxy.Create<IPluginLog, MeterRuntimeLogProxy>(), null!,
+                    () => true, () => "Self", () => roster, () => null, null!, DispatchProxy.Create<IFramework, NoOpPluginLogProxy>(), null!,
+                    () => new(134, 0, mode, true, false, false), null!, null!, null!, _ => null,
+                    () => false, _ => new(), () => new Dictionary<string, HtmlOverlayWindowSettings>(), () => { },
+                    () => false, () => false, (_, _) => false);
+                typeof(SelfHostedActRuntime).GetField("eventClock", Private)!.SetValue(runtime, new EncounterEventClock(new TestTime()));
+                var snapshots = new List<ActEncounterSnapshot>();
+                runtime.EncounterChanged += (data, _) => snapshots.Add(data);
+                runtime.UpdateFrameworkState(null);
+                var encounter = new EncounterData("Self", "Middle La Noscea", null!);
+                for (var index = 0; index < hits.Length; index++)
+                {
+                    var at = At.AddSeconds(hits[index].Seconds);
+                    // Raw network lines precede ACT's MasterSwing for the same hit.
+                    foreach (var raw in RawLines(index))
+                        typeof(SelfHostedActRuntime).GetMethod("OnBeforeLogLineRead", Private)!.Invoke(runtime,
+                            [false, new LogLineEventArgs(raw, int.Parse(raw[..2]), at.LocalDateTime, "Middle La Noscea", true)]);
+                    var swing = new MasterSwing(2, false, hits[index].Amount, at.LocalDateTime, index, "Attack", "Self", "damage", "Dummy");
+                    encounter.AddCombatAction(swing);
+                    typeof(SelfHostedActRuntime).GetMethod("OnAfterCombatAction", Private)!.Invoke(runtime, [false, new CombatActionEventArgs(swing)]);
+                }
+                var self = snapshots[^1].Combatants.Single();
+                if (mode == EncounterMode.OpenWorld)
+                    Check(self.TotalDamage == 75000 && Math.Abs(snapshots[^1].CombatDuration!.Value.TotalSeconds - 10) < .001,
+                        $"Open-world dummy hits without an EffectResult were dropped: {self.TotalDamage} over {snapshots[^1].CombatDuration}.");
+                else
+                    Check(self.TotalDamage == 20000, $"Duty damage stopped requiring FFLogs-style confirmation: {self.TotalDamage}.");
+            }
+        }
+        finally { ActGlobals.oFormActMain = previous; }
     }
 
     private static void RuntimeClock(double skew)
@@ -98,6 +161,13 @@ internal static class FeedbackRegressionSmokeTests
             Hit(0);
             tracker.ObserveConfirmedDamage(start, "10000001", "Self", "", "40000001", "Boss");
             time.Advance(20); time.Wall = At.AddHours(4);
+            // A captured anchor keeps advancing on the real Stopwatch, so a stalled
+            // runner can only lengthen live durations. Bound them by the measured wait
+            // instead of a fixed allowance that a slow CI machine can exceed.
+            var captured = Stopwatch.GetTimestamp();
+            static bool Near(TimeSpan value, double expected, long since) =>
+                value.TotalSeconds >= expected - .001 &&
+                value.TotalSeconds <= expected + Stopwatch.GetElapsedTime(since).TotalSeconds + .001;
             tracker.ObserveConfirmedDamage(start.AddSeconds(20), "10000001", "Self", "", "40000001", "Boss");
             Hit(20);
             var snapshot = snapshots[^1].Data;
@@ -105,13 +175,14 @@ internal static class FeedbackRegressionSmokeTests
                   Math.Abs(snapshot.Combatants.Single().Dps - 10_000) < .001,
                 $"Live skew={skew}: duration={snapshot.CombatDuration}, rows={JsonSerializer.Serialize(snapshot.Combatants)}.");
             var mapped = ActEncounterMapper.Map(snapshot);
-            Check(Math.Abs(mapped.Duration.TotalSeconds - 20) < .2, "Live header did not inherit event time.");
-            var delayed = mapped with { TimeAnchor = new(start.AddSeconds(20), Stopwatch.GetTimestamp() - 2 * Stopwatch.Frequency) };
-            Check(Math.Abs(delayed.Duration.TotalSeconds - 22) < .2, "Header stopped between damage events.");
+            Check(Near(mapped.Duration, 20, captured), $"Live header did not inherit event time: {mapped.Duration}.");
+            var delayedAt = Stopwatch.GetTimestamp();
+            var delayed = mapped with { TimeAnchor = new(start.AddSeconds(20), delayedAt - 2 * Stopwatch.Frequency) };
+            Check(Near(delayed.Duration, 22, delayedAt), $"Header stopped between damage events: {delayed.Duration}.");
             var cumulative = new DutyEncounterAccumulator();
             var live = cumulative.Update(mapped, false, time.Wall);
-            Check(Math.Abs(live.Duration.TotalSeconds - 20) < .2 &&
-                  Math.Abs((cumulative.CurrentTime - start).TotalSeconds - 20) < .2, "Cumulative meter lost the event clock.");
+            Check(Near(live.Duration, 20, captured) && Near(cumulative.CurrentTime - start, 20, captured),
+                $"Cumulative meter lost the event clock: {live.Duration}, {cumulative.CurrentTime - start}.");
             var finished = mapped with { EndTime = start.AddSeconds(20) };
             Check(finished.Duration.TotalSeconds == 20, "Finished timing changed after wall-clock correction.");
             var json = JsonSerializer.Serialize(finished);

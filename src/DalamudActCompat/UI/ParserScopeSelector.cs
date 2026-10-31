@@ -12,7 +12,12 @@ internal static class ParserScopeSelector
     public static bool Draw(UiText text, PluginConfiguration configuration)
     {
         var changed = false;
-        if (DactTheme.BeginCombo(text.Get("游戏解析范围", "Parse scope"), Format(text, configuration.ParserScope)))
+        var label = text.Get("游戏解析范围", "Parse scope");
+        // Reserve the translated caption instead of relying on ImGui's default
+        // two-thirds input width, which overflows with long labels at 200% fonts.
+        ImGui.SetNextItemWidth(Math.Min(ImGui.CalcItemWidth(), Math.Max(1,
+            ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize(label).X - ImGui.GetStyle().ItemInnerSpacing.X)));
+        if (DactTheme.BeginCombo(label, Format(text, configuration.ParserScope)))
         {
             foreach (var scope in Options)
             {

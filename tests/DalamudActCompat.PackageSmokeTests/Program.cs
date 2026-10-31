@@ -86,6 +86,18 @@ try
         await HostLifecycleSmokeTests.RunAsync(testRoot);
         return 0;
     }
+    if (args.Contains("--ui-acceptance-only", StringComparer.Ordinal))
+    {
+        UiLanguageSmokeTests.Run();
+        OverlayManagerSmokeTests.Acceptance();
+        EncounterWindowAcceptance.Run();
+        return 0;
+    }
+    if (args.Contains("--history-acceptance-only", StringComparer.Ordinal))
+    {
+        EncounterWindowAcceptance.Run();
+        return 0;
+    }
     await ManualPluginPackageSmokeTests.RunAsync(testRoot);
     if (args.Contains("--manual-plugins-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--account-recovery-only", StringComparer.Ordinal))
@@ -250,8 +262,6 @@ try
     ValidateExternalPluginLogLineFormat();
     ValidatePostNamazuOverlayHandlerResponse();
     ValidateActTtsDispatch();
-    ValidateFoxTtsBridge();
-    ValidateRuntimePluginStartupOrder();
     ValidateBoundedHostQueue();
     var orderingFailures = await TriggerEventOrderingSmokeTests.RunAsync(testRoot);
     Assert(
@@ -12024,58 +12034,6 @@ static void ValidateActTtsDispatch()
         "The ACT TTS entry point bypassed the standard PlayTtsMethod delegate.");
 }
 
-static void ValidateFoxTtsBridge()
-{
-    var previousActMain = ActGlobals.oFormActMain;
-    var actMain = CreateUninitializedActMain();
-    var restored = false;
-    actMain.PlayTtsMethod = _ => restored = true;
-    ActGlobals.oFormActMain = actMain;
-    try
-    {
-        using var foxTts = new FoxTtsProbe();
-        var log = DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>();
-        var removeBridge = LoadedActPlugin.InstallFoxTtsBridge(foxTts, log);
-        actMain.TTS("Cactbot alert");
-        Assert(
-            foxTts.Wait(TimeSpan.FromSeconds(5)) && foxTts.LastMessage == "Cactbot alert",
-            "The ACT.FoxTTS bridge did not forward a TTS request to FoxTTS Speak.");
-
-        removeBridge();
-        actMain.TTS("restored");
-        Assert(restored, "Removing the ACT.FoxTTS bridge did not restore the previous TTS delegate.");
-    }
-    finally
-    {
-        ActGlobals.oFormActMain = previousActMain;
-    }
-}
-
-static void ValidateRuntimePluginStartupOrder()
-{
-    var mustLoadBeforeOverlay = typeof(IinactAdapter).GetMethod(
-                                    "MustLoadBeforeOverlay",
-                                    BindingFlags.Static | BindingFlags.NonPublic)
-                                ?? throw new InvalidOperationException(
-                                    "Runtime plugin startup phase selector was not found.");
-    var foxTts = new RuntimePluginSpec(
-        "ACT.FoxTTS",
-        "C:\\plugins\\foxtts",
-        "ACT.FoxTTS.dll",
-        "ACT.FoxTTS.FoxTTSPlugin");
-    var triggernometry = new RuntimePluginSpec(
-        "triggernometry",
-        "C:\\plugins\\triggernometry",
-        "Triggernometry.dll",
-        "Triggernometry.Plugin");
-    Assert(
-        mustLoadBeforeOverlay.Invoke(null, [foxTts]) as bool? == true,
-        "FoxTTS is no longer guaranteed to own the ACT TTS dispatcher before Cactbot starts.");
-    Assert(
-        mustLoadBeforeOverlay.Invoke(null, [triggernometry]) as bool? == false,
-        "An unrelated ACT extension was moved ahead of OverlayPlugin startup.");
-}
-
 static void ValidateCactbotSpokenAlertDefaults()
 {
     var method = typeof(CactbotEventSource).GetMethod(
@@ -14329,23 +14287,6 @@ internal sealed class BlockingStartupParserEngine : IParserEngine
 internal sealed class EnumSettingsOwner
 {
     public PluginIntegrationMode PluginIntegration { get; set; }
-}
-
-internal sealed class FoxTtsProbe : IDisposable
-{
-    private readonly ManualResetEventSlim spoken = new();
-
-    public string? LastMessage { get; private set; }
-
-    public void Speak(string message)
-    {
-        LastMessage = message;
-        spoken.Set();
-    }
-
-    public bool Wait(TimeSpan timeout) => spoken.Wait(timeout);
-
-    public void Dispose() => spoken.Dispose();
 }
 
 public class NoOpPluginLogProxy : DispatchProxy

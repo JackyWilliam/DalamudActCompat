@@ -27,17 +27,25 @@ internal sealed class EncounterDurationTracker
     private DateTimeOffset firstConfirmedDamage;
     private DateTimeOffset lastConfirmedDamage;
     private bool encounterActive;
+    private bool confirmActionDamage;
 
     public EncounterDurationTracker(Func<string, string, bool>? includeCombatEvent = null)
         => this.includeCombatEvent = includeCombatEvent;
 
+    /// <param name="confirmActionDamage">
+    /// True outside ranked content. Striking dummies keep their HP, so the server sends
+    /// no EffectResult for most hits; the damaging action itself must keep the DPS clock
+    /// running there instead of stopping at the last hit that happened to get a result.
+    /// </param>
     public void StartEncounter(
         DateTimeOffset startTime,
-        IReadOnlyList<ActPlayerIdentity> identities)
+        IReadOnlyList<ActPlayerIdentity> identities,
+        bool confirmActionDamage = false)
     {
         ArgumentNullException.ThrowIfNull(identities);
         lock (syncRoot)
         {
+            this.confirmActionDamage = confirmActionDamage;
             pendingActions.Clear();
             targets.Clear();
             retiredTargetLifetimes.Clear();
@@ -320,6 +328,7 @@ internal sealed class EncounterDurationTracker
             queue = new Queue<PendingDamage>();
             pendingActions.Add(key, queue);
         }
+        var queuedBefore = queue.Count;
         for (var effectIndex = 8; effectIndex < 24; effectIndex += 2)
         {
             if (!FfxivActionEffectDecoder.TryDecodeDamage(
@@ -343,6 +352,12 @@ internal sealed class EncounterDurationTracker
         if (queue.Count == 0)
         {
             pendingActions.Remove(key);
+        }
+        if (confirmActionDamage && queue.Count > queuedBefore)
+        {
+            // A later EffectResult for the same hit only records the same span again.
+            RecordConfirmedDamageUnsafe(timestamp, sourceId, fields[3], ownerId, targetId, fields[7]);
+            return true;
         }
         return false;
     }
