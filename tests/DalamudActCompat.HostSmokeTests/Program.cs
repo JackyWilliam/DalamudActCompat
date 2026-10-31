@@ -2875,6 +2875,10 @@ async Task ValidateDrawingDiagnosticProbeAsync()
     var folder = new XElement(fixture.Root!.Element("ExportedFolder")!);
     folder.Name = "Folder";
     root.Add(new XElement("Folders", folder));
+    var redrawFixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "RedrawMinimal.xml"));
+    var redrawFolder = new XElement(redrawFixture.Root!.Element("ExportedFolder")!);
+    redrawFolder.Name = "Folder";
+    root.Element("Folders")!.Add(redrawFolder);
     // Only the isolated probe registers these sinks; the fixture's original nodes,
     // expressions and delays stay intact. No native permission or real game is used.
     var setup = """
@@ -2883,7 +2887,7 @@ async Task ValidateDrawingDiagnosticProbeAsync()
         using Triggernometry.Core.Scripting;
         var plugin = RealPlugin.Instance;
         ScriptHelper.SetDictVariable(true, "U7a_cfg", new Triggernometry.Core.Variables.VariableDictionary(new System.Collections.Generic.Dictionary<string,string> { {"P1光轮缩放on", "1"} }));
-        foreach (var name in new [] {"ObjectScaling", "SetOpacity"}) {
+        foreach (var name in new [] {"ObjectScaling", "SetOpacity", "Redraw"}) {
             var capturedName = name;
             plugin.RegisterNamedCallback(name, new Action<object,string>((_, value) => {
                 if (ScriptHelper.GetScalarVariable(false,"DACT_DRAW_THROW")?.ToString() == "1")
@@ -2956,6 +2960,13 @@ async Task ValidateDrawingDiagnosticProbeAsync()
             string OrbLine(string time, string id = "40FF0001") =>
                 $"[{time}] ChatLog 03:{id}:PRIVATE_ORB_NAME:0:100:0:0:0:0:17821:0:0:0:0:0:0:100:100:0:";
             await Setup("DACT_DRAW_SETUP", "DACT_DRAW_SETUP_DONE");
+            // Run the exact user-importable fixture through TN's parser, regex,
+            // expression resolver and named callback without touching game memory.
+            await Line("[21:00:00.000] ChatLog 00:0038::dact_redraw_self");
+            var selfAddress = baseline.Combatants.Single(actor => actor.Id == baseline.CurrentPlayerId).Address;
+            Assert(selfAddress != 0, "Redraw probe needs a nonzero self address.");
+            await WaitForProcessOutputAsync(host, "DACT_DRAW_CAPTURE Redraw " + selfAddress, TimeSpan.FromSeconds(5));
+            await Line("[21:00:00.001] ChatLog 108:4000A032:BAF2:0:1:");
             await Line("[21:00:00.000] ChatLog 14:40000001:PRIVATE_BOSS:9CD7:cast:");
             await Line(OrbLine("21:00:01.000"));
             await WaitForProcessOutputAsync(host, "DACT_DRAW_CAPTURE ObjectScaling", TimeSpan.FromSeconds(5));
@@ -2991,6 +3002,11 @@ async Task ValidateDrawingDiagnosticProbeAsync()
             await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             var log = ReadProcessLog(host).Output;
             var records = DrawingDiagnosticTests.ParseRecords(log);
+            foreach (var stage in new[] { "received", "queued" })
+                Assert(records.Any(record => record.GetProperty("stage").GetString() == stage &&
+                    record.GetProperty("event").GetProperty("Type").GetString() == "108" &&
+                    record.GetProperty("event").GetProperty("Detail").GetString() == "BAF2"),
+                    "108 ability did not reach diagnostic stage: " + stage);
             bool Stage(string stage) => records.Any(r => r.GetProperty("stage").GetString() == stage);
             foreach (var stage in new[] { "received", "queued", "inventory", "match", "condition-blocked", "fire-return", "action-return", "callback-return", "callback-throw", "exception", "entity-change" })
                 Assert(Stage(stage), "Missing real TN diagnostic stage: " + stage);

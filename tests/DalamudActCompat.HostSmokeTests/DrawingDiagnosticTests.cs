@@ -95,7 +95,55 @@ internal static class DrawingDiagnosticTests
         finally { Console.SetOut(original); }
         Require(plugin.Calls == 3 && captured.ToString().Contains("observer-error"), "observer failure changed original dispatch");
         HostPluginBridge.ConfigurePermissions(new(new Dictionary<string, IReadOnlyList<string>>(), []));
+        ValidateRedraw();
         Console.WriteLine("Drawing diagnostics: event correlation/privacy/limits/conditions/callback/no-op/exception/zone/permissions passed.");
+    }
+
+    private static void ValidateRedraw()
+    {
+        // Exercise the public observer/dispatch boundary: the old whitelist omitted
+        // both ends of BBY's 108 -> Redraw chain while the callback still ran.
+        const string line = "[21:52:53.931] ChatLog 108:4000A032:BAF2:0:1:";
+        Require(DrawingEvent.Parse(line)?.Detail == "BAF2", "108 ability ID missing");
+        var plugin = new FakePlugin();
+        plugin.callbacksByName["Redraw"] = new[] { new object() };
+        var instance = new FakeInstance { ctx = new()
+        {
+            Trigger = new() { Name = "清除特效", Parent = new() { Name = "U7b test" } },
+            Plugin = plugin, triggeredText = line,
+        } };
+        HostPluginBridge.ConfigurePermissions(new(new Dictionary<string, IReadOnlyList<string>>
+        { ["triggernometry"] = ["ReadCombatLogs"] }, ["triggernometry"]));
+        HostPluginBridge.ApplyFfxivEntitySnapshot(new(1363, 0, DateTimeOffset.UtcNow, []));
+        using var captured = new StringWriter();
+        var original = Console.Out;
+        try
+        {
+            Console.SetOut(captured);
+            HostPluginBridge.ObserveDrawingLog(plugin, line, "received", null);
+            HostPluginBridge.ObserveDrawingLog(plugin, line, "queued", null);
+            HostPluginBridge.InvokeDrawingCallback(plugin, "Redraw", "305397760", instance);
+            plugin.Failure = new InvalidOperationException("EXPECTED_REDRAW_FAILURE");
+            var threw = false;
+            try { HostPluginBridge.InvokeDrawingCallback(plugin, "Redraw", "305397760", instance); }
+            catch (Exception ex) { threw = ReferenceEquals(ex, plugin.Failure); }
+            Require(threw && plugin.Calls == 2, "Redraw dispatch/exception changed");
+        }
+        finally
+        {
+            Console.SetOut(original);
+            HostPluginBridge.ConfigurePermissions(new(new Dictionary<string, IReadOnlyList<string>>(), []));
+        }
+        var records = ParseRecords(captured.ToString());
+        foreach (var stage in new[] { "received", "queued", "callback-enter", "callback-return", "callback-throw" })
+            Require(records.Any(r => r.GetProperty("stage").GetString() == stage &&
+                r.GetProperty("event").GetProperty("Type").GetString() == "108"), "Redraw/108 stage missing: " + stage);
+        var callbacks = records.Where(r => r.TryGetProperty("callback", out _)).ToArray();
+        Require(callbacks.Length == 4 && callbacks.All(r => r.GetProperty("registered").GetInt32() == 1 &&
+            r.GetProperty("parameters").GetProperty("numericCsv").GetString() == "305397760"), "Redraw resolved address missing");
+        Require(!JsonSerializer.Serialize(HostPluginBridge.SafeDrawingParameters("Redraw", "PRIVATE_PLAYER"))
+            .Contains("PRIVATE_PLAYER"), "Redraw arbitrary payload leaked");
+        Console.WriteLine("Drawing diagnostics: 108 receive/queue and Redraw address/return/exception passed.");
     }
 
     internal static void ValidateRewrittenAssembly(Assembly implementation)
