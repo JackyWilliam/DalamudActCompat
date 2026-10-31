@@ -120,3 +120,10 @@ Unscrambler.XIV 7.57.1、OverlayPlugin 0.19.111（仅国际服 7.57h 操作码�
 
 本版只包含触发器时间基准修复（PR #151），不改随包依赖。三项发布依赖门禁重新联网核对均通过：
 FFXIV_ACT_Plugin 3.0.3.4（IINACT 2.10.3.11）、Cactbot 0.37.5 与随包 ACT 插件（含 Triggernometry 2.3.0.0）均为上游当前版本。
+
+## 0.4.5.17 发布前核对（2026-10-30）
+
+本版包含多语言布局、野外木人统计、近期战斗页、Host OwnerID、皮肤云同步兼容修复与同进程插件加载死代码清理，不改随包依赖。
+三项发布依赖门禁重新联网核对均通过：`sync-parser-dependencies.ps1 -Check` 确认 FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11；
+`sync-bundled-act-plugins.ps1 -Check` 确认随包 ACT 插件仍为当前版本（含 Triggernometry 2.3.0.0）；
+`sync-cactbot.ps1 -Check` 确认 Cactbot 0.37.5 与官方摘要一致。未同步上游依赖或修改锁文件。
