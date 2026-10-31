@@ -227,6 +227,12 @@ if ([int]$manifest.DalamudApiLevel -ne $ExpectedDalamudApiLevel) {
     throw "Plugin ZIP DalamudApiLevel mismatch. Expected $ExpectedDalamudApiLevel, got $($manifest.DalamudApiLevel). Rebuild the plugin before publishing."
 }
 
+# Dalamud installs this manifest as-is, so an empty IconUrl leaves every installed
+# copy without an icon in tools that read installed plugins.
+if ([string]::IsNullOrWhiteSpace($manifest.IconUrl)) {
+    throw "Plugin ZIP manifest has no IconUrl."
+}
+
 $requiredUiAssets = @(
     "Assets/act-logo.jpg",
     "Assets/act-button.png",

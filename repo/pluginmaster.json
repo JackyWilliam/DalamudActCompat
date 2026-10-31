@@ -18,7 +18,7 @@
   "LastUpdate": 1793423809735,
   "Changelog": "修复 PostNamazu command 的静默派发语义，保留 normalcommand 与合法插件命令；增强 Redraw/108 技能及 Address 诊断。妖星指定 NPC 的实战清特效仍待确认，未宣称彻底修复。更新后请完整重启游戏。",
   "CanUnloadAsync": true,
-  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
+  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png"
 },
 {
   "Author": "raynording",
@@ -37,6 +37,6 @@
   "LastUpdate": 1789711112705,
   "Changelog": "首次发布独立卫月修复插件：内置已验证核心包，备份与失败回滚，保留账号、皮肤和触发器配置。",
   "CanUnloadAsync": true,
-  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg"
+  "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png"
 }
 ]
