@@ -386,8 +386,23 @@ public static class NativePostNamazuBridge
             }
 
             using var message = new Utf8String(command);
-            uiModule->ProcessChatBoxEntry(&message);
+            ExecuteCommandInner(uiModule, &message);
         }, cancellationToken);
+    }
+
+    internal static unsafe void ExecuteCommandInner(UIModule* uiModule, Utf8String* message)
+    {
+        var shellModule = uiModule->GetRaptureShellModule();
+        if (shellModule is null)
+        {
+            throw new InvalidOperationException("FFXIV RaptureShellModule is unavailable.");
+        }
+
+        // PostNamazu command uses the inner shell entry: unknown commands are
+        // silent and do not alter chat history or interrupt a running macro.
+        // Keep the native dispatcher (including Dalamud's plugin-command hooks);
+        // normalcommand retains its upstream outer chat-entry implementation.
+        shellModule->ExecuteCommandInner(message, uiModule);
     }
 
     public static Task SendMarkAsync(
