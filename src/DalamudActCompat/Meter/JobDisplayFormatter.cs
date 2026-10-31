@@ -68,7 +68,7 @@ public static class JobDisplayFormatter
         JobDisplayStyle.ChineseAbbreviation => text.Get("中文简称", "Chinese abbreviation"),
         JobDisplayStyle.MinimalIcon => text.Get("简约", "Minimal"),
         JobDisplayStyle.ClassicIcon => text.Get("传统", "Classic"),
-        JobDisplayStyle.FlatIcon => text.Get("平面", "Flat"),
+        JobDisplayStyle.FlatIcon => text.Get("扁平", "Flat"),
         _ => text.Get("简称", "Abbreviation"),
     };
 

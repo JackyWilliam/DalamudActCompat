@@ -5525,6 +5525,19 @@ void ValidateFfxivEntityDeltaRepository()
             [],
             [])),
         "The full snapshot did not normalize duplicate/invalid actors or supersede an old delta.");
+
+    var player = baseline.Combatants.Single(combatant => combatant.Id == baseline.CurrentPlayerId);
+    var pet = target with { Id = 0x40001234, OwnerId = player.Id, Name = "Host Smoke Pet" };
+    repository.Apply(baseline with
+    {
+        Timestamp = baselineAt.AddMilliseconds(600),
+        Combatants = [player with { OwnerId = 0xE0000000 }, pet],
+    });
+    var owned = repository.GetCombatantList();
+    Assert(
+        owned.Single(combatant => combatant.ID == player.Id).OwnerID == 0 &&
+        owned.Single(combatant => combatant.ID == pet.Id).OwnerID == player.Id,
+        "Host combatants did not expose Dalamud's no-owner value as ACT's OwnerID 0.");
 }
 
 IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)

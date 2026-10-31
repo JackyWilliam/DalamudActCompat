@@ -101,10 +101,7 @@ internal static class BrandedWindowChrome
             new Vector2(titleLeft, textTop),
             ImGui.GetColorU32(DactTheme.Palette.Text),
             title);
-        drawList.AddText(
-            new Vector2(titleLeft + ImGui.CalcTextSize(title).X + 9, textTop),
-            ImGui.GetColorU32(DactTheme.Tone(new Vector4(0.68f, 0.72f, 0.77f, 1), DactTheme.Palette.Muted)),
-            sectionLabel);
+        var sectionLeft = titleLeft + ImGui.CalcTextSize(title).X + 9;
 
         var helpWidth = helpAction is null ? 0 : actionButtonSize;
         var friendsWidth = friendsAction is null ? 0 : ImGui.CalcTextSize(Math.Max(0, onlineFriends).ToString()).X + 34;
@@ -131,6 +128,12 @@ internal static class BrandedWindowChrome
         var centerSize = ImGui.CalcTextSize(centerLabel) + new Vector2(gaugeWidth, 0);
         var centerLeft = screenStart.X + ((availableWidth - centerSize.X) * 0.5f);
         var versionLeft = screenStart.X + actionRight - trailingWidth - versionSize.X - 12;
+        // Translated window names at large font sizes reach the version label on
+        // narrow windows; shorten the name rather than drawing the two over each other.
+        drawList.AddText(
+            new Vector2(sectionLeft, textTop),
+            ImGui.GetColorU32(DactTheme.Tone(new Vector4(0.68f, 0.72f, 0.77f, 1), DactTheme.Palette.Muted)),
+            FriendsMessagePreview.Ellipsize(sectionLabel, Math.Max(0, versionLeft - 12 - sectionLeft), value => ImGui.CalcTextSize(value).X));
         // On narrow/scaled windows preserve clickable controls and omit the optional
         // middle status instead of drawing it over the version or friend button.
         if (centerLeft > titleLeft + ImGui.CalcTextSize(title).X + ImGui.CalcTextSize(sectionLabel).X + 24 &&

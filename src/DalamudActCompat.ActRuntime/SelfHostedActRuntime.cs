@@ -109,7 +109,6 @@ public sealed class SelfHostedActRuntime : IDisposable
     private PostNamazuEventSource? externalPostNamazuEventSource;
     private RainbowMage.OverlayPlugin.EventSources.CactbotEventSource? cactbotEventSource;
     private System.Threading.Timer? radarOptionsReloadTimer;
-    private readonly List<LoadedActPlugin> customPlugins = [];
     private bool actGlobalsInitialized;
     private EncounterData? activeEncounter;
     private Guid activeEncounterId;
@@ -652,33 +651,6 @@ public sealed class SelfHostedActRuntime : IDisposable
         {
             log.Warning(ex, "Could not display the HTML overlay failure notification.");
         }
-    }
-
-    public IReadOnlyList<string> LoadedCustomPluginIds
-        => customPlugins.Select(plugin => plugin.Id).ToArray();
-
-    public IReadOnlyList<ActPluginRuntimeStatus> CustomPluginStatuses
-        => customPlugins
-            .Select(plugin => new ActPluginRuntimeStatus(
-                plugin.Id,
-                plugin.Status,
-                plugin.Stages,
-                plugin.Diagnostics))
-            .ToArray();
-
-    public bool OpenCustomPluginConfiguration(string id)
-    {
-        var plugin = customPlugins.FirstOrDefault(
-            candidate => string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (plugin is null)
-        {
-            log.Warning($"ACT plugin '{id}' configuration was requested, but the plugin is not loaded.");
-            return false;
-        }
-
-        plugin.OpenConfiguration();
-        log.Information($"Opened ACT plugin '{id}' configuration.");
-        return true;
     }
 
     public event Action<ActEncounterSnapshot, bool>? EncounterChanged;
@@ -1418,56 +1390,6 @@ public sealed class SelfHostedActRuntime : IDisposable
         => string.Concat(value.Select(character =>
             Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
 
-    public IReadOnlyList<(string Id, Exception Error)> LoadCustomPlugins(
-        IEnumerable<RuntimePluginSpec> plugins)
-    {
-        var failures = new List<(string Id, Exception Error)>();
-        foreach (var plugin in plugins
-                     .OrderBy(GetPluginLoadPriority)
-                     .ThenBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var loadedPlugin = LoadedActPlugin.Load(plugin, log);
-                customPlugins.Add(loadedPlugin);
-                if (IsPluginInitializationError(loadedPlugin.Status))
-                {
-                    var error = new InvalidOperationException(
-                        $"ACT plugin '{plugin.Id}' reported an initialization error:{Environment.NewLine}" +
-                        loadedPlugin.Status);
-                    log.Error(error, $"ACT plugin '{plugin.Id}' initialized incompletely.");
-                    failures.Add((plugin.Id, error));
-                    continue;
-                }
-
-                log.Information(
-                    $"ACT plugin '{plugin.Id}' loaded. Status: {loadedPlugin.Status}");
-            }
-            catch (Exception ex)
-            {
-                log.Error(ex, $"ACT plugin '{plugin.Id}' failed to load.");
-                failures.Add((plugin.Id, ex));
-            }
-        }
-
-        return failures;
-    }
-
-    private static int GetPluginLoadPriority(RuntimePluginSpec plugin)
-        => plugin.Id.ToLowerInvariant() switch
-        {
-            "cactbotself" => 100,
-            "triggernometry" => 200,
-            "postnamazu" => 300,
-            "act.foxtts" => 400,
-            _ => 1000,
-        };
-
-    private static bool IsPluginInitializationError(string status)
-        => status.Contains("error", StringComparison.OrdinalIgnoreCase) ||
-           status.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-           status.Contains("exception", StringComparison.OrdinalIgnoreCase);
-
     private static FileStream AcquireWebViewSessionLock(string path, TimeSpan timeout)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -1800,19 +1722,6 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     public void StopParser()
     {
-        for (var index = customPlugins.Count - 1; index >= 0; index--)
-        {
-            try
-            {
-                customPlugins[index].Dispose();
-            }
-            catch (Exception ex)
-            {
-                log.Error(ex, $"Failed to unload ACT plugin '{customPlugins[index].Id}'.");
-            }
-        }
-
-        customPlugins.Clear();
         try
         {
             StopOverlay();
@@ -2477,7 +2386,10 @@ public sealed class SelfHostedActRuntime : IDisposable
                 raidDpsEstimator.StartEncounter(actionTime);
                 effectiveDamageEventCursor = 0;
                 effectiveDamageLedger.StartEncounter(identities);
-                encounterDurationTracker.StartEncounter(actionTime, identities);
+                encounterDurationTracker.StartEncounter(
+                    actionTime,
+                    identities,
+                    confirmActionDamage: encounterModeSnapshot().Mode == EncounterMode.OpenWorld);
                 effectiveDamageEncounter = encounter;
             }
         }
@@ -2736,7 +2648,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                                                  effectiveDamageLedger.TryResolveDamage(
                                                      item.Identity,
                                                      out effectiveDamage);
-                        var totalDamage = hasEffectiveDamage
+                        // The ledger only counts hits the server confirms with an EffectResult,
+                        // matching FFLogs in duties. Striking dummies keep their HP, so most
+                        // open-world hits never get one; FFLogs ranks none of that content and
+                        // ACT's own total is the number players compare there.
+                        var totalDamage = hasEffectiveDamage && activeEncounterMode != EncounterMode.OpenWorld
                             ? effectiveDamage
                             : item.Combatant.Damage;
                         var rawHealing = 0L;
@@ -3514,9 +3430,3 @@ public sealed class SelfHostedActRuntime : IDisposable
         property?.SetValue(null, log);
     }
 }
-
-public sealed record ActPluginRuntimeStatus(
-    string Id,
-    string Status,
-    IReadOnlyList<CompatibilityStageResult> Stages,
-    IReadOnlyList<ActPluginDiagnostic> Diagnostics);

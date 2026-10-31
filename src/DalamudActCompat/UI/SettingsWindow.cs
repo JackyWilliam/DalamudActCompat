@@ -597,7 +597,7 @@ public sealed class SettingsWindow : Window
             {
                 var settings = configuration.OverlayWindows[name];
                 var status = settings.IsVisible
-                    ? text.Get("已打开", "Open")
+                    ? text.Get("已打开", "Opened")
                     : !templateCatalogAvailable
                         ? text.Get("解析器未运行", "Parser stopped")
                         : templateNames.Contains(name)

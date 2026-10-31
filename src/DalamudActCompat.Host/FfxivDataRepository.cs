@@ -333,7 +333,9 @@ internal sealed class FfxivDataRepository : IDataRepository
         => new()
         {
             ID = source.Id,
-            OwnerID = source.OwnerId,
+            // Dalamud reports "no owner" as 0xE0000000; FFXIV_ACT_Plugin and OverlayPlugin
+            // expose it as 0, and triggers test OwnerID == 0 to tell players from pets.
+            OwnerID = IsValidEntityId(source.OwnerId) ? source.OwnerId : 0,
             type = source.Type,
             Job = source.Job,
             Level = source.Level,

@@ -140,7 +140,7 @@ public sealed partial class ControlCenterWindow
 
     private string ManagedOverlayStatus(string name, HtmlOverlayWindowSettings settings, IReadOnlyList<ActOverlayTemplate> templates)
     {
-        if (settings.IsVisible) return settings.IsUserHidden ? text.Get("已隐藏", "Hidden") : text.Get("已打开", "Open");
+        if (settings.IsVisible) return settings.IsUserHidden ? text.Get("已隐藏", "Hidden") : text.Get("已打开", "Opened");
         if (parserStatus.State != ParserState.Running) return text.Get("解析器未运行", "Parser stopped");
         if (!CanOpenManagedOverlay(name, settings, templates)) return text.Get("本地资源不可用", "Local asset unavailable");
         return text.Get("已关闭", "Closed");
@@ -180,7 +180,7 @@ public sealed partial class ControlCenterWindow
         ImGui.Separator();
         ImGui.TextDisabled(text.Get("全部悬浮窗", "All overlays"));
         var hide = configuration.HideHtmlOverlaysWhenGameUnfocused;
-        if (DactTheme.Checkbox(text.Get("游戏失焦时隐藏", "Hide when game loses focus"), ref hide)) setHideHtmlOverlaysWhenUnfocused(hide);
+        if (DactTheme.WrappedCheckbox(text.Get("游戏失焦时隐藏", "Hide when game loses focus"), ref hide)) setHideHtmlOverlaysWhenUnfocused(hide);
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(text.Get(
             "仅临时隐藏网页悬浮窗，不改变各悬浮窗保存的开启状态。",
             "Temporarily hides web overlays without changing their saved open state."));
@@ -193,7 +193,9 @@ public sealed partial class ControlCenterWindow
         var template = templates.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
         var available = CanOpenManagedOverlay(name, settings, templates);
         ImGui.PushID(name);
+        ImGui.PushTextWrapPos(0);
         DactTheme.TextColored(IceBlue, OverlayDisplayName(name));
+        ImGui.PopTextWrapPos();
         ImGui.TextWrapped(OverlayKind(name, template) + " · " + ManagedOverlayStatus(name, settings, templates));
         ImGui.BeginDisabled(!settings.IsVisible && (!available || parserStatus.State != ParserState.Running));
         if (DactTheme.Button(settings.IsVisible ? text.Get("关闭", "Close") : text.Get("打开", "Open")))
@@ -252,7 +254,7 @@ public sealed partial class ControlCenterWindow
         var changed = Checkbox(text.Get("启动时自动打开", "Open on startup"), settings.OpenOnStartup, v => settings.OpenOnStartup = v);
         changed |= Checkbox(text.Get("脱战隐藏", "Hide out of combat"), settings.AutoHideOutOfCombat, v => settings.AutoHideOutOfCombat = v);
         ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
-        ImGui.TextUnformatted(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
+        ImGui.TextWrapped(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
         ImGui.BeginDisabled(!available && !settings.IsVisible);
         if (DactTheme.Button(settings.IsEditing ? text.Get("完成位置编辑", "Finish position editing") : text.Get("编辑位置和大小", "Edit position and size")))
         {

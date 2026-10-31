@@ -195,7 +195,9 @@ internal static partial class SkinSmokeTests
         var config = JsonConvert.DeserializeObject<PluginConfiguration>("""{"Version":16,"Appearance":{"SelectedSkin":"eorzea","SponsorTier":10,"UnlockedEasterEggs":["eorzea","bogus"]},"Meter":{"HorizontalWindow":{"BackgroundOpacity":0.85}}}""")!;
         config.ApplyMigrations();
         Check(config.Version == 17 && config.Meter.HorizontalWindow.BackgroundOpacity == 0, "Migration changed the old horizontal appearance.");
-        Check(config.Appearance.UnlockedEasterEggs.Count == 0 && SkinCatalog.Resolve(config.Appearance, true, 0) == SkinCatalog.Default,
+        // A known sponsor skin is never a discovery. An unknown ID may be a newer client's
+        // easter egg and is kept, but it unlocks nothing in this build.
+        Check(config.Appearance.UnlockedEasterEggs.SetEquals(["bogus"]) && SkinCatalog.Resolve(config.Appearance, true, 0) == SkinCatalog.Default,
             "A local config or discovery list granted sponsor access.");
         Check(Enumerable.Range(0, 3).All(tier => SkinCatalog.Resolve(config.Appearance, true, tier) == SkinCatalog.Default) && SkinCatalog.Resolve(config.Appearance, false, 3) == SkinCatalog.Default && Enumerable.Range(3, 8).All(tier => SkinCatalog.Resolve(config.Appearance, true, tier) == SkinCatalog.Eorzea),
             "Sponsor authorization ignored the active account.");
@@ -251,7 +253,8 @@ internal static partial class SkinSmokeTests
             "Cold reload or repeat migration lost the horizontal color/opacity.");
         Check(restored.Meter.RoleSplitDamageWindow.BackgroundColor != restored.Meter.RoleSplitHealerWindow.BackgroundColor,
             "D/T and H backgrounds were coupled.");
-        Check(restored.Appearance.UnlockedEasterEggs.SetEquals(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id)) &&
+        // The unknown "bogus" ID from the migrated config above is carried forward unchanged.
+        Check(restored.Appearance.UnlockedEasterEggs.SetEquals(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id).Append("bogus")) &&
               SkinCatalog.Resolve(restored.Appearance, true, 0) == SkinCatalog.Jade, "Discovered colors did not persist or incorrectly require sponsorship.");
         var background = restored.Meter.HorizontalWindow;
         var fill = MeterBackground.Fill(background);

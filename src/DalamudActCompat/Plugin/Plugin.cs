@@ -484,7 +484,6 @@ public sealed class Plugin : IDalamudPlugin
             encounterModeStateProvider.Read,
             () => configuration.EmbeddedPlugins.FfxivActPluginEnabled,
             () => configuration.EmbeddedPlugins.OverlayPluginEnabled,
-            DiscoverRuntimePlugins,
             fflogsEstimateService.CaptureAvailableEstimates,
             () => new(configuration.EncounterResetMode, configuration.EncounterResetSeconds));
         parserEngine = new ParserEngine(parserAdapter);
@@ -1028,12 +1027,14 @@ public sealed class Plugin : IDalamudPlugin
             DiscordBindingNotice.Verified => text.Get(
                 "Discord 绑定验证成功。",
                 "Discord link verification succeeded."),
+            // These notices appear in game, where only CommandName is registered; /dact is
+            // the Discord bot's command and does nothing when typed into game chat.
             DiscordBindingNotice.Unbound => text.Get(
-                "Discord 绑定验证未通过：账号尚未绑定。请使用 /dact 打开账号页面完成绑定。",
-                "Discord link verification failed: this account is not linked. Use /dact to open the account page and link Discord."),
+                "Discord 绑定验证未通过：账号尚未绑定。请使用 /actcompat 打开账号页面完成绑定。",
+                "Discord link verification failed: this account is not linked. Use /actcompat to open the account page and link Discord."),
             _ => text.Get(
-                "Discord 绑定验证失败：暂时无法获取有效的服务器状态，将自动重试。可使用 /dact 查看详情。",
-                "Discord link verification failed: a valid server status is temporarily unavailable. DACT will retry. Use /dact for details."),
+                "Discord 绑定验证失败：暂时无法获取有效的服务器状态，将自动重试。可使用 /actcompat 查看详情。",
+                "Discord link verification failed: a valid server status is temporarily unavailable. DACT will retry. Use /actcompat for details."),
         };
         try
         {
@@ -5717,9 +5718,6 @@ public sealed class Plugin : IDalamudPlugin
                 "PostNamazu commands must begin with '/'.");
         }
     }
-
-    private IReadOnlyList<RuntimePluginSpec> DiscoverRuntimePlugins()
-        => [];
 
     private static IReadOnlyList<ActPlayerIdentity> BuildPlayerIdentities(
         IPlayerState playerState,

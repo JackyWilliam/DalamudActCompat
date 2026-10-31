@@ -10,7 +10,7 @@ using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 
-internal static class OverlayManagerSmokeTests
+internal static partial class OverlayManagerSmokeTests
 {
     private const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
     private static void Set(object target, string field, object? value) => target.GetType().GetField(field, Private)!.SetValue(target, value);

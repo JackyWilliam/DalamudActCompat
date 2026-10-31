@@ -19,7 +19,6 @@ public sealed class IinactAdapter : IParserEngine
     private readonly Func<EncounterModeSnapshot> getEncounterModeSnapshot;
     private readonly Func<bool> parserEnabled;
     private readonly Func<bool> overlayEnabled;
-    private readonly Func<IReadOnlyList<RuntimePluginSpec>> customPlugins;
     private readonly Func<Encounter, Encounter> captureFflogsEstimates;
     private readonly Func<EncounterResetOptions> getEncounterResetOptions;
     private readonly object syncRoot = new();
@@ -50,7 +49,6 @@ public sealed class IinactAdapter : IParserEngine
         Func<EncounterModeSnapshot> getEncounterModeSnapshot,
         Func<bool> parserEnabled,
         Func<bool> overlayEnabled,
-        Func<IReadOnlyList<RuntimePluginSpec>> customPlugins,
         Func<Encounter, Encounter>? captureFflogsEstimates = null,
         Func<EncounterResetOptions>? getEncounterResetOptions = null)
     {
@@ -63,7 +61,6 @@ public sealed class IinactAdapter : IParserEngine
         this.getEncounterModeSnapshot = getEncounterModeSnapshot;
         this.parserEnabled = parserEnabled;
         this.overlayEnabled = overlayEnabled;
-        this.customPlugins = customPlugins;
         this.captureFflogsEstimates = captureFflogsEstimates ?? (static encounter => encounter);
         this.getEncounterResetOptions = getEncounterResetOptions ?? (() => default);
         frameworkGameState = getEncounterModeSnapshot();
@@ -124,29 +121,19 @@ public sealed class IinactAdapter : IParserEngine
             actRuntime.StartParser(getLogDirectory());
             SubscribeFrameworkUpdates();
 
-            var runtimePlugins = customPlugins();
-            LoadCustomPlugins(runtimePlugins.Where(MustLoadBeforeOverlay));
+            // ACT extensions (Triggernometry, PostNamazu, FoxTTS, ...) run in the external
+            // Host so a faulting extension cannot take the game down; only the parser and
+            // OverlayPlugin start in this process.
             if (overlayEnabled())
             {
                 actRuntime.StartOverlay();
             }
 
-            LoadCustomPlugins(runtimePlugins.Where(plugin => !MustLoadBeforeOverlay(plugin)));
-            var pluginDetail = string.Join(
-                Environment.NewLine,
-                actRuntime.CustomPluginStatuses.Select(plugin =>
-                {
-                    var stages = plugin.Stages.Count == 0
-                        ? string.Empty
-                        : $" [{string.Join(", ", plugin.Stages.Select(stage => $"{stage.Stage}={stage.State}"))}]";
-                    return $"{plugin.Id}: {plugin.Status}{stages}";
-                }));
             SetStatus(
                 ParserState.Running,
                 actRuntime.IsOverlayRunning
                     ? "FFXIV_ACT_Plugin and OverlayPlugin are running in DalamudActCompat."
-                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.",
-                string.IsNullOrWhiteSpace(pluginDetail) ? null : pluginDetail);
+                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.");
         }
         catch (OperationCanceledException)
         {
@@ -172,17 +159,6 @@ public sealed class IinactAdapter : IParserEngine
             logger.Error(cleanupError, "Parser cleanup after failed initialization also failed.");
         }
     }
-
-    private void LoadCustomPlugins(IEnumerable<RuntimePluginSpec> plugins)
-    {
-        foreach (var failure in actRuntime.LoadCustomPlugins(plugins))
-        {
-            logger.Error(failure.Error, $"ACT plugin '{failure.Id}' failed to load.");
-        }
-    }
-
-    private static bool MustLoadBeforeOverlay(RuntimePluginSpec plugin)
-        => string.Equals(plugin.Id, "act.foxtts", StringComparison.OrdinalIgnoreCase);
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
