@@ -33,8 +33,13 @@ public static partial class LegacyAssemblyRewriter
         ReplaceWithBridge(wrapper, module.ImportReference(typeof(HostPluginBridge).GetMethod(
             nameof(HostPluginBridge.ProcessTriggernometryLog))!), loadInstance: true, loadParameters: true);
 
-        var execute = module.GetType("Triggernometry.Core.ActionOld").Methods.Single(method =>
+        // TN 2.4 converts legacy XML actions to typed actions and removed ActionOld's
+        // executor; the initializer's final clear then runs as ActionVariableScalar(Context).
+        var legacyExecute = module.GetType("Triggernometry.Core.ActionOld").Methods.SingleOrDefault(method =>
             method.Name == "ExecutionImplementation" && method.Parameters.Count == 2);
+        var execute = legacyExecute ?? module.GetType("Triggernometry.Core.Actions.ActionVariableScalar").Methods.Single(method =>
+            method.Name == "ExecuteImplementation" && method.Parameters.Count == 1 &&
+            method.Parameters[0].ParameterType.FullName == "Triggernometry.Core.Context");
         var notify = module.ImportReference(typeof(HostPluginBridge).GetMethod(
             nameof(HostPluginBridge.CompleteTriggernometryInitializationAction))!);
         var il = execute.Body.GetILProcessor();
@@ -42,7 +47,7 @@ public static partial class LegacyAssemblyRewriter
         {
             // Branches to the existing return must also pass the completion observer.
             exit.OpCode = OpCodes.Ldarg_0;
-            var context = il.Create(OpCodes.Ldarg_2);
+            var context = il.Create(legacyExecute is null ? OpCodes.Ldarg_1 : OpCodes.Ldarg_2);
             var call = il.Create(OpCodes.Call, notify);
             il.InsertAfter(exit, context);
             il.InsertAfter(context, call);
