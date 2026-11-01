@@ -177,7 +177,7 @@ internal static class HelpScreenshotGenerator
             _ => { }, () => { }, _ => { }, _ => { }, () => { });
         var bundled = new (string Id, string Name, string Version, bool Enabled)[]
         {
-            ("triggernometry", "Triggernometry CN Maintained Edition", "2.3.0.0", true),
+            ("triggernometry", "Triggernometry CN Maintained Edition", "2.4.1.1", true),
             ("postnamazu", "PostNamazu", "1.3.6.6", true),
             ("act.foxtts", "ACT.FoxTTS", "3.3.1.189", true),
             ("silverdasher", "银山雀儿 / SilverDasher", "0.6.0.4", false),
