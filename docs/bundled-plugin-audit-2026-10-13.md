@@ -134,3 +134,12 @@ FFXIV_ACT_Plugin 3.0.3.4（IINACT 2.10.3.11）、Cactbot 0.37.5 与随包 ACT �
 三项联网门禁重新通过：FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11、随包 ACT 插件（Triggernometry 2.3.0.0）和 Cactbot 0.37.5 均为当前版本；锁文件未变。
 完整 Release 构建使用正式参数，重新收集核心、Host 与三类资源目录，内容哈希由收集器根据实际文件生成。包校验、隐私检查、版本与 API 15 校验通过。
 命令入口和真实 TN 的诊断／清特效链隔离回放用于回归，不代表妖星指定 NPC 的实战清特效已确认。
+
+## 0.4.5.19 发布前核对（2026-11-01）
+
+随包扩展门禁发现 Triggernometry 已过期：上游 CN 维护版发布 2.4.1.1（上游提交 `14ba281`），随包仍为 2.3.0.0。
+已通过在线更新装上 2.4.1.1 的用户无法加载 TN：2.4 删除了 `ActionOld` 的执行入口、`QueuedAction` 与嵌套 `ActionInstance`，Host 改写在 `WrapTriggernometryLogOrdering` 失败。
+本版兼容新旧两种动作执行结构，并只更新 TN：DLL、汉化与锁文件版本／SHA（`6341d15e95a383365c2927cbb008114bface7485a18a0891d41243307c8f6c02`）；ACT.FoxTTS、PostNamazu、银山雀儿与抹茶不变。
+- 2.3.0.0 与 2.4.1.1 的 Host、进程内改写均通过；改写后结构断言与 IL 静态校验未新增错误。
+- 2.4 新增的 `ActionClipboard`、`ActionTraySlider` 沿用 2.3 已在 Host 中运行的剪贴板与 TraySlider 实现；PictoACT 所在的 BridgeNamazu 模块未改动。
+三项联网门禁：FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11、Cactbot 0.37.5 为当前版本；随包 ACT 插件在更新 TN 后重新检查通过。
