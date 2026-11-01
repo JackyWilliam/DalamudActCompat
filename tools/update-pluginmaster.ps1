@@ -9,7 +9,8 @@ param(
     [string] $PluginMasterPath = "repo/pluginmaster.json",
 
     [Parameter(Mandatory = $false)]
-    [string] $IconUrl = "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/Assets/act-logo.jpg",
+    # Must stay a PNG of at most 512x512: Dalamud rejects larger icons and shows its default.
+    [string] $IconUrl = "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png",
 
     [Parameter(Mandatory = $false)]
     [string] $Changelog = "Development build update."

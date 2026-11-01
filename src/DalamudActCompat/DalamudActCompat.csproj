@@ -10,6 +10,9 @@
     <Punchline>In-game ACT-compatible parsing platform foundation.</Punchline>
     <Description>Dalamud-side UI, storage, parser abstraction, and compatibility-host bridge for an ACT-compatible FFXIV parsing platform.</Description>
     <RepoUrl>https://github.com/JackyWilliam/DalamudActCompat</RepoUrl>
+    <!-- Dalamud keeps the packaged manifest on install, so tools that read installed
+         plugins only see an icon when the ZIP carries it. Dalamud rejects icons over 512px. -->
+    <IconUrl>https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png</IconUrl>
     <MinimumDalamudVersion>15.0.0</MinimumDalamudVersion>
     <CanUnloadAsync>true</CanUnloadAsync>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

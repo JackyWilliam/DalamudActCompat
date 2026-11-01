@@ -1927,23 +1927,34 @@ static void ValidatePluginRepositoryMetadata()
         entry.GetProperty("CanUnloadAsync").GetBoolean() &&
         entry.GetProperty("DownloadLinkTesting").ValueKind == JsonValueKind.Null,
         "Dalamud custom repository version or release download links drifted from the plugin assembly.");
-    var iconUrl = entry.GetProperty("IconUrl").GetString();
+    // Dalamud keeps the packaged manifest on install, so the ZIP and every
+    // custom-repository entry must name the same icon.
+    var iconUrl = project.Descendants("IconUrl").Single().Value;
     Assert(
         Uri.TryCreate(iconUrl, UriKind.Absolute, out var iconUri) &&
         iconUri.Scheme == Uri.UriSchemeHttps &&
         iconUri.Host == "raw.githubusercontent.com" &&
         iconUri.AbsolutePath.EndsWith(
-            "/src/DalamudActCompat/Assets/act-logo.jpg",
-            StringComparison.Ordinal),
-        "Dalamud custom repository does not expose the ACT logo through a public HTTPS IconUrl.");
+            "/src/DalamudActCompat/images/icon.png",
+            StringComparison.Ordinal) &&
+        document.RootElement.EnumerateArray().All(item =>
+            item.GetProperty("IconUrl").GetString() == iconUrl),
+        "Plugin manifest and custom repository do not share one public HTTPS IconUrl.");
+    var iconPath = Path.Combine(projectRoot, "src", "DalamudActCompat", "images", "icon.png");
+    var icon = File.Exists(iconPath) ? File.ReadAllBytes(iconPath) : [];
+    // Check the PNG header rather than the extension; Dalamud rejects icons over 512x512.
+    byte[] pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    var iconWidth = icon.Length >= 24
+        ? System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(icon.AsSpan(16, 4))
+        : 0;
+    var iconHeight = icon.Length >= 24
+        ? System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(icon.AsSpan(20, 4))
+        : 0;
     Assert(
-        File.Exists(Path.Combine(
-            projectRoot,
-            "src",
-            "DalamudActCompat",
-            "Assets",
-            "act-logo.jpg")),
-        "The public custom-repository IconUrl target is missing from the source repository.");
+        icon.AsSpan().StartsWith(pngSignature) &&
+        iconWidth == iconHeight &&
+        iconWidth is > 0 and <= 512,
+        "The public IconUrl target must be a square PNG no larger than 512x512.");
 }
 
 static void ValidateBoundedHostQueue()
