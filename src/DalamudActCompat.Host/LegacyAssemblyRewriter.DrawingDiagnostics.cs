@@ -24,12 +24,38 @@ public static partial class LegacyAssemblyRewriter
         ObserveExceptions(fire, 1);
         ObserveReturns(module.GetType("Triggernometry.Core.Folder").Methods.Single(m => m.Name == "PassesFilter"), 1, "folder-filter");
 
-        var action = module.GetType("Triggernometry.Core.ActionOld").Methods.Single(m => m.Name == "ExecutionImplementation");
-        var actionIl = action.Body.GetILProcessor();
-        var actionFirst = action.Body.Instructions[0];
-        foreach (var instruction in Notification(actionIl, 2, "action-enter", null)) actionIl.InsertBefore(actionFirst, instruction);
-        ObserveReturns(action, 2, "action-return");
-        ObserveExceptions(action, 2);
+        var legacyAction = module.GetType("Triggernometry.Core.ActionOld").Methods.SingleOrDefault(m => m.Name == "ExecutionImplementation");
+        MethodDefinition action, failure;
+        if (legacyAction is not null)
+        {
+            action = failure = legacyAction;
+            var actionIl = action.Body.GetILProcessor();
+            var actionFirst = action.Body.Instructions[0];
+            foreach (var instruction in Notification(actionIl, 2, "action-enter", null)) actionIl.InsertBefore(actionFirst, instruction);
+            ObserveReturns(action, 2, "action-return");
+            ObserveExceptions(action, 2);
+        }
+        else
+        {
+            // TN 2.4 removed ActionOld's executor. Every typed action enters through
+            // InternalExecute, and every failure reaches LogExecutionException before TN
+            // rethrows it to the queue. An async action returns when it is scheduled.
+            var actionBase = module.GetType("Triggernometry.Core.ActionBase");
+            action = actionBase.Methods.Single(m => m.Name == "InternalExecute" && m.Parameters.Count == 2);
+            var actionIl = action.Body.GetILProcessor();
+            var actionFirst = action.Body.Instructions[0];
+            foreach (var instruction in Notification(actionIl, 1, "action-enter", null)) actionIl.InsertBefore(actionFirst, instruction);
+            ObserveReturns(action, 1, "action-return");
+            failure = actionBase.Methods.Single(m => m.Name == "LogExecutionException" && m.Parameters.Count == 2 &&
+                m.Parameters[1].ParameterType.FullName == "System.Exception");
+            var failureIl = failure.Body.GetILProcessor();
+            var failureFirst = failure.Body.Instructions[0];
+            foreach (var instruction in new[]
+            {
+                failureIl.Create(OpCodes.Ldarg_0), failureIl.Create(OpCodes.Ldarg_1), failureIl.Create(OpCodes.Ldstr, "exception"),
+                failureIl.Create(OpCodes.Ldarg_2), failureIl.Create(OpCodes.Call, notify),
+            }) failureIl.InsertBefore(failureFirst, instruction);
+        }
 
         var plugin = module.GetType("Triggernometry.Core.RealPlugin");
         var queue = plugin.Methods.Single(m => m.Name == "LogLineQueuer" && m.Parameters.Count == 3);
@@ -47,13 +73,14 @@ public static partial class LegacyAssemblyRewriter
         var invoke = callback.Body.Instructions.Single(i => i.Operand is MethodReference m && m.Name == "InvokeNamedCallback");
         // Keep the original argument evaluation and dispatcher, adding only the
         // context carried by this ActionInstance for a reliable event/call correlation.
+        // TN 2.4 passes the Context itself as the only argument.
         callbackIl.InsertBefore(invoke, callbackIl.Create(OpCodes.Ldarg_1));
         invoke.OpCode = OpCodes.Call;
         invoke.Operand = module.ImportReference(typeof(HostPluginBridge).GetMethod(nameof(HostPluginBridge.InvokeDrawingCallback))!);
 
         // Added observations can move a short branch beyond its signed-byte range.
         // Cecil preserves the chosen opcode, so widen them before serializing the IL.
-        foreach (var method in new[] { fire, conditions, action, queue, callback,
+        foreach (var method in new[] { fire, conditions, action, failure, queue, callback,
             trigger.Methods.Single(m => m.Name == "CheckMatch"),
             module.GetType("Triggernometry.Core.Folder").Methods.Single(m => m.Name == "PassesFilter") }.OfType<MethodDefinition>())
         foreach (var instruction in method.Body.Instructions.Where(i => i.OpCode.OperandType == OperandType.ShortInlineBrTarget))

@@ -3960,10 +3960,11 @@ void ValidateTriggernometryLaunchProcessPatch()
         called.Name == nameof(Process.Start) &&
         called.HasThis &&
         called.Parameters.Count == 0);
+    // TN 2.4 starts the process inside `using`, so the guard leaves that try block.
     var hasNullGuard = launchMethod.Body.Instructions.Any(instruction =>
         instruction.OpCode.Code is Code.Brfalse or Code.Brfalse_S &&
         instruction.Operand is Instruction target &&
-        target.OpCode.Code == Code.Ret);
+        target.OpCode.Code is Code.Ret or Code.Leave or Code.Leave_S);
     Assert(
         bridgeCalls == 1 && legacyInstanceStarts == 0 && hasNullGuard,
         "Triggernometry LaunchProcess did not route its instance Start path through " +

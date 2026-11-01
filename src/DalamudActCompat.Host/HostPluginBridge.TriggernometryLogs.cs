@@ -30,9 +30,11 @@ public static partial class HostPluginBridge
         // its conditions, variables, ID or actions, and never wait on TN's worker thread.
         if (!TriggerLogBindings.Any(pair => pair.Value.AwaitingInitialization)) return;
         var actionType = action.GetType();
-        if (actionType.GetField("ActionType")?.GetValue(action)?.ToString() != "Variable" ||
-            actionType.GetProperty("VariableOp")?.GetValue(action)?.ToString() != "UnsetRegexUniversal" ||
-            actionType.GetProperty("VariableName")?.GetValue(action) as string != "^U7b11a") return;
+        // TN 2.4 runs the same XML action as ActionVariableScalar with Operation/Name.
+        var typed = actionType.FullName == "Triggernometry.Core.Actions.ActionVariableScalar";
+        if (!typed && actionType.GetField("ActionType")?.GetValue(action)?.ToString() != "Variable" ||
+            actionType.GetProperty(typed ? "Operation" : "VariableOp")?.GetValue(action)?.ToString() != "UnsetRegexUniversal" ||
+            actionType.GetProperty(typed ? "Name" : "VariableName")?.GetValue(action) as string != "^U7b11a") return;
         const BindingFlags contextMembers = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         var text = context.GetType().GetField("triggeredText", contextMembers)?.GetValue(context) as string;
         var match = U7bInitializationConverted.Match(text ?? string.Empty);

@@ -156,6 +156,11 @@ internal static class DrawingDiagnosticTests
             ("Triggernometry.Core.Trigger", "CheckMatch"), ("Triggernometry.Core.Trigger", "Fire"),
             ("Triggernometry.Core.Trigger", "TryBlockByCondition"), ("Triggernometry.Core.Folder", "PassesFilter"),
             ("Triggernometry.Core.ActionOld", "ExecutionImplementation"),
+            // TN 2.4 replaced ActionOld's executor with these rewritten entry points.
+            ("Triggernometry.Core.ActionBase", "InternalExecute"),
+            ("Triggernometry.Core.ActionBase", "LogExecutionException"),
+            ("Triggernometry.Core.Actions.ActionVariableScalar", "ExecuteImplementation"),
+            ("Triggernometry.Core.Actions.ActionLaunchProcess", "ExecuteImplementation"),
             ("Triggernometry.Core.RealPlugin", "LogLineQueuer"),
             ("Triggernometry.Core.Actions.ActionNamedCallback", "ExecuteImplementation"),
         })

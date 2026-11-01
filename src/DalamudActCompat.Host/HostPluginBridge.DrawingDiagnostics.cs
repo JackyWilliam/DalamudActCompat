@@ -71,10 +71,10 @@ public static partial class HostPluginBridge
             }
             if (stage.StartsWith("action-", StringComparison.Ordinal) || stage == "exception")
             {
-                data["action"] = Member(subject, "ActionType")?.ToString();
-                data["order"] = Member(subject, "OrderNumber");
-                data["callback"] = Member(subject, "NamedCallbackName");
-                data["variable"] = Clip(Member(subject, "VariableName")?.ToString(), 100);
+                data["action"] = Member(subject, "ActionType")?.ToString() ?? subject.GetType().Name;
+                data["order"] = Member(subject, "OrderNumber") ?? Member(subject, "IndexInTrigger");
+                data["callback"] = ActionCallbackName(subject);
+                data["variable"] = Clip(ActionVariableName(subject), 100);
                 if (stage == "action-return")
                 {
                     // The original action swallows exceptions, so a return is not a
@@ -119,7 +119,8 @@ public static partial class HostPluginBridge
         {
             if (DrawingDiagnosticsAllowed() && DrawingCallbackNames.Contains(name))
             {
-                context = Member(actionInstance, "ctx");
+                // TN 2.4 passes the Context directly instead of an ActionInstance.
+                context = Member(actionInstance, "ctx") ?? actionInstance;
                 trace = IsDrawingNode(Member(context, "Trigger"));
             }
         }
@@ -274,8 +275,19 @@ public static partial class HostPluginBridge
     }
 
     private static bool HasDrawingCallback(object node) => Member(node, "Actions") is IEnumerable actions &&
-        actions.Cast<object>().Any(action => DrawingCallbackNames.Contains(Member(action, "NamedCallbackName") as string ?? "") ||
-            DrawingScalars.Contains(Member(action, "VariableName") as string ?? ""));
+        actions.Cast<object>().Any(action => DrawingCallbackNames.Contains(ActionCallbackName(action) ?? "") ||
+            DrawingScalars.Contains(ActionVariableName(action) ?? ""));
+
+    // TN 2.4 actions are typed classes without ActionType; their Name holds the
+    // callback or variable that the legacy NamedCallbackName/VariableName fields carried.
+    private static string? ActionCallbackName(object? action) => Member(action, "ActionType") is not null
+        ? Member(action, "NamedCallbackName") as string
+        : action?.GetType().Name == "ActionNamedCallback" ? Member(action, "Name") as string : null;
+
+    private static string? ActionVariableName(object? action) => Member(action, "ActionType") is not null
+        ? Member(action, "VariableName") as string
+        : action?.GetType().Name.StartsWith("ActionVariable", StringComparison.Ordinal) == true
+            ? Member(action, "Name") as string : null;
 
     private static bool ParentsDrawingEnabled(object node)
     {

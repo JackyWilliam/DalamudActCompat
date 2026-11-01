@@ -2256,12 +2256,7 @@ public static partial class LegacyAssemblyRewriter
                 called.HasThis &&
                 called.Parameters.Count == 0)
             .ToArray();
-        if (instanceProcessStarts.Length != 1 ||
-            launchProcess.Body.Variables.Count < 3 ||
-            launchProcess.Body.Variables[1].VariableType.FullName !=
-                typeof(System.Diagnostics.Process).FullName ||
-            launchProcess.Body.Variables[2].VariableType.FullName !=
-                typeof(System.Diagnostics.ProcessStartInfo).FullName)
+        if (instanceProcessStarts.Length != 1)
         {
             throw new InvalidOperationException(
                 "Unexpected Triggernometry LaunchProcess shape: " +
@@ -2275,31 +2270,40 @@ public static partial class LegacyAssemblyRewriter
         var startInfoLoad = setStartInfo?.Previous;
         var processLoadForSet = startInfoLoad?.Previous;
         var discardStartResult = instanceStart.Next;
-        var returnInstruction = launchProcess.Body.Instructions.Single(instruction =>
-            instruction.OpCode.Code == Code.Ret);
-        if (processLoadForSet?.OpCode.Code != Code.Ldloc_1 ||
-            startInfoLoad?.OpCode.Code != Code.Ldloc_2 ||
+        // Locals are matched by use, not slot: TN 2.4 dropped the context local.
+        var processLocal = LoadedLocal(processLoadForSet, launchProcess.Body);
+        // TN 2.4 also wraps the process in `using`. IL cannot branch out of that try
+        // block, so a refused launch takes the block's own leave and still disposes.
+        var launchRegion = launchProcess.Body.ExceptionHandlers.SingleOrDefault(handler =>
+            IsInTryBlock(handler, instanceStart));
+        var launchExit = launchRegion is null
+            ? launchProcess.Body.Instructions.Single(instruction => instruction.OpCode.Code == Code.Ret)
+            : launchRegion.TryEnd.Previous;
+        if (processLocal?.VariableType.FullName != typeof(System.Diagnostics.Process).FullName ||
+            LoadedLocal(startInfoLoad, launchProcess.Body)?.VariableType.FullName !=
+                typeof(System.Diagnostics.ProcessStartInfo).FullName ||
             setStartInfo?.Operand is not MethodReference setStartInfoCall ||
             setStartInfoCall.DeclaringType.FullName !=
                 typeof(System.Diagnostics.Process).FullName ||
             setStartInfoCall.Name != "set_StartInfo" ||
-            processLoadForStart?.OpCode.Code != Code.Ldloc_1 ||
-            discardStartResult?.OpCode.Code != Code.Pop)
+            LoadedLocal(processLoadForStart, launchProcess.Body) != processLocal ||
+            discardStartResult?.OpCode.Code != Code.Pop ||
+            launchExit?.OpCode.Code is not (Code.Ret or Code.Leave or Code.Leave_S))
         {
             throw new InvalidOperationException(
                 "Unexpected Triggernometry LaunchProcess instruction sequence.");
         }
 
-        processLoadForSet.OpCode = OpCodes.Nop;
+        processLoadForSet!.OpCode = OpCodes.Nop;
         processLoadForSet.Operand = null;
         setStartInfo.OpCode = OpCodes.Call;
         setStartInfo.Operand = startProcessByInfo;
-        processLoadForStart.OpCode = OpCodes.Stloc_1;
-        processLoadForStart.Operand = null;
-        instanceStart.OpCode = OpCodes.Ldloc_1;
-        instanceStart.Operand = null;
+        processLoadForStart!.OpCode = OpCodes.Stloc;
+        processLoadForStart.Operand = processLocal;
+        instanceStart.OpCode = OpCodes.Ldloc;
+        instanceStart.Operand = processLocal;
         discardStartResult.OpCode = OpCodes.Brfalse;
-        discardStartResult.Operand = returnInstruction;
+        discardStartResult.Operand = launchExit;
 
         // Triggernometry first probes OverlayPlugin's private combatant-memory shape before
         // falling back to FFXIV_ACT_Plugin. Current OverlayPlugin no longer exposes the old
@@ -2600,6 +2604,14 @@ public static partial class LegacyAssemblyRewriter
             "ActionVariableList", "ActionVariableScalar", "ActionVariableTable",
             "ActionWindowMessage",
         ];
+        // TN 2.4 (top-level ActionInstance) split the clipboard write out of the scalar
+        // action and added tray popups. Both reuse helpers 2.3 already ran in this Host:
+        // the UI-thread clipboard writer and TraySlider.
+        if (module.GetType("Triggernometry.Core.ActionInstance") is not null)
+        {
+            expectedActions = [.. expectedActions, "ActionClipboard", "ActionTraySlider"];
+        }
+
         var actionClasses = types
             .Where(type =>
                 type.Namespace == "Triggernometry.Core.Actions" &&
@@ -3126,6 +3138,31 @@ public static partial class LegacyAssemblyRewriter
         {
             yield return nested;
         }
+    }
+
+    private static VariableDefinition? LoadedLocal(Instruction? instruction, Mono.Cecil.Cil.MethodBody body)
+        => instruction?.OpCode.Code switch
+        {
+            Code.Ldloc_0 => body.Variables[0],
+            Code.Ldloc_1 => body.Variables[1],
+            Code.Ldloc_2 => body.Variables[2],
+            Code.Ldloc_3 => body.Variables[3],
+            Code.Ldloc or Code.Ldloc_S => instruction.Operand as VariableDefinition,
+            _ => null,
+        };
+
+    private static bool IsInTryBlock(ExceptionHandler handler, Instruction target)
+    {
+        for (var instruction = handler.TryStart; instruction is not null && instruction != handler.TryEnd;
+             instruction = instruction.Next)
+        {
+            if (instruction == target)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private sealed record MatchaUpstreamSecrets(
