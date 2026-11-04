@@ -40,8 +40,12 @@ public static partial class LegacyAssemblyRewriter
             // TN 2.4 removed ActionOld's executor. Every typed action enters through
             // InternalExecute, and every failure reaches LogExecutionException before TN
             // rethrows it to the queue. An async action returns when it is scheduled.
+            // TN 2.4.3 appends the queued ActionInstance for cancellation; the observer
+            // only reads the action and its Context, so any trailing parameters are kept.
             var actionBase = module.GetType("Triggernometry.Core.ActionBase");
-            action = actionBase.Methods.Single(m => m.Name == "InternalExecute" && m.Parameters.Count == 2);
+            action = actionBase.Methods.Single(m => m.Name == "InternalExecute" && m.Parameters.Count >= 2 &&
+                m.Parameters[0].ParameterType.FullName == "Triggernometry.Core.Context" &&
+                m.Parameters[1].ParameterType.FullName == "System.Action");
             var actionIl = action.Body.GetILProcessor();
             var actionFirst = action.Body.Instructions[0];
             foreach (var instruction in Notification(actionIl, 1, "action-enter", null)) actionIl.InsertBefore(actionFirst, instruction);
