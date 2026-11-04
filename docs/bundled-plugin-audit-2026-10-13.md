@@ -143,3 +143,12 @@ FFXIV_ACT_Plugin 3.0.3.4（IINACT 2.10.3.11）、Cactbot 0.37.5 与随包 ACT �
 - 2.3.0.0 与 2.4.1.1 的 Host、进程内改写均通过；改写后结构断言与 IL 静态校验未新增错误。
 - 2.4 新增的 `ActionClipboard`、`ActionTraySlider` 沿用 2.3 已在 Host 中运行的剪贴板与 TraySlider 实现；PictoACT 所在的 BridgeNamazu 模块未改动。
 三项联网门禁：FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11、Cactbot 0.37.5 为当前版本；随包 ACT 插件在更新 TN 后重新检查通过。
+
+## 0.4.5.20 发布前核对（2026-11-04）
+
+随包扩展门禁发现 Triggernometry 已过期：上游 CN 维护版发布 2.4.3.0（上游提交 `0c1dbf6`），随包仍为 2.4.1.1。
+已通过在线更新装上 2.4.3.0 的用户无法加载 TN：2.4.3.0 为取消已出队动作，给 `ActionBase.InternalExecute` 追加了 `ActionInstance` 参数，Host 改写在 `ObserveTriggernometryDrawingPipeline` 失败。
+本版按前两个参数匹配该观察点，并只更新 TN：DLL、汉化与锁文件版本／SHA（`97c19636023df5a24e645ad7e4def4a6b2895ec8be3a3bf5247c5a6eee75da0b`）；ACT.FoxTTS、PostNamazu、银山雀儿与抹茶不变。
+- 2.4.1.1 与 2.4.3.0 的 Host、进程内改写均通过；IL 静态校验未新增错误。
+- 实现程序集成员对比：签名变化只有 `InternalExecute` 与 DACT 未引用的 `RealPlugin.CancelQueuedActions`，其余为新增；Host 运行时反射的成员不变。
+三项联网门禁：FFXIV_ACT_Plugin 3.0.3.4 / IINACT 2.10.3.11、Cactbot 0.37.5 为当前版本；随包 ACT 插件在更新 TN 后重新检查通过。
