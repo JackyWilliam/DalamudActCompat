@@ -41,7 +41,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 ### 2. Install the plugin
 
-Enter `/xlplugins`, search for **Dalamud ACT Compat**, and select Install.
+Enter `/xlplugins`, search for **DACT**, and select Install.
 
 Starting with 0.3.10.0, Dalamud installs an approximately 18 MiB core package, then the plugin fetches only missing Host, Cactbot, and bundled-extension resources. Verified same-version caches are reused; interrupted downloads resume, and a failed update retains the previous verified resources. Do not manually extract resource packs into the plugin directory.
 
