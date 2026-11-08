@@ -312,10 +312,14 @@ public sealed class Plugin : IDalamudPlugin
             "act-plugins",
             BundledActPluginManager.DirectoryName,
             out var bundledActPluginDirectory);
+        // The Host must match this plugin exactly; an older version's Host pack is never used
+        // (see ResourcePackManager.ResolveDirectoryAsync). Without one the download starts and
+        // a failure opens the core-resource dialog instead of running a mismatched Host.
         var hasPackagedHostResources = resourcePackManager.TryResolveAvailableDirectory(
             "host",
             "host",
-            out var packagedHostDirectory);
+            out var packagedHostDirectory,
+            allowPreviousVersion: false);
         hostResourcesAvailableAtStartup = hasPackagedHostResources;
         bundledActResourceStatus = hasBundledActPluginResources
             ? ResourcePackOperationStatus.Ready()
@@ -428,7 +432,9 @@ public sealed class Plugin : IDalamudPlugin
             ResolveCombatLogDirectory);
         zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
         // 战斗记录 · 开荒进度 keeps its own file; a failed load just starts an empty progression.
-        progressionStore = new ProgressionStore(jsonStore, paths.ProgressionFile);
+        var bossNames = dataManager.GetExcelSheet<Lumina.Excel.Sheets.BNpcName>();
+        progressionStore = new ProgressionStore(jsonStore, paths.ProgressionFile,
+            pull => FflogsPhases.Restore(pull, id => bossNames.GetRowOrDefault(id)?.Singular.ExtractText()));
         _ = progressionStore.LoadAsync(CancellationToken.None).ContinueWith(
             task => log.Warning(task.Exception!, "Progression history could not be loaded."),
             TaskContinuationOptions.OnlyOnFaulted);
@@ -2055,10 +2061,22 @@ public sealed class Plugin : IDalamudPlugin
             Volatile.Write(ref hostResourceStatus, ResourcePackOperationStatus.Downloading());
         }
 
-        StartBackgroundOperation(() => InitializeHostResourcesAsync(
-            cachedResourcesAvailable: false,
-            attempt,
-            attempt.Token));
+        StartBackgroundOperation(async () =>
+        {
+            await InitializeHostResourcesAsync(
+                    cachedResourcesAvailable: false,
+                    attempt,
+                    attempt.Token)
+                .ConfigureAwait(false);
+            // A retry after the startup check found no Host: start the extensions now instead of
+            // waiting for the next game start. Before sign-in the runtime startup does this once
+            // it sees the Host ready. A failed Host download no longer falls back to an older Host,
+            // so this retry is the way back for players whose first download failed.
+            if (GetHostResourceStatus().State == ResourcePackOperationState.Ready && cloudRuntimeInitialized)
+            {
+                await StartIndependentHostAsync(CurrentCloudRuntimeToken()).ConfigureAwait(false);
+            }
+        });
     }
 
     private void CancelHostResourceDownload()
@@ -2150,7 +2168,8 @@ public sealed class Plugin : IDalamudPlugin
                     "host",
                     "host",
                     cancellationToken,
-                    progress)
+                    progress,
+                    allowPreviousVersion: false)
                 .ConfigureAwait(false);
             hostSupervisor.SetPackagedHostDirectory(directory);
             matchaHostSupervisor.SetPackagedHostDirectory(directory);
@@ -2196,7 +2215,8 @@ public sealed class Plugin : IDalamudPlugin
         string packId,
         string localDirectoryName,
         CancellationToken cancellationToken,
-        IProgress<ResourcePackDownloadProgress>? progress = null)
+        IProgress<ResourcePackDownloadProgress>? progress = null,
+        bool allowPreviousVersion = true)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(3));
@@ -2206,7 +2226,8 @@ public sealed class Plugin : IDalamudPlugin
                     packId,
                     localDirectoryName,
                     timeout.Token,
-                    progress)
+                    progress,
+                    allowPreviousVersion)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (

@@ -64,7 +64,7 @@ After the build succeeds, run the Release workflow. It validates the package, up
 gh workflow run Release -f tag=v0.4.1.0 --repo JackyWilliam/DalamudActCompat --ref main
 ```
 
-Hosted Build CI compiles against public SDK 15 references and runs the Package, Host, Legacy Resource, and scanner suites. Formal packaging uses the local launcher references. If no Windows self-hosted runner is available, build the exact reviewed and merged main commit locally after CI passes, verify the dependency locks with the three `sync-*.ps1 -Check` commands in `release.yml`, and run the collector below. Create a draft release targeting that commit, upload the two resource packs first, then the manifest and core ZIP. Verify all four assets before publishing; download them anonymously afterward and compare SHA-256 hashes with the validated local files.
+Hosted Build CI compiles against public SDK 15 references and runs the Package, Host, Legacy Resource, and scanner suites. Formal packaging uses the local launcher references. If no Windows self-hosted runner is available, build the exact reviewed and merged main commit locally after CI passes, verify the dependency locks with the three `sync-*.ps1 -Check` commands in `release.yml`, and run the collector below. Create a draft release targeting that commit, upload the three resource packs first, then the manifest and core ZIP. Verify all five assets before publishing; download them anonymously afterward and compare SHA-256 hashes with the validated local files.
 
 ## Update PluginMaster
 

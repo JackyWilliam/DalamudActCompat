@@ -36,11 +36,17 @@ public sealed class ResourcePackManager : IDisposable
         catalog = File.Exists(manifestPath) ? LoadCatalog(manifestPath) : null;
     }
 
+    // allowPreviousVersion: whether a failed download may fall back to another version's verified
+    // pack. Cactbot and the bundled extensions work across versions, so they do; the Host must
+    // match this plugin exactly. In 1.0.0.0 a failed Host download (GitHub 504, gh-proxy 500) fell
+    // back to the previous version's Host, whose rewriter could not load Triggernometry 2.4.3.0,
+    // and nothing told the player. Without that fallback the caller reports the failure instead.
     public async Task<string> ResolveDirectoryAsync(
         string packId,
         string localDirectoryName,
         CancellationToken cancellationToken,
-        IProgress<ResourcePackDownloadProgress>? progress = null)
+        IProgress<ResourcePackDownloadProgress>? progress = null,
+        bool allowPreviousVersion = true)
     {
         var localDirectory = Path.Combine(pluginDirectory, localDirectoryName);
         var entry = catalog?.Packs.FirstOrDefault(candidate => string.Equals(
@@ -98,6 +104,12 @@ public sealed class ResourcePackManager : IDisposable
         {
             // HttpClient reports its own timeout as TaskCanceledException. Only the caller's
             // cancellation is terminal; transport timeouts still get cache fallback handling.
+            if (!allowPreviousVersion)
+            {
+                logger.Warning(
+                    $"Resource pack {entry.Id} {entry.Version} could not be downloaded and must match this version, so no older cache is used: {ex.GetBaseException().Message}");
+                throw;
+            }
             var fallback = TryResolvePrevious(entry.Id, entry.Sha256);
             if (fallback is not null)
             {
@@ -113,7 +125,8 @@ public sealed class ResourcePackManager : IDisposable
     public bool TryResolveAvailableDirectory(
         string packId,
         string localDirectoryName,
-        out string directory)
+        out string directory,
+        bool allowPreviousVersion = true)
     {
         var localDirectory = Path.Combine(pluginDirectory, localDirectoryName);
         var entry = catalog?.Packs.FirstOrDefault(candidate => string.Equals(
@@ -147,7 +160,7 @@ public sealed class ResourcePackManager : IDisposable
             return true;
         }
 
-        directory = TryResolvePrevious(entry.Id, entry.Sha256) ?? string.Empty;
+        directory = allowPreviousVersion ? TryResolvePrevious(entry.Id, entry.Sha256) ?? string.Empty : string.Empty;
         return directory.Length > 0;
     }
 

@@ -149,6 +149,33 @@ internal static class AccountNativeUiSmokeTests
             Check(Plays(SplashAnimationMode.EveryOpen, true, false) && Plays(SplashAnimationMode.EveryOpen, false, true) &&
                   !Plays(SplashAnimationMode.EveryOpen, false, false), "Splash on every open missed a reopen or replayed without one.");
             Check(!Plays(SplashAnimationMode.Off, true, true), "Splash played while switched off.");
+            // Closing ends a running splash. ImGui's clock keeps going while the window is closed, so a
+            // run cut short used to resume midway on a quick reopen, or be found already over after a
+            // longer one and send that open straight to the page.
+            Set("skinSettings", Activator.CreateInstance(typeof(ControlCenterWindow).GetField("skinSettings", hidden)!.FieldType, nonPublic: true)!);
+            Set("saveConfiguration", (Action)(() => { }));
+            var transition = typeof(ControlCenterWindow).GetField("visibilityTransition", hidden)!;
+            var transitionBefore = transition.GetValue(window);
+            bool StartsOver(double ranFor, Action closeAndReopen)
+            {
+                config.SplashAnimation = SplashAnimationMode.EveryOpen;
+                splashPlayed.SetValue(null, true);
+                splashStarted.SetValue(window, ImGui.GetTime() - ranFor);
+                closeAndReopen();
+                beginSplash.Invoke(window, null);
+                var startedOver = (double)splashStarted.GetValue(window)! == ImGui.GetTime();
+                splashStarted.SetValue(window, -1d);
+                return startedOver;
+            }
+            foreach (var ranFor in new[] { .7, 10 })
+            {
+                Check(StartsOver(ranFor, () => { window.OnClose(); window.OnOpen(); }),
+                    $"Splash on every open carried on a run closed {ranFor}s in instead of starting over.");
+                // Reopening during the close fade gets no OnClose/OnOpen from Dalamud.
+                Check(StartsOver(ranFor, () => { window.IsOpen = true; window.HideAnimated(); window.ShowAnimated(); }),
+                    $"Splash on every open carried on a run reopened during the close fade {ranFor}s in.");
+            }
+            window.IsOpen = false; transition.SetValue(window, transitionBefore);
             Check(JsonConvert.DeserializeObject<PluginConfiguration>("{}")!.SplashAnimation == SplashAnimationMode.FirstOpenPerLaunch,
                 "A configuration written before the splash setting did not keep the 1.0 splash behaviour.");
             splashPlayed.SetValue(null, true);
