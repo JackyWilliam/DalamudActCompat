@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DalamudActCompat.Protocol;
 using SharpCompress.Archives;
 
 namespace DalamudActCompat.Compatibility.PluginHost;
@@ -33,13 +34,20 @@ public sealed partial class BundledActPluginUpdateChecker : IDisposable
     private readonly string cacheDirectory;
     private readonly HttpClient httpClient;
     private readonly bool ownsHttpClient;
+    private readonly Func<Exception, string> describeFailure;
 
+    // describeFailure turns a failed source check into the reason shown in 三方扩展; the
+    // default is the exception's own message (tests and tools without localized text).
     public BundledActPluginUpdateChecker(
         string cacheDirectory,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        Func<Exception, string>? describeFailure = null)
     {
         this.cacheDirectory = Path.GetFullPath(cacheDirectory);
-        this.httpClient = httpClient ?? new HttpClient
+        this.describeFailure = describeFailure ?? (ex => ex.GetBaseException().Message);
+        // The CN Triggernometry build is fetched from 123pan, which some resolvers outside China
+        // cannot look up; FallbackDnsHttp retries those through Cloudflare / Google DNS.
+        this.httpClient = httpClient ?? new HttpClient(FallbackDnsHttp.CreateHandler(), disposeHandler: true)
         {
             Timeout = TimeSpan.FromSeconds(45),
         };
@@ -104,7 +112,7 @@ public sealed partial class BundledActPluginUpdateChecker : IDisposable
         {
             return new CheckOutcome(
                 null,
-                $"{bundled.Name}: {ex.GetBaseException().Message}");
+                $"{bundled.Name}: {describeFailure(ex)}");
         }
     }
 
@@ -272,6 +280,27 @@ public sealed partial class BundledActPluginUpdateChecker : IDisposable
             throw new InvalidDataException($"Update URL is not HTTPS: {sourceUrl}");
         }
 
+        try
+        {
+            await DownloadOnceAsync(uri, destinationPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+                                   ex is HttpRequestException { StatusCode: null } or TaskCanceledException or IOException &&
+                                   ex is not FileNotFoundException and not DirectoryNotFoundException)
+        {
+            // 123pan's edges stall or drop a connection now and then (the "A task was canceled"
+            // report); one fresh attempt, on a fresh connection, usually gets through. An HTTP
+            // status (404, 403) is the server's answer and is not retried.
+            File.Delete(destinationPath);
+            await DownloadOnceAsync(uri, destinationPath, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task DownloadOnceAsync(
+        Uri uri,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
         using var response = await httpClient
             .GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);

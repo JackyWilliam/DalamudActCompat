@@ -6,6 +6,7 @@ using DalamudActCompat.Fflogs;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using System.Numerics;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Meter;
 
@@ -431,7 +432,7 @@ public sealed class MeterWindow : Window
             label);
         if (hovered)
         {
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 hps ? "切换到 DPS 榜" : "切换到 HPS 榜",
                 hps ? "Switch to DPS ranking" : "Switch to HPS ranking"));
         }
@@ -461,7 +462,7 @@ public sealed class MeterWindow : Window
         }
         if (hovered)
         {
-            ImGui.SetTooltip(settings.FollowsParserScope
+            DactUi.Tooltip(settings.FollowsParserScope
                 ? text.Get("切换列表 / 平铺布局；人数跟随解析范围", "Switch list / tile layout; players follow the parse scope")
                 : text.Get("切换 8 人本 / 24 人本", "Switch 8-player / 24-player mode"));
         }
@@ -827,7 +828,7 @@ public sealed class MeterWindow : Window
             hovered ? MeterBackground.CurrentText : accent);
         if (hovered)
         {
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 settings.FollowsParserScope ? "当前跟随解析范围；可在插件的战斗统计页切回按榜单设置。" : compact ? "展开：显示完整队伍" : "收起：只显示自己",
                 settings.FollowsParserScope ? "Following parse scope; switch back in the Combat Meter settings page." : compact ? "Expand: show the full party" : "Collapse: show only yourself"));
         }
@@ -1484,7 +1485,7 @@ public sealed class MeterWindow : Window
             new Vector2(start.X + rdpsColumn.Offset + rdpsColumn.Width, end.Y));
         if (rdpsHovered)
         {
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 "rDPS（预估）\n基于本地战斗事件与团队增益归因实时估算的团队贡献伤害。结果仅供参考，可能因游戏版本、战斗事件状态及统计口径产生少量差异。",
                 "rDPS (estimated)\nReal-time raid-contribution damage estimated from local combat events and party buffs. Results are informational and may vary slightly with game versions, event state, and statistical conventions."));
         }
@@ -1496,7 +1497,7 @@ public sealed class MeterWindow : Window
             var updated = reference.LatestDataUpdatedAt is { } date
                 ? date.ToLocalTime().ToString("yyyy/MM/dd")
                 : "--";
-            ImGui.SetTooltip(text.Format(
+            DactUi.Tooltip(text.Format(
                 $"DPS Parse 预估\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{updated}",
                 $"Estimated DPS Parse\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {updated}"));
         }
@@ -1716,7 +1717,7 @@ public sealed class MeterWindow : Window
                         new Vector2(start.X + identity.Offset, start.Y),
                         new Vector2(start.X + identity.Offset + identity.Width, end.Y)))
                 {
-                    ImGui.SetTooltip(displayName);
+                    DactUi.Tooltip(displayName);
                 }
             }
             previewInteraction?.Observe(
@@ -1760,7 +1761,7 @@ public sealed class MeterWindow : Window
                 new Vector2(start.X + highestDamage.Offset + highestDamage.Width, end.Y));
             if (highestDamageHovered && row.HighestDamage > 0)
             {
-                ImGui.SetTooltip(text.Format(
+                DactUi.Tooltip(text.Format(
                     $"最高单次：{row.HighestDamageAction} {row.HighestDamage:N0}",
                     $"Highest hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
             }
@@ -1818,7 +1819,7 @@ public sealed class MeterWindow : Window
 
         if (estimate is not null && hovered && !highestDamageHovered)
         {
-            ImGui.SetTooltip(text.Format(
+            DactUi.Tooltip(text.Format(
                 $"DPS Parse 预估：{estimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
                 $"Estimated DPS Parse: {estimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {estimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }
@@ -2118,7 +2119,7 @@ public sealed class MeterWindow : Window
         MeterColumn? HighestDamage,
         MeterColumn? Deaths);
 
-    private static Vector4 JobColor(string job)
+    internal static Vector4 JobColor(string job)
     {
         var normalized = job.Trim().ToUpperInvariant();
         if (normalized is "PLD" or "WAR" or "DRK" or "GNB") return new Vector4(0.28f, 0.52f, 0.84f, 1);

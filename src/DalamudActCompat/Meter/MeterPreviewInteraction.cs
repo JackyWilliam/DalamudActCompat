@@ -1,12 +1,12 @@
 using Dalamud.Bindings.ImGui;
 using System.Numerics;
+using DalamudActCompat.UI;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Meter;
 
 internal sealed class MeterPreviewInteraction
 {
-    private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
-    private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
     private readonly List<MeterSlotDefinition> slots;
     private readonly Func<string?> getSelectedSlotId;
     private readonly Action<string> selectSlot;
@@ -40,15 +40,23 @@ internal sealed class MeterPreviewInteraction
             getSelectedSlotId(),
             slot.Id,
             StringComparison.OrdinalIgnoreCase);
-        if (hovered || (selected && highlightSelection))
+        // 1.0: the theme accent instead of the old gold / ice-blue frames, easing in and out.
+        // Hover lights a faint rim; the selection a tinted fill with a solid accent rim.
+        var key = $"##preview-slot-{slot.Id}-{(int)start.X}-{(int)start.Y}";
+        var hover = DactMotion.Float(ImGui.GetID(key + "-hover"), hovered ? 1 : 0, DactMotion.Fast);
+        var pick = DactMotion.Float(ImGui.GetID(key + "-pick"), selected && highlightSelection ? 1 : 0, DactMotion.Normal);
+        var s = DactUi.S;
+        var palette = DactTheme.Palette;
+        var radius = 4 * s;
+        if (pick > .01f)
         {
-            drawList.AddRect(
-                start,
-                end,
-                ImGui.GetColorU32(hovered ? IceBlue : Gold),
-                3,
-                ImDrawFlags.None,
-                hovered ? 1.8f : 1.2f);
+            drawList.AddRectFilled(start, end, ImGui.GetColorU32(palette.Accent with { W = .14f * pick }), radius);
+            drawList.AddRect(start, end, ImGui.GetColorU32(palette.Accent with { W = .9f * pick }), radius, ImDrawFlags.None, 1.5f * s);
+        }
+        if (hover > .01f)
+        {
+            drawList.AddRect(start, end, ImGui.GetColorU32(palette.Text with { W = .5f * hover * (1 - .6f * pick) }), radius,
+                ImDrawFlags.None, 1.2f * s);
         }
 
         if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))

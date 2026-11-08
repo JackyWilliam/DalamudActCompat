@@ -247,6 +247,34 @@ internal static partial class FriendsUiSmokeTests
             Check(FriendDutySnapshotProvider.Resolve(state.Item1, state.Item2, state.Item3, state.Item4, state.Item5, duties) is null,
                 "Logout/loading/field/unknown content exposed a duty.");
     }
+    // The same local fixtures as RunNativeAsync, for the offline UI baseline's 好友 page:
+    // a busy sponsor friend in a duty, an away friend, an offline one, the official notices,
+    // and one incoming plus one outgoing request. Nothing reaches the live service.
+    internal static async Task<FriendsUiManager> CreateVisualSampleAsync(Action openMain)
+    {
+        var api = new Fake(administrator: false, sponsorTier: 10) { VisualData = true, Self = new("native-self", "Raynor", false, 1) };
+        api.Profile = new CloudPresenceSettings("busy", "今晚刷坐骑", true, 1);
+        api.AddIncoming(3, history: true);
+        var texts = new[] { "今晚一起刷坐骑吗？我已经准备好了。", "好啊，等我打完这把。", "你什么时候结束？" };
+        api.Chat = api.Chat with { History = api.Chat.History.Take(3).Select((m, i) => i == 1
+            ? m with { Sender = new("user", api.Self.Id, api.Self.Username), RecipientId = api.Peer.Id, Text = texts[i] }
+            : i == 2 ? m with { Text = "", QuickMessageId = CloudChatPolicy.WhenFinished } : m with { Text = texts[i] }).ToArray(), LatestMessageId = 3 };
+        api.Requests.Add(new(Guid.NewGuid().ToString(), "pending", "incoming", new("request-in", "风之旅人", false, 3), default, default, null));
+        api.Requests.Add(new(Guid.NewGuid().ToString(), "pending", "outgoing", new("request-out", "白魔小葵"), default, default, null));
+        var awayId = Guid.NewGuid().ToString(); var officialId = Guid.NewGuid().ToString();
+        var own = new CloudChatMessage(4, awayId, new("user", api.Self.Id, api.Self.Username), "away", 1, Guid.NewGuid(),
+            "好，等你回来再一起打。", null, "history", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        var official = own with { Id = 5, ConversationId = officialId, Sender = new("official", null, "DACT 官方"), RecipientId = api.Self.Id,
+            Text = "欢迎使用好友功能，祝你冒险愉快！" };
+        api.AdditionalChats.Add(new(awayId, "friend", 1, new("away", "远方的旅行者"), 1, 0, 4, [own], [], 2, CloudChatPolicy.Notice));
+        api.AdditionalChats.Add(new(officialId, "official", 1, new("official", "DACT 官方"), 1, 0, 5, [official], [], null, CloudChatPolicy.Notice));
+        var controller = new FriendsChatController(api, new MemoryDisk(), TimeSpan.FromHours(1));
+        var ui = new FriendsUiManager(controller, openMain, administratorIcon: new AdministratorSmokeTests.PreviewIcon(),
+            sponsorIcon: new AdministratorSmokeTests.PreviewIcon(1000));
+        await Until(() => controller.Snapshot.Conversations.Count == 3 && controller.Snapshot.Friends?.PresenceSettings is not null, "visual sample");
+        return ui;
+    }
+
     public static async Task RunNativeAsync(bool runNotifications = true)
     {
         var api = new Fake(administrator: true, sponsorTier: 10) { VisualData = true, Self = new("native-self", "Raynor", true, 1) }; var disk = new MemoryDisk();
@@ -290,8 +318,11 @@ internal static partial class FriendsUiSmokeTests
     private static unsafe void NativeFrames(Fake api, FriendsChatController controller, FriendsUiManager ui, bool runNotifications)
     {
         var library = Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") ?? throw new Exception("Set DACT_TEST_CIMGUI to the installed cimgui.dll.");
-        // Dalamud's generated binding resolves beside the test assembly.
-        File.Copy(library, Path.Combine(AppContext.BaseDirectory, "cimgui.dll"), overwrite: true);
+        // Dalamud's generated binding resolves beside the test assembly. The skin tests that run
+        // first in this process may have loaded that copy already; it is then locked but in place.
+        var beside = Path.Combine(AppContext.BaseDirectory, "cimgui.dll");
+        try { File.Copy(library, beside, overwrite: true); }
+        catch (IOException) when (File.Exists(beside)) { }
         NativeLibrary.Load(library);
         var context = ImGui.CreateContext();
         try
@@ -470,7 +501,10 @@ internal static partial class FriendsUiSmokeTests
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-closed.png"));
             ui.ToggleDrawer(); for (var i = 0; i < 12; i++) Frame();
             if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, "friends-drawer-expanded.png"));
-            typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
+            // 1.0: a notification's 「全部展开」 floats the chat in its own focused window (the drawer's
+            // OpenChat shows the conversation on the 好友 page instead).
+            typeof(FriendsUiManager).GetMethod("OpenChatWindow", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(ui, [api.Id, new Vector2(1500, 400), new Vector2(1840, 520), true]);
             Frame(); Frame(); Check(Focus().Contains("DACTFriendChat"), "Explicit chat opening did not focus the chat.");
             Frame(true);
             api.AddIncoming(1, history: true); controller.Refresh();
@@ -560,7 +594,8 @@ internal static partial class FriendsUiSmokeTests
                 Key(ImGuiKey.Escape); Key(ImGuiKey.Escape);
                 if (scale == 1)
                 {
-                    typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
+                    typeof(FriendsUiManager).GetMethod("OpenChatWindow", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(ui, [api.Id, new Vector2(1500, 400), new Vector2(1840, 520), true]);
                     Frame(); Frame();
                     if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"friends-chat-{language.Id}.png"));
                 }

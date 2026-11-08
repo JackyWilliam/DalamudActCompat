@@ -4,6 +4,7 @@ using Dalamud.Interface.Components;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Infrastructure.Resources;
 using System.Numerics;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -76,7 +77,7 @@ public sealed class CoreResourceDownloadWindow : Window
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip(text.Get("取消下载", "Cancel download"));
+                DactUi.Tooltip(text.Get("取消下载", "Cancel download"));
             }
             return;
         }
@@ -94,7 +95,7 @@ public sealed class CoreResourceDownloadWindow : Window
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip(text.Get("下载核心组件", "Download core components"));
+            DactUi.Tooltip(text.Get("下载核心组件", "Download core components"));
         }
         ImGui.SameLine();
         ImGui.TextUnformatted(text.Get("是否下载核心组件？", "Download core components?"));

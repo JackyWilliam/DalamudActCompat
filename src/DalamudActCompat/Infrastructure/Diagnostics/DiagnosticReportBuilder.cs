@@ -56,7 +56,7 @@ internal static class DiagnosticReportBuilder
         DiagnosticReportSnapshot snapshot)
     {
         var report = new StringBuilder();
-        report.AppendLine("Dalamud ACT Compat diagnostic report");
+        report.AppendLine("DACT diagnostic report");
         report.AppendLine($"Generated: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
         report.AppendLine($"Plugin: {snapshot.PluginVersion}");
         report.AppendLine($"Dalamud: {snapshot.DalamudVersion}");

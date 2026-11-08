@@ -10,6 +10,7 @@ using DalamudActCompat.Infrastructure.Storage;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Encounters;
 
@@ -763,7 +764,7 @@ public sealed class EncounterWindow : Window
             TrimToWidth(name, Math.Max(20, nameRight - x - 6)));
         if (hovered && fflogsEstimate is not null)
         {
-            ImGui.SetTooltip(text.Format(
+            DactUi.Tooltip(text.Format(
                 $"DPS Parse 预估：{fflogsEstimate.Score}\n根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算。\nFFLogs 数据更新于：{fflogsEstimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}",
                 $"Estimated DPS Parse: {fflogsEstimate.Score}\nEstimated from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition.\nFFLogs data updated: {fflogsEstimate.DataUpdatedAt.ToLocalTime():yyyy/MM/dd}"));
         }

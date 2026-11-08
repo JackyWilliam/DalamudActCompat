@@ -1,8 +1,9 @@
 [
 {
   "Author": "raynording",
-  "Name": "Dalamud ACT Compat",
+  "Name": "DACT",
   "InternalName": "DalamudActCompat",
+  "Tags": ["Dalamud ACT Compat", "ACT", "DACT"],
   "AssemblyVersion": "0.4.5.20",
   "TestingAssemblyVersion": null,
   "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",

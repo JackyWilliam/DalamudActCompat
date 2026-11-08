@@ -1893,6 +1893,11 @@ public static partial class HostPluginBridge
     public static bool IsTriggernometryNetworkAllowed()
         => AuditDecision("triggernometry", "NetworkRequest");
 
+    // Replaces TN's `new HttpClient()` (see UseFallbackDnsForTriggernometry): same defaults,
+    // plus a Cloudflare / Google DNS lookup when the system resolver fails.
+    public static System.Net.Http.HttpClient CreateTriggernometryHttpClient()
+        => DalamudActCompat.Protocol.FallbackDnsHttp.CreateClient();
+
     private static bool TryUsePostNamazuLoopbackPrefixes(
         HttpListener listener,
         IReadOnlyList<string> originalPrefixes)

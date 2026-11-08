@@ -3,14 +3,13 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
 public sealed class SimplifiedHomeWindow : Window
 {
     private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
-    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
-    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
     private static readonly string VersionLabel =
         $"v{typeof(SimplifiedHomeWindow).Assembly.GetName().Version?.ToString(4) ?? "0.0.0.0"}";
     private readonly PluginConfiguration configuration;
@@ -70,11 +69,12 @@ public sealed class SimplifiedHomeWindow : Window
         }
 
         DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
-        DactTheme.PushStyleColor(ImGuiCol.CheckMark, IceBlue);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(22, 20));
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
+        // Indigo of the DACT logo, like the control center; skins substitute their own border.
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(.208f, .251f, .420f, 1));
+        DactTheme.PushStyleColor(ImGuiCol.CheckMark, DactTheme.Palette.Accent);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(20, 18));
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 6);
         Flags = DactTheme.WindowFlags(Flags);
     }
 
@@ -84,52 +84,34 @@ public sealed class SimplifiedHomeWindow : Window
         ImGui.PopStyleColor(3);
     }
 
+    // 精简主页 in the 1.0 controls: logo, version, the meter switch and the way back.
     public override void Draw()
     {
+        DactUi.BeginFrame();
         DactTheme.DrawGameWindow();
+        var s = DactUi.S;
         DrawCloseButton();
         DrawCenteredLogo();
-        DrawCenteredText(VersionLabel, new Vector4(0.66f, 0.70f, 0.75f, 1));
-        ImGui.Dummy(new Vector2(1, 18));
-        ImGui.Separator();
-        ImGui.Dummy(new Vector2(1, 12));
+        DrawCenteredText(VersionLabel, DactTheme.Palette.Muted);
+        ImGui.Dummy(new Vector2(1, 6 * s));
+        DactUi.Divider();
+        ImGui.Dummy(new Vector2(1, 4 * s));
 
         var meterVisible = configuration.Meter.IsVisible;
-        if (DactTheme.Checkbox(
-                text.Get("显示战斗统计悬浮窗", "Show Combat Meter overlay"),
-                ref meterVisible))
-        {
-            setMeterVisible(meterVisible);
-        }
-
-        ImGui.Dummy(new Vector2(1, 8));
-        if (DactTheme.Button(
-                text.Get("退出精简模式", "Exit simplified mode"),
-                new Vector2(-1, 0)))
-        {
+        if (DactUi.ToggleRow(text.Get("显示战斗统计悬浮窗", "Show Combat Meter overlay"), ref meterVisible)) setMeterVisible(meterVisible);
+        ImGui.Dummy(new Vector2(1, 4 * s));
+        if (DactUi.Button(text.Get("退出精简模式", "Exit simplified mode") + "##exit-simplified", ButtonKind.Primary, width: ImGui.GetContentRegionAvail().X))
             exitSimplifiedMode();
-        }
     }
 
     private void DrawCloseButton()
     {
-        const float buttonSize = 24;
-        var startX = ImGui.GetCursorPosX();
-        var availableWidth = ImGui.GetContentRegionAvail().X;
-        ImGui.SetCursorPosX(startX + Math.Max(0, availableWidth - buttonSize));
-        DactTheme.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.16f, 0.22f, 0.30f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.22f, 0.29f, 0.38f, 1));
-        if (DactTheme.Button("×##close-simplified-home", new Vector2(buttonSize)))
-        {
-            // Closing the menu must not disable simplified mode; `/actcompat` reopens it.
-            IsOpen = false;
-        }
-        ImGui.PopStyleColor(3);
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip(text.Get("关闭精简主页", "Close simplified home"));
-        }
+        var s = DactUi.S;
+        var start = ImGui.GetCursorPos();
+        ImGui.SetCursorPos(new Vector2(ImGui.GetWindowWidth() - 10 * s - 28 * s, 10 * s));
+        // Closing the menu must not disable simplified mode; `/actcompat` reopens it.
+        if (DactUi.IconButton("##close-simplified-home", "close", text.Get("关闭精简主页", "Close simplified home"))) IsOpen = false;
+        ImGui.SetCursorPos(start);
     }
 
     private void DrawCenteredLogo()

@@ -3,6 +3,8 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
+using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
@@ -72,6 +74,9 @@ internal static partial class SkinSmokeTests
         Set("isStatusVisible", (Func<bool>)(() => true));
         Set("getGameRegionSelection", (Func<GameRegionSelection>)(() => GameRegionResolver.Resolve(GameRegionMode.Auto, "Chinese", 4)));
         Set("setGameRegionMode", (Action<GameRegionMode>)(_ => { }));
+        // 1.0 主页 status tiles read the extension list and the cloud snapshot.
+        Set("discoverPlugins", (Func<IReadOnlyList<InstalledActPlugin>>)(() => []));
+        Set("cloud", new CloudUiBridge(() => CloudClientSnapshot.SignedOut(), _ => { }, _ => { }, _ => { }, () => { }, () => { }, _ => { }, () => { }, _ => { }, _ => { }, () => { }));
         var overview = typeof(ControlCenterWindow).GetMethod("DrawOverview", flags)!;
         var selectedStyle = typeof(ControlCenterWindow).GetMethod("PushOpenWindowButtonStyle", BindingFlags.Static | BindingFlags.NonPublic)!;
         var selectedStylePop = typeof(ControlCenterWindow).GetMethod("PopOpenWindowButtonStyle", BindingFlags.Static | BindingFlags.NonPublic)!;
@@ -138,15 +143,17 @@ internal static partial class SkinSmokeTests
                 Check(clicks == before + 1, $"{skin}: disabled button became clickable.");
                 if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"DACT-按钮-{skin}.png"));
                 io.AddMousePosEvent(-100, -100); Frame(true); Frame(true);
-                // Inspect the real homepage child, not a duplicate mock: at least
-                // one ordinary quick action must submit the visible button fill.
+                // Inspect the real homepage child, not a duplicate mock: at least one ordinary
+                // (secondary) quick action must submit the 1.0 button fill, the skin's Hover slot.
                 var hasFill = false;
+                var secondaryFill = ImGui.ColorConvertFloat4ToU32(palette.Hover);
+                Check(palette.Hover != palette.Raised, $"{skin}: secondary buttons would vanish into their card.");
                 for (var i = 0; i < context.Windows.Size; i++)
                 {
                     var child = context.Windows[i];
-                    if (!(Marshal.PtrToStringUTF8((nint)child.Name) ?? "").Contains("overview-quick-actions-card")) continue;
+                    if (!(Marshal.PtrToStringUTF8((nint)child.Name) ?? "").Contains("home-quick-actions")) continue;
                     for (var v = 0; v < child.DrawList.VtxBuffer.Size; v++)
-                        hasFill |= child.DrawList.VtxBuffer[v].Col == ImGui.ColorConvertFloat4ToU32(normal);
+                        hasFill |= child.DrawList.VtxBuffer[v].Col == secondaryFill;
                 }
                 Check(hasFill, $"{skin}: real homepage quick buttons did not render their distinct fill.");
                 if (output is not null) raster.Save(ImGui.GetDrawData(), Path.Combine(output, $"DACT-首页-{skin}.png"));

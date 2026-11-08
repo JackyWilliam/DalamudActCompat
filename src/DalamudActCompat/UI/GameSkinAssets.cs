@@ -37,6 +37,14 @@ internal sealed class GameSkinAssets
 
     public bool HasWindowTextures => Files.Where(name => name.StartsWith("WindowA_Bg", StringComparison.Ordinal)).All(name => resolve(name) is not null);
 
+    // Dalamud releases a shared texture about 2 s after its last use. Touched every frame while
+    // the skin is in use, so a window opened later never draws its first frames without them
+    // (a plain background, then the game frame popping in: the 「闪一下」 on opening DACT).
+    public void KeepAlive()
+    {
+        foreach (var name in Files) resolve(name);
+    }
+
     private static void Image(ImDrawListPtr draw, IDalamudTextureWrap texture, Vector2 atlasSize,
         Vector2 source, Vector2 sourceSize, Vector2 min, Vector2 max, Vector4 tint)
         => draw.AddImage(texture.Handle, min, max, source / atlasSize, (source + sourceSize) / atlasSize, ImGui.GetColorU32(tint));
@@ -99,9 +107,20 @@ internal sealed class GameSkinAssets
         return true;
     }
 
+    // The sprites' scale for the current font; the window frame, tooltips and layouts that keep
+    // clear of the rim all use it, so they agree on where the rim is drawn.
+    public static float Scale => Math.Max(.75f, ImGui.GetFontSize() / 17f);
+
+    // The window sprite ends in a 10 px transparent shadow tail below a 6 px rim, so the paper
+    // inside a full window stops this far above the window's bottom edge.
+    public static float BottomRimInset => 16 * Scale;
+
+    // The paper starts 7 px in on the left and 9 px in on the right (the right rim carries a
+    // shadow); one inset that clears both.
+    public static float SideRimInset => 9 * Scale;
+
     public bool Window()
-        => Window(ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(),
-            Math.Max(.75f, ImGui.GetFontSize() / 17f), clipToContent: false);
+        => Window(ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(), Scale, clipToContent: false);
 
     public void PopupFrame()
     {
@@ -141,12 +160,19 @@ internal sealed class GameSkinAssets
         draw.PushClipRect(min, max, clipToContent);
         float[] xs = [min.X, min.X + side, max.X - side, max.X];
         float[] ys = [min.Y, min.Y + top, max.Y - bottom, max.Y];
+        // A panel shorter or narrower than the sprite (a tooltip, a small menu) crops the edge
+        // slices from their outer side instead of squashing them, so the rim keeps the game's
+        // thickness and corner radius. Full-size windows take whole slices as before.
+        float[] sourceX = [0, 0, 32 - side / scale];
+        float[] sourceW = [side / scale, 32, side / scale];
+        float[] sourceY = [0, 0, 96 - bottom / scale];
+        float[] sourceH = [top / scale, 32, bottom / scale];
         for (var y = 0; y < 3; y++) for (var x = 0; x < 3; x++)
         {
             var texture = y == 1 ? x == 1 ? middle : vertical : x == 1 ? horizontal : corner;
             var atlas = y == 1 ? new Vector2(32, 32) : new Vector2(32, 96);
-            var source = new Vector2(x == 2 ? 16 : 0, y == 2 ? 64 : 0);
-            var sourceSize = new Vector2(x == 1 ? 32 : 16, y == 0 ? 64 : 32);
+            var source = new Vector2(sourceX[x], sourceY[y]);
+            var sourceSize = new Vector2(sourceW[x], sourceH[y]);
             // ULD uses tiled rendering for the window paper and edge strips.
             // Stretching a 32px paper swatch over the whole panel magnifies grain.
             var tileWidth = x == 1 ? sourceSize.X * scale : xs[x + 1] - xs[x];

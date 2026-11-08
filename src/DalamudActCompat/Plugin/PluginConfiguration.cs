@@ -10,7 +10,7 @@ namespace DalamudActCompat.Plugin;
 
 public sealed class PluginConfiguration : IPluginConfiguration
 {
-    private const int CurrentVersion = 17;
+    private const int CurrentVersion = 18;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -71,6 +71,26 @@ public sealed class PluginConfiguration : IPluginConfiguration
         CreateDefaultOverlayWindows();
 
     public MeterSettings Meter { get; set; } = new();
+
+    // 新版导览: set once when an existing installation upgrades to 1.0, cleared when the tour ends.
+    public bool ShowNewVersionTour { get; set; }
+
+    // 全局搜索 shortcut: works anywhere in the game, even with DACT closed, and opens only the search
+    // box. A virtual-key code plus modifiers, default Ctrl+Shift+K (user choice). The switch turns
+    // it off and keeps the chord for when it is switched back on; Key 0 also counts as off.
+    public bool SearchHotkeyEnabled { get; set; } = true;
+    public int SearchHotkeyKey { get; set; } = 0x4B;
+    public OverlayHotkeyModifiers SearchHotkeyModifiers { get; set; } = OverlayHotkeyModifiers.Control | OverlayHotkeyModifiers.Shift;
+
+    // A method, not a property, so it is not written to the configuration file.
+    public bool SearchHotkeyActive() => SearchHotkeyEnabled && SearchHotkeyKey != 0;
+
+    // 场景方案: per content type meter/overlay presets; off until the player enables it.
+    public ScenePresetSettings Scenes { get; set; } = new();
+
+    // AI 助手: off by default. The API key never lives here (see AiKeyStore), so it stays out of
+    // the configuration file and cloud sync.
+    public DalamudActCompat.Ai.AiSettings Ai { get; set; } = new();
 
     public UiSkinSettings Appearance { get; set; } = new();
 
@@ -330,6 +350,14 @@ public sealed class PluginConfiguration : IPluginConfiguration
             // transparently. Preserve that appearance until the user opts in.
             Meter.HorizontalWindow.BackgroundOpacity = 0;
             Version = 17;
+            changed = true;
+        }
+
+        if (Version < 18)
+        {
+            // People upgrading from 0.4 get the 1.0 tour once; fresh installs start at 18.
+            ShowNewVersionTour = true;
+            Version = 18;
             changed = true;
         }
 

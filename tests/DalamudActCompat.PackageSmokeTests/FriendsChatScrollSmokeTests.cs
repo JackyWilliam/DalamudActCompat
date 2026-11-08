@@ -26,7 +26,9 @@ internal static partial class FriendsUiSmokeTests
         }
         void Settle() { for (var i = 0; i < 8; i++) Frame(); }
         Frame();
-        typeof(FriendsUiManager).GetMethod("OpenChat", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ui, [api.Id]);
+        // The floating chat (a notification's 全部展开) owns this history.
+        typeof(FriendsUiManager).GetMethod("OpenChatWindow", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(ui, [api.Id, new Vector2(1000, 400), new Vector2(1340, 520), true]);
         Settle();
         ImGuiWindowPtr History()
         {

@@ -1126,6 +1126,14 @@ void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
         var implementation = loadContext.Assemblies.Single(assembly => assembly.GetName().Name == "TriggernometryPlugin");
         DrawingDiagnosticTests.ValidateRewrittenAssembly(implementation);
         ValidateTriggernometryEventTimePatch(patchedTriggernometryAssemblyPath);
+        ValidateTriggernometryFallbackDnsPatch(patchedTriggernometryAssemblyPath);
+        // Run one rewritten constructor for real: TN references the .NET Framework System.Net.Http,
+        // the factory returns the runtime's; the static field must accept it.
+        var httpHelper = implementation.GetType("Triggernometry.Utilities.HttpHelper", throwOnError: true)!;
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(httpHelper.TypeHandle);
+        var helperClient = httpHelper.GetField("client", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null);
+        Assert(helperClient is System.Net.Http.HttpClient { Timeout.TotalSeconds: 10 },
+            "Triggernometry's rewritten HttpHelper client did not initialize through the DNS fallback factory.");
         var transcriber = implementation.GetType("Triggernometry.FFXIV.LogTranscribe.LogTranscriber");
         if (transcriber is not null)
         {
@@ -1187,6 +1195,30 @@ void ValidateTriggernometryEventTimePatch(string assemblyPath)
         fireTiming.Length == 2 &&
         fireTiming.All(method => !CallsNow(method) && CallsBridge(method, nameof(HostPluginBridge.TriggernometryFireNow))),
         "The bundled Triggernometry still measures refire windows and action delays with Host receipt time.");
+}
+
+// TN's own downloads (update manifest, translations, PostNamazu, trigger repositories) must use
+// the Host's client that retries failed DNS lookups through Cloudflare / Google.
+void ValidateTriggernometryFallbackDnsPatch(string assemblyPath)
+{
+    using var module = ModuleDefinition.ReadModule(assemblyPath);
+    var instructions = module.Types.SelectMany(EnumerateCecilTypes)
+        .SelectMany(type => type.Methods)
+        .Where(method => method.HasBody)
+        .SelectMany(method => method.Body.Instructions)
+        .ToArray();
+    var plainClients = instructions.Count(instruction =>
+        instruction.OpCode == Mono.Cecil.Cil.OpCodes.Newobj &&
+        instruction.Operand is MethodReference { Name: ".ctor", HasParameters: false, DeclaringType.FullName: "System.Net.Http.HttpClient" });
+    var fallbackClients = instructions.Count(instruction =>
+        instruction.Operand is MethodReference
+        {
+            Name: nameof(HostPluginBridge.CreateTriggernometryHttpClient),
+            DeclaringType.Name: nameof(HostPluginBridge),
+        });
+    Assert(plainClients == 0 && fallbackClients >= 3,
+        $"Triggernometry still creates {plainClients} HttpClient(s) with the system resolver only ({fallbackClients} use the fallback).");
+    Console.WriteLine($"Triggernometry HTTP clients use the DNS fallback: {fallbackClients}.");
 }
 
 async Task ValidateSequenceRegressionTerminatesHostAsync()

@@ -20,6 +20,26 @@ Source: <https://github.com/microsoft/ClearScript/tree/7.5.0>.
 ACTLogsUploader, the Titan tool (`ACT.JSB_5`), and their native V8/ICU companions
 are not bundled or downloaded by DACT; users supply those files themselves.
 
+The optional AI assistant uses the official Anthropic C# SDK 13.6.0
+(Copyright 2023 Anthropic, PBC), licensed under Apache-2.0; its license text is
+included as `LICENSES/Anthropic-SDK-Apache-2.0.txt`.
+Source: <https://github.com/anthropics/anthropic-sdk-csharp>.
+Its dependencies Microsoft.Extensions.AI.Abstractions 10.5.1
+(<https://github.com/dotnet/extensions>) and Microsoft.Extensions.ObjectPool
+10.0.1 (<https://github.com/dotnet/aspnetcore>) are licensed under MIT; the
+license text is included as `LICENSES/dotnet-MIT.txt`. The assistant is off by
+default and contacts only the provider and endpoint the user configures, with
+the user's own API key.
+
+The assistant's per-job fight review notes (`Ai/JobKnowledge/*.md`, embedded in
+`DalamudActCompat.dll`) adapt the rotation checks and advice of xivanalysis
+(Copyright (c) 2018 Saxon Landers & contributors), licensed under MIT; the
+license text is included as `LICENSES/xivanalysis-MIT.txt`.
+Source: <https://github.com/xivanalysis/xivanalysis/tree/dawntrail>.
+Action and status ids in those notes were checked against XIVAPI
+(<https://v2.xivapi.com>); names shown to the user come from the user's own game
+client.
+
 The release archive also includes the official OverlayPlugin/cactbot release
 package. On first load, DalamudActCompat installs it into the current user's
 own plugin configuration directory; on a later DalamudActCompat update, it

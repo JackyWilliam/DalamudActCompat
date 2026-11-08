@@ -56,14 +56,67 @@ Directory.CreateDirectory(testRoot);
 
 try
 {
+    if (args.Contains("--device-limit-only", StringComparer.Ordinal))
+    {
+        await CloudDeviceLimitSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
+    if (args.Contains("--ai-only", StringComparer.Ordinal))
+    {
+        AiAssistantSmokeTests.Run(testRoot);
+        return 0;
+    }
     if (args.Contains("--postnamazu-command-only", StringComparer.Ordinal))
     {
         PostNamazuCommandSmokeTests.Run();
         return 0;
     }
+    if (args.Length == 2 && args[0] == "--dns-fallback-probe")
+    {
+        // Live network check (not part of the offline suite): DoH answers for the host, then a
+        // HEAD through the fallback client that DACT's update check and the Host's TN use.
+        var host = new Uri(args[1]).Host;
+        var addresses = await DalamudActCompat.Protocol.FallbackDnsHttp.ResolveOverHttpsAsync(host, CancellationToken.None);
+        Console.WriteLine($"DoH {host}: {string.Join(", ", addresses.Select(address => address.ToString()))}");
+        using var probe = DalamudActCompat.Protocol.FallbackDnsHttp.CreateClient();
+        using var head = await probe.SendAsync(new HttpRequestMessage(HttpMethod.Head, args[1]));
+        Console.WriteLine($"HEAD {args[1]}: {(int)head.StatusCode} {head.Content.Headers.ContentLength}");
+        // Again with the system resolver failing, as it does for the players who reported it.
+        typeof(DalamudActCompat.Protocol.FallbackDnsHttp)
+            .GetField("systemLookup", BindingFlags.NonPublic | BindingFlags.Static)!
+            .SetValue(null, new Func<string, CancellationToken, Task<System.Net.IPAddress[]>>((_, _) =>
+                throw new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound)));
+        using var fallbackProbe = DalamudActCompat.Protocol.FallbackDnsHttp.CreateClient();
+        using var fallbackHead = await fallbackProbe.SendAsync(new HttpRequestMessage(HttpMethod.Head, args[1]));
+        Console.WriteLine($"HEAD with system DNS failing: {(int)fallbackHead.StatusCode}");
+        using var plain = new HttpClient();
+        try
+        {
+            await plain.SendAsync(new HttpRequestMessage(HttpMethod.Head, args[1]));
+            Console.WriteLine("plain HttpClient: reached (system DNS still works for it, expected)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"plain HttpClient: {ex.GetBaseException().Message}");
+        }
+        return addresses.Length > 0 && head.IsSuccessStatusCode && fallbackHead.IsSuccessStatusCode ? 0 : 1;
+    }
     if (args.Length == 2 && args[0] == "--help-screenshots")
     {
         HelpScreenshotGenerator.Run(args[1]);
+        return 0;
+    }
+    if (args.Length == 2 && args[0] == "--ui-baseline")
+    {
+        return UiBaselineGenerator.Run(args[1]);
+    }
+    if (args.Length == 2 && args[0] == "--ui-baseline-friends")
+    {
+        // The friend drawer, chat and notifications are captured by their native test in a
+        // fresh process: cimgui can only be copied beside the tests before it is loaded.
+        Environment.SetEnvironmentVariable("DACT_NATIVE_UI_OUTPUT", args[1]);
+        Directory.CreateDirectory(args[1]);
+        await FriendsUiSmokeTests.RunNativeAsync();
         return 0;
     }
     if (args.Contains("--help-only", StringComparer.Ordinal))
@@ -74,6 +127,11 @@ try
     if (args.Contains("--ban-native-only", StringComparer.Ordinal))
     {
         BanRecoveryNativeSmokeTests.Run();
+        return 0;
+    }
+    if (args.Contains("--file-picker-native-only", StringComparer.Ordinal))
+    {
+        FilePickerNativeSmokeTests.Run();
         return 0;
     }
     if (args.Contains("--ban-recovery-only", StringComparer.Ordinal))
@@ -167,6 +225,7 @@ try
     MeterDisplayScopeSmokeTests.Run(args.Contains("--meter-display-scope-only", StringComparer.Ordinal) &&
         Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
+    AiAssistantSmokeTests.Run(testRoot);
     EnglishLocalizationSmokeTests.Run();
     UiLanguageSmokeTests.Run();
     HelpWindowSmokeTests.Run();
@@ -377,6 +436,7 @@ try
     await ValidateCommittedRegistrationSurvivesCredentialWriteFailureAsync(testRoot);
     await ValidateCloudBanResponseEnforcesMarkerAsync(testRoot);
     await CloudBanRecoverySmokeTests.RunAsync(testRoot);
+    await CloudDeviceLimitSmokeTests.RunAsync(testRoot);
     var cloudIntegrationBaseUrl = Environment.GetEnvironmentVariable(
         "DACT_CLOUD_INTEGRATION_BASE_URL");
     var cloudIntegrationAdminToken = Environment.GetEnvironmentVariable(
@@ -734,7 +794,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 17 &&
+        configuration.Version == 18 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -2363,7 +2423,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 17 &&
+        legacyConfiguration.Version == 18 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -2393,7 +2453,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 17 &&
+        parserMigration.Version == 18 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -2407,7 +2467,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 17 &&
+        newConfiguration.Version == 18 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -2446,7 +2506,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousHorizontalUser.ApplyMigrations() &&
-        previousHorizontalUser.Version == 17 &&
+        previousHorizontalUser.Version == 18 &&
         !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
@@ -2471,7 +2531,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousCompositeIdentityUser.ApplyMigrations() &&
-        previousCompositeIdentityUser.Version == 17 &&
+        previousCompositeIdentityUser.Version == 18 &&
         previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
         previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
         !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
@@ -2500,7 +2560,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousOpacityUser.ApplyMigrations() &&
-        previousOpacityUser.Version == 17 &&
+        previousOpacityUser.Version == 18 &&
         Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         previousOpacityUser.Meter.RoleSplitDamageCompact &&
@@ -2532,7 +2592,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousSharedRoleUser.ApplyMigrations() &&
-        previousSharedRoleUser.Version == 17 &&
+        previousSharedRoleUser.Version == 18 &&
         previousSharedRoleUser.Meter.RoleSplitDamageSlots.Select(static slot =>
             (slot.Metric, slot.Visible)).SequenceEqual(
                 previousSharedRoleUser.Meter.RoleSplitHealerSlots.Select(static slot =>
@@ -2567,7 +2627,7 @@ static void ValidateMeterRows()
     previousSharedRoleAppearance.Meter.RoleSplitWindow.SortMode = MeterSortMode.Hps;
     Assert(
         previousSharedRoleAppearance.ApplyMigrations() &&
-        previousSharedRoleAppearance.Version == 17 &&
+        previousSharedRoleAppearance.Version == 18 &&
         previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsEnabled &&
         previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsEnabled &&
         previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
@@ -2597,7 +2657,7 @@ static void ValidateMeterRows()
         Newtonsoft.Json.JsonConvert.SerializeObject(previousSharedRoleAppearance));
     Assert(
         restoredRoleAppearance is not null &&
-        restoredRoleAppearance.Version == 17 &&
+        restoredRoleAppearance.Version == 18 &&
         restoredRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
         !restoredRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
         !restoredRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
@@ -2660,7 +2720,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 17 &&
+        previousDebugConfiguration.Version == 18 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -2672,7 +2732,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 17 &&
+        previousV6Configuration.Version == 18 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -2711,7 +2771,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 17 &&
+        previousGenericPluginUser.Version == 18 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -2723,7 +2783,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 17 &&
+        previousEdpsUser.Version == 18 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -2739,7 +2799,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 17 &&
+        previousCustomMetricUser.Version == 18 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2768,7 +2828,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 17 &&
+        previousTimelineUser.Version == 18 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2857,7 +2917,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 17 &&
+        previousV5CactbotUser.Version == 18 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(
@@ -3550,7 +3610,8 @@ static void ValidateIndependentMeterWindows()
         "src",
         "DalamudActCompat",
         "Meter",
-        "MeterStyleEditorWindow.cs"));
+        "MeterStyleEditorWindow.cs")) +
+        File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "Meter", "MeterStyleEditorWindow.Layout.cs"));
     var meterSettingsSource = File.ReadAllText(Path.Combine(
         projectRoot,
         "src",
@@ -3617,7 +3678,7 @@ static void ValidateIndependentMeterWindows()
         classicSource.Contains("FirstOrDefault(static row => row.IsLocalPlayer)", StringComparison.Ordinal) &&
         classicSource.Contains("minimumIdentityWidth", StringComparison.Ordinal) &&
         classicSource.Contains("杰克...", StringComparison.Ordinal) &&
-        classicSource.Contains("SetTooltip(displayName)", StringComparison.Ordinal) &&
+        classicSource.Contains("DactUi.Tooltip(displayName)", StringComparison.Ordinal) &&
         classicSource.Contains("ShouldDrawTeamSummary(settings)", StringComparison.Ordinal) &&
         classicSource.Contains("MinimumSize = new Vector2(120, 90)", StringComparison.Ordinal),
         "The classic Meter lost its table modes, compact summary rule, or compressible identity column.");
@@ -3642,8 +3703,8 @@ static void ValidateIndependentMeterWindows()
         !roleSource.Contains("titleHovered", StringComparison.Ordinal),
         "Role split lost its independent D/T/H columns, collapse control, empty-state collapse, or height animation.");
     Assert(
-        editorSource.Contains("＋ 添加槽位", StringComparison.Ordinal) &&
-        editorSource.Contains("恢复此模板默认槽位", StringComparison.Ordinal) &&
+        editorSource.Contains("\"添加槽位\"", StringComparison.Ordinal) &&
+        editorSource.Contains("\"恢复默认槽位\"", StringComparison.Ordinal) &&
         editorSource.Contains("页面预览", StringComparison.Ordinal) &&
         !editorSource.Contains("真实页面预览", StringComparison.Ordinal) &&
         editorSource.Contains("meterWindow.DrawEditorPreview", StringComparison.Ordinal) &&
@@ -3674,7 +3735,7 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("真的要退出吗？", StringComparison.Ordinal) &&
         editorSource.Contains("保存并退出", StringComparison.Ordinal) &&
         editorSource.Contains("不保存并退出", StringComparison.Ordinal) &&
-        editorSource.Contains("BeginPopupModal", StringComparison.Ordinal) &&
+        editorSource.Contains("DactUi.BeginDialog(ExitDialog", StringComparison.Ordinal) &&
         editorSource.Contains("editingSnapshot", StringComparison.Ordinal) &&
         !editorSource.Contains("hasUnsavedChanges", StringComparison.Ordinal) &&
         editorSource.Contains("if (!HasUnsavedConfigurationChanges())", StringComparison.Ordinal) &&
@@ -3684,8 +3745,8 @@ static void ValidateIndependentMeterWindows()
         editorSource.Contains("ImGuiWindowFlags.NoScrollbar", StringComparison.Ordinal) &&
         // Footer visibility and clicks are verified by SkinSmokeTests across font scales;
         // requiring one specific height calculation would reject equivalent layout fixes.
-        editorSource.Contains("DrawInlineHelp", StringComparison.Ordinal) &&
-        editorSource.Contains("moveButtonWidth", StringComparison.Ordinal) &&
+        editorSource.Contains("DactUi.OpenDialog(ExitDialog)", StringComparison.Ordinal) &&
+        editorSource.Contains("\"前移\"", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("SwapSlots", StringComparison.Ordinal) &&
         previewInteractionSource.Contains("IsMouseReleased", StringComparison.Ordinal) &&
         meterSettingsSource.Contains("MigrateIndependentRoleSplitWindows", StringComparison.Ordinal) &&
@@ -3733,11 +3794,11 @@ static void ValidateIndependentMeterWindows()
         cleanFingerprint != changedFingerprint,
         "Meter editor dirty-state detection prompts for tab browsing or misses a real style change.");
     Assert(
-        controlCenterSource.Contains("BeginCombo(\"##meter-template\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DactUi.Segmented(\"meter-template\"", StringComparison.Ordinal) &&
         controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("游戏失去焦点时隐藏网页悬浮窗", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("游戏失焦时隐藏网页悬浮窗", StringComparison.Ordinal) &&
         File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Overlays.cs"))
             .Contains("setHideHtmlOverlaysWhenUnfocused(hide)", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("DPS 计算口径", StringComparison.Ordinal) &&
@@ -3752,7 +3813,7 @@ static void ValidateIndependentMeterWindows()
         simplifiedSource.Contains("IsOpen = false", StringComparison.Ordinal) &&
         Regex.IsMatch(
             simplifiedSource,
-            "DactTheme\\.Button\\(\\s*text\\.Get\\(\"退出精简模式\"") &&
+            "DactUi\\.Button\\(\\s*text\\.Get\\(\"退出精简模式\"") &&
         !simplifiedSource.Contains("EnableParsing", StringComparison.Ordinal) &&
         !simplifiedSource.Contains("HTML", StringComparison.Ordinal),
         "Simplified mode lost its dedicated controls or independent close action.");
@@ -4738,7 +4799,7 @@ static void ValidateWindowDragContinuity()
     {
         "UI/ControlCenterWindow.cs", "UI/HelpWindow.cs", "UI/StatusWindow.cs",
         "UI/ThirdPartyPluginNoticeWindow.cs", "UI/CloudBanNoticeWindow.cs",
-        "Encounters/EncounterWindow.cs", "Meter/MeterStyleEditorWindow.cs",
+        "Encounters/EncounterWindow.cs", "Meter/MeterStyleEditorWindow.Layout.cs",
         "Meter/MeterWindow.cs", "Meter/HorizontalMeterWindow.cs", "Meter/RoleSplitMeterWindow.cs",
     })
     {
@@ -4925,48 +4986,54 @@ static void ValidateControlCenterPresentation()
     var cloudPopupSource = controlCenterSource[
         controlCenterSource.IndexOf("private void DrawCloudQuickPopup(", StringComparison.Ordinal)..
         controlCenterSource.IndexOf("private static void DrawCloudQuickRow(", StringComparison.Ordinal)];
-    var popupRoundingIndex = cloudPopupSource.IndexOf(
-        "ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);", StringComparison.Ordinal);
+    // 1.0 draws the cloud status as a shared DactUi popover; the rounding and the balanced
+    // open/closed style restoration now live in the kit's BeginPopover.
+    var popoverKitSource = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "Kit", "DactUi.cs"));
+    var popoverSource = popoverKitSource[
+        popoverKitSource.IndexOf("public static bool BeginPopover(", StringComparison.Ordinal)..];
+    popoverSource = popoverSource[..popoverSource.IndexOf("ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing", StringComparison.Ordinal)];
+    var popupRoundingIndex = popoverSource.IndexOf("ImGuiStyleVar.PopupRounding", StringComparison.Ordinal);
     Assert(
-        popupRoundingIndex >= 0 && popupRoundingIndex < cloudPopupSource.IndexOf("ImGui.BeginPopup(", StringComparison.Ordinal) &&
+        cloudPopupSource.Contains("DactUi.BeginPopover(CloudQuickPopupId", StringComparison.Ordinal) &&
         !cloudPopupSource.Contains("ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding", StringComparison.Ordinal) &&
-        cloudPopupSource.Contains("ImGuiStyleVar.PopupBorderSize", StringComparison.Ordinal) &&
-        Regex.Matches(cloudPopupSource, @"ImGui\.PopStyleVar\(3\);").Count == 2,
+        popupRoundingIndex >= 0 && popupRoundingIndex < popoverSource.IndexOf("ImGui.BeginPopup(", StringComparison.Ordinal) &&
+        popoverSource.Contains("ImGuiStyleVar.PopupBorderSize", StringComparison.Ordinal) &&
+        Regex.Matches(popoverSource, @"ImGui\.PopStyleVar\(3\);").Count == 1,
         "The cloud status popup lost its local popup rounding or balanced open/closed style restoration.");
     Assert(
         controlCenterSource.Contains("text.Get(\"主页\", \"Home\")", StringComparison.Ordinal) &&
         controlCenterSource.Contains("(Page.Diagnostics, text.Get(\"设置&账号\", \"Settings & Account\"))", StringComparison.Ordinal) &&
         controlCenterSource.Contains("account-authentication-gate", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("account-authentication-hero", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("account-authentication-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("\"auth-brand\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("\"auth-form\"", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawDiscordBindingGate(cloudSnapshot)", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("account-authentication-navigation", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("\"##auth-pages\"", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawAuthenticationGate(cloudSnapshot);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("private void DrawAccountSettings()", StringComparison.Ordinal) &&
         controlCenterSource.Contains("记住登录状态（下次自动登录）", StringComparison.Ordinal) &&
         Regex.Matches(controlCenterSource, "ref cloudRememberLogin\\);").Count == 1 &&
         !controlCenterSource.Contains("重置后自动登录", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("恢复密钥自助改密", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("一次性重置码（必填）", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("获取重置码", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("一次性重置码", StringComparison.Ordinal) &&
         controlCenterSource.Contains("恢复密钥（必填）", StringComparison.Ordinal) &&
         controlCenterSource.Contains("将自动用于改密和解锁原有云备份", StringComparison.Ordinal) &&
         controlCenterSource.Contains("复制诊断日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开 FFLogs 上传日志", StringComparison.Ordinal) &&
         controlCenterSource.Contains("ImGui.SetClipboardText(directory);", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawCombatLogDirectorySettings();", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("text.Get(\"当前路径\", \"Current path\")", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DactUi.PathField(getCombatLogDirectory())", StringComparison.Ordinal) &&
         controlCenterSource.Contains("text.Get(\"更改目录...\", \"Change directory...\")", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("最多保留最近 2 个不同内容的密文版本", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("最多保留最近 2 个不同内容的版本", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("最多保留最近 10 个密文版本", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("Up to 2 encrypted versions with different content are retained", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("up to 2 versions with different content are kept", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("The latest 10 encrypted versions are retained", StringComparison.Ordinal) &&
         controlCenterSource.Contains("打开游戏后自动同步配置", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("每次打开游戏并登录后自动检查一次", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("每次打开游戏并登录后检查一次", StringComparison.Ordinal) &&
         controlCenterSource.Contains("配置没变化就不上传", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("最终更改会在下次打开游戏后同步", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("cloud-summary-card", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("cloud-backup-card", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("cloud-invitation-support-card", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("退出游戏不会被阻塞", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("\"cloud-summary\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("\"cloud-backup\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("\"cloud-invitations\"", StringComparison.Ordinal) &&
         controlCenterSource.Contains("CloudQuickPopupId", StringComparison.Ordinal) &&
         controlCenterSource.Contains("statusAction: () => cloudQuickPopupRequested = true", StringComparison.Ordinal) &&
         controlCenterSource.Contains("查看云同步状态", StringComparison.Ordinal) &&
@@ -4985,14 +5052,14 @@ static void ValidateControlCenterPresentation()
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "factoryReset" && parameter.ParameterType == typeof(Func<Task<string>>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
-            parameter.Name == "buildDiagnosticReport" && parameter.ParameterType == typeof(Func<string>)) &&
+            parameter.Name == "exportDiagnosticReport" && parameter.ParameterType == typeof(Func<DiagnosticReportExport>)) &&
         typeof(ControlCenterWindow).GetConstructors().Single().GetParameters().Any(parameter =>
             parameter.Name == "openCombatLogDirectory" && parameter.ParameterType == typeof(Func<string>)),
         "The login gate, reset form, account page, automatic cloud sync, two-version limit, recovery guard, diagnostic copy, or upload-log shortcut is missing.");
     Assert(
-        controlCenterSource.Contains("FontAwesomeIcon.Download", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("FontAwesomeIcon.Times", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("下载中...", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("(\"download\", text.Get(\"下载扩展组件\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("(\"close\", text.Get(\"取消下载\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("下载中 {resourceStatus.ProgressPercent}%", StringComparison.Ordinal) &&
         controlCenterSource.Contains("不可用", StringComparison.Ordinal) &&
         coreResourceWindowSource.Contains("ImGui.ProgressBar", StringComparison.Ordinal) &&
         coreResourceWindowSource.Contains("是否下载核心组件？", StringComparison.Ordinal) &&
@@ -5002,7 +5069,7 @@ static void ValidateControlCenterPresentation()
         !controlCenterSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
         !settingsSource.Contains("QQ 群：582145824", StringComparison.Ordinal) &&
         thirdPartySource.Contains(
-            "DrawMetadata(text.Get(\"当前维护者\", \"Current maintainer\"), plugin.Maintainer);",
+            "text.Get(\"当前维护者\", \"Current maintainer\"), plugin.Maintainer)",
             StringComparison.Ordinal),
         "SilverDasher support information leaked into its introduction or disappeared from the third-party extension card.");
     Assert(
@@ -5028,20 +5095,20 @@ static void ValidateControlCenterPresentation()
         Regex.Matches(pluginSource, Regex.Escape("ActPluginPermissions.Remove")).Count >= 3 &&
         hostSupervisorSource.Contains("WaitForPluginStageAsync", StringComparison.Ordinal),
         "Generic plugin consent/uninstall feedback, exact permission replacement, startup-stage waiting, or Matcha overlay log relay is missing.");
-    var navigationIndex = controlCenterSource.IndexOf(
-        "DrawPageTabs();",
-        StringComparison.Ordinal);
-    var scrollContentIndex = controlCenterSource.IndexOf(
-        "control-center-page-content",
-        StringComparison.Ordinal);
+    // 1.0 shell: the sidebar stays fixed while only the page area scrolls; 主页 keeps its
+    // status tiles, quick actions (with the runtime-status toggle) and basic settings.
+    var shellSource = File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "ControlCenterWindow.Shell.cs"));
+    var navigationIndex = shellSource.IndexOf("DrawSidebar(cloudSnapshot, bodyHeight);", StringComparison.Ordinal);
+    var scrollContentIndex = shellSource.IndexOf("DrawPageArea(bodyHeight - rimInset, drawPage);", StringComparison.Ordinal);
     Assert(
         navigationIndex >= 0 &&
         scrollContentIndex > navigationIndex &&
-        controlCenterSource.Contains("overview-parser-card", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("overview-quick-actions-card", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("overview-general-card", StringComparison.Ordinal) &&
+        shellSource.Contains("control-center-page-content", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DactUi.StatTiles(", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("home-quick-actions", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("home-general", StringComparison.Ordinal) &&
         controlCenterSource.Contains("关闭运行状态", StringComparison.Ordinal),
-        "The fixed navigation, gold overview cards, or runtime-status toggle is missing.");
+        "The fixed sidebar navigation, home status tiles and cards, or runtime-status toggle is missing.");
     var hostResourceMethodStart = pluginSource.IndexOf(
         "private async Task InitializeHostResourcesAsync",
         StringComparison.Ordinal);
@@ -5108,13 +5175,13 @@ static void ValidateControlCenterPresentation()
         historyNavigationIndex >= 0 && historyContentIndex > historyNavigationIndex,
         "Combat History navigation is no longer fixed above its scrolling page content.");
     var permissionChoiceIndex = thirdPartySource.IndexOf(
-        "private void DrawPermissionChoiceModal",
+        "private void DrawPermissionChoiceDialog",
         StringComparison.Ordinal);
     var ttsChoiceIndex = thirdPartySource.IndexOf(
-        "private void DrawTtsProChoiceModal",
+        "private void DrawTtsProChoiceDialog",
         StringComparison.Ordinal);
     var updateStatusIndex = thirdPartySource.IndexOf(
-        "private void DrawUpdateStatusBanner",
+        "public void OpenManualDisclosure",
         StringComparison.Ordinal);
     Assert(
         permissionChoiceIndex >= 0 &&
@@ -5124,28 +5191,28 @@ static void ValidateControlCenterPresentation()
     var permissionChoiceMethod = thirdPartySource[permissionChoiceIndex..ttsChoiceIndex];
     var ttsChoiceMethod = thirdPartySource[ttsChoiceIndex..updateStatusIndex];
     Assert(
-        thirdPartySource.Contains("Size = new Vector2(1200, 650);", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("\"third-party-plugin-cards\"", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("ImGuiTableFlags.SizingStretchSame", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("DrawPermissionChoiceModal", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("DrawTtsProChoiceModal", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("Size = new Vector2(1000, 640);", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("\"third-party-notice-content\"", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("cardHeights[plugin.Id] = DrawPluginCard(", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DactUi.BeginFrame();", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DrawPermissionChoiceDialog", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DrawTtsProChoiceDialog", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("DactUi.BeginDialog(TtsProDialog", StringComparison.Ordinal) &&
         thirdPartySource.Contains("不同意完整权限，保持安全模式", StringComparison.Ordinal) &&
         thirdPartySource.Contains("是否将 FoxTTS 改为 Cafe TTS Pro？", StringComparison.Ordinal) &&
         thirdPartySource.Contains("本次不更改", StringComparison.Ordinal) &&
         thirdPartySource.Contains("不再提醒", StringComparison.Ordinal) &&
-        permissionChoiceMethod.Contains("ImGui.BeginPopupModal", StringComparison.Ordinal) &&
+        permissionChoiceMethod.Contains("DactUi.BeginDialog(PermissionDialog", StringComparison.Ordinal) &&
         !permissionChoiceMethod.Contains("ref ", StringComparison.Ordinal) &&
-        ttsChoiceMethod.Contains("ref ttsPopupOpen", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("showCloseButton: ShouldShowCloseButton(", StringComparison.Ordinal) &&
+        ttsChoiceMethod.Contains("FoxTtsProChoice.NeverRemind", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("if (ShouldShowCloseButton(openMode", StringComparison.Ordinal) &&
         thirdPartySource.Contains("未确认的扩展保持禁用", StringComparison.Ordinal) &&
         thirdPartySource.Contains("BeginPermissionChoice();", StringComparison.Ordinal) &&
         thirdPartySource.Contains("shouldPromptForPermissions()", StringComparison.Ordinal) &&
         pluginSource.Contains("HasExplicitActCapabilityDecision", StringComparison.Ordinal) &&
         pluginSource.Contains("installCommitted = true;", StringComparison.Ordinal) &&
         pluginSource.Contains("BundledPluginInstallOutcome.RuntimeRecoveryPending", StringComparison.Ordinal) &&
-        thirdPartySource.Contains("third-party-update-status", StringComparison.Ordinal) &&
+        thirdPartySource.Contains("正在检查更新", StringComparison.Ordinal) &&
         pluginSource.Contains("thirdPartyPluginNoticeWindow.OpenManualDisclosure", StringComparison.Ordinal) &&
         pluginSource.Contains("OpenRequiredAfterPluginUpdateWhenPending();", StringComparison.Ordinal) &&
         pluginSource.Contains("BeginUpdateCheck(userInitiated: true)", StringComparison.Ordinal) &&
@@ -5210,9 +5277,9 @@ static void ValidateControlCenterPresentation()
         controlCenterSource.Contains("CactbotOperationState.Installing", StringComparison.Ordinal),
         "Cactbot validation still blocks plugin startup or lacks tracked status/shutdown handling.");
     Assert(
-        statusSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        statusSource.Contains("DactUi.BeginFrame();", StringComparison.Ordinal) &&
         statusSource.Contains("runtime-status-content", StringComparison.Ordinal) &&
-        statusSource.Contains("BeginGoldCard", StringComparison.Ordinal) &&
+        statusSource.Contains("DactUi.BeginCard(\"runtime-parser-card\"", StringComparison.Ordinal) &&
         statusSource.Contains("ImGuiWindowFlags.NoTitleBar", StringComparison.Ordinal),
         "The ACT compatibility status window does not use the new rounded branded card design.");
     var configurePermissionsIndex = pluginSource.IndexOf(
@@ -5313,7 +5380,7 @@ static void ValidateControlCenterPresentation()
         pluginSource.Contains("cloudBanNoticeWindow.Show(notice, lifted: false);", StringComparison.Ordinal) &&
         pluginSource.Contains("requiresRestart: requiresRestart", StringComparison.Ordinal) &&
         pluginSource.Contains("本次登录已经生效", StringComparison.Ordinal) &&
-        cloudBanNoticeSource.Contains("BrandedWindowChrome.Draw", StringComparison.Ordinal) &&
+        cloudBanNoticeSource.Contains("DactUi.BeginFrame();", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavInputs", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("ImGuiWindowFlags.NoNavFocus", StringComparison.Ordinal) &&
         cloudBanNoticeSource.Contains("text.Get(\"确认\", \"Confirm\")", StringComparison.Ordinal) &&
@@ -10496,7 +10563,8 @@ static void ValidateHtmlOverlayDefaults()
         "src",
         "DalamudActCompat",
         "Meter",
-        "MeterStyleEditorWindow.cs"));
+        "MeterStyleEditorWindow.cs")) +
+        File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "Meter", "MeterStyleEditorWindow.Layout.cs"));
     var roleSplitSource = File.ReadAllText(Path.Combine(
         FindProjectRoot(),
         "src",
@@ -10643,24 +10711,25 @@ static void ValidateHtmlOverlayDefaults()
         helpWindowSource.Contains("宏指令", StringComparison.Ordinal) &&
         helpWindowSource.Contains("ImGui.SetClipboardText(command);", StringComparison.Ordinal) &&
         helpWindowSource.Contains("InputTextWithHint", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("help-search-card", StringComparison.Ordinal) &&
-        helpWindowSource.Contains("ImGui.Dummy(new Vector2(0, 8))", StringComparison.Ordinal) &&
+        // 1.0: search lives in the sidebar field; pages use the kit's header and cards.
+        helpWindowSource.Contains("DrawSearchField", StringComparison.Ordinal) &&
+        helpWindowSource.Contains("DactUi.PageHeader", StringComparison.Ordinal) &&
         !helpWindowSource.Contains(
             "ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Gold.X, Gold.Y, Gold.Z, 0.72f))",
             StringComparison.Ordinal) &&
-        // The search button follows the UI language instead of always reading "Search".
-        helpWindowSource.Contains("text.Get(\"搜索\", \"Search\")", StringComparison.Ordinal) &&
+        // Clearing the results follows the UI language too.
+        helpWindowSource.Contains("text.Get(\"清除搜索\", \"Clear search\")", StringComparison.Ordinal) &&
         helpWindowSource.Contains("searchDraft", StringComparison.Ordinal) &&
         !helpWindowSource.Contains("text.Get(\"清除\", \"Clear\")", StringComparison.Ordinal) &&
         helpWindowSource.Contains("CreateSearchEntries", StringComparison.Ordinal) &&
-        // Cards size to their content; fixed heights clipped text at larger font scales.
-        helpWindowSource.Contains("cardHeights[id] =", StringComparison.Ordinal) &&
+        // Cards size to their content (the kit measures them); fixed heights clipped text.
+        helpWindowSource.Contains("DactUi.BeginCard(id, title)", StringComparison.Ordinal) &&
         !Regex.IsMatch(helpWindowSource, @"DrawCard\(""[^""]+"", [^,]+, \d+,") &&
         new[]
         {
             "登录 DACT 账号", "绑定 Discord", "确认解析器在运行", "打一下木人",
             "数值是怎么算的", "统计重置与历史", "FFLogs DPS Parse 预估",
-            "添加网页悬浮窗", "移动、缩放与鼠标穿透", "启用和打开配置", "ACT 插件权限边界",
+            "添加网页悬浮窗", "移动、缩放与鼠标穿透", "启用和打开配置", "扩展那一行的「权限」",
             "云同步", "找回账号", "好友", "先看运行状态", "重启对应的组件", "反馈问题",
             "重启共享 Host", "重启抹茶 Host", "重启通用 Host",
         }.All(section => helpWindowSource.Contains(section, StringComparison.Ordinal)) &&
@@ -10777,12 +10846,14 @@ static void ValidateHtmlOverlayDefaults()
         launcherPositionAtSmallSize == launcherPositionAtLargeSize &&
         launcherPositionInDesktopViewport == new Vector2(421, 322),
         "The quick button no longer preserves viewport-relative coordinates when the game window changes size or desktop position.");
+    // 1.0 cards come from the kit; they size to their content and never scroll on their own.
+    var kitSource = File.ReadAllText(Path.Combine(FindProjectRoot(), "src", "DalamudActCompat", "UI", "Kit", "DactUi.cs"));
     Assert(
-        controlCenterSource.Contains("allowScrolling: false", StringComparison.Ordinal) &&
-        controlCenterSource.Contains(
-            "ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse",
+        controlCenterSource.Contains("DactUi.BeginCard(", StringComparison.Ordinal) &&
+        kitSource.Contains(
+            "ImGui.BeginChild(id, new Vector2(width, Math.Max(1, height)), true, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)",
             StringComparison.Ordinal),
-        "Overview or Combat Meter settings regained a nested scrolling region.");
+        "Home or Combat Meter cards regained a nested scrolling region.");
     var pluginFailure = new ThirdPartyPluginInstallStatus(
         ThirdPartyPluginInstallState.Failed,
         "FishersIntuition",
@@ -10801,16 +10872,12 @@ static void ValidateHtmlOverlayDefaults()
             "private const int ResetConfirmationMilliseconds = 10_000;",
             StringComparison.Ordinal),
         "The encounter-reset confirmation is not configured to close after ten seconds.");
-    var fflogsApiCardIndex = controlCenterSource.IndexOf(
-        "fflogs-api-refresh-card",
-        StringComparison.Ordinal);
-    var fflogsAutomaticCardIndex = controlCenterSource.IndexOf(
-        "fflogs-automatic-encounter-card",
-        StringComparison.Ordinal);
+    // 1.0 FFLogs card: credentials and 测试并刷新 first, automatic duty matching below them.
+    var fflogsCredentialIndex = controlCenterSource.IndexOf("fflogs-client-secret", StringComparison.Ordinal);
+    var fflogsAutomaticIndex = controlCenterSource.IndexOf("当前副本自动识别", StringComparison.Ordinal);
     Assert(
-        fflogsApiCardIndex >= 0 && fflogsAutomaticCardIndex > fflogsApiCardIndex &&
-        controlCenterSource.Contains("API 凭据与数据刷新", StringComparison.Ordinal) &&
-        controlCenterSource.Contains("当前副本自动识别", StringComparison.Ordinal) &&
+        fflogsCredentialIndex >= 0 && fflogsAutomaticIndex > fflogsCredentialIndex &&
+        controlCenterSource.Contains("测试并刷新", StringComparison.Ordinal) &&
         !controlCenterSource.Contains("绑定当前战斗", StringComparison.Ordinal),
         "FFLogs automatic duty matching is missing or manual encounter binding is still exposed.");
     Assert(
@@ -13091,6 +13158,35 @@ static void ValidateDiagnosticReport(string testRoot)
         selected[0].Contains("failure", StringComparison.Ordinal) &&
         selected[1].Contains("at DalamudActCompat.Test()", StringComparison.Ordinal),
         "The diagnostic log filter did not retain only plugin lines and their exception continuation.");
+
+    // "复制诊断日志" copies a .txt file: UTF-8 with BOM, ASCII name, only the newest exports kept.
+    var exportLogs = Path.Combine(testRoot, "diagnostic-export-logs");
+    var exportDirectory = Path.Combine(exportLogs, DiagnosticReportFile.ExportDirectoryName);
+    Directory.CreateDirectory(exportDirectory);
+    for (var i = 0; i < DiagnosticReportFile.RetainedExports + 3; i++)
+    {
+        File.WriteAllText(Path.Combine(exportDirectory, $"DACT-diagnostic-20260101-0000{i:00}.txt"), "old");
+    }
+
+    var exported = DiagnosticReportFile.Write(exportLogs, "诊断 report", DateTimeOffset.Parse("2026-11-07T15:30:12+08:00"));
+    var exportedBytes = File.ReadAllBytes(exported);
+    var remaining = Directory.GetFiles(exportDirectory, "DACT-diagnostic-*.txt");
+    Assert(
+        Path.GetFileName(exported) == "DACT-diagnostic-20261107-153012.txt" &&
+        exportedBytes.Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF }) &&
+        File.ReadAllText(exported) == "诊断 report" &&
+        remaining.Length == DiagnosticReportFile.RetainedExports &&
+        remaining.Contains(exported) &&
+        !remaining.Any(file => file.EndsWith("000000.txt", StringComparison.Ordinal)),
+        "The diagnostic report file was misnamed, not UTF-8 with BOM, or old exports were not pruned to the newest ones.");
+
+    // CF_HDROP payload: 20-byte DROPFILES header (pFiles = 20, fWide = 1), then a double-NUL list.
+    var dropFiles = FileClipboard.BuildDropFiles([@"C:\a.txt"]);
+    Assert(
+        BitConverter.ToInt32(dropFiles, 0) == 20 &&
+        BitConverter.ToInt32(dropFiles, 16) == 1 &&
+        System.Text.Encoding.Unicode.GetString(dropFiles, 20, dropFiles.Length - 20) == "C:\\a.txt\0\0",
+        "The clipboard file list is not a wide DROPFILES block terminated by two NULs.");
 }
 
 static string FindProjectRoot()
@@ -13296,7 +13392,7 @@ static void ValidateCloudActivationKeyHelp()
            help.Contains("DACT and activation keys are free", StringComparison.Ordinal) &&
            help.Contains("ImGui.SetClipboardText(ActivationQqGroup)", StringComparison.Ordinal) &&
            help.Contains("OpenUrl(ActivationDiscordUrl)", StringComparison.Ordinal) &&
-           help.Contains("availableWidth >= buttonsWidth", StringComparison.Ordinal) &&
+           help.Contains("DactUi.SameLineIfFits(", StringComparison.Ordinal) &&
            !help.Contains("CollapsingHeader", StringComparison.Ordinal),
         "Registration lost visible free-key instructions, contact actions, or narrow-width layout.");
     var readme = File.ReadAllText(Path.Combine(projectRoot, "README.md"));

@@ -43,7 +43,8 @@ internal static class UltimateSkins
             active: 0xF2D774, activeHigh: 0xFFF7D6, activeLow: 0xA9852A, activeFace: 0x3B3720, activeFaceLow: 0x2B2917, activeRim: 0xC8AF64, activeInk: 0x3A2D05,
             text: 0xE8F0F4, muted: 0x9DB0BC, titleTop: 0x223340, titleBottom: 0x121D26,
             tintLeft: Clear, tintRight: Rgb(0x82D2E1, .07f), inlay: Rgb(0x41B9C4), rounding: 3),
-        [SkinCatalog.UltimateAlexander] = Make(UltimateKind.Alexander, 0,
+        // Alexander uses the same nameplate backing as the other five (user decision: no gears).
+        [SkinCatalog.UltimateAlexander] = Make(UltimateKind.Alexander, 195703,
             gun: 0x121715, panel: 0x161D19, groove: 0x0B0F0D, line: 0x28312C, face: 0x24302A, faceLow: 0x1B241F, faceHover: 0x2B3931, facePress: 0x131A16,
             frame: 0x8E6B3E, frameHigh: 0xB88A4F, head: 0xD4AF62, hover: 0xD4AF62, glow: Rgb(0xF2C45C, .55f),
             active: 0x3DCB62, activeHigh: 0xB6F6C0, activeLow: 0x167234, activeFace: 0x22492F, activeFaceLow: 0x183925, activeRim: 0x5E9A6A, activeInk: 0x0A2412,
@@ -616,11 +617,6 @@ internal static class UltimateSkins
 
     public static void DrawOrnaments(ImDrawListPtr draw, Vector2 windowMin, Vector2 windowMax, UltimateStyle u, float scale, double time, UltimateSkinAssets? assets)
     {
-        if (u.Kind == UltimateKind.Alexander)
-        {
-            DrawGears(draw, windowMin, windowMax, scale, time);
-            return;
-        }
         if (assets?.Icon(u.BackingIcon) is not { } texture) return;
         // The plate is wider than the DACT window. Keep the plate's proportions and anchor
         // each half of the backing to its own window edge, split at the window centre.
@@ -655,67 +651,6 @@ internal static class UltimateSkins
             var t = (i + .5f) / steps; var alpha = alphaFrom + (alphaTo - alphaFrom) * t * t * (3 - 2 * t);
             draw.AddImage(texture.Handle, new(x0, top), new(x1, top + height),
                 new((x0 - plateX) / width, 0), new((x1 - plateX) / width, 1), Col(Vector4.One, alpha));
-        }
-    }
-
-    private static readonly Vector4 Gold = Rgb(0xFFD46A);
-
-    private static void DrawGears(ImDrawListPtr draw, Vector2 min, Vector2 max, float scale, double time)
-    {
-        // Two clusters of luminous gears break out of the top-right and bottom-left corners.
-        (Vector2 Center, float Radius, int Direction)[] gears =
-        [
-            (new(max.X - 26 * scale, min.Y + 12 * scale), 44 * scale, 1), (new(max.X + 28 * scale, min.Y - 8 * scale), 22 * scale, -1),
-            (new(max.X + 22 * scale, min.Y + 54 * scale), 25 * scale, -1),
-            (new(min.X + 6 * scale, max.Y - 12 * scale), 40 * scale, -1), (new(min.X - 30 * scale, max.Y - 56 * scale), 20 * scale, 1),
-        ];
-        foreach (var cluster in new[] { gears[0].Center + new Vector2(14, 10) * scale, gears[3].Center + new Vector2(-10, -12) * scale })
-            for (var i = 4; i >= 1; i--) draw.AddCircleFilled(cluster, (34 + i * 16) * scale, Col(Gold, .028f), 48);
-        foreach (var (center, radius, direction) in gears)
-            Gear(draw, center, radius, (float)(direction * time * MathF.Tau / (direction > 0 ? 80 : 56)), scale);
-        Sparks(draw, gears[0].Center + new Vector2(10, 6) * scale, 70 * scale, scale, time, 0);
-        Sparks(draw, gears[3].Center + new Vector2(-8, -10) * scale, 60 * scale, scale, time, 17);
-    }
-
-    private static void Gear(ImDrawListPtr draw, Vector2 center, float radius, float angle, float scale)
-    {
-        var teeth = Math.Max(14, (int)MathF.Round(radius / scale * .62f)); var depth = MathF.Max(3 * scale, radius * .12f);
-        Span<Vector2> outline = stackalloc Vector2[teeth * 4];
-        var step = MathF.Tau / teeth;
-        for (var i = 0; i < teeth; i++)
-        {
-            var a = angle + i * step;
-            outline[i * 4] = Polar(center, radius - depth, a + step * .06f);
-            outline[i * 4 + 1] = Polar(center, radius, a + step * .26f);
-            outline[i * 4 + 2] = Polar(center, radius, a + step * .54f);
-            outline[i * 4 + 3] = Polar(center, radius - depth, a + step * .74f);
-        }
-        FillFan(draw, center, outline, Col(Gold, .14f));
-        // A wide faint stroke under the line reads as the plate's soft glow.
-        draw.AddPolyline(ref outline[0], outline.Length, Col(Gold, .12f), ImDrawFlags.Closed, 6 * scale);
-        draw.AddPolyline(ref outline[0], outline.Length, Col(Gold, .22f), ImDrawFlags.Closed, 3.2f * scale);
-        draw.AddPolyline(ref outline[0], outline.Length, Col(Gold, .95f), ImDrawFlags.Closed, 1.5f * scale);
-        draw.AddCircle(center, radius * .58f, Col(Gold, .7f), 40, scale);
-        for (var i = 0; i < 28; i++) draw.AddCircleFilled(Polar(center, radius * .72f, angle + i * MathF.Tau / 28), .8f * scale, Col(Gold, .55f), 6);
-        draw.AddCircle(Polar(center, radius * .25f, angle - .5f), radius * .26f, Col(Gold, .6f), 24, scale);
-        draw.AddCircle(Polar(center, radius * .31f, angle + 2.4f), radius * .18f, Col(Gold, .5f), 20, scale);
-        draw.AddCircleFilled(center, radius * .1f, Col(Gold, .7f), 12);
-    }
-
-    private static void Sparks(ImDrawListPtr draw, Vector2 center, float spread, float scale, double time, int seed)
-    {
-        for (var i = 0; i < 12; i++)
-        {
-            var n = i + seed;
-            // Deterministic drift: each spark rises, fades in and out, then restarts elsewhere.
-            var period = 3.5 + n % 5 * .8;
-            var phase = (float)((time / period + n * .37) % 1);
-            var angle = n * 2.399f; var distance = spread * (.35f + (n * 37 % 100) / 160f);
-            var position = Polar(center, distance, angle) + new Vector2(MathF.Sin(phase * MathF.Tau + n) * 4 * scale, -phase * 26 * scale);
-            var alpha = MathF.Sin(phase * MathF.PI);
-            var size = (1 + n % 3 * .5f) * scale;
-            draw.AddCircleFilled(position, size * 3, Col(Gold, .12f * alpha), 10);
-            draw.AddCircleFilled(position, size, Col(Rgb(0xFFF1C0), .9f * alpha), 8);
         }
     }
 }

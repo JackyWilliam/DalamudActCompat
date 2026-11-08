@@ -385,7 +385,7 @@ internal sealed class FriendsChatController : IDisposable
             local.Outbox.Remove(command.Id);
             var messages = view.Chat.History.Concat(view.Chat.Pending).Where(m => m.Id != sent.Message.Id).Append(sent.Message).ToArray();
             SetConversation(view.Chat with { History = messages.Where(m => m.State == "history").ToArray(), Pending = messages.Where(m => m.State == "pending").ToArray(),
-                NextSendSequence = sent.NextSendSequence, Revision = -1 }, sent.Message.State == "pending" ? "已发送，待对方上线接收。" : "已发送。");
+                NextSendSequence = sent.NextSendSequence, Revision = -1 }, sent.Message.State == "pending" ? "已发送，待对方上线接收" : "已发送");
             await SaveAsync().ConfigureAwait(false);
             nextPoll = DateTimeOffset.MinValue;
         }

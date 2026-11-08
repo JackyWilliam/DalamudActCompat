@@ -6,16 +6,12 @@ using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Infrastructure.Processes;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Protocol;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
 public sealed class StatusWindow : Window
 {
-    private static Vector4 Navy => DactTheme.Tone(new Vector4(0.035f, 0.048f, 0.068f, 1), DactTheme.Palette.Surface);
-    private static Vector4 NavyRaised => DactTheme.Tone(new Vector4(0.070f, 0.095f, 0.125f, 1), DactTheme.Palette.Raised);
-    private static Vector4 NavyHover => DactTheme.Tone(new Vector4(0.105f, 0.145f, 0.185f, 1), DactTheme.Palette.Hover);
-    private static Vector4 Gold => DactTheme.Tone(new Vector4(0.78f, 0.66f, 0.36f, 1), DactTheme.Palette.Gold);
-    private static Vector4 IceBlue => DactTheme.Tone(new Vector4(0.42f, 0.78f, 0.96f, 1), DactTheme.Palette.Accent);
 
     private readonly IParserEngine parserEngine;
     private readonly UiText text;
@@ -74,360 +70,266 @@ public sealed class StatusWindow : Window
         };
         ShowCloseButton = false;
         RespectCloseHotkey = false;
-        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse;
+        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
     }
+
+    public void Detach() => parserEngine.StatusChanged -= OnStatusChanged;
+
+    private readonly WindowFade fade = new();
+
+    public override void OnOpen() => fade.Opened();
 
     public override void PreDraw()
     {
         headerDrag.PrepareNextWindow();
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        // Indigo of the DACT logo, like the control center; skins substitute their own border.
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(.208f, .251f, .420f, 1));
+        ImGui.PushStyleColor(ImGuiCol.ResizeGrip, Vector4.Zero);
         outerFrameStylePushed = true;
         Flags = DactTheme.WindowFlags(Flags);
+        // Pushed last so it nests inside this window's other style pushes (WindowFade).
+        if (!fade.Push()) IsOpen = false;
     }
 
     public override void PostDraw()
     {
-        if (!outerFrameStylePushed)
-        {
-            return;
-        }
-
-        ImGui.PopStyleColor();
-        ImGui.PopStyleVar(2);
+        fade.Pop();
+        if (!outerFrameStylePushed) return;
+        ImGui.PopStyleColor(2);
+        ImGui.PopStyleVar(3);
         outerFrameStylePushed = false;
     }
 
+    // 运行状态 in the 1.0 frame: a 48 px header with the parser state, then one card per
+    // component; each Host card leads with its process and IPC state and keeps its restart and
+    // stop buttons.
     public override void Draw()
     {
-        WindowName = text.Get(
-            "ACT 兼容状态###DalamudActCompatStatus",
-            "ACT Compat Status###DalamudActCompatStatus");
-        PushTheme();
+        WindowName = text.Get("ACT 兼容状态###DalamudActCompatStatus", "ACT Compat Status###DalamudActCompatStatus");
+        ControlCenterWindow.PushTheme();
         try
         {
-            var stateLabel = $"● {LocalizeParserState(status.State)}";
-            var stateColor = status.State == ParserState.Running
-                ? IceBlue
-                : new Vector4(0.70f, 0.72f, 0.76f, 1);
-            if (BrandedWindowChrome.Draw(
-                    headerDrag,
-                    logoTexture,
-                    text.Get("运行状态", "Runtime status"),
-                    stateLabel,
-                    stateColor,
-                    ControlCenterWindow.FormatVersionLabel(
-                        typeof(StatusWindow).Assembly.GetName().Version),
-                    "runtime-status", text: text))
+            DactUi.BeginFrame();
+            DactTheme.DrawGameWindow();
+            var s = DactUi.S;
+            var min = ImGui.GetWindowPos();
+            var size = ImGui.GetWindowSize();
+            var line = Math.Max(1, s);
+            DrawHeader(min, size.X, 48 * s);
+            ImGui.GetWindowDrawList().AddRectFilled(new Vector2(min.X, min.Y + 48 * s), new Vector2(min.X + size.X, min.Y + 48 * s + line),
+                DactUi.U32(DactUi.DividerColor));
+            ImGui.SetCursorScreenPos(new Vector2(min.X, min.Y + 48 * s + line));
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(22, 18) * s);
+            ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarSize, 8 * s);
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, Vector4.Zero);
+            if (ImGui.BeginChild("runtime-status-content", new Vector2(-1, size.Y - 48 * s - line), false, ImGuiWindowFlags.AlwaysUseWindowPadding))
             {
-                IsOpen = false;
-            }
-
-            if (ImGui.BeginChild("runtime-status-content", new Vector2(-1, -1), true))
-            {
+                ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 14) * s);
                 DrawStatusContent();
+                ImGui.PopStyleVar();
             }
             ImGui.EndChild();
+            ImGui.PopStyleColor();
+            ImGui.PopStyleVar(2);
         }
         finally
         {
-            PopTheme();
+            ControlCenterWindow.PopTheme();
         }
     }
 
-    public void Detach() => parserEngine.StatusChanged -= OnStatusChanged;
+    private void DrawHeader(Vector2 min, float width, float height)
+    {
+        var s = DactUi.S;
+        var draw = ImGui.GetWindowDrawList();
+        var logo = new Vector2(min.X + 14 * s, min.Y + (height - 26 * s) * .5f);
+        draw.AddImageRounded(logoTexture.GetWrapOrEmpty().Handle, logo, logo + new Vector2(26 * s), Vector2.Zero, Vector2.One,
+            ImGui.GetColorU32(Vector4.One), 6 * s);
+        var title = text.Get("运行状态", "Runtime status");
+        var x = logo.X + 36 * s;
+        DactUi.DrawText(draw, new Vector2(x, min.Y), height, title, DactTheme.Palette.Text);
+        x += DactUi.TextWidth(title) + 10 * s;
+        var version = ControlCenterWindow.FormatVersionLabel(typeof(StatusWindow).Assembly.GetName().Version);
+        DactUi.DrawText(draw, new Vector2(x, min.Y), height, version, DactUi.HintColor, DactFonts.Small);
+        var dragLeft = x + DactUi.TextWidth(version, DactFonts.Small) + 8 * s;
+
+        var right = min.X + width - 10 * s - 28 * s;
+        ImGui.SetCursorScreenPos(new Vector2(right, min.Y + (height - 28 * s) * .5f));
+        if (DactUi.IconButton("##runtime-close", "close", text.Get("关闭", "Close"))) fade.RequestClose();
+        var state = LocalizeParserState(status.State);
+        var tone = status.State == ParserState.Running ? PillTone.Ok
+            : status.State is ParserState.Faulted or ParserState.MissingDependency or ParserState.VersionIncompatible ? PillTone.Error
+            : status.State == ParserState.Initializing ? PillTone.Warn : PillTone.Off;
+        right -= 10 * s + DactUi.PillWidth(state);
+        DactUi.DrawPill(draw, new Vector2(right, min.Y + (height - 22 * s) * .5f), state, tone);
+        if (right - 8 * s > dragLeft)
+        {
+            ImGui.SetCursorScreenPos(new Vector2(dragLeft, min.Y));
+            ImGui.InvisibleButton("##runtime-drag", new Vector2(right - 8 * s - dragLeft, height));
+            headerDrag.HandleItem();
+        }
+    }
 
     private void DrawStatusContent()
     {
-        DrawCard("runtime-parser-card", text.Get("解析器", "Parser"),
-            string.IsNullOrWhiteSpace(status.Detail) ? 126 : 166,
-            () =>
-            {
-                DactTheme.TextColored(IceBlue, LocalizeParserState(status.State));
-                ImGui.TextWrapped(status.Message);
-                if (!string.IsNullOrWhiteSpace(status.Detail))
-                {
-                    ImGui.TextDisabled(status.Detail);
-                }
-                ImGui.TextDisabled(
-                    $"{text.Get("更新时间", "Updated")}: {status.UpdatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}");
-            });
+        DactUi.BeginCard("runtime-parser-card", text.Get("解析器", "Parser"));
+        StatePills((LocalizeParserState(status.State), status.State == ParserState.Running ? PillTone.Ok : PillTone.Off));
+        DactUi.Wrapped(status.Message);
+        if (!string.IsNullOrWhiteSpace(status.Detail)) DactUi.Hint(status.Detail);
+        DactUi.Hint($"{text.Get("更新时间", "Updated")}: {status.UpdatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}");
+        DactUi.EndCard();
 
+        var s = DactUi.S;
         var host = getHostSnapshot();
-        DrawCard("runtime-host-card", text.Get("共享 ACT Host", "Shared ACT Host"), 330, () =>
+        DactUi.BeginCard("runtime-host-card", text.Get("共享 ACT Host", "Shared ACT Host"));
+        HostState(host);
+        Rows(
+            (text.Get("有界队列", "Bounded queues"), $"control={host.ControlQueueLength}/{HostProtocol.ControlQueueCapacity}, data={host.DataQueueLength}/{HostProtocol.DataQueueCapacity}"),
+            (text.Get("已丢弃低优先级事件", "Dropped low-priority events"), host.DroppedMessages.ToString()),
+            (text.Get("处理进度", "Processing progress"), $"{host.HostAcknowledgedSequence}/{host.LastWrittenSequence}"),
+            (text.Get("资源", "Resources"), $"working set={FormatBytes(host.HostWorkingSetBytes)}, private={FormatBytes(host.HostPrivateBytes)}, {host.HostThreadCount} {text.Get("线程", "threads")}"),
+            (text.Get("系统可用内存", "System available memory"), FormatBytes(host.AvailablePhysicalMemoryBytes)),
+            (text.Get("内存保护", "Memory protection"), $"{LocalizeValue(host.MemoryProtection.State)} — {FormatMemoryProtectionDetail(host.MemoryProtection)}"),
+            (text.Get("健康状态", "Health"), $"{LocalizeValue(host.HealthState)}{Detail(host.HealthDetail)}"));
+        if (DactUi.Button(text.Get("重启共享 Host", "Restart shared Host") + "##restart-shared", icon: "refresh")) restartHost();
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(text.Get("停止共享 Host", "Stop shared Host") + "##stop-shared")) stopHost();
+        if (host.MemoryProtection.State is HostMemoryProtectionState.Monitoring or HostMemoryProtectionState.DeferredForCombat or HostMemoryProtectionState.EmergencyCountdown)
         {
-            DactTheme.TextColored(
-                host.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
-                $"{text.Get("进程", "Process")}: {LocalizeValue(host.State)}    " +
-                $"IPC: {LocalizeValue(host.IpcStatus)}");
-            ImGui.TextUnformatted(
-                $"{text.Get("有界队列", "Bounded queues")}: " +
-                $"control={host.ControlQueueLength}/{HostProtocol.ControlQueueCapacity}, " +
-                $"data={host.DataQueueLength}/{HostProtocol.DataQueueCapacity}");
-            ImGui.TextUnformatted(
-                $"{text.Get("已丢弃低优先级事件", "Dropped low-priority events")}: {host.DroppedMessages}");
-            ImGui.TextUnformatted(
-                $"{text.Get("处理进度", "Processing progress")}: " +
-                $"{host.HostAcknowledgedSequence}/{host.LastWrittenSequence}");
-            ImGui.TextUnformatted(
-                $"{text.Get("资源", "Resources")}: " +
-                $"working set={FormatBytes(host.HostWorkingSetBytes)}, " +
-                $"private={FormatBytes(host.HostPrivateBytes)}, " +
-                $"{host.HostThreadCount} {text.Get("线程", "threads")}");
-            ImGui.TextUnformatted(
-                $"{text.Get("系统可用内存", "System available memory")}: " +
-                $"{FormatBytes(host.AvailablePhysicalMemoryBytes)}");
-            ImGui.TextWrapped(
-                $"{text.Get("内存保护", "Memory protection")}: " +
-                $"{LocalizeValue(host.MemoryProtection.State)} — " +
-                FormatMemoryProtectionDetail(host.MemoryProtection));
-            ImGui.TextWrapped(
-                $"{text.Get("健康状态", "Health")}: {LocalizeValue(host.HealthState)} — {host.HealthDetail}");
-            if (DactTheme.Button(text.Get("重启共享 Host", "Restart shared Host")))
-            {
-                restartHost();
-            }
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("停止共享 Host", "Stop shared Host")))
-            {
-                stopHost();
-            }
-            if (host.MemoryProtection.State is HostMemoryProtectionState.Monitoring or
-                HostMemoryProtectionState.DeferredForCombat or
-                HostMemoryProtectionState.EmergencyCountdown)
-            {
-                ImGui.SameLine();
-                if (DactTheme.Button(text.Get(
-                        "本次忽略自动内存回收",
-                        "Ignore automatic recovery this session")))
-                {
-                    ignoreHostMemoryProtection();
-                }
-            }
-        });
+            var ignore = text.Get("本次忽略自动内存回收", "Ignore automatic recovery this session");
+            DactUi.SameLineIfFits(DactUi.ButtonWidth(ignore, ButtonKind.Ghost));
+            if (DactUi.Button(ignore + "##ignore-memory", ButtonKind.Ghost)) ignoreHostMemoryProtection();
+        }
+        DactUi.EndCard();
 
         var matchaHost = getMatchaHostSnapshot();
-        DrawCard("runtime-matcha-host-card", text.Get("抹茶专属 Host", "Matcha dedicated Host"), 244, () =>
-        {
-            DactTheme.TextColored(
-                matchaHost.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
-                $"{text.Get("进程", "Process")}: {LocalizeValue(matchaHost.State)}    " +
-                $"IPC: {LocalizeValue(matchaHost.IpcStatus)}");
-            ImGui.TextUnformatted(
-                $"{text.Get("有界队列", "Bounded queues")}: " +
-                $"control={matchaHost.ControlQueueLength}/{HostProtocol.ControlQueueCapacity}, " +
-                $"data={matchaHost.DataQueueLength}/{HostProtocol.DataQueueCapacity}, " +
-                $"network={matchaHost.MatchaNetworkQueueLength}/{HostProtocol.MatchaNetworkQueueCapacity}");
-            ImGui.TextUnformatted(
-                $"{text.Get("已丢弃抹茶网络事件", "Dropped Matcha network events")}: " +
-                $"{matchaHost.DroppedMatchaNetworkMessages}");
-            ImGui.TextUnformatted(
-                $"{text.Get("处理进度", "Processing progress")}: " +
-                $"{matchaHost.HostAcknowledgedSequence}/{matchaHost.LastWrittenSequence}");
-            ImGui.TextUnformatted(
-                $"{text.Get("资源", "Resources")}: " +
-                $"{matchaHost.HostWorkingSetBytes / (1024d * 1024d):0.0} MiB, " +
-                $"{matchaHost.HostThreadCount} {text.Get("线程", "threads")}");
-            ImGui.TextWrapped(
-                $"{text.Get("健康状态", "Health")}: {LocalizeValue(matchaHost.HealthState)} — {matchaHost.HealthDetail}");
-            if (DactTheme.Button(text.Get("重启抹茶 Host", "Restart Matcha Host")))
-            {
-                restartMatchaHost();
-            }
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("停止抹茶 Host", "Stop Matcha Host")))
-            {
-                stopMatchaHost();
-            }
-        });
+        DactUi.BeginCard("runtime-matcha-host-card", text.Get("抹茶专属 Host", "Matcha dedicated Host"));
+        HostState(matchaHost);
+        Rows(
+            (text.Get("有界队列", "Bounded queues"), $"control={matchaHost.ControlQueueLength}/{HostProtocol.ControlQueueCapacity}, data={matchaHost.DataQueueLength}/{HostProtocol.DataQueueCapacity}, network={matchaHost.MatchaNetworkQueueLength}/{HostProtocol.MatchaNetworkQueueCapacity}"),
+            (text.Get("已丢弃抹茶网络事件", "Dropped Matcha network events"), matchaHost.DroppedMatchaNetworkMessages.ToString()),
+            (text.Get("处理进度", "Processing progress"), $"{matchaHost.HostAcknowledgedSequence}/{matchaHost.LastWrittenSequence}"),
+            (text.Get("资源", "Resources"), $"{matchaHost.HostWorkingSetBytes / (1024d * 1024d):0.0} MiB, {matchaHost.HostThreadCount} {text.Get("线程", "threads")}"),
+            (text.Get("健康状态", "Health"), $"{LocalizeValue(matchaHost.HealthState)}{Detail(matchaHost.HealthDetail)}"));
+        if (DactUi.Button(text.Get("重启抹茶 Host", "Restart Matcha Host") + "##restart-matcha", icon: "refresh")) restartMatchaHost();
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(text.Get("停止抹茶 Host", "Stop Matcha Host") + "##stop-matcha")) stopMatchaHost();
+        DactUi.EndCard();
 
         var genericHost = getGenericHostSnapshot();
-        DrawCard("runtime-generic-host-card", text.Get("通用第三方 Host", "Generic third-party Host"), 210, () =>
-        {
-            DactTheme.TextColored(
-                genericHost.State == HostSupervisorState.Running ? IceBlue : Vector4.One,
-                $"{text.Get("进程", "Process")}: {LocalizeValue(genericHost.State)}    " +
-                $"IPC: {LocalizeValue(genericHost.IpcStatus)}");
-            ImGui.TextWrapped(text.Get(
-                "仅在至少一个已授权的普通 ACT 插件启用时运行；所有这类插件共用这一个进程。",
-                "Runs only while at least one authorized generic ACT plugin is enabled; all such plugins share this process."));
-            ImGui.TextUnformatted(
-                $"{text.Get("有界队列", "Bounded queues")}: " +
-                $"control={genericHost.ControlQueueLength}/{HostProtocol.ControlQueueCapacity}, " +
-                $"data={genericHost.DataQueueLength}/{HostProtocol.DataQueueCapacity}");
-            ImGui.TextUnformatted(
-                $"{text.Get("资源", "Resources")}: " +
-                $"{genericHost.HostWorkingSetBytes / (1024d * 1024d):0.0} MiB, " +
-                $"{genericHost.HostThreadCount} {text.Get("线程", "threads")}");
-            ImGui.TextWrapped(
-                $"{text.Get("健康状态", "Health")}: {LocalizeValue(genericHost.HealthState)} — {genericHost.HealthDetail}");
-            if (DactTheme.Button(text.Get("重启通用 Host", "Restart generic Host")))
-            {
-                restartGenericHost();
-            }
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("停止通用 Host", "Stop generic Host")))
-            {
-                stopGenericHost();
-            }
-        });
+        DactUi.BeginCard("runtime-generic-host-card", text.Get("通用第三方 Host", "Generic third-party Host"));
+        HostState(genericHost);
+        DactUi.Hint(text.Get(
+            "仅在至少一个已授权的普通 ACT 插件启用时运行；所有这类插件共用这一个进程。",
+            "Runs only while at least one authorized generic ACT plugin is enabled; all such plugins share this process."));
+        Rows(
+            (text.Get("有界队列", "Bounded queues"), $"control={genericHost.ControlQueueLength}/{HostProtocol.ControlQueueCapacity}, data={genericHost.DataQueueLength}/{HostProtocol.DataQueueCapacity}"),
+            (text.Get("资源", "Resources"), $"{genericHost.HostWorkingSetBytes / (1024d * 1024d):0.0} MiB, {genericHost.HostThreadCount} {text.Get("线程", "threads")}"),
+            (text.Get("健康状态", "Health"), $"{LocalizeValue(genericHost.HealthState)}{Detail(genericHost.HealthDetail)}"));
+        if (DactUi.Button(text.Get("重启通用 Host", "Restart generic Host") + "##restart-generic", icon: "refresh")) restartGenericHost();
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(text.Get("停止通用 Host", "Stop generic Host") + "##stop-generic")) stopGenericHost();
+        DactUi.EndCard();
 
-        if (host.PluginHealth.Count > 0)
-        {
-            var height = Math.Clamp(72 + (host.PluginHealth.Count * 38), 118, 260);
-            DrawCard("runtime-plugin-health-card", text.Get("扩展运行健康", "Extension runtime health"), height, () =>
-            {
-                foreach (var plugin in host.PluginHealth)
-                {
-                    DactTheme.TextColored(IceBlue, plugin.PluginId);
-                    ImGui.SameLine();
-                    ImGui.TextWrapped(
-                        $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, " +
-                        $"exceptions={plugin.Exceptions}, slow={plugin.SlowCalls}, " +
-                        $"last={plugin.LastDurationMilliseconds}ms" +
-                        (plugin.ActiveCallback is null
-                            ? string.Empty
-                            : $", active={plugin.ActiveMilliseconds}ms"));
-                }
-            });
-        }
-
-        if (matchaHost.PluginHealth.Count > 0)
-        {
-            var height = Math.Clamp(72 + (matchaHost.PluginHealth.Count * 38), 118, 260);
-            DrawCard("runtime-matcha-plugin-health-card", text.Get("抹茶运行健康", "Matcha runtime health"), height, () =>
-            {
-                foreach (var plugin in matchaHost.PluginHealth)
-                {
-                    DactTheme.TextColored(IceBlue, plugin.PluginId);
-                    ImGui.SameLine();
-                    ImGui.TextWrapped(
-                        $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, " +
-                        $"exceptions={plugin.Exceptions}, slow={plugin.SlowCalls}, " +
-                        $"last={plugin.LastDurationMilliseconds}ms" +
-                        (plugin.ActiveCallback is null
-                            ? string.Empty
-                            : $", active={plugin.ActiveMilliseconds}ms"));
-                }
-            });
-        }
-
-        if (genericHost.PluginHealth.Count > 0)
-        {
-            var height = Math.Clamp(72 + (genericHost.PluginHealth.Count * 38), 118, 260);
-            DrawCard("runtime-generic-plugin-health-card", text.Get("普通插件运行健康", "Generic plugin runtime health"), height, () =>
-            {
-                foreach (var plugin in genericHost.PluginHealth)
-                {
-                    DactTheme.TextColored(IceBlue, plugin.PluginId);
-                    ImGui.SameLine();
-                    ImGui.TextWrapped(
-                        $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, " +
-                        $"exceptions={plugin.Exceptions}, slow={plugin.SlowCalls}, " +
-                        $"last={plugin.LastDurationMilliseconds}ms");
-                }
-            });
-        }
-
-        if (host.Diagnostics.Count > 0)
-        {
-            DrawCard("runtime-diagnostics-card", text.Get("最近 Host 结构化异常", "Recent structured Host diagnostics"), 240, () =>
-            {
-                foreach (var diagnostic in host.Diagnostics.TakeLast(20).Reverse())
-                {
-                    ImGui.TextWrapped(
-                        $"[{diagnostic.PluginId}/{diagnostic.Phase}] " +
-                        $"{diagnostic.ExceptionType}: {diagnostic.Message} " +
-                        $"source={diagnostic.SourceAssembly}/" +
-                        $"{diagnostic.SourceType}.{diagnostic.SourceMethod}, " +
-                        $"thread={diagnostic.ThreadId}" +
-                        (diagnostic.IsWindowsFormsThread ? " (WinForms)" : string.Empty) +
-                        $", x{diagnostic.RepeatCount}");
-                }
-            });
-        }
-
-        if (matchaHost.Diagnostics.Count > 0)
-        {
-            DrawCard("runtime-matcha-diagnostics-card", text.Get("最近抹茶 Host 异常", "Recent Matcha Host diagnostics"), 240, () =>
-            {
-                foreach (var diagnostic in matchaHost.Diagnostics.TakeLast(20).Reverse())
-                {
-                    ImGui.TextWrapped(
-                        $"[{diagnostic.PluginId}/{diagnostic.Phase}] " +
-                        $"{diagnostic.ExceptionType}: {diagnostic.Message} " +
-                        $"source={diagnostic.SourceAssembly}/" +
-                        $"{diagnostic.SourceType}.{diagnostic.SourceMethod}, " +
-                        $"thread={diagnostic.ThreadId}" +
-                        (diagnostic.IsWindowsFormsThread ? " (WinForms)" : string.Empty) +
-                        $", x{diagnostic.RepeatCount}");
-                }
-            });
-        }
-
-        if (genericHost.Diagnostics.Count > 0)
-        {
-            DrawCard("runtime-generic-diagnostics-card", text.Get("最近通用 Host 异常", "Recent generic Host diagnostics"), 240, () =>
-            {
-                foreach (var diagnostic in genericHost.Diagnostics.TakeLast(20).Reverse())
-                {
-                    ImGui.TextWrapped(
-                        $"[{diagnostic.PluginId}/{diagnostic.Phase}] " +
-                        $"{diagnostic.ExceptionType}: {diagnostic.Message}");
-                }
-            });
-        }
+        PluginHealth("runtime-plugin-health-card", text.Get("扩展运行健康", "Extension runtime health"), host.PluginHealth, true);
+        PluginHealth("runtime-matcha-plugin-health-card", text.Get("抹茶运行健康", "Matcha runtime health"), matchaHost.PluginHealth, true);
+        PluginHealth("runtime-generic-plugin-health-card", text.Get("普通插件运行健康", "Generic plugin runtime health"), genericHost.PluginHealth, false);
+        Diagnostics("runtime-diagnostics-card", text.Get("最近 Host 结构化异常", "Recent structured Host diagnostics"), host.Diagnostics, true);
+        Diagnostics("runtime-matcha-diagnostics-card", text.Get("最近抹茶 Host 异常", "Recent Matcha Host diagnostics"), matchaHost.Diagnostics, true);
+        Diagnostics("runtime-generic-diagnostics-card", text.Get("最近通用 Host 异常", "Recent generic Host diagnostics"), genericHost.Diagnostics, false);
 
         DrawStages(host, "postnamazu", text.Get("鲶鱼精邮差分阶段状态", "PostNamazu staged status"));
         DrawStages(host, "triggernometry", text.Get("Triggernometry 兼容状态", "Triggernometry compatibility status"));
         DrawStages(matchaHost, "matcha", text.Get("抹茶兼容状态", "Matcha compatibility status"));
-        foreach (var pluginId in genericHost.PluginStages
-                     .Select(static stage => stage.PluginId)
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
-        {
+        foreach (var pluginId in genericHost.PluginStages.Select(static stage => stage.PluginId).Distinct(StringComparer.OrdinalIgnoreCase))
             DrawStages(genericHost, pluginId, $"{pluginId} — {text.Get("通用 Host 状态", "generic Host status")}");
-        }
 
-        DrawCard("runtime-safety-card", text.Get("安全边界", "Safety boundary"), 138, () =>
+        DactUi.BeginCard("runtime-safety-card", text.Get("安全边界", "Safety boundary"));
+        DactUi.Wrapped(text.Get(
+            "FoxTTS、鲶鱼精邮差、Triggernometry 与银山雀儿保持在原共享 Host；抹茶独占专属 Host；用户自行安装且未特化的插件共用一个按需启动的通用 Host。三个边界互不连带崩溃，但都是普通用户权限的完整信任桌面进程。",
+            "FoxTTS, PostNamazu, Triggernometry, and SilverDasher stay in the original shared Host; Matcha owns its dedicated Host; user-installed non-specialized plugins share one on-demand generic Host. Failures do not cross these three boundaries, but every Host remains a full-trust standard-user desktop process."));
+        DactUi.EndCard();
+    }
+
+    private static string Detail(string? detail) => string.IsNullOrWhiteSpace(detail) ? string.Empty : $" — {detail}";
+
+    private void HostState(HostSupervisorSnapshot host)
+        => StatePills(
+            ($"{text.Get("进程", "Process")} {LocalizeValue(host.State)}", host.State == HostSupervisorState.Running ? PillTone.Ok : PillTone.Off),
+            ($"IPC {LocalizeValue(host.IpcStatus)}", host.IpcStatus.ToString().Equals("Connected", StringComparison.OrdinalIgnoreCase) ? PillTone.Ok : PillTone.Off));
+
+    private static void StatePills(params (string Label, PillTone Tone)[] pills)
+    {
+        var s = DactUi.S;
+        for (var index = 0; index < pills.Length; index++)
         {
-            ImGui.TextWrapped(text.Get(
-                "FoxTTS、鲶鱼精邮差、Triggernometry 与银山雀儿保持在原共享 Host；抹茶独占专属 Host；用户自行安装且未特化的插件共用一个按需启动的通用 Host。三个边界互不连带崩溃，但都是普通用户权限的完整信任桌面进程。",
-                "FoxTTS, PostNamazu, Triggernometry, and SilverDasher stay in the original shared Host; Matcha owns its dedicated Host; user-installed non-specialized plugins share one on-demand generic Host. Failures do not cross these three boundaries, but every Host remains a full-trust standard-user desktop process."));
-        });
+            if (index > 0) ImGui.SameLine(0, 8 * s);
+            DactUi.Pill(pills[index].Label, pills[index].Tone);
+        }
+    }
+
+    // Label column on the left (muted), value on the right; long values wrap in their column.
+    private static void Rows(params (string Label, string Value)[] rows)
+    {
+        var s = DactUi.S;
+        var width = ImGui.GetContentRegionAvail().X;
+        var labelWidth = Math.Min(width * .35f, Math.Max(112 * s, rows.Max(row => DactUi.TextWidth(row.Label, DactFonts.Small)) + 8 * s));
+        ImGui.BeginGroup();
+        using (DactUi.Gap(6))
+        {
+            foreach (var (label, value) in rows)
+            {
+                var start = ImGui.GetCursorScreenPos();
+                ImGui.BeginGroup();
+                DactUi.Wrapped(label, DactTheme.Palette.Muted, DactFonts.Small, labelWidth);
+                ImGui.EndGroup();
+                var bottom = ImGui.GetItemRectMax().Y;
+                ImGui.SetCursorScreenPos(start + new Vector2(labelWidth + 12 * s, 0));
+                ImGui.BeginGroup();
+                DactUi.Wrapped(value, DactTheme.Palette.Text, DactFonts.Small, width - labelWidth - 12 * s);
+                ImGui.EndGroup();
+                bottom = Math.Max(bottom, ImGui.GetItemRectMax().Y);
+                ImGui.SetCursorScreenPos(new Vector2(start.X, bottom));
+                ImGui.Dummy(new Vector2(width, 0));
+            }
+        }
+        ImGui.EndGroup();
+    }
+
+    private void PluginHealth(string id, string title, IReadOnlyList<HostPluginHealth> plugins, bool showActive)
+    {
+        if (plugins.Count == 0) return;
+        DactUi.BeginCard(id, title);
+        Rows(plugins.Select(plugin => (plugin.PluginId,
+            $"{LocalizeValue(plugin.State)}, events={plugin.CompletedEvents}, exceptions={plugin.Exceptions}, slow={plugin.SlowCalls}, last={plugin.LastDurationMilliseconds}ms" +
+            (showActive && plugin.ActiveCallback is not null ? $", active={plugin.ActiveMilliseconds}ms" : string.Empty))).ToArray());
+        DactUi.EndCard();
+    }
+
+    private static void Diagnostics(string id, string title, IReadOnlyList<HostDiagnostic> diagnostics, bool detailed)
+    {
+        if (diagnostics.Count == 0) return;
+        DactUi.BeginCard(id, title, gap: 6);
+        foreach (var diagnostic in diagnostics.TakeLast(20).Reverse())
+            DactUi.Wrapped(detailed
+                    ? $"[{diagnostic.PluginId}/{diagnostic.Phase}] {diagnostic.ExceptionType}: {diagnostic.Message} " +
+                      $"source={diagnostic.SourceAssembly}/{diagnostic.SourceType}.{diagnostic.SourceMethod}, thread={diagnostic.ThreadId}" +
+                      (diagnostic.IsWindowsFormsThread ? " (WinForms)" : string.Empty) + $", x{diagnostic.RepeatCount}"
+                    : $"[{diagnostic.PluginId}/{diagnostic.Phase}] {diagnostic.ExceptionType}: {diagnostic.Message}",
+                DactTheme.Palette.Text, DactFonts.Small);
+        DactUi.EndCard();
     }
 
     private void DrawStages(HostSupervisorSnapshot host, string pluginId, string title)
     {
-        var stages = host.PluginStages
-            .Where(stage => string.Equals(stage.PluginId, pluginId, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (stages.Length == 0)
-        {
-            return;
-        }
-
-        var height = Math.Clamp(70 + (stages.Length * 42), 116, 260);
-        DrawCard($"runtime-stages-{pluginId}", title, height, () =>
-        {
-            foreach (var stage in stages)
-            {
-                DactTheme.TextColored(IceBlue, stage.Stage);
-                ImGui.SameLine();
-                ImGui.TextWrapped($"{LocalizeValue(stage.State)} — {stage.Detail}");
-            }
-        });
-    }
-
-    private static void DrawCard(string id, string title, float height, Action drawContent)
-    {
-        if (BrandedWindowChrome.BeginGoldCard(id, height))
-        {
-            DactTheme.TextColored(Gold, title);
-            drawContent();
-        }
-        BrandedWindowChrome.EndGoldCard();
-        ImGui.Spacing();
+        var stages = host.PluginStages.Where(stage => string.Equals(stage.PluginId, pluginId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (stages.Length == 0) return;
+        DactUi.BeginCard($"runtime-stages-{pluginId}", title);
+        Rows(stages.Select(stage => (stage.Stage, $"{LocalizeValue(stage.State)}{Detail(stage.Detail)}")).ToArray());
+        DactUi.EndCard();
     }
 
     private string LocalizeParserState(ParserState state) => state switch
@@ -515,26 +417,6 @@ public sealed class StatusWindow : Window
             : bytes >= 1024L * 1024L * 1024L
                 ? $"{bytes / (1024d * 1024d * 1024d):0.00} GiB"
                 : $"{bytes / (1024d * 1024d):0.0} MiB";
-
-    private static void PushTheme()
-    {
-        DactTheme.PushStyleColor(ImGuiCol.WindowBg, Navy);
-        DactTheme.PushStyleColor(ImGuiCol.ChildBg, Navy);
-        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
-        DactTheme.PushStyleColor(ImGuiCol.Separator, new Vector4(0.34f, 0.29f, 0.18f, 0.70f));
-        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.17f, 0.24f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, NavyHover);
-        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.25f, 0.34f, 1));
-        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8);
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5);
-        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 8));
-    }
-
-    private static void PopTheme()
-    {
-        ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(7);
-    }
 
     private void OnStatusChanged(object? sender, ParserStatus next)
         => status = next;

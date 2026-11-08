@@ -2,6 +2,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.UI.Kit;
 using System.Numerics;
 
 namespace DalamudActCompat.UI;
@@ -10,8 +11,6 @@ public sealed class LauncherWindow : Window
 {
     private const int MinimumButtonSize = 56;
     private const int MaximumButtonSize = 128;
-    private static readonly Vector2 TextureUvMin = new(1f / 6f, 0);
-    private static readonly Vector2 TextureUvMax = new(5f / 6f, 1);
 
     private readonly PluginConfiguration configuration;
     private readonly ISharedImmediateTexture buttonTexture;
@@ -83,8 +82,19 @@ public sealed class LauncherWindow : Window
     {
         var buttonSize = GetButtonSize();
         var buttonDimensions = new Vector2(buttonSize, buttonSize);
-        var wrap = buttonTexture.GetWrapOrEmpty();
-        ImGui.Image(wrap.Handle, buttonDimensions, TextureUvMin, TextureUvMax);
+        // 1.0: just the transparent DACT logo, no tile or border (user decision after testing in
+        // game). Hover grows it slightly and lifts it from a soft dim, so it still reads as a button.
+        ImGui.InvisibleButton("##dact-launcher", buttonDimensions,
+            ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
+        var min = ImGui.GetItemRectMin();
+        var draw = ImGui.GetWindowDrawList();
+        var hover = Kit.DactMotion.Float(ImGuiP.GetItemID(), ImGui.IsItemHovered() ? 1 : 0, Kit.DactMotion.Fast);
+        // The resting size leaves room for the hover growth so the logo never clips the window.
+        var half = buttonSize * (.46f + .04f * hover);
+        var center = min + buttonDimensions * .5f;
+        var tint = .88f + .12f * hover;
+        draw.AddImage(buttonTexture.GetWrapOrEmpty().Handle, center - new Vector2(half), center + new Vector2(half),
+            Vector2.Zero, Vector2.One, ImGui.GetColorU32(new Vector4(tint, tint, tint, 1)));
 
         var hovered = ImGui.IsItemHovered();
         var leftClicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
@@ -92,14 +102,6 @@ public sealed class LauncherWindow : Window
         var middleClicked = ImGui.IsItemClicked(ImGuiMouseButton.Middle);
         if (hovered)
         {
-            var drawList = ImGui.GetWindowDrawList();
-            drawList.AddRect(
-                ImGui.GetItemRectMin(),
-                ImGui.GetItemRectMax(),
-                ImGui.GetColorU32(new Vector4(0.78f, 0.66f, 0.36f, 0.9f)),
-                buttonSize * 0.25f,
-                ImDrawFlags.None,
-                2);
             DrawHelpTooltip();
         }
 
@@ -140,15 +142,12 @@ public sealed class LauncherWindow : Window
 
     private void DrawHelpTooltip()
     {
-        ImGui.BeginTooltip();
-        ImGui.TextUnformatted(text.Get("ACT 快捷按钮", "ACT quick button"));
-        ImGui.Separator();
-        ImGui.TextUnformatted(text.Get("左键：打开或关闭设置", "Left click: Open or close settings"));
-        ImGui.TextUnformatted(text.Get(
-            "右键：打开或关闭战斗统计",
-            "Right click: Open or close Combat Meter"));
-        ImGui.TextUnformatted(text.Get("按住中键：拖动按钮", "Hold middle mouse: Move button"));
-        ImGui.EndTooltip();
+        // A blank line stands in for the old separator so every skin, 艾欧泽亚's framed tooltip
+        // included, draws this help through the one tooltip path.
+        DactUi.Tooltip(text.Get("ACT 快捷按钮", "ACT quick button") + "\n\n" +
+            text.Get("左键：打开或关闭设置", "Left click: Open or close settings") + "\n" +
+            text.Get("右键：打开或关闭战斗统计", "Right click: Open or close Combat Meter") + "\n" +
+            text.Get("按住中键：拖动按钮", "Hold middle mouse: Move button"));
     }
 
     private float GetButtonSize()

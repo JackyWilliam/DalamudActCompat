@@ -39,7 +39,7 @@ internal static partial class SkinSmokeTests
         var restored = JsonConvert.DeserializeObject<PluginConfiguration>(JsonConvert.SerializeObject(config))!;
         restored.ApplyMigrations();
         var snapshot = new PluginConfiguration(); snapshot.RestoreFrom(restored.CreateSnapshot()); snapshot.ApplyMigrations();
-        Check(snapshot.Version == 17 && snapshot.Meter.ClassicWindow.BackgroundOpacity == 0 &&
+        Check(snapshot.Version == 18 && snapshot.Meter.ClassicWindow.BackgroundOpacity == 0 &&
             snapshot.Meter.ClassicWindow.DataBarOpacity == .6f && snapshot.Meter.RoleSplitDamageWindow.DataBarOpacity == 0 &&
             snapshot.Meter.RoleSplitHealerWindow.DataBarOpacity == 1,
             "Reload/snapshot changed independent opacity or the configuration version.");

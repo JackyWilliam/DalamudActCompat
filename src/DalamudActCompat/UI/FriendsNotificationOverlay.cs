@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Infrastructure.Cloud;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -22,20 +23,26 @@ internal sealed partial class FriendsUiManager
         if (context.NavWindow.Handle != null && !IsNotification(context.NavWindow)) lastNonNotificationFocus = context.NavWindow.ID;
         if (incoming.Visible.Count == 0) return;
         var viewport = ImGui.GetMainViewport();
-        var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        DactUi.BeginFrame();
+        var scale = DactUi.S;
         var padding = Math.Max(3, 10 * scale); var gap = 8 * scale;
-        var expandWidth = ImGui.CalcTextSize(uiText.Get("全部展开", "Open chat")).X + padding * 2;
-        var totalWidth = Math.Min(320 * scale + gap + expandWidth, viewport.WorkSize.X - 16);
-        var bodyWidth = Math.Max(1, totalWidth - gap - expandWidth);
+        // 全部展开 sits inside the bubble, in the sender's row on the right (user request), and
+        // opens the conversation in its own floating window.
+        var expandLabel = uiText.Get("全部展开", "Open chat");
+        var expandWidth = DactUi.TextWidth(expandLabel, DactFonts.Small) + 34 * scale;
+        var bodyWidth = Math.Max(1, Math.Min(340 * scale, viewport.WorkSize.X - 16));
+        var totalWidth = bodyWidth;
         var textWidth = Math.Max(1, bodyWidth - padding * 2);
         var lineHeight = ImGui.GetTextLineHeight();
-        var buttonHeight = ImGui.GetFrameHeight();
+        var headerHeight = Math.Max(lineHeight, 24 * scale);
+        // 1.0 buttons are 30 px tall at the default font.
+        var buttonHeight = 30 * scale;
         var layouts = new List<IncomingLayout>(); var totalHeight = 0f;
         foreach (var entry in incoming.Visible)
         {
             var body = FriendsMessagePreview.Ellipsize(uiText.MessageBody(entry.Message), lineHeight * 3, s => ImGui.CalcTextSize(s, false, textWidth).Y);
             var hasReplies = FriendsIncomingNotifications.Replies(entry.Message, uiText).Count > 0;
-            var height = padding * 2 + lineHeight + gap + ImGui.CalcTextSize(body, false, textWidth).Y + (hasReplies ? buttonHeight + gap : 0);
+            var height = padding * 2 + headerHeight + gap + ImGui.CalcTextSize(body, false, textWidth).Y + (hasReplies ? buttonHeight + gap : 0);
             if (layouts.Count > 0 && totalHeight + gap + height > viewport.WorkSize.Y - 16) break;
             layouts.Add(new(entry, body, height)); totalHeight += height + (layouts.Count > 1 ? gap : 0);
         }
@@ -56,8 +63,8 @@ internal sealed partial class FriendsUiManager
             var settledX = right ? viewport.WorkPos.X + viewport.WorkSize.X - 8 - totalWidth : viewport.WorkPos.X + 8;
             var outsideX = right ? viewport.WorkPos.X + viewport.WorkSize.X : viewport.WorkPos.X - totalWidth;
             var groupX = outsideX + (settledX - outsideX) * entry.SlideProgress(now);
-            var bodyPosition = new Vector2(groupX + (right ? expandWidth + gap : 0), entry.Y!.Value);
-            var expandPosition = new Vector2(groupX + (right ? 0 : bodyWidth + gap), entry.Y.Value + (layout.Height - buttonHeight) / 2);
+            var bodyPosition = new Vector2(groupX, entry.Y!.Value);
+            var expandPosition = new Vector2(bodyPosition.X + bodyWidth - padding + 4 * scale - expandWidth, bodyPosition.Y + padding);
             var id = state.Session.Generation + "-" + entry.Message.Id;
             ImGui.PushStyleVar(ImGuiStyleVar.Alpha, ImGui.GetStyle().Alpha * entry.Opacity(now));
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
@@ -67,16 +74,20 @@ internal sealed partial class FriendsUiManager
             {
                 ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
                 var list = ImGui.GetWindowDrawList();
-                var background = Navy; background.W = 1 - Math.Clamp(configuration.FriendNotificationBackgroundTransparency, 0, 100) / 100f;
-                list.AddRectFilled(bodyPosition, bodyPosition + new Vector2(bodyWidth, layout.Height), ImGui.GetColorU32(background), 9 * scale);
+                // 1.0 card: raised fill (its transparency is the player's 气泡背景透明度) with the card border.
+                var opacity = 1 - Math.Clamp(configuration.FriendNotificationBackgroundTransparency, 0, 100) / 100f;
+                list.AddRectFilled(bodyPosition, bodyPosition + new Vector2(bodyWidth, layout.Height), ImGui.GetColorU32(DactTheme.Palette.Raised with { W = opacity }), 10 * scale);
+                list.AddRect(bodyPosition, bodyPosition + new Vector2(bodyWidth, layout.Height), ImGui.GetColorU32(DactUi.CardBorder with { W = DactUi.CardBorder.W * Math.Max(opacity, .35f) }),
+                    10 * scale, ImDrawFlags.None, Math.Max(1, scale));
                 var author = entry.Message.Sender.IsOfficial ? uiText.Get("DACT 官方通知", "DACT announcements") : state.FriendDisplayName(entry.Message.Sender.UserId, entry.Message.Sender.Name);
-                author = FriendsMessagePreview.Ellipsize(author, textWidth, s => ImGui.CalcTextSize(s).X);
-                var origin = bodyPosition + new Vector2(padding);
+                var authorWidth = Math.Max(1, textWidth - expandWidth - 6 * scale);
+                author = FriendsMessagePreview.Ellipsize(author, authorWidth, s => ImGui.CalcTextSize(s).X);
+                var origin = bodyPosition + new Vector2(padding, padding + (headerHeight - lineHeight) / 2);
                 AccountIdentityBadge.DrawName(administratorIcon, author,
                     !entry.Message.Sender.IsOfficial && state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.IsAdmin == true,
-                    origin, textWidth, entry.Message.Sender.IsOfficial ? Gold : Blue, sponsorIcon,
+                    origin, authorWidth, entry.Message.Sender.IsOfficial ? Gold : Blue, sponsorIcon,
                     entry.Message.Sender.IsOfficial ? 0 : state.Conversations.GetValueOrDefault(entry.Message.ConversationId)?.Chat.Peer.SponsorTier ?? entry.Message.Sender.SponsorTier, text: uiText);
-                origin.Y += lineHeight + gap;
+                origin = bodyPosition + new Vector2(padding, padding + headerHeight + gap);
                 list.AddText(ImGui.GetFont(), ImGui.GetFontSize(), origin, ImGui.GetColorU32(DactTheme.Palette.Text), layout.Body, textWidth);
                 if (FriendsIncomingNotifications.Replies(entry.Message, uiText).Count > 0)
                 {
@@ -88,16 +99,15 @@ internal sealed partial class FriendsUiManager
             }
             ImGui.End();
             DrawNotificationReplies(entry, state, now, textWidth, bodyPosition + new Vector2(padding, layout.Height - padding - buttonHeight), id);
-            // Keep the explicit action in its own tight window. The transparent
-            // gap and the rest of the screen must not become an input-catching box.
-            ImGui.SetNextWindowPos(expandPosition); ImGui.SetNextWindowSize(new(expandWidth, buttonHeight));
-            if (ImGui.Begin(NotificationPrefix + id + "-expand", NotificationFlags))
+            // Keep the explicit action in its own tight window. The rest of the bubble and
+            // the screen must not become an input-catching box.
+            if (NotificationLink(id + "-expand", expandLabel, expandPosition, new(expandWidth, headerHeight)) && entry.DismissedAt is null &&
+                controller.Snapshot.Session == state.Session)
             {
-                ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
-                if (DactTheme.Button(uiText.Get("全部展开", "Open chat"), new(expandWidth, buttonHeight)) && controller.Snapshot.Session == state.Session)
-                { OpenChat(entry.Message.ConversationId); entry.ExpiresAt = now; }
+                OpenChatWindow(entry.Message.ConversationId, bodyPosition, bodyPosition + new Vector2(bodyWidth, layout.Height), right);
+                entry.Dismiss(now);
             }
-            ImGui.End(); ImGui.PopStyleVar(3);
+            ImGui.PopStyleVar(3);
         }
         // Mouse buttons may focus an ImGui window even with NoNav. Only an
         // explicit OpenChat may focus chat; quick replies return to the prior owner.
@@ -133,6 +143,29 @@ internal sealed partial class FriendsUiManager
         return state.Busy ? uiText.Get("正在回复…", "Sending reply…") : uiText.Get("未能确认，请展开聊天查看", "Unconfirmed. Open the chat to check.");
     }
 
+    // 全部展开 in the bubble's sender row: a compact accent pill with the pop-out icon, since it
+    // opens a window of its own.
+    private static bool NotificationLink(string id, string label, Vector2 position, Vector2 size)
+    {
+        ImGui.SetNextWindowPos(position); ImGui.SetNextWindowSize(size);
+        var clicked = false;
+        if (ImGui.Begin(NotificationPrefix + id, NotificationFlags))
+        {
+            ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
+            var s = DactUi.S;
+            var palette = DactTheme.Palette;
+            clicked = ImGui.InvisibleButton("##notification-link", size);
+            var min = ImGui.GetItemRectMin();
+            var hover = DactMotion.Float(ImGuiP.GetItemID(), ImGui.IsItemHovered() ? 1 : 0, DactMotion.Fast);
+            var draw = ImGui.GetWindowDrawList();
+            draw.AddRectFilled(min, min + size, DactUi.U32(palette.Accent with { W = .12f + .14f * hover }), size.Y * .5f);
+            DactUi.DrawText(draw, min + new Vector2(10 * s, 0), size.Y, label, palette.Accent, DactFonts.Small);
+            DactIcons.Draw(draw, "external", new Vector2(min.X + size.X - 22 * s, min.Y + (size.Y - 12 * s) * .5f), 12 * s, palette.Accent);
+        }
+        ImGui.End();
+        return clicked;
+    }
+
     private static bool NotificationButton(string id, string label, Vector2 position, Vector2 size, bool enabled)
     {
         // No enclosing input window: only each actual button's rectangle receives
@@ -144,7 +177,7 @@ internal sealed partial class FriendsUiManager
             // New no-focus windows may be inserted below an existing body. Keep
             // the actual controls above its translucent fill without focusing them.
             ImGuiP.BringWindowToDisplayFront(ImGuiP.GetCurrentWindow());
-            ImGui.BeginDisabled(!enabled); clicked = DactTheme.Button(label, size); ImGui.EndDisabled();
+            clicked = DactUi.Button(label + "##notification-button", width: size.X, disabled: !enabled);
         }
         ImGui.End(); return clicked;
     }
@@ -153,7 +186,7 @@ internal sealed partial class FriendsUiManager
     {
         var view = state.Conversations.GetValueOrDefault(entry.Message.ConversationId);
         if (view is null || NotificationReplyStatus(entry, state) is not null) return;
-        var buttonHeight = ImGui.GetFrameHeight();
+        var buttonHeight = 30 * DactUi.S;
         if (entry.ReplyOperation is { } operation)
         {
             if (view.PendingSend?.OperationId == operation && !state.Busy)

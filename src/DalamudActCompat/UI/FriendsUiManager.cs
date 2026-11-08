@@ -3,6 +3,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -20,6 +21,22 @@ internal sealed partial class FriendsUiManager : IDisposable
         public float LastScroll;
         public string Draft = "";
         public Guid? SubmittedOperation;
+        // What was submitted, so the bubble shows the moment Enter is pressed and the editor is
+        // already empty; the text goes back into the editor if the send never reached the outbox.
+        public string? SubmittedText;
+        public string? SubmittedQuick;
+        public bool SubmittedFromDraft;
+        // Enter ends ImGui's text editing; the field takes the keyboard back for the next message.
+        public bool RefocusDraft;
+        // When each message (by operation for my own, so the 发送中 bubble and the confirmed
+        // message are one) first showed up, for the slide-in; messages present when the
+        // conversation came into view are recorded as settled.
+        public readonly Dictionary<string, double> Appeared = new(StringComparer.Ordinal);
+        public int LastDrawFrame = -10;
+        // Measured last frame: the input rows stay pinned to the bottom whatever shows above them.
+        public float ComposerHeight;
+        // The alert it was opened from, to place a new window beside it.
+        public (Vector2 Min, Vector2 Max, bool OnRight)? Beside;
         public Vector2 Position;
         public Vector2 Size = new(400, 460);
     }
@@ -117,27 +134,39 @@ internal sealed partial class FriendsUiManager : IDisposable
         }
         finally { PopTheme(); }
     }
-    private void OpenChat(string id)
+    // Rows of the legacy drawer show a conversation on the 好友 page.
+    private void OpenChat(string id) => ShowConversation(id);
+
+    // A notification's 「全部展开」 floats the conversation in its own window beside the alert,
+    // with DACT open or not (user request). A chat window already open stays where it is.
+    private void OpenChatWindow(string id, Vector2 alertMin, Vector2 alertMax, bool alertOnRight)
     {
         if (!windows.TryGetValue(id, out var window)) windows[id] = window = new();
-        window.Open = true; window.Focus = true; window.ScrollToLatest = true;
+        if (!window.Open) window.New = true;
+        window.Open = true;
+        window.Focus = true;
+        window.ScrollToLatest = true;
+        window.Beside = (alertMin, alertMax, alertOnRight);
     }
-    private unsafe void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
+    private void DrawChat(string id, ChatWindow window, FriendsChatSnapshot state)
     {
         var view = state.Conversations.GetValueOrDefault(id);
-        // A queued command may fail before it can prepare a durable send. Keep the
-        // editor text until that exact operation has entered the controlled outbox.
-        if (window.SubmittedOperation is { } submitted && view?.LastPreparedOperation == submitted)
-        { window.Draft = ""; window.SubmittedOperation = null; }
         var official = view?.Chat.Kind == "official";
         var title = official ? uiText.Get("DACT 官方通知", "DACT announcements") : view is null ? uiText.Get("好友聊天", "Friend chat") : state.FriendDisplayName(view.Chat.Peer.Id, view.Chat.Peer.Username);
-        var viewport = ImGui.GetMainViewport(); var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        var viewport = ImGui.GetMainViewport();
+        var s = DalamudActCompat.UI.Kit.DactUi.S;
         var maximum = viewport.WorkSize - new Vector2(16);
-        ImGui.SetNextWindowSizeConstraints(Vector2.Min(new Vector2(320, 340) * scale, maximum), maximum);
+        ImGui.SetNextWindowSizeConstraints(Vector2.Min(new Vector2(320, 360) * s, maximum), maximum);
         if (window.New)
         {
-            window.Size = Vector2.Min(new Vector2(420, 510) * scale, maximum);
-            window.Position = FriendsWindowLayout.Clamp(anchor + new Vector2(44, 58), window.Size, viewport.WorkPos, viewport.WorkSize);
+            window.Size = Vector2.Min(new Vector2(400, 480) * s, maximum);
+            // Opened from an alert: next to it, on the screen side away from the edge it hugs.
+            var placed = window.Beside is var (alertMin, alertMax, alertOnRight)
+                ? new Vector2(alertOnRight ? alertMin.X - 12 * s - window.Size.X : alertMax.X + 12 * s,
+                    (alertMin.Y + alertMax.Y - window.Size.Y) * .5f)
+                : anchor + new Vector2(44, 58);
+            window.Beside = null;
+            window.Position = FriendsWindowLayout.Clamp(placed, window.Size, viewport.WorkPos, viewport.WorkSize);
             ImGui.SetNextWindowPos(window.Position, ImGuiCond.Always); ImGui.SetNextWindowSize(window.Size, ImGuiCond.Always); window.New = false;
         }
         else
@@ -148,136 +177,22 @@ internal sealed partial class FriendsUiManager : IDisposable
         // Focus is requested only by a user's click, never by arrival/polling.
         if (window.Focus) { ImGui.SetNextWindowFocus(); window.Focus = false; }
         window.Drag.PrepareNextWindow();
-        var flags = DactTheme.WindowFlags(
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10 * s);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, Math.Max(1, s));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(14 * s));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8, 12) * s);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, DactTheme.Palette.Surface);
+        ImGui.PushStyleColor(ImGuiCol.Border, DactTheme.Palette.Border);
+        var expanded = ImGui.Begin($"{title}###DACTFriendChat-{id}", ref window.Open,
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoTitleBar |
-            ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove);
-        var gameFrame = (flags & ImGuiWindowFlags.NoBackground) != 0;
-        // The sprite has transparent outer pixels. Suppress the original fill
-        // and outline only once textures are ready, or they show as a second rim.
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, gameFrame ? 0 : ImGui.GetStyle().WindowBorderSize);
-        var expanded = ImGui.Begin($"{title}###DACTFriendChat-{id}", ref window.Open, flags);
-        ImGui.PopStyleVar();
+            ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoScrollbar);
+        ImGui.PopStyleColor(2);
+        ImGui.PopStyleVar(4);
         if (expanded)
         {
             window.Position = ImGui.GetWindowPos(); window.Size = ImGui.GetWindowSize();
-            if (gameFrame)
-            {
-                // Fill inside the same eight-pixel strips used by PopupFrame,
-                // leaving its outer transparency and rounded corners intact.
-                var inset = new Vector2(8 * scale);
-                // The opaque fill belongs to the game sprite. Glass must sample
-                // the actual scene here, before chat content is drawn.
-                if (!DactTheme.Palette.Glass && !DactTheme.Palette.Rain)
-                    ImGui.GetWindowDrawList().AddRectFilled(window.Position + inset,
-                        window.Position + window.Size - inset, ImGui.GetColorU32(Navy));
-                DactTheme.DrawGamePopupFrame();
-            }
-            DrawChatHeader(window, title, official, view?.Chat.Peer, scale);
-            var focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
-            if (view is null) { ImGui.TextWrapped(uiText.Get("会话正在同步，或好友关系已解除。", "This conversation is syncing, or the friendship has ended.")); }
-            else
-            {
-                if (state.State != "ready") ImGui.TextWrapped(uiText.SystemMessage(state.Status));
-                var contentWidth = ImGui.GetContentRegionAvail().X;
-                var sendStatus = uiText.SystemMessage(view.SendStatus);
-                var statusHeight = string.IsNullOrEmpty(sendStatus) ? 0 : ImGui.CalcTextSize(sendStatus, false, contentWidth).Y;
-                var sendLabel = uiText.Get("发送", "Send");
-                var inviteLabel = uiText.Get("下把邀我", "Invite me next time");
-                var finishLabel = uiText.Get("你什么时候结束", "When will you finish?");
-                var retryLabel = uiText.Get("重试原消息", "Retry original message");
-                var discardLabel = uiText.Get("放弃此发送…", "Discard this send…");
-                // Measure wrapped action rows before history takes its space, so
-                // longer translations keep the input and retry controls reachable.
-                var extraFooter = ExtraButtonRowHeight(contentWidth, sendLabel, inviteLabel, finishLabel) +
-                    (view.PendingSend is null ? 0 : ExtraButtonRowHeight(contentWidth, retryLabel, discardLabel));
-                // The usage notice lives once in the friend drawer. Reclaim its
-                // former footer space here while keeping official/read-only identity.
-                var showLatest = !window.AtBottom && view.UnreadCount > 0;
-                var footer = (official ? 38 * scale : (view.PendingSend is null ? 82 : 175) * scale + statusHeight + extraFooter) +
-                    (showLatest ? ImGui.GetFrameHeightWithSpacing() : 0);
-                var historyHeight = Math.Max(90 * scale, ImGui.GetContentRegionAvail().Y - footer);
-                if (ImGui.BeginChild("messages", new Vector2(-1, historyHeight), false))
-                {
-                    var history = ImGuiP.GetCurrentWindow();
-                    var scroll = ImGui.GetScrollY();
-                    var bottomBeforeDraw = scroll >= ImGui.GetScrollMaxY() - 4;
-                    var wheel = ImGui.IsWindowHovered() && ImGui.GetIO().MouseWheel != 0;
-                    var scrollbar = ImGui.GetCurrentContext().ActiveId == ImGuiP.GetWindowScrollbarID(history, ImGuiAxis.Y);
-                    // User scrolling takes precedence over a pending follow. A
-                    // shorter retained history can clamp Y too, without user input.
-                    if (wheel || scrollbar || !window.ScrollToLatest && scroll < window.LastScroll - 1 && ImGui.GetScrollMaxY() >= window.LastScroll)
-                    { window.ScrollToLatest = false; window.AtBottom = bottomBeforeDraw; }
-                    var messages = view.Chat.History.Concat(view.Chat.Pending).OrderBy(m => m.Id).ToArray();
-                    if (messages.Any(m => m.Id > window.LastMessage && m.Sender.UserId == state.Friends?.User?.Id))
-                        window.ScrollToLatest = true;
-                    foreach (var message in messages)
-                        DrawBubble(message, message.Sender.UserId == state.Friends?.User?.Id, administratorIcon, sponsorIcon,
-                            message.Sender.IsOfficial ? null : state.FriendDisplayName(message.Sender.UserId, message.Sender.Name), uiText);
-                    if (messages.Length == 0) ImGui.TextDisabled(uiText.Get("暂无消息。", "No messages yet."));
-                    var last = messages.LastOrDefault()?.Id ?? 0;
-                    // Scroll targets and content extents settle on later frames.
-                    // Keep following through wrapping/footer/resize changes, and
-                    // mark read only after the newly drawn tail is actually visible.
-                    var tailVisible = ImGui.GetItemRectMax().Y <= history.InnerRect.Max.Y - history.WindowPadding.Y + 4;
-                    if (window.ScrollToLatest || window.AtBottom)
-                    {
-                        window.ScrollToLatest = !tailVisible;
-                        if (window.ScrollToLatest) ImGui.SetScrollHereY(1);
-                        window.AtBottom = true;
-                    }
-                    else window.AtBottom = bottomBeforeDraw && tailVisible;
-                    window.LastMessage = last;
-                    window.LastScroll = scroll;
-                    if (focused && window.AtBottom && tailVisible)
-                    {
-                        var incoming = messages.Where(m => m.RecipientId == state.Friends?.User?.Id).Select(m => m.Id).DefaultIfEmpty().Max();
-                        controller.MarkRead(id, incoming);
-                    }
-                }
-                ImGui.EndChild();
-                if (showLatest && DactTheme.Button(uiText.Get("有新消息 · 回到底部", "New messages · Jump to latest"), new(-1, 0)))
-                    window.ScrollToLatest = true;
-                if (official) ImGui.TextWrapped(uiText.Get("这里接收 DACT 官方通知，不支持回复。", "DACT announcements appear here. Replies are disabled."));
-                else
-                {
-                    if (view.PendingSend is { } pending)
-                    {
-                        var preview = pending.Text ?? (pending.QuickMessageId == CloudChatPolicy.InviteNext ? uiText.Get("下把邀我", "Invite me next time") : uiText.Get("你什么时候结束", "When will you finish?"));
-                        ImGui.TextWrapped(uiText.Format($"待确认：{(preview.Length > 60 ? preview[..60] + "…" : preview)}", $"Unconfirmed: {(preview.Length > 60 ? preview[..60] + "…" : preview)}"));
-                        if (preview.Length > 60 && ImGui.IsItemHovered())
-                        {
-                            ImGui.BeginTooltip(); ImGui.PushTextWrapPos(ImGui.GetFontSize() * 28);
-                            ImGui.TextUnformatted(preview); ImGui.PopTextWrapPos(); ImGui.EndTooltip();
-                        }
-                        ImGui.BeginDisabled(state.Busy);
-                        var retryRowRight = ImGui.GetCursorScreenPos().X + contentWidth;
-                        if (DactTheme.Button(retryLabel)) controller.Retry(id);
-                        ContinueButtonRow(discardLabel, retryRowRight);
-                        if (DactTheme.Button(discardLabel)) ImGui.OpenPopup("discard-pending");
-                        ImGui.EndDisabled();
-                        if (ImGui.BeginPopup("discard-pending"))
-                        {
-                            ImGui.TextWrapped(uiText.Get("原消息可能已送达。放弃后请先查看会话记录，再决定是否重新输入发送。", "The original message may have arrived. After discarding, check the conversation before composing another message."));
-                            if (DactTheme.Button(uiText.Get("确认放弃", "Confirm discard"))) { controller.Discard(id); ImGui.CloseCurrentPopup(); }
-                            ImGui.EndPopup();
-                        }
-                    }
-                    ImGui.BeginDisabled(state.Busy || view.PendingSend is not null);
-                    ImGui.SetNextItemWidth(-1);
-                    var enter = ImGui.InputTextWithHint("##chat-draft", uiText.Get("输入消息，按回车发送", "Type a message; press Enter to send"), ref window.Draft, 4000, ImGuiInputTextFlags.EnterReturnsTrue);
-                    if (enter && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } enterOperation)
-                        window.SubmittedOperation = enterOperation;
-                    var buttonRowRight = ImGui.GetCursorScreenPos().X + contentWidth;
-                    if (DactTheme.Button(sendLabel) && !string.IsNullOrWhiteSpace(window.Draft) && controller.Send(id, window.Draft) is { } buttonOperation)
-                        window.SubmittedOperation = buttonOperation;
-                    ContinueButtonRow(inviteLabel, buttonRowRight);
-                    if (DactTheme.Button(inviteLabel)) controller.Send(id, "", CloudChatPolicy.InviteNext);
-                    ContinueButtonRow(finishLabel, buttonRowRight);
-                    if (DactTheme.Button(finishLabel)) controller.Send(id, "", CloudChatPolicy.WhenFinished);
-                    ImGui.EndDisabled();
-                    if (!string.IsNullOrEmpty(sendStatus)) ImGui.TextWrapped(sendStatus);
-                }
-            }
+            if (view is null) DalamudActCompat.UI.Kit.DactUi.Wrapped(uiText.Get("会话正在同步，或好友关系已解除。", "This conversation is syncing, or the friendship has ended."), DactTheme.Palette.Muted);
+            else DrawConversation(id, view, window, state, page: false);
         }
         ImGui.End();
     }
@@ -292,7 +207,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         // window, while the custom close control cannot start a drag.
         ImGui.InvisibleButton("##chat-header-drag", new Vector2(dragWidth, height));
         window.Drag.HandleItem();
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(title);
+        if (ImGui.IsItemHovered()) DactUi.Tooltip(title);
         AccountIdentityBadge.DrawName(administratorIcon, title, !official && peer?.IsAdmin == true,
             start + new Vector2(4 * scale, 7 * scale), dragWidth - 8 * scale, official ? Gold : Blue,
             sponsorIcon, official ? 0 : peer?.SponsorTier ?? 0, text: uiText);
@@ -303,7 +218,7 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (ImGui.IsItemHovered())
         {
             list.AddRectFilled(close, close + new Vector2(height), ImGui.GetColorU32(DactTheme.Palette.Surface), 4 * scale);
-            ImGui.SetTooltip(uiText.Get("关闭聊天", "Close chat"));
+            DactUi.Tooltip(uiText.Get("关闭聊天", "Close chat"));
         }
         var inset = height * .34f;
         var color = ImGui.GetColorU32(DactTheme.Palette.Text);
@@ -374,7 +289,7 @@ internal sealed partial class FriendsUiManager : IDisposable
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav))
         {
             if (DactTheme.SmallButton(uiText.Get("● 新好友申请 · 点击查看", "● New friend request · View")))
-            { openMain(); drawerOpen = true; toastUntil = 0; }
+            { ShowRequests(); toastUntil = 0; }
         }
         ImGui.End();
     }

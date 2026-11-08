@@ -4,6 +4,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using System.Numerics;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Meter;
 
@@ -477,7 +478,7 @@ public sealed class HorizontalMeterWindow : Window
             ImGui.GetColorU32(new Vector4(IceBlue.X, IceBlue.Y, IceBlue.Z, 0.35f)));
         if (ImGui.IsMouseHoveringRect(start, start + new Vector2(width, height)) && row.HighestDamage > 0)
         {
-            ImGui.SetTooltip(text.Format(
+            DactUi.Tooltip(text.Format(
                 $"最高单次：{row.HighestDamageAction} {row.HighestDamage:N0}",
                 $"Highest hit: {row.HighestDamageAction} {row.HighestDamage:N0}"));
         }

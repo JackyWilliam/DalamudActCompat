@@ -42,6 +42,14 @@ internal static partial class OverlayManagerSmokeTests
             Set(f.Window, "isStatusVisible", (Func<bool>)(() => true));
             Set(f.Window, "getGameRegionSelection", (Func<GameRegionSelection>)(() => GameRegionResolver.Resolve(GameRegionMode.Auto, "Chinese", 4)));
             Set(f.Window, "setGameRegionMode", (Action<GameRegionMode>)(_ => { }));
+            // The 1.0 home page shows extension, cloud and quick-action tiles beside the general settings.
+            Set(f.Window, "discoverPlugins", (Func<IReadOnlyList<DalamudActCompat.Compatibility.PluginHost.InstalledActPlugin>>)(() => []));
+            Set(f.Window, "cloud", new DalamudActCompat.Infrastructure.Cloud.CloudUiBridge(
+                () => DalamudActCompat.Infrastructure.Cloud.CloudClientSnapshot.SignedOut(), _ => { }, _ => { }, _ => { }, () => { }, () => { },
+                _ => { }, () => { }, _ => { }, _ => { }, () => { }));
+            Set(f.Window, "setStatusVisible", (Action<bool>)(_ => { }));
+            Set(f.Window, "setMeterVisible", (Action<bool>)(_ => { }));
+            Set(f.Window, "setSimplifiedMode", (Action<bool>)(_ => { }));
             var draw = typeof(ControlCenterWindow).GetMethod("DrawOverlays", Private)!;
             var home = typeof(ControlCenterWindow).GetMethod("DrawOverview", Private)!;
             var details = typeof(ControlCenterWindow).GetField("overlayDetailsPage", Private)!;
@@ -59,6 +67,8 @@ internal static partial class OverlayManagerSmokeTests
                     ImGui.SetNextWindowPos(new(20)); ImGui.SetNextWindowSize(size);
                     ImGui.PushStyleColor(ImGuiCol.WindowBg, DactTheme.Palette.Surface);
                     ImGui.Begin("UI acceptance", DactTheme.WindowFlags(ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings));
+                    // Like ControlCenterWindow.Draw: the 1.0 kit derives its layout scale from the font size.
+                    DalamudActCompat.UI.Kit.DactUi.BeginFrame();
                     DactTheme.DrawGameWindow();
                     // Stacked details can start below the viewport. Scroll the
                     // parent to them so native clipping cannot silently skip the page.

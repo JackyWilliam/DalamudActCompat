@@ -2,6 +2,7 @@ using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.UI;
 using System.Numerics;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Meter;
 
@@ -278,7 +279,7 @@ internal static class MeterSlotPresentation
                 value);
             drawList.PopClipRect();
             if (ImGui.IsMouseHoveringRect(new(cellStart.X, start.Y), new(cellStart.X + cellWidth, start.Y + TeamSummaryHeight)))
-                ImGui.SetTooltip($"{label}: {value}");
+                DactUi.Tooltip($"{label}: {value}");
             previewInteraction?.Observe(
                 summaries[index],
                 new Vector2(cellStart.X, start.Y),

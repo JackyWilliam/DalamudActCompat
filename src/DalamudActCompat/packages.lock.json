@@ -2,6 +2,15 @@
   "version": 1,
   "dependencies": {
     "net10.0-windows10.0.17763": {
+      "Anthropic": {
+        "type": "Direct",
+        "requested": "[13.6.0, )",
+        "resolved": "13.6.0",
+        "contentHash": "KPmqMhlU3Q2hOlslb4TgRMgQGDzf5v4qW/1bgE+D8dK5BbB1v3Ml40eMGmktmwm+5FPL9arV5MgXWoMBJLHniw==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.5.1"
+        }
+      },
       "DalamudPackager": {
         "type": "Direct",
         "requested": "[15.0.0, )",
@@ -19,6 +28,11 @@
         "requested": "[0.50.1, )",
         "resolved": "0.50.1",
         "contentHash": "VY90K8BBvaAMvvRDJ8EvsfI/GgoIYxlgxMpxdgwpzaesJ0pGSHTLbZ7SD4JYxsGCnOibzua/+8HvDjV6KTw4jA=="
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.5.1",
+        "contentHash": "nB0l3IlsVbNeUxsE7nZNb9GY8rP1OSeqpj0pseORPejt474HNKEauTWTLdSJPkSvPlRMxowZNMo6nyp7APAiSg=="
       },
       "Microsoft.Extensions.ObjectPool": {
         "type": "Transitive",

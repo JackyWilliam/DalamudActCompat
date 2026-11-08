@@ -46,6 +46,28 @@ internal sealed class SkinSettingsPanel
         ImGui.EndChild();
     }
 
+    // 1.0 外观与皮肤 card: preview, current skin, short hint, 管理皮肤.
+    public void DrawCard(UiSkinSettings settings, CloudClientSnapshot account, UiText text)
+    {
+        var s = Kit.DactUi.S;
+        Kit.DactUi.BeginCard("settings-appearance", text.Get("外观与皮肤", "Appearance & skins"));
+        var current = SkinCatalog.All.First(skin => skin.Id == ActiveSkin(settings, account));
+        var start = ImGui.GetCursorScreenPos();
+        DrawPreview(current.Id, start, new Vector2(118, 74) * s, text, true);
+        ImGui.SetCursorScreenPos(start + new Vector2(132 * s, 0));
+        ImGui.BeginGroup();
+        using (Kit.DactUi.Gap(6))
+        {
+            Kit.DactUi.Text(text.Format($"当前：{current.ChineseName}", $"Current: {text.Get(current.ChineseName, current.EnglishName)}"));
+            Kit.DactUi.Wrapped(text.Get("预览皮肤、查看权益与探索配色。", "Preview skins, benefits and discoveries."), Kit.DactUi.HintColor,
+                Kit.DactFonts.Small, ImGui.GetContentRegionAvail().X);
+            if (Kit.DactUi.Button(text.Get("管理皮肤", "Manage skins") + "##manage-skins", icon: "palette")) Open(settings, account);
+        }
+        ImGui.EndGroup();
+        ImGui.SetCursorScreenPos(new Vector2(start.X, Math.Max(ImGui.GetItemRectMax().Y, start.Y + 74 * s) + 12 * s));
+        Kit.DactUi.EndCard();
+    }
+
     public bool Draw(UiSkinSettings settings, CloudClientSnapshot account, UiText text, Action refresh,
         Action discoverPalette, Action discoverGlass, Action discoverObsidian)
     {
@@ -81,7 +103,9 @@ internal sealed class SkinSettingsPanel
             {
                 if (ImGui.BeginChild("skin-catalogue", new Vector2(width * .45f, -1), false)) DrawCatalogue(settings, account, text, scale);
                 ImGui.EndChild();
-                ImGui.SameLine(0, 16 * scale);
+                // The catalogue's scrollbar sits in the middle of a wider gutter, so 皮肤收藏 and the
+                // previewed skin's name read as two columns instead of one crowded run (user report).
+                ImGui.SameLine(0, 22 * scale);
                 if (ImGui.BeginChild("skin-detail", new Vector2(-1, -1), false)) DrawDetail(settings, account, text, refresh, scale);
                 ImGui.EndChild();
             }
@@ -138,7 +162,7 @@ internal sealed class SkinSettingsPanel
         {
             ImGui.PushID(skin.Id);
             var min = ImGui.GetCursorScreenPos();
-            var size = new Vector2(ImGui.GetContentRegionAvail().X, 108 * scale);
+            var size = new Vector2(ImGui.GetContentRegionAvail().X - 12 * scale, 108 * scale);
             if (ImGui.InvisibleButton("skin-card", size)) PreviewSkinId = skin.Id;
             var draw = ImGui.GetWindowDrawList();
             var selected = PreviewSkinId == skin.Id;

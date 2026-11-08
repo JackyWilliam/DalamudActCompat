@@ -1,6 +1,7 @@
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.Protocol;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -37,7 +38,7 @@ internal static class GameRegionSelector
 
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 "自动模式读取游戏 Framework 的原生客户端区域值，不使用 Dalamud 语言或安装路径；手动切换会立即刷新解析器和正在运行的扩展 Host。",
                 "Auto reads the game's native client region value from Framework, not the Dalamud language or installation path. A manual change immediately refreshes the parser and active extension Hosts."));
         }
@@ -47,6 +48,22 @@ internal static class GameRegionSelector
         ImGui.PushTextWrapPos(0);
         ImGui.TextDisabled(FormatDetectionStatus(text, selection));
         ImGui.PopTextWrapPos();
+    }
+
+    // 1.0 stacked field: label, full-width select, detection status as the hint.
+    public static void DrawField(UiText text, GameRegionSelection selection, Action<GameRegionMode> setMode)
+    {
+        var modes = Enum.GetValues<GameRegionMode>();
+        DactUi.BeginField(text.Get("游戏区域", "Game region"));
+        var index = Array.IndexOf(modes, selection.Mode);
+        if (DactUi.Select("game-region", modes.Select(mode => FormatMode(text, mode, ResolvePreviewRegion(mode, selection))).ToArray(), ref index) &&
+            index >= 0 && modes[index] != selection.Mode)
+            setMode(modes[index]);
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Get(
+                "自动模式读取游戏 Framework 的原生客户端区域值，不使用 Dalamud 语言或安装路径；手动切换会立即刷新解析器和正在运行的扩展 Host。",
+                "Auto reads the game's native client region value from Framework, not the Dalamud language or installation path. A manual change immediately refreshes the parser and active extension Hosts."));
+        DactUi.EndField(FormatDetectionStatus(text, selection));
     }
 
     private static HostGameRegion ResolvePreviewRegion(
