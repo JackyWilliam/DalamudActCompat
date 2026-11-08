@@ -322,6 +322,14 @@ public sealed partial class ControlCenterWindow : Window
 
     public void ShowAnimated()
     {
+        // Reopened during the close fade: the window never closed as far as Dalamud knows, so it
+        // sends neither OnClose nor OnOpen, but the player did close it and open it again.
+        if (IsOpen && visibilityTransition == VisibilityTransition.Closing)
+        {
+            EndSplashOnClose();
+            OnOpen();
+        }
+
         IsOpen = true;
         // External plugin collectors can invoke OpenMainUi while this window is already open
         // behind another window, so an "appearing" focus condition alone is insufficient.
@@ -530,6 +538,7 @@ public sealed partial class ControlCenterWindow : Window
 
     public override void OnClose()
     {
+        EndSplashOnClose();
         skinSettings.Close();
         historyLimitDraft = null;
         saveConfiguration();

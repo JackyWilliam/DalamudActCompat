@@ -10,7 +10,8 @@ namespace DalamudActCompat.Encounters;
 
 // Samples a duty pull for 战斗记录 · 开荒进度. ACT encounters only carry totals, so the game is
 // read directly while the party fights inside a duty:
-// - phase: the main boss (the targetable enemy with the largest max HP) changing name;
+// - phase: FFLogs' phase where FflogsPhases knows the fight, otherwise the main boss (the
+//   targetable enemy with the largest max HP) changing name;
 // - how far: that boss's HP at the last sample before the pull ended;
 // - wipe cause: the boss's most recent cast when the first party member fell;
 // - clear or wipe: Dalamud's duty events, which ACT does not report.
@@ -40,6 +41,8 @@ internal sealed class ProgressionTracker : IDisposable
     private uint territory;
     private string dutyName = string.Empty;
     private readonly List<string> bosses = [];
+    // FFLogs' phase, for the fights FflogsPhases knows.
+    private int fflogsPhase;
     private DateTimeOffset lastPhaseAt;
     private string? candidate;
     private DateTimeOffset candidateSince;
@@ -131,6 +134,7 @@ internal sealed class ProgressionTracker : IDisposable
         pullStart = now;
         territory = clientState.TerritoryType;
         bosses.Clear();
+        fflogsPhase = 1;
         lastPhaseAt = now;
         candidate = null;
         bossHp = 1;
@@ -150,6 +154,7 @@ internal sealed class ProgressionTracker : IDisposable
     private void Sample(DateTimeOffset now)
     {
         IBattleNpc? boss = null;
+        var phased = FflogsPhases.Covers(territory);
         foreach (var gameObject in objectTable)
         {
             // Combatant covers every battle NPC; the hostile flag keeps escorted or allied NPCs out.
@@ -157,6 +162,9 @@ internal sealed class ProgressionTracker : IDisposable
                 (npc.StatusFlags & StatusFlags.Hostile) == 0 ||
                 !npc.IsTargetable || npc.MaxHp == 0 || npc.CurrentHp == 0) continue;
             if (boss is null || npc.MaxHp > boss.MaxHp) boss = npc;
+            // Every targetable enemy counts, not just the biggest: a returning boss can share the
+            // arena with one that has more HP (Futures Rewritten P4).
+            if (phased) fflogsPhase = FflogsPhases.Next(territory, fflogsPhase, id => id == npc.NameId);
         }
 
         if (boss is not null)
@@ -232,6 +240,7 @@ internal sealed class ProgressionTracker : IDisposable
             bosses.ToArray(),
             cleared ? 0 : bossHp,
             cleared ? null : wipeCast,
-            firstDeath));
+            firstDeath,
+            FflogsPhases.Covers(territory) ? fflogsPhase : 0));
     }
 }

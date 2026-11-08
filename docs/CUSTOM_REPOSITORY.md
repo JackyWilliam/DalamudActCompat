@@ -31,7 +31,7 @@ DalamudActCompat/
 ## Release Steps
 
 1. Run `.github/workflows/release.yml` from the source ref to publish, with a tag matching its assembly version such as `v0.4.2.0`. Leave `dry_run` disabled for publication. A new tag targets the verified workflow commit; an existing tag must already point to that commit.
-2. Confirm the Windows self-hosted runner published `DalamudActCompat-core.zip`, `resource-packs.json`, and exactly two resource-pack ZIPs (Cactbot and bundled extensions; the Host ships inside the core since 1.0.0.1) to `https://github.com/JackyWilliam/DalamudActCompat/releases`.
+2. Confirm the Windows self-hosted runner published `DalamudActCompat-core.zip`, `resource-packs.json`, and exactly three resource-pack ZIPs to `https://github.com/JackyWilliam/DalamudActCompat/releases`.
 3. Wait for `DalamudActCompatRepo` to detect the latest stable Release and update its own `pluginmaster.json`.
 4. Confirm the raw URL returns the new version in a browser.
 5. Add the raw URL to Dalamud custom plugin repositories and test install/update.

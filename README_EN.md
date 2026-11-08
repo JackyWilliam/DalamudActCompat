@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 Enter `/xlplugins`, search for **DACT**, and select Install.
 
-Dalamud installs an approximately 42 MiB core package that includes the Host, then the plugin fetches only missing Cactbot and bundled-extension resources. Verified same-version caches are reused; interrupted downloads resume, and a failed update retains the previous verified resources. Do not manually extract resource packs into the plugin directory.
+Dalamud installs an approximately 31 MiB core package, then the plugin fetches only missing Host, Cactbot, and bundled-extension resources. Verified same-version caches are reused and interrupted downloads resume. A failed Cactbot or bundled-extension update retains the previous verified resources; the Host must match the plugin version, so a failed Host download is reported with a retry instead of using an older Host. Do not manually extract resource packs into the plugin directory.
 
 ### 3. Obtain a one-time activation key
 

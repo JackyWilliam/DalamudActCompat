@@ -8,7 +8,8 @@ using DalamudActCompat.UI.Kit;
 namespace DalamudActCompat.UI;
 
 // 开屏动画 (Figma 11 开屏动画) and 新版导览 (features.js tour).
-// The splash plays once per game launch on the first open. The logo assembles from its SVG parts:
+// The splash plays when the window opens, as 开屏动画 sets (by default only on the first open of a
+// game launch); closing the window ends it. The logo assembles from its SVG parts:
 // the three cards rise in one after another, the orbit draws itself around them with a glowing
 // head (behind the cards, then in front), the bars grow, the star spins in with a flare and
 // D-A-C-T fades in letter by letter. Then the logo flies to where this open lands (header corner
@@ -62,6 +63,11 @@ public sealed partial class ControlCenterWindow
     private bool splashReopened;
 
     public override void OnOpen() => splashReopened = true;
+
+    // The splash runs on ImGui's clock, which keeps going while the window is closed and not
+    // drawing, so a run cut short by closing would carry on unseen: the next open resumed it
+    // midway, or found it already over and went straight to the page instead of replaying.
+    private void EndSplashOnClose() => splashStartedAt = -1;
 
     private void BeginSplashIfFirstOpen()
     {

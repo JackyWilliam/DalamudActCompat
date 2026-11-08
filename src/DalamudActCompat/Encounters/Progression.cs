@@ -13,10 +13,12 @@ public sealed record ProgressionPull(
     IReadOnlyList<string> Bosses,
     double BossHpFraction,
     string? WipeCast,
-    double? FirstDeathSeconds)
+    double? FirstDeathSeconds,
+    // FFLogs' phase for the fights FflogsPhases knows; 0 elsewhere and in files from before it.
+    int FflogsPhase = 0)
 {
-    // Each main boss met in order is a phase; a pull that saw none still counts as phase 1.
-    public int Phase => Math.Max(1, Bosses.Count);
+    // Elsewhere each main boss met in order is a phase; a pull that saw none still counts as phase 1.
+    public int Phase => FflogsPhase > 0 ? FflogsPhase : Math.Max(1, Bosses.Count);
 
     public string? LastBoss => Bosses.Count > 0 ? Bosses[^1] : null;
 
@@ -95,10 +97,14 @@ public sealed class ProgressionStore
     private ProgressionPull[] pulls = [];
     private Task pendingSave = Task.CompletedTask;
 
-    public ProgressionStore(JsonFileStore jsonStore, string path)
+    // Brings pulls saved by an older version up to date as they load (see FflogsPhases.Restore).
+    private readonly Func<ProgressionPull, ProgressionPull> upgrade;
+
+    public ProgressionStore(JsonFileStore jsonStore, string path, Func<ProgressionPull, ProgressionPull>? upgrade = null)
     {
         this.jsonStore = jsonStore;
         this.path = path;
+        this.upgrade = upgrade ?? (pull => pull);
     }
 
     // The UI reads this every frame, so it is an immutable snapshot swapped on change.
@@ -112,7 +118,7 @@ public sealed class ProgressionStore
         if (loaded is null) return;
         lock (gate)
         {
-            Volatile.Write(ref pulls, loaded.OrderBy(pull => pull.StartTime).TakeLast(MaximumPulls).ToArray());
+            Volatile.Write(ref pulls, loaded.OrderBy(pull => pull.StartTime).TakeLast(MaximumPulls).Select(upgrade).ToArray());
             Version++;
         }
     }
