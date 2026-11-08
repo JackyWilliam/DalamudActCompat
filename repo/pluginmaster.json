@@ -16,8 +16,8 @@
   "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v1.0.0.1/DalamudActCompat-core.zip",
   "DownloadLinkTesting": null,
   "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v1.0.0.1/DalamudActCompat-core.zip",
-  "LastUpdate": 1794132152169,
-  "Changelog": "DACT 1.0.0.1：修复界面缩放不是整倍数时（含卫月默认字号）登录页和好友聊天一直抖动；设置 → 通用新增「开屏动画」（启动游戏后首次 / 每次打开 / 关闭）；Triggernometry 新版本与绘图诊断对不上时不再导致其加载失败；全局搜索等处补全繁中、日、德、法译文。更新后请完整重启游戏，无需重新登录。",
+  "LastUpdate": 1794134795833,
+  "Changelog": "DACT 1.0.0.1：修复界面缩放不是整倍数时（含卫月默认字号）登录页和好友聊天一直抖动；设置 → 通用新增「开屏动画」（启动游戏后首次 / 每次打开 / 关闭）；修复更新 1.0 时 Host 组件下载失败、退回旧 Host 导致 Triggernometry 显示「故障」（Host 改为随插件本体安装）；全局搜索等处补全繁中、日、德、法译文。更新后请完整重启游戏，无需重新登录。",
   "CanUnloadAsync": true,
   "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png"
 },

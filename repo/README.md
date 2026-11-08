@@ -14,4 +14,4 @@ The plugin ZIP should be published from the source repository release:
 https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.3.10.0/DalamudActCompat-core.zip
 ```
 
-Keep the raw JSON URL and release ZIP URL separate. Dalamud users add the raw JSON URL; the JSON points Dalamud to the core ZIP. The core then verifies and caches the separately published Host, Cactbot, and bundled-extension packs.
+Keep the raw JSON URL and release ZIP URL separate. Dalamud users add the raw JSON URL; the JSON points Dalamud to the core ZIP. The core carries the Host, then verifies and caches the separately published Cactbot and bundled-extension packs.

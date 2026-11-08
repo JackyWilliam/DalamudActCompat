@@ -153,7 +153,6 @@ jobs:
           name: dact-release-${{ inputs.tag }}-${{ github.run_id }}
           path: |
             artifacts/release/DalamudActCompat-core.zip
-            artifacts/release/host-*.zip
             artifacts/release/cactbot-*.zip
             artifacts/release/act-plugins-*.zip
             artifacts/release/resource-packs.json
@@ -169,12 +168,13 @@ jobs:
         run: |
           $resourcePacks = @(
             Get-ChildItem artifacts/release -File |
-              Where-Object { $_.Name -match '^(host-[0-9a-f]{64}|cactbot-.+|act-plugins-.+)\.zip$' } |
+              Where-Object { $_.Name -match '^(cactbot-.+|act-plugins-.+)\.zip$' } |
               Sort-Object Name |
               ForEach-Object FullName
           )
-          if ($resourcePacks.Count -ne 3) {
-            throw "Expected exactly three verified resource packs, found $($resourcePacks.Count)."
+          # The Host ships inside the core since 1.0.0.1; only Cactbot and the bundled extensions remain packs.
+          if ($resourcePacks.Count -ne 2) {
+            throw "Expected exactly two verified resource packs, found $($resourcePacks.Count)."
           }
           # An existing tag must identify the exact source that passed this run.
           git show-ref --verify --quiet "refs/tags/$env:TAG_NAME"
