@@ -92,7 +92,38 @@ internal static class AccountNativeUiSmokeTests
                         "Authentication changed to a portrait layout.");
                 }
             }
-            config.UiLanguage = "zh-CN"; io.FontGlobalScale = 1; size = new(992, 610);
+            // The form is centred from last frame's height. At non-integer UI scales (Dalamud font
+            // scale, e.g. 118%/125%) that height used to change with the sub-pixel start, so the form
+            // kept shaking by a pixel; once settled it must keep the same height on every frame.
+            var formHeights = (Dictionary<string, float>)typeof(ControlCenterWindow).GetField("authFormHeights", hidden)!.GetValue(window)!;
+            config.UiLanguage = "zh-CN"; size = new(920, 640);
+            foreach (var scale in new[] { 1f, 1.06f, 1.18f, 1.25f, 1.4f })
+            foreach (var mode in new[] { "Login", "Register", "ResetPassword" })
+            {
+                io.FontGlobalScale = scale;
+                Set("cloudAuthenticationPage", Enum.Parse(page, mode)); Set("cloudResetPasswordStep", false);
+                formHeights.Clear();
+                for (var i = 0; i < 24; i++) Frame();
+                var settled = new HashSet<string>();
+                for (var i = 0; i < 16; i++) { Frame(); settled.Add(string.Join(";", formHeights.Select(p => $"{p.Key}={p.Value:R}"))); }
+                Check(settled.Count == 1, $"Authentication form {mode} at {scale * 100:0}% kept moving: {string.Join(" | ", settled)}");
+            }
+            // Window heights where the form only just fits switch between centred and top-aligned;
+            // sweep them pixel by pixel so neither side can flip the other back.
+            foreach (var scale in new[] { 1f, 1.18f })
+            foreach (var mode in new[] { "Login", "Register" })
+            for (var height = 380; height <= 640; height++)
+            {
+                io.FontGlobalScale = scale; size = new(920, height);
+                Set("cloudAuthenticationPage", Enum.Parse(page, mode));
+                formHeights.Clear();
+                for (var i = 0; i < 8; i++) Frame();
+                var settled = new HashSet<string>();
+                for (var i = 0; i < 6; i++) { Frame(); settled.Add(string.Join(";", formHeights.Select(p => $"{p.Key}={p.Value:R}"))); }
+                Check(settled.Count == 1, $"Authentication form {mode} at {scale * 100:0}%, height {height}, kept moving: {string.Join(" | ", settled)}");
+            }
+            io.FontGlobalScale = 1; size = new(992, 610);
+
             Set("cloudAuthenticationPage", Enum.Parse(page, "Login"));
             Set("cloudUsername", "keyboard_user"); Set("cloudPassword", "fixture-password");
             Frame(); Frame();
@@ -125,7 +156,7 @@ internal static class AccountNativeUiSmokeTests
             snapshot = snapshot with { IsSignedIn = true, Username = "binding_user", Recovery = new(true, true, false, 3, 0, true) };
             Frame(); Frame();
             Check(bindingCodes == 2, "A new login could not prepare its own binding code.");
-            Console.WriteLine("Native account UI: horizontal login/register/recovery, CN/EN at 100%/140%, window-local binding, outside click passthrough, one-time code preparation and sign-out transitions passed.");
+            Console.WriteLine("Native account UI: horizontal login/register/recovery, CN/EN at 100%/140%, still forms at 100-140% scale, window-local binding, outside click passthrough, one-time code preparation and sign-out transitions passed.");
         }
         finally { DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
     }

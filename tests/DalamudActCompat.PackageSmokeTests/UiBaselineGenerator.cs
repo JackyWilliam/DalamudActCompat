@@ -34,6 +34,8 @@ internal static class UiBaselineGenerator
                       ?? throw new InvalidOperationException("Set DACT_TEST_CIMGUI to Dalamud's cimgui.dll.");
         File.Copy(library, Path.Combine(AppContext.BaseDirectory, "cimgui.dll"), true);
         NativeLibrary.Load(library);
+        // Capture names are Chinese; a redirected console would print them as "?".
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
         Directory.CreateDirectory(output);
         var shots = new List<Shot>();
         var failures = new List<string>();
@@ -158,6 +160,73 @@ internal static class UiBaselineGenerator
                 return left;
             }
 
+            // DACT_UI_BASELINE_JITTER=1 freezes time after the capture settles and redraws 40
+            // frames: with nothing animating, a window whose vertices still change in the last 20
+            // lays itself out from its own last frame and shakes in the game (the 1.0 sign-in form
+            // did at non-integer UI scales, on a 16-frame cycle). A change that stops early is a
+            // capture still settling. DACT_UI_BASELINE_SCALE sets the UI scale to check.
+            // Expected movers, all on the wall clock: the splash filmstrip, 听雨窗's rain, the skin
+            // catalogue's animated thumbnails, and 战斗记录 · 日志文件 (the sample fight has no end
+            // time, so its DPS keeps counting).
+            var jitterCheck = Environment.GetEnvironmentVariable("DACT_UI_BASELINE_JITTER") == "1";
+            if (float.TryParse(Environment.GetEnvironmentVariable("DACT_UI_BASELINE_SCALE"), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var uiScale)) io.FontGlobalScale = uiScale;
+            var jitters = new List<string>();
+            void CheckStill(string group, string name, Action frame)
+            {
+                // Four seconds of normal frames let every DactMotion ease land first; an ease still
+                // creeping under the frozen clock would cross a rounding step and look like a shake.
+                for (var index = 0; index < 240; index++) frame();
+                var delta = io.DeltaTime;
+                io.DeltaTime = 1e-5f;
+                var states = new Dictionary<string, HashSet<int>>();
+                // Scrollbar and content size per window, to tell a scrollbar flipping on and off
+                // from content laid out from last frame's measurement.
+                var layouts = new Dictionary<string, HashSet<string>>();
+                try
+                {
+                    for (var index = 0; index < 40; index++)
+                    {
+                        frame();
+                        if (index < 20) continue;
+                        var owners = new Dictionary<nint, string>();
+                        for (var i = 0; i < context.Windows.Size; i++)
+                        {
+                            var native = context.Windows[i];
+                            if (!native.Active) continue;
+                            var windowName = Marshal.PtrToStringUTF8((nint)native.Name) ?? "?";
+                            owners[(nint)native.DrawList.Handle] = windowName;
+                            if (!layouts.TryGetValue(windowName, out var layout)) layouts[windowName] = layout = [];
+                            layout.Add($"scrollbar={native.ScrollbarY} content={native.ContentSize.X:R}x{native.ContentSize.Y:R} scroll={native.Scroll.Y:R}");
+                        }
+                        var data = ImGui.GetDrawData();
+                        for (var n = 0; n < data.CmdListsCount; n++)
+                        {
+                            var list = new ImDrawListPtr(data.CmdLists[n]);
+                            var hash = new HashCode();
+                            for (var v = 0; v < list.VtxBuffer.Size; v++)
+                            {
+                                var position = list.VtxBuffer[v].Pos;
+                                hash.Add(MathF.Round(position.X * 100));
+                                hash.Add(MathF.Round(position.Y * 100));
+                            }
+                            var owner = owners.TryGetValue((nint)list.Handle, out var known) ? known : "list " + n;
+                            if (!states.TryGetValue(owner, out var seen)) states[owner] = seen = [];
+                            seen.Add(hash.ToHashCode());
+                        }
+                    }
+                }
+                finally { io.DeltaTime = delta; }
+                foreach (var (owner, seen) in states)
+                    if (seen.Count > 1)
+                    {
+                        jitters.Add($"{group} / {name}: {owner} ({seen.Count} states)");
+                        Console.WriteLine($"JITTER {group} / {name}: {owner} ({seen.Count} states)");
+                        if (layouts.TryGetValue(owner, out var layout) && layout.Count > 1)
+                            foreach (var state in layout) Console.WriteLine("    " + state);
+                    }
+            }
+
             void Capture(string group, string name, Window window, Vector2? size, string note = "", string? fullMarker = null,
                 Vector2? display = null, Action? extra = null, int frames = 30, Vector2? at = null)
             {
@@ -183,6 +252,7 @@ internal static class UiBaselineGenerator
                         }
                     }
 
+                    if (jitterCheck) CheckStill(group, name, () => Frame(window, at ?? new(10), current, area, extra));
                     var file = Sanitize($"{group}--{name}") + ".png";
                     raster.Save(ImGui.GetDrawData(), Path.Combine(output, file));
                     shots.Add(new(group, name, file, (int)area.X, (int)area.Y, note));
@@ -611,6 +681,11 @@ internal static class UiBaselineGenerator
             var acknowledged = Construct<ThirdPartyPluginNoticeWindow>(returns: new() { ["getDisclosures"] = disclosures, ["getPending"] = Array.Empty<DalamudActCompat.Compatibility.PluginHost.BundledActPluginDescriptor>() });
             acknowledged.OpenManualDisclosure();
             Capture("07 其他窗口", "三方扩展-声明已确认", acknowledged, new(1000, 640), "三方扩展 · 声明已确认");
+            if (jitterCheck)
+            {
+                Console.WriteLine($"UI jitter check at {io.FontGlobalScale * 100:0}% scale: {jitters.Count} moving windows.");
+                foreach (var jitter in jitters) Console.WriteLine("  " + jitter);
+            }
         }
         finally
         {

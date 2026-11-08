@@ -39,8 +39,15 @@ public sealed partial class ControlCenterWindow
         {
             var room = ImGui.GetContentRegionAvail().Y;
             var measured = authFormHeights.GetValueOrDefault(formId);
-            var top = ImGui.GetCursorPosY();
-            if (measured > 0 && measured < room) ImGui.SetCursorPosY(top + (room - measured) * .5f);
+            // ImGui truncates every item's position to a whole pixel, so the same form measures a
+            // little taller or shorter depending on the fraction of its starting y. At non-integer
+            // UI scales (Dalamud's default 16 px font is already one), centring on last frame's
+            // height moved that fraction, which changed the height again and the form shook every
+            // frame. The form always starts on a whole pixel, centred or not, so its height no
+            // longer depends on where it starts.
+            var cursor = ImGui.GetCursorScreenPos();
+            var offset = measured > 0 && measured < room ? (room - measured) * .5f : 0;
+            ImGui.SetCursorScreenPos(cursor with { Y = MathF.Ceiling(cursor.Y + offset) });
             var start = ImGui.GetCursorPosY();
             using (DactUi.Gap(14)) drawForm();
             authFormHeights[formId] = ImGui.GetCursorPosY() - start - 14 * s;
