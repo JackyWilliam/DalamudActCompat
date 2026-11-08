@@ -9,6 +9,7 @@ using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
+using DalamudActCompat.UI.Kit;
 
 internal static partial class OverlayManagerSmokeTests
 {
@@ -155,8 +156,11 @@ internal static partial class OverlayManagerSmokeTests
             var popup = new ImGuiWindowPtr(context.OpenPopupStack[0].Window);
             Check(popup.Pos.X >= 0 && popup.Pos.X + popup.Size.X <= io.DisplaySize.X,
                 "Resizing the viewport stranded the add dialog outside its bounds.");
-            var cancel = popup.Pos + new Vector2(40, popup.Size.Y - popup.WindowPadding.Y - ImGui.GetFrameHeight() * .5f);
+            // 1.0 dialogs put 取消 at the bottom right (30 px buttons).
+            var cancel = popup.Pos + new Vector2(popup.Size.X - popup.WindowPadding.X - 20 * DactUi.S, popup.Size.Y - popup.WindowPadding.Y - 15 * DactUi.S);
             io.AddMousePosEvent(cancel.X, cancel.Y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); io.AddMouseButtonEvent(0, false); Frame();
+            // 1.0 dialogs fade out (0.14 s) before ImGui closes the popup.
+            for (var i = 0; i < 20; i++) Frame();
             Check(!ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId), "Cancel did not close the actual add dialog.");
             Save("DACT-正式界面-窄窗德语");
             f.Operation = new(CactbotOperationState.Error, "Test installation error"); f.Templates.Clear();

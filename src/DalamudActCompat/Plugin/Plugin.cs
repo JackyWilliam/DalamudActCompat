@@ -58,6 +58,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginPaths paths;
     private readonly PluginLogger logger;
     private readonly LiquidGlassRenderer liquidGlass;
+    private readonly ISharedImmediateTexture[] keepAliveTextures;
     private readonly ResourcePackManager resourcePackManager;
     private readonly UiText text;
     private readonly EncounterStateStore stateStore;
@@ -65,6 +66,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IinactAdapter parserAdapter;
     private readonly SelfHostedActRuntime actRuntime;
     private readonly EncounterService encounterService;
+    private readonly ProgressionStore progressionStore;
+    private readonly ProgressionTracker progressionTracker;
+    private readonly ScenePresetController scenePresets;
+    private bool scenePresetFailureLogged;
     private readonly PluginLifecycle lifecycle;
     private readonly MeterWindow meterWindow;
     private readonly HorizontalMeterWindow horizontalMeterWindow;
@@ -78,6 +83,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EncounterWindow encounterWindow;
     private readonly ControlCenterWindow settingsWindow;
     private readonly HelpWindow helpWindow;
+    private readonly SearchWindow searchWindow;
+    private readonly SearchHotkey searchHotkey;
     private readonly SettingsWindow advancedSettingsWindow;
     private readonly StatusWindow statusWindow;
     private readonly LauncherWindow launcherWindow;
@@ -99,7 +106,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly BundledActPluginManager bundledPluginManager;
     private readonly BundledActPluginUpdateChecker bundledPluginUpdateChecker;
     private readonly CactbotPackageInstaller cactbotInstaller;
-    private readonly FileDialogManager fileDialogManager = new();
+    // DACT's own picker for files and folders (Dalamud's kept its own look in every skin).
+    private DactFilePicker filePicker = null!;
     private readonly CancellationTokenSource bundledUpdateCancellation = new();
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
     private readonly CancellationTokenSource cactbotOperationCancellation = new();
@@ -214,7 +222,8 @@ public sealed class Plugin : IDalamudPlugin
         INotificationManager notificationManager,
         IPartyList partyList,
         IObjectTable objectTable,
-        ITextureProvider textureProvider)
+        ITextureProvider textureProvider,
+        IDutyState dutyState)
     {
         this.objectTable = objectTable;
         this.partyList = partyList;
@@ -335,7 +344,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         bundledActResourcesAvailableAtStartup = hasBundledActPluginResources;
         bundledPluginUpdateChecker = new BundledActPluginUpdateChecker(
-            paths.BundledPluginUpdateCacheDirectory);
+            paths.BundledPluginUpdateCacheDirectory,
+            describeFailure: DescribeUpdateSourceFailure);
         stateStore = new EncounterStateStore();
         var disabledUntrustedPlugin = false;
         foreach (var installed in packageInstaller.Discover(configuration.DisabledActPluginIds))
@@ -417,6 +427,14 @@ public sealed class Plugin : IDalamudPlugin
             paths,
             ResolveCombatLogDirectory);
         zoneNameLocalizer = new ZoneNameLocalizer(dataManager, log);
+        // 战斗记录 · 开荒进度 keeps its own file; a failed load just starts an empty progression.
+        progressionStore = new ProgressionStore(jsonStore, paths.ProgressionFile);
+        _ = progressionStore.LoadAsync(CancellationToken.None).ContinueWith(
+            task => log.Warning(task.Exception!, "Progression history could not be loaded."),
+            TaskContinuationOptions.OnlyOnFaulted);
+        progressionTracker = new ProgressionTracker(
+            framework, dutyState, condition, clientState, objectTable, partyList, dataManager,
+            progressionStore, zoneNameLocalizer.Localize, log);
         fflogsEstimateService = new FflogsEstimateService(
             () => configuration.Fflogs,
             paths.FflogsCacheFile,
@@ -503,11 +521,12 @@ public sealed class Plugin : IDalamudPlugin
             pluginInterface.AssemblyLocation.Directory!.FullName,
             "Assets");
         var logoTexture = textureProvider.GetFromFile(
-            Path.Combine(assetDirectory, "act-logo.jpg"));
+            Path.Combine(assetDirectory, "dact-logo.png"));
         var administratorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "Player26_Icon.png"));
         var sponsorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "SponsorCrown.png"));
+        keepAliveTextures = [logoTexture, administratorIcon, sponsorIcon];
         var launcherTexture = textureProvider.GetFromFile(
-            Path.Combine(assetDirectory, "act-button.png"));
+            Path.Combine(assetDirectory, "dact-logo.png"));
         var jobIcons = new JobIconTextureSet(
             textureProvider,
             Path.Combine(assetDirectory, "JobIcons"));
@@ -683,7 +702,6 @@ public sealed class Plugin : IDalamudPlugin
             SetMeterVisible,
             OpenMeter,
             meterStyleEditorWindow.Open,
-            encounterWindow.OpenRecent,
             () => statusWindow.IsOpen,
             value => statusWindow.IsOpen = value,
             SelectPluginPackage,
@@ -701,7 +719,7 @@ public sealed class Plugin : IDalamudPlugin
             ResolveCombatLogDirectory,
             SelectCombatLogDirectory,
             ResetCombatLogDirectory,
-            BuildDiagnosticReport,
+            ExportDiagnosticReport,
             () => packageInstaller.Discover(configuration.DisabledActPluginIds),
             OpenActPluginConfiguration,
             GetCompatibilityExtensionResourceStatus,
@@ -752,15 +770,78 @@ public sealed class Plugin : IDalamudPlugin
                 StartCloudRollback,
                 () => StartCloudOperation(cloudClient.CreateDiscordLinkCodeAsync),
                 cloudClient.HasRecoveryKeyFor,
-                () => StartCloudOperation(cloudClient.RefreshRecoveryStatusAsync)));
+                () => StartCloudOperation(cloudClient.RefreshRecoveryStatusAsync),
+                (deviceIds, all) => StartCloudOperation(token => cloudClient.ResolveDeviceLimitAsync(deviceIds, all, token)),
+                cloudClient.CancelDeviceLimit));
         friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
-        friendsUi = new FriendsUiManager(friendsController, settingsWindow.ShowAnimated, configuration,
+        friendsUi = new FriendsUiManager(friendsController, settingsWindow.OpenFriends, configuration,
             playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
             stopNotificationSound: friendsNotificationSound.Stop,
             administratorIcon: administratorIcon, sponsorIcon: sponsorIcon);
         settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
+        settingsWindow.Paths = paths;
+        settingsWindow.EncounterHistory = stateStore;
+        settingsWindow.JobIcons = jobIcons;
+        settingsWindow.LogoLayers = textureProvider.GetFromFile(Path.Combine(assetDirectory, "dact-logo-layers.png"));
+        settingsWindow.LocalizeZone = zoneNameLocalizer.Localize;
+        settingsWindow.Progression = progressionStore;
+        scenePresets = new ScenePresetController(configuration, clientState, condition, dataManager,
+            SetMeterVisible, OpenHtmlOverlay, CloseHtmlOverlay, SaveConfiguration);
+        settingsWindow.ScenePresets = scenePresets;
+        settingsWindow.SubmitFeedback = request => cloudClient.SubmitFeedbackAsync(request, CancellationToken.None);
+        settingsWindow.ListFeedback = () => cloudClient.ListFeedbackAsync(CancellationToken.None);
+        // Always answered (empty when cancelled): the feedback dialog waits for it to come back.
+        settingsWindow.PickScreenshots = done => filePicker.OpenFile("screenshots",
+            text.Get("选择截图", "Choose screenshots"), [".png", ".jpg", ".jpeg"],
+            (success, paths) => done(success ? paths : []), 3);
+        settingsWindow.OpenHelpTopic = helpWindow.OpenTopic;
+        settingsWindow.HelpOutline = helpWindow.Outline;
+        // 全局搜索: the shortcut opens the standalone box. The layout editor's header offers the
+        // control center's feedback and help (no search there, by the user's decision).
+        searchHotkey = new SearchHotkey(configuration);
+        searchWindow = new SearchWindow(settingsWindow);
+        settingsWindow.SearchShortcut = searchHotkey;
+        settingsWindow.OpenSearchWindow = () => { if (!searchWindow.IsOpen) searchWindow.ToggleSearch(); };
+        meterStyleEditorWindow.OpenFeedback = () => { settingsWindow.ShowAnimated(); settingsWindow.OpenFeedback(); };
+        meterStyleEditorWindow.OpenHelp = () => helpWindow.OpenTopic("CombatMeter");
+        meterStyleEditorWindow.OpenMeterSettings = settingsWindow.ShowMeterPage;
+        var aiKeys = new DalamudActCompat.Ai.AiKeyStore(paths.AiKeyDirectory, paths.AiKeyFile);
+        try
+        {
+            aiKeys.AdoptLegacy(configuration.Ai.Provider);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The old file stays where it is; the player can paste the key again.
+            logger.Warning($"Could not move the AI key to its provider file: {exception.GetType().Name}");
+        }
+        settingsWindow.AiKeys = aiKeys;
+        // AI 复盘 judges casts against the player's own client data (recasts differ by patch and region).
+        settingsWindow.ActionInfo = id => dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>().GetRowOrDefault(id) is { } action
+            ? new DalamudActCompat.Ai.AiActionInfo(action.Name.ToString(), action.CooldownGroup == 58 || action.AdditionalCooldownGroup == 58,
+                action.Recast100ms / 10f, action.MaxCharges)
+            : null;
+        settingsWindow.StatusName = id => dataManager.GetExcelSheet<Lumina.Excel.Sheets.Status>().GetRowOrDefault(id)?.Name.ToString();
+        settingsWindow.ActiveCombatLogDirectory = ResolveActiveCombatLogDirectory;
+        settingsWindow.BuildDiagnosticReport = BuildDiagnosticReport;
+        // Read on the draw thread when a request is prepared; null before a character is loaded.
+        settingsWindow.LocalIdentity = () => playerState.IsLoaded && !string.IsNullOrWhiteSpace(playerState.CharacterName)
+            ? (playerState.CharacterName, playerState.HomeWorld.ValueNullable?.Name.ToString() ?? string.Empty)
+            : null;
+        settingsWindow.RestartHost = host =>
+        {
+            switch (host)
+            {
+                case "matcha": RestartMatchaHostFromUi(); break;
+                case "generic": RestartGenericHostFromUi(); break;
+                default: RestartHostFromUi(); break;
+            }
+        };
+        framework.Update += OnFrameworkUpdateForScenes;
+        // 扩展 rows show each extension's run state from whichever Host runs it.
+        settingsWindow.HostSnapshots = () => [hostSupervisor.Snapshot, matchaHostSupervisor.Snapshot, genericHostSupervisor.Snapshot];
         coreResourceDownloadWindow = new CoreResourceDownloadWindow(
             text,
             GetHostResourceStatus,
@@ -805,10 +886,14 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(coreResourceDownloadWindow);
         windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
+        windowSystem.AddWindow(searchWindow);
+        filePicker = new DactFilePicker(text, logoTexture);
+        windowSystem.AddWindow(filePicker);
         // Authentication gates functional windows; account state changes only notify.
         // The user owns opening the control centre, including its sign-in/binding page.
         RestrictWindowsToAuthenticationGate();
 
+        DalamudActCompat.UI.Kit.DactFonts.Initialize(pluginInterface.UiBuilder);
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
@@ -846,7 +931,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    public string Name => "Dalamud ACT Compat";
+    public string Name => "DACT";
 
     public void Dispose()
     {
@@ -892,6 +977,7 @@ public sealed class Plugin : IDalamudPlugin
         SkinCatalog.UltimateUnlocked = () => false;
         services.CommandManager.RemoveHandler(CommandName);
         services.PluginInterface.UiBuilder.Draw -= Draw;
+        DalamudActCompat.UI.Kit.DactFonts.Dispose();
         services.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         services.PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
         cloudClient.BanReceived -= OnCloudBanReceived;
@@ -900,6 +986,8 @@ public sealed class Plugin : IDalamudPlugin
         pictoActOverlay.Dispose();
         overlayHotkeys.Dispose();
         settingsWindow.Detach();
+        progressionTracker.Dispose();
+        services.Framework.Update -= OnFrameworkUpdateForScenes;
         advancedSettingsWindow.Detach();
         statusWindow.Detach();
         windowSystem.RemoveAllWindows();
@@ -922,16 +1010,42 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        ReleaseStuckKeys();
         overlayHotkeyEditor.BeginFrame();
         try { DrawCore(); }
-        finally { overlayHotkeyEditor.EndFrame(); }
+        finally
+        {
+            overlayHotkeyEditor.EndFrame();
+        }
     }
+
+    // Dalamud hands non-modifier keys (and their key-ups) to ImGui only while a text field is
+    // typing. Enter and Esc end the typing on their key-down, so their key-up never arrives and
+    // ImGui keeps them "held": its key repeat then fired Enter again and again (the chat field
+    // re-submitted and re-focused itself, flickering the friends composer; a search opened later
+    // could jump at once). The OS knows they are up; tell ImGui.
+    private static void ReleaseStuckKeys()
+    {
+        var io = ImGui.GetIO();
+        foreach (var (key, virtualKey) in StuckKeyCandidates)
+            if (ImGui.IsKeyDown(key) && !SearchHotkey.IsKeyDown(virtualKey))
+                io.AddKeyEvent(key, false);
+    }
+
+    private static readonly (ImGuiKey Key, int VirtualKey)[] StuckKeyCandidates =
+        [(ImGuiKey.Enter, 0x0D), (ImGuiKey.KeypadEnter, 0x0D), (ImGuiKey.Escape, 0x1B)];
 
     private void DrawCore()
     {
         var appearanceAccount = cloudClient.Snapshot;
         DactTheme.SetCurrent(configuration.Appearance, appearanceAccount.IsSignedIn && appearanceAccount.ActiveBan is null, appearanceAccount.Sponsor?.Tier ?? 0);
         liquidGlass.BeginFrame(services.PluginInterface.UiBuilder.DeviceHandle, DactTheme.Palette.Glass || DactTheme.Palette.Rain || settingsWindow.NeedsGlassPreview);
+        // Dalamud releases a shared texture ~2 s after its last use. Touch the ones DACT's windows
+        // open with every frame, so a window opened later never shows a frame without its logo,
+        // badges or skin artwork before they reload (the flash when opening the control center).
+        foreach (var texture in keepAliveTextures) texture.GetWrapOrEmpty();
+        if (DactTheme.Palette.Light) DactTheme.GameAssets?.KeepAlive();
+        if (DactTheme.Palette.Ultimate is { } plate) DactTheme.UltimateAssets?.Icon(plate.BackingIcon);
         var noticeAccount = appearanceAccount.CanUseDact ? appearanceAccount : CloudClientSnapshot.SignedOut();
         cloudAdministratorNotice.Update(noticeAccount);
         // Serialize the two celebrations so their windows and confirmation buttons
@@ -978,10 +1092,11 @@ public sealed class Plugin : IDalamudPlugin
         // Never wrap live meters in the skin scope: inherited ChildBg and popup
         // colors otherwise replace translucent meter backgrounds with the skin.
         meterWindowSystem.Draw();
+        // The search shortcut works with DACT closed too, so it is polled here, not in a window.
+        if (searchHotkey.Poll(SearchHotkey.GameTextInputActive)) searchWindow.ToggleSearch();
         using var appearanceFrame = DactTheme.PushFrame();
         windowSystem.Draw();
         friendsUi.Draw(settingsWindow.IsOpen, services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]);
-        DactTheme.DrawFileDialog(fileDialogManager);
         cloudAdministratorNotice.Draw(cloudClient.Snapshot);
         if (!cloudAdministratorNotice.IsOpen) cloudSponsorNotice.Draw(cloudClient.Snapshot);
     }
@@ -1182,12 +1297,14 @@ public sealed class Plugin : IDalamudPlugin
         roleSplitHealerWindow.IsOpen = false;
         advancedSettingsWindow.IsOpen = false;
         statusWindow.IsOpen = false;
-        helpWindow.IsOpen = false;
+        // Help stays open: it is static guidance, and the sign-in page's help button opens it
+        // before the account is ready.
         launcherWindow.IsOpen = false;
         thirdPartyPluginNoticeWindow.IsOpen = false;
         encounterWindow.IsOpen = false;
         meterStyleEditorWindow.IsOpen = false;
         simplifiedHomeWindow.IsOpen = false;
+        searchWindow.IsOpen = false;
     }
 
     private void RestoreWindowsAfterAuthenticationGate()
@@ -1536,6 +1653,18 @@ public sealed class Plugin : IDalamudPlugin
         SetMeterVisible(visible);
     }
 
+    // 场景方案 is a convenience: a failure is logged once and never disturbs the frame.
+    private void OnFrameworkUpdateForScenes(IFramework _)
+    {
+        try { scenePresets.Update(); }
+        catch (Exception ex)
+        {
+            if (scenePresetFailureLogged) return;
+            scenePresetFailureLogged = true;
+            services.Log.Warning(ex, "Scene presets could not be applied.");
+        }
+    }
+
     private void SetMeterVisible(bool visible)
     {
         configuration.Meter.IsVisible = visible;
@@ -1695,11 +1824,12 @@ public sealed class Plugin : IDalamudPlugin
             case "off":
                 settingsWindow.HideAnimated();
                 break;
+            // 1.0: the history window became the 战斗记录 page of the control centre.
             case "history":
-                encounterWindow.OpenRecent();
+                settingsWindow.OpenHistory(0);
                 break;
             case "logs":
-                encounterWindow.OpenLogFiles();
+                settingsWindow.OpenHistory(2);
                 break;
             case "status":
                 statusWindow.IsOpen = true;
@@ -3683,6 +3813,19 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
+    // 三方扩展 showed the raw "A task was canceled." for a slow 123pan download (user report);
+    // name the cause in the player's language instead.
+    private string DescribeUpdateSourceFailure(Exception ex) => ex switch
+    {
+        TaskCanceledException or TimeoutException => text.Get(
+            "连接更新源超时，请稍后重试。", "Timed out reaching the update source. Try again later."),
+        HttpRequestException { StatusCode: { } status } => text.Format(
+            $"更新源返回 HTTP {(int)status}。", $"The update source returned HTTP {(int)status}."),
+        HttpRequestException => text.Get(
+            "无法连接更新源（网络或 DNS 不可用）。", "Couldn't reach the update source (network or DNS unavailable)."),
+        _ => ex.GetBaseException().Message,
+    };
+
     private static string BuildBundledPluginUpdateMessage(
         BundledActPluginUpdateCheckResult check,
         int pendingOnlineCount, UiText text)
@@ -3707,12 +3850,12 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        fileDialogManager.OpenFileDialog(
+        filePicker.OpenFile("act-plugin",
             text.Get("选择 ACT 扩展 DLL 或 ZIP", "Select ACT plugin DLL or ZIP"),
-            "ACT plugin{.dll,.zip}",
-            (success, selectedPath) =>
+            [".dll", ".zip"],
+            (success, selectedPaths) =>
             {
-                if (success && !string.IsNullOrWhiteSpace(selectedPath))
+                if (success && selectedPaths.FirstOrDefault() is { } selectedPath && !string.IsNullOrWhiteSpace(selectedPath))
                 {
                     InstallActPlugin(selectedPath);
                 }
@@ -3721,12 +3864,12 @@ public sealed class Plugin : IDalamudPlugin
 
     private void SelectCactbotPackage()
     {
-        fileDialogManager.OpenFileDialog(
+        filePicker.OpenFile("cactbot",
             text.Get("选择 OverlayPlugin/cactbot 官方 Release ZIP", "Select an official OverlayPlugin/cactbot release ZIP"),
-            "Cactbot Release{.zip}",
-            async (success, selectedPath) =>
+            [".zip"],
+            async (success, selectedPaths) =>
             {
-                if (!success || string.IsNullOrWhiteSpace(selectedPath))
+                if (!success || selectedPaths.FirstOrDefault() is not { } selectedPath || string.IsNullOrWhiteSpace(selectedPath))
                 {
                     return;
                 }
@@ -3848,7 +3991,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void SelectCombatLogDirectory(Action<bool, string> reportResult)
     {
-        fileDialogManager.OpenFolderDialog(
+        filePicker.OpenFolder("combat-log",
             text.Get("选择 FFLogs 上传日志目录", "Choose FFLogs upload log directory"),
             (success, directory) =>
             {
@@ -4038,6 +4181,14 @@ public sealed class Plugin : IDalamudPlugin
             IOException or
             UnauthorizedAccessException or
             System.Security.SecurityException;
+
+    private DiagnosticReportExport ExportDiagnosticReport()
+    {
+        var report = BuildDiagnosticReport();
+        return new DiagnosticReportExport(
+            report,
+            DiagnosticReportFile.Write(paths.LogDirectory, report, DateTimeOffset.Now));
+    }
 
     private string BuildDiagnosticReport()
     {
@@ -4268,8 +4419,8 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ChoosePluginDirectory(Action continueWith)
     {
-        fileDialogManager.OpenFolderDialog(
-            "Choose where the ACT plugin folder should be created",
+        filePicker.OpenFolder("act-plugin-folder",
+            text.Get("选择创建 ACT 扩展文件夹的位置", "Choose where the ACT plugin folder should be created"),
             (success, directory) =>
             {
                 if (!success || string.IsNullOrWhiteSpace(directory))

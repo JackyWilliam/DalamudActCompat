@@ -8,6 +8,7 @@ using Dalamud.Plugin.Services;
 using DalamudActCompat.Infrastructure.Logging;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
+using DalamudActCompat.UI.Kit;
 
 internal static class HelpWindowSmokeTests
 {
@@ -87,17 +88,18 @@ internal static class HelpWindowSmokeTests
             var window = new HelpWindow(text, new SkinSmokeTests.EmptyTexture(),
                 Path.Combine(AppContext.BaseDirectory, "Assets", "Help"), path => Load(path), logger, () => { }, () => { }, () => { });
             var pageField = typeof(HelpWindow).GetField("selectedPage", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            var heights = (Dictionary<string, float>)typeof(HelpWindow).GetField("cardHeights", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)!;
+            // 1.0 help pages measure their cards through the shared DactUi card cache.
+            var heights = (Dictionary<uint, float>)typeof(DactUi).GetField("CardHeights", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
             foreach (var language in HelpScreenshotGenerator.Languages)
             foreach (var (width, height, scale, tag) in new[] { (980f, 720f, 1f, "100"), (980f, 720f, 1.4f, "140"), (820f, 580f, 1f, "min"), (980f, 9000f, 1.4f, "full140") })
             foreach (var page in Enum.GetValues(pageField.FieldType))
             {
                 config.UiLanguage = language; io.FontGlobalScale = scale; io.DisplaySize = new(width + 40, height + 40);
                 pageField.SetValue(window, page);
-                Dictionary<string, float>? previous = null;
+                Dictionary<uint, float>? previous = null;
                 for (var frame = 0; frame < 8; frame++)
                 {
-                    previous = new Dictionary<string, float>(heights);
+                    previous = new Dictionary<uint, float>(heights);
                     ImGui.NewFrame();
                     using (DactTheme.PushFrame())
                     {

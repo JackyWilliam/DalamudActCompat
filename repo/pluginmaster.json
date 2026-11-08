@@ -1,9 +1,10 @@
 [
 {
   "Author": "raynording",
-  "Name": "Dalamud ACT Compat",
+  "Name": "DACT",
   "InternalName": "DalamudActCompat",
-  "AssemblyVersion": "0.4.5.20",
+  "Tags": ["Dalamud ACT Compat", "ACT", "DACT"],
+  "AssemblyVersion": "1.0.0.0",
   "TestingAssemblyVersion": null,
   "Description": "Self-contained ACT-compatible host with embedded FFXIV_ACT_Plugin, OverlayPlugin, optional plugin packages, and recoverable factory reset.",
   "Punchline": "In-game ACT-compatible parsing platform foundation.",
@@ -12,11 +13,11 @@
   "DalamudApiLevel": 15,
   "IsHide": false,
   "IsTestingExclusive": false,
-  "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.5.20/DalamudActCompat-core.zip",
+  "DownloadLinkInstall": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v1.0.0.0/DalamudActCompat-core.zip",
   "DownloadLinkTesting": null,
-  "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v0.4.5.20/DalamudActCompat-core.zip",
-  "LastUpdate": 1793820141868,
-  "Changelog": "适配 Triggernometry 2.4.3.0，修复其无法加载、“打开配置”无反应的问题，随包 Triggernometry 同步更新至 2.4.3.0。更新后请完整重启游戏。",
+  "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v1.0.0.0/DalamudActCompat-core.zip",
+  "LastUpdate": 1794109746225,
+  "Changelog": "DACT 1.0：全新控制中心（顶栏全局搜索、左侧导航），皮肤与管理皮肤页，好友页与独立聊天窗口，战斗记录并入并新增开荒进度，AI 助手（默认关闭，自备 API Key），顶栏反馈，账号最多 5 台设备。更新后需重新登录一次，请完整重启游戏。",
   "CanUnloadAsync": true,
   "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png"
 },

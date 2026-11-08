@@ -95,8 +95,8 @@ internal static class SystemStatusText
         ["消息需为1～2000个字符。"] = "Messages must contain 1–2,000 characters.",
         ["快捷消息无效。"] = "Invalid quick message.",
         ["正在保存并发送…"] = "Saving and sending…",
-        ["已发送，待对方上线接收。"] = "Sent. Waiting for the recipient to come online.",
-        ["已发送。"] = "Sent.",
+        ["已发送，待对方上线接收"] = "Sent, waiting for the recipient to come online",
+        ["已发送"] = "Sent",
         ["发送已确认，但本机状态保存失败；将重新核对记录。"] = "Delivery confirmed, but local state could not be saved. The conversation will be checked again.",
         ["原消息已超出保留范围，未重新发送。"] = "The original message is no longer retained. It was not resent.",
         ["本机保存失败，未开始本次发送，请重试。"] = "Local save failed. Sending did not start; please retry.",
@@ -164,6 +164,21 @@ internal static class SystemStatusText
         ["登录状态不存在或已过期。"] = "Your session is missing or expired.",
         ["备份不存在。"] = "Backup not found.",
         ["请先登录。"] = "Please sign in first.",
+        ["这个账号已在 5 台设备上登录。请选择要登出的设备，或全部登出后再登录；旧版 DACT 请先更新。"] =
+            "This account is signed in on 5 devices. Choose devices to sign out, or sign out all, then sign in; older DACT builds must update first.",
+        ["已取消登录。"] = "Sign-in cancelled.",
+        // 反馈 refusals from DACT Cloud.
+        ["请求内容过大。"] = "The request is too large.",
+        ["JSON 格式无效。"] = "Invalid JSON.",
+        ["今天提交的反馈太多了，请明天再试。"] = "You have sent a lot of feedback today; please try again tomorrow.",
+        ["反馈类型无效。"] = "Invalid feedback type.",
+        ["反馈内容需要 1 到 4000 个字符。"] = "Feedback must contain 1–4,000 characters.",
+        ["最多只能附 3 张截图。"] = "You can attach up to 3 screenshots.",
+        ["截图只支持 PNG 或 JPEG。"] = "Screenshots must be PNG or JPEG.",
+        ["截图必须是不超过 2 MB 的 PNG 或 JPEG。"] = "Screenshots must be PNG or JPEG files of 2 MB or less.",
+        ["诊断日志过长或格式无效。"] = "The diagnostic log is too long or invalid.",
+        ["对话记录过长或格式无效。"] = "The conversation is too long or invalid.",
+        ["请重新登录。"] = "Please sign in again.",
     };
 
     private sealed record Rule(string Pattern, string Format, bool TranslateFirst = false)

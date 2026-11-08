@@ -13,6 +13,7 @@ public sealed class PluginPaths
     {
         ConfigDirectory = Path.GetFullPath(configDirectory);
         HistoryFile = Path.Combine(ConfigDirectory, "encounters.json");
+        ProgressionFile = Path.Combine(ConfigDirectory, "progression.json");
         LogDirectory = Path.Combine(ConfigDirectory, "logs");
         CombatLogDirectory = Path.Combine(LogDirectory, "ffxiv");
         EncounterLogDirectory = Path.Combine(LogDirectory, "encounters");
@@ -29,6 +30,8 @@ public sealed class PluginPaths
             "bundled-plugin-updates");
         ResourcePackCacheDirectory = Path.Combine(ConfigDirectory, "resource-packs");
         CloudCredentialFile = Path.Combine(ConfigDirectory, "cloud-account.dat");
+        AiKeyFile = Path.Combine(ConfigDirectory, "ai-key.dat");
+        AiKeyDirectory = Path.Combine(ConfigDirectory, "ai-keys");
         CloudDeviceFile = Path.Combine(ConfigDirectory, "cloud-device.dat");
         CloudBanFile = Path.Combine(ConfigDirectory, "cloud-ban.dat");
         CloudRollbackDirectory = Path.Combine(
@@ -40,6 +43,10 @@ public sealed class PluginPaths
     public string ConfigDirectory { get; }
 
     public string HistoryFile { get; }
+
+    // 战斗记录 · 开荒进度; kept apart from encounters.json because the history limit would
+    // otherwise cut a long progression down to the last few pulls.
+    public string ProgressionFile { get; }
 
     public string LogDirectory { get; }
 
@@ -64,6 +71,12 @@ public sealed class PluginPaths
     public string ResourcePackCacheDirectory { get; }
 
     public string CloudCredentialFile { get; }
+
+    // The AI 助手 API key, DPAPI-protected for the current Windows user.
+    // The single-key file of builds before per-provider keys; only read to migrate it.
+    public string AiKeyFile { get; }
+
+    public string AiKeyDirectory { get; }
 
     public string CloudDeviceFile { get; }
 

@@ -30,7 +30,9 @@ internal static partial class DactTheme
     private static Vector4 Rgb(uint rgb) => new(((rgb >> 16) & 255) / 255f, ((rgb >> 8) & 255) / 255f, (rgb & 255) / 255f, 1);
     private static readonly SkinPalette DefaultPalette = new(
         new(.035f, .048f, .068f, 1), new(.070f, .095f, .125f, 1), new(.105f, .145f, .185f, 1),
-        new(.78f, .66f, .36f, 1), new(.42f, .78f, .96f, 1), Vector4.One, new(.65f, .70f, .76f, 1), new(.34f, .29f, .18f, 1));
+        new(.78f, .66f, .36f, 1), new(.42f, .78f, .96f, 1), Vector4.One, new(.65f, .70f, .76f, 1),
+        // 1.0: indigo of the DACT logo; the former gold border clashed with it.
+        Rgb(0x35406B));
 
     public static GameSkinAssets? GameAssets { get; set; }
     public static UltimateSkinAssets? UltimateAssets { get; set; }
@@ -197,6 +199,15 @@ internal static partial class DactTheme
         draw.AddRectFilled(min, max, ImGui.GetColorU32(selected ? Palette.Hover : Palette.Raised), 3);
         return false;
     }
+
+    // How far 艾欧泽亚's game frame reaches into a window: layouts that run to the window's bottom
+    // or sides (scrolling pages, footers, dividers) stop here so they never cover the metal rim.
+    // Zero for every other skin, whose frame is a 1 px border.
+    public static float GameFrameBottomInset => GameFrameDrawn ? GameSkinAssets.BottomRimInset : 0;
+
+    public static float GameFrameSideInset => GameFrameDrawn ? GameSkinAssets.SideRimInset : 0;
+
+    private static bool GameFrameDrawn => Palette.Light && GameAssets is { HasWindowTextures: true };
 
     public static bool DrawGameWindow()
     {
@@ -422,7 +433,7 @@ internal static partial class DactTheme
             if (ShowKeyboardFocus) list.AddRect(itemMin - new Vector2(2), itemMax + new Vector2(2), ImGui.GetColorU32(Palette.Accent), 5);
             var caption = label.Split("##", 2)[0];
             list.PushClipRect(itemMin, itemMax, true);
-            list.AddText(CenteredTextPosition(caption, itemMin, itemMax) + (held ? new Vector2(0, 1) : Vector2.Zero), ImGui.GetColorU32(textColor), caption);
+            DrawButtonCaption(list, caption, itemMin, itemMax, ImGui.GetColorU32(textColor), held ? new Vector2(0, 1) : Vector2.Zero);
             list.PopClipRect();
             return clicked;
         }
@@ -444,7 +455,7 @@ internal static partial class DactTheme
                 ImGui.IsItemActive() ? Palette.Hover : Palette.Raised, ImGui.IsItemHovered());
             var caption = label.Split("##", 2)[0];
             glassDraw.PushClipRect(glassMin, glassMax, true);
-            glassDraw.AddText(CenteredTextPosition(caption, glassMin, glassMax), ImGui.GetColorU32(textColor), caption);
+            DrawButtonCaption(glassDraw, caption, glassMin, glassMax, ImGui.GetColorU32(textColor), Vector2.Zero);
             glassDraw.PopClipRect();
             if (ShowKeyboardFocus) glassDraw.AddRect(glassMin, glassMax, ImGui.GetColorU32(Palette.Accent), (glassMax.Y - glassMin.Y) * .5f);
             return clicked;
@@ -488,12 +499,29 @@ internal static partial class DactTheme
         // transparent shadow is not part of the surface that centers the label.
         var faceMin = textured ? new Vector2(min.X, min.Y + (max.Y - min.Y) * 2 / 28) : min;
         var faceMax = textured ? new Vector2(max.X, min.Y + (max.Y - min.Y) * 22 / 28) : max;
-        var textPos = CenteredTextPosition(display, faceMin, faceMax) + (ImGui.IsItemActive() ? new Vector2(0, 1) : Vector2.Zero);
-        if (textured) draw.AddText(textPos + new Vector2(0, 1), ImGui.GetColorU32(new Vector4(.12f, .08f, .04f, .8f)), display);
         // UIColor row 50, used by Character/Social buttons, is white in Light.
-        draw.AddText(textPos, ImGui.GetColorU32(textured ? Vector4.One : Palette.Text), display);
+        DrawButtonCaption(draw, display, faceMin, faceMax, ImGui.GetColorU32(textured ? Vector4.One : Palette.Text),
+            ImGui.IsItemActive() ? new Vector2(0, 1) : Vector2.Zero, textured ? ImGui.GetColorU32(new Vector4(.12f, .08f, .04f, .8f)) : null);
         draw.PopClipRect();
         return pressed;
+    }
+
+    // The 1.0 kit's icon for the next skinned button (DactUi.Button sets it around the call), so
+    // textured, glass and nameplate buttons carry the same icon as the default look.
+    internal static string? PendingButtonIcon;
+
+    private static void DrawButtonCaption(ImDrawListPtr list, string caption, Vector2 faceMin, Vector2 faceMax, uint color, Vector2 nudge, uint? shadow = null)
+    {
+        var position = CenteredTextPosition(caption, faceMin, faceMax) + nudge;
+        if (PendingButtonIcon is { } icon && DalamudActCompat.UI.Kit.DactIcons.Has(icon))
+        {
+            var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+            position.X += 10 * scale;
+            var iconMin = new Vector2(position.X - 20 * scale, (faceMin.Y + faceMax.Y) * .5f - 7 * scale + nudge.Y);
+            DalamudActCompat.UI.Kit.DactIcons.Draw(list, icon, iconMin, 14 * scale, ImGui.ColorConvertU32ToFloat4(color));
+        }
+        if (shadow is { } dark) list.AddText(position + new Vector2(0, 1), dark, caption);
+        list.AddText(position, color, caption);
     }
 
     // Mouse clicks also assign ImGui focus. Only keyboard/gamepad navigation

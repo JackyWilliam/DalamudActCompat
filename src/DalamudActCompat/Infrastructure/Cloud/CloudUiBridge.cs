@@ -42,7 +42,9 @@ public sealed class CloudUiBridge
         Action rollback,
         Action? createDiscordLinkCode = null,
         Func<string, bool>? hasRecoveryKeyFor = null,
-        Action? refreshRecoveryStatus = null)
+        Action? refreshRecoveryStatus = null,
+        Action<IReadOnlyList<string>, bool>? resolveDeviceLimit = null,
+        Action? cancelDeviceLimit = null)
     {
         GetSnapshot = getSnapshot;
         Register = register;
@@ -58,6 +60,8 @@ public sealed class CloudUiBridge
         CreateDiscordLinkCode = createDiscordLinkCode ?? (() => { });
         HasRecoveryKeyFor = hasRecoveryKeyFor ?? (_ => false);
         RefreshRecoveryStatus = refreshRecoveryStatus ?? (() => { });
+        ResolveDeviceLimit = resolveDeviceLimit ?? ((_, _) => { });
+        CancelDeviceLimit = cancelDeviceLimit ?? (() => { });
     }
 
     internal Func<CloudClientSnapshot> GetSnapshot { get; }
@@ -74,4 +78,7 @@ public sealed class CloudUiBridge
     internal Action CreateDiscordLinkCode { get; }
     internal Func<string, bool> HasRecoveryKeyFor { get; }
     internal Action RefreshRecoveryStatus { get; }
+    // The device-limit prompt's answer: device ids to sign out, or true to sign out all others.
+    internal Action<IReadOnlyList<string>, bool> ResolveDeviceLimit { get; }
+    internal Action CancelDeviceLimit { get; }
 }

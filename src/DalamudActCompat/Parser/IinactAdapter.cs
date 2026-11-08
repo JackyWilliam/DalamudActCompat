@@ -132,8 +132,8 @@ public sealed class IinactAdapter : IParserEngine
             SetStatus(
                 ParserState.Running,
                 actRuntime.IsOverlayRunning
-                    ? "FFXIV_ACT_Plugin and OverlayPlugin are running in DalamudActCompat."
-                    : "FFXIV_ACT_Plugin is running in DalamudActCompat.");
+                    ? "FFXIV_ACT_Plugin and OverlayPlugin are running in DACT."
+                    : "FFXIV_ACT_Plugin is running in DACT.");
         }
         catch (OperationCanceledException)
         {

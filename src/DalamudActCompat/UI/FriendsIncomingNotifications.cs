@@ -9,8 +9,24 @@ internal sealed class FriendIncomingNotification(CloudChatMessage message, long 
     internal long ExpiresAt { get; set; } = shownAt + 6000;
     internal float? Y { get; set; }
     internal Guid? ReplyOperation { get; set; }
-    internal float Opacity(long now) => Math.Clamp((ExpiresAt - now) / 800f, 0, 1);
-    internal float SlideProgress(long now) => 1 - MathF.Pow(1 - Math.Clamp((now - ShownAt) / 220f, 0, 1), 3);
+    // 全部展开 slides the bubble back out over 220 ms instead of letting it vanish in one frame.
+    internal long? DismissedAt { get; private set; }
+
+    internal void Dismiss(long now)
+    {
+        DismissedAt ??= now;
+        ExpiresAt = Math.Min(ExpiresAt, now + 220);
+    }
+
+    internal float Opacity(long now) => DismissedAt is { } dismissed
+        ? Math.Clamp(1 - (now - dismissed) / 220f, 0, 1)
+        : Math.Clamp((ExpiresAt - now) / 800f, 0, 1);
+
+    internal float SlideProgress(long now) => DismissedAt is { } dismissed
+        ? 1 - Ease((now - dismissed) / 220f)
+        : Ease((now - ShownAt) / 220f);
+
+    private static float Ease(float t) => 1 - MathF.Pow(1 - Math.Clamp(t, 0, 1), 3);
 }
 
 // Only three visible entries plus one watermark per current conversation live in

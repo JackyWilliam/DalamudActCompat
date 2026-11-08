@@ -10,6 +10,21 @@ internal sealed class CloudMachineIdentity(string fallbackPath)
     private const string Prefix = "dact-device-v1_";
     private readonly string fallbackPath = Path.GetFullPath(fallbackPath);
 
+    // The Windows computer name, shown to the same account when it has to choose which of its
+    // signed-in devices to sign out. Never part of the device fingerprint above.
+    public static string GetDeviceName()
+    {
+        try
+        {
+            var name = Environment.MachineName.Trim();
+            return name.Length > 0 ? name : "Windows PC";
+        }
+        catch (InvalidOperationException)
+        {
+            return "Windows PC";
+        }
+    }
+
     public string GetDeviceId()
     {
         var machineGuid = ReadMachineGuid();

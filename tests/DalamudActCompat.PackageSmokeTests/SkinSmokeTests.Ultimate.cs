@@ -47,8 +47,9 @@ internal static partial class SkinSmokeTests
             var palettes = ids.Select(DactTheme.For).ToArray();
             Check(palettes.All(palette => palette.Ultimate is not null) && palettes.Select(palette => palette.Accent).Distinct().Count() == 6,
                 "Ultimate skins lost their style or share one accent colour.");
-            Check(palettes.Count(palette => palette.Ultimate!.BackingIcon != 0) == 5 && DactTheme.For(SkinCatalog.UltimateAlexander).Ultimate!.BackingIcon == 0,
-                "Five plates should use their game backing and Alexander its drawn gears.");
+            // 1.0: Alexander uses the same nameplate backing as the others (user decision, no gears).
+            Check(palettes.All(palette => palette.Ultimate!.BackingIcon != 0) && palettes.Select(palette => palette.Ultimate!.BackingIcon).Distinct().Count() == 6,
+                "All six plates should use their own game backing.");
         }
         finally { SkinCatalog.UltimateUnlocked = previous; }
     }

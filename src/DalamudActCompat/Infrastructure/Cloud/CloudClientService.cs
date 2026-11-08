@@ -28,7 +28,10 @@ internal sealed record CloudClientSnapshot(
     bool UltimateSkinsUnlocked = false,
     bool UltimateSkinsConfirmed = false,
     bool UltimateSkinSyncPending = false,
-    string? SkinSyncError = null)
+    string? SkinSyncError = null,
+    // Set when sign-in was refused because the account is on its device limit; the login
+    // page then asks which devices to sign out (ResolveDeviceLimitAsync).
+    CloudDeviceLimit? DeviceLimit = null)
 {
     // A remembered login proves identity, not Discord ownership. Only a status
     // returned for this session may release the runtime and its functional UI.
@@ -267,14 +270,56 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
         string suppliedRecoveryKey,
         bool rememberLogin,
         CancellationToken cancellationToken)
+        => LoginCoreAsync(new PendingLogin(username, password, suppliedRecoveryKey, rememberLogin), [], false, cancellationToken);
+
+    // The answer to the device-limit prompt: sign the chosen devices (or all others) out and
+    // finish the sign-in that was refused, with the credentials typed for it.
+    public Task ResolveDeviceLimitAsync(IReadOnlyList<string> deviceIds, bool signOutAll, CancellationToken cancellationToken)
+    {
+        var pending = Interlocked.Exchange(ref pendingLogin, null);
+        if (pending is null)
+        {
+            UpdateSnapshot(value => value with { DeviceLimit = null, StatusMessage = "请重新登录。", StatusIsError = true });
+            return Task.CompletedTask;
+        }
+        return LoginCoreAsync(pending, deviceIds, signOutAll, cancellationToken);
+    }
+
+    public void CancelDeviceLimit()
+    {
+        Interlocked.Exchange(ref pendingLogin, null);
+        UpdateSnapshot(value => value with { DeviceLimit = null, StatusMessage = "已取消登录。", StatusIsError = false });
+    }
+
+    // Kept in memory only while the device-limit prompt is open, so choosing a device does not
+    // ask for the password again; cleared on answer, cancel and sign-out.
+    private sealed record PendingLogin(string Username, string Password, string RecoveryKey, bool RememberLogin);
+
+    private PendingLogin? pendingLogin;
+
+    private Task LoginCoreAsync(PendingLogin login, IReadOnlyList<string> signOutDevices, bool signOutAll, CancellationToken cancellationToken)
         => RunExclusiveAsync("正在登录…", async token =>
         {
-            var response = await apiClient.LoginAsync(
-                    username.Trim(),
-                    password,
-                    machineIdentity.GetDeviceId(),
-                    token)
-                .ConfigureAwait(false);
+            var (username, password, suppliedRecoveryKey, rememberLogin) = login;
+            UpdateSnapshot(value => value with { DeviceLimit = null });
+            CloudAuthenticationResponse response;
+            try
+            {
+                response = await apiClient.LoginAsync(
+                        username.Trim(),
+                        password,
+                        machineIdentity.GetDeviceId(),
+                        token,
+                        signOutDevices,
+                        signOutAll)
+                    .ConfigureAwait(false);
+            }
+            catch (CloudApiException limit) when (limit.DeviceLimit is { } devices)
+            {
+                pendingLogin = login;
+                UpdateSnapshot(value => value with { DeviceLimit = devices, StatusMessage = limit.Message, StatusIsError = true });
+                return;
+            }
             if (response.KeyEnvelope is null)
             {
                 throw new InvalidDataException("账号缺少云端加密密钥，无法安全读取备份。");
@@ -412,6 +457,7 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
     public Task LogoutAsync(CancellationToken cancellationToken)
         => RunExclusiveAsync("正在退出登录…", async token =>
         {
+            pendingLogin = null;
             var current = credentials;
             Exception? localCleanupFailure = null;
             try
@@ -440,6 +486,13 @@ internal sealed partial class CloudClientService : IDisposable, ICloudFriendsSes
                 throw localCleanupFailure;
             }
         }, cancellationToken);
+
+    // Feedback does not change the sync state, so it runs outside the exclusive cloud operations.
+    public Task<CloudFeedbackReceipt> SubmitFeedbackAsync(CloudFeedbackRequest request, CancellationToken cancellationToken)
+        => apiClient.SubmitFeedbackAsync(RequireCredentials().Token, request, cancellationToken);
+
+    public Task<IReadOnlyList<CloudFeedbackItem>> ListFeedbackAsync(CancellationToken cancellationToken)
+        => apiClient.ListFeedbackAsync(RequireCredentials().Token, cancellationToken);
 
     public Task RefreshBackupsAsync(CancellationToken cancellationToken)
         => RunExclusiveAsync("正在刷新云端版本…", async token =>

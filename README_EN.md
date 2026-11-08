@@ -16,14 +16,18 @@ The project is currently released and validated primarily on **Windows with XIVL
 
 | Feature | What it is for |
 | --- | --- |
+| 1.0 Control Center | Global search in the header (Ctrl+Shift+K), cloud status, feedback, and help; a sidebar for Home, Combat Meter, Encounter history, Overlays, Extensions, Friends, AI assistant, Account & cloud, and Settings |
+| Skins | Deep Ocean (default), Eorzea (sponsor tier 3), ultimate nameplate skins unlocked by clearing each ultimate, and hidden palettes to discover in the client; each has its own controls and popups, and can be previewed before applying |
 | In-game combat meter | View 4/8/24-player DPS, rDPS, HPS, total damage, highest-hit actions, hit rates, deaths, and a local FFLogs percentile estimate |
 | Meter styles | Choose one of Classic, Horizontal, or Role Split; customize ordered slots in Page preview while Horizontal remains background-free |
-| Encounter history | Store runs and individual pulls, then inspect party data and raw logs |
+| Encounter history | Store runs and individual pulls, then inspect party data and raw logs; Progression records how far each attempt got and the most common wipes |
 | Cactbot / HTML overlays | Install Cactbot resources and create, resize, lock, or click through in-game overlays |
 | Common ACT extensions | Use Triggernometry, PostNamazu, ACT.FoxTTS, SilverDasher, and Cafe.Matcha |
 | Imported extensions | Preflight DLL/ZIP packages and load compatible ACT plugins in a generic Host after permission review |
-| Accounts and cloud sync | Register with an activation key, optionally sign in automatically, create up to three friend invitations, and back up configuration with end-to-end encryption |
-| Friends and chat | Add friends, view presence, exchange messages and receive offline messages, with unread indicators, incoming bubbles, quick replies, and four notification sounds |
+| Accounts and cloud sync | Register with an activation key, optionally sign in automatically, create up to three friend invitations, and back up configuration with end-to-end encryption; each account can be signed in on up to five PCs |
+| Friends and chat | A Friends page and chat windows you can pop out: presence, messages and offline messages, with unread indicators, incoming bubbles, quick replies, and four notification sounds |
+| AI assistant | Diagnose problems, review encounters, and answer usage questions; off by default, uses your own API key, which stays on your PC |
+| Feedback | Send problems or suggestions from the header with screenshots, diagnostics, and AI conversations; replies arrive in Friends · DACT announcements |
 | Shared RPets sign-in | Synchronize sign-in, account switching, and sign-out with the separately installed RPets plugin |
 | Isolation and diagnostics | Inspect the parser, shared Host, Matcha Host, and generic Host separately, then stop or restart only the failing component |
 
@@ -55,13 +59,15 @@ Registering a DACT account requires a one-time activation key. Join QQ group **1
 
 1. Read the third-party extension notice. Check each author, source, version, permission set, and SHA-256 before deciding whether to install and authorize it.
 2. Enter `/actcompat` to open the Control Center.
-3. On Overview, keep Enable parsing and Start parser automatically enabled. Confirm the status at the top is Running.
+3. On Home, keep Enable parsing and Start parser automatically enabled, and confirm the parser shows Running. The first time 1.0 opens, a short what's-new tour appears; you can skip it at any time.
 4. Enter `/actcompat meter`, then deal valid damage to a striking dummy or duty enemy to populate the meter.
 5. Configure Cactbot, Triggernometry, PostNamazu, or other optional extensions from the Overlays and Extensions pages only when needed.
 
-The help button in the top-right corner opens the complete in-game guide. It supports Chinese and English keyword search and lets you copy commands.
+The question-mark button in the header opens the complete in-game guide. It supports Chinese and English keyword search and lets you copy commands. The header search field (Ctrl+Shift+K by default; rebind or turn it off in Settings) searches settings, pages, and help together.
 
-Starting with 0.4.1.0, sign in and select the friends icon beside the cloud status to find accounts, handle friend requests, and open chats. The status popup controls presence and optional duty sharing. Notification settings provide independent bubble and sound switches, position and background opacity controls, and four sounds with previews. Each pair of friends retains the latest 20 history messages and latest three pending offline messages across both participants. Friend requests are separate from registration invitation codes.
+> **Updating from 0.4.x to 1.0 requires signing in once more.** To record the five-device limit by PC name, every account is signed out once when 1.0 is released. Configuration, friends, and cloud backups are unaffected.
+
+Starting with 1.0, Friends lives in the Control Center sidebar: find accounts, handle friend requests, and open chats, which can also be popped out into their own windows. The status popup controls presence and optional duty sharing. Notification settings provide independent bubble and sound switches, position and background opacity controls, and four sounds with previews. Each pair of friends retains the latest 20 history messages and latest three pending offline messages across both participants. Friend requests are separate from registration invitation codes.
 
 > Open FFLogs upload logs only opens the local Network log directory and copies its path. It does not upload automatically. Diagnostic logs are for troubleshooting and do not replace combat logs.
 
@@ -69,26 +75,33 @@ Starting with 0.4.1.0, sign in and select the friends icon beside the cloud stat
 
 ![Control Center overview](docs/images/readme/control-center-overview.png)
 
-| Combat Meter settings | Cactbot and HTML overlays |
+| Global search | Friends and chat |
 | --- | --- |
+| [![Global search](docs/images/readme/global-search.png)](docs/images/readme/global-search.png) | [![Friends](docs/images/readme/friends.png)](docs/images/readme/friends.png) |
+| **Encounter history · Progression** | **AI assistant** |
+| [![Encounter history](docs/images/readme/encounter-history.png)](docs/images/readme/encounter-history.png) | [![AI assistant](docs/images/readme/ai-assistant.png)](docs/images/readme/ai-assistant.png) |
+| **Combat Meter** | **Cactbot and HTML overlays** |
 | [![Combat Meter settings](docs/images/readme/combat-meter-settings.png)](docs/images/readme/combat-meter-settings.png) | [![Overlay settings](docs/images/readme/overlay-settings.png)](docs/images/readme/overlay-settings.png) |
-| **Extension management** | **General settings** |
-| [![Extension management](docs/images/readme/extension-management.png)](docs/images/readme/extension-management.png) | [![General settings](docs/images/readme/general-settings.png)](docs/images/readme/general-settings.png) |
-| **Encounter history** | **Runtime status** |
-| [![Encounter history](docs/images/readme/encounter-history.png)](docs/images/readme/encounter-history.png) | [![Runtime status](docs/images/readme/runtime-status.png)](docs/images/readme/runtime-status.png) |
+| **Extensions** | **Settings** |
+| [![Extension management](docs/images/readme/extension-management.png)](docs/images/readme/extension-management.png) | [![Settings](docs/images/readme/general-settings.png)](docs/images/readme/general-settings.png) |
+| **Appearance and skins** | **Runtime status** |
+| [![Appearance and skins](docs/images/readme/skins.png)](docs/images/readme/skins.png) | [![Runtime status](docs/images/readme/runtime-status.png)](docs/images/readme/runtime-status.png) |
 
-> These screenshots show the v0.3.9.0 interface. Later versions keep the same information structure, but wording, version numbers, and individual options may change. Select a thumbnail to view the full image.
+> Screenshots show v1.0.0.0 in the default Deep Ocean skin with the plugin's built-in sample encounter and sample account (Chinese UI). Select a thumbnail to view the full image.
 
 ## Control Center
 
 | Page | What you can do there |
 | --- | --- |
-| Overview | Inspect parser state; toggle parsing, autostart, unfocused web-overlay hiding, and Simplified mode; open the meter, history, runtime status, and log directory |
-| Combat Meter | Select one of three mutually exclusive templates; customize the 8-player classic table, use fixed job/name + DPS/HPS rows for 24 players, and configure opacity or FFLogs where supported |
+| Home | Status cards for the parser, extensions, cloud sync, and friends; quick actions for the meter, encounter history, runtime status, and log directory; toggle parsing, autostart, unfocused web-overlay hiding, and Simplified mode |
+| Combat Meter | Select one of three mutually exclusive templates; configure 8/24-player modes, DPS/HPS ordering, opacity, and FFLogs; select slots directly in the style editor's page preview |
+| Encounter history | Recent encounters, Progression, and log files |
 | Overlays | Install Cactbot, manage alerts, timelines, and custom HTML overlays, and hide web overlays when the game is unfocused |
 | Extensions | Enable extensions, open their configuration, inspect sources and updates, import DLL/ZIP packages, and grant permissions |
-| Cloud Sync | Register or sign in, choose automatic sign-in, manage friend invitations, and upload, preview, restore, or roll back end-to-end encrypted configuration |
-| Settings | Auto-detect or manually select China/Global, restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
+| Friends | Friend list, requests, and adding friends; chat and incoming-message notification settings |
+| AI assistant | Diagnose problems, review encounters, usage Q&A, and AI settings (provider, API key, model) |
+| Account & cloud | Register or sign in, choose automatic sign-in, manage friend invitations, and upload, preview, restore, or roll back end-to-end encrypted configuration |
+| Settings | Auto-detect or manually select China/Global; appearance and skins, scene presets; the global search shortcut; restart the parser, copy diagnostics, change language and shortcuts, or start a separately confirmed factory reset |
 
 Game region defaults to the native client-region value exposed by the game's Framework: the China client uses the China packet family and the international client uses Global. Dalamud language and installation paths are not used, so a Chinese language pack on the international client remains Global. If the game region cannot be read, DACT defaults to Global and allows a manual override. Changing the setting refreshes the running parser and extension Hosts without changing client-language action names or log parsing. The FFLogs estimate follows the same setting, using the CN partition for China and the latest worldwide partition for Global.
 
@@ -147,7 +160,7 @@ Open `/xlplugins` and confirm that Dalamud ACT Compat is installed, enabled, and
 ### The Combat Meter is missing or always empty
 
 1. Enter `/actcompat meter` and temporarily disable Auto hide out of combat.
-2. Confirm that the parser is Running on Overview and in `/actcompat status`.
+2. Confirm that the parser is Running on Home and in `/actcompat status`.
 3. Deal several valid hits to a striking dummy or duty enemy. Entering a duty, selecting a target, or opening the window does not create combat data.
 4. If it remains empty, restart the parser and create a new sample encounter.
 
@@ -161,7 +174,7 @@ Loading a webpage does not mean its data protocol is connected. Confirm that the
 
 ### What to include in a bug report
 
-Provide the DACT version, occurrence time, reproduction steps, expected and actual behavior, the first failed component in `/actcompat status`, and the complete Copy diagnostics output. Missing or incorrect combat data also requires the matching `Network_*.log`. Review character names, server names, and local paths before sharing.
+The easiest way is the feedback button in the Control Center header: attach screenshots, diagnostics, and AI conversations, and replies arrive in Friends · DACT announcements. For a GitHub issue, provide the DACT version, occurrence time, reproduction steps, expected and actual behavior, the first failed component in `/actcompat status`, and the complete Copy diagnostics output. Missing or incorrect combat data also requires the matching `Network_*.log`. Review character names, server names, and local paths before sharing.
 
 ## How it runs
 

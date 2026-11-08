@@ -4,6 +4,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using System.Numerics;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Meter;
 
@@ -322,7 +323,7 @@ public sealed class RoleSplitMeterWindow : Window
         DrawChevron(drawList, toggleStart, toggleEnd, Compact != (Profile.CollapseDirection == MeterCollapseDirection.Downward));
         if (!embeddedPreview && toggleHovered)
         {
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 configuration.Meter.FollowsParserScope ? "当前跟随解析范围；可在插件的战斗统计页切回按榜单设置。" : Compact ? "展开榜单" : "收起榜单",
                 configuration.Meter.FollowsParserScope ? "Following parse scope; switch back in the Combat Meter settings page." : Compact ? "Expand ranking" : "Collapse ranking"));
         }

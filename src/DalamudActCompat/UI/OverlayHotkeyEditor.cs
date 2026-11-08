@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Overlay;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -79,7 +80,7 @@ internal sealed class OverlayHotkeyEditor(HtmlOverlayHotkeyService service, Func
                 recording = binding;
                 previousKeys = ReadKeys();
             }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+            if (ImGui.IsItemHovered()) DactUi.Tooltip(label);
             if (!stacked) ImGui.SameLine();
             var deleteWidth = ImGui.CalcTextSize(text.Get("删除", "Delete")).X + ImGui.GetStyle().FramePadding.X * 2;
             ImGui.SetNextItemWidth(Math.Max(80 * scale, ImGui.GetContentRegionAvail().X - deleteWidth - ImGui.GetStyle().ItemSpacing.X));

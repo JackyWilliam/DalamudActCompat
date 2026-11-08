@@ -132,10 +132,9 @@ internal static class CloudOperationGuardSmokeTests
               source.Contains("Interlocked.CompareExchange(ref cloudAutoSyncDueUtcTicks, dueTicks, 0)", StringComparison.Ordinal),
             "Cloud UI, admission, or auto-sync retry is no longer wired to the full-operation guard.");
         var ui = File.ReadAllText(Path.Combine(projectRoot, "src", "DalamudActCompat", "UI", "ControlCenterWindow.cs"));
-        var card = ui[ui.IndexOf("private void DrawCloudBackupCard(", StringComparison.Ordinal)..];
-        Check(card.IndexOf("ImGui.BeginDisabled(snapshot.IsBusy)", StringComparison.Ordinal) <
-              card.IndexOf("cloud.Upload();", StringComparison.Ordinal) &&
-              card.Contains("###CloudUploadCurrent", StringComparison.Ordinal) &&
+        // 1.0: the upload button lives in the 同步 card and is disabled while a cloud operation runs.
+        var card = ui[ui.IndexOf("private void DrawCloudSummaryCard(", StringComparison.Ordinal)..];
+        Check(card.Contains("\"###CloudUploadCurrent\", ButtonKind.Primary, \"upload\", disabled: snapshot.IsBusy)) cloud.Upload();", StringComparison.Ordinal) &&
               card.Contains("Working…", StringComparison.Ordinal),
             "The upload control lost its disabled/busy label or stable ImGui ID.");
     }

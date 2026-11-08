@@ -81,6 +81,13 @@ internal sealed record CloudCreatedInvitation(
     string Status,
     DateTimeOffset CreatedAt);
 
+// A device the account is signed in on, as the device-limit prompt shows it. Id is an opaque
+// handle the server derives from its device record; Name is that PC's computer name (null
+// for devices signed in by builds that did not report one).
+internal sealed record CloudSignedInDevice(string Id, string? Name, DateTimeOffset SignedInAt, DateTimeOffset? FirstSeenAt);
+
+internal sealed record CloudDeviceLimit(int Limit, IReadOnlyList<CloudSignedInDevice> Devices);
+
 internal sealed class CloudApiException(
     HttpStatusCode statusCode,
     string code,
@@ -90,8 +97,11 @@ internal sealed class CloudApiException(
     DateTimeOffset? banExpiresAt = null,
     string? banReason = null,
     long? nextSendSequence = null,
-    int? retryAfterSeconds = null) : Exception(message)
+    int? retryAfterSeconds = null,
+    CloudDeviceLimit? deviceLimit = null) : Exception(message)
 {
+    public CloudDeviceLimit? DeviceLimit { get; } = deviceLimit;
+
     public HttpStatusCode StatusCode { get; } = statusCode;
 
     public string Code { get; } = code;
@@ -159,21 +169,34 @@ internal sealed partial class CloudApiClient : IDisposable
                 password,
                 activationKey,
                 deviceId,
+                deviceName = CloudMachineIdentity.GetDeviceName(),
                 keyEnvelope,
                 recoveryVerifier,
             },
             null,
             cancellationToken);
 
+    // signOutDevices / signOutAllDevices answer a device_limit error (see CloudDeviceLimit);
+    // the server checks the password again before ending those sessions.
     public Task<CloudAuthenticationResponse> LoginAsync(
         string username,
         string password,
         string deviceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? signOutDevices = null,
+        bool signOutAllDevices = false)
         => SendJsonAsync<CloudAuthenticationResponse>(
             HttpMethod.Post,
             "api/v1/auth/login",
-            new { username, password, deviceId },
+            new
+            {
+                username,
+                password,
+                deviceId,
+                deviceName = CloudMachineIdentity.GetDeviceName(),
+                signOutDevices = signOutDevices ?? [],
+                signOutAllDevices,
+            },
             null,
             cancellationToken);
 
@@ -187,7 +210,7 @@ internal sealed partial class CloudApiClient : IDisposable
         => SendJsonAsync<CloudAuthenticationResponse>(
             HttpMethod.Post,
             "api/v1/auth/reset-password",
-            new { username, resetCode, newPassword, deviceId, keyEnvelope, recoverCloudKey = keyEnvelope is null },
+            new { username, resetCode, newPassword, deviceId, deviceName = CloudMachineIdentity.GetDeviceName(), keyEnvelope, recoverCloudKey = keyEnvelope is null },
             null,
             cancellationToken);
 
@@ -209,7 +232,7 @@ internal sealed partial class CloudApiClient : IDisposable
         => SendJsonAsync<CloudAuthenticationResponse>(
             HttpMethod.Post,
             "api/v1/auth/reset-password-with-recovery",
-            new { username, recoveryVerifier, newPassword, deviceId, keyEnvelope },
+            new { username, recoveryVerifier, newPassword, deviceId, deviceName = CloudMachineIdentity.GetDeviceName(), keyEnvelope },
             null,
             cancellationToken);
 
@@ -234,6 +257,12 @@ internal sealed partial class CloudApiClient : IDisposable
     public Task<CloudSponsorStatus> AcknowledgeSponsorAsync(string token, string grantId, CancellationToken cancellationToken)
         => SendJsonAsync<CloudSponsorStatus>(HttpMethod.Post,
             "api/v1/auth/sponsor-notice/ack", new { sponsorGrantId = grantId }, token, cancellationToken);
+
+    public Task<CloudFeedbackReceipt> SubmitFeedbackAsync(string token, CloudFeedbackRequest request, CancellationToken cancellationToken)
+        => SendJsonAsync<CloudFeedbackReceipt>(HttpMethod.Post, "api/v1/feedback", request, token, cancellationToken);
+
+    public async Task<IReadOnlyList<CloudFeedbackItem>> ListFeedbackAsync(string token, CancellationToken cancellationToken)
+        => (await SendJsonAsync<CloudFeedbackList>(HttpMethod.Get, "api/v1/feedback", null, token, cancellationToken).ConfigureAwait(false)).Items ?? [];
 
     public Task<CloudAccountStatus> GetAccountStatusAsync(string token, CancellationToken cancellationToken)
         => SendJsonAsync<CloudAccountStatus>(HttpMethod.Get, "api/v1/auth/me", null, token, cancellationToken);
@@ -550,7 +579,10 @@ internal sealed partial class CloudApiClient : IDisposable
                 error.BanExpiresAt,
                 error.BanReason,
                 error.NextSendSequence,
-                error.RetryAfterSeconds);
+                error.RetryAfterSeconds,
+                error.Error == "device_limit" && error.Devices is { } devices
+                    ? new CloudDeviceLimit(error.DeviceLimit ?? devices.Count, devices)
+                    : null);
         }
         catch (CloudApiException)
         {
@@ -604,5 +636,7 @@ internal sealed partial class CloudApiClient : IDisposable
         DateTimeOffset? BanExpiresAt,
         string? BanReason,
         long? NextSendSequence,
-        int? RetryAfterSeconds);
+        int? RetryAfterSeconds,
+        int? DeviceLimit = null,
+        IReadOnlyList<CloudSignedInDevice>? Devices = null);
 }

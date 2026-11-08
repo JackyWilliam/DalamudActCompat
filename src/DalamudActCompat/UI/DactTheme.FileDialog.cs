@@ -13,13 +13,30 @@ internal static partial class DactTheme
 
     internal static unsafe void DrawFileDialogSurface(Action draw)
     {
-        var themed = CurrentSkin != SkinCatalog.Default;
+        // 1.0: the default skin is DACT's own look as well, so Dalamud's picker (安装 DLL / ZIP,
+        // Cactbot 安装 / 更新, 反馈截图) is dressed for every skin. PushFrame leaves the default skin
+        // untouched, which left the picker Dalamud-red there.
+        var defaultSkin = CurrentSkin == SkinCatalog.Default;
+        const bool themed = true;
         var light = Palette.Light;
         var scale = ImGui.GetIO().FontGlobalScale;
         var style = ImGui.GetStyle();
         var labelsWidth = ImGui.CalcTextSize("Ok").X + ImGui.CalcTextSize("Cancel").X;
         var compact = light || labelsWidth + style.FramePadding.X * 4 + style.ItemSpacing.X * 3 > 100 * scale;
-        if (!themed && !compact) { draw(); return; }
+        var defaultColors = 0;
+        var defaultVars = 0;
+        if (defaultSkin)
+        {
+            foreach (var slot in FrameSlots) ImGui.PushStyleColor(slot, Color(slot, Vector4.One));
+            ImGui.PushStyleColor(ImGuiCol.ScrollbarBg, Vector4.Zero);
+            ImGui.PushStyleColor(ImGuiCol.ScrollbarGrab, Palette.Muted with { W = .28f });
+            ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabHovered, Palette.Muted with { W = .45f });
+            defaultColors = FrameSlots.Length + 3;
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 12 * scale);
+            ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 6 * scale);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
+            defaultVars = 3;
+        }
         var context = ImGui.GetCurrentContext();
         var starts = FileDialogVertexStarts;
         starts.Clear();
@@ -42,8 +59,12 @@ internal static partial class DactTheme
             ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, light ? 5 * scale : style.FrameRounding);
         }
         try { draw(); }
-        finally { if (compact) ImGui.PopStyleVar(3); }
-        if (!themed) return;
+        finally
+        {
+            if (compact) ImGui.PopStyleVar(3);
+            if (defaultVars > 0) ImGui.PopStyleVar(defaultVars);
+            if (defaultColors > 0) ImGui.PopStyleColor(defaultColors);
+        }
         // Dalamud's picker hardcodes its breadcrumb fill and file-icon colors.
         // Recolor only geometry emitted by this draw, rather than altering its
         // shared static fields (which would also affect other plugins' dialogs).

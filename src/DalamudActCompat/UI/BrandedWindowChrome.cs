@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -95,7 +96,7 @@ internal static class BrandedWindowChrome
             Vector2.Zero, Vector2.One, ImGui.GetColorU32(Vector4.One), 6);
 
         var textTop = screenStart.Y + ((height - ImGui.GetTextLineHeight()) * 0.5f);
-        const string title = "Dalamud ACT Compat";
+        const string title = "DACT";
         var titleLeft = logoLeft + logoSize + 9;
         drawList.AddText(
             new Vector2(titleLeft, textTop),
@@ -202,7 +203,7 @@ internal static class BrandedWindowChrome
             ImGui.PopStyleColor(4);
             if (!string.IsNullOrWhiteSpace(statusTooltip) && ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip(statusTooltip);
+                DactUi.Tooltip(statusTooltip);
             }
         }
         if (friendsAction is not null)
@@ -219,7 +220,7 @@ internal static class BrandedWindowChrome
             drawList.AddText(buttonStart + new Vector2(28, (actionButtonSize - ImGui.GetTextLineHeight()) / 2),
                 ImGui.GetColorU32(DactTheme.Palette.Text), Math.Max(0, onlineFriends).ToString());
             if (friendsUnread) drawList.AddCircleFilled(buttonStart + new Vector2(friendsWidth - 2, 3), 3.5f, ImGui.GetColorU32(new Vector4(1, .3f, .3f, 1)));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text?.Format(
+            if (ImGui.IsItemHovered()) DactUi.Tooltip(text?.Format(
                 $"好友 · {Math.Max(0, onlineFriends)} 人在线{(friendsUnread ? " · 有未读消息" : "")}",
                 $"Friends · {Math.Max(0, onlineFriends)} online{(friendsUnread ? text.Get(" · 有未读消息", " · Unread messages") : "")}")
                 ?? $"好友 · {Math.Max(0, onlineFriends)} 人在线");
@@ -241,7 +242,7 @@ internal static class BrandedWindowChrome
             ImGui.PopStyleColor(3);
             if (!string.IsNullOrWhiteSpace(helpTooltip) && ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip(helpTooltip);
+                DactUi.Tooltip(helpTooltip);
             }
         }
         if (showCloseButton)
@@ -255,7 +256,7 @@ internal static class BrandedWindowChrome
             closeRequested = DactTheme.IconButton(
                 $"close-{id}", GameSkinIcon.Close, "×",
                 new Vector2(actionButtonSize, actionButtonSize));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text?.Get("关闭窗口", "Close window") ?? "关闭窗口 / Close window");
+            if (ImGui.IsItemHovered()) DactUi.Tooltip(text?.Get("关闭窗口", "Close window") ?? "关闭窗口 / Close window");
             ImGui.PopStyleColor(3);
         }
         ImGui.SetCursorPos(new Vector2(start.X, start.Y + height + 6));
@@ -365,7 +366,7 @@ internal static class BrandedWindowChrome
             // Translations and larger fonts can exceed an equal-width tab. Keep
             // its click target and full tooltip while clipping at grapheme edges.
             var caption = FriendsMessagePreview.Ellipsize(labels[index], Math.Max(0, segmentWidth - 16), value => ImGui.CalcTextSize(value).X);
-            if (caption != labels[index] && ImGui.IsItemHovered()) ImGui.SetTooltip(labels[index]);
+            if (caption != labels[index] && ImGui.IsItemHovered()) DactUi.Tooltip(labels[index]);
             var labelSize = ImGui.CalcTextSize(caption);
             var labelPosition = texturedTab
                 ? DactTheme.CenteredTextPosition(caption, itemMin, itemMin + new Vector2(segmentWidth, height - 2))

@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Text;
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Infrastructure.Cloud;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -145,7 +146,7 @@ internal sealed partial class FriendsUiManager
         var direction = outside ? 1 : -1;
         list.AddLine(center + new Vector2(2 * direction, -5) * scale, center + new Vector2(-3 * direction, 0) * scale, ImGui.GetColorU32(Blue), 1.6f * scale);
         list.AddLine(center + new Vector2(-3 * direction, 0) * scale, center + new Vector2(2 * direction, 5) * scale, ImGui.GetColorU32(Blue), 1.6f * scale);
-        if (hovered) ImGui.SetTooltip(uiText.Get("收起好友列表", "Collapse friends"));
+        if (hovered) DactUi.Tooltip(uiText.Get("收起好友列表", "Collapse friends"));
     }
 
     private void DrawOwnPresenceMenu(FriendsChatSnapshot state, float scale)
@@ -164,7 +165,7 @@ internal sealed partial class FriendsUiManager
         var detail = current is null ? uiText.Get("正在读取状态…", "Loading status…") : StatusName(status) + (string.IsNullOrEmpty(current.Text) ? "" : " · " + current.Text);
         list.AddText(start + new Vector2(22, 26) * scale, ImGui.GetColorU32(DactTheme.Tone(new Vector4(.60f, .68f, .75f, 1), DactTheme.Palette.Muted)), detail);
         list.PopClipRect();
-        if (hovered) ImGui.SetTooltip(uiText.Get("修改我的状态", "Edit my status"));
+        if (hovered) DactUi.Tooltip(uiText.Get("修改我的状态", "Edit my status"));
         // Keep the list compact. Draft text and privacy controls appear only
         // while explicitly editing this account's presence, not in the default list.
         var maximum = ImGui.GetMainViewport().WorkSize - new Vector2(16);
@@ -262,7 +263,7 @@ internal sealed partial class FriendsUiManager
             var next = current with { ShareDuty = share };
             if (controller.UpdatePresence(next)) { submittedSettings = next; shareSubmission = true; }
         }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(uiText.Get("默认关闭。仅分享实际副本名称；关闭或隐身会清除当前副本。多开副本不一致时不显示，不保留活动历史。", "Off by default. Shares only your current duty name. Disabling this or going invisible clears it. Conflicting duties across clients are hidden; no activity history is kept."));
+        if (ImGui.IsItemHovered()) DactUi.Tooltip(uiText.Get("默认关闭。仅分享实际副本名称；关闭或隐身会清除当前副本。多开副本不一致时不显示，不保留活动历史。", "Off by default. Shares only your current duty name. Disabling this or going invisible clears it. Conflicting duties across clients are hidden; no activity history is kept."));
         ImGui.EndDisabled();
         if (presenceChangedElsewhere) ImGui.TextWrapped(uiText.Get("其他设备已更新状态，请确认草稿后再保存。", "Another device updated your status. Review your draft before saving."));
         if (privacySaveUnconfirmed) ImGui.TextWrapped(uiText.Get("关闭操作尚未确认；本机已暂停副本分享，请重试保存。", "The change is unconfirmed. Duty sharing is paused on this PC; please save again."));
@@ -336,7 +337,7 @@ internal sealed partial class FriendsUiManager
             if (duty is not null) list.AddText(start + new Vector2(19, statusY + 22) * scale, ImGui.GetColorU32(Blue), Fit(uiText.Get("正在进行：", "In duty: ") + duty));
             list.PopClipRect();
             DrawUnreadBadge(start, width, unreadCount, scale);
-            if (hovered) ImGui.SetTooltip(state.FriendDisplayName(friend.User.Id, friend.User.Username) + "\n" + statusText + (duty is null ? "" : uiText.Get("\n正在进行：", "\nIn duty: ") + duty) + uiText.Get("\n右键设置备注或管理好友", "\nRight-click to edit a note or manage this friend"));
+            if (hovered) DactUi.Tooltip(state.FriendDisplayName(friend.User.Id, friend.User.Username) + "\n" + statusText + (duty is null ? "" : uiText.Get("\n正在进行：", "\nIn duty: ") + duty) + uiText.Get("\n右键设置备注或管理好友", "\nRight-click to edit a note or manage this friend"));
             ImGui.PopID();
         }
     }

@@ -70,7 +70,11 @@ internal static class HelpScreenshotGenerator
             var text = new UiText(config);
             var logger = new PluginLogger(EntityServiceProxy.Create<IPluginLog>(new()));
             var sample = SampleEncounterFactory.Create(DateTimeOffset.UtcNow);
-            using var logo = new SkinSmokeTests.EmptyTexture();
+            // The real logo, so the help shows the header and sign-in page as players see them.
+            var textureApi = DispatchProxy.Create<ITextureProvider, UiBaselineGenerator.PreviewTextureProvider>();
+            var textures = (UiBaselineGenerator.PreviewTextureProvider)(object)textureApi;
+            textures.Raster = raster;
+            var logo = textures.Load(Path.Combine(AppContext.BaseDirectory, "Assets", "dact-logo.png"));
             var fflogs = new FflogsEstimateService(
                 () => config.Fflogs,
                 Path.Combine(Path.GetTempPath(), $"dact-help-fflogs-{Guid.NewGuid():N}.json"),
@@ -83,12 +87,12 @@ internal static class HelpScreenshotGenerator
             var transition = typeof(ControlCenterWindow).GetField("visibilityTransition", BindingFlags.NonPublic | BindingFlags.Instance)!;
             transition.SetValue(window, Enum.Parse(transition.FieldType, "Open"));
             var discoveryNotice = typeof(ControlCenterWindow).GetField("discoveryNoticeUntil", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            void CaptureControlCenter(string name) => Capture(raster, io, new(900, 640), Path.Combine(directory, name), () =>
+            void CaptureControlCenter(string name) => Capture(raster, io, new(940, 660), Path.Combine(directory, name), () =>
             {
                 // Hidden-skin discoveries are an easter egg, not something the help should show.
                 discoveryNotice.SetValue(window, 0L);
                 window.PreDraw();
-                ImGui.SetNextWindowPos(new(10, 10)); ImGui.SetNextWindowSize(new(880, 620));
+                ImGui.SetNextWindowPos(new(10, 10)); ImGui.SetNextWindowSize(new(920, 640));
                 ImGui.Begin(window.WindowName, window.Flags | ImGuiWindowFlags.NoSavedSettings);
                 window.Draw();
                 ImGui.End();
@@ -102,10 +106,11 @@ internal static class HelpScreenshotGenerator
             CaptureControlCenter("account-discord.png");
             account.DiscordBound = true;
             var pageField = typeof(ControlCenterWindow).GetField("selectedPage", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            foreach (var page in Enum.GetValues(pageField.FieldType))
+            // Only the pages the help shows (HelpWindow.Image names).
+            foreach (var page in new[] { "Overview", "Meter", "Overlays", "Extensions", "Cloud", "Diagnostics" })
             {
-                pageField.SetValue(window, page);
-                CaptureControlCenter($"control-{page.ToString()!.ToLowerInvariant()}.png");
+                pageField.SetValue(window, Enum.Parse(pageField.FieldType, page));
+                CaptureControlCenter($"control-{page.ToLowerInvariant()}.png");
             }
 
             var store = new EncounterStateStore();
@@ -149,7 +154,7 @@ internal static class HelpScreenshotGenerator
         raster.Save(ImGui.GetDrawData(), path);
     }
 
-    private static ControlCenterWindow CreateControlCenter(
+    internal static ControlCenterWindow CreateControlCenter(
         PluginConfiguration config,
         UiText text,
         PluginLogger logger,
@@ -158,6 +163,8 @@ internal static class HelpScreenshotGenerator
         Encounter sample,
         AccountState account)
     {
+        // The once-per-session splash would cover the first captures; the baseline shoots it on purpose.
+        typeof(ControlCenterWindow).GetField("splashPlayedThisSession", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, true);
         var parser = DispatchProxy.Create<IParserEngine, RunningParser>();
         var cloud = new CloudUiBridge(
             () => new CloudClientSnapshot(
@@ -172,7 +179,8 @@ internal static class HelpScreenshotGenerator
                     : null,
                 DiscordLinkCode: account.SignedIn && !account.DiscordBound
                     ? new CloudDiscordLinkCode("DACT-7Q4M-2K9P", DateTimeOffset.UtcNow.AddMinutes(10))
-                    : null),
+                    : null,
+                DeviceLimit: account.DeviceLimit),
             _ => { }, _ => { }, _ => { }, () => { }, () => { },
             _ => { }, () => { }, _ => { }, _ => { }, () => { });
         var bundled = new (string Id, string Name, string Version, bool Enabled)[]
@@ -221,11 +229,14 @@ internal static class HelpScreenshotGenerator
         return (ControlCenterWindow)constructor.Invoke(arguments);
     }
 
-    private sealed class AccountState
+    internal sealed class AccountState
     {
         public bool SignedIn { get; set; }
 
         public bool DiscordBound { get; set; }
+
+        // 登录 · 设备已满 sample for the baseline.
+        public CloudDeviceLimit? DeviceLimit { get; set; }
     }
 
     // Reports a running parser; event subscriptions and lifecycle calls are ignored.
@@ -233,7 +244,7 @@ internal static class HelpScreenshotGenerator
     {
         private static readonly ParserStatus Running = new(
             ParserState.Running,
-            "FFXIV_ACT_Plugin and OverlayPlugin are running in DalamudActCompat.",
+            "FFXIV_ACT_Plugin and OverlayPlugin are running in DACT.",
             DateTimeOffset.UtcNow);
 
         protected override object? Invoke(MethodInfo? method, object?[]? args)
@@ -241,7 +252,7 @@ internal static class HelpScreenshotGenerator
     }
 
     // Builds a callback that ignores its arguments and returns a neutral value for its type.
-    private static Delegate Stub(Type delegateType, object? value, bool hasValue)
+    internal static Delegate Stub(Type delegateType, object? value, bool hasValue)
     {
         var invoke = delegateType.GetMethod("Invoke")!;
         var parameters = invoke.GetParameters().Select(parameter => Expression.Parameter(parameter.ParameterType)).ToArray();
@@ -251,7 +262,7 @@ internal static class HelpScreenshotGenerator
         return Expression.Lambda(delegateType, body, parameters).Compile();
     }
 
-    private static object? Neutral(Type type)
+    internal static object? Neutral(Type type)
     {
         if (type == typeof(void)) return null;
         if (type == typeof(string)) return string.Empty;

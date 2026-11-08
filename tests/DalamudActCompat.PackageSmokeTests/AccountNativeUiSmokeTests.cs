@@ -23,7 +23,7 @@ internal static class AccountNativeUiSmokeTests
             Check(io.Fonts.Build(), "Account font atlas failed.");
             var raster = new NativeUiRasterizer(io.Fonts);
             using var logo = new SkinSmokeTests.EmptyTexture();
-            using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "act-logo.jpg")))
+            using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "dact-logo.png")))
             {
                 var pixels = new byte[bitmap.Width * bitmap.Height * 4];
                 for (var y = 0; y < bitmap.Height; y++) for (var x = 0; x < bitmap.Width; x++)
@@ -41,6 +41,8 @@ internal static class AccountNativeUiSmokeTests
             var cloud = new CloudUiBridge(() => snapshot, _ => { }, request => logins.Add(request), _ => { }, () => logouts++, () => { }, _ => { },
                 () => { }, _ => { }, _ => { }, () => { }, refreshRecoveryStatus: () => checks++, createDiscordLinkCode: () => bindingCodes++);
             Set("text", text); Set("cloud", cloud); Set("logoTexture", logo); Set("cloudRememberLogin", true);
+            // The uninitialized window skips field initializers; the 1.0 form centring cache needs one.
+            Set("authFormHeights", new Dictionary<string, float>(StringComparer.Ordinal));
             foreach (var field in new[] { "cloudUsername", "cloudPassword", "cloudPasswordConfirmation", "cloudActivationKey", "cloudResetCode", "cloudRecoveryKey" }) Set(field, "");
             var page = typeof(ControlCenterWindow).GetNestedType("CloudAuthenticationPage", BindingFlags.NonPublic)!;
             var size = new Vector2(992, 610); var drag = new WindowDragController();
@@ -83,8 +85,8 @@ internal static class AccountNativeUiSmokeTests
                         var w = context.Windows[i];
                         if (!w.Active) continue;
                         var name = Marshal.PtrToStringUTF8((nint)w.Name) ?? "";
-                        if (hero.Handle == null && name.Contains("account-authentication-hero")) hero = w;
-                        if (form.Handle == null && name.Contains("account-authentication-card")) form = w;
+                        if (hero.Handle == null && name.Contains("auth-brand")) hero = w;
+                        if (form.Handle == null && name.Contains("auth-form")) form = w;
                     }
                     Check(hero.Handle != null && form.Handle != null && form.Pos.X > hero.Pos.X && Math.Abs(form.Pos.Y - hero.Pos.Y) < 2,
                         "Authentication changed to a portrait layout.");

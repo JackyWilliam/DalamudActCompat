@@ -16,14 +16,18 @@ Dalamud ACT Compat（简称 DACT）把 `FFXIV_ACT_Plugin`、`OverlayPlugin` 和�
 
 | 功能 | 实际用途 |
 | --- | --- |
+| 1.0 控制中心 | 顶栏全局搜索（Ctrl+Shift+K）、云同步状态、反馈与帮助；左侧导航直达主页、战斗统计、战斗记录、悬浮窗、扩展、好友、AI 助手、账号与云同步、设置 |
+| 皮肤 | 默认的深海原色、艾欧泽亚（赞助 3 级）、通关对应绝境战解锁的绝本铭牌皮肤，以及等你在客户端里发现的隐藏配色；每款都有自己的控件与浮层样式，可先预览再应用 |
 | 游戏内战斗统计 | 查看 4/8/24 人 DPS、rDPS、HPS、总伤害、最高伤害、命中率、死亡和本地 FFLogs 区间估算 |
 | 统计样式 | 经典榜、横版和职能分栏三选一；8 人经典表格可自定义，24 人使用固定的职业/名字 + DPS/HPS 紧凑条 |
-| 战斗历史 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志 |
+| 战斗记录 | 按每次进本和每一把战斗保存记录，回看队伍数据与原始日志；「开荒进度」记录每次打到哪里和最常见的团灭点 |
 | Cactbot / HTML 悬浮窗 | 安装 Cactbot 资源，在游戏内创建、缩放、锁定和穿透悬浮窗 |
 | 常见 ACT 扩展 | 使用 Triggernometry、PostNamazu、ACT.FoxTTS、SilverDasher 和 Cafe.Matcha |
 | 自行导入扩展 | 对 DLL/ZIP 做静态预检，确认权限后在通用 Host 中加载兼容的 ACT 插件 |
-| 账号与云同步 | 使用激活码注册、可选自动登录、生成最多 3 个好友邀请码，并端到端加密备份配置 |
-| 好友与聊天 | 添加好友、查看在线状态、收发消息及离线来信；支持未读提醒、来信气泡、快捷回复和四种提示音 |
+| 账号与云同步 | 使用激活码注册、可选自动登录、生成最多 3 个好友邀请码，并端到端加密备份配置；每个账号最多同时登录 5 台电脑 |
+| 好友与聊天 | 好友页与可单独打开的聊天窗口：在线状态、收发消息及离线来信；支持未读提醒、来信气泡、快捷回复和四种提示音 |
+| AI 助手 | 诊断问题、复盘战斗、回答使用问题；默认关闭，使用你自己的 API Key，Key 只存在本机 |
+| 反馈 | 顶栏反馈按钮提交问题或建议，可附截图、诊断日志与 AI 对话，回复出现在好友「官方通知」 |
 | RPets 共用登录 | 与独立安装的 RPets 同步登录、切换账号和退出状态 |
 | 故障隔离与诊断 | 分开查看解析器、共享 Host、抹茶 Host 和通用 Host，按组件停止或重启 |
 
@@ -57,13 +61,15 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 1. 阅读首次弹出的第三方扩展声明，核对作者、来源、版本、权限和 SHA-256，再决定是否安装及授权。
 2. 输入 `/actcompat` 打开控制中心。
-3. 在“概览”确认“启用解析”和“自动启动解析器”已开启，顶部状态为“运行中”。
+3. 在“主页”确认“启用解析”和“自动启动解析器”已开启，“解析器”显示“运行中”。首次打开 1.0 会有一段新版导览，可随时跳过。
 4. 输入 `/actcompat meter` 打开战斗统计，对木人或副本敌人造成有效伤害后即可看到数据。
 5. 需要 Cactbot、Triggernometry、鲶鱼精或其他扩展时，再到“悬浮窗”和“扩展”页配置。
 
-控制中心右上角有完整的游戏内帮助，支持中英文关键词搜索和宏指令复制。
+控制中心顶栏右侧的问号是完整的游戏内帮助，支持中英文关键词搜索和宏指令复制；顶栏搜索框（默认 Ctrl+Shift+K，可在设置里改键或关闭）会同时搜索设置项、页面和帮助。
 
-0.4.1.0 起，登录后点击主窗口云状态右侧的好友图标，即可查找账号、处理好友申请和打开聊天。状态弹窗可设置在线状态及是否分享当前副本；来信提醒设置支持独立开关气泡和声音、调整位置与背景透明度、选择及试听四种提示音。每对好友双方合计保留最近 20 条历史和最新 3 条离线待收消息。这里的好友申请与注册用的邀请码是两个独立功能。
+> **从 0.4.x 更新到 1.0 后需要重新登录一次。** 为了按电脑名记录「最多 5 台设备」，1.0 发布时所有账号统一退出一次；配置、好友和云备份都不受影响。
+
+1.0 起，好友在控制中心左侧导航，可以查找账号、处理好友申请和打开聊天，聊天也能拆成独立窗口。状态弹窗可设置在线状态及是否分享当前副本；来信提醒设置支持独立开关气泡和声音、调整位置与背景透明度、选择及试听四种提示音。每对好友双方合计保留最近 20 条历史和最新 3 条离线待收消息。这里的好友申请与注册用的邀请码是两个独立功能。
 
 > “打开 FFLogs 上传日志”只会打开本地 Network 日志目录并复制路径，不会自动上传。诊断日志用于排错，不能代替战斗日志。
 
@@ -71,26 +77,33 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 ![控制中心概览](docs/images/readme/control-center-overview.png)
 
-| 战斗统计设置 | Cactbot 与 HTML 悬浮窗 |
+| 全局搜索 | 好友与聊天 |
 | --- | --- |
+| [![全局搜索](docs/images/readme/global-search.png)](docs/images/readme/global-search.png) | [![好友](docs/images/readme/friends.png)](docs/images/readme/friends.png) |
+| **战斗记录 · 开荒进度** | **AI 助手** |
+| [![战斗记录](docs/images/readme/encounter-history.png)](docs/images/readme/encounter-history.png) | [![AI 助手](docs/images/readme/ai-assistant.png)](docs/images/readme/ai-assistant.png) |
+| **战斗统计** | **Cactbot 与 HTML 悬浮窗** |
 | [![战斗统计设置](docs/images/readme/combat-meter-settings.png)](docs/images/readme/combat-meter-settings.png) | [![悬浮窗设置](docs/images/readme/overlay-settings.png)](docs/images/readme/overlay-settings.png) |
-| **扩展管理** | **通用设置** |
-| [![扩展管理](docs/images/readme/extension-management.png)](docs/images/readme/extension-management.png) | [![通用设置](docs/images/readme/general-settings.png)](docs/images/readme/general-settings.png) |
-| **战斗记录** | **运行状态** |
-| [![战斗记录](docs/images/readme/encounter-history.png)](docs/images/readme/encounter-history.png) | [![运行状态](docs/images/readme/runtime-status.png)](docs/images/readme/runtime-status.png) |
+| **扩展** | **设置** |
+| [![扩展管理](docs/images/readme/extension-management.png)](docs/images/readme/extension-management.png) | [![设置](docs/images/readme/general-settings.png)](docs/images/readme/general-settings.png) |
+| **外观与皮肤** | **运行状态** |
+| [![外观与皮肤](docs/images/readme/skins.png)](docs/images/readme/skins.png) | [![运行状态](docs/images/readme/runtime-status.png)](docs/images/readme/runtime-status.png) |
 
-> 截图记录的是 v0.3.9.0 界面；后续版本沿用相同的信息结构，具体文字、版本号和选项以当前版本为准。点击小图可查看原图。
+> 截图为 v1.0.0.0 默认皮肤「深海原色」，数据是插件内置的示例战斗与示例账号。点击小图可查看原图。
 
 ## 控制中心
 
 | 页面 | 这里能做什么 |
 | --- | --- |
-| 概览 | 查看解析器状态；开关解析、自动启动、失焦隐藏网页悬浮窗和精简模式；打开统计、历史、运行状态与日志目录 |
-| 战斗统计 | 在三个互斥模板间切换；设置 8/24 人模式、DPS/HPS 排序、独立统计槽位、透明度和 FFLogs 估算 |
+| 主页 | 解析器、扩展、云同步和好友的状态卡片；快捷入口打开统计、战斗记录、运行状态与日志目录；开关解析、自动启动、失焦隐藏网页悬浮窗和精简模式 |
+| 战斗统计 | 在三个互斥模板间切换；设置 8/24 人模式、DPS/HPS 排序、透明度和 FFLogs 估算；在样式编辑器的页面预览里点选槽位直接调整 |
+| 战斗记录 | 近期战斗、开荒进度与日志文件 |
 | 悬浮窗 | 安装 Cactbot；管理文字提醒、时间轴和自定义 HTML 悬浮窗；设置游戏失焦时隐藏网页悬浮窗 |
 | 扩展 | 启停扩展；打开扩展配置；检查来源与更新；导入 DLL/ZIP；分配权限 |
-| 云同步 | 注册或登录账号；选择是否自动登录；管理好友邀请码；上传、预览、恢复或回滚端到端加密配置 |
-| 设置 | 自动检测或手动选择国服/国际服；重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |
+| 好友 | 好友列表、申请与添加；聊天与来信提醒设置 |
+| AI 助手 | 诊断问题、战斗复盘、使用问答与 AI 设置（服务商、API Key、模型） |
+| 账号与云同步 | 注册或登录账号；选择是否自动登录；管理好友邀请码；上传、预览、恢复或回滚端到端加密配置 |
+| 设置 | 自动检测或手动选择国服/国际服；外观与皮肤、场景方案；全局搜索快捷键；重启解析器；复制诊断；设置语言和快捷按钮；执行需再次确认的恢复出厂设置 |
 
 “游戏区域”默认读取游戏 Framework 的原生客户端区域值：国服客户端使用国服网络协议，国际服客户端使用国际服网络协议；不根据 Dalamud 语言或安装路径判断，因此国际服中文语言包不会被误判。无法读取游戏区域时暂按国际服处理，并可手动覆盖；切换后插件会刷新正在运行的解析器与扩展 Host，而动作名和日志语言仍跟随游戏客户端。FFLogs 区间估算会同步使用国服 CN 分区或国际服最新全球分区。
 
@@ -149,7 +162,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 ### 战斗统计窗口不见了或一直为空
 
 1. 输入 `/actcompat meter`，并暂时关闭“脱战自动隐藏”。
-2. 确认“概览”和 `/actcompat status` 中的解析器都是“运行中”。
+2. 确认“主页”和 `/actcompat status` 中的解析器都是“运行中”。
 3. 对木人或副本敌人实际造成几次有效伤害；仅进本、选中目标或打开窗口不会产生数据。
 4. 仍为空时重启解析器，并重新产生一场新样本。
 
@@ -163,7 +176,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 ### 反馈问题需要什么
 
-请提供 DACT 版本、发生时间、复现步骤、预期结果、实际现象、`/actcompat status` 中第一个失败的组件和“复制诊断日志”的完整内容。统计缺失或数值异常还需保留对应的 `Network_*.log`。提交前请自行检查角色名、服务器名和本地路径。
+最方便的是点控制中心顶栏的反馈按钮：可以附截图、诊断日志和 AI 对话，回复会出现在好友「官方通知」。在 Issue 中反馈时，请提供 DACT 版本、发生时间、复现步骤、预期结果、实际现象、`/actcompat status` 中第一个失败的组件和“复制诊断日志”的完整内容。统计缺失或数值异常还需保留对应的 `Network_*.log`。提交前请自行检查角色名、服务器名和本地路径。
 
 ## 它是怎么运行的
 

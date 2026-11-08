@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -35,14 +36,14 @@ internal static class AccountIdentityBadge
             if (sponsorIcon is not null)
                 list.AddImage(sponsorIcon.GetWrapOrEmpty().Handle, start + new Vector2(4, 0), start + new Vector2(4 + badgeSize, badgeSize));
             list.AddText(start + new Vector2(badgeSize + 8, 0), ImGui.GetColorU32(new Vector4(1, .86f, .6f, 1)), tier);
-            if (ImGui.IsMouseHoveringRect(start, end)) ImGui.SetTooltip(text?.Format($"赞助者 · {sponsorTier} 级 · 永久", $"Sponsor · Tier {sponsorTier} · Permanent") ?? $"赞助者 · {sponsorTier} 级 · 永久");
+            if (ImGui.IsMouseHoveringRect(start, end)) DactUi.Tooltip(text?.Format($"赞助者 · {sponsorTier} 级 · 永久", $"Sponsor · Tier {sponsorTier} · Permanent") ?? $"赞助者 · {sponsorTier} 级 · 永久");
             start.X = end.X + 4;
         }
         if (hasBadge)
         {
             list.AddImage(icon!.GetWrapOrEmpty().Handle, start, start + new Vector2(badgeSize),
                 Vector2.Zero, Vector2.One, ImGui.GetColorU32(Vector4.One));
-            if (ImGui.IsMouseHoveringRect(start, start + new Vector2(badgeSize))) ImGui.SetTooltip(text?.Get("管理员", "Administrator") ?? "管理员");
+            if (ImGui.IsMouseHoveringRect(start, start + new Vector2(badgeSize))) DactUi.Tooltip(text?.Get("管理员", "Administrator") ?? "管理员");
         }
         list.PopClipRect();
     }

@@ -1,6 +1,7 @@
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -32,10 +33,26 @@ internal static class ParserScopeSelector
             ImGui.EndCombo();
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 "自动按实际组队切换：单人→仅自己，小队→小队成员，24人团队→团队成员；不受统计窗口8/24人布局影响。切换后用于后续统计，已记录的数据保留；不影响原始日志和触发器。",
                 "Auto follows your actual group: solo → Self, party → Party, alliance → Alliance. The meter's 8/24-player layout does not change parsing. Changes apply to subsequent statistics; existing data, raw logs and triggers are retained."));
         return changed;
+    }
+
+    // 1.0 stacked field: label, full-width select, hint (screens.js 主页 · 基础设置).
+    public static bool DrawField(UiText text, PluginConfiguration configuration)
+    {
+        DactUi.BeginField(text.Get("游戏解析范围", "Parse scope"));
+        var index = Array.IndexOf(Options, configuration.ParserScope);
+        var changed = DactUi.Select("parser-scope", Options.Select(scope => Format(text, scope)).ToArray(), ref index);
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Get(
+                "自动按实际组队切换：单人→仅自己，小队→小队成员，24人团队→团队成员；不受统计窗口8/24人布局影响。切换后用于后续统计，已记录的数据保留；不影响原始日志和触发器。",
+                "Auto follows your actual group: solo → Self, party → Party, alliance → Alliance. The meter's 8/24-player layout does not change parsing. Changes apply to subsequent statistics; existing data, raw logs and triggers are retained."));
+        DactUi.EndField(text.Get("只解析选中范围内的玩家事件。", "Only player events within the selected scope are parsed."));
+        if (!changed || index < 0 || Options[index] == configuration.ParserScope) return false;
+        configuration.ParserScope = Options[index];
+        return true;
     }
 
     private static string Format(UiText text, ParserScope scope) => scope switch

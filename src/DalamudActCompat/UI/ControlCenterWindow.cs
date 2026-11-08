@@ -10,12 +10,15 @@ using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Infrastructure.Cloud;
+using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Infrastructure.Processes;
 using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.Quality;
+using DalamudActCompat.UI.Kit;
 using System.Numerics;
 
 namespace DalamudActCompat.UI;
@@ -37,8 +40,11 @@ public sealed partial class ControlCenterWindow : Window
     {
         Overview,
         Meter,
+        History,
         Overlays,
         Extensions,
+        Friends,
+        Ai,
         Cloud,
         Diagnostics,
     }
@@ -102,7 +108,6 @@ public sealed partial class ControlCenterWindow : Window
     private readonly Action<bool> setMeterVisible;
     private readonly Action openMeter;
     private readonly Action openMeterStyleEditor;
-    private readonly Action openHistory;
     private readonly Func<bool> isStatusVisible;
     private readonly Action<bool> setStatusVisible;
     private readonly Action selectPluginPackage;
@@ -120,7 +125,7 @@ public sealed partial class ControlCenterWindow : Window
     private readonly Func<string> getCombatLogDirectory;
     private readonly Action<Action<bool, string>> selectCombatLogDirectory;
     private readonly Action<Action<bool, string>> resetCombatLogDirectory;
-    private readonly Func<string> buildDiagnosticReport;
+    private readonly Func<DiagnosticReportExport> exportDiagnosticReport;
     private readonly Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins;
     private readonly Action<string> openPluginConfiguration;
     private readonly Func<ResourcePackOperationStatus> getBundledActResourceStatus;
@@ -208,7 +213,6 @@ public sealed partial class ControlCenterWindow : Window
         Action<bool> setMeterVisible,
         Action openMeter,
         Action openMeterStyleEditor,
-        Action openHistory,
         Func<bool> isStatusVisible,
         Action<bool> setStatusVisible,
         Action selectPluginPackage,
@@ -226,7 +230,7 @@ public sealed partial class ControlCenterWindow : Window
         Func<string> getCombatLogDirectory,
         Action<Action<bool, string>> selectCombatLogDirectory,
         Action<Action<bool, string>> resetCombatLogDirectory,
-        Func<string> buildDiagnosticReport,
+        Func<DiagnosticReportExport> exportDiagnosticReport,
         Func<IReadOnlyList<InstalledActPlugin>> discoverPlugins,
         Action<string> openPluginConfiguration,
         Func<ResourcePackOperationStatus> getBundledActResourceStatus,
@@ -266,7 +270,6 @@ public sealed partial class ControlCenterWindow : Window
         this.setMeterVisible = setMeterVisible;
         this.openMeter = openMeter;
         this.openMeterStyleEditor = openMeterStyleEditor;
-        this.openHistory = openHistory;
         this.isStatusVisible = isStatusVisible;
         this.setStatusVisible = setStatusVisible;
         this.selectPluginPackage = selectPluginPackage;
@@ -284,7 +287,7 @@ public sealed partial class ControlCenterWindow : Window
         this.getCombatLogDirectory = getCombatLogDirectory;
         this.selectCombatLogDirectory = selectCombatLogDirectory;
         this.resetCombatLogDirectory = resetCombatLogDirectory;
-        this.buildDiagnosticReport = buildDiagnosticReport;
+        this.exportDiagnosticReport = exportDiagnosticReport;
         this.discoverPlugins = discoverPlugins;
         this.openPluginConfiguration = openPluginConfiguration;
         this.getBundledActResourceStatus = getBundledActResourceStatus;
@@ -393,7 +396,14 @@ public sealed partial class ControlCenterWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Clamp(alpha, 0.01f, 1));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 10);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1);
-        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(0.34f, 0.29f, 0.18f, 0.85f));
+        // The 1.0 header, sidebar and page area run to the window edges and pad themselves.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        // Indigo of the DACT logo (#35406B); other skins substitute their own border.
+        DactTheme.PushStyleColor(ImGuiCol.Border, new Vector4(.208f, .251f, .420f, 1));
+        // The window still resizes from its corner, but the design has no visible grip.
+        ImGui.PushStyleColor(ImGuiCol.ResizeGrip, Vector4.Zero);
+        ImGui.PushStyleColor(ImGuiCol.ResizeGripHovered, DactTheme.Palette.Muted with { W = .25f });
+        ImGui.PushStyleColor(ImGuiCol.ResizeGripActive, DactTheme.Palette.Muted with { W = .4f });
         visibilityStylePushed = true;
         Flags = DactTheme.WindowFlags(Flags);
     }
@@ -402,8 +412,8 @@ public sealed partial class ControlCenterWindow : Window
     {
         if (visibilityStylePushed)
         {
-            ImGui.PopStyleColor();
-            ImGui.PopStyleVar(3);
+            ImGui.PopStyleColor(4);
+            ImGui.PopStyleVar(4);
             visibilityStylePushed = false;
         }
     }
@@ -431,26 +441,36 @@ public sealed partial class ControlCenterWindow : Window
         try
         {
             var cloudSnapshot = cloud.GetSnapshot();
+            BeginSplashIfFirstOpen();
+            // AI replies keep arriving while another page is open.
+            PumpAiResults();
             // Only the control centre carries the plate ornaments; they stay anchored to this
             // window (not the friends drawer) and follow its fade through the style alpha.
             if (DactTheme.Palette.Ultimate is { } ultimate)
                 UltimateSkins.DrawOrnaments(ImGui.GetBackgroundDrawList(), ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(),
                     ultimate, Math.Max(.75f, ImGui.GetFontSize() / 17f), ImGui.GetTime(), DactTheme.UltimateAssets);
             Friends?.SetAnchor(ImGui.GetWindowPos(), ImGui.GetWindowSize(), ImGui.GetStyle().Alpha, ImGuiP.GetCurrentWindow().ID);
-            DrawWindowChrome(cloudSnapshot);
-            DrawCloudQuickPopup(cloudSnapshot);
+            DactTheme.DrawGameWindow();
             if (!cloudSnapshot.IsSignedIn || cloudSnapshot.CanUseDact) cloudDiscordCodeRequestedFor = null;
             if (!cloudSnapshot.CanUseDact)
             {
                 skinSettings.Close();
-                ImGui.Spacing();
-                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, PageContentHeight()), false,
-                        DactTheme.Palette.Light ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None))
+                DactUi.BeginFrame();
+                var headerHeight = 48 * DactUi.S;
+                DrawShellHeader(cloudSnapshot, ImGui.GetWindowPos(), ImGui.GetWindowSize().X, headerHeight);
+                DrawCloudQuickPopup(cloudSnapshot);
+                ImGui.SetCursorPos(new Vector2(0, headerHeight));
+                ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(18) * DactUi.S);
+                if (ImGui.BeginChild("account-authentication-gate", new Vector2(-1, -1), false,
+                        ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.AlwaysUseWindowPadding))
                 {
                     if (cloudSnapshot.IsSignedIn) DrawDiscordBindingGate(cloudSnapshot);
                     else DrawAuthenticationGate(cloudSnapshot);
                 }
                 ImGui.EndChild();
+                ImGui.PopStyleVar();
+                // Before sign-in the splash lands on the sign-in page's big logo.
+                DrawSplashOverlay(false);
                 return;
             }
 
@@ -460,19 +480,21 @@ public sealed partial class ControlCenterWindow : Window
                 // of dropping the user onto the previously selected functional page.
                 selectedPage = Page.Cloud;
             }
-            DrawPageTabs();
-            ImGui.Spacing();
             if (selectedPage != Page.Diagnostics) skinSettings.Close();
-            var pageFlags = skinSettings.IsOpen ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None;
-            if (DactTheme.Palette.Light) pageFlags |= ImGuiWindowFlags.NoBackground;
-            if (ImGui.BeginChild("control-center-page-content", new Vector2(-1, PageContentHeight()), true, pageFlags))
+            // 好友 needs a signed-in account; its sub-page always reopens on the friend list.
+            if (selectedPage == Page.Friends && (Friends is null || !cloudSnapshot.CanUseDact)) selectedPage = Page.Overview;
+            if (selectedPage != Page.Friends) friendNotificationsPage = false;
+            if (selectedPage != Page.Diagnostics) scenesPage = false;
+            DrawShell(cloudSnapshot, () =>
             {
-                if (resetSettingsScroll) { ImGui.SetScrollY(0); resetSettingsScroll = false; }
                 var hostConfigurationChanged = false;
                 var changed = selectedPage switch
                 {
                     Page.Overview => DrawOverview(),
                     Page.Meter => DrawMeter(),
+                    Page.History => DrawHistoryPage(),
+                    Page.Friends => DrawFriendsPage(),
+                    Page.Ai => DrawAiPage(cloudSnapshot),
                     Page.Overlays => DrawOverlays(),
                     Page.Extensions => DrawExtensions(out hostConfigurationChanged),
                     Page.Cloud => DrawCloud(),
@@ -489,8 +511,10 @@ public sealed partial class ControlCenterWindow : Window
                 {
                     applyPermissionChanges();
                 }
-            }
-            ImGui.EndChild();
+            });
+            DrawCloudQuickPopup(cloudSnapshot);
+            DrawTour(cloudSnapshot);
+            DrawSplashOverlay(true);
         }
         finally
         {
@@ -515,33 +539,24 @@ public sealed partial class ControlCenterWindow : Window
 
     private void DrawHistoryLimitEditor()
     {
+        var s = DactUi.S;
         var draft = historyLimitDraft ?? configuration.HistoryLimit;
-        if (ImGui.SliderInt(text.Get("历史记录上限", "History limit"), ref draft, 1, 200))
-        {
-            historyLimitDraft = draft;
-        }
-
-        ImGui.TextDisabled(text.Get(
-            "战斗历史、战斗 JSON 与 Network 日志分别保留此数量。",
-            "Encounter history, encounter JSON, and Network logs each keep this many."));
-        if (historyLimitDraft is not { } pending || pending == configuration.HistoryLimit)
-        {
-            historyLimitDraft = null;
-            return;
-        }
-
+        DactUi.BeginField(text.Get("历史记录上限", "History limit"));
+        if (DactUi.SliderInt("history-limit", ref draft, 1, 200, text.Format($"{draft} 场", $"{draft} fights"))) historyLimitDraft = draft;
         // This page shares the same destructive setting as advanced settings, so both
         // entry points require the same explicit confirmation contract.
-        if (DactTheme.SmallButton(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm")) &&
-            applyHistoryLimit(pending))
+        if (historyLimitDraft is { } pending && pending != configuration.HistoryLimit)
         {
-            historyLimitDraft = null;
+            if (DactUi.Button(text.Get("确定###history-limit-confirm", "Confirm###history-limit-confirm"), ButtonKind.Primary) &&
+                applyHistoryLimit(pending))
+                historyLimitDraft = null;
+            ImGui.SameLine(0, 8 * s);
+            if (DactUi.Button(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel"))) historyLimitDraft = null;
         }
-        ImGui.SameLine();
-        if (DactTheme.SmallButton(text.Get("取消###history-limit-cancel", "Cancel###history-limit-cancel")))
-        {
-            historyLimitDraft = null;
-        }
+        else historyLimitDraft = null;
+        DactUi.EndField(text.Get(
+            "战斗历史、战斗 JSON 与 Network 日志分别保留此数量。",
+            "Encounter history, encounter JSON, and Network logs each keep this many."));
     }
 
     private string FormatCactbotStatus()
@@ -644,181 +659,88 @@ public sealed partial class ControlCenterWindow : Window
         discoveryNoticeUntil = Environment.TickCount64 + 8000;
         saveConfiguration();
     }
+    // 主页 (screens.js homeContent): status tiles, quick actions, basic settings in two columns.
+    // "显示 ACT 快捷按钮" moved to 设置 · 通用 in 1.0.
     private bool DrawOverview()
     {
-        DrawPageHeader(
-            text.Get("概览", "Overview"),
-            text.Get("常用状态和入口集中在这里。", "Status and common actions in one place."),
-            showDivider: false);
+        var palette = DactTheme.Palette;
+        DactUi.PageHeader(
+            text.Get("主页", "Home"),
+            text.Get("常用状态和入口集中在这里。", "Status and common actions in one place."));
 
-        var cardContentWidth = Math.Max(
-            1,
-            ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().WindowPadding.X * 2));
-        var parserMessageHeight = ImGui.CalcTextSize(
-            parserStatus.Message,
-            false,
-            cardContentWidth).Y;
-        var parserCardHeight =
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            (ImGui.GetTextLineHeightWithSpacing() *
-             (string.IsNullOrWhiteSpace(parserStatus.Detail) ? 2 : 3)) +
-            parserMessageHeight +
-            ImGui.GetStyle().ItemSpacing.Y;
-        if (BrandedWindowChrome.BeginGoldCard(
-                "overview-parser-card",
-                parserCardHeight,
-                allowScrolling: false))
-        {
-            DactTheme.TextColored(Gold, text.Get("解析器", "Parser"));
-            DactTheme.TextColored(IceBlue, LocalizeState(parserStatus.State));
-            ImGui.TextWrapped(parserStatus.Message);
-            if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
-            {
-                ImGui.TextDisabled(parserStatus.Detail);
-            }
-        }
-        BrandedWindowChrome.EndGoldCard();
+        var running = parserStatus.State == ParserState.Running;
+        var plugins = discoverPlugins();
+        var enabledPlugins = plugins.Count(plugin => plugin.Enabled);
+        var cloudSnapshot = cloud.GetSnapshot();
+        var (cloudLabel, cloudColor) = ResolveCloudStatus(cloudSnapshot);
+        var friendsSnapshot = Friends?.Snapshot;
+        var onlineFriends = friendsSnapshot?.Friends?.OnlineCount ?? 0;
+        var unreadMessages = friendsSnapshot?.Conversations.Values.Where(c => c.Unread).Sum(c => Math.Max(1, c.UnreadCount)) ?? 0;
+        DactUi.StatTiles(
+            new("pulse", text.Get("解析器", "Parser"), LocalizeState(parserStatus.State), running ? palette.Accent : palette.Gold,
+                running ? text.Get("两个系统插件已加载", "Both system plugins loaded") : parserStatus.Message),
+            new("plug", text.Get("扩展", "Extensions"), text.Format($"{enabledPlugins} / {plugins.Count} 已启用", $"{enabledPlugins} / {plugins.Count} enabled"), palette.Text,
+                enabledPlugins == plugins.Count
+                    ? text.Get("全部已启用", "All enabled")
+                    : text.Format($"{plugins.Count - enabledPlugins} 个已停用", $"{plugins.Count - enabledPlugins} disabled")),
+            new("cloud", text.Get("云同步", "Cloud sync"), cloudLabel, cloudColor,
+                cloudSnapshot.Backups.Count == 0
+                    ? text.Get("自动同步已开启", "Automatic sync on")
+                    : text.Format($"云端保留 {cloudSnapshot.Backups.Count} 个版本", $"{cloudSnapshot.Backups.Count} cloud versions kept")),
+            new("users", text.Get("好友", "Friends"), text.Format($"{onlineFriends} 人在线", $"{onlineFriends} online"), palette.Text,
+                unreadMessages == 0
+                    ? text.Get("没有未读消息", "No unread messages")
+                    : text.Format($"{unreadMessages} 条未读消息", $"{unreadMessages} unread messages")));
 
-        ImGui.Spacing();
-        var overviewScale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
+        DactUi.BeginCard("home-quick-actions", text.Get("快捷入口", "Quick actions"));
         var meterVisible = configuration.Meter.IsVisible;
-        var actionLabels = new[] {
-            meterVisible ? text.Get("关闭战斗统计", "Close Combat Meter") : text.Get("打开战斗统计", "Open Combat Meter"),
-            text.Get("战斗历史", "Encounter history"),
-            isStatusVisible() ? text.Get("关闭运行状态", "Close Runtime status") : text.Get("运行状态", "Runtime status"),
-            text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs") };
-        var actionWidths = actionLabels.Select((label, index) => Math.Min(cardContentWidth,
-            Math.Max((index == 3 ? 230 : 150) * overviewScale, ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2))).ToArray();
-        var actionHeight = Math.Max(36 * overviewScale, DactTheme.ButtonHeight);
-        var actionRows = 2; var rowWidth = actionWidths[0];
-        // Size the card from the same wrapping rule used by the buttons; fixed
-        // Chinese widths clipped translations and the extra rows at larger fonts.
-        for (var i = 1; i < 3; i++)
+        var meterLabel = meterVisible ? text.Get("关闭战斗统计", "Close Combat Meter") : text.Get("打开战斗统计", "Open Combat Meter");
+        if (DactUi.Button(meterLabel + "##home-meter", ButtonKind.Primary, "meter")) setMeterVisible(!meterVisible);
+        var historyLabel = text.Get("战斗记录", "Encounter history");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(historyLabel, icon: "history"));
+        if (DactUi.Button(historyLabel + "##home-history", icon: "history"))
         {
-            if (rowWidth + ImGui.GetStyle().ItemSpacing.X + actionWidths[i] > cardContentWidth)
-            { actionRows++; rowWidth = actionWidths[i]; }
-            else rowWidth += ImGui.GetStyle().ItemSpacing.X + actionWidths[i];
+            selectedPage = Page.History;
+            historyTab = 0;
         }
-        var quickActionsCardHeight =
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            ImGui.GetTextLineHeightWithSpacing() +
-            actionRows * (actionHeight + ImGui.GetStyle().ItemSpacing.Y) +
-            (string.IsNullOrWhiteSpace(combatLogFolderFeedback)
-                ? 0
-                : ImGui.CalcTextSize(combatLogFolderFeedback, false, cardContentWidth).Y + ImGui.GetStyle().ItemSpacing.Y);
-        if (BrandedWindowChrome.BeginGoldCard(
-                "overview-quick-actions-card",
-                quickActionsCardHeight,
-                allowScrolling: false))
-        {
-            DactTheme.TextColored(Gold, text.Get("快捷入口", "Quick actions"));
-            if (meterVisible)
-            {
-                PushOpenWindowButtonStyle();
-            }
-            if (DactTheme.Button(
-                    actionLabels[0], new Vector2(actionWidths[0], actionHeight)))
-            {
-                setMeterVisible(!meterVisible);
-            }
-            if (meterVisible)
-            {
-                PopOpenWindowButtonStyle();
-            }
-            OverlaySameLineIfFits(actionWidths[1]);
-            if (DactTheme.Button(actionLabels[1], new Vector2(actionWidths[1], actionHeight)))
-            {
-                openHistory();
-            }
-            OverlaySameLineIfFits(actionWidths[2]);
-            DrawStatusWindowToggleButton(new Vector2(actionWidths[2], actionHeight));
+        var statusLabel = isStatusVisible() ? text.Get("关闭运行状态", "Close Runtime status") : text.Get("运行状态", "Runtime status");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(statusLabel, icon: "pulse"));
+        if (DactUi.Button(statusLabel + "##home-status", icon: "pulse")) setStatusVisible(!isStatusVisible());
+        var logsLabel = text.Get("打开 FFLogs 上传日志", "Open FFLogs upload logs");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(logsLabel, icon: "folder"));
+        if (DactUi.Button(logsLabel + "##home-logs", icon: "folder")) OpenCombatLogDirectoryForUpload();
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Get(
+                "打开 FFLogs 上传使用的原始 Network 日志目录，并把文件夹路径复制到剪贴板。",
+                "Opens the raw Network log directory used for FFLogs uploads and copies its folder path to the clipboard."));
+        if (!string.IsNullOrWhiteSpace(combatLogFolderFeedback))
+            DactUi.Wrapped(combatLogFolderFeedback, combatLogFolderFeedbackIsError ? DactUi.Danger : palette.Accent, DactFonts.Small);
+        DactUi.EndCard();
 
-            if (DactTheme.Button(
-                    actionLabels[3], new Vector2(actionWidths[3], actionHeight)))
-            {
-                OpenCombatLogDirectoryForUpload();
-            }
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip(text.Get(
-                    "打开 FFLogs 上传使用的原始 Network 日志目录，并把文件夹路径复制到剪贴板。",
-                    "Opens the raw Network log directory used for FFLogs uploads and copies its folder path to the clipboard."));
-            }
-            if (!string.IsNullOrWhiteSpace(combatLogFolderFeedback))
-            {
-                ImGui.PushTextWrapPos(0);
-                DactTheme.TextColored(
-                    combatLogFolderFeedbackIsError
-                        ? new Vector4(0.95f, 0.45f, 0.40f, 1)
-                        : IceBlue,
-                    combatLogFolderFeedback);
-                ImGui.PopTextWrapPos();
-            }
-        }
-        BrandedWindowChrome.EndGoldCard();
-
-        ImGui.Spacing();
         var changed = false;
-        var generalHint = text.Get(
-            "快捷按钮：左键设置、右键战斗统计、按住中键拖动。",
-            "Quick button: left settings, right Combat Meter, hold middle mouse to move.");
-        var regionHint = text.Get(
-            "无法读取游戏区域，暂按国际服处理 · 可手动选择 · 语言：简体中文",
-            "Game region unavailable; using Global · Manual selection is available · Language: Simplified Chinese");
-        var generalCardHeight =
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            ImGui.GetTextLineHeightWithSpacing() +
-            (ImGui.GetFrameHeightWithSpacing() * 7) +
-            ImGui.CalcTextSize(regionHint, false, cardContentWidth).Y +
-            ImGui.CalcTextSize(generalHint, false, cardContentWidth).Y +
-            (ImGui.GetStyle().ItemSpacing.Y * 2);
-        if (BrandedWindowChrome.BeginGoldCard(
-                "overview-general-card",
-                generalCardHeight,
-                allowScrolling: false))
+        DactUi.BeginCard("home-general", text.Get("基础设置", "General"));
+        if (DactUi.BeginGrid("home-general-grid", 16))
         {
-            DactTheme.TextColored(Gold, text.Get("基础设置", "General"));
-            changed |= Checkbox(
-                text.Get("启用解析", "Enable parsing"),
-                configuration.EnableParsing,
-                value => configuration.EnableParsing = value);
-            changed |= Checkbox(
-                text.Get("自动启动解析器", "Auto start parser"),
-                configuration.AutoStartParser,
-                value => configuration.AutoStartParser = value);
-            GameRegionSelector.Draw(
-                text,
-                getGameRegionSelection(),
-                setGameRegionMode);
-            changed |= ParserScopeSelector.Draw(text, configuration);
+            var parsing = configuration.EnableParsing;
+            if (DactUi.ToggleRow(text.Get("启用解析", "Enable parsing"), ref parsing)) { configuration.EnableParsing = parsing; changed = true; }
+            GameRegionSelector.DrawField(text, getGameRegionSelection(), setGameRegionMode);
             var simplifiedMode = configuration.SimplifiedModeEnabled;
-            if (DactTheme.Checkbox(text.Get("精简模式", "Simplified mode"), ref simplifiedMode))
-            {
-                setSimplifiedMode(simplifiedMode);
-            }
+            if (DactUi.ToggleRow(text.Get("精简模式", "Simplified mode"), ref simplifiedMode)) setSimplifiedMode(simplifiedMode);
             if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip(text.Get(
+                DactUi.Tooltip(text.Get(
                     "只保留解析和战斗统计；网页悬浮窗、扩展插件及其他 DACT 窗口会暂时关闭。可用 /actcompat simple off 退出。",
                     "Keeps only parsing and the combat meter. Web overlays, extensions, and other DACT windows are temporarily closed. Use /actcompat simple off to exit."));
-            }
-            var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
-            if (DactTheme.WrappedCheckbox(
-                    text.Get("游戏失去焦点时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"),
-                    ref hideWhenUnfocused))
-            {
-                setHideHtmlOverlaysWhenUnfocused(hideWhenUnfocused);
-            }
-            changed |= Checkbox(
-                text.Get("显示 ACT 快捷按钮", "Show ACT quick button"),
-                configuration.ShowLauncherButton,
-                value => configuration.ShowLauncherButton = value);
-            ImGui.PushTextWrapPos(0);
-            ImGui.TextDisabled(generalHint);
-            ImGui.PopTextWrapPos();
-        }
-        BrandedWindowChrome.EndGoldCard();
 
+            DactUi.NextColumn();
+            var autoStart = configuration.AutoStartParser;
+            if (DactUi.ToggleRow(text.Get("自动启动解析器", "Auto start parser"), ref autoStart)) { configuration.AutoStartParser = autoStart; changed = true; }
+            changed |= ParserScopeSelector.DrawField(text, configuration);
+            var hideWhenUnfocused = configuration.HideHtmlOverlaysWhenGameUnfocused;
+            if (DactUi.ToggleRow(text.Get("游戏失焦时隐藏网页悬浮窗", "Hide web overlays when the game is unfocused"), ref hideWhenUnfocused))
+                setHideHtmlOverlaysWhenUnfocused(hideWhenUnfocused);
+            DactUi.EndGrid();
+        }
+        DactUi.EndCard();
         return changed;
     }
 
@@ -844,76 +766,85 @@ public sealed partial class ControlCenterWindow : Window
         }
     }
 
+    // 战斗统计 (screens.js meterScreen): the 榜单 and FFLogs cards side by side.
     private bool DrawMeter()
     {
-        DrawPageHeader(
-            text.Get("战斗统计", "Combat Meter"),
-            text.Get("仅调整内置战斗统计的显示，不影响 Cactbot 或 HTML 悬浮窗。", "These options affect only the built-in Combat Meter, not Cactbot or HTML overlays."));
-
+        var s = DactUi.S;
         var changed = false;
-        var visible = configuration.Meter.IsVisible;
-        if (DactTheme.Checkbox(text.Get("显示战斗统计", "Show Combat Meter"), ref visible))
-        {
-            setMeterVisible(visible);
-        }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("定位到战斗统计", "Open Combat Meter window")))
-        {
-            openMeter();
-        }
-
-        DactTheme.TextColored(IceBlue, text.Get("榜单模板", "Meter template"));
-        var activeKind = configuration.Meter.ActiveWindowKind;
-        ImGui.SetNextItemWidth(260);
-        if (DactTheme.BeginCombo("##meter-template", MeterKindLabel(activeKind)))
-        {
-            foreach (var kind in Enum.GetValues<MeterWindowKind>())
+        var showLabel = text.Get("显示战斗统计", "Show Combat Meter");
+        var locateLabel = text.Get("定位到战斗统计", "Open Combat Meter window");
+        DactUi.PageHeader(
+            text.Get("战斗统计", "Combat Meter"),
+            text.Get("仅调整内置战斗统计的显示，不影响 Cactbot 或 HTML 悬浮窗。", "These options affect only the built-in Combat Meter, not Cactbot or HTML overlays."),
+            DactUi.InlineToggleWidth(showLabel) + 12 * s + DactUi.ButtonWidth(locateLabel, icon: "target"),
+            () =>
             {
-                if (ImGui.Selectable(MeterKindLabel(kind), kind == activeKind))
-                {
-                    configuration.Meter.ActivateWindow(kind);
-                    changed = true;
-                }
-            }
-            ImGui.EndCombo();
-        }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("自定义", "Customize")))
+                var visible = configuration.Meter.IsVisible;
+                if (DactUi.InlineToggle(showLabel, ref visible)) setMeterVisible(visible);
+                ImGui.SameLine(0, 12 * s);
+                if (DactUi.Button(locateLabel + "##meter-locate", icon: "target")) openMeter();
+            });
+
+        if (DactUi.BeginGrid("meter-grid", 14))
         {
-            openMeterStyleEditor();
+            changed |= DrawMeterRankingCard();
+            DactUi.NextColumn();
+            changed |= DrawFflogsSettings();
+            DactUi.EndGrid();
         }
-        ImGui.TextDisabled(text.Get(
+        return changed;
+    }
+
+    private bool DrawMeterRankingCard()
+    {
+        var s = DactUi.S;
+        var changed = false;
+        DactUi.BeginCard("meter-ranking", null);
+        var resetLabel = text.Get("重置当前战斗…", "Reset current encounter…");
+        DactUi.CardTitleRow(text.Get("榜单", "Meter"), null, DactUi.ButtonWidth(resetLabel, ButtonKind.Danger, "reset"), () =>
+        {
+            if (DactUi.Button(resetLabel + "##meter-reset", ButtonKind.Danger, "reset"))
+            {
+                resetEncounterConfirmationExpiresAt = Environment.TickCount64 + ResetConfirmationMilliseconds;
+                DactUi.OpenDialog(ResetEncounterPopupId);
+            }
+            // The confirmation shares this card's ID scope, where the popup was opened.
+            DrawResetEncounterConfirmation();
+        });
+
+        // 榜单模板 is a segmented control now (was a dropdown); 自定义… opens the style editor.
+        DactUi.BeginField(text.Get("榜单模板", "Meter template"));
+        var kinds = Enum.GetValues<MeterWindowKind>();
+        var kindIndex = Array.IndexOf(kinds, configuration.Meter.ActiveWindowKind);
+        var customizeLabel = text.Get("自定义…", "Customize…");
+        var segmentWidth = ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(customizeLabel) - 8 * s;
+        if (DactUi.Segmented("meter-template", kinds.Select(MeterKindLabel).ToArray(), ref kindIndex, segmentWidth) && kindIndex >= 0)
+        {
+            configuration.Meter.ActivateWindow(kinds[kindIndex]);
+            changed = true;
+        }
+        ImGui.SameLine(0, 8 * s);
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + s);
+        if (DactUi.Button(customizeLabel + "##meter-customize")) openMeterStyleEditor();
+        DactUi.EndField(text.Get(
             "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
             "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots."));
 
-        ImGui.SetNextItemWidth(260);
-        changed |= MeterDisplayScopeSelector.Draw(text, configuration);
-        changed |= EncounterResetSelector.Draw(text, configuration);
+        changed |= MeterDisplayScopeSelector.DrawField(text, configuration);
+        changed |= EncounterResetSelector.DrawField(text, configuration);
 
-        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.38f, 0.10f, 0.12f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.58f, 0.15f, 0.17f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.68f, 0.18f, 0.20f, 1));
-        if (DactTheme.Button(text.Get("重置当前战斗…", "Reset current encounter…")))
-        {
-            resetEncounterConfirmationExpiresAt =
-                Environment.TickCount64 + ResetConfirmationMilliseconds;
-            ImGui.OpenPopup(ResetEncounterPopupId);
-        }
-        ImGui.PopStyleColor(3);
-        DrawResetEncounterConfirmation();
-
+        DactUi.BeginField(text.Get("刷新间隔", "Refresh interval"));
         var refreshInterval = configuration.Meter.RefreshIntervalMs;
-        if (ImGui.SliderInt(
-                text.Get("刷新间隔（毫秒）", "Refresh interval (ms)"),
-                ref refreshInterval,
-                250,
-                2000))
+        if (DactUi.SliderInt("meter-refresh-interval", ref refreshInterval, 250, 2000,
+                text.Format($"{refreshInterval} 毫秒", $"{refreshInterval} ms")))
         {
             configuration.Meter.RefreshIntervalMs = refreshInterval;
             changed = true;
         }
+        DactUi.EndField();
+
         changed |= DrawPlayerIdentityControls();
-        changed |= DrawFflogsSettings();
+        DactUi.EndCard();
         return changed;
     }
 
@@ -926,55 +857,45 @@ public sealed partial class ControlCenterWindow : Window
 
     private void DrawResetEncounterConfirmation()
     {
-        ImGui.SetNextWindowSize(new Vector2(430, 0), ImGuiCond.Appearing);
-        if (!ImGui.BeginPopupModal(
-                ResetEncounterPopupId,
-                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
-        {
-            return;
-        }
-
+        if (!DactUi.BeginDialog(ResetEncounterPopupId, 430)) return;
         var now = Environment.TickCount64;
+        // Expiry starts the fade-out; a click during the fade no longer counts as a confirmation.
         if (IsResetConfirmationExpired(resetEncounterConfirmationExpiresAt, now))
         {
             resetEncounterConfirmationExpiresAt = 0;
-            ImGui.CloseCurrentPopup();
-            ImGui.EndPopup();
-            return;
+            DactUi.CloseDialog(ResetEncounterPopupId);
         }
-
-        var secondsRemaining = Math.Max(
-            0,
-            (int)Math.Ceiling((resetEncounterConfirmationExpiresAt - now) / 1000.0));
-        ImGui.TextWrapped(text.Get(
+        var live = resetEncounterConfirmationExpiresAt > 0;
+        var secondsRemaining = live ? Math.Max(0, (int)Math.Ceiling((resetEncounterConfirmationExpiresAt - now) / 1000.0)) : 0;
+        DactUi.Text(text.Get("重置当前战斗", "Reset current encounter"), size: DactFonts.H2);
+        DactUi.Wrapped(text.Get(
             "这会清空当前战斗统计，但不会删除已经保存的历史记录。确认后才能执行。",
-            "This clears the current encounter but does not delete saved history. It runs only after confirmation."));
-        ImGui.TextDisabled(text.Format(
+            "This clears the current encounter but does not delete saved history. It runs only after confirmation."), DactTheme.Palette.Text);
+        DactUi.Hint(text.Format(
             $"确认窗口将在 {secondsRemaining} 秒后自动关闭。",
             $"This confirmation closes automatically in {secondsRemaining} seconds."));
-        ImGui.Spacing();
-
-        DactTheme.PushStyleColor(ImGuiCol.Button, new Vector4(0.48f, 0.10f, 0.12f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.68f, 0.16f, 0.18f, 1));
-        DactTheme.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.20f, 0.22f, 1));
-        var confirmed = DactTheme.Button(text.Get("确认重置", "Confirm reset"));
-        ImGui.PopStyleColor(3);
-        ImGui.SameLine();
-        var cancelled = DactTheme.Button(text.Get("取消", "Cancel"));
-
-        if (confirmed)
+        if (DialogFooter(text.Get("确认重置", "Confirm reset"), "reset-encounter", ButtonKind.Danger) is { } confirmed && live)
         {
-            resetCurrentEncounter();
+            if (confirmed) resetCurrentEncounter();
             resetEncounterConfirmationExpiresAt = 0;
-            ImGui.CloseCurrentPopup();
+            DactUi.CloseDialog(ResetEncounterPopupId);
         }
-        else if (cancelled)
-        {
-            resetEncounterConfirmationExpiresAt = 0;
-            ImGui.CloseCurrentPopup();
-        }
+        DactUi.EndDialog(ResetEncounterPopupId);
+    }
 
-        ImGui.EndPopup();
+    // DACT dialog footer: 取消 then the main action, right-aligned. Returns true for the action,
+    // false for 取消 and null when neither was clicked this frame.
+    private bool? DialogFooter(string action, string id, ButtonKind kind = ButtonKind.Primary, string? cancelLabel = null)
+    {
+        var s = DactUi.S;
+        var cancel = cancelLabel ?? text.Get("取消", "Cancel");
+        var total = DactUi.ButtonWidth(cancel) + 8 * s + DactUi.ButtonWidth(action, kind);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, ImGui.GetContentRegionAvail().X - total));
+        bool? result = null;
+        if (DactUi.Button(cancel + "##dialog-cancel-" + id)) result = false;
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(action + "##dialog-confirm-" + id, kind)) result = true;
+        return result;
     }
 
     internal static bool IsResetConfirmationExpired(long expiresAt, long now)
@@ -1073,27 +994,17 @@ public sealed partial class ControlCenterWindow : Window
     private bool DrawCustomHtmlOverlayCreator()
     {
         var changed = false;
-        // A full-width input leaves no room for an inline translated label.
-        // Separate labels preserve the old hidden IDs and remain readable at large fonts.
-        ImGui.TextUnformatted(text.Get("名称###custom-overlay-name", "Name###custom-overlay-name").Split("##", 2)[0]);
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText(
-            "###custom-overlay-name",
-            ref customOverlayName,
-            80);
-        ImGui.TextUnformatted(text.Get("网址###custom-overlay-url", "URL###custom-overlay-url").Split("##", 2)[0]);
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText(
-            "###custom-overlay-url",
-            ref customOverlayUrl,
-            2048);
-        ImGui.PushTextWrapPos(0);
-        ImGui.TextDisabled(text.Get(
+        // Separate field labels keep the old hidden IDs and stay readable at large fonts.
+        DactUi.BeginField(text.Get("名称###custom-overlay-name", "Name###custom-overlay-name").Split("##", 2)[0]);
+        DactUi.Input("custom-overlay-name", ref customOverlayName, text.Get("例如：我的计时器", "e.g. My timer"), 80);
+        DactUi.EndField();
+        DactUi.BeginField(text.Get("网址###custom-overlay-url", "URL###custom-overlay-url").Split("##", 2)[0]);
+        DactUi.Input("custom-overlay-url", ref customOverlayUrl, "https://", 2048);
+        DactUi.EndField(text.Get(
             "支持 http、https 与 file 地址；只添加你信任的悬浮窗页面。",
             "Supports http, https, and file URLs. Only add overlay pages you trust."));
-        ImGui.PopTextWrapPos();
 
-        if (DactTheme.Button(text.Get("创建并打开", "Create and open")))
+        if (DactUi.Button(text.Get("创建并打开", "Create and open") + "##custom-overlay-create", ButtonKind.Primary))
         {
             var name = customOverlayName.Trim();
             var templates = getOverlayTemplates();
@@ -1134,13 +1045,7 @@ public sealed partial class ControlCenterWindow : Window
         }
 
         if (!string.IsNullOrWhiteSpace(customOverlayFeedback))
-        {
-            DactTheme.TextColored(
-                customOverlayFeedbackIsError
-                    ? new Vector4(0.96f, 0.42f, 0.38f, 1)
-                    : new Vector4(0.45f, 0.88f, 0.62f, 1),
-                customOverlayFeedback);
-        }
+            DactUi.Wrapped(customOverlayFeedback, customOverlayFeedbackIsError ? DactUi.Danger : DactTheme.Palette.Accent, DactFonts.Small);
 
         return changed;
     }
@@ -1151,159 +1056,262 @@ public sealed partial class ControlCenterWindow : Window
         customOverlayFeedbackIsError = isError;
     }
 
+    // Host snapshots (main, Matcha, generic) for the per-extension run state; set by the plugin.
+    internal Func<IReadOnlyList<HostSupervisorSnapshot>>? HostSnapshots { get; set; }
+
+    // 扩展 (screens.js extensionsScreen): system plugins, then every compatibility extension as a
+    // row with its run state, permissions and configuration.
     private bool DrawExtensions(out bool hostConfigurationChanged)
     {
-        DrawPageHeader(
+        var s = DactUi.S;
+        var installLabel = text.Get("安装 DLL / ZIP", "Install DLL / ZIP");
+        var folderLabel = text.Get("打开文件夹", "Open folder");
+        var updatesLabel = text.Get("检查更新与来源", "Check updates and sources");
+        DactUi.PageHeader(
             text.Get("扩展", "Extensions"),
-            text.Get("系统插件与第三方 ACT 扩展保持原有运行方式。", "System plugins and third-party ACT extensions keep their existing runtime behavior."));
+            text.Get("系统插件与第三方 ACT 扩展保持原有运行方式。", "System plugins and third-party ACT extensions keep their existing runtime behavior."),
+            DactUi.ButtonWidth(installLabel, ButtonKind.Primary, "upload") + DactUi.ButtonWidth(folderLabel, icon: "folder") +
+            DactUi.ButtonWidth(updatesLabel, icon: "refresh") + 16 * s,
+            () =>
+            {
+                if (DactUi.Button(installLabel + "##ext-install", ButtonKind.Primary, "upload")) selectPluginPackage();
+                ImGui.SameLine(0, 8 * s);
+                if (DactUi.Button(folderLabel + "##ext-folder", icon: "folder")) openPluginDirectory();
+                ImGui.SameLine(0, 8 * s);
+                if (DactUi.Button(updatesLabel + "##ext-updates", icon: "refresh")) checkBundledPluginUpdates();
+            });
+        if (getPluginInstallStatus().State != ThirdPartyPluginInstallState.Idle)
+        {
+            // Install progress sits in its own card; its failure and consent dialogs open from inside it.
+            DactUi.BeginCard("ext-install-status", null);
+            DrawPluginInstallStatus();
+            DactUi.EndCard();
+        }
 
         var changed = false;
-        changed |= Checkbox(
-            "FFXIV_ACT_Plugin",
-            configuration.EmbeddedPlugins.FfxivActPluginEnabled,
-            value => configuration.EmbeddedPlugins.FfxivActPluginEnabled = value);
-        changed |= Checkbox(
-            "OverlayPlugin",
-            configuration.EmbeddedPlugins.OverlayPluginEnabled,
-            value => configuration.EmbeddedPlugins.OverlayPluginEnabled = value);
-        ImGui.TextDisabled(text.Get(
+        DactUi.BeginCard("ext-system", text.Get("系统插件", "System plugins"));
+        var ffxiv = configuration.EmbeddedPlugins.FfxivActPluginEnabled;
+        var overlay = configuration.EmbeddedPlugins.OverlayPluginEnabled;
+        var start = ImGui.GetCursorScreenPos();
+        if (DactUi.Toggle("##ext-ffxiv", ref ffxiv)) { configuration.EmbeddedPlugins.FfxivActPluginEnabled = ffxiv; changed = true; }
+        var draw = ImGui.GetWindowDrawList();
+        DactUi.DrawText(draw, start + new Vector2(44 * s, -2 * s), 24 * s, "FFXIV_ACT_Plugin", DactTheme.Palette.Text);
+        var second = start + new Vector2(44 * s + DactUi.TextWidth("FFXIV_ACT_Plugin") + 24 * s, 0);
+        ImGui.SetCursorScreenPos(second);
+        if (DactUi.Toggle("##ext-overlay", ref overlay)) { configuration.EmbeddedPlugins.OverlayPluginEnabled = overlay; changed = true; }
+        DactUi.DrawText(draw, second + new Vector2(44 * s, -2 * s), 24 * s, "OverlayPlugin", DactTheme.Palette.Text);
+        ImGui.SetCursorScreenPos(start);
+        ImGui.Dummy(new Vector2(ImGui.GetContentRegionAvail().X, 20 * s));
+        DactUi.Hint(text.Get(
             "改变系统插件状态后需要重启解析器；兼容扩展启停后会自动重启独立 Host。",
             "Restart the parser after changing a system plugin; compatibility-extension changes restart the independent Host automatically."));
+        DactUi.EndCard();
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        DactTheme.TextColored(Gold, text.Get("兼容扩展", "Compatibility extensions"));
         var installedPlugins = discoverPlugins();
         hostConfigurationChanged = false;
-        changed |= DrawExtensionEntry(
-            installedPlugins,
-            "act.foxtts",
-            "ACT.FoxTTS",
-            text.Get("TTS 语音合成与播报", "TTS speech synthesis and announcements"),
-            out var extensionChanged);
-        hostConfigurationChanged |= extensionChanged;
-        changed |= DrawExtensionEntry(
-            installedPlugins,
-            "postnamazu",
-            text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
-            text.Get("游戏命令、标点与本地桥接", "Game commands, markers, and local bridge"),
-            out extensionChanged);
-        hostConfigurationChanged |= extensionChanged;
-        changed |= DrawExtensionEntry(
-            installedPlugins,
-            "triggernometry",
-            "Triggernometry",
-            text.Get("触发器、时间轴、TTS 与绘图", "Triggers, timelines, TTS, and drawing"),
-            out extensionChanged);
-        hostConfigurationChanged |= extensionChanged;
-        changed |= DrawExtensionEntry(
-            installedPlugins,
-            "silverdasher",
-            text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
-            text.Get(
-                "狩猎、临危受命与跨区状态提醒",
-                "Hunts, FATEs, and cross-world status alerts"),
-            out extensionChanged);
-        hostConfigurationChanged |= extensionChanged;
-        changed |= DrawExtensionEntry(
-            installedPlugins,
-            "matcha",
-            text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
-            text.Get(
-                "狩猎与临危受命提醒；默认自启动并独占专属 Host",
-                "Hunt and FATE alerts; starts by default in its dedicated Host"),
-            out extensionChanged);
-        hostConfigurationChanged |= extensionChanged;
-
-        var genericPlugins = installedPlugins
-            .Where(plugin => !ActPluginPackageInstaller.IsSpecializedPluginId(
-                plugin.Manifest.Id))
-            .ToArray();
-        changed |= DrawSimulantEntry(installedPlugins, out extensionChanged);
-        hostConfigurationChanged |= extensionChanged;
-        if (genericPlugins.Length > 0)
+        DactUi.BeginCard("ext-compat", null, gap: 4);
+        var autoLabel = text.Get("启动时自动检查更新", "Check for updates on startup");
+        var noticeLabel = text.Get("三方扩展声明", "Third-party extension notice");
+        var titleActions = DactUi.TextWidth(autoLabel, DactFonts.Small) + 6 * s + 13 * s + 8 * s + 34 * s + 8 * s +
+                           DactUi.ButtonWidth(noticeLabel, ButtonKind.Ghost);
+        DactUi.CardTitleRow(text.Get("兼容扩展", "Compatibility extensions"), null, titleActions, () =>
         {
-            ImGui.Spacing();
-            DactTheme.TextColored(
-                IceBlue,
-                text.Get("用户安装的普通 ACT 插件", "User-installed generic ACT plugins"));
-            ImGui.TextDisabled(text.Get(
-                "这些插件共用一个按需启动的通用 Host，不会为每个插件创建常驻进程。",
-                "These plugins share one on-demand generic Host; no persistent process is created per plugin."));
-            foreach (var plugin in genericPlugins)
+            var at = ImGui.GetCursorScreenPos();
+            var titleDraw = ImGui.GetWindowDrawList();
+            DactUi.DrawText(titleDraw, at, 30 * s, autoLabel, DactTheme.Palette.Muted, DactFonts.Small);
+            var helpAt = at + new Vector2(DactUi.TextWidth(autoLabel, DactFonts.Small) + 6 * s, 8.5f * s);
+            ImGui.SetCursorScreenPos(helpAt);
+            ImGui.InvisibleButton("##ext-auto-help", new Vector2(13 * s));
+            DactIcons.Draw(titleDraw, "help", helpAt, 13 * s, ImGui.IsItemHovered() ? DactTheme.Palette.Text : DactTheme.Palette.Muted);
+            if (ImGui.IsItemHovered())
+                DactUi.Tooltip(text.Get(
+                    "关闭后仍可使用上方按钮手动检查；不会影响 Dalamud 自身的插件更新。",
+                    "When disabled, the button above still checks manually; Dalamud's own plugin updates are unaffected."));
+            ImGui.SetCursorScreenPos(new Vector2(helpAt.X + 21 * s, at.Y + 5 * s));
+            var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
+            if (DactUi.Toggle("##ext-auto-check", ref autoCheckUpdates))
             {
-                changed |= DrawGenericExtensionEntry(plugin, out extensionChanged);
-                hostConfigurationChanged |= extensionChanged;
+                configuration.AutoCheckBundledPluginUpdates = autoCheckUpdates;
+                changed = true;
             }
-        }
-        DrawGenericDeleteModal();
+            ImGui.SetCursorScreenPos(new Vector2(helpAt.X + 21 * s + 42 * s, at.Y));
+            if (DactUi.Button(noticeLabel + "##ext-notice", ButtonKind.Ghost)) openBundledPluginNotice();
+        });
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        DactTheme.TextColored(Gold, text.Get("扩展管理", "Extension management"));
-        if (DactTheme.Button(text.Get("安装 DLL / ZIP", "Install DLL / ZIP")))
+        var first = true;
+        void Separator()
         {
-            selectPluginPackage();
+            if (!first) DactUi.Divider();
+            first = false;
         }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("打开扩展文件夹", "Open extension folder")))
+        foreach (var (id, name, description, capabilities) in new (string, string, string, IReadOnlyList<ActCapability>?)[]
+                 {
+                     ("act.foxtts", "ACT.FoxTTS", text.Get("TTS 语音合成与播报", "TTS speech synthesis and announcements"), null),
+                     ("postnamazu", text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"), text.Get("游戏命令、标点与本地桥接", "Game commands, markers, and local bridge"), BundledActPluginCapabilities.PostNamazu),
+                     ("triggernometry", "Triggernometry", text.Get("触发器、时间轴、TTS 与绘图", "Triggers, timelines, TTS, and drawing"), BundledActPluginCapabilities.Triggernometry),
+                     ("silverdasher", text.Get("银山雀儿 / SilverDasher", "SilverDasher"), text.Get("狩猎、临危受命与跨区状态提醒", "Hunts, FATEs, and cross-world status alerts"), BundledActPluginCapabilities.SilverDasher),
+                     ("matcha", text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"), text.Get("狩猎与临危受命提醒；默认自启动并独占专属 Host", "Hunt and FATE alerts; starts by default in its dedicated Host"), BundledActPluginCapabilities.Matcha),
+                 })
         {
-            openPluginDirectory();
+            Separator();
+            changed |= DrawExtensionEntry(installedPlugins, id, name, description, capabilities, out var extensionChanged);
+            hostConfigurationChanged |= extensionChanged;
         }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("检查更新与来源", "Check updates and sources")))
-        {
-            checkBundledPluginUpdates();
-        }
-        DrawPluginInstallStatus();
-        var autoCheckUpdates = configuration.AutoCheckBundledPluginUpdates;
-        if (DactTheme.Checkbox(
-                text.Get(
-                    "启动时自动检查第三方扩展更新",
-                    "Automatically check third-party extension updates on startup"),
-                ref autoCheckUpdates))
-        {
-            configuration.AutoCheckBundledPluginUpdates = autoCheckUpdates;
-            changed = true;
-        }
-        ImGui.TextDisabled(text.Get(
-            "关闭后仍可使用上方按钮手动检查；不会影响 Dalamud 自身的插件更新。",
-            "When disabled, the button above still checks manually; Dalamud's own plugin updates are unaffected."));
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        DactTheme.TextColored(Gold, text.Get("ACT 插件权限边界", "ACT plugin permission boundary"));
-        ImGui.TextWrapped(text.Get(
-            "高风险能力默认关闭，授权按扩展和能力分别保存；权限组保存后会自动重启 Host 一次，使完整功能立即生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
-            "High-risk capabilities are denied by default. Grants are stored per extension and capability; after a permission group is saved, the Host restarts once so the complete feature set takes effect immediately. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
-        hostConfigurationChanged |= DrawPluginPermissions(
-            "postnamazu",
-            text.Get("鲶鱼精邮差 / PostNamazu", "PostNamazu"),
-            BundledActPluginCapabilities.PostNamazu);
-        hostConfigurationChanged |= DrawPluginPermissions(
-            "triggernometry",
-            "Triggernometry",
-            BundledActPluginCapabilities.Triggernometry);
-        hostConfigurationChanged |= DrawPluginPermissions(
-            "silverdasher",
-            text.Get("银山雀儿 / SilverDasher", "SilverDasher"),
-            BundledActPluginCapabilities.SilverDasher);
-        hostConfigurationChanged |= DrawPluginPermissions(
-            "matcha",
-            text.Get("抹茶 / Cafe.Matcha", "Cafe.Matcha"),
-            BundledActPluginCapabilities.Matcha);
         if (installedPlugins.Any(plugin => plugin.Manifest.Id == "simulant"))
         {
-            hostConfigurationChanged |= DrawPluginPermissions(
-                "simulant",
-                text.Get("仿生石 / Simulant", "Simulant"),
-                BundledActPluginCapabilities.Simulant);
+            Separator();
+            changed |= DrawSimulantEntry(installedPlugins, out var simulantChanged);
+            hostConfigurationChanged |= simulantChanged;
         }
+
+        var genericPlugins = installedPlugins
+            .Where(plugin => !ActPluginPackageInstaller.IsSpecializedPluginId(plugin.Manifest.Id))
+            .ToArray();
+        foreach (var plugin in genericPlugins)
+        {
+            Separator();
+            changed |= DrawGenericExtensionEntry(plugin, out var genericChanged);
+            hostConfigurationChanged |= genericChanged;
+        }
+        if (genericPlugins.Length > 0)
+            DactUi.Hint(text.Get(
+                "这些插件共用一个按需启动的通用 Host，不会为每个插件创建常驻进程。",
+                "These plugins share one on-demand generic Host; no persistent process is created per plugin."));
+        DrawGenericDeleteModal();
+        DactUi.EndCard();
+
         changed |= hostConfigurationChanged;
         return changed;
+    }
+
+    // Run state of one extension from the Host that runs it (stages and callback health).
+    private (string Label, PillTone Tone, string? Note) ExtensionRunState(string pluginId, bool enabled)
+    {
+        if (!enabled) return (text.Get("已禁用", "Disabled"), PillTone.Off, null);
+        var hosts = HostSnapshots?.Invoke() ?? [];
+        bool Same(string other) => string.Equals(other, pluginId, StringComparison.OrdinalIgnoreCase);
+        var host = hosts.FirstOrDefault(candidate => candidate.PluginStages?.Any(stage => Same(stage.PluginId)) == true ||
+                                                     candidate.PluginHealth?.Any(health => Same(health.PluginId)) == true);
+        if (host is null) return (text.Get("已启用", "Enabled"), PillTone.Ok, null);
+        var failed = host.PluginStages?.FirstOrDefault(stage => Same(stage.PluginId) && stage.State == "failed");
+        var health = host.PluginHealth?.FirstOrDefault(candidate => Same(candidate.PluginId));
+        if (host.State is HostSupervisorState.Faulted or HostSupervisorState.CircuitOpen)
+            return (text.Get("故障", "Faulted"), PillTone.Error, text.Get("所在 Host 已停止响应；可在运行状态中重启 Host。", "Its Host stopped responding; restart the Host from Runtime status."));
+        if (failed is not null) return (text.Get("故障", "Faulted"), PillTone.Error, $"{failed.Stage}: {failed.Detail}");
+        if (health?.CircuitOpen == true)
+            return (text.Get("故障", "Faulted"), PillTone.Error, text.Get("事件处理多次超时，已暂停；重启 Host 后恢复。", "Event handling timed out repeatedly and is paused; restart the Host to resume."));
+        if (host.State == HostSupervisorState.Starting) return (text.Get("初始化中", "Initializing"), PillTone.Warn, null);
+        if (health is { State: "degraded" })
+            return (text.Get("运行异常", "Degraded"), PillTone.Warn,
+                text.Format($"异常 {health.Exceptions} 次 · 超时 {health.SlowCalls} 次", $"{health.Exceptions} exceptions · {health.SlowCalls} timeouts"));
+        return (text.Get("已启用", "Enabled"), PillTone.Ok, null);
+    }
+
+    // One row (screens.js extensionRow): switch, name + version (+ 自行安装), note, state pill,
+    // 权限, 打开配置 or 查看并授权, and delete for user-installed DLLs. Returns the toggled value.
+    private bool? DrawExtensionRow(string rowId, string name, InstalledActPlugin? installed, string note, Vector4? noteColor,
+        bool enabled, bool canToggle, (string Label, PillTone Tone) state, IReadOnlyList<ActCapability>? capabilities,
+        bool needsConsent, Action? openConfig, Action authorize, ref bool permissionsChanged,
+        (string Icon, string Tooltip, Action Run)? trailing = null)
+    {
+        var s = DactUi.S;
+        ImGui.PushID(rowId);
+        var width = ImGui.GetContentRegionAvail().X;
+        var start = ImGui.GetCursorScreenPos();
+        var draw = ImGui.GetWindowDrawList();
+        var permissionLabel = text.Get("权限", "Permissions");
+        var actionLabel = needsConsent ? text.Get("查看并授权", "Review and authorize") : text.Get("打开配置", "Open configuration");
+        var userManaged = installed is not null && ActPluginPackageInstaller.IsUserManaged(installed.Manifest);
+        var pillWidth = DactUi.TextWidth(state.Label, DactFonts.Small) + 30 * s;
+        var rightWidth = pillWidth + 12 * s + (capabilities is { Count: > 0 } && installed is not null ? DactUi.ButtonWidth(permissionLabel, icon: "shield") + 8 * s : 0) +
+                         (installed is null ? 0 : DactUi.ButtonWidth(actionLabel)) + (userManaged ? 36 * s : 0) + (trailing is null ? 0 : 36 * s);
+        var nameWidth = Math.Max(80 * s, width - 46 * s - rightWidth - 12 * s);
+        string noteText;
+        using (DactFonts.Push(DactFonts.Small)) noteText = string.Join("\n", DactUi.WrapLines(note, nameWidth));
+        float noteHeight;
+        using (DactFonts.Push(DactFonts.Small)) noteHeight = string.IsNullOrEmpty(note) ? 0 : ImGui.CalcTextSize(noteText).Y;
+        var rowHeight = Math.Max(30 * s, 18 * s + (noteHeight > 0 ? 2 * s + noteHeight : 0)) + 16 * s;
+        var middle = start.Y + rowHeight * .5f;
+
+        bool? toggled = null;
+        ImGui.SetCursorScreenPos(new Vector2(start.X + 4 * s, middle - 10 * s));
+        var on = enabled;
+        if (DactUi.Toggle("##enabled", ref on, !canToggle)) toggled = on;
+
+        var textLeft = start.X + 50 * s;
+        var top = start.Y + 8 * s;
+        var title = DactUi.Fit(name, nameWidth);
+        DactUi.DrawText(draw, new Vector2(textLeft, top), 18 * s, title, enabled ? DactTheme.Palette.Text : DactTheme.Palette.Muted);
+        var x = textLeft + DactUi.TextWidth(title) + 8 * s;
+        if (installed is not null)
+        {
+            var version = $"v{installed.DisplayVersion}";
+            DactUi.DrawText(draw, new Vector2(x, top), 18 * s, version, DactTheme.Palette.Muted, DactFonts.Small);
+            var versionMin = new Vector2(x, top);
+            x += DactUi.TextWidth(version, DactFonts.Small) + 8 * s;
+            // Keep the signed-off manifest visible for diagnosis without presenting it as the loaded DLL version.
+            if (installed.HasVersionMismatch && ImGui.IsMouseHoveringRect(versionMin, new Vector2(x, top + 18 * s)))
+                DactUi.Tooltip(text.Format(
+                    $"实际 DLL 版本为 {installed.DisplayVersion}；安装清单记录为 {installed.Manifest.Version}。",
+                    $"The DLL version is {installed.DisplayVersion}; the install manifest records {installed.Manifest.Version}."));
+        }
+        if (userManaged && x + 60 * s < textLeft + nameWidth)
+        {
+            ImGui.SetCursorScreenPos(new Vector2(x, top - 2 * s));
+            DactUi.Pill(text.Get("自行安装", "Self-installed"), PillTone.Off, dot: false);
+        }
+        if (noteHeight > 0)
+            using (DactFonts.Push(DactFonts.Small))
+                draw.AddText(new Vector2(textLeft, top + 20 * s), DactUi.U32(DactTheme.Foreground(noteColor ?? DactUi.HintColor)), noteText);
+
+        var right = start.X + width;
+        if (trailing is { } extra)
+        {
+            right -= 28 * s;
+            ImGui.SetCursorScreenPos(new Vector2(right, middle - 14 * s));
+            if (DactUi.IconButton("##trailing", extra.Icon, extra.Tooltip)) extra.Run();
+            right -= 8 * s;
+        }
+        if (userManaged)
+        {
+            right -= 28 * s;
+            ImGui.SetCursorScreenPos(new Vector2(right, middle - 14 * s));
+            if (DactUi.IconButton("##delete", "trash", text.Get("删除插件", "Delete plugin")))
+            {
+                genericPluginToDeleteId = installed!.Manifest.Id;
+                genericPluginToDeleteName = installed.Manifest.Name;
+                genericDeletePopupRequested = true;
+            }
+            right -= 8 * s;
+        }
+        if (installed is not null)
+        {
+            right -= DactUi.ButtonWidth(actionLabel);
+            ImGui.SetCursorScreenPos(new Vector2(right, middle - 15 * s));
+            if (needsConsent ? DactUi.Button(actionLabel + "##authorize") : DactUi.Button(actionLabel + "##configure", disabled: !enabled || openConfig is null))
+            {
+                if (needsConsent) authorize();
+                else openConfig?.Invoke();
+            }
+            right -= 8 * s;
+        }
+        if (capabilities is { Count: > 0 } && installed is not null)
+        {
+            right -= DactUi.ButtonWidth(permissionLabel, icon: "shield");
+            ImGui.SetCursorScreenPos(new Vector2(right, middle - 15 * s));
+            if (DactUi.Button(permissionLabel + "##permissions", icon: "shield")) ImGui.OpenPopup("permissions");
+            permissionsChanged |= DrawPluginPermissionsPopup(installed.Manifest.Id, name, capabilities);
+            right -= 8 * s;
+        }
+        right -= pillWidth + 4 * s;
+        ImGui.SetCursorScreenPos(new Vector2(right, middle - 11 * s));
+        DactUi.Pill(state.Label, state.Tone);
+
+        ImGui.SetCursorScreenPos(start);
+        ImGui.Dummy(new Vector2(width, rowHeight));
+        ImGui.PopID();
+        return toggled;
     }
 
     private void DrawPluginInstallStatus()
@@ -1314,11 +1322,9 @@ public sealed partial class ControlCenterWindow : Window
             return;
         }
 
-        ImGui.Spacing();
-        ImGui.TextUnformatted(string.IsNullOrWhiteSpace(status.DisplayName)
+        var displayName = string.IsNullOrWhiteSpace(status.DisplayName)
             ? text.Get("第三方插件", "Third-party plugin")
-            : status.DisplayName);
-        ImGui.SameLine();
+            : status.DisplayName;
         var (labelZh, labelEn) = status.State switch
         {
             ThirdPartyPluginInstallState.Preflighting => ("正在预检…", "Preflighting…"),
@@ -1331,16 +1337,14 @@ public sealed partial class ControlCenterWindow : Window
             ThirdPartyPluginInstallState.Failed => ("失败", "Failed"),
             _ => ("", ""),
         };
-        var statusColor = status.State is ThirdPartyPluginInstallState.Failed
-            ? new Vector4(0.95f, 0.38f, 0.38f, 1)
-            : status.State is ThirdPartyPluginInstallState.Ready
-                ? new Vector4(0.42f, 0.88f, 0.56f, 1)
-                : Gold;
-        DactTheme.TextColored(statusColor, text.Get(labelZh, labelEn));
-        if (!string.IsNullOrWhiteSpace(status.Detail))
+        var tone = status.State switch
         {
-            ImGui.TextWrapped(status.Detail);
-        }
+            ThirdPartyPluginInstallState.Failed => PillTone.Error,
+            ThirdPartyPluginInstallState.Ready or ThirdPartyPluginInstallState.Removed => PillTone.Ok,
+            _ => PillTone.Warn,
+        };
+        DactUi.CardTitleRow(displayName, () => DactUi.Pill(text.Get(labelZh, labelEn), tone));
+        if (!string.IsNullOrWhiteSpace(status.Detail)) DactUi.Hint(status.Detail);
 
         if (status.State == ThirdPartyPluginInstallState.Failed)
         {
@@ -1349,12 +1353,12 @@ public sealed partial class ControlCenterWindow : Window
             {
                 openedPluginFailureStatus = status;
                 pluginFailureLogCopied = false;
-                ImGui.OpenPopup(PluginInstallFailurePopupId);
+                DactUi.OpenDialog(PluginInstallFailurePopupId);
             }
 
             if (DactTheme.Button(text.Get("查看失败原因", "View failure details")))
             {
-                ImGui.OpenPopup(PluginInstallFailurePopupId);
+                DactUi.OpenDialog(PluginInstallFailurePopupId);
             }
             DrawPluginInstallFailureModal(status);
             return;
@@ -1375,73 +1379,53 @@ public sealed partial class ControlCenterWindow : Window
                 StringComparison.Ordinal))
         {
             openedGenericPermissionKey = permissionKey;
-            ImGui.OpenPopup(GenericPermissionPopupId);
+            DactUi.OpenDialog(GenericPermissionPopupId);
         }
 
         if (DactTheme.Button(text.Get("查看授权", "Review permissions")))
         {
-            ImGui.OpenPopup(GenericPermissionPopupId);
+            DactUi.OpenDialog(GenericPermissionPopupId);
         }
         DrawGenericPermissionModal(status);
     }
 
     private void DrawPluginInstallFailureModal(ThirdPartyPluginInstallStatus status)
     {
-        ImGui.SetNextWindowSize(new Vector2(640, 0), ImGuiCond.Appearing);
-        if (!ImGui.BeginPopupModal(
-                PluginInstallFailurePopupId,
-                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
-        {
-            return;
-        }
-
-        DactTheme.TextColored(
-            new Vector4(0.95f, 0.38f, 0.38f, 1),
-            text.Get("插件导入失败", "Plugin import failed"));
-        ImGui.TextUnformatted(string.IsNullOrWhiteSpace(status.DisplayName)
-            ? text.Get("第三方插件", "Third-party plugin")
-            : status.DisplayName);
-        if (!string.IsNullOrWhiteSpace(status.Version))
-        {
-            ImGui.SameLine();
-            ImGui.TextDisabled($"v{status.Version}");
-        }
-
-        ImGui.Separator();
-        ImGui.TextWrapped(string.IsNullOrWhiteSpace(status.Detail)
+        if (!DactUi.BeginDialog(PluginInstallFailurePopupId, 560)) return;
+        var s = DactUi.S;
+        var palette = DactTheme.Palette;
+        DactUi.Text(text.Get("插件导入失败", "Plugin import failed"), DactUi.Danger, DactFonts.H2);
+        var name = string.IsNullOrWhiteSpace(status.DisplayName) ? text.Get("第三方插件", "Third-party plugin") : status.DisplayName;
+        DactUi.Text(string.IsNullOrWhiteSpace(status.Version) ? name : $"{name}  v{status.Version}", palette.Text);
+        DactUi.Divider();
+        DactUi.Wrapped(string.IsNullOrWhiteSpace(status.Detail)
             ? text.Get("导入过程没有返回具体原因。", "The import did not return a specific reason.")
-            : status.Detail);
-        ImGui.Spacing();
-        if (DactTheme.Button(
-                text.Get("复制日志", "Copy log"),
-                new Vector2(140, 34)))
+            : status.Detail, palette.Text);
+        DactUi.Hint(text.Get(
+            "关闭只会清除本次失败提示，不会删除原始 DLL / ZIP 或已安装插件。",
+            "Closing clears only this failure notice; it does not delete the original DLL / ZIP or installed plugins."));
+        if (DactUi.Button(text.Get("复制日志", "Copy log") + "##plugin-failure-copy", icon: "copy"))
         {
             ImGui.SetClipboardText(BuildPluginInstallFailureLog(status));
             pluginFailureLogCopied = true;
         }
         if (pluginFailureLogCopied)
         {
-            ImGui.SameLine();
-            DactTheme.TextColored(
-                new Vector4(0.45f, 0.88f, 0.62f, 1),
-                text.Get("已复制", "Copied"));
+            ImGui.SameLine(0, 8 * s);
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 4 * s);
+            DactUi.Pill(text.Get("已复制", "Copied"), PillTone.Ok);
         }
-
-        ImGui.SameLine();
-        if (DactTheme.Button(
-                text.Get("关闭并清除记录", "Close and clear"),
-                new Vector2(180, 34)))
+        var close = text.Get("关闭并清除记录", "Close and clear");
+        ImGui.SameLine(0, 8 * s);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(close, ButtonKind.Primary)));
+        if (DactUi.Button(close + "##plugin-failure-close", ButtonKind.Primary))
         {
-            ImGui.CloseCurrentPopup();
+            DactUi.CloseDialog(PluginInstallFailurePopupId);
             openedPluginFailureStatus = null;
             pluginFailureLogCopied = false;
             dismissPluginInstallFailure();
         }
-
-        ImGui.TextDisabled(text.Get(
-            "关闭只会清除本次失败提示，不会删除原始 DLL / ZIP 或已安装插件。",
-            "Closing clears only this failure notice; it does not delete the original DLL / ZIP or installed plugins."));
-        ImGui.EndPopup();
+        DactUi.EndDialog(PluginInstallFailurePopupId);
     }
 
     internal static string BuildPluginInstallFailureLog(
@@ -1466,89 +1450,53 @@ public sealed partial class ControlCenterWindow : Window
 
     private void DrawGenericPermissionModal(ThirdPartyPluginInstallStatus status)
     {
-        ImGui.SetNextWindowSize(new Vector2(620, 0), ImGuiCond.Appearing);
-        if (!ImGui.BeginPopupModal(
-                GenericPermissionPopupId,
-                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
-        {
-            return;
-        }
-
-        DactTheme.TextColored(Gold, text.Get("第三方 ACT 插件授权", "Third-party ACT plugin authorization"));
-        ImGui.TextUnformatted(status.DisplayName);
-        if (!string.IsNullOrWhiteSpace(status.Version))
-        {
-            ImGui.SameLine();
-            ImGui.TextDisabled($"v{status.Version}");
-        }
-
-        ImGui.Separator();
-        ImGui.TextWrapped(text.Get(
+        if (!DactUi.BeginDialog(GenericPermissionPopupId, 560)) return;
+        var palette = DactTheme.Palette;
+        DactUi.Text(text.Get("第三方 ACT 插件授权", "Third-party ACT plugin authorization"), palette.Gold, DactFonts.H2);
+        DactUi.Text(string.IsNullOrWhiteSpace(status.Version) ? status.DisplayName : $"{status.DisplayName}  v{status.Version}", palette.Text);
+        DactUi.Divider();
+        DactUi.Wrapped(text.Get(
             "静态预检已经完成。该 DLL 会作为桌面代码运行；以下清单约束兼容接口，但无法拦截插件自身直接调用 Windows API。",
-            "Static preflight is complete. This DLL runs as desktop code; the list below governs compatibility APIs but cannot intercept direct Windows API calls made by the plugin."));
-        ImGui.TextDisabled(text.Get(
-            "预检生成的权限清单：",
-            "Permissions generated by preflight:"));
-        if (status.Capabilities.Count == 0)
+            "Static preflight is complete. This DLL runs as desktop code; the list below governs compatibility APIs but cannot intercept direct Windows API calls made by the plugin."),
+            palette.Text);
+        DactUi.Hint(text.Get("预检生成的权限清单：", "Permissions generated by preflight:"));
+        var lines = status.Capabilities.Count == 0
+            ? [text.Get("未检测到额外兼容接口权限", "No additional compatibility API permissions detected")]
+            : status.Capabilities.Select(capability => ActCapabilityDisplay.Label(capability, text)).ToArray();
+        foreach (var line in lines) DactUi.Wrapped("·  " + line, palette.Text);
+        if (DialogFooter(text.Get("授权并启用", "Authorize and enable"), "generic-permission", cancelLabel: text.Get("暂不授权", "Do not authorize")) is { } approved)
         {
-            ImGui.BulletText(text.Get("未检测到额外兼容接口权限", "No additional compatibility API permissions detected"));
+            DactUi.CloseDialog(GenericPermissionPopupId);
+            if (approved) approvePendingPlugin();
+            else denyPendingPlugin();
         }
-        else
-        {
-            foreach (var capability in status.Capabilities)
-            {
-                ImGui.BulletText(ActCapabilityDisplay.Label(capability, text));
-            }
-        }
-
-        ImGui.Spacing();
-        if (DactTheme.Button(
-                text.Get("授权并启用", "Authorize and enable"),
-                new Vector2(170, 34)))
-        {
-            ImGui.CloseCurrentPopup();
-            approvePendingPlugin();
-        }
-        ImGui.SameLine();
-        if (DactTheme.Button(
-                text.Get("暂不授权", "Do not authorize"),
-                new Vector2(150, 34)))
-        {
-            ImGui.CloseCurrentPopup();
-            denyPendingPlugin();
-        }
-
-        ImGui.EndPopup();
+        DactUi.EndDialog(GenericPermissionPopupId);
     }
 
-    private bool DrawPluginPermissions(
-        string pluginId,
-        string displayName,
-        IReadOnlyList<ActCapability> capabilities)
+    // Capability switches for one extension, opened from its 权限 button. Grants are saved per
+    // extension and capability; saving restarts the Host once so they take effect.
+    private bool DrawPluginPermissionsPopup(string pluginId, string displayName, IReadOnlyList<ActCapability> capabilities)
     {
+        var s = DactUi.S;
+        // A content popup: card padding on every side (the menu padding left the switches on the edge).
+        if (!DactUi.BeginMenuPopup("permissions", 380 * s, 16)) return false;
         var changed = false;
-        if (!ImGui.TreeNode($"{displayName}##control-center-permissions-{pluginId}"))
+        using (DactUi.Gap(10))
         {
-            return false;
-        }
-
-        foreach (var capability in capabilities)
-        {
-            var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
-            if (!DactTheme.Checkbox(
-                    $"{ActCapabilityDisplay.Label(capability, text)}##control-center-{pluginId}-{capability}",
-                    ref allowed))
+            DactUi.Text(text.Format($"{displayName} 权限", $"{displayName} permissions"), DactTheme.Palette.Gold);
+            DactUi.Hint(text.Get(
+                "高风险能力默认关闭，授权按扩展和能力分别保存；权限组保存后会自动重启 Host 一次，使完整功能立即生效。第三方 DLL 的直接系统调用仍由独立 Host 的进程边界承担。",
+                "High-risk capabilities are denied by default. Grants are stored per extension and capability; after a permission group is saved, the Host restarts once so the complete feature set takes effect immediately. Direct system calls from third-party DLLs remain behind the independent Host process boundary."));
+            foreach (var capability in capabilities)
             {
-                continue;
+                var allowed = configuration.IsActCapabilityAllowed(pluginId, capability);
+                if (!DactUi.ToggleRow($"{ActCapabilityDisplay.Label(capability, text)}##control-center-{pluginId}-{capability}", ref allowed)) continue;
+                configuration.SetActCapability(pluginId, capability, allowed);
+                logger.Information($"ACT permission changed: plugin={pluginId}, capability={capability}, allowed={allowed}.");
+                changed = true;
             }
-
-            configuration.SetActCapability(pluginId, capability, allowed);
-            logger.Information(
-                $"ACT permission changed: plugin={pluginId}, capability={capability}, allowed={allowed}.");
-            changed = true;
         }
-
-        ImGui.TreePop();
+        ImGui.EndPopup();
         return changed;
     }
 
@@ -1559,70 +1507,41 @@ public sealed partial class ControlCenterWindow : Window
         var pluginId = plugin.Manifest.Id;
         var changed = false;
         enabledChanged = false;
-        ImGui.PushID($"generic-extension-{pluginId}");
         var trusted = configuration.TrustedGenericActPluginIds.Contains(pluginId);
         var enabled = plugin.Enabled && trusted;
-        if (DactTheme.Checkbox(plugin.Manifest.Name, ref enabled))
+        var state = trusted ? ExtensionRunState(pluginId, enabled) : (text.Get("未授权", "Not authorized"), PillTone.Warn, (string?)null);
+        var requested = ActPluginPackageInstaller.GetRequestedCapabilities(plugin.Manifest);
+        var permissionsChanged = false;
+        var toggled = DrawExtensionRow($"generic-extension-{pluginId}", plugin.Manifest.Name, plugin,
+            state.Item3 ?? text.Get("自行安装的 ACT 扩展；装好后才显示，可单独设置权限", "Self-installed ACT extension; listed once installed, with its own permissions"),
+            state.Item3 is null ? null : ExtensionNoteColor(state.Item2),
+            enabled, true, (state.Item1, state.Item2), trusted && requested.Count > 0 ? requested : null,
+            !trusted, () => openPluginConfiguration(pluginId), () => requestPluginAuthorization(pluginId), ref permissionsChanged);
+        enabledChanged |= permissionsChanged;
+        if (toggled is { } value)
         {
-            if (enabled && !configuration.TrustedGenericActPluginIds.Contains(pluginId))
+            if (value && !configuration.TrustedGenericActPluginIds.Contains(pluginId))
             {
                 // Enabling an untrusted DLL opens the same informed-consent flow as installation.
                 requestPluginAuthorization(pluginId);
-                enabled = false;
             }
             else
             {
-                if (enabled)
-                {
-                    configuration.DisabledActPluginIds.Remove(pluginId);
-                }
-                else
-                {
-                    configuration.DisabledActPluginIds.Add(pluginId);
-                }
-
+                if (value) configuration.DisabledActPluginIds.Remove(pluginId);
+                else configuration.DisabledActPluginIds.Add(pluginId);
                 changed = true;
                 enabledChanged = true;
             }
         }
-
-        ImGui.SameLine();
-        DactTheme.TextColored(
-            enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
-            enabled
-                ? text.Get("已启用", "Enabled")
-                : trusted
-                    ? text.Get("已禁用", "Disabled")
-                    : text.Get("未授权", "Not authorized"));
-        ImGui.SameLine();
-        DrawInstalledVersion(plugin);
-        if (!trusted)
-        {
-            ImGui.SameLine();
-            if (DactTheme.SmallButton(text.Get("查看并授权", "Review and authorize")))
-            {
-                requestPluginAuthorization(pluginId);
-            }
-        }
-        else if (enabled)
-        {
-            ImGui.SameLine();
-            if (DactTheme.SmallButton(text.Get("打开配置", "Open configuration")))
-            {
-                openPluginConfiguration(pluginId);
-            }
-        }
-        DrawPluginDeleteButton(plugin);
-
-        var requested = ActPluginPackageInstaller.GetRequestedCapabilities(plugin.Manifest);
-        if (trusted && requested.Count > 0)
-        {
-            enabledChanged |= DrawPluginPermissions(pluginId, plugin.Manifest.Name, requested);
-        }
-
-        ImGui.PopID();
         return changed;
     }
+
+    private static Vector4 ExtensionNoteColor(PillTone tone) => tone switch
+    {
+        PillTone.Error => DactUi.Danger,
+        PillTone.Warn => DactTheme.Palette.Gold,
+        _ => DactUi.HintColor,
+    };
 
     private void DrawPluginDeleteButton(InstalledActPlugin plugin)
     {
@@ -1634,7 +1553,7 @@ public sealed partial class ControlCenterWindow : Window
             genericPluginToDeleteName = plugin.Manifest.Name;
             genericDeletePopupRequested = true;
         }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(text.Get("删除插件", "Delete plugin"));
+        if (ImGui.IsItemHovered()) DactUi.Tooltip(text.Get("删除插件", "Delete plugin"));
     }
 
     private bool NeedsManualPluginConsent(InstalledActPlugin plugin)
@@ -1665,42 +1584,25 @@ public sealed partial class ControlCenterWindow : Window
     {
         if (genericDeletePopupRequested)
         {
-            ImGui.OpenPopup(GenericDeletePopupId);
+            DactUi.OpenDialog(GenericDeletePopupId);
             genericDeletePopupRequested = false;
         }
 
-        ImGui.SetNextWindowSize(new Vector2(520, 0), ImGuiCond.Appearing);
-        if (!ImGui.BeginPopupModal(
-                GenericDeletePopupId,
-                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize))
-        {
-            return;
-        }
-
-        DactTheme.TextColored(Gold, text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"));
-        ImGui.TextWrapped(text.Format(
+        if (!DactUi.BeginDialog(GenericDeletePopupId, 440)) return;
+        DactUi.Text(text.Get("删除第三方 ACT 插件", "Delete third-party ACT plugin"), size: DactFonts.H2);
+        DactUi.Wrapped(text.Format(
             $"确定删除 {genericPluginToDeleteName} 吗？插件文件会先备份，相关扩展会短暂重启。",
-            $"Delete {genericPluginToDeleteName}? Plugin files will be backed up first, and related extensions will briefly restart."));
-        if (DactTheme.Button(text.Get("确认删除", "Delete"), new Vector2(140, 34)))
+            $"Delete {genericPluginToDeleteName}? Plugin files will be backed up first, and related extensions will briefly restart."),
+            DactTheme.Palette.Text);
+        if (DialogFooter(text.Get("确认删除", "Delete"), "generic-delete", ButtonKind.Danger) is { } confirmed)
         {
             var pluginId = genericPluginToDeleteId;
-            ImGui.CloseCurrentPopup();
+            DactUi.CloseDialog(GenericDeletePopupId);
             genericPluginToDeleteId = null;
             genericPluginToDeleteName = null;
-            if (!string.IsNullOrWhiteSpace(pluginId))
-            {
-                uninstallGenericPlugin(pluginId);
-            }
+            if (confirmed && !string.IsNullOrWhiteSpace(pluginId)) uninstallGenericPlugin(pluginId);
         }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("取消", "Cancel"), new Vector2(120, 34)))
-        {
-            ImGui.CloseCurrentPopup();
-            genericPluginToDeleteId = null;
-            genericPluginToDeleteName = null;
-        }
-
-        ImGui.EndPopup();
+        DactUi.EndDialog(GenericDeletePopupId);
     }
 
     private bool DrawSimulantEntry(
@@ -1711,46 +1613,26 @@ public sealed partial class ControlCenterWindow : Window
         var changed = false;
         enabledChanged = false;
         // Simulant is user-supplied; expose management only after a manual import.
-        if (installed is null)
-        {
-            return false;
-        }
-        ImGui.PushID("extension-simulant");
-        if (installed is not null)
-        {
-            var enabled = installed.Enabled && !NeedsManualPluginConsent(installed);
-            if (DactTheme.Checkbox(text.Get("仿生石 / Simulant", "Simulant"), ref enabled))
-            {
-                changed = enabledChanged = SetInstalledPluginEnabled(installed, enabled);
-            }
-            ImGui.SameLine();
-            DrawInstalledVersion(installed);
-            DrawInstalledPluginAuthorization(installed);
-            if (enabled)
-            {
-                ImGui.SameLine();
-                if (DactTheme.SmallButton(text.Get("打开配置", "Open configuration")))
-                {
-                    openPluginConfiguration("simulant");
-                }
-            }
-            DrawPluginDeleteButton(installed);
-        }
-        ImGui.TextDisabled(text.Get(
-            "本地机制模拟；与 PostNamazu、Triggernometry 一起运行。",
-            "Local mechanic simulation; runs alongside PostNamazu and Triggernometry."));
+        if (installed is null) return false;
+        var needsConsent = NeedsManualPluginConsent(installed);
+        var enabled = installed.Enabled && !needsConsent;
         var missing = new[] { "postnamazu", "triggernometry" }
             .Where(id => !plugins.Any(plugin => plugin.Manifest.Id == id && plugin.Enabled)).ToArray();
-        if (missing.Length > 0)
-        {
-            ImGui.TextWrapped(text.Format(
-                $"请先安装并启用：{string.Join(", ", missing)}。",
-                $"Install and enable first: {string.Join(", ", missing)}."));
-        }
-        ImGui.TextWrapped(text.Get(
-            "初始化需要 Simulant 原生内存权限，以及 PostNamazu 游戏命令和原生内存权限。上游 v0.0.4.2 标注支持 7.55；当前游戏版本需以实际扫描结果和实机验证为准。",
-            "Initialization requires Simulant native memory access and PostNamazu game-command/native-memory access. Upstream v0.0.4.2 targets 7.55; other game builds require signature checks and in-game verification."));
-        ImGui.PopID();
+        var state = needsConsent ? (text.Get("未授权", "Not authorized"), PillTone.Warn, (string?)null) : ExtensionRunState("simulant", enabled);
+        var note = state.Item3 ?? (missing.Length > 0
+            ? text.Format($"请先安装并启用：{string.Join(", ", missing)}。", $"Install and enable first: {string.Join(", ", missing)}.")
+            : text.Get("本地机制模拟；与 PostNamazu、Triggernometry 一起运行。", "Local mechanic simulation; runs alongside PostNamazu and Triggernometry."));
+        var permissionsChanged = false;
+        var toggled = DrawExtensionRow("extension-simulant", text.Get("仿生石 / Simulant", "Simulant"), installed, note,
+            state.Item3 is not null || missing.Length > 0 ? ExtensionNoteColor(state.Item3 is not null ? state.Item2 : PillTone.Warn) : null,
+            enabled, true, (state.Item1, state.Item2), BundledActPluginCapabilities.Simulant, needsConsent,
+            () => openPluginConfiguration("simulant"), () => requestPluginAuthorization(installed.Manifest.Id), ref permissionsChanged);
+        enabledChanged |= permissionsChanged;
+        if (toggled is { } value) changed = enabledChanged = SetInstalledPluginEnabled(installed, value) || enabledChanged;
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Get(
+                "初始化需要 Simulant 原生内存权限，以及 PostNamazu 游戏命令和原生内存权限。上游 v0.0.4.2 标注支持 7.55；当前游戏版本需以实际扫描结果和实机验证为准。",
+                "Initialization requires Simulant native memory access and PostNamazu game-command/native-memory access. Upstream v0.0.4.2 targets 7.55; other game builds require signature checks and in-game verification."));
         return changed;
     }
 
@@ -1759,80 +1641,48 @@ public sealed partial class ControlCenterWindow : Window
         string pluginId,
         string displayName,
         string description,
+        IReadOnlyList<ActCapability>? capabilities,
         out bool enabledChanged)
     {
+        var s = DactUi.S;
         var installed = installedPlugins.FirstOrDefault(plugin =>
             string.Equals(plugin.Manifest.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         var changed = false;
         enabledChanged = false;
-        ImGui.PushID($"extension-{pluginId}");
         var resourceStatus = getBundledActResourceStatus();
+        var permissionsChanged = false;
         if (resourceStatus.State != ResourcePackOperationState.Ready)
         {
-            ImGui.TextUnformatted(displayName);
-            ImGui.SameLine();
-            if (resourceStatus.State == ResourcePackOperationState.Downloading)
-            {
-                DactTheme.TextColored(
-                    IceBlue,
-                    text.Format(
-                        $"下载中...{resourceStatus.ProgressPercent}%",
-                        $"Downloading...{resourceStatus.ProgressPercent}%"));
-                ImGui.SameLine();
-                if (ImGuiComponents.IconButton(FontAwesomeIcon.Times))
-                {
-                    cancelBundledActResourceDownload();
-                }
-                if (ImGui.IsItemHovered())
-                {
-                    ImGui.SetTooltip(text.Get("取消下载", "Cancel download"));
-                }
-            }
-            else if (resourceStatus.State == ResourcePackOperationState.Unavailable)
-            {
-                ImGui.TextDisabled(text.Get("不可用", "Unavailable"));
-                ImGui.SameLine();
-                if (ImGuiComponents.IconButton(FontAwesomeIcon.Download))
-                {
-                    startBundledActResourceDownload();
-                }
-                if (ImGui.IsItemHovered())
-                {
-                    ImGui.SetTooltip(text.Get("下载扩展组件", "Download extension components"));
-                }
-            }
-        }
-        else if (installed is null)
-        {
-            ImGui.TextUnformatted(displayName);
-            ImGui.SameLine();
-            ImGui.TextDisabled(text.Get("未安装", "Not installed"));
-        }
-        else
-        {
-            var enabled = installed.Enabled && !NeedsManualPluginConsent(installed);
-            if (DactTheme.Checkbox(displayName, ref enabled))
-            {
-                changed = enabledChanged = SetInstalledPluginEnabled(installed, enabled);
-            }
-
-            ImGui.SameLine();
-            DactTheme.TextColored(
-                enabled ? IceBlue : new Vector4(0.66f, 0.69f, 0.74f, 1),
-                enabled ? text.Get("已启用", "Enabled") : text.Get("已禁用", "Disabled"));
-            DrawInstalledPluginAuthorization(installed);
-            ImGui.SameLine();
-            if (enabled && DactTheme.SmallButton(text.Get("打开配置", "Open configuration")))
-            {
-                openPluginConfiguration(pluginId);
-            }
-            DrawPluginDeleteButton(installed);
-            ImGui.SameLine();
-            DrawInstalledVersion(installed);
+            // Extension components are not on disk yet: the row offers the download instead.
+            var downloading = resourceStatus.State == ResourcePackOperationState.Downloading;
+            var state = downloading
+                ? (text.Format($"下载中 {resourceStatus.ProgressPercent}%", $"Downloading {resourceStatus.ProgressPercent}%"), PillTone.Warn)
+                : (text.Get("不可用", "Unavailable"), PillTone.Off);
+            (string, string, Action)? action = downloading
+                ? ("close", text.Get("取消下载", "Cancel download"), cancelBundledActResourceDownload)
+                : resourceStatus.State == ResourcePackOperationState.Unavailable
+                    ? ("download", text.Get("下载扩展组件", "Download extension components"), startBundledActResourceDownload)
+                    : null;
+            DrawExtensionRow($"extension-{pluginId}", displayName, null, description, null, false, false, state, null, false, null, () => { },
+                ref permissionsChanged, action);
+            return false;
         }
 
-        ImGui.TextDisabled(description);
-        ImGui.PopID();
+        if (installed is null)
+        {
+            DrawExtensionRow($"extension-{pluginId}", displayName, null, description, null, false, false,
+                (text.Get("未安装", "Not installed"), PillTone.Off), null, false, null, () => { }, ref permissionsChanged);
+            return false;
+        }
+
+        var needsConsent = NeedsManualPluginConsent(installed);
+        var enabled = installed.Enabled && !needsConsent;
+        var run = needsConsent ? (text.Get("未授权", "Not authorized"), PillTone.Warn, (string?)null) : ExtensionRunState(pluginId, enabled);
+        var toggled = DrawExtensionRow($"extension-{pluginId}", displayName, installed, run.Item3 ?? description,
+            run.Item3 is null ? null : ExtensionNoteColor(run.Item2), enabled, true, (run.Item1, run.Item2), capabilities,
+            needsConsent, () => openPluginConfiguration(pluginId), () => requestPluginAuthorization(installed.Manifest.Id), ref permissionsChanged);
+        enabledChanged |= permissionsChanged;
+        if (toggled is { } value) changed = enabledChanged = SetInstalledPluginEnabled(installed, value) || enabledChanged;
         return changed;
     }
 
@@ -1845,7 +1695,7 @@ public sealed partial class ControlCenterWindow : Window
         }
 
         // Keep the signed-off manifest visible for diagnosis without presenting it as the loaded DLL version.
-        ImGui.SetTooltip(text.Format(
+        DactUi.Tooltip(text.Format(
             $"实际 DLL 版本为 {plugin.DisplayVersion}；安装清单记录为 {plugin.Manifest.Version}。",
             $"The DLL version is {plugin.DisplayVersion}; the install manifest records {plugin.Manifest.Version}."));
     }
@@ -1933,18 +1783,77 @@ public sealed partial class ControlCenterWindow : Window
         ImGui.EndTable();
     }
 
+    // 账号与云同步 (screens.js cloud): 账号 and 同步 on the left, 备份与恢复 and Discord on the
+    // right, 邀请好友 across the bottom. 支持 DACT moved to the 设置 page.
     private bool DrawCloud()
     {
         var snapshot = cloud.GetSnapshot();
-        DrawPageHeader(
-            text.Get("云同步", "Cloud Sync"),
+        DactUi.PageHeader(
+            text.Get("账号与云同步", "Account & Cloud"),
             text.Get(
                 "自动保护常用配置，管理最近两份备份，并在需要时安全恢复。",
-                "Automatically protect settings, manage the latest two backups, and restore safely when needed."),
-            showDivider: false);
-
-        DrawSignedInCloud(snapshot);
+                "Automatically protect settings, manage the latest two backups, and restore safely when needed."));
+        if (!string.IsNullOrWhiteSpace(snapshot.RecoveryKeyToSave)) DrawCloudRecoveryKeyCard(snapshot.RecoveryKeyToSave);
+        if (DactUi.BeginGrid("cloud-grid", 14))
+        {
+            using (DactUi.Gap(14))
+            {
+                DrawCloudAccountCard(snapshot);
+                DrawCloudSummaryCard(snapshot);
+            }
+            DactUi.NextColumn();
+            using (DactUi.Gap(14))
+            {
+                DrawCloudBackupCard(snapshot);
+                DrawCloudDiscordRecovery(snapshot);
+            }
+            DactUi.EndGrid();
+        }
+        DrawCloudInvitationCard(snapshot);
         return false;
+    }
+
+    private bool cloudChangePasswordOpen;
+
+    private void DrawCloudAccountCard(CloudClientSnapshot snapshot)
+    {
+        var s = DactUi.S;
+        DactUi.BeginCard("cloud-account", text.Get("账号", "Account"));
+        var start = ImGui.GetCursorScreenPos();
+        ImGui.GetWindowDrawList().AddImageRounded(logoTexture.GetWrapOrEmpty().Handle, start, start + new Vector2(40 * s), Vector2.Zero, Vector2.One,
+            ImGui.GetColorU32(Vector4.One), 8 * s);
+        ImGui.SetCursorScreenPos(start + new Vector2(52 * s, 0));
+        ImGui.BeginGroup();
+        using (DactUi.Gap(2))
+        {
+            // The name keeps its server-authorized sponsor/administrator markers.
+            using (DactFonts.Push(DactFonts.H2))
+            {
+                if (Friends is not null) Friends.DrawAccountName(snapshot);
+                else ImGui.TextUnformatted(snapshot.Username ?? string.Empty);
+            }
+            if (snapshot.SessionExpiresAt is { } expiresAt)
+                DactUi.Hint(text.Format(
+                    $"登录有效期至 {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}",
+                    $"Session expires {expiresAt.LocalDateTime:yyyy-MM-dd HH:mm}"));
+        }
+        ImGui.EndGroup();
+        ImGui.SetCursorScreenPos(new Vector2(start.X, Math.Max(ImGui.GetItemRectMax().Y, start.Y + 40 * s) + 12 * s));
+        var changeLabel = text.Get("修改密码", "Change password");
+        if (DactUi.Button(changeLabel + "##cloud-change-password", cloudChangePasswordOpen ? ButtonKind.Primary : ButtonKind.Secondary))
+            cloudChangePasswordOpen = !cloudChangePasswordOpen;
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(text.Get("退出登录", "Sign out") + "##cloud-sign-out", disabled: snapshot.IsBusy))
+        {
+            cloud.Logout();
+            ClearCloudSecrets();
+        }
+        if (cloudChangePasswordOpen)
+        {
+            cloudUsername = snapshot.Username ?? string.Empty;
+            DrawCloudPasswordResetForm(snapshot.IsBusy, hasLocalRecoveryKey: true);
+        }
+        DactUi.EndCard();
     }
 
     private (string Label, Vector4 Color) ResolveCloudStatus(CloudClientSnapshot snapshot)
@@ -1955,7 +1864,7 @@ public sealed partial class ControlCenterWindow : Window
         }
         if (snapshot.StatusIsError)
         {
-            return (text.Get("云同步异常", "Cloud error"), new Vector4(1, 0.45f, 0.42f, 1));
+            return (text.Get("云同步异常", "Cloud error"), DactUi.Danger);
         }
         if (snapshot.IsBusy)
         {
@@ -1969,121 +1878,78 @@ public sealed partial class ControlCenterWindow : Window
         {
             return (text.Get("等待首次同步", "Awaiting first sync"), Gold);
         }
-        return (text.Get("云同步正常", "Cloud sync ready"), new Vector4(0.45f, 0.88f, 0.62f, 1));
+        return (text.Get("云同步正常", "Cloud sync ready"), DactTheme.Palette.Accent);
     }
+
+    // 顶栏 · 云同步状态 (features.js cloudPopover): an anchored popover under the header chip,
+    // right edges aligned. Status, account, backups and the auto-sync switch, then refresh and a
+    // way into 账号与云同步. Clicking its title keeps the hidden-skin discovery of the old popup.
+    private Vector2 cloudChipAnchor;
 
     private void DrawCloudQuickPopup(CloudClientSnapshot snapshot)
     {
         if (cloudQuickPopupRequested)
         {
-            ImGui.OpenPopup(CloudQuickPopupId);
+            DactUi.OpenPopover(CloudQuickPopupId, cloudChipAnchor, alignRight: true);
             cloudQuickPopupRequested = false;
         }
-
-        var scale = Math.Max(.75f, ImGui.GetFontSize() / 17f);
-        var viewport = ImGui.GetMainViewport();
-        var maximumSize = Vector2.Max(Vector2.One, viewport.WorkSize - new Vector2(16));
-        var popupWidth = Math.Min(390 * scale, maximumSize.X);
-        var parentPosition = ImGui.GetWindowPos();
-        var parentSize = ImGui.GetWindowSize();
-        ImGui.SetNextWindowPos(
-            new Vector2(
-                parentPosition.X + Math.Max(12, parentSize.X - popupWidth - 42),
-                parentPosition.Y + 48),
-            ImGuiCond.Appearing);
-        ImGui.SetNextWindowSizeConstraints(new Vector2(popupWidth, 0), new Vector2(popupWidth, maximumSize.Y));
-        // Popup borders/background have separate ImGui settings. WindowBorderSize
-        // does not outline this surface, leaving it merged into the panel behind it.
-        ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 9);
-        ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 1);
-        // Auto-fit truncates the window size to pixels. Fractional padding (e.g.
-        // 16/17 font scale) otherwise leaves a 0.12px overflow and a permanent bar.
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(MathF.Ceiling(16 * scale)));
-        DactTheme.PushStyleColor(ImGuiCol.PopupBg, Navy);
-        DactTheme.PushStyleColor(ImGuiCol.Border, Gold);
-        DactTheme.PreparePopupPosition(CloudQuickPopupId);
-        if (!ImGui.BeginPopup(
-                CloudQuickPopupId,
-                ImGuiWindowFlags.AlwaysAutoResize |
-                ImGuiWindowFlags.NoResize |
-                ImGuiWindowFlags.NoMove |
-                (DactTheme.Palette.Rain ? ImGuiWindowFlags.NoBackground : ImGuiWindowFlags.None)))
-        {
-            ImGui.PopStyleColor(2);
-            ImGui.PopStyleVar(3);
-            return;
-        }
-
-        DactTheme.DrawGamePopupFrame();
-        var (statusLabel, statusColor) = ResolveCloudStatus(snapshot);
-        var heading = ImGui.GetCursorPos();
-        var closeSize = new Vector2(24 * scale);
-        var closeX = heading.X + ImGui.GetContentRegionAvail().X - closeSize.X;
-        DactTheme.TextColored(Gold, text.Get("云同步状态", "Cloud sync status"));
+        if (!DactUi.BeginPopover(CloudQuickPopupId, 320)) return;
+        var s = DactUi.S;
+        var palette = DactTheme.Palette;
+        var (statusLabel, _) = ResolveCloudStatus(snapshot);
+        var top = ImGui.GetCursorPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        DactUi.Text(text.Get("云同步状态", "Cloud sync status"), palette.Gold);
         if (ImGui.IsItemClicked()) DiscoverSkin(skinDiscoveries.ClickCloudStatus(configuration.Appearance, Environment.TickCount64));
-        ImGui.SameLine();
-        ImGui.SetCursorPos(new Vector2(closeX, heading.Y));
-        if (DactTheme.IconButton("close-cloud-status", GameSkinIcon.Close, "×", closeSize)) ImGui.CloseCurrentPopup();
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(text.Get("关闭", "Close"));
-        ImGui.SetCursorPos(new Vector2(heading.X, heading.Y + Math.Max(closeSize.Y, ImGui.GetTextLineHeight()) + ImGui.GetStyle().ItemSpacing.Y));
-        DactTheme.TextColored(statusColor, $"● {statusLabel}");
-        if (!string.IsNullOrWhiteSpace(snapshot.StatusMessage))
-        {
-            ImGui.TextWrapped(text.SystemMessage(snapshot.StatusMessage));
-        }
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        if (snapshot.CanUseDact && Friends is not null)
-        {
-            ImGui.TextDisabled(text.Get("账号", "Account"));
-            ImGui.SameLine();
-            Friends.DrawAccountName(snapshot);
-        }
-        else DrawCloudQuickRow(text.Get("账号", "Account"),
-            snapshot.IsSignedIn ? snapshot.Username ?? "—" : text.Get("尚未登录", "Signed out"));
-        DrawCloudQuickRow(
-            text.Get("最近备份", "Latest backup"),
-            snapshot.Backups.FirstOrDefault() is { } latestBackup
-                ? latestBackup.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")
-                : text.Get("暂无", "None"));
-        DrawCloudQuickRow(
-            text.Get("云端版本", "Cloud versions"),
-            $"{snapshot.Backups.Count}/2");
+        var pillWidth = Math.Min(DactUi.PillWidth(statusLabel), width * .6f);
+        ImGui.SetCursorPos(new Vector2(top.X + width - pillWidth, top.Y - 2 * s));
+        DactUi.Pill(statusLabel, CloudStatusTone(snapshot), maxWidth: pillWidth);
+        if (!string.IsNullOrWhiteSpace(snapshot.StatusMessage)) DactUi.Hint(text.SystemMessage(snapshot.StatusMessage));
 
-        var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
-        if (DactTheme.Checkbox(
-                text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"),
-                ref autoCloudSyncEnabled))
+        CloudInfoRow(text.Get("账号", "Account"), () =>
         {
-            configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
+            if (snapshot.CanUseDact && Friends is not null) Friends.DrawAccountName(snapshot);
+            else DactUi.Text(snapshot.IsSignedIn ? snapshot.Username ?? "—" : text.Get("尚未登录", "Signed out"));
+        });
+        var latest = snapshot.Backups.FirstOrDefault();
+        CloudInfoRow(text.Get("最近备份", "Latest backup"), () => DactUi.Text(
+            latest is null ? text.Get("暂无", "None") : latest.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm"),
+            latest is null ? palette.Muted : palette.Text));
+        CloudInfoRow(text.Get("云端版本", "Cloud versions"), () => DactUi.Text($"{snapshot.Backups.Count} / 2"));
+        DactUi.Divider();
+
+        var autoSync = configuration.AutoCloudSyncEnabled;
+        if (DactUi.ToggleRow(text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"), ref autoSync,
+                text.Get("每次打开游戏并登录后检查一次；配置没变化就不上传，退出游戏时不会等待网络。",
+                    "Checks once after each game launch and sign-in; unchanged settings are not uploaded, and shutdown never waits for the network.")))
+        {
+            configuration.AutoCloudSyncEnabled = autoSync;
             saveConfiguration();
         }
-        DrawAuthenticationMutedText(text.Get(
-            "每次打开游戏并登录后检查一次；配置没变化就不上传，退出游戏时不会等待网络。",
-            "Checks once after each game launch and sign-in; unchanged settings are not uploaded, and shutdown never waits for the network."));
-        ImGui.Spacing();
-
         if (snapshot.IsSignedIn)
         {
-            ImGui.BeginDisabled(snapshot.IsBusy);
-            if (DactTheme.Button(text.Get("刷新状态", "Refresh status"), new Vector2(118, 34)))
-            {
-                cloud.Refresh();
-            }
-            ImGui.EndDisabled();
-            ImGui.SameLine();
+            if (DactUi.Button(text.Get("刷新状态", "Refresh status") + "##cloud-quick-refresh", icon: "refresh", disabled: snapshot.IsBusy)) cloud.Refresh();
+            ImGui.SameLine(0, 8 * s);
         }
-        if (DactTheme.Button(text.Get("打开云同步", "Open Cloud Sync"), new Vector2(142, 34)))
+        if (DactUi.Button(text.Get("打开云同步", "Open Cloud Sync") + "##cloud-quick-open", ButtonKind.Primary))
         {
             selectedPage = Page.Cloud;
             ImGui.CloseCurrentPopup();
         }
-
         if (ImGui.IsKeyPressed(ImGuiKey.Escape)) ImGui.CloseCurrentPopup();
-        ImGui.EndPopup();
-        ImGui.PopStyleColor(2);
-        ImGui.PopStyleVar(3);
+        DactUi.EndPopover();
+    }
+
+    // Label column (72 px, small muted) beside the value, like dsl infoRow.
+    private static void CloudInfoRow(string label, Action value)
+    {
+        var s = DactUi.S;
+        var top = ImGui.GetCursorPos();
+        DactUi.DrawText(ImGui.GetWindowDrawList(), ImGui.GetCursorScreenPos(), 18 * s, label, DactUi.HintColor, DactFonts.Small);
+        ImGui.SetCursorPos(new Vector2(top.X + 80 * s, top.Y));
+        ImGui.BeginGroup();
+        value();
+        ImGui.EndGroup();
     }
 
     private static void DrawCloudQuickRow(string label, string value)
@@ -2093,429 +1959,256 @@ public sealed partial class ControlCenterWindow : Window
         ImGui.TextUnformatted(value);
     }
 
-    private void DrawSignedInCloud(CloudClientSnapshot snapshot)
-    {
-        DrawCloudSummaryCard(snapshot);
-        ImGui.Spacing();
-        DrawCloudDiscordRecovery(snapshot);
-
-        if (!string.IsNullOrWhiteSpace(snapshot.RecoveryKeyToSave))
-        {
-            ImGui.Spacing();
-            DrawCloudRecoveryKeyCard(snapshot.RecoveryKeyToSave);
-        }
-
-        ImGui.Spacing();
-        DrawCloudBackupCard(snapshot);
-        ImGui.Spacing();
-        DrawCloudInvitationAndSupportCard(snapshot);
-    }
+    private PillTone CloudStatusTone(CloudClientSnapshot snapshot)
+        => !snapshot.IsSignedIn || !configuration.AutoCloudSyncEnabled ? PillTone.Off
+            : snapshot.StatusIsError ? PillTone.Error
+            : snapshot.IsBusy || snapshot.Backups.Count == 0 ? PillTone.Warn
+            : PillTone.Ok;
 
     private void DrawCloudSummaryCard(CloudClientSnapshot snapshot)
     {
-        var statusMessage = snapshot.IsBusy
-            ? $"{text.SystemMessage(snapshot.StatusMessage)}  {text.Get("处理中…", "Working…")}"
-            : text.SystemMessage(snapshot.StatusMessage);
-        var wrapWidth = Math.Max(
-            1,
-            ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().WindowPadding.X * 2));
-        var statusMessageHeight = string.IsNullOrWhiteSpace(statusMessage)
-            ? 0
-            : ImGui.CalcTextSize(statusMessage, false, wrapWidth).Y;
-        var syncHint = text.Get(
-            "每次打开游戏并登录后自动检查一次；配置没变化就不上传。退出时不阻塞游戏，本次会话的最终更改会在下次打开游戏后同步。",
-            "Checks once after each game launch and sign-in, skipping unchanged settings. Shutdown is never delayed; final session changes sync next launch.");
-        var style = ImGui.GetStyle();
-        var lineHeight = ImGui.GetTextLineHeightWithSpacing();
-        var actionHeight = Math.Max(32, ImGui.GetFrameHeight());
-        // Every row uses live ImGui metrics because global font/UI scaling changes both
-        // line height and spacing; a fixed budget can clip the final action button.
-        var cardHeight =
-            (style.WindowPadding.Y * 2) +
-            (lineHeight * 4) +
-            statusMessageHeight +
-            ImGui.CalcTextSize(syncHint, false, wrapWidth).Y +
-            ImGui.GetFrameHeightWithSpacing() +
-            actionHeight +
-            (style.ItemSpacing.Y * 7) +
-            18;
+        var s = DactUi.S;
+        var palette = DactTheme.Palette;
+        var (statusLabel, _) = ResolveCloudStatus(snapshot);
+        DactUi.BeginCard("cloud-summary", null);
+        DactUi.CardTitleRow(text.Get("同步", "Sync"), () => DactUi.Pill(statusLabel, CloudStatusTone(snapshot)));
 
-        if (BrandedWindowChrome.BeginGoldCard(
-                "cloud-summary-card",
-                cardHeight,
-                allowScrolling: false))
+        // Three small figures side by side: label (small, muted) over value.
+        var stats = new (string Label, string Value, Vector4 Color)[]
         {
-            var (statusLabel, statusColor) = ResolveCloudStatus(snapshot);
-            DactTheme.TextColored(Gold, text.Get("同步概览", "Sync overview"));
-            DactTheme.TextColored(statusColor, $"● {statusLabel}");
-            if (!string.IsNullOrWhiteSpace(statusMessage))
-            {
-                ImGui.TextWrapped(statusMessage);
-            }
-
-            ImGui.Spacing();
-            if (ImGui.BeginTable(
-                    "cloud-summary-metrics",
-                    3,
-                    ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchSame))
-            {
-                ImGui.TableNextColumn();
-                DrawCloudMetric(
-                    text.Get("自动同步", "Auto-sync"),
-                    configuration.AutoCloudSyncEnabled
-                        ? text.Get("已开启", "On")
-                        : text.Get("已关闭", "Off"),
-                    configuration.AutoCloudSyncEnabled
-                        ? new Vector4(0.45f, 0.88f, 0.62f, 1)
-                        : AuthenticationMutedText);
-                ImGui.TableNextColumn();
-                DrawCloudMetric(
-                    text.Get("云端版本", "Cloud versions"),
-                    $"{snapshot.Backups.Count}/2",
-                    IceBlue);
-                ImGui.TableNextColumn();
-                DrawCloudMetric(
-                    text.Get("最近备份", "Latest backup"),
-                    snapshot.Backups.FirstOrDefault() is { } latestBackup
-                        ? latestBackup.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm")
-                        : text.Get("暂无", "None"),
-                    IceBlue);
-                ImGui.EndTable();
-            }
-
-            ImGui.Spacing();
-            var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
-            if (DactTheme.Checkbox(
-                    text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"),
-                    ref autoCloudSyncEnabled))
-            {
-                configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
-                saveConfiguration();
-            }
-            DrawAuthenticationMutedText(syncHint);
-
-            ImGui.BeginDisabled(snapshot.IsBusy);
-            if (DactTheme.Button(
-                    text.Get("刷新状态", "Refresh status"),
-                    new Vector2(118, actionHeight)))
-            {
-                cloud.Refresh();
-            }
-            ImGui.EndDisabled();
+            (text.Get("自动同步", "Auto-sync"), configuration.AutoCloudSyncEnabled ? text.Get("已开启", "On") : text.Get("已关闭", "Off"),
+                configuration.AutoCloudSyncEnabled ? palette.Accent : palette.Muted),
+            (text.Get("云端版本", "Cloud versions"), $"{snapshot.Backups.Count} / 2", palette.Text),
+            (text.Get("最近备份", "Latest backup"), snapshot.Backups.FirstOrDefault() is { } latest
+                ? latest.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") : text.Get("暂无", "None"),
+                snapshot.Backups.Count > 0 ? palette.Text : palette.Muted),
+        };
+        var origin = ImGui.GetCursorScreenPos();
+        var column = (ImGui.GetContentRegionAvail().X - 24 * s) / 3;
+        var draw = ImGui.GetWindowDrawList();
+        for (var i = 0; i < stats.Length; i++)
+        {
+            var at = origin + new Vector2(i * (column + 12 * s), 0);
+            string label, value;
+            using (DactFonts.Push(DactFonts.Small)) label = DactUi.Fit(stats[i].Label, column);
+            value = DactUi.Fit(stats[i].Value, column);
+            DactUi.DrawText(draw, at, 16 * s, label, palette.Muted, DactFonts.Small);
+            DactUi.DrawText(draw, at + new Vector2(0, 18 * s), 18 * s, value, stats[i].Color);
         }
-        BrandedWindowChrome.EndGoldCard();
-    }
+        ImGui.Dummy(new Vector2(ImGui.GetContentRegionAvail().X, 36 * s));
 
-    private static void DrawCloudMetric(string label, string value, Vector4 color)
-    {
-        ImGui.TextDisabled(label);
-        DactTheme.TextColored(color, value);
+        var autoCloudSyncEnabled = configuration.AutoCloudSyncEnabled;
+        if (DactUi.ToggleRow(text.Get("打开游戏后自动同步配置", "Sync configuration after game launch"), ref autoCloudSyncEnabled,
+                text.Get("每次打开游戏并登录后检查一次；配置没变化就不上传，退出游戏不会被阻塞。",
+                    "Checks once after each game launch and sign-in; unchanged settings are not uploaded, and quitting the game is never delayed.")))
+        {
+            configuration.AutoCloudSyncEnabled = autoCloudSyncEnabled;
+            saveConfiguration();
+        }
+
+        var uploadLabel = snapshot.IsBusy ? text.Get("处理中…", "Working…") : text.Get("上传当前配置", "Upload current configuration");
+        if (DactUi.Button(uploadLabel + "###CloudUploadCurrent", ButtonKind.Primary, "upload", disabled: snapshot.IsBusy)) cloud.Upload();
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Get(
+                "手动上传会短暂停止解析器与扩展，完成后自动恢复。",
+                "Manual upload briefly stops parsers and extensions, then restores them."));
+        var refreshLabel = text.Get("刷新状态", "Refresh status");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(refreshLabel, icon: "refresh"));
+        if (DactUi.Button(refreshLabel + "##cloud-refresh", icon: "refresh", disabled: snapshot.IsBusy)) cloud.Refresh();
+        // The result of the last action (upload, refresh, restore) stays readable under the buttons.
+        var statusMessage = text.SystemMessage(snapshot.StatusMessage);
+        if (!string.IsNullOrWhiteSpace(statusMessage))
+            DactUi.Wrapped(snapshot.IsBusy ? $"{statusMessage}  {text.Get("处理中…", "Working…")}" : statusMessage,
+                snapshot.StatusIsError ? DactUi.Danger : DactUi.HintColor, DactFonts.Small);
+        DactUi.EndCard();
     }
 
     private void DrawCloudRecoveryKeyCard(string recoveryKey)
     {
-        var recoveryTitle = text.Get(
+        var s = DactUi.S;
+        DactUi.BeginCard("cloud-recovery-key", null);
+        DactUi.Wrapped(text.Get(
             "恢复密钥只显示这一次，请立即离线保存",
-            "Save this recovery key offline now; it is shown only once");
-        var wrapWidth = Math.Max(
-            1,
-            ImGui.GetContentRegionAvail().X -
-            (ImGui.GetStyle().WindowPadding.X * 2));
-        var cardHeight =
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            ImGui.CalcTextSize(recoveryTitle, false, wrapWidth).Y +
-            ImGui.GetFrameHeightWithSpacing() +
-            (ImGui.GetStyle().ItemSpacing.Y * 3) +
-            12;
-        if (BrandedWindowChrome.BeginGoldCard(
-                "cloud-recovery-key-card",
-                cardHeight,
-                allowScrolling: false))
-        {
-            DactTheme.TextColored(
-                new Vector4(1f, 0.72f, 0.25f, 1),
-                recoveryTitle);
-            var visibleRecoveryKey = recoveryKey;
-            ImGui.SetNextItemWidth(-90);
-            ImGui.InputText(
-                "###cloud-created-recovery-key",
-                ref visibleRecoveryKey,
-                96,
-                ImGuiInputTextFlags.ReadOnly);
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("复制", "Copy")))
-            {
-                ImGui.SetClipboardText(recoveryKey);
-            }
-        }
-        BrandedWindowChrome.EndGoldCard();
+            "Save this recovery key offline now; it is shown only once"), DactTheme.Palette.Gold);
+        var visibleRecoveryKey = recoveryKey;
+        var copyLabel = text.Get("复制", "Copy");
+        DactUi.Input("cloud-created-recovery-key", ref visibleRecoveryKey, "", 96,
+            width: ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(copyLabel) - 8 * s, readOnly: true);
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(copyLabel + "##cloud-copy-recovery", ButtonKind.Primary)) ImGui.SetClipboardText(recoveryKey);
+        DactUi.EndCard();
     }
 
     private void DrawCloudBackupCard(CloudClientSnapshot snapshot)
     {
-        var previewHeight = snapshot.RestorePreview is { } activePreview &&
-                            cloudPreviewRequestedBackupId == selectedCloudBackupId
-            ? 116 + (activePreview.Scopes.Count * ImGui.GetTextLineHeightWithSpacing())
-            : 0;
-        var rollbackHeight = string.IsNullOrWhiteSpace(snapshot.LastRollbackPath) ? 0 : 44;
-        var cardHeight =
-            290 +
-            (snapshot.Backups.Count * ImGui.GetFrameHeightWithSpacing()) +
-            previewHeight +
-            rollbackHeight;
+        var s = DactUi.S;
+        DactUi.BeginCard("cloud-backup", text.Get("备份与恢复", "Backup & restore"));
+        DactUi.Hint(text.Get(
+            "配置在本机加密后上传，服务器无法读取；最多保留最近 2 个不同内容的版本，恢复前始终先预览。",
+            "Settings are encrypted on this PC before upload, so the server cannot read them; up to 2 versions with different content are kept, and every restore is previewed first."));
 
-        if (BrandedWindowChrome.BeginGoldCard(
-                "cloud-backup-card",
-                cardHeight,
-                allowScrolling: false))
+        DactUi.BeginField(text.Get("云端版本", "Cloud version"));
+        if (snapshot.Backups.Count == 0)
         {
-            DactTheme.TextColored(Gold, text.Get("备份与恢复", "Backup & restore"));
-            DrawAuthenticationMutedText(text.Get(
-                "配置在本机加密后上传，服务器无法读取；恢复前始终先预览变更。",
-                "Settings are encrypted on this PC before upload. Always preview changes before restoring."));
-            DrawAuthenticationMutedText(text.Get(
-                "最多保留最近 2 个不同内容的密文版本；相同配置不会重复占用空间。",
-                "Up to 2 encrypted versions with different content are retained; unchanged settings use no extra slot."));
-
-            ImGui.BeginDisabled(snapshot.IsBusy);
-            var uploadLabel = snapshot.IsBusy
-                ? text.Get("处理中…", "Working…")
-                : text.Get("上传当前配置", "Upload current configuration");
-            if (DactTheme.Button($"{uploadLabel}###CloudUploadCurrent", new Vector2(152, 34)))
-            {
-                cloud.Upload();
-            }
-            ImGui.EndDisabled();
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip(text.Get(
-                    "手动上传会短暂停止解析器与扩展，完成后自动恢复。",
-                    "Manual upload briefly stops parsers and extensions, then restores them."));
-            }
-
-            ImGui.Spacing();
-            ImGui.Separator();
-            DactTheme.TextColored(IceBlue, text.Get("选择云端版本", "Choose a cloud version"));
-            if (snapshot.Backups.Count == 0)
-            {
-                DrawAuthenticationMutedText(text.Get(
+            var none = 0;
+            DactUi.Select("cloud-backups", [text.Get("暂无备份", "No backups")], ref none, disabled: true);
+            // The empty-state explanation lives in the (disabled) select's tooltip, as in the design.
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                DactUi.Tooltip(text.Get(
                     "暂无备份。开启自动同步后，下次打开游戏并登录时会自动创建第一份备份。",
                     "No backup yet. With auto-sync enabled, the first backup is created after the next game launch and sign-in."));
+            DactUi.EndField();
+        }
+        else
+        {
+            if (snapshot.Backups.All(backup => backup.Id != selectedCloudBackupId))
+            {
+                selectedCloudBackupId = snapshot.Backups[0].Id;
+                cloudPreviewRequestedBackupId = null;
+                confirmCloudRestore = false;
+            }
+            var index = snapshot.Backups.ToList().FindIndex(backup => backup.Id == selectedCloudBackupId);
+            var labels = snapshot.Backups
+                .Select(backup => $"{backup.CreatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}  {FormatCloudBytes(backup.SizeBytes)}")
+                .ToArray();
+            if (DactUi.Select("cloud-backups", labels, ref index) && index >= 0)
+            {
+                selectedCloudBackupId = snapshot.Backups[index].Id;
+                cloudPreviewRequestedBackupId = null;
+                confirmCloudRestore = false;
+            }
+            DactUi.EndField();
+        }
+
+        var canUseSelection = !snapshot.IsBusy && !string.IsNullOrWhiteSpace(selectedCloudBackupId) && snapshot.Backups.Count > 0;
+        if (DactUi.Button(text.Get("预览恢复内容", "Preview restore") + "##cloud-preview", disabled: !canUseSelection))
+        {
+            cloudPreviewRequestedBackupId = selectedCloudBackupId;
+            confirmCloudRestore = false;
+            cloud.PreviewRestore(selectedCloudBackupId!);
+        }
+
+        if (snapshot.RestorePreview is { } preview && cloudPreviewRequestedBackupId == selectedCloudBackupId)
+        {
+            DactUi.Wrapped(text.Format(
+                $"将新增 {preview.AddedFiles}、修改 {preview.ChangedFiles}、删除 {preview.RemovedFiles} 个文件；" +
+                $"共 {preview.FileCount} 个文件。新电脑的日志目录和 ACT 插件目录会保留。",
+                $"Adds {preview.AddedFiles}, changes {preview.ChangedFiles}, and removes {preview.RemovedFiles} files; {preview.FileCount} files total. This PC's log and ACT plugin paths are preserved."),
+                size: DactFonts.Small);
+            foreach (var scope in preview.Scopes)
+                DactUi.Hint($"· {scope.RelativePath}: +{scope.AddedFiles} ~{scope.ChangedFiles} -{scope.RemovedFiles} ={scope.UnchangedFiles}");
+            if (!confirmCloudRestore)
+            {
+                if (DactUi.Button(text.Get("恢复这个版本", "Restore this version") + "##cloud-restore", disabled: snapshot.IsBusy))
+                    confirmCloudRestore = true;
             }
             else
             {
-                if (snapshot.Backups.All(backup => backup.Id != selectedCloudBackupId))
+                DactUi.Wrapped(text.Get(
+                    "将覆盖白名单内的本机配置，完成后必须重载 DACT。",
+                    "Whitelisted local settings will be replaced; DACT must be reloaded afterward."), DactUi.Danger, DactFonts.Small);
+                if (DactUi.Button(text.Get("确认覆盖", "Confirm restore") + "##cloud-restore-confirm", ButtonKind.Danger, disabled: snapshot.IsBusy))
                 {
-                    selectedCloudBackupId = snapshot.Backups[0].Id;
-                    cloudPreviewRequestedBackupId = null;
+                    cloud.Restore(selectedCloudBackupId!);
                     confirmCloudRestore = false;
                 }
-                foreach (var backup in snapshot.Backups)
-                {
-                    var selected = backup.Id == selectedCloudBackupId;
-                    var label = $"{backup.CreatedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}  " +
-                                $"{FormatCloudBytes(backup.SizeBytes)}###{backup.Id}";
-                    if (ImGui.Selectable(label, selected))
-                    {
-                        selectedCloudBackupId = backup.Id;
-                        cloudPreviewRequestedBackupId = null;
-                        confirmCloudRestore = false;
-                    }
-                }
-            }
-
-            var canUseSelection =
-                !snapshot.IsBusy &&
-                !string.IsNullOrWhiteSpace(selectedCloudBackupId);
-            ImGui.BeginDisabled(!canUseSelection);
-            if (DactTheme.Button(text.Get("预览恢复内容", "Preview restore"), new Vector2(142, 32)))
-            {
-                cloudPreviewRequestedBackupId = selectedCloudBackupId;
-                confirmCloudRestore = false;
-                cloud.PreviewRestore(selectedCloudBackupId!);
-            }
-            ImGui.EndDisabled();
-
-            if (snapshot.RestorePreview is { } preview &&
-                cloudPreviewRequestedBackupId == selectedCloudBackupId)
-            {
-                ImGui.TextWrapped(text.Format(
-                    $"将新增 {preview.AddedFiles}、修改 {preview.ChangedFiles}、删除 {preview.RemovedFiles} 个文件；" +
-                    $"共 {preview.FileCount} 个文件。新电脑的日志目录和 ACT 插件目录会保留。",
-                    $"Adds {preview.AddedFiles}, changes {preview.ChangedFiles}, and removes {preview.RemovedFiles} files; {preview.FileCount} files total. This PC's log and ACT plugin paths are preserved."));
-                foreach (var scope in preview.Scopes)
-                {
-                    ImGui.BulletText(
-                        $"{scope.RelativePath}: +{scope.AddedFiles} ~{scope.ChangedFiles} -{scope.RemovedFiles} ={scope.UnchangedFiles}");
-                }
-                if (!confirmCloudRestore)
-                {
-                    ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (DactTheme.Button(text.Get("恢复这个版本", "Restore this version")))
-                    {
-                        confirmCloudRestore = true;
-                    }
-                    ImGui.EndDisabled();
-                }
-                else
-                {
-                    DactTheme.TextColored(
-                        new Vector4(1f, 0.56f, 0.30f, 1),
-                        text.Get(
-                            "将覆盖白名单内的本机配置，完成后必须重载 DACT。",
-                            "Whitelisted local settings will be replaced; DACT must be reloaded afterward."));
-                    ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (DactTheme.Button(text.Get("确认覆盖", "Confirm restore")))
-                    {
-                        cloud.Restore(selectedCloudBackupId!);
-                        confirmCloudRestore = false;
-                    }
-                    ImGui.EndDisabled();
-                    ImGui.SameLine();
-                    if (DactTheme.Button(text.Get("取消", "Cancel")))
-                    {
-                        confirmCloudRestore = false;
-                    }
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(snapshot.LastRollbackPath))
-            {
-                ImGui.Spacing();
-                if (!confirmCloudRollback)
-                {
-                    ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (DactTheme.Button(text.Get("撤销上次恢复", "Undo last restore")))
-                    {
-                        confirmCloudRollback = true;
-                    }
-                    ImGui.EndDisabled();
-                }
-                else
-                {
-                    ImGui.BeginDisabled(snapshot.IsBusy);
-                    if (DactTheme.Button(text.Get("确认回滚", "Confirm rollback")))
-                    {
-                        cloud.Rollback();
-                        confirmCloudRollback = false;
-                    }
-                    ImGui.EndDisabled();
-                    ImGui.SameLine();
-                    if (DactTheme.Button(text.Get("取消###cloud-rollback", "Cancel###cloud-rollback")))
-                    {
-                        confirmCloudRollback = false;
-                    }
-                }
+                ImGui.SameLine(0, 8 * s);
+                if (DactUi.Button(text.Get("取消", "Cancel") + "##cloud-restore-cancel")) confirmCloudRestore = false;
             }
         }
-        BrandedWindowChrome.EndGoldCard();
+
+        if (!string.IsNullOrWhiteSpace(snapshot.LastRollbackPath))
+        {
+            if (!confirmCloudRollback)
+            {
+                if (DactUi.Button(text.Get("撤销上次恢复", "Undo last restore") + "##cloud-rollback", disabled: snapshot.IsBusy))
+                    confirmCloudRollback = true;
+            }
+            else
+            {
+                if (DactUi.Button(text.Get("确认回滚", "Confirm rollback") + "##cloud-rollback-confirm", ButtonKind.Danger, disabled: snapshot.IsBusy))
+                {
+                    cloud.Rollback();
+                    confirmCloudRollback = false;
+                }
+                ImGui.SameLine(0, 8 * s);
+                if (DactUi.Button(text.Get("取消###cloud-rollback", "Cancel###cloud-rollback"))) confirmCloudRollback = false;
+            }
+        }
+        DactUi.EndCard();
     }
 
-    private void DrawCloudInvitationAndSupportCard(CloudClientSnapshot snapshot)
+    private void DrawCloudInvitationCard(CloudClientSnapshot snapshot)
     {
-        var invitationCount = snapshot.Invitations?.Invitations.Count ?? 0;
-        var shareKeyHeight = string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare) ? 0 : 62;
-        var cardHeight =
-            390 +
-            shareKeyHeight +
-            (invitationCount * ImGui.GetTextLineHeightWithSpacing());
-
-        if (BrandedWindowChrome.BeginGoldCard(
-                "cloud-invitation-support-card",
-                cardHeight,
-                allowScrolling: false))
+        var s = DactUi.S;
+        DactUi.BeginCard("cloud-invitations", text.Get("邀请好友", "Invite friends"));
+        if (snapshot.Invitations is not { } invitations)
         {
-            DactTheme.TextColored(Gold, text.Get("邀请好友", "Invite friends"));
-            if (snapshot.Invitations is { } invitations)
-            {
-                DactTheme.TextColored(
-                    IceBlue,
-                    invitations.IsAdmin
-                        ? text.Format($"管理员 · 无限生成 · 已生成 {invitations.Used} 个", $"Administrator · Unlimited · {invitations.Used} created")
-                        : text.Format(
-                            $"已使用 {invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} · 剩余 {invitations.Remaining}",
-                            $"{invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} used · {invitations.Remaining} remaining"));
-                DrawAuthenticationMutedText(text.Get(
-                    "每个激活码只能使用一次。请填写受邀好友的游戏 ID 或 QQ ID，方便后续核对。",
-                    "Each activation key can be used once. Enter the friend's game ID or QQ ID for later verification."));
-                ImGui.SetNextItemWidth(-1);
-                ImGui.InputTextWithHint(
-                    "###cloud-invitee-contact",
-                    text.Get("受邀好友的游戏 ID 或 QQ ID", "Invitee game ID or QQ ID"),
-                    ref cloudInviteeContact,
-                    81);
-                var normalizedInviteeContact = cloudInviteeContact.Trim();
-                var inviteeContactValid = normalizedInviteeContact.Length is >= 2 and <= 80;
-                ImGui.BeginDisabled(
-                    snapshot.IsBusy ||
-                    !invitations.CanGenerate ||
-                    !inviteeContactValid);
-                if (DactTheme.Button(text.Get("生成好友激活码", "Create friend activation key")))
-                {
-                    cloud.CreateInvitation(normalizedInviteeContact);
-                }
-                ImGui.EndDisabled();
-                if (!inviteeContactValid && !string.IsNullOrWhiteSpace(cloudInviteeContact))
-                {
-                    DrawAuthenticationMutedText(text.Get(
-                        "游戏 ID 或 QQ ID 长度需要为 2 到 80 个字符。",
-                        "The game ID or QQ ID must contain 2 to 80 characters."));
-                }
-                if (!string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare))
-                {
-                    var invitationKey = snapshot.InvitationKeyToShare;
-                    ImGui.SetNextItemWidth(-90);
-                    ImGui.InputText(
-                        "###cloud-created-invitation-key",
-                        ref invitationKey,
-                        96,
-                        ImGuiInputTextFlags.ReadOnly);
-                    ImGui.SameLine();
-                    if (DactTheme.Button(text.Get("复制###copy-invitation", "Copy###copy-invitation")))
-                    {
-                        ImGui.SetClipboardText(snapshot.InvitationKeyToShare);
-                    }
-                    DrawAuthenticationMutedText(text.Get(
-                        "完整激活码只显示这一次，请现在发给好友。",
-                        "The complete key is shown once; share it now."));
-                }
-                foreach (var invitation in invitations.Invitations)
-                {
-                    ImGui.BulletText(
-                        $"{invitation.Name} · {invitation.InviteeContact ?? "—"} · " +
-                        $"…{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
-                }
-            }
-
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
-            DactTheme.TextColored(Gold, text.Get("支持 DACT", "Support DACT"));
-            ImGui.TextWrapped(text.Get(
-                "你的支持将用于账号与加密备份服务器的持续运行，以及 DACT 的维护和后续开发。",
-                "Your support helps keep the account and encrypted-backup server online and funds ongoing DACT maintenance and development."));
-            DactTheme.TextColored(IceBlue, text.Get(
-                "支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额。",
-                "Supporters may contact the administrator to request more friend-invite slots beyond the default 3."));
-            DrawAuthenticationMutedText(text.Get(
-                "支持不会解除封禁、跳过风控或授予管理员权限。",
-                "Support does not remove bans, bypass risk controls, or grant administrator privileges."));
-            if (DactTheme.Button(
-                    text.Get("爱发电支持", "Support on Afdian"),
-                    new Vector2(190, 34)))
-            {
-                // Opening the support page does not grant benefits; sponsorship
-                // remains a permanent account grant verified by the administrator.
-                OpenUrl(AfdianSupportUrl);
-            }
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip(text.Format(
-                    $"在浏览器中打开爱发电。\n赞助后请联系管理员核对账号并开通等级；{SkinCatalog.EorzeaSponsorTier} 级永久解锁艾欧泽亚皮肤。",
-                    $"Open Afdian in your browser.\nAfter sponsoring, contact the administrator to verify your account; tier {SkinCatalog.EorzeaSponsorTier} permanently unlocks the Eorzea skin."));
-            }
+            DactUi.Hint(text.Get("默认 3 个邀请名额。", "3 invitation slots by default."));
+            DactUi.EndCard();
+            return;
         }
-        BrandedWindowChrome.EndGoldCard();
+        DactUi.Hint((invitations.IsAdmin
+            ? text.Format($"管理员 · 无限生成 · 已生成 {invitations.Used} 个", $"Administrator · Unlimited · {invitations.Used} created")
+            : text.Format(
+                $"已使用 {invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} · 剩余 {invitations.Remaining}",
+                $"{invitations.QuotaUsed ?? invitations.Used}/{invitations.Quota} used · {invitations.Remaining} remaining")) +
+            (text.IsChinese ? "。" : ". ") + text.Get(
+                "每个激活码只能使用一次。请填写受邀好友的游戏 ID 或 QQ ID，方便后续核对。",
+                "Each activation key can be used once. Enter the friend's game ID or QQ ID for later verification."));
+        var createLabel = text.Get("生成邀请码", "Create invitation key");
+        DactUi.Input("cloud-invitee-contact", ref cloudInviteeContact, text.Get("受邀好友的游戏 ID 或 QQ ID", "Invitee game ID or QQ ID"), 81,
+            width: ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(createLabel) - 8 * s);
+        var normalizedInviteeContact = cloudInviteeContact.Trim();
+        var inviteeContactValid = normalizedInviteeContact.Length is >= 2 and <= 80;
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(createLabel + "##cloud-invite", disabled: snapshot.IsBusy || !invitations.CanGenerate || !inviteeContactValid))
+            cloud.CreateInvitation(normalizedInviteeContact);
+        if (!inviteeContactValid && !string.IsNullOrWhiteSpace(cloudInviteeContact))
+            DactUi.Wrapped(text.Get("游戏 ID 或 QQ ID 长度需要为 2 到 80 个字符。", "The game ID or QQ ID must contain 2 to 80 characters."),
+                DactTheme.Palette.Gold, DactFonts.Small);
+        if (!string.IsNullOrWhiteSpace(snapshot.InvitationKeyToShare))
+        {
+            var invitationKey = snapshot.InvitationKeyToShare;
+            var copyLabel = text.Get("复制###copy-invitation", "Copy###copy-invitation");
+            DactUi.Input("cloud-created-invitation-key", ref invitationKey, "", 96,
+                width: ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(copyLabel) - 8 * s, readOnly: true);
+            ImGui.SameLine(0, 8 * s);
+            if (DactUi.Button(copyLabel, ButtonKind.Primary)) ImGui.SetClipboardText(snapshot.InvitationKeyToShare);
+            DactUi.Hint(text.Get("完整激活码只显示这一次，请现在发给好友。", "The complete key is shown once; share it now."));
+        }
+        foreach (var invitation in invitations.Invitations)
+            DactUi.Hint($"· {invitation.Name} · {invitation.InviteeContact ?? "—"} · …{invitation.CodeHint} · {FormatInvitationStatus(invitation.Status)}");
+        DactUi.EndCard();
+    }
+
+    // 支持 DACT card (设置 page in 1.0).
+    private void DrawSupportCard()
+    {
+        DactUi.BeginCard("settings-support", text.Get("支持 DACT", "Support DACT"));
+        DactUi.Hint(text.Get("用于服务器运行与后续开发。", "Keeps the servers running and funds further development."));
+        if (DactUi.Button(text.Get("爱发电支持", "Support on Afdian") + "##support-afdian", icon: "heart"))
+        {
+            // Opening the support page does not grant benefits; sponsorship
+            // remains a permanent account grant verified by the administrator.
+            OpenUrl(AfdianSupportUrl);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            DactUi.Tooltip(text.Format(
+                $"在浏览器中打开爱发电。\n赞助后请联系管理员核对账号并开通等级；{SkinCatalog.EorzeaSponsorTier} 级永久解锁艾欧泽亚皮肤。",
+                $"Open Afdian in your browser.\nAfter sponsoring, contact the administrator to verify your account; tier {SkinCatalog.EorzeaSponsorTier} permanently unlocks the Eorzea skin.") +
+                "\n" + text.Get(
+                    "你的支持将用于账号与加密备份服务器的持续运行，以及 DACT 的维护和后续开发。",
+                    "Your support helps keep the account and encrypted-backup server online and funds ongoing DACT maintenance and development.") +
+                "\n" + text.Get(
+                    "支持者可以联系管理员，申请增加超过默认 3 个的好友邀请名额。",
+                    "Supporters may contact the administrator to request more friend-invite slots beyond the default 3.") +
+                "\n" + text.Get(
+                    "支持不会解除封禁、跳过风控或授予管理员权限。",
+                    "Support does not remove bans, bypass risk controls, or grant administrator privileges."));
+        }
+        DactUi.EndCard();
     }
 
     private void ClearCloudSecrets()
@@ -2586,101 +2279,70 @@ public sealed partial class ControlCenterWindow : Window
         skinSettings.PreviewSkinId is SkinCatalog.LiquidGlass or SkinCatalog.RainyWindow &&
         configuration.Appearance.UnlockedEasterEggs.Contains(skinSettings.PreviewSkinId);
 
+    // Paths for 文件位置; set by the plugin (absent in screenshot tests).
+    internal Infrastructure.Storage.PluginPaths? Paths { get; set; }
+
+    private const string FactoryResetDialog = "factory-reset-confirm";
+    private bool fileLocationsOpen;
+
+    // 设置 (screens.js settings): two columns of cards, 解析器与诊断, then the danger zone. The
+    // account moved to 账号与云同步 and 来信提醒 to its own page under 好友.
     private bool DrawDiagnostics()
     {
-        DrawPageHeader(
-            text.Get("设置&账号", "Settings & Account"),
-            text.Get(
-                "运行状态、账号、语言、快捷按钮与恢复选项。",
-                "Runtime status, account, language, quick-button, and recovery options."));
-
-        skinSettings.DrawEntry(configuration.Appearance, cloud.GetSnapshot(), text);
-        if (skinSettings.IsOpen)
-        {
-            resetSettingsScroll = true;
-            return false;
-        }
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
-        DrawAccountSettings();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        DactTheme.TextColored(Gold, $"{text.Get("解析器", "Parser")}: {LocalizeState(parserStatus.State)}");
-        ImGui.TextWrapped(parserStatus.Message);
-        if (!string.IsNullOrWhiteSpace(parserStatus.Detail))
-        {
-            ImGui.TextWrapped(parserStatus.Detail);
-        }
-        if (DactTheme.Button(text.Get("重启解析器", "Restart parser")))
-        {
-            RestartParser();
-        }
-        ImGui.SameLine();
-        DrawStatusWindowToggleButton(Vector2.Zero, detailedLabel: true);
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("三方扩展声明", "Third-party extension notice")))
-        {
-            openBundledPluginNotice();
-        }
-
-        DrawCombatLogDirectorySettings();
-
-        if (DactTheme.Button(text.Get("复制诊断日志", "Copy diagnostic log")))
-        {
-            CopyDiagnosticReport();
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip(text.Get(
-                "复制本插件相关的运行状态与近期日志；不复制战斗日志和配置文件，并会遮盖用户路径与常见凭据。原始战斗数据问题可使用右侧按钮打开日志文件夹。",
-                "Copies recent plugin diagnostics and runtime state. Combat logs and configuration files are excluded, and user paths and common credentials are redacted. For raw combat-data issues, use the button on the right to open the log folder."));
-        }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("打开日志文件夹", "Open log folder")))
-        {
-            openLogDirectory();
-        }
-
-        if (!string.IsNullOrWhiteSpace(diagnosticCopyFeedback))
-        {
-            DactTheme.TextColored(
-                diagnosticCopyFeedbackIsError
-                    ? new Vector4(0.95f, 0.45f, 0.40f, 1)
-                    : IceBlue,
-                diagnosticCopyFeedback);
-        }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        if (scenesPage) return DrawScenesPage();
         var changed = false;
-        ImGui.Spacing();
-        ImGui.Separator();
-        changed |= UiLanguageSelector.Draw(configuration, text);
-        changed |= Checkbox(text.Get("调试模式", "Debug mode"), configuration.DebugMode, value => configuration.DebugMode = value);
-        if (configuration.DebugMode)
+        DactUi.PageHeader(text.Get("设置", "Settings"),
+            text.Get("外观、语言、提醒、日志与恢复选项。", "Appearance, language, notifications, logs and recovery options."));
+        if (DactUi.BeginGrid("settings-grid", 14))
         {
-            changed |= Checkbox(
-                text.Get("记录 FFLogs parity 诊断", "Record FFLogs parity diagnostics"),
-                configuration.EnableFflogsParityRecorder,
-                value => configuration.EnableFflogsParityRecorder = value);
-            if (ImGui.IsItemHovered())
+            using (DactUi.Gap(14))
             {
-                ImGui.SetTooltip(text.Get(
-                    "仅在手动启用后记录；普通 Debug 不会自动启动 parity 工具。",
-                    "Records only when explicitly enabled; ordinary Debug does not start the parity tool."));
+                skinSettings.DrawCard(configuration.Appearance, cloud.GetSnapshot(), text);
+                if (skinSettings.IsOpen)
+                {
+                    resetSettingsScroll = true;
+                    DactUi.EndGrid();
+                    return false;
+                }
+                changed |= DrawGeneralSettingsCard();
             }
-            DrawCombatQuality();
+            DactUi.NextColumn();
+            using (DactUi.Gap(14))
+            {
+                changed |= DrawDataAndLogsCard();
+                DrawSupportCard();
+            }
+            DactUi.EndGrid();
         }
-        changed |= Checkbox(text.Get("显示 ACT 快捷按钮", "Show ACT quick button"), configuration.ShowLauncherButton, value => configuration.ShowLauncherButton = value);
+        DrawParserDiagnosticsCard();
+        changed |= DrawScenePresetCard();
+        DrawFactoryResetZone();
+        return changed;
+    }
+
+    private bool DrawGeneralSettingsCard()
+    {
+        var s = DactUi.S;
+        var changed = false;
+        DactUi.BeginCard("settings-general", text.Get("通用", "General"));
+        changed |= UiLanguageSelector.DrawField(configuration, text);
+        changed |= DrawSearchShortcutField();
+        var showLauncher = configuration.ShowLauncherButton;
+        if (DactUi.ToggleRow(text.Get("显示 ACT 快捷按钮", "Show ACT quick button"), ref showLauncher,
+                text.Get("左键打开控制中心、右键显示或隐藏战斗统计、按住中键拖动。", "Left-click opens the control center, right-click shows or hides the Combat Meter, hold the middle button to move it.")))
+        {
+            configuration.ShowLauncherButton = showLauncher;
+            changed = true;
+        }
+        DactUi.BeginField(text.Get("快捷按钮尺寸", "Quick-button size"));
         var launcherButtonSize = configuration.LauncherButtonSize;
-        if (ImGui.SliderInt(text.Get("快捷按钮尺寸（像素）", "Quick-button size (pixels)"), ref launcherButtonSize, 56, 128))
+        if (DactUi.SliderInt("launcher-size", ref launcherButtonSize, 56, 128, text.Format($"{launcherButtonSize} 像素", $"{launcherButtonSize} px")))
         {
             configuration.LauncherButtonSize = launcherButtonSize;
             changed = true;
         }
-        if (DactTheme.Button(text.Get("重置快捷按钮大小与位置", "Reset quick-button size and position")))
+        DactUi.EndField();
+        if (DactUi.Button(text.Get("重置快捷按钮大小与位置", "Reset quick-button size and position") + "##launcher-reset", icon: "reset"))
         {
             configuration.LauncherPositionX = 80;
             configuration.LauncherPositionY = 160;
@@ -2688,87 +2350,246 @@ public sealed partial class ControlCenterWindow : Window
             configuration.ShowLauncherButton = true;
             changed = true;
         }
+        var debug = configuration.DebugMode;
+        if (DactUi.ToggleRow(text.Get("调试模式", "Debug mode"), ref debug)) { configuration.DebugMode = debug; changed = true; }
+        if (configuration.DebugMode)
+        {
+            var parity = configuration.EnableFflogsParityRecorder;
+            if (DactUi.ToggleRow(text.Get("记录 FFLogs parity 诊断", "Record FFLogs parity diagnostics"), ref parity))
+            {
+                configuration.EnableFflogsParityRecorder = parity;
+                changed = true;
+            }
+            if (ImGui.IsItemHovered())
+                DactUi.Tooltip(text.Get(
+                    "仅在手动启用后记录；普通 Debug 不会自动启动 parity 工具。",
+                    "Records only when explicitly enabled; ordinary Debug does not start the parity tool."));
+            DrawCombatQuality();
+        }
+        DactUi.EndCard();
+        return changed;
+    }
 
+    // 全局搜索快捷键: a switch (the user wants it possible to turn off), and while it is on a
+    // recorder: click, then press the new chord; Esc cancels. A chord needs Ctrl or Alt, so a plain
+    // letter never fires while playing.
+    private bool recordingSearchShortcut;
+    private HashSet<int> recordingHeldKeys = [];
+    private string? searchShortcutError;
+
+    private bool DrawSearchShortcutField()
+    {
+        var s = DactUi.S;
+        var changed = false;
+        const OverlayHotkeyModifiers defaultModifiers = OverlayHotkeyModifiers.Control | OverlayHotkeyModifiers.Shift;
+        var enabled = configuration.SearchHotkeyActive();
+        if (DactUi.ToggleRow(text.Get("全局搜索快捷键", "Search shortcut"), ref enabled, text.Get(
+                "在游戏里任何时候都能按，不用先打开 DACT，只弹出搜索框；再按一次、按 Esc 或点别处关闭。",
+                "Works anywhere in the game without opening DACT and shows only the search box; press it again, Esc or click elsewhere to close.")))
+        {
+            configuration.SearchHotkeyEnabled = enabled;
+            // A chord switched off by an earlier build (key 0) comes back as the default.
+            if (enabled && configuration.SearchHotkeyKey == 0)
+            {
+                configuration.SearchHotkeyKey = 0x4B;
+                configuration.SearchHotkeyModifiers = defaultModifiers;
+            }
+            recordingSearchShortcut = false;
+            searchShortcutError = null;
+            changed = true;
+        }
+        if (!configuration.SearchHotkeyActive()) return changed;
+        ImGui.BeginGroup();
+        var label = recordingSearchShortcut
+            ? text.Get("请按下新的组合键…（Esc 取消）", "Press the new shortcut… (Esc cancels)")
+            : ShortcutLabel;
+        if (DactUi.Button(label + "##search-shortcut-record", recordingSearchShortcut ? ButtonKind.Primary : ButtonKind.Secondary, "edit"))
+        {
+            recordingSearchShortcut = !recordingSearchShortcut;
+            recordingHeldKeys = HeldKeyboardKeys();
+            searchShortcutError = null;
+        }
+        if (!recordingSearchShortcut && (configuration.SearchHotkeyKey != 0x4B || configuration.SearchHotkeyModifiers != defaultModifiers))
+        {
+            ImGui.SameLine(0, 8 * s);
+            if (DactUi.Button(text.Get("恢复默认", "Reset to default") + "##search-shortcut-default", ButtonKind.Ghost))
+            {
+                configuration.SearchHotkeyKey = 0x4B;
+                configuration.SearchHotkeyModifiers = defaultModifiers;
+                changed = true;
+            }
+        }
+        if (recordingSearchShortcut)
+        {
+            // Only a key pressed after recording began counts; the click's own keys are ignored.
+            var held = HeldKeyboardKeys();
+            foreach (var key in held.Except(recordingHeldKeys).Where(key => key is not (0x10 or 0x11 or 0x12 or 0x5B or 0x5C)))
+            {
+                var modifiers = (SearchShortcut ?? new SearchHotkey(configuration)).CurrentModifiers();
+                if (key == 0x1B) recordingSearchShortcut = false;
+                else if ((modifiers & (OverlayHotkeyModifiers.Control | OverlayHotkeyModifiers.Alt)) == 0)
+                    searchShortcutError = text.Get("组合键需要包含 Ctrl 或 Alt，以免打字或操作角色时误触。", "The shortcut needs Ctrl or Alt so typing or playing never triggers it.");
+                else
+                {
+                    configuration.SearchHotkeyKey = key;
+                    configuration.SearchHotkeyModifiers = modifiers;
+                    recordingSearchShortcut = false;
+                    searchShortcutError = null;
+                    changed = true;
+                }
+                break;
+            }
+            recordingHeldKeys = held;
+            if (SearchShortcut is { } hotkey) hotkey.SuspendedThroughFrame = ImGui.GetFrameCount() + 1;
+        }
+        if (searchShortcutError is { } error) DactUi.Wrapped(error, DactUi.Danger, DactFonts.Small);
+        ImGui.EndGroup();
+        return changed;
+    }
+
+    private static HashSet<int> HeldKeyboardKeys()
+    {
+        var held = new HashSet<int>();
+        for (var key = 8; key < 255; key++)
+            if (HtmlOverlayHotkey.IsKeyboardKey(key) && SearchHotkey.IsKeyDown(key)) held.Add(key);
+        return held;
+    }
+
+    private bool DrawDataAndLogsCard()
+    {
+        var s = DactUi.S;
+        DactUi.BeginCard("settings-data", text.Get("数据与日志", "Data & logs"));
         DrawHistoryLimitEditor();
+        DrawCombatLogDirectorySettings();
 
-        changed |= FriendsNotificationSettings.Draw(configuration, text, PreviewFriendNotificationSound);
+        if (DactUi.Button(text.Get("复制诊断日志", "Copy diagnostic log") + "##copy-diagnostics")) CopyDiagnosticReport();
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Get(
+                "把本插件相关的运行状态与近期日志打包成 .txt 文件并复制，在 QQ、Discord 等聊天框里按 Ctrl+V 即可作为文件发送；不含战斗日志和配置文件，并会遮盖用户路径与常见凭据。原始战斗数据问题可使用右侧按钮打开日志文件夹。",
+                "Packs recent plugin diagnostics and runtime state into a .txt file and copies the file, so Ctrl+V in QQ, Discord or another chat sends it as an attachment. Combat logs and configuration files are excluded, and user paths and common credentials are redacted. For raw combat-data issues, use the button on the right to open the log folder."));
+        var openLabel = text.Get("打开日志文件夹", "Open log folder");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(openLabel, icon: "folder"));
+        if (DactUi.Button(openLabel + "##open-logs", icon: "folder")) openLogDirectory();
+        if (!string.IsNullOrWhiteSpace(diagnosticCopyFeedback))
+            DactUi.Wrapped(diagnosticCopyFeedback, diagnosticCopyFeedbackIsError ? DactUi.Danger : DactTheme.Palette.Accent, DactFonts.Small);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        DactTheme.TextColored(Gold, text.Get("恢复", "Recovery"));
-        ImGui.TextWrapped(text.Get(
+        DactUi.Disclosure(text.Get("文件位置（配置、调试日志、战斗日志）", "File locations (config, debug logs, combat logs)"), ref fileLocationsOpen);
+        if (fileLocationsOpen)
+        {
+            var locations = new List<(string Label, string Path)>();
+            if (Paths is { } paths)
+            {
+                locations.Add((text.Get("配置", "Config"), paths.ConfigDirectory));
+                locations.Add((text.Get("调试日志", "Debug logs"), paths.LogDirectory));
+            }
+            locations.Add((text.Get("战斗日志", "Combat logs"), getCombatLogDirectory()));
+            foreach (var (label, location) in locations)
+            {
+                DactUi.Text(label, DactTheme.Palette.Muted, DactFonts.Small);
+                DactUi.PathField(location);
+            }
+        }
+        DactUi.EndCard();
+        return false;
+    }
+
+    private void DrawParserDiagnosticsCard()
+    {
+        var s = DactUi.S;
+        DactUi.BeginCard("settings-parser", null);
+        var running = parserStatus.State == ParserState.Running;
+        DactUi.Text(text.Get("解析器与诊断", "Parser & diagnostics"), DactTheme.Palette.Gold);
+        // State pill with the parser's own message beside it, as in the design.
+        DactUi.Pill(text.Format($"解析器{LocalizeState(parserStatus.State)}", $"Parser {LocalizeState(parserStatus.State).ToLowerInvariant()}"),
+            running ? PillTone.Ok : parserStatus.State == ParserState.Faulted ? PillTone.Error : PillTone.Warn);
+        ImGui.SameLine(0, 10 * s);
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (22 * s - ImGui.GetTextLineHeight()) * .5f);
+        DactUi.Wrapped(parserStatus.Message, DactUi.HintColor, DactFonts.Small, ImGui.GetContentRegionAvail().X);
+        if (!string.IsNullOrWhiteSpace(parserStatus.Detail)) DactUi.Hint(parserStatus.Detail);
+        if (DactUi.Button(text.Get("重启解析器", "Restart parser") + "##restart-parser", icon: "reset")) RestartParser();
+        var visible = isStatusVisible();
+        var statusLabel = visible ? text.Get("关闭详细运行状态", "Close detailed runtime status") : text.Get("详细运行状态", "Detailed runtime status");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(statusLabel, icon: "pulse"));
+        if (DactUi.Button(statusLabel + "##detailed-status", visible ? ButtonKind.Primary : ButtonKind.Secondary, "pulse")) setStatusVisible(!visible);
+        var noticeLabel = text.Get("三方扩展声明", "Third-party extension notice");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(noticeLabel));
+        if (DactUi.Button(noticeLabel + "##settings-notice")) openBundledPluginNotice();
+        DrawMyFeedbackRow();
+        DactUi.EndCard();
+    }
+
+    private void DrawFactoryResetZone()
+    {
+        var s = DactUi.S;
+        var width = ImGui.GetContentRegionAvail().X;
+        var start = ImGui.GetCursorScreenPos();
+        var buttonLabel = text.Get("恢复出厂设置...", "Restore factory settings...");
+        var textWidth = width - DactUi.ButtonWidth(buttonLabel, ButtonKind.Danger) - 40 * s;
+        // Danger zone (dsl: dangerSoft panel with a red edge); the button opens a centred confirmation.
+        ImGui.SetCursorScreenPos(start + new Vector2(14 * s));
+        ImGui.BeginGroup();
+        using (DactUi.Gap(2))
+        {
+            DactUi.Text(text.Get("恢复出厂设置", "Factory reset"), DactUi.Danger);
+            DactUi.Wrapped(text.Get(
+                "恢复出厂设置会停止 ACT 宿主、备份所有可变数据，并恢复两个系统插件和默认设置。",
+                "Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings."),
+                DactUi.HintColor, DactFonts.Small, textWidth);
+            if (!string.IsNullOrWhiteSpace(factoryResetResult))
+                DactUi.Wrapped($"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {factoryResetResult}", DactUi.HintColor, DactFonts.Small, textWidth);
+        }
+        ImGui.EndGroup();
+        var height = ImGui.GetItemRectSize().Y + 28 * s;
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddRectFilled(start, start + new Vector2(width, height), DactUi.U32(DactUi.DangerSoft), 10 * s);
+        draw.AddRect(start, start + new Vector2(width, height), DactUi.U32(DactUi.Danger with { W = .35f }), 10 * s, ImDrawFlags.None, Math.Max(1, s));
+        ImGui.SetCursorScreenPos(new Vector2(start.X + width - 14 * s - DactUi.ButtonWidth(buttonLabel, ButtonKind.Danger), start.Y + (height - 30 * s) * .5f));
+        if (DactUi.Button(buttonLabel + "##factory-reset", ButtonKind.Danger)) DactUi.OpenDialog(FactoryResetDialog);
+        DrawFactoryResetDialog();
+        ImGui.SetCursorScreenPos(start);
+        ImGui.Dummy(new Vector2(width, height));
+    }
+
+    private void DrawFactoryResetDialog()
+    {
+        var s = DactUi.S;
+        if (!DactUi.BeginDialog(FactoryResetDialog)) return;
+        DactUi.Text(text.Get("恢复出厂设置", "Factory reset"), DactUi.Danger, DactFonts.H2);
+        DactUi.Wrapped(text.Get(
             "恢复出厂设置会停止 ACT 宿主、备份所有可变数据，并恢复两个系统插件和默认设置。",
             "Factory reset stops the ACT host, backs up all mutable data, and restores the two system plugins and default settings."));
-        if (!confirmFactoryReset)
-        {
-            if (DactTheme.Button(text.Get("恢复出厂设置...", "Restore factory settings...")))
-            {
-                confirmFactoryReset = true;
-            }
-        }
-        else
-        {
-            ImGui.TextWrapped(text.Get(
-                "按确认继续。此前状态仍可从备份目录恢复。",
-                "Press confirm to continue. The previous state remains recoverable from the backup directory."));
-            if (DactTheme.Button(text.Get("确认恢复", "Confirm factory reset")))
-            {
-                confirmFactoryReset = false;
-                _ = RunFactoryResetAsync();
-            }
-
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("取消", "Cancel")))
-            {
-                confirmFactoryReset = false;
-            }
-        }
-
+        DactUi.Hint(text.Get(
+            "按确认继续。此前状态仍可从备份目录恢复。",
+            "Press confirm to continue. The previous state remains recoverable from the backup directory."));
         if (!string.IsNullOrWhiteSpace(factoryResetResult))
+            DactUi.Hint($"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {factoryResetResult}");
+        if (DactUi.Button(text.Get("取消", "Cancel") + "##factory-cancel")) DactUi.CloseDialog(FactoryResetDialog);
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(text.Get("确认恢复", "Confirm factory reset") + "##factory-confirm", ButtonKind.Danger))
         {
-            ImGui.TextWrapped(
-                $"{text.Get("最近一次出厂备份", "Last factory reset backup")}: {factoryResetResult}");
+            DactUi.CloseDialog(FactoryResetDialog);
+            _ = RunFactoryResetAsync();
         }
-        return changed;
+        DactUi.EndDialog(FactoryResetDialog);
     }
 
     private void DrawCombatLogDirectorySettings()
     {
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        DactTheme.TextColored(Gold, text.Get("FFLogs 上传日志", "FFLogs upload logs"));
-        ImGui.TextDisabled(text.Get("当前路径", "Current path"));
-        ImGui.TextWrapped(getCombatLogDirectory());
-
-        if (DactTheme.Button(text.Get("更改目录...", "Change directory...")))
-        {
-            selectCombatLogDirectory(ReportCombatLogDirectoryChange);
-        }
+        var s = DactUi.S;
+        DactUi.BeginField(text.Get("FFLogs 上传日志目录", "FFLogs upload log folder"));
+        DactUi.PathField(getCombatLogDirectory());
+        DactUi.EndField();
+        if (DactUi.Button(text.Get("更改目录...", "Change directory...") + "##log-dir-change")) selectCombatLogDirectory(ReportCombatLogDirectoryChange);
         if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip(text.Get(
+            DactUi.Tooltip(text.Get(
                 "只更改之后写入的原始 Network 日志；旧日志不会移动或删除。解析器正在运行时会自动重启，战斗中切换可能截断当前战斗。",
                 "Changes only future raw Network log writes; existing logs are not moved or deleted. A running parser restarts automatically, which may split the current encounter."));
-        }
-        ImGui.SameLine();
-        if (DactTheme.Button(text.Get("恢复默认", "Restore default")))
-        {
-            resetCombatLogDirectory(ReportCombatLogDirectoryChange);
-        }
-
+        // Long translations (Standard wiederherstellen) take the next line instead of overflowing the card.
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(text.Get("恢复默认", "Restore default")));
+        if (DactUi.Button(text.Get("恢复默认", "Restore default") + "##log-dir-reset")) resetCombatLogDirectory(ReportCombatLogDirectoryChange);
         var feedback = Volatile.Read(ref combatLogDirectoryChangeFeedback);
         if (feedback is not null)
-        {
-            DactTheme.TextColored(
-                feedback.IsError
-                    ? new Vector4(0.95f, 0.45f, 0.40f, 1)
-                    : IceBlue,
-                feedback.Message);
-        }
-
-        ImGui.Spacing();
+            DactUi.Wrapped(feedback.Message, feedback.IsError ? DactUi.Danger : DactTheme.Palette.Accent, DactFonts.Small);
     }
 
     private void ReportCombatLogDirectoryChange(bool success, string message)
@@ -2780,13 +2601,26 @@ public sealed partial class ControlCenterWindow : Window
     {
         try
         {
-            var report = buildDiagnosticReport();
-            ImGui.SetClipboardText(report);
-            diagnosticCopyFeedback = text.Format(
-                $"已复制诊断日志（{report.Length:N0} 字符），可直接粘贴到问题反馈。",
-                $"Diagnostic log copied ({report.Length:N0} characters); paste it into the issue report.");
+            var export = exportDiagnosticReport();
+            var fileName = Path.GetFileName(export.FilePath);
+            if (FileClipboard.TrySetFiles([export.FilePath]))
+            {
+                diagnosticCopyFeedback = text.Format(
+                    $"已复制诊断日志文件 {fileName}，在聊天框或反馈页按 Ctrl+V 即可作为文件发送。",
+                    $"Diagnostic log file {fileName} copied; press Ctrl+V in a chat or the issue report to send it as a file.");
+                logger.Information("Bounded diagnostic report saved and copied to the clipboard as a file.");
+            }
+            else
+            {
+                // Some setups refuse file clipboard data; the text still gets the report across.
+                ImGui.SetClipboardText(export.Report);
+                diagnosticCopyFeedback = text.Format(
+                    $"无法以文件形式复制，已改为复制文字；文件 {fileName} 保存在日志文件夹的 {DiagnosticReportFile.ExportDirectoryName} 里。",
+                    $"Could not copy as a file, so the text was copied instead; {fileName} is saved in the log folder under {DiagnosticReportFile.ExportDirectoryName}.");
+                logger.Warning("Clipboard refused the diagnostic report file; copied its text instead.");
+            }
+
             diagnosticCopyFeedbackIsError = false;
-            logger.Information("Bounded diagnostic report copied to the clipboard.");
         }
         catch (Exception ex)
         {
@@ -2957,193 +2791,176 @@ public sealed partial class ControlCenterWindow : Window
     private bool DrawPlayerIdentityControls()
     {
         var changed = false;
-        var identityMode = configuration.Meter.PlayerIdentityMode;
-        if (DactTheme.BeginCombo(text.Get("玩家 ID 显示", "Player identity"), PlayerIdentityModeLabel(identityMode)))
+        var modes = Enum.GetValues<PlayerIdentityMode>();
+        DactUi.BeginField(text.Get("玩家 ID 显示", "Player identity"));
+        var index = Array.IndexOf(modes, configuration.Meter.PlayerIdentityMode);
+        if (DactUi.Select("player-identity", modes.Select(PlayerIdentityModeLabel).ToArray(), ref index) &&
+            index >= 0 && modes[index] != configuration.Meter.PlayerIdentityMode)
         {
-            foreach (var mode in Enum.GetValues<PlayerIdentityMode>())
-            {
-                if (ImGui.Selectable(PlayerIdentityModeLabel(mode), mode == identityMode))
-                {
-                    configuration.Meter.PlayerIdentityMode = mode;
-                    changed = true;
-                }
-            }
-            ImGui.EndCombo();
+            configuration.Meter.PlayerIdentityMode = modes[index];
+            changed = true;
         }
-
-        ImGui.TextDisabled(text.Get(
+        DactUi.EndField(text.Get(
             "遮盖只影响界面显示，不修改解析数据和保存的战斗日志。",
             "Masking affects display only; parsed data and saved encounter logs are unchanged."));
-        if (configuration.Meter.PlayerIdentityMode == PlayerIdentityMode.Anonymous)
-        {
-            var alias = configuration.Meter.LocalPlayerAlias;
-            if (ImGui.InputText(text.Get("自己的代称", "Your alias"), ref alias, 32))
-            {
-                configuration.Meter.LocalPlayerAlias = alias;
-                changed = true;
-            }
-        }
+        if (configuration.Meter.PlayerIdentityMode != PlayerIdentityMode.Anonymous) return changed;
 
+        DactUi.BeginField(text.Get("自己的代称", "Your alias"));
+        var alias = configuration.Meter.LocalPlayerAlias;
+        if (DactUi.Input("local-player-alias", ref alias, text.Get("自己的代称", "Your alias"), 32))
+        {
+            configuration.Meter.LocalPlayerAlias = alias;
+            changed = true;
+        }
+        DactUi.EndField();
         return changed;
     }
 
+    private bool fflogsGuideOpen;
+
+    // FFLogs Parse 预估 card: status pill in the title, switch, guide, credentials, duty matching.
     private bool DrawFflogsSettings()
     {
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        DactTheme.TextColored(Gold, text.Get("FFLogs DPS Parse 预估", "FFLogs DPS Parse estimate"));
-        ImGui.TextWrapped(text.Get(
-            "根据本场实际 DPS 与当前 FFLogs 同职业、同副本、同分区的 DPS 分布估算 Parse 数字与颜色。缓存缺失时显示“--”，不会猜测百分位。",
-            "Estimate the Parse number and color from this encounter's actual DPS and the current FFLogs DPS distribution for the same job, encounter, and partition. Missing cache data is shown as '--'; no percentile is guessed."));
-        var reference = fflogsEstimateService.ReferenceSnapshot;
-        var referenceDate = reference.LatestDataUpdatedAt is { } updatedAt
-            ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd")
-            : "--";
-        var partitionLabel = reference.Partition?.ToString() ?? text.Get("最新", "Latest");
-        ImGui.TextDisabled(text.Format(
-            $"区域 {reference.Region} · 分区 {partitionLabel} · 指标 {reference.Metric} · FFLogs 数据更新于：{referenceDate}",
-            $"Region {reference.Region} · Partition {partitionLabel} · Metric {reference.Metric} · FFLogs data updated: {referenceDate}"));
-
+        var s = DactUi.S;
         var changed = false;
-        if (ImGui.BeginTable(
-                "fflogs-api-refresh-card",
-                1,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
+        var status = fflogsEstimateService.Status;
+        DactUi.BeginCard("meter-fflogs", null);
+        DactUi.CardTitleRow(text.Get("FFLogs Parse 预估", "FFLogs Parse estimate"),
+            () => DactUi.Pill(FflogsStatusShort(status.State), FflogsStatusTone(status.State)));
+        DactUi.Hint(text.Get(
+            "用本场实际 DPS 对照 FFLogs 同职业、同副本、同分区的分布估算 Parse；缓存缺失时显示“--”。",
+            "Estimates the Parse from this fight's actual DPS against the FFLogs distribution for the same job, duty and partition; shows \"--\" when no cache is available."));
+
+        var reference = fflogsEstimateService.ReferenceSnapshot;
+        var referenceDate = reference.LatestDataUpdatedAt is { } updatedAt ? updatedAt.ToLocalTime().ToString("yyyy/MM/dd") : "--";
+        var partitionLabel = reference.Partition?.ToString() ?? text.Get("最新", "Latest");
+        DactUi.Pill(text.Format(
+                $"区域 {reference.Region} · 分区 {partitionLabel} · 指标 {reference.Metric}",
+                $"Region {reference.Region} · Partition {partitionLabel} · Metric {reference.Metric}"),
+            PillTone.Off, dot: false, maxWidth: ImGui.GetContentRegionAvail().X);
+        // The data date moved into the pill's tooltip (the 1.0 card keeps one metadata line).
+        if (ImGui.IsItemHovered())
+            DactUi.Tooltip(text.Format($"FFLogs 数据更新于：{referenceDate}", $"FFLogs data updated: {referenceDate}"));
+
+        var enabled = configuration.Fflogs.Enabled;
+        if (DactUi.ToggleRow(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
         {
-            ImGui.TableNextColumn();
-            DactTheme.TextColored(IceBlue, text.Get(
-                "API 凭据与数据刷新",
-                "API credentials and data refresh"));
-            ImGui.TextDisabled(text.Get(
-                "负责验证 FFLogs API 凭据并刷新估算数据。",
-                "Validates the FFLogs API credentials and refreshes estimate data."));
-
-            var enabled = configuration.Fflogs.Enabled;
-            if (DactTheme.Checkbox(text.Get("启用 FFLogs 在线估算", "Enable FFLogs online estimate"), ref enabled))
-            {
-                UpdateFflogsSettings(settings => settings.Enabled = enabled);
-                fflogsEstimateService.NotifyCredentialsChanged();
-                changed = true;
-                if (enabled)
-                {
-                    fflogsEstimateService.RequestRefresh(getCurrentEncounter());
-                }
-            }
-
-            if (ImGui.CollapsingHeader(text.Get(
-                    "如何创建 FFLogs API Client",
-                    "How to create an FFLogs API client")))
-            {
-                DactTheme.PushStyleColor(ImGuiCol.ChildBg, NavyRaised);
-                if (ImGui.BeginChild("fflogs-client-guide", new Vector2(-1, 150), true))
-                {
-                    ImGui.TextWrapped(text.Get(
-                        "1. 登录 FFLogs 网站。\n" +
-                        "2. 点击 Create Client。\n" +
-                        "3. 输入一个名称。\n" +
-                        "4. 输入一个网址；如果不知道填什么，请填写 https://example.com。\n" +
-                        "5. 点击创建。\n" +
-                        "6. 在下方找到 Client ID 和 Client Secret，并分别填入插件对应位置。",
-                        "1. Sign in to FFLogs.\n" +
-                        "2. Click Create Client.\n" +
-                        "3. Enter a name.\n" +
-                        "4. Enter a URL; use https://example.com if you do not have one.\n" +
-                        "5. Create the client.\n" +
-                        "6. Copy the Client ID and Client Secret shown below into the matching plugin fields."));
-                }
-                ImGui.EndChild();
-                ImGui.PopStyleColor();
-            }
-
-            var clientId = configuration.Fflogs.ClientId;
-            if (ImGui.InputText("Client ID", ref clientId, 128))
-            {
-                UpdateFflogsSettings(settings => settings.ClientId = clientId.Trim());
-                fflogsEstimateService.NotifyCredentialsChanged();
-                changed = true;
-            }
-
-            var clientSecret = configuration.Fflogs.ClientSecret;
-            if (ImGui.InputText("Client Secret", ref clientSecret, 256, ImGuiInputTextFlags.Password))
-            {
-                UpdateFflogsSettings(settings => settings.ClientSecret = clientSecret.Trim());
-                fflogsEstimateService.NotifyCredentialsChanged();
-                changed = true;
-            }
-
-            ImGui.TextDisabled(text.Get(
-                "使用免费的 FFLogs API Client；密钥保存在本机插件配置中，可随时撤销；不会上传玩家 ID。",
-                "Uses a free FFLogs API client. The secret is stored locally and can be revoked; player IDs are never uploaded."));
-            if (DactTheme.Button(text.Get("创建 / 管理 API Client", "Create / manage API client")))
-            {
-                OpenUrl("https://www.fflogs.com/api/clients/");
-            }
-            ImGui.SameLine();
-            if (DactTheme.Button(text.Get("测试并刷新", "Test and refresh")))
-            {
-                fflogsEstimateService.RequestRefresh(getCurrentEncounter());
-            }
-
-            var status = fflogsEstimateService.Status;
-            DactTheme.TextColored(FflogsStatusColor(status.State), FflogsStatusLabel(status.State));
-            var statusDetail = FflogsStatusDetail(status);
-            var statusDetailHeight = ImGui.GetTextLineHeightWithSpacing() * 4.4f;
-            if (ImGui.BeginChild(
-                    "fflogs-status-detail",
-                    new Vector2(-1, statusDetailHeight),
-                    false))
-            {
-                if (!string.IsNullOrWhiteSpace(statusDetail))
-                {
-                    ImGui.TextWrapped(statusDetail);
-                }
-            }
-            ImGui.EndChild();
-            ImGui.EndTable();
+            UpdateFflogsSettings(settings => settings.Enabled = enabled);
+            fflogsEstimateService.NotifyCredentialsChanged();
+            changed = true;
+            if (enabled) fflogsEstimateService.RequestRefresh(getCurrentEncounter());
         }
 
-        ImGui.Spacing();
-        if (ImGui.BeginTable(
-                "fflogs-automatic-encounter-card",
-                1,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
+        // Same order as before: the guide sits right above the fields it explains.
+        DactUi.Disclosure(text.Get("如何创建 FFLogs API Client", "How to create an FFLogs API client"), ref fflogsGuideOpen);
+        if (fflogsGuideOpen)
         {
-            ImGui.TableNextColumn();
-            DactTheme.TextColored(IceBlue, text.Get("当前副本自动识别", "Automatic duty matching"));
-            ImGui.TextDisabled(text.Get(
-                "进入副本后按游戏 Territory ID 自动匹配；只会访问当前开放的 FFLogs 榜单。",
-                "Matches by the game's Territory ID on duty entry and only accesses the current FFLogs ranking tier."));
+            var steps = text.Get(
+                    "1. 登录 FFLogs 网站。\n" +
+                    "2. 点击 Create Client。\n" +
+                    "3. 输入一个名称。\n" +
+                    "4. 输入一个网址；如果不知道填什么，请填写 https://example.com。\n" +
+                    "5. 点击创建。\n" +
+                    "6. 在下方找到 Client ID 和 Client Secret，并分别填入插件对应位置。",
+                    "1. Sign in to FFLogs.\n" +
+                    "2. Click Create Client.\n" +
+                    "3. Enter a name.\n" +
+                    "4. Enter a URL; use https://example.com if you do not have one.\n" +
+                    "5. Create the client.\n" +
+                    "6. Copy the Client ID and Client Secret shown below into the matching plugin fields.")
+                .Split('\n')
+                // The panel numbers the steps itself.
+                .Select(step => System.Text.RegularExpressions.Regex.Replace(step, @"^\s*\d+\.\s*", ""))
+                .ToArray();
+            DactUi.StepsPanel(steps);
+        }
 
+        DactUi.BeginField("Client ID");
+        var clientId = configuration.Fflogs.ClientId;
+        if (DactUi.Input("fflogs-client-id", ref clientId, text.Get("粘贴 Client ID", "Paste the Client ID"), 128))
+        {
+            UpdateFflogsSettings(settings => settings.ClientId = clientId.Trim());
+            fflogsEstimateService.NotifyCredentialsChanged();
+            changed = true;
+        }
+        DactUi.EndField();
+        DactUi.BeginField("Client Secret");
+        var clientSecret = configuration.Fflogs.ClientSecret;
+        if (DactUi.Input("fflogs-client-secret", ref clientSecret, text.Get("粘贴 Client Secret", "Paste the Client Secret"), 256, secret: true))
+        {
+            UpdateFflogsSettings(settings => settings.ClientSecret = clientSecret.Trim());
+            fflogsEstimateService.NotifyCredentialsChanged();
+            changed = true;
+        }
+        DactUi.EndField();
+
+        if (DactUi.Button(text.Get("测试并刷新", "Test and refresh") + "##fflogs-refresh", ButtonKind.Primary))
+            fflogsEstimateService.RequestRefresh(getCurrentEncounter());
+        var manageLabel = text.Get("创建 / 管理 API Client", "Create / manage API client");
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(manageLabel, icon: "external"));
+        if (DactUi.Button(manageLabel + "##fflogs-manage", icon: "external")) OpenUrl("https://www.fflogs.com/api/clients/");
+        DactUi.Hint(text.Get(
+            "密钥只保存在本机插件配置中，可随时撤销；不会上传玩家 ID。",
+            "The secret is stored only in the local plugin settings and can be revoked anytime; player IDs are never uploaded."));
+        // The title pill shows the state; the full sentence and details appear only when there is a problem.
+        var statusDetail = FflogsStatusDetail(status);
+        if (!string.IsNullOrWhiteSpace(statusDetail))
+        {
+            DactUi.Wrapped(FflogsStatusLabel(status.State), FflogsStatusColor(status.State), DactFonts.Small);
+            DactUi.Hint(statusDetail.Trim());
+        }
+
+        DactUi.Divider();
+        // Duty matching: a small target icon beside its title and explanation.
+        var iconAt = ImGui.GetCursorScreenPos();
+        DactIcons.Draw(ImGui.GetWindowDrawList(), "target", iconAt + new Vector2(0, 2 * s), 14 * s, DactTheme.Palette.Muted);
+        ImGui.Indent(22 * s);
+        using (DactUi.Gap(2))
+        {
+            DactUi.Text(text.Get("当前副本自动识别", "Automatic duty matching"), DactTheme.Palette.Muted, DactFonts.Small);
+            if (ImGui.IsItemHovered())
+                DactUi.Tooltip(text.Get(
+                    "进入副本后按游戏 Territory ID 自动匹配；只会访问当前开放的 FFLogs 榜单。",
+                    "Matches by the game's Territory ID on duty entry and only accesses the current FFLogs ranking tier.") + "\n" +
+                    text.Get("国服使用 CN 分区，国际服使用 FFLogs 最新全球分区。", "China uses the CN partition; Global uses the latest FFLogs global partition."));
             var activeEncounter = fflogsEstimateService.ActiveEncounter;
-            if (activeEncounter is not null)
-            {
-                ImGui.TextDisabled(
-                    $"Territory {activeEncounter.TerritoryId}  ·  " +
-                    $"{activeEncounter.EncounterName}  ·  " +
-                    $"FFLogs #{activeEncounter.EncounterId}  ·  " +
-                    $"{(activeEncounter.Difficulty == 101 ? "Savage" : "Normal")}");
-                if (activeEncounter.Phase > 1)
-                {
-                    DactTheme.TextColored(
-                        IceBlue,
-                        text.Get("已自动切换至第二阶段榜单", "Automatically switched to the phase-two ranking"));
-                }
-            }
-            else
-            {
-                ImGui.TextDisabled(text.Get(
-                    "当前不在最新团队副本榜单中，不会加载历史榜单。",
-                    "The current territory is outside the latest raid tier; historical rankings will not be loaded."));
-            }
-            ImGui.TextDisabled(text.Get(
-                "榜单区域跟随上方游戏区域设置；国服使用 CN 分区，国际服使用 FFLogs 最新全球分区。",
-                "The ranking population follows the game-region setting above: CN partition for China, latest global partition for Global."));
-            ImGui.EndTable();
+            var where = activeEncounter is null
+                ? text.Get("当前不在最新团队副本榜单中，不会加载历史榜单。",
+                    "The current territory is outside the latest raid tier; historical rankings will not be loaded.")
+                : $"Territory {activeEncounter.TerritoryId}  ·  {activeEncounter.EncounterName}  ·  " +
+                  $"FFLogs #{activeEncounter.EncounterId}  ·  {(activeEncounter.Difficulty == 101 ? "Savage" : "Normal")}";
+            var region = text.Get("榜单区域跟随主页的游戏区域。", "The ranking region follows the game region on Home.");
+            DactUi.Hint(text.IsChinese ? where + region : where + " " + region);
+            if (activeEncounter?.Phase > 1)
+                DactUi.Wrapped(text.Get("已自动切换至第二阶段榜单", "Automatically switched to the phase-two ranking"), DactTheme.Palette.Accent, DactFonts.Small);
         }
-
+        ImGui.Unindent(22 * s);
+        DactUi.EndCard();
         return changed;
     }
+
+    // Short state for the card's title pill; the full sentence and details stay below the buttons.
+    private string FflogsStatusShort(FflogsEstimateState state) => state switch
+    {
+        FflogsEstimateState.Disabled => text.Get("未启用", "Off"),
+        FflogsEstimateState.NeedsCredentials => text.Get("需要凭据", "Needs credentials"),
+        FflogsEstimateState.Idle => text.Get("等待数据", "Waiting"),
+        FflogsEstimateState.Loading => text.Get("连接中", "Connecting"),
+        FflogsEstimateState.Ready => text.Get("已就绪", "Ready"),
+        FflogsEstimateState.InactiveContent => text.Get("无活跃榜单", "No active ranking"),
+        FflogsEstimateState.Error => text.Get("连接失败", "Failed"),
+        FflogsEstimateState.RequestsPaused => text.Get("已暂停", "Paused"),
+        FflogsEstimateState.RetryWaiting => text.Get("等待重试", "Retrying"),
+        _ => state.ToString(),
+    };
+
+    private static PillTone FflogsStatusTone(FflogsEstimateState state) => state switch
+    {
+        FflogsEstimateState.Ready => PillTone.Ok,
+        FflogsEstimateState.Error or FflogsEstimateState.RequestsPaused => PillTone.Error,
+        FflogsEstimateState.InactiveContent or FflogsEstimateState.RetryWaiting or FflogsEstimateState.NeedsCredentials => PillTone.Warn,
+        _ => PillTone.Off,
+    };
 
     private async Task RunFactoryResetAsync()
     {

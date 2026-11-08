@@ -194,7 +194,7 @@ internal static partial class SkinSmokeTests
     {
         var config = JsonConvert.DeserializeObject<PluginConfiguration>("""{"Version":16,"Appearance":{"SelectedSkin":"eorzea","SponsorTier":10,"UnlockedEasterEggs":["eorzea","bogus"]},"Meter":{"HorizontalWindow":{"BackgroundOpacity":0.85}}}""")!;
         config.ApplyMigrations();
-        Check(config.Version == 17 && config.Meter.HorizontalWindow.BackgroundOpacity == 0, "Migration changed the old horizontal appearance.");
+        Check(config.Version == 18 && config.Meter.HorizontalWindow.BackgroundOpacity == 0, "Migration changed the old horizontal appearance.");
         // A known sponsor skin is never a discovery. An unknown ID may be a newer client's
         // easter egg and is kept, but it unlocks nothing in this build.
         Check(config.Appearance.UnlockedEasterEggs.SetEquals(["bogus"]) && SkinCatalog.Resolve(config.Appearance, true, 0) == SkinCatalog.Default,
@@ -321,7 +321,7 @@ internal static partial class SkinSmokeTests
             config.Appearance.UnlockedEasterEggs.UnionWith(SkinCatalog.All.Where(skin => skin.EasterEgg).Select(skin => skin.Id));
             var account = CloudClientSnapshot.SignedOut() with { IsSignedIn = true, Username = "preview-sponsor", Sponsor = new(3) };
             var text = new UiText(config); var logo = new EmptyTexture(); var drag = new WindowDragController();
-            using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "act-logo.jpg")))
+            using (var bitmap = new System.Drawing.Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "dact-logo.png")))
             {
                 var pixels = new byte[bitmap.Width * bitmap.Height * 4];
                 for (var y = 0; y < bitmap.Height; y++) for (var x = 0; x < bitmap.Width; x++)

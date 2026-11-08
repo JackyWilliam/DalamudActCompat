@@ -6,7 +6,7 @@ param(
     [string] $OutputDirectory = "artifacts/release",
 
     [Parameter(Mandatory = $false)]
-    [string] $ExpectedAssemblyVersion = "0.4.5.20",
+    [string] $ExpectedAssemblyVersion = "1.0.0.0",
 
     [Parameter(Mandatory = $false)]
     [int] $ExpectedDalamudApiLevel = 15,
@@ -234,8 +234,9 @@ if ([string]::IsNullOrWhiteSpace($manifest.IconUrl)) {
 }
 
 $requiredUiAssets = @(
-    "Assets/act-logo.jpg",
-    "Assets/act-button.png",
+    "Assets/dact-logo.png",
+    "Assets/dact-logo-layers.png",
+    "images/icon.png",
     "Assets/JobIcons/LimitBreak.png",
     "Assets/StatusIcons/CombatRunning.png",
     "Assets/StatusIcons/CombatTransition.png",
@@ -373,6 +374,11 @@ $requiredRuntimeFiles = @(
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
     "LICENSES/WindowsCommunityToolkit-MIT.md",
     "LICENSES/ClearScript-LICENSE.txt",
+    "LICENSES/Anthropic-SDK-Apache-2.0.txt",
+    "LICENSES/dotnet-MIT.txt",
+    "LICENSES/xivanalysis-MIT.txt",
+    "Anthropic.dll",
+    "Microsoft.Extensions.AI.Abstractions.dll",
     "THIRD_PARTY_NOTICES.md",
     "BundledActPlugins/bundled-plugins.lock.json",
     "BundledActPlugins/triggernometry/zh-CN.triglations.xml",

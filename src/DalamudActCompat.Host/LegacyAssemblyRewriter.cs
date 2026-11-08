@@ -1979,6 +1979,7 @@ public static partial class LegacyAssemblyRewriter
 
         WrapTriggernometryLogOrdering(module);
         UseTriggernometryEventTime(module);
+        UseFallbackDnsForTriggernometry(module);
         ObserveTriggernometryDrawingPipeline(module);
 
         var repositoryUpdate = module.Types

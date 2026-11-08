@@ -13,8 +13,10 @@ internal sealed class NativeUiRasterizer
     private readonly Dictionary<ulong, (byte[] Pixels, int Width, int Height)> textures = new();
     public void AddTexture(ImTextureID id, byte[] pixels, int width, int height)
         => textures.Add(id.Handle, (pixels, width, height));
+    private readonly NativeUiVectorExporter vectors;
     public unsafe NativeUiRasterizer(ImFontAtlasPtr atlas)
     {
+        vectors = new(atlas, handle => textures.TryGetValue(handle, out var texture) ? texture : null);
         for (var i = 0; i < atlas.Textures.Size; i++)
         {
             byte* source = null; var width = 0; var height = 0;
@@ -57,6 +59,9 @@ internal sealed class NativeUiRasterizer
             }
         }
         WritePng(path, pixels, width, height);
+        // Opt-in editable export of the same frame for design-tool reconstruction.
+        if (Environment.GetEnvironmentVariable("DACT_NATIVE_UI_VECTOR") is { Length: > 0 })
+            vectors.Save(data, Path.ChangeExtension(path, ".json"), Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, "images"));
     }
     private static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
     private static Vector4 Color(uint c) => new(c & 255, (c >> 8) & 255, (c >> 16) & 255, c >> 24);

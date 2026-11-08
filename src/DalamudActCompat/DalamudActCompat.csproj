@@ -3,11 +3,15 @@
     <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
-    <Version>0.4.5.20</Version>
-    <AssemblyVersion>0.4.5.20</AssemblyVersion>
-    <Name>Dalamud ACT Compat</Name>
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Name>DACT</Name>
     <Author>raynording</Author>
     <Punchline>In-game ACT-compatible parsing platform foundation.</Punchline>
+    <!-- The plugin was listed as "Dalamud ACT Compat" before 1.0. The repair plugin, which must
+         not change, opens the installer searching that name; a matching tag keeps it found on
+         installers that compare the whole search text (the CN installer also matches InternalName). -->
+    <Tags>Dalamud ACT Compat;ACT;DACT</Tags>
     <Description>Dalamud-side UI, storage, parser abstraction, and compatibility-host bridge for an ACT-compatible FFXIV parsing platform.</Description>
     <RepoUrl>https://github.com/JackyWilliam/DalamudActCompat</RepoUrl>
     <!-- Dalamud keeps the packaged manifest on install, so tools that read installed
@@ -27,10 +31,14 @@
     </Reference>
     <EmbeddedResource Include="UI/LiquidGlass.hlsl" LogicalName="DACT.LiquidGlass.hlsl" />
     <EmbeddedResource Include="UI/Locales/*.json" LogicalName="DACT.Locales.%(Filename).json" />
+    <!-- AI 复盘 job notes; partly adapted from xivanalysis (MIT, see THIRD_PARTY_NOTICES.md). -->
+    <EmbeddedResource Include="Ai/JobKnowledge/*.md" LogicalName="DACT.JobKnowledge.%(Filename).md" />
     <ProjectReference Include="../DalamudActCompat.Host/DalamudActCompat.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../DalamudActCompat.Protocol/DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
     <PackageReference Include="SharpCompress" Version="0.50.1" />
+    <!-- AI 助手 talks to Claude through the official SDK with the player's own key. -->
+    <PackageReference Include="Anthropic" Version="13.6.0" />
     <Content Include="../../vendor/IINACT/LICENSE" Link="LICENSES/IINACT-GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Core/LICENSE.txt" Link="LICENSES/OverlayPlugin.Core-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Common/LICENSE.txt" Link="LICENSES/OverlayPlugin.Common-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
@@ -38,6 +46,9 @@
     <Content Include="../../vendor/ThirdParty/dnlib-LICENSE.txt" Link="LICENSES/dnlib-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/WindowsCommunityToolkit-LICENSE.md" Link="LICENSES/WindowsCommunityToolkit-MIT.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/ClearScript-LICENSE.txt" Link="LICENSES/ClearScript-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/ThirdParty/Anthropic-SDK-LICENSE.txt" Link="LICENSES/Anthropic-SDK-Apache-2.0.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/ThirdParty/dotnet-MIT.txt" Link="LICENSES/dotnet-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../vendor/ThirdParty/xivanalysis-LICENSE.txt" Link="LICENSES/xivanalysis-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/BundledActPlugins/**/*"
              Link="BundledActPlugins/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
@@ -49,6 +60,9 @@
     <Content Include="Assets/**/*"
              Link="Assets/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
+    <!-- Plugin list tools (e.g. omni) read the icon from the installed folder at the Dalamud
+         convention images/icon.png rather than downloading IconUrl, so it ships in the package. -->
+    <Content Include="images/icon.png" Link="images/icon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="CopyCompatibilityHost" BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
@@ -65,6 +79,32 @@
       <ReleaseDebugSymbols Include="$(OutputPath)**/*.pdb" />
     </ItemGroup>
     <Delete Files="@(ReleaseDebugSymbols)" Condition="'$(Configuration)' == 'Release'" />
+  </Target>
+
+  <!-- DalamudPackager moves the output's images folder next to latest.zip (for plugin repos) and
+       leaves it out of the ZIP, so installs never received images/icon.png. Put it back into the
+       ZIP after packaging; plugin list tools read it from the installed folder. -->
+  <UsingTask TaskName="AddFileToZip" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ZipPath ParameterType="System.String" Required="true" />
+      <SourceFile ParameterType="System.String" Required="true" />
+      <EntryName ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO.Compression" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        using (var zip = ZipFile.Open(ZipPath, ZipArchiveMode.Update))
+        {
+            zip.GetEntry(EntryName)?.Delete();
+            zip.CreateEntryFromFile(SourceFile, EntryName);
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <!-- Release only: the skipped Debug packager target would otherwise trigger this first, and the
+       Release packager then rewrites latest.zip without the icon (a target runs once per build). -->
+  <Target Name="PackagePluginIcon" AfterTargets="DefaultDalamudPackagerRelease" Condition="'$(Configuration)' == 'Release'">
+    <AddFileToZip ZipPath="$(OutputPath)$(AssemblyName)/latest.zip" SourceFile="$(MSBuildProjectDirectory)/images/icon.png" EntryName="images/icon.png" />
   </Target>
 
 </Project>

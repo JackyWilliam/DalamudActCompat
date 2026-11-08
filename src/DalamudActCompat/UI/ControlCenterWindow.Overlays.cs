@@ -1,8 +1,10 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.ActRuntime;
+using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Parser;
+using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
@@ -29,51 +31,45 @@ public sealed partial class ControlCenterWindow
         .ThenBy(pair => ResolveOverlayDisplayName(pair.Key, pair.Value), StringComparer.OrdinalIgnoreCase)
         .Select(pair => pair.Key).ToArray();
 
+    // 悬浮窗 (screens.js overlays): Cactbot strip, then the overlay list beside its details.
     private bool DrawOverlays()
     {
         configuration.OverlayWindows ??= new(StringComparer.OrdinalIgnoreCase);
         var templates = getOverlayTemplates();
-        var scale = OverlayScale;
-        var headingStart = ImGui.GetCursorPos();
-        var pageWidth = ImGui.GetContentRegionAvail().X;
-        var addLabel = text.Get("＋ 添加悬浮窗", "+ Add overlay");
-        var addWidth = ImGui.CalcTextSize(addLabel).X + 30 * scale;
-        var headingWide = pageWidth >= 760 * scale;
-        if (headingWide) ImGui.PushTextWrapPos(headingStart.X + pageWidth - addWidth - 18 * scale);
-        DrawPageHeader(text.Get("悬浮窗管理", "Overlay manager"),
-            text.Get("选择一个悬浮窗，调整它的显示与操作。", "Select an overlay to manage its display and controls."), false);
-        if (headingWide) ImGui.PopTextWrapPos();
-        var headingEnd = ImGui.GetCursorPosY();
-        if (headingWide) ImGui.SetCursorPos(headingStart + new Vector2(pageWidth - addWidth, 0));
-        if (DactTheme.Button(addLabel, new(addWidth, 36 * scale)))
-        {
-            overlayCreatorPage = null;
-            ImGui.OpenPopup(AddOverlayPopup);
-        }
-        if (headingWide) ImGui.SetCursorPosY(Math.Max(headingEnd, ImGui.GetCursorPosY()));
-        ImGui.Spacing();
+        var s = DactUi.S;
+        var addLabel = text.Get("添加悬浮窗", "Add overlay");
+        DactUi.PageHeader(text.Get("悬浮窗", "Overlays"),
+            text.Get("选择一个悬浮窗，调整它的显示与操作。", "Select an overlay to manage its display and controls."),
+            DactUi.ButtonWidth(addLabel, ButtonKind.Primary, "plus"),
+            () =>
+            {
+                if (DactUi.Button(addLabel + "##overlay-add", ButtonKind.Primary, "plus"))
+                {
+                    overlayCreatorPage = null;
+                    DactUi.OpenDialog(AddOverlayPopup);
+                }
+            });
         DrawCactbotManagement();
-        ImGui.Spacing();
 
         var names = RegisteredOverlayNames();
         if (selectedCreatedOverlay is null || !names.Contains(selectedCreatedOverlay, StringComparer.OrdinalIgnoreCase))
             SelectManagedOverlay(names.FirstOrDefault());
-        var wide = ImGui.GetContentRegionAvail().X >= 760 * scale;
-        var height = Math.Max(360 * scale, ImGui.GetContentRegionAvail().Y);
+        // Side by side when the details still get a usable width; narrow windows stack them
+        // and keep scrolling rather than squeezing translated controls.
+        var wide = ImGui.GetContentRegionAvail().X >= 560 * s;
+        var height = Math.Max(330 * s, ImGui.GetContentRegionAvail().Y);
         var changed = false;
-        // Narrow windows stack the panels and retain scrolling rather than
-        // shrinking translated controls until they overlap or become unreachable.
-        if (ImGui.BeginChild("overlay-list", new(wide ? 252 * scale : -1, wide ? height : 250 * scale), true))
+        if (DactUi.BeginPanel("overlay-list", new Vector2(wide ? 210 * s : -1, wide ? height : 230 * s), 10, 4))
             DrawManagedOverlayList(names, templates, wide);
-        ImGui.EndChild();
-        if (wide) ImGui.SameLine(); else ImGui.Spacing();
-        if (ImGui.BeginChild("overlay-details", new(-1, height), true))
+        DactUi.EndPanel();
+        if (wide) ImGui.SameLine(0, 14 * s);
+        if (DactUi.BeginPanel("overlay-details", new Vector2(-1, height)))
         {
             if (selectedCreatedOverlay is { } name && configuration.OverlayWindows.TryGetValue(name, out var settings))
                 changed |= DrawManagedOverlayDetails(name, settings, templates);
-            else ImGui.TextWrapped(text.Get("添加一个悬浮窗后，即可在这里设置。", "Add an overlay to configure it here."));
+            else DactUi.Wrapped(text.Get("添加一个悬浮窗后，即可在这里设置。", "Add an overlay to configure it here."), DactTheme.Palette.Muted);
         }
-        ImGui.EndChild();
+        DactUi.EndPanel();
         changed |= DrawAddOverlayDialog(templates);
         return changed;
     }
@@ -89,35 +85,58 @@ public sealed partial class ControlCenterWindow
 
     private void DrawCactbotManagement()
     {
-        ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(10, 9) * OverlayScale);
-        if (!ImGui.BeginTable("cactbot-management", 1, ImGuiTableFlags.BordersOuter | ImGuiTableFlags.SizingStretchSame))
-        { ImGui.PopStyleVar(); return; }
-        ImGui.TableNextRow(); ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(NavyRaised)); ImGui.TableNextColumn();
+        var s = DactUi.S;
         var labels = new[] { text.Get("Cactbot 设置", "Cactbot settings"), text.Get("安装 / 更新", "Install / update"), text.Get("官方项目页", "Official project") };
-        var actionsWidth = labels.Sum(s => ImGui.CalcTextSize(s).X + ImGui.GetStyle().FramePadding.X * 2) + ImGui.GetStyle().ItemSpacing.X * 3;
-        var columns = ImGui.GetContentRegionAvail().X - actionsWidth > 330 * OverlayScale ? 2 : 1;
-        if (ImGui.BeginTable("cactbot-management-header", columns, ImGuiTableFlags.SizingStretchProp))
+        var actionsWidth = DactUi.ButtonWidth(labels[0]) + DactUi.ButtonWidth(labels[1]) + DactUi.ButtonWidth(labels[2], ButtonKind.Ghost, "external") + 24 * s;
+        DactUi.BeginCard("cactbot-management", null, padding: 12, gap: 8);
+        var inline = ImGui.GetContentRegionAvail().X - actionsWidth > 300 * s;
+        var top = ImGui.GetCursorPos();
+        var infoWidth = inline ? ImGui.GetContentRegionAvail().X - actionsWidth - 12 * s : ImGui.GetContentRegionAvail().X;
+        ImGui.BeginGroup();
+        using (DactUi.Gap(4))
         {
-            ImGui.TableSetupColumn("status", ImGuiTableColumnFlags.WidthStretch);
-            if (columns == 2) ImGui.TableSetupColumn("actions", ImGuiTableColumnFlags.WidthFixed, actionsWidth);
-            ImGui.TableNextColumn();
-            DactTheme.TextColored(Gold, "Cactbot");
-            OverlaySameLineIfFits(ImGui.CalcTextSize(LocalizeState(parserStatus.State)).X + 35 * OverlayScale);
-            DactTheme.TextColored(parserStatus.State == ParserState.Running ? IceBlue : DactTheme.Palette.Muted,
-                text.Format($"解析器：{LocalizeState(parserStatus.State)}", $"Parser: {LocalizeState(parserStatus.State)}"));
-            ImGui.TextWrapped(FormatCactbotStatus());
-            ImGui.TableNextColumn();
-            if (DactTheme.Button(labels[0])) openCactbotSettings();
-            OverlaySameLineIfFits(ImGui.CalcTextSize(labels[1]).X + ImGui.GetStyle().FramePadding.X * 2);
-            if (DactTheme.Button(labels[1])) selectCactbotPackage();
-            OverlaySameLineIfFits(ImGui.CalcTextSize(labels[2]).X + ImGui.GetStyle().FramePadding.X * 2);
-            if (DactTheme.Button(labels[2])) OpenUrl("https://github.com/OverlayPlugin/cactbot");
-            ImGui.EndTable();
+            var rowStart = ImGui.GetCursorScreenPos();
+            ImGui.Dummy(new Vector2(infoWidth, 22 * s));
+            var draw = ImGui.GetWindowDrawList();
+            DactUi.DrawText(draw, rowStart, 22 * s, "Cactbot", DactTheme.Palette.Gold);
+            var x = DactUi.TextWidth("Cactbot") + 8 * s;
+            ImGui.SetCursorScreenPos(rowStart + new Vector2(x, 0));
+            DactUi.Pill(FormatCactbotStatus(), CactbotStatusTone(), maxWidth: infoWidth - x);
+            x += ImGui.GetItemRectSize().X + 8 * s;
+            var parserLabel = text.Format($"解析器：{LocalizeState(parserStatus.State)}", $"Parser: {LocalizeState(parserStatus.State)}");
+            if (x + DactUi.TextWidth(parserLabel, DactFonts.Small) <= infoWidth)
+                DactUi.DrawText(draw, rowStart + new Vector2(x, 0), 22 * s, parserLabel,
+                    parserStatus.State == ParserState.Running ? DactTheme.Palette.Muted : DactTheme.Palette.Gold, DactFonts.Small);
+            ImGui.SetCursorScreenPos(rowStart + new Vector2(0, 26 * s));
+            DactUi.Wrapped(text.Get(
+                "提示中的玩家默认显示职业全称；可在 Cactbot 设置的“默认玩家代称”中修改。",
+                "Player callouts default to full job names; change this under Default Player Label in Cactbot settings."),
+                DactUi.HintColor, DactFonts.Small, infoWidth);
         }
-        ImGui.TextWrapped(text.Get(
-            "提示中的玩家默认显示职业全称；可在 Cactbot 设置的“默认玩家代称”中修改。",
-            "Player callouts default to full job names; change this under Default Player Label in Cactbot settings."));
-        ImGui.EndTable(); ImGui.PopStyleVar();
+        ImGui.EndGroup();
+        var infoHeight = ImGui.GetItemRectSize().Y;
+        if (inline) ImGui.SetCursorPos(new Vector2(top.X + infoWidth + 12 * s, top.Y + Math.Max(0, (infoHeight - 30 * s) * .5f)));
+        if (DactUi.Button(labels[0] + "##cactbot-settings")) openCactbotSettings();
+        // Long translations at large font sizes cannot fit both buttons on one line.
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(labels[1]));
+        if (DactUi.Button(labels[1] + "##cactbot-install")) selectCactbotPackage();
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(labels[2], ButtonKind.Ghost, "external"));
+        if (DactUi.Button(labels[2] + "##cactbot-project", ButtonKind.Ghost, "external")) OpenUrl("https://github.com/OverlayPlugin/cactbot");
+        // Beside a taller description the buttons end early; the card must still clear the text.
+        if (inline) ImGui.SetCursorPosY(Math.Max(ImGui.GetCursorPosY(), top.Y + infoHeight + ImGui.GetStyle().ItemSpacing.Y));
+        DactUi.EndCard();
+    }
+
+    private PillTone CactbotStatusTone()
+    {
+        var status = getCactbotOperationStatus();
+        return status.State switch
+        {
+            CactbotOperationState.Checking or CactbotOperationState.Installing => PillTone.Warn,
+            CactbotOperationState.Error => PillTone.Error,
+            _ when isCactbotInstalled() => PillTone.Ok,
+            _ => PillTone.Off,
+        };
     }
 
     private void OverlaySameLineIfFits(float width)
@@ -146,96 +165,138 @@ public sealed partial class ControlCenterWindow
         return text.Get("已关闭", "Closed");
     }
 
+    private PillTone ManagedOverlayTone(string name, HtmlOverlayWindowSettings settings, IReadOnlyList<ActOverlayTemplate> templates)
+    {
+        if (settings.IsVisible) return settings.IsUserHidden ? PillTone.Warn : PillTone.Ok;
+        if (parserStatus.State == ParserState.Running && !CanOpenManagedOverlay(name, settings, templates)) return PillTone.Error;
+        return PillTone.Off;
+    }
+
     private void DrawManagedOverlayList(string[] names, IReadOnlyList<ActOverlayTemplate> templates, bool wide)
     {
-        ImGui.TextUnformatted(text.Get("我的悬浮窗", "My overlays"));
-        var rowHeight = ImGui.GetTextLineHeightWithSpacing() * 2 + 12 * OverlayScale;
-        var listHeight = Math.Max(70 * OverlayScale, ImGui.GetContentRegionAvail().Y - (wide ? 112 : 85) * OverlayScale);
-        if (ImGui.BeginChild("overlay-rows", new(-1, listHeight), false))
+        var s = DactUi.S;
+        DactUi.Text(text.Get("我的悬浮窗", "My overlays"), DactTheme.Palette.Muted, DactFonts.Small);
+        // The rows scroll on their own; the all-overlays switch stays pinned below them.
+        // gap + divider + gap + label + gap + switch row (4 + 1 + 4 + 16 + 4 + 24).
+        var footerHeight = 53 * s;
+        var listHeight = Math.Max(60 * s, ImGui.GetContentRegionAvail().Y - footerHeight);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(0, 4) * s);
+        if (ImGui.BeginChild("overlay-rows", new Vector2(-1, listHeight), false))
         {
-            if (names.Length == 0) ImGui.TextWrapped(text.Get("还没有创建悬浮窗。", "No overlays have been created yet."));
+            if (names.Length == 0) DactUi.Wrapped(text.Get("还没有创建悬浮窗。", "No overlays have been created yet."), DactTheme.Palette.Muted, DactFonts.Small);
             foreach (var name in names)
             {
                 var settings = configuration.OverlayWindows[name];
                 var template = templates.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
                 ImGui.PushID(name);
-                var start = ImGui.GetCursorScreenPos(); var width = ImGui.GetContentRegionAvail().X;
-                if (ImGui.InvisibleButton("select-overlay", new(width, rowHeight))) SelectManagedOverlay(name);
-                var draw = ImGui.GetWindowDrawList();
+                var start = ImGui.GetCursorScreenPos();
+                var width = ImGui.GetContentRegionAvail().X;
+                var rowHeight = 18 * s + 16 * s + 2 * s + 18 * s;
+                if (ImGui.InvisibleButton("select-overlay", new Vector2(width, rowHeight))) SelectManagedOverlay(name);
+                var hovered = ImGui.IsItemHovered();
                 var selected = string.Equals(name, selectedCreatedOverlay, StringComparison.OrdinalIgnoreCase);
-                draw.AddRectFilled(start, start + new Vector2(width, rowHeight), ImGui.GetColorU32(selected ? NavyHover : NavyRaised), 6);
-                if (selected) draw.AddRect(start, start + new Vector2(width, rowHeight), ImGui.GetColorU32(IceBlue), 6);
-                draw.PushClipRect(start + new Vector2(8, 0), start + new Vector2(width - 8, rowHeight), true);
-                draw.AddText(start + new Vector2(9, 7), ImGui.GetColorU32(DactTheme.Palette.Text),
-                    FriendsMessagePreview.Ellipsize(OverlayDisplayName(name), Math.Max(1, width - 18), s => ImGui.CalcTextSize(s).X));
+                var draw = ImGui.GetWindowDrawList();
+                var fill = DactMotion.Color(ImGuiP.GetItemID(), DactTheme.Palette.Hover with { W = selected ? 1 : hovered ? .5f : 0 }, DactMotion.Fast);
+                if (fill.W > 0) draw.AddRectFilled(start, start + new Vector2(width, rowHeight), DactUi.U32(fill), 8 * s);
+                if (selected)
+                    draw.AddRect(start, start + new Vector2(width, rowHeight), DactUi.U32(DactTheme.Palette.Accent with { W = .55f }), 8 * s, ImDrawFlags.None, Math.Max(1, s));
                 var status = OverlayKind(name, template) + " · " + ManagedOverlayStatus(name, settings, templates);
-                draw.AddText(start + new Vector2(9, 7 + ImGui.GetTextLineHeightWithSpacing()),
-                    ImGui.GetColorU32(DactTheme.Palette.Muted), FriendsMessagePreview.Ellipsize(status, Math.Max(1, width - 18), s => ImGui.CalcTextSize(s).X));
-                draw.PopClipRect();
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(OverlayDisplayName(name) + "\n" + status);
+                var title = DactUi.Fit(OverlayDisplayName(name), width - 20 * s);
+                DactUi.DrawText(draw, start + new Vector2(10 * s, 9 * s), 18 * s, title, selected ? DactTheme.Palette.Text : DactTheme.Palette.Muted);
+                string line;
+                using (DactFonts.Push(DactFonts.Small)) line = DactUi.Fit(status, width - 20 * s);
+                DactUi.DrawText(draw, start + new Vector2(10 * s, 29 * s), 16 * s, line, DactTheme.Palette.Muted, DactFonts.Small);
+                if (hovered && (title != OverlayDisplayName(name) || line != status)) DactUi.Tooltip(OverlayDisplayName(name) + "\n" + status);
                 ImGui.PopID();
             }
         }
         ImGui.EndChild();
-        ImGui.Separator();
-        ImGui.TextDisabled(text.Get("全部悬浮窗", "All overlays"));
+        ImGui.PopStyleVar();
+        DactUi.Divider();
+        DactUi.Text(text.Get("全部悬浮窗", "All overlays"), DactTheme.Palette.Muted, DactFonts.Small);
         var hide = configuration.HideHtmlOverlaysWhenGameUnfocused;
-        if (DactTheme.WrappedCheckbox(text.Get("游戏失焦时隐藏", "Hide when game loses focus"), ref hide)) setHideHtmlOverlaysWhenUnfocused(hide);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(text.Get(
+        if (DactUi.ToggleRow(text.Get("游戏失焦时隐藏", "Hide when game loses focus"), ref hide)) setHideHtmlOverlaysWhenUnfocused(hide);
+        if (ImGui.IsItemHovered()) DactUi.Tooltip(text.Get(
             "仅临时隐藏网页悬浮窗，不改变各悬浮窗保存的开启状态。",
             "Temporarily hides web overlays without changing their saved open state."));
     }
 
     private bool DrawManagedOverlayDetails(string name, HtmlOverlayWindowSettings settings, IReadOnlyList<ActOverlayTemplate> templates)
     {
+        var s = DactUi.S;
         var changed = false;
         var cactbot = SelfHostedActRuntime.IsCactbotOverlayName(name);
         var template = templates.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
         var available = CanOpenManagedOverlay(name, settings, templates);
         ImGui.PushID(name);
-        ImGui.PushTextWrapPos(0);
-        DactTheme.TextColored(IceBlue, OverlayDisplayName(name));
-        ImGui.PopTextWrapPos();
-        ImGui.TextWrapped(OverlayKind(name, template) + " · " + ManagedOverlayStatus(name, settings, templates));
-        ImGui.BeginDisabled(!settings.IsVisible && (!available || parserStatus.State != ParserState.Running));
-        if (DactTheme.Button(settings.IsVisible ? text.Get("关闭", "Close") : text.Get("打开", "Open")))
+
+        // Title row: name, state, source, then 打开/关闭 · 隐藏/显示 · more, right-aligned.
+        var openLabel = settings.IsVisible ? text.Get("关闭", "Close") : text.Get("打开", "Open");
+        var hideLabel = settings.IsUserHidden ? text.Get("显示", "Show") : text.Get("隐藏", "Hide");
+        var openKind = settings.IsVisible ? ButtonKind.Secondary : ButtonKind.Primary;
+        var actionsWidth = DactUi.ButtonWidth(openLabel, openKind) + DactUi.ButtonWidth(hideLabel) + 28 * s + 16 * s;
+        var width = ImGui.GetContentRegionAvail().X;
+        var rowStart = ImGui.GetCursorScreenPos();
+        var draw = ImGui.GetWindowDrawList();
+        var titleRoom = Math.Max(60 * s, width - actionsWidth - 12 * s);
+        var x = 0f;
+        string title;
+        using (DactFonts.Push(DactFonts.H2)) title = DactUi.Fit(OverlayDisplayName(name), titleRoom * .55f);
+        DactUi.DrawText(draw, rowStart, 30 * s, title, DactTheme.Palette.Text, DactFonts.H2);
+        using (DactFonts.Push(DactFonts.H2)) x += ImGui.CalcTextSize(title).X + 8 * s;
+        ImGui.SetCursorScreenPos(rowStart + new Vector2(x, 4 * s));
+        DactUi.Pill(ManagedOverlayStatus(name, settings, templates), ManagedOverlayTone(name, settings, templates), maxWidth: Math.Max(40 * s, titleRoom - x));
+        x += ImGui.GetItemRectSize().X + 8 * s;
+        var origin = text.Format($"来自 {OverlayKind(name, template)}", $"From {OverlayKind(name, template)}");
+        if (x + DactUi.TextWidth(origin, DactFonts.Small) <= titleRoom)
+            DactUi.DrawText(draw, rowStart + new Vector2(x, 0), 30 * s, origin, DactTheme.Palette.Muted, DactFonts.Small);
+
+        ImGui.SetCursorScreenPos(rowStart + new Vector2(width - actionsWidth, 0));
+        var canOpen = settings.IsVisible || (available && parserStatus.State == ParserState.Running);
+        if (DactUi.Button(openLabel + "##overlay-open", openKind, disabled: !canOpen))
         { if (settings.IsVisible) closeHtmlOverlay(name); else openHtmlOverlay(name); }
-        ImGui.EndDisabled();
-        OverlaySameLineIfFits(95 * OverlayScale);
-        ImGui.BeginDisabled(!settings.IsVisible);
-        if (DactTheme.Button(settings.IsUserHidden ? text.Get("显示", "Show") : text.Get("隐藏", "Hide")))
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.Button(hideLabel + "##overlay-hide", disabled: !settings.IsVisible))
         { settings.IsUserHidden = !settings.IsUserHidden; changed = true; }
-        ImGui.EndDisabled();
-        OverlaySameLineIfFits(95 * OverlayScale);
-        if (DactTheme.Button(text.Get("更多", "More"))) ImGui.OpenPopup("overlay-actions");
+        ImGui.SameLine(0, 8 * s);
+        if (DactUi.IconButton("##overlay-more", "more", text.Get("更多", "More"), DactTheme.Palette.Hover)) ImGui.OpenPopup("overlay-actions");
         var removed = false;
-        if (ImGui.BeginPopup("overlay-actions"))
+        if (DactUi.BeginMenuPopup("overlay-actions"))
         {
-            if (!cactbot && ImGui.MenuItem(text.Get("重命名", "Rename")))
-            { overlayBeingRenamed = name; overlayRenameValue = OverlayDisplayName(name); overlayRenameFeedback = null; }
-            if (ImGui.MenuItem(cactbot ? text.Get("移除并重置", "Remove and reset") : text.Get("删除悬浮窗", "Delete overlay")))
-            { deleteHtmlOverlay(name); SelectManagedOverlay(null); removed = true; }
-            ImGui.TextWrapped(cactbot ? text.Get(
+            if (!cactbot && DactUi.MenuRow(text.Get("重命名", "Rename"), width: 220 * s))
+            {
+                overlayBeingRenamed = name; overlayRenameValue = OverlayDisplayName(name); overlayRenameFeedback = null;
+                ImGui.CloseCurrentPopup();
+            }
+            if (DactUi.MenuRow(cactbot ? text.Get("移除并重置", "Remove and reset") : text.Get("删除悬浮窗", "Delete overlay"), danger: true, width: 220 * s))
+            { deleteHtmlOverlay(name); SelectManagedOverlay(null); removed = true; ImGui.CloseCurrentPopup(); }
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + 212 * s);
+            DactUi.Hint(cactbot ? text.Get(
                 "关闭并移除记录，清除窗口设置；保留本地模板。", "Close and remove this entry, clearing window settings while keeping the local template.")
                 : text.Get("关闭悬浮窗并删除它保存的网址、位置、大小与显示设置。", "Close the overlay and delete its saved URL, position, size, and display settings."));
+            ImGui.PopTextWrapPos();
             ImGui.EndPopup();
         }
+        ImGui.SetCursorScreenPos(rowStart);
+        ImGui.Dummy(new Vector2(width, 30 * s));
         if (removed) { ImGui.PopID(); return changed; }
         if (overlayBeingRenamed == name) changed |= DrawOverlayRenameEditor(name, settings);
-        ImGui.Spacing();
-        overlayDetailsPage = (OverlayDetailsPage)BrandedWindowChrome.DrawNavigationRail("overlay-detail-tabs",
-            [text.Get("常规", "General"), text.Get("快捷键", "Hotkeys"), text.Get("来源", "Source")], (int)overlayDetailsPage, 36 * OverlayScale);
-        ImGui.Spacing();
+
+        var page = (int)overlayDetailsPage;
+        if (DactUi.Tabs("overlay-detail-tabs", [text.Get("常规", "General"), text.Get("快捷键", "Hotkeys"), text.Get("来源", "Source")], ref page))
+            overlayDetailsPage = (OverlayDetailsPage)page;
         if (cactbot && (!available || parserStatus.State != ParserState.Running))
         {
-            ImGui.TextWrapped(parserStatus.State != ParserState.Running
+            DactUi.Wrapped(parserStatus.State != ParserState.Running
                 ? text.Get("启动解析器后才能打开该悬浮窗。", "Start the parser before opening this overlay.")
-                : text.Get("当前 Cactbot 包缺少该页面，不会回退到远程地址。", "The current Cactbot package does not contain this page; no online fallback will be used."));
-            if (settings.OpenOnStartup && DactTheme.Button(text.Get("停止自动打开", "Disable startup")))
+                : text.Get("当前 Cactbot 包缺少该页面，不会回退到远程地址。", "The current Cactbot package does not contain this page; no online fallback will be used."),
+                DactTheme.Palette.Gold, DactFonts.Small);
+            if (settings.OpenOnStartup && DactUi.Button(text.Get("停止自动打开", "Disable startup") + "##overlay-stop-startup"))
             { settings.OpenOnStartup = false; changed = true; }
-            if (DactTheme.Button(text.Get("移除并重置", "Remove and reset")))
+            if (settings.OpenOnStartup) ImGui.SameLine(0, 8 * s);
+            if (DactUi.Button(text.Get("移除并重置", "Remove and reset") + "##overlay-reset", ButtonKind.Danger))
             { deleteHtmlOverlay(name); SelectManagedOverlay(null); ImGui.PopID(); return changed; }
-            ImGui.Separator();
+            DactUi.Divider();
         }
         switch (overlayDetailsPage)
         {
@@ -250,28 +311,56 @@ public sealed partial class ControlCenterWindow
 
     private bool DrawManagedOverlayGeneral(string name, HtmlOverlayWindowSettings settings, bool available)
     {
-        ImGui.TextUnformatted(text.Get("显示与启动", "Display and startup"));
-        var changed = Checkbox(text.Get("启动时自动打开", "Open on startup"), settings.OpenOnStartup, v => settings.OpenOnStartup = v);
-        changed |= Checkbox(text.Get("脱战隐藏", "Hide out of combat"), settings.AutoHideOutOfCombat, v => settings.AutoHideOutOfCombat = v);
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
-        ImGui.TextWrapped(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"));
-        ImGui.BeginDisabled(!available && !settings.IsVisible);
-        if (DactTheme.Button(settings.IsEditing ? text.Get("完成位置编辑", "Finish position editing") : text.Get("编辑位置和大小", "Edit position and size")))
+        var s = DactUi.S;
+        var changed = false;
+        if (DactUi.BeginGrid("overlay-general", 20))
+        {
+            using (DactUi.Gap(10))
+            {
+                DactUi.Text(text.Get("显示与启动", "Display and startup"), DactTheme.Palette.Muted, DactFonts.Small);
+                var startup = settings.OpenOnStartup;
+                if (DactUi.ToggleRow(text.Get("启动时自动打开", "Open on startup"), ref startup)) { settings.OpenOnStartup = startup; changed = true; }
+                var autoHide = settings.AutoHideOutOfCombat;
+                if (DactUi.ToggleRow(text.Get("脱战隐藏", "Hide out of combat"), ref autoHide)) { settings.AutoHideOutOfCombat = autoHide; changed = true; }
+            }
+            DactUi.NextColumn();
+            using (DactUi.Gap(10))
+            {
+                DactUi.Text(text.Get("位置、缩放、穿透与锁定", "Position, scale, click-through, and lock"), DactTheme.Palette.Muted, DactFonts.Small);
+                var clickThrough = settings.IsClickThrough;
+                if (DactUi.ToggleRow(text.Get("鼠标穿透", "Click-through"), ref clickThrough)) { settings.SetClickThrough(clickThrough); changed = true; }
+                var locked = settings.IsLocked;
+                if (DactUi.ToggleRow(text.Get("锁定位置和大小", "Lock position and size"), ref locked)) { settings.SetLocked(locked); changed = true; }
+            }
+            DactUi.EndGrid();
+        }
+
+        DactUi.BeginField(text.Get("页面缩放", "Page zoom"));
+        var zoom = settings.ZoomFactor;
+        if (DactUi.SliderFloat("overlay-zoom", ref zoom, .5f, 2)) { settings.ZoomFactor = zoom; changed = true; }
+        DactUi.EndField();
+
+        var editLabel = settings.IsEditing ? text.Get("完成位置编辑", "Finish position editing") : text.Get("编辑位置和大小", "Edit position and size");
+        if (DactUi.Button(editLabel + "##overlay-edit", settings.IsEditing ? ButtonKind.Primary : ButtonKind.Secondary, "target",
+                disabled: !available && !settings.IsVisible))
         {
             var edit = !settings.IsEditing;
             if (!edit || settings.IsVisible || openHtmlOverlay(name)) { settings.SetEditing(edit); changed = true; }
         }
-        ImGui.EndDisabled();
-        changed |= Checkbox(text.Get("鼠标穿透", "Click-through"), settings.IsClickThrough, settings.SetClickThrough);
-        OverlaySameLineIfFits(ImGui.CalcTextSize(text.Get("锁定位置和大小", "Lock position and size")).X + 45 * OverlayScale);
-        changed |= Checkbox(text.Get("锁定位置和大小", "Lock position and size"), settings.IsLocked, settings.SetLocked);
-        ImGui.SetNextItemWidth(Math.Min(300 * OverlayScale, Math.Max(80 * OverlayScale, ImGui.GetContentRegionAvail().X - 130 * OverlayScale)));
-        changed |= SliderFloat(text.Get("页面缩放", "Page zoom"), settings.ZoomFactor, .5f, 2, v => settings.ZoomFactor = v);
-        ImGui.TextWrapped(settings.IsEditing ? text.Get(
+        var note = settings.IsEditing ? text.Get(
             "单击可操作网页；按住并拖动可移动，拖动右下角斜纹可缩放。",
             "Click to use the page; hold and drag to move, or drag the striped bottom-right grip to resize.") : text.Get(
             "位置编辑时会暂时关闭穿透与锁定；完成后会恢复。",
-            "Position editing temporarily disables click-through and locking; finishing restores them."));
+            "Position editing temporarily disables click-through and locking; finishing restores them.");
+        // The note sits beside the button when it fits, as in the design, otherwise below it.
+        var room = ImGui.GetWindowContentRegionMax().X - ImGui.GetItemRectMax().X + ImGui.GetWindowPos().X - 10 * s;
+        if (room > 160 * s)
+        {
+            ImGui.SameLine(0, 10 * s);
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (30 * s - ImGui.GetTextLineHeight()) * .5f);
+            DactUi.Wrapped(note, DactUi.HintColor, DactFonts.Small, room);
+        }
+        else DactUi.Hint(note);
         return changed;
     }
 
@@ -288,59 +377,65 @@ public sealed partial class ControlCenterWindow
 
     private bool DrawManagedOverlaySource(string name, HtmlOverlayWindowSettings settings, ActOverlayTemplate? template)
     {
+        var s = DactUi.S;
         var changed = false;
         var cactbot = SelfHostedActRuntime.IsCactbotOverlayName(name);
         var custom = !cactbot && template is null;
-        ImGui.TextUnformatted(text.Get("页面来源", "Page source"));
-        ImGui.TextWrapped(OverlayKind(name, template));
+        DactUi.Text(text.Get("页面来源", "Page source"), DactTheme.Palette.Muted, DactFonts.Small);
+        DactUi.Text(OverlayKind(name, template));
         var address = ManagedOverlaySource(template, settings);
         if (address.Length > 0)
         {
-            ImGui.TextDisabled(cactbot ? text.Get("本地页面", "Local page") : text.Get("页面网址", "Page URL"));
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputText("##source-address", ref address, Math.Max(2048, address.Length + 1), ImGuiInputTextFlags.ReadOnly);
+            DactUi.BeginField(cactbot ? text.Get("本地页面", "Local page") : text.Get("页面网址", "Page URL"));
+            DactUi.Input("source-address", ref address, "", Math.Max(2048, address.Length + 1), readOnly: true);
+            DactUi.EndField();
         }
-        else ImGui.TextWrapped(text.Get("本地资源不可用", "Local asset unavailable"));
-        if (cactbot) ImGui.TextWrapped(text.Get("此页面随 Cactbot 一起安装和更新。", "This page is installed and updated with Cactbot."));
+        else DactUi.Wrapped(text.Get("本地资源不可用", "Local asset unavailable"), DactTheme.Palette.Gold, DactFonts.Small);
+        if (cactbot) DactUi.Hint(text.Get("此页面随 Cactbot 一起安装和更新。", "This page is installed and updated with Cactbot."));
         if (custom)
         {
-            if (DactTheme.Button(text.Get("修改网址", "Edit URL")))
+            if (editingOverlaySource != name && DactUi.Button(text.Get("修改网址", "Edit URL") + "##overlay-edit-url"))
             { editingOverlaySource = name; overlaySourceDraft = settings.SourceUrl; overlaySourceFeedback = null; }
             if (editingOverlaySource == name)
             {
-                ImGui.SetNextItemWidth(-1); ImGui.InputText("##edit-source", ref overlaySourceDraft, 2048);
-                if (DactTheme.Button(text.Get("保存网址", "Save URL"))) changed |= SaveManagedOverlaySource(name, overlaySourceDraft);
-                OverlaySameLineIfFits(110 * OverlayScale);
-                if (DactTheme.Button(text.Get("取消", "Cancel"))) { editingOverlaySource = null; overlaySourceFeedback = null; }
+                DactUi.Input("edit-source", ref overlaySourceDraft, "https://", 2048);
+                if (DactUi.Button(text.Get("保存网址", "Save URL") + "##overlay-save-url", ButtonKind.Primary)) changed |= SaveManagedOverlaySource(name, overlaySourceDraft);
+                ImGui.SameLine(0, 8 * s);
+                if (DactUi.Button(text.Get("取消", "Cancel") + "##overlay-cancel-url")) { editingOverlaySource = null; overlaySourceFeedback = null; }
             }
-            if (overlaySourceFeedback is not null) ImGui.TextWrapped(overlaySourceFeedback);
+            if (overlaySourceFeedback is not null) DactUi.Wrapped(overlaySourceFeedback, DactUi.Danger, DactFonts.Small);
         }
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
-        ImGui.TextUnformatted(text.Get("数据连接", "Data connection"));
+
+        DactUi.Divider();
+        DactUi.Text(text.Get("数据连接", "Data connection"), DactTheme.Palette.Muted, DactFonts.Small);
         // Only custom pages currently report a detected WebSocket connection.
         // Window visibility is not evidence that a page is receiving game data.
-        if (!settings.IsVisible) ImGui.TextWrapped(custom ? text.Get("打开后自动检测连接", "Connection will be detected when opened") : text.Get("已关闭", "Closed"));
-        else if (!custom) ImGui.TextWrapped(text.Get("页面已打开；此页面没有独立的连接检测结果。", "The page is open; no separate connection detection result is available for this page."));
-        else ImGui.TextWrapped(string.IsNullOrWhiteSpace(settings.ConnectionStateDetail)
-            ? text.Get("打开后自动检测连接", "Connection will be detected when opened") : text.SystemMessage(settings.ConnectionStateDetail));
-        if (custom && ImGui.TreeNode(text.Get("连接高级设置", "Advanced connection settings")))
+        var connection = !settings.IsVisible
+            ? custom ? text.Get("打开后自动检测连接", "Connection will be detected when opened") : text.Get("已关闭", "Closed")
+            : !custom ? text.Get("页面已打开；此页面没有独立的连接检测结果。", "The page is open; no separate connection detection result is available for this page.")
+            : string.IsNullOrWhiteSpace(settings.ConnectionStateDetail)
+                ? text.Get("打开后自动检测连接", "Connection will be detected when opened") : text.SystemMessage(settings.ConnectionStateDetail);
+        DactUi.Wrapped(connection);
+        if (custom)
         {
-            var reconnect = false;
-            ImGui.SetNextItemWidth(Math.Min(280 * OverlayScale, ImGui.GetContentRegionAvail().X));
-            if (DactTheme.BeginCombo("##connection-mode", GetOverlayConnectionModeLabel(settings.ConnectionMode)))
+            DactUi.Disclosure(text.Get("连接高级设置", "Advanced connection settings"), ref overlayConnectionAdvancedOpen);
+            if (overlayConnectionAdvancedOpen)
             {
-                foreach (var mode in Enum.GetValues<OverlayConnectionMode>())
-                    if (ImGui.Selectable(GetOverlayConnectionModeLabel(mode), settings.ConnectionMode == mode))
-                    { settings.ConnectionMode = mode; reconnect = true; }
-                ImGui.EndCombo();
+                var reconnect = false;
+                var modes = Enum.GetValues<OverlayConnectionMode>();
+                var index = Array.IndexOf(modes, settings.ConnectionMode);
+                if (DactUi.Select("connection-mode", modes.Select(GetOverlayConnectionModeLabel).ToArray(), ref index, 280 * s) && index >= 0)
+                { settings.ConnectionMode = modes[index]; reconnect = true; }
+                ImGui.SameLine(0, 8 * s);
+                if (DactUi.Button(text.Get("重新检测", "Detect again") + "##overlay-detect")) { settings.ConnectionMode = OverlayConnectionMode.Auto; reconnect = true; }
+                DactUi.Hint(text.Get("默认自动检测；手动模式只用于检测失败时微调。", "Automatic detection is the default. Manual modes are only for troubleshooting."));
+                if (reconnect) { ReconnectManagedOverlay(name, settings); changed = true; }
             }
-            if (DactTheme.Button(text.Get("重新检测", "Detect again"))) { settings.ConnectionMode = OverlayConnectionMode.Auto; reconnect = true; }
-            ImGui.TextWrapped(text.Get("默认自动检测；手动模式只用于检测失败时微调。", "Automatic detection is the default. Manual modes are only for troubleshooting."));
-            if (reconnect) { ReconnectManagedOverlay(name, settings); changed = true; }
-            ImGui.TreePop();
         }
         return changed;
     }
+
+    private bool overlayConnectionAdvancedOpen;
 
     internal bool SaveManagedOverlaySource(string name, string value)
     {
@@ -368,72 +463,87 @@ public sealed partial class ControlCenterWindow
 
     private bool DrawAddOverlayDialog(IReadOnlyList<ActOverlayTemplate> templates)
     {
-        var width = Math.Min(650 * OverlayScale, ImGui.GetMainViewport().WorkSize.X - 40 * OverlayScale);
-        // A modal can outlive viewport resizing. Refit it before drawing so all
-        // creation controls and the cancel action remain inside the viewport.
-        DactTheme.PreparePopupPosition(AddOverlayPopup);
-        ImGui.SetNextWindowSize(new(width, 0));
-        if (!ImGui.BeginPopupModal(text.Get("添加悬浮窗", "Add overlay") + AddOverlayPopup,
-                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings)) return false;
+        // The dialog centres on the DACT window; a narrow window keeps it 24 px inside each edge.
+        var hostWidth = (DactUi.HostMax.X - DactUi.HostMin.X) / DactUi.S;
+        var width = hostWidth > 0 ? Math.Clamp(hostWidth - 48, 320, 560) : 560;
+        if (!DactUi.BeginDialog(AddOverlayPopup, width)) return false;
+        var s = DactUi.S;
+        var palette = DactTheme.Palette;
         var changed = false;
+        DactUi.Text(text.Get("添加悬浮窗", "Add overlay"), size: DactFonts.H2);
         if (overlayCreatorPage is null)
         {
-            ImGui.TextWrapped(text.Get("选择悬浮窗来源", "Choose an overlay source"));
+            DactUi.Hint(text.Get("选择悬浮窗来源", "Choose an overlay source"));
             foreach (var page in Enum.GetValues<OverlayCreatorPage>())
             {
                 var label = page switch { OverlayCreatorPage.Cactbot => "Cactbot", OverlayCreatorPage.Template => text.Get("从模板创建", "Create from template"), _ => text.Get("从网址创建", "Create from URL") };
-                if (DactTheme.Button(label, new(-1, 42 * OverlayScale))) { overlayCreatorPage = page; selectedCreationTemplate = null; customOverlayFeedback = null; }
+                if (DactUi.Button(label + "##overlay-source-" + page, width: ImGui.GetContentRegionAvail().X))
+                {
+                    overlayCreatorPage = page;
+                    selectedCreationTemplate = null;
+                    customOverlayFeedback = null;
+                }
+            }
+        }
+        else if (overlayCreatorPage == OverlayCreatorPage.Url)
+        {
+            changed |= DrawCustomHtmlOverlayCreator();
+            if (changed)
+            {
+                overlayDetailsPage = OverlayDetailsPage.General;
+                DactUi.CloseDialog(AddOverlayPopup);
             }
         }
         else
         {
-            if (overlayCreatorPage == OverlayCreatorPage.Url)
-            {
-                changed |= DrawCustomHtmlOverlayCreator();
-                if (changed) { overlayDetailsPage = OverlayDetailsPage.General; ImGui.CloseCurrentPopup(); }
-            }
+            var cactbot = overlayCreatorPage == OverlayCreatorPage.Cactbot;
+            var choices = templates.Where(t => t.IsCactbot == cactbot).OrderBy(t => GetCactbotOverlayOrder(t.Name)).ToArray();
+            if (choices.Length == 0)
+                DactUi.Wrapped(templates.Count == 0
+                    ? text.Get("启动解析器后可选择悬浮窗模板。", "Start the parser to select an overlay template.")
+                    : text.Get("没有可用的本地模板。", "No local templates are available."), palette.Muted);
             else
             {
-                var cactbot = overlayCreatorPage == OverlayCreatorPage.Cactbot;
-                var choices = templates.Where(t => t.IsCactbot == cactbot).OrderBy(t => GetCactbotOverlayOrder(t.Name)).ToArray();
-                if (choices.Length == 0) ImGui.TextWrapped(templates.Count == 0
-                    ? text.Get("启动解析器后可选择悬浮窗模板。", "Start the parser to select an overlay template.")
-                    : text.Get("没有可用的本地模板。", "No local templates are available."));
-                else
+                if (!choices.Any(t => t.Name == selectedCreationTemplate))
                 {
-                    if (!choices.Any(t => t.Name == selectedCreationTemplate))
-                    {
-                        var previous = cactbot ? configuration.SelectedCactbotOverlay : configuration.SelectedOverlayTemplate;
-                        selectedCreationTemplate = choices.FirstOrDefault(t => string.Equals(t.Name, previous, StringComparison.OrdinalIgnoreCase))?.Name ?? choices[0].Name;
-                    }
-                    ImGui.SetNextItemWidth(-1);
-                    if (DactTheme.BeginCombo("##creation-template", cactbot ? FormatCactbotOverlayName(selectedCreationTemplate!) : selectedCreationTemplate!))
-                    {
-                        foreach (var item in choices)
-                            if (ImGui.Selectable(cactbot ? FormatCactbotOverlayName(item.Name) : item.Name, item.Name == selectedCreationTemplate)) selectedCreationTemplate = item.Name;
-                        ImGui.EndCombo();
-                    }
-                    var already = RegisteredOverlayNames().Contains(selectedCreationTemplate!, StringComparer.OrdinalIgnoreCase);
-                    if (DactTheme.Button(already ? text.Get("查看已有悬浮窗", "View existing overlay") : text.Get("添加并打开", "Add and open")))
-                    {
-                        // Slash commands and the advanced settings still use the
-                        // persisted template selection; keep both entry points in sync.
-                        if (cactbot) configuration.SelectedCactbotOverlay = selectedCreationTemplate!;
-                        else configuration.SelectedOverlayTemplate = selectedCreationTemplate!;
-                        changed = true;
-                        if (already || openHtmlOverlay(selectedCreationTemplate!)) { SelectManagedOverlay(selectedCreationTemplate); ImGui.CloseCurrentPopup(); }
-                    }
-                    if (already) ImGui.TextWrapped(text.Get("此模板已在列表中，可直接查看和打开。", "This template is already listed; select it to view or open it."));
+                    var previous = cactbot ? configuration.SelectedCactbotOverlay : configuration.SelectedOverlayTemplate;
+                    selectedCreationTemplate = choices.FirstOrDefault(t => string.Equals(t.Name, previous, StringComparison.OrdinalIgnoreCase))?.Name ?? choices[0].Name;
                 }
-                if (cactbot) ImGui.TextWrapped(text.Get(
-                    "文字提醒和时间轴可以同时打开；它们与旧版组合窗口互斥。其他 Cactbot 窗口可自由多开。",
-                    "Alerts and timeline can be open together; both conflict with the legacy combined window. Other Cactbot overlays can be opened together freely."));
+                var labels = choices.Select(t => cactbot ? FormatCactbotOverlayName(t.Name) : t.Name).ToArray();
+                var index = Array.FindIndex(choices, t => t.Name == selectedCreationTemplate);
+                DactUi.BeginField(text.Get("模板", "Template"));
+                if (DactUi.Select("creation-template", labels, ref index)) selectedCreationTemplate = choices[index].Name;
+                DactUi.EndField();
+                var already = RegisteredOverlayNames().Contains(selectedCreationTemplate!, StringComparer.OrdinalIgnoreCase);
+                if (DactUi.Button((already ? text.Get("查看已有悬浮窗", "View existing overlay") : text.Get("添加并打开", "Add and open")) + "##creation-add",
+                        ButtonKind.Primary))
+                {
+                    // Slash commands and the advanced settings still use the
+                    // persisted template selection; keep both entry points in sync.
+                    if (cactbot) configuration.SelectedCactbotOverlay = selectedCreationTemplate!;
+                    else configuration.SelectedOverlayTemplate = selectedCreationTemplate!;
+                    changed = true;
+                    if (already || openHtmlOverlay(selectedCreationTemplate!))
+                    {
+                        SelectManagedOverlay(selectedCreationTemplate);
+                        DactUi.CloseDialog(AddOverlayPopup);
+                    }
+                }
+                if (already) DactUi.Hint(text.Get("此模板已在列表中，可直接查看和打开。", "This template is already listed; select it to view or open it."));
             }
-            if (DactTheme.Button(text.Get("返回", "Back"))) overlayCreatorPage = null;
-            ImGui.SameLine();
+            if (cactbot) DactUi.Hint(text.Get(
+                "文字提醒和时间轴可以同时打开；它们与旧版组合窗口互斥。其他 Cactbot 窗口可自由多开。",
+                "Alerts and timeline can be open together; both conflict with the legacy combined window. Other Cactbot overlays can be opened together freely."));
         }
-        if (DactTheme.Button(text.Get("取消", "Cancel"))) ImGui.CloseCurrentPopup();
-        ImGui.EndPopup();
+        DactUi.Divider();
+        // 返回 sits on the left of a sub-page; 取消 always closes from the right.
+        if (overlayCreatorPage is not null && DactUi.Button(text.Get("返回", "Back") + "##overlay-add-back", ButtonKind.Ghost))
+            overlayCreatorPage = null;
+        var cancel = text.Get("取消", "Cancel");
+        if (overlayCreatorPage is not null) ImGui.SameLine(0, 8 * s);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(cancel)));
+        if (DactUi.Button(cancel + "##overlay-add-cancel")) DactUi.CloseDialog(AddOverlayPopup);
+        DactUi.EndDialog(AddOverlayPopup);
         return changed;
     }
 }
