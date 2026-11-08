@@ -41,7 +41,7 @@ https://raw.githubusercontent.com/JackyWilliam/DalamudActCompatRepo/main/pluginm
 
 ### 2. 安装插件
 
-输入 `/xlplugins`，搜索 **Dalamud ACT Compat**，点击安装。
+输入 `/xlplugins`，搜索 **DACT**，点击安装。
 
 **装了错误编号 4.4.0.0，无法更新到 0.4.4.0？** 同一仓库内安装独立卫月插件 **[DACT 修复工具](tools/DACT.Repair/README.md)**，停用主插件后点击修复，再重启一次游戏并启用 DACT；保留配置，无需手动卸载重装。
 
