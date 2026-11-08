@@ -570,18 +570,14 @@ if (Test-Path -LiteralPath $packStagingRoot) {
 }
 New-Item -ItemType Directory -Force -Path $packStagingRoot | Out-Null
 
-$hostSource = Join-Path $validationDir "host"
+# The Host stays in the core package (1.0.0.1). It is rebuilt with every version, so a separate
+# pack never saved a download, and it must match this plugin exactly: on 1.0.0.0 a failed pack
+# download (GitHub 504, gh-proxy 500) fell back to the previous version's Host, which could not
+# load Triggernometry 2.4.3.0. Dalamud's own download brings the core, and with it the Host.
 $cactbotSource = Join-Path $validationDir "BundledCactbot"
 $pluginsSource = Join-Path $validationDir "BundledActPlugins"
-$hostContentHash = Get-DirectoryContentSha256 $hostSource
 $cactbotContentHash = Get-DirectoryContentSha256 $cactbotSource
 $pluginsContentHash = Get-DirectoryContentSha256 $pluginsSource
-
-$hostTemporaryPack = Join-Path $outputPath "host-pending.zip"
-New-ResourcePack $hostSource "host" $hostTemporaryPack $packStagingRoot
-$hostArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $hostTemporaryPack).Hash.ToLowerInvariant()
-$hostPack = Join-Path $outputPath "host-$hostArchiveHash.zip"
-Move-Item -LiteralPath $hostTemporaryPack -Destination $hostPack -Force
 
 $cactbotVersion = [string] $cactbotLock.version
 $cactbotPack = Join-Path $outputPath "cactbot-$cactbotVersion.zip"
@@ -594,7 +590,6 @@ $packManifest = [ordered] @{
     schemaVersion = 1
     version = $ExpectedAssemblyVersion
     packs = @(
-        (New-PackDescriptor "host" $ExpectedAssemblyVersion $hostPack "host" $hostContentHash),
         (New-PackDescriptor "cactbot" $cactbotVersion $cactbotPack "BundledCactbot" $cactbotContentHash),
         (New-PackDescriptor "act-plugins" $ExpectedAssemblyVersion $pluginsPack "BundledActPlugins" $pluginsContentHash)
     )
@@ -607,7 +602,7 @@ Copy-Item -LiteralPath $packManifestPath -Destination (Join-Path $validationDir 
 $coreStaging = Join-Path $packStagingRoot "core"
 New-Item -ItemType Directory -Force -Path $coreStaging | Out-Null
 foreach ($item in Get-ChildItem -LiteralPath $validationDir) {
-    if ($item.Name -in @("host", "BundledCactbot", "BundledActPlugins")) {
+    if ($item.Name -in @("BundledCactbot", "BundledActPlugins")) {
         continue
     }
     Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $coreStaging $item.Name) -Recurse
@@ -620,6 +615,18 @@ $coreTemporary = "$corePack.tmp"
     [IO.Compression.CompressionLevel]::Optimal,
     $false)
 Move-Item -LiteralPath $coreTemporary -Destination $corePack -Force
+$coreArchive = [IO.Compression.ZipFile]::OpenRead($corePack)
+try {
+    if (-not ($coreArchive.Entries | Where-Object { $_.FullName -replace '\\', '/' -eq "host/DalamudActCompat.Host.exe" })) {
+        throw "Core package does not contain host/DalamudActCompat.Host.exe; the Host must ship with the core."
+    }
+}
+finally {
+    $coreArchive.Dispose()
+}
+if (@($packManifest.packs | Where-Object { $_.id -eq "host" }).Count -ne 0) {
+    throw "resource-packs.json still lists a Host pack; the core's own Host must be the only one."
+}
 
 foreach ($descriptor in $packManifest.packs) {
     $packPath = Join-Path $outputPath $descriptor.fileName
@@ -629,8 +636,10 @@ foreach ($descriptor in $packManifest.packs) {
         throw "Generated resource pack failed manifest verification: $($descriptor.id)"
     }
 }
-if ((Get-Item -LiteralPath $corePack).Length -gt 32MB) {
-    throw "Core package exceeds the 32 MiB split-package budget."
+# 48 MiB since the Host moved back into the core (about 31 MiB + 11 MiB in 1.0.0.1); Cactbot and
+# the bundled extensions remain separate packs because they are reused across versions.
+if ((Get-Item -LiteralPath $corePack).Length -gt 48MB) {
+    throw "Core package exceeds the 48 MiB split-package budget."
 }
 
 # The full ZIP exists only as a validated staging artifact; release consumers receive the core.
@@ -639,7 +648,7 @@ Remove-Item -LiteralPath $packStagingRoot -Recurse -Force
 Remove-Item -LiteralPath $validationDir -Recurse -Force
 
 Write-Host "Collected core ZIP: $corePack"
-Write-Host "Collected resource packs: $([IO.Path]::GetFileName($hostPack)), $([IO.Path]::GetFileName($cactbotPack)), $([IO.Path]::GetFileName($pluginsPack))"
+Write-Host "Collected resource packs: $([IO.Path]::GetFileName($cactbotPack)), $([IO.Path]::GetFileName($pluginsPack)); Host ships in the core."
 Write-Host "Validated resource manifest: $packManifestPath"
 Write-Host "Validated AssemblyVersion: $($manifest.AssemblyVersion)"
 Write-Host "Validated DalamudApiLevel: $($manifest.DalamudApiLevel)"

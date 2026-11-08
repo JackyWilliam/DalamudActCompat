@@ -1186,6 +1186,34 @@ static async Task ValidateResourcePackLifecycleAsync(string testRoot)
     Assert(
         File.ReadAllText(Path.Combine(rolledBack, "payload.txt")) == "stable-content",
         "A failed resource update did not roll back to the previous verified cache.");
+
+    // 1.0.0.1 ships the Host inside the core package, and its catalog no longer lists a Host pack.
+    // On 1.0.0.0 a failed Host download (GitHub 504, gh-proxy 500) rolled back to the Host pack of
+    // the version installed before, whose rewriter could not load Triggernometry 2.4.3.0. Even with
+    // such an older Host pack cached and every download failing, the core's own Host must win.
+    var coreHost = CreateResourcePackFixture(root, "core-host", "previous-version-host", "1");
+    var olderHostPack = coreHost.Entry with { Id = "host", Urls = ["https://packs.test/older-host"] };
+    WriteResourceCatalog(coreHost.PluginDirectory, olderHostPack);
+    _ = await new ResourcePackManager(
+            coreHost.PluginDirectory,
+            coreHost.CacheDirectory,
+            log,
+            new HttpClient(new ScriptedHttpMessageHandler(_ => ByteResponse(coreHost.ArchiveBytes))))
+        .ResolveDirectoryAsync("host", "host", CancellationToken.None);
+    var shippedHost = Path.Combine(coreHost.PluginDirectory, "host");
+    Directory.CreateDirectory(shippedHost);
+    File.WriteAllText(Path.Combine(shippedHost, "payload.txt"), "core-host");
+    WriteResourceCatalog(coreHost.PluginDirectory, rollbackV2.Entry with { Id = "cactbot", Urls = ["https://packs.test/unavailable"] });
+    var gatewayTimeoutHandler = new ScriptedHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.GatewayTimeout));
+    var coreHostManager = new ResourcePackManager(coreHost.PluginDirectory, coreHost.CacheDirectory, log, new HttpClient(gatewayTimeoutHandler));
+    var availableAtStartup = coreHostManager.TryResolveAvailableDirectory("host", "host", out var startupHost);
+    var resolvedHost = await coreHostManager.ResolveDirectoryAsync("host", "host", CancellationToken.None);
+    Assert(
+        availableAtStartup &&
+        string.Equals(Path.GetFullPath(startupHost), Path.GetFullPath(shippedHost), StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(Path.GetFullPath(resolvedHost), Path.GetFullPath(shippedHost), StringComparison.OrdinalIgnoreCase) &&
+        gatewayTimeoutHandler.Requests.Count == 0,
+        "The Host shipped in the core package was not used, or an older cached Host pack was picked instead.");
 }
 
 static ResourcePackFixture CreateResourcePackFixture(
