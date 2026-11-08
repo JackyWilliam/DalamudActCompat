@@ -148,6 +148,7 @@ public sealed partial class ControlCenterWindow
         var settings = Page.Diagnostics;
         Setting("palette", "外观与皮肤", "Appearance and skins", "设置", "Settings", settings, null, () => scenesPage = false);
         Setting("gear", "界面语言", "Interface language", "设置 · 通用", "Settings · General", settings, "settings-general", () => scenesPage = false);
+        Setting("sparkle", "开屏动画", "Splash animation", "设置 · 通用", "Settings · General", settings, "settings-general", () => scenesPage = false);
         Setting("home", "显示 ACT 快捷按钮", "Show ACT quick button", "设置 · 通用", "Settings · General", settings, "settings-general", () => scenesPage = false,
             () => configuration.ShowLauncherButton, value => { configuration.ShowLauncherButton = value; saveConfiguration(); });
         Setting("wrench", "调试模式", "Debug mode", "设置 · 通用", "Settings · General", settings, "settings-general", () => scenesPage = false,

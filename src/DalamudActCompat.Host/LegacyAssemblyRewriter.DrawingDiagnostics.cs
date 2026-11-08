@@ -14,17 +14,65 @@ public static partial class LegacyAssemblyRewriter
             Console.WriteLine("DACT_DRAW_DIAG_UNAVAILABLE: detailed observers require the Triggernometry 2.2 ABI.");
             return;
         }
-        var notify = module.ImportReference(typeof(HostPluginBridge).GetMethod(nameof(HostPluginBridge.ObserveDrawingDiagnostic))!);
+        // These observers are diagnostics only; Triggernometry runs the same without them. TN is
+        // updated on its own (the extension updater), and before 0.4.5.20 a changed signature here
+        // (2.4.3 added a parameter to InternalExecute) threw and stopped TN from loading at all.
+        // Every target is found before anything is changed, so a layout this code does not know
+        // leaves TN untouched and only turns the drawing diagnostics off.
+        static MethodDefinition? One(TypeDefinition? type, Func<MethodDefinition, bool> match)
+        {
+            var found = type?.Methods.Where(match).Take(2).ToArray() ?? [];
+            return found.Length == 1 ? found[0] : null;
+        }
+        // The observers load this and the method's first argument (the context), so each target
+        // must be an instance method with at least that one parameter.
         var trigger = module.GetType("Triggernometry.Core.Trigger");
-        var fire = trigger.Methods.Single(m => m.Name == "Fire" && m.Parameters.Count == 2);
-        ObserveReturns(trigger.Methods.Single(m => m.Name == "CheckMatch"), 1, "match");
-        ObserveReturns(fire, 1, "fire-return");
-        var conditions = trigger.Methods.SingleOrDefault(m => m.Name == "TryBlockByCondition");
-        if (conditions is not null) ObserveReturns(conditions, 1, "condition-blocked");
-        ObserveExceptions(fire, 1);
-        ObserveReturns(module.GetType("Triggernometry.Core.Folder").Methods.Single(m => m.Name == "PassesFilter"), 1, "folder-filter");
+        var fire = One(trigger, m => m.Name == "Fire" && m.HasThis && m.Parameters.Count == 2);
+        var checkMatch = One(trigger, m => m.Name == "CheckMatch" && m.HasThis && m.Parameters.Count >= 1);
+        var conditions = One(trigger, m => m.Name == "TryBlockByCondition" && m.HasThis && m.Parameters.Count >= 1);
+        var folderFilter = One(module.GetType("Triggernometry.Core.Folder"), m => m.Name == "PassesFilter" && m.HasThis && m.Parameters.Count >= 1);
+        // TN 2.2's executor carries the context as its second argument.
+        var legacyAction = One(module.GetType("Triggernometry.Core.ActionOld"), m => m.Name == "ExecutionImplementation" && m.HasThis && m.Parameters.Count >= 2);
+        var actionBase = module.GetType("Triggernometry.Core.ActionBase");
+        // TN 2.4 removed ActionOld's executor. Every typed action enters through
+        // InternalExecute, and every failure reaches LogExecutionException before TN
+        // rethrows it to the queue. An async action returns when it is scheduled.
+        // TN 2.4.3 appends the queued ActionInstance for cancellation; the observer
+        // only reads the action and its Context, so any trailing parameters are kept.
+        var typedAction = legacyAction is not null ? null : One(actionBase, m => m.Name == "InternalExecute" && m.HasThis && m.Parameters.Count >= 2 &&
+            m.Parameters[0].ParameterType.FullName == "Triggernometry.Core.Context" &&
+            m.Parameters[1].ParameterType.FullName == "System.Action");
+        var typedFailure = legacyAction is not null ? null : One(actionBase, m => m.Name == "LogExecutionException" && m.HasThis && m.Parameters.Count == 2 &&
+            m.Parameters[1].ParameterType.FullName == "System.Exception");
+        // ObserveDrawingLog takes the plugin, the line (a string) and the boxed third argument.
+        var queue = One(module.GetType("Triggernometry.Core.RealPlugin"), m => m.Name == "LogLineQueuer" && m.HasThis && m.Parameters.Count == 3 &&
+            m.Parameters[0].ParameterType.FullName == "System.String");
+        var callback = One(module.GetType("Triggernometry.Core.Actions.ActionNamedCallback"), m => m.Name == "ExecuteImplementation" && m.HasThis && m.Parameters.Count >= 1);
+        // The call is swapped for InvokeDrawingCallback(plugin, name, value, context), which only
+        // fits TN's instance InvokeNamedCallback(string, string); another shape would be bad IL.
+        var invokes = callback?.Body.Instructions.Where(i => i.Operand is MethodReference { Name: "InvokeNamedCallback" }).Take(2).ToArray() ?? [];
+        var invokeFits = invokes.Length == 1 && invokes[0].Operand is MethodReference { HasThis: true, Parameters.Count: 2 } target &&
+                         target.Parameters.All(p => p.ParameterType.FullName == "System.String");
+        var missing = new (string Name, bool Found)[]
+        {
+            ("Trigger.Fire", fire is not null), ("Trigger.CheckMatch", checkMatch is not null), ("Folder.PassesFilter", folderFilter is not null),
+            ("ActionBase.InternalExecute", legacyAction is not null || typedAction is not null),
+            ("ActionBase.LogExecutionException", legacyAction is not null || typedFailure is not null),
+            ("RealPlugin.LogLineQueuer", queue is not null), ("ActionNamedCallback.InvokeNamedCallback", invokeFits),
+        }.Where(target => !target.Found).Select(target => target.Name).ToArray();
+        if (missing.Length > 0)
+        {
+            Console.WriteLine($"DACT_DRAW_DIAG_UNAVAILABLE: this Triggernometry build changed {string.Join(", ", missing)}; drawing diagnostics are off and Triggernometry loads unchanged.");
+            return;
+        }
 
-        var legacyAction = module.GetType("Triggernometry.Core.ActionOld").Methods.SingleOrDefault(m => m.Name == "ExecutionImplementation");
+        var notify = module.ImportReference(typeof(HostPluginBridge).GetMethod(nameof(HostPluginBridge.ObserveDrawingDiagnostic))!);
+        ObserveReturns(checkMatch!, 1, "match");
+        ObserveReturns(fire!, 1, "fire-return");
+        if (conditions is not null) ObserveReturns(conditions, 1, "condition-blocked");
+        ObserveExceptions(fire!, 1);
+        ObserveReturns(folderFilter!, 1, "folder-filter");
+
         MethodDefinition action, failure;
         if (legacyAction is not null)
         {
@@ -37,21 +85,12 @@ public static partial class LegacyAssemblyRewriter
         }
         else
         {
-            // TN 2.4 removed ActionOld's executor. Every typed action enters through
-            // InternalExecute, and every failure reaches LogExecutionException before TN
-            // rethrows it to the queue. An async action returns when it is scheduled.
-            // TN 2.4.3 appends the queued ActionInstance for cancellation; the observer
-            // only reads the action and its Context, so any trailing parameters are kept.
-            var actionBase = module.GetType("Triggernometry.Core.ActionBase");
-            action = actionBase.Methods.Single(m => m.Name == "InternalExecute" && m.Parameters.Count >= 2 &&
-                m.Parameters[0].ParameterType.FullName == "Triggernometry.Core.Context" &&
-                m.Parameters[1].ParameterType.FullName == "System.Action");
+            action = typedAction!;
             var actionIl = action.Body.GetILProcessor();
             var actionFirst = action.Body.Instructions[0];
             foreach (var instruction in Notification(actionIl, 1, "action-enter", null)) actionIl.InsertBefore(actionFirst, instruction);
             ObserveReturns(action, 1, "action-return");
-            failure = actionBase.Methods.Single(m => m.Name == "LogExecutionException" && m.Parameters.Count == 2 &&
-                m.Parameters[1].ParameterType.FullName == "System.Exception");
+            failure = typedFailure!;
             var failureIl = failure.Body.GetILProcessor();
             var failureFirst = failure.Body.Instructions[0];
             foreach (var instruction in new[]
@@ -61,9 +100,7 @@ public static partial class LegacyAssemblyRewriter
             }) failureIl.InsertBefore(failureFirst, instruction);
         }
 
-        var plugin = module.GetType("Triggernometry.Core.RealPlugin");
-        var queue = plugin.Methods.Single(m => m.Name == "LogLineQueuer" && m.Parameters.Count == 3);
-        var queueIl = queue.Body.GetILProcessor();
+        var queueIl = queue!.Body.GetILProcessor();
         var first = queue.Body.Instructions[0];
         foreach (var instruction in new[]
         {
@@ -72,9 +109,8 @@ public static partial class LegacyAssemblyRewriter
             queueIl.Create(OpCodes.Call, module.ImportReference(typeof(HostPluginBridge).GetMethod(nameof(HostPluginBridge.ObserveDrawingLog))!)),
         }) queueIl.InsertBefore(first, instruction);
 
-        var callback = module.GetType("Triggernometry.Core.Actions.ActionNamedCallback").Methods.Single(m => m.Name == "ExecuteImplementation");
-        var callbackIl = callback.Body.GetILProcessor();
-        var invoke = callback.Body.Instructions.Single(i => i.Operand is MethodReference m && m.Name == "InvokeNamedCallback");
+        var callbackIl = callback!.Body.GetILProcessor();
+        var invoke = invokes[0];
         // Keep the original argument evaluation and dispatcher, adding only the
         // context carried by this ActionInstance for a reliable event/call correlation.
         // TN 2.4 passes the Context itself as the only argument.
@@ -84,9 +120,7 @@ public static partial class LegacyAssemblyRewriter
 
         // Added observations can move a short branch beyond its signed-byte range.
         // Cecil preserves the chosen opcode, so widen them before serializing the IL.
-        foreach (var method in new[] { fire, conditions, action, failure, queue, callback,
-            trigger.Methods.Single(m => m.Name == "CheckMatch"),
-            module.GetType("Triggernometry.Core.Folder").Methods.Single(m => m.Name == "PassesFilter") }.OfType<MethodDefinition>())
+        foreach (var method in new[] { fire, conditions, action, failure, queue, callback, checkMatch, folderFilter }.OfType<MethodDefinition>())
         foreach (var instruction in method.Body.Instructions.Where(i => i.OpCode.OperandType == OperandType.ShortInlineBrTarget))
         {
             instruction.OpCode = instruction.OpCode.Code switch

@@ -1127,6 +1127,7 @@ void ValidateTriggernometryAssemblyRewrite(string assemblyPath)
         DrawingDiagnosticTests.ValidateRewrittenAssembly(implementation);
         ValidateTriggernometryEventTimePatch(patchedTriggernometryAssemblyPath);
         ValidateTriggernometryFallbackDnsPatch(patchedTriggernometryAssemblyPath);
+        ValidateTriggernometryDrawingObserverIsOptional(assemblyPath);
         // Run one rewritten constructor for real: TN references the .NET Framework System.Net.Http,
         // the factory returns the runtime's; the static field must accept it.
         var httpHelper = implementation.GetType("Triggernometry.Utilities.HttpHelper", throwOnError: true)!;
@@ -1195,6 +1196,39 @@ void ValidateTriggernometryEventTimePatch(string assemblyPath)
         fireTiming.Length == 2 &&
         fireTiming.All(method => !CallsNow(method) && CallsBridge(method, nameof(HostPluginBridge.TriggernometryFireNow))),
         "The bundled Triggernometry still measures refire windows and action delays with Host receipt time.");
+}
+
+// The drawing observers are diagnostics only. Before 0.4.5.20, TN 2.4.3's extra InternalExecute
+// parameter made them throw and Triggernometry failed to load (players updated TN through the
+// extension updater before DACT). A future layout is simulated by moving InternalExecute in TN's
+// own, not yet rewritten implementation (the rewritten one no longer calls InvokeNamedCallback,
+// so it would be skipped for that alone): the observer must neither throw nor change any method,
+// and must name exactly what it could not find.
+void ValidateTriggernometryDrawingObserverIsOptional(string triggernometryPath)
+{
+    using var outer = ModuleDefinition.ReadModule(triggernometryPath);
+    var packed = outer.Resources.OfType<EmbeddedResource>().Single(resource => resource.Name == "costura.triggernometryplugin.dll.compressed");
+    var implementation = new MemoryStream();
+    using (var deflate = new DeflateStream(packed.GetResourceStream(), CompressionMode.Decompress)) deflate.CopyTo(implementation);
+    implementation.Position = 0;
+    using var module = ModuleDefinition.ReadModule(implementation);
+    var moved = module.GetType("Triggernometry.Core.ActionBase").Methods.Where(method => method.Name == "InternalExecute").ToArray();
+    Assert(moved.Length == 1, "The bundled Triggernometry no longer has exactly one ActionBase.InternalExecute to move.");
+    moved[0].Name = "InternalExecuteMoved";
+    Dictionary<string, int> Sizes() => module.Types.SelectMany(EnumerateCecilTypes).SelectMany(type => type.Methods)
+        .Where(method => method.HasBody).ToDictionary(method => method.FullName, method => method.Body.Instructions.Count);
+    var before = Sizes();
+    var observe = typeof(LegacyAssemblyRewriter).GetMethod("ObserveTriggernometryDrawingPipeline", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var output = new StringWriter();
+    var console = Console.Out;
+    Console.SetOut(output);
+    try { observe.Invoke(null, [module]); }
+    finally { Console.SetOut(console); }
+    var after = Sizes();
+    Assert(before.Count == after.Count && before.All(pair => after[pair.Key] == pair.Value) &&
+           output.ToString().Contains("DACT_DRAW_DIAG_UNAVAILABLE: this Triggernometry build changed ActionBase.InternalExecute;", StringComparison.Ordinal),
+        "A Triggernometry layout the drawing observers do not know changed TN or stopped it from loading: " + output.ToString().Trim());
+    Console.WriteLine("Triggernometry drawing observers stay optional for an unknown layout.");
 }
 
 // TN's own downloads (update manifest, translations, PostNamazu, trigger repositories) must use

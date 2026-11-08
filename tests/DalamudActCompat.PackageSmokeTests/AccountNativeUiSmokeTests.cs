@@ -6,6 +6,7 @@ using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
+using Newtonsoft.Json;
 
 internal static class AccountNativeUiSmokeTests
 {
@@ -92,7 +93,66 @@ internal static class AccountNativeUiSmokeTests
                         "Authentication changed to a portrait layout.");
                 }
             }
-            config.UiLanguage = "zh-CN"; io.FontGlobalScale = 1; size = new(992, 610);
+            // The form is centred from last frame's height. At non-integer UI scales (Dalamud font
+            // scale, e.g. 118%/125%) that height used to change with the sub-pixel start, so the form
+            // kept shaking by a pixel; once settled it must keep the same height on every frame.
+            var formHeights = (Dictionary<string, float>)typeof(ControlCenterWindow).GetField("authFormHeights", hidden)!.GetValue(window)!;
+            config.UiLanguage = "zh-CN"; size = new(920, 640);
+            foreach (var scale in new[] { 1f, 1.06f, 1.18f, 1.25f, 1.4f })
+            foreach (var mode in new[] { "Login", "Register", "ResetPassword" })
+            {
+                io.FontGlobalScale = scale;
+                Set("cloudAuthenticationPage", Enum.Parse(page, mode)); Set("cloudResetPasswordStep", false);
+                formHeights.Clear();
+                for (var i = 0; i < 24; i++) Frame();
+                var settled = new HashSet<string>();
+                for (var i = 0; i < 16; i++) { Frame(); settled.Add(string.Join(";", formHeights.Select(p => $"{p.Key}={p.Value:R}"))); }
+                Check(settled.Count == 1, $"Authentication form {mode} at {scale * 100:0}% kept moving: {string.Join(" | ", settled)}");
+            }
+            // Window heights where the form only just fits switch between centred and top-aligned;
+            // sweep them pixel by pixel so neither side can flip the other back.
+            foreach (var scale in new[] { 1f, 1.18f })
+            foreach (var mode in new[] { "Login", "Register" })
+            for (var height = 380; height <= 640; height++)
+            {
+                io.FontGlobalScale = scale; size = new(920, height);
+                Set("cloudAuthenticationPage", Enum.Parse(page, mode));
+                formHeights.Clear();
+                for (var i = 0; i < 8; i++) Frame();
+                var settled = new HashSet<string>();
+                for (var i = 0; i < 6; i++) { Frame(); settled.Add(string.Join(";", formHeights.Select(p => $"{p.Key}={p.Value:R}"))); }
+                Check(settled.Count == 1, $"Authentication form {mode} at {scale * 100:0}%, height {height}, kept moving: {string.Join(" | ", settled)}");
+            }
+            io.FontGlobalScale = 1; size = new(992, 610);
+
+            // 开屏动画 setting: 启动游戏后首次 plays on the launch's first open only, 每次打开 also on
+            // every reopen, 关闭 never; within one open the next frame never restarts it.
+            var splashPlayed = typeof(ControlCenterWindow).GetField("splashPlayedThisSession", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var splashStarted = typeof(ControlCenterWindow).GetField("splashStartedAt", hidden)!;
+            var beginSplash = typeof(ControlCenterWindow).GetMethod("BeginSplashIfFirstOpen", hidden)!;
+            Set("configuration", config);
+            bool Plays(SplashAnimationMode mode, bool firstOfLaunch, bool reopened)
+            {
+                config.SplashAnimation = mode;
+                splashPlayed.SetValue(null, !firstOfLaunch);
+                splashStarted.SetValue(window, -1d);
+                if (reopened) window.OnOpen();
+                beginSplash.Invoke(window, null);
+                var played = (double)splashStarted.GetValue(window)! >= 0;
+                splashStarted.SetValue(window, -1d);
+                beginSplash.Invoke(window, null);
+                Check((double)splashStarted.GetValue(window)! < 0, $"Splash {mode} restarted on the next frame of the same open.");
+                return played;
+            }
+            Check(Plays(SplashAnimationMode.FirstOpenPerLaunch, true, true) && !Plays(SplashAnimationMode.FirstOpenPerLaunch, false, true),
+                "Splash on first open per launch played on a reopen or not at all.");
+            Check(Plays(SplashAnimationMode.EveryOpen, true, false) && Plays(SplashAnimationMode.EveryOpen, false, true) &&
+                  !Plays(SplashAnimationMode.EveryOpen, false, false), "Splash on every open missed a reopen or replayed without one.");
+            Check(!Plays(SplashAnimationMode.Off, true, true), "Splash played while switched off.");
+            Check(JsonConvert.DeserializeObject<PluginConfiguration>("{}")!.SplashAnimation == SplashAnimationMode.FirstOpenPerLaunch,
+                "A configuration written before the splash setting did not keep the 1.0 splash behaviour.");
+            splashPlayed.SetValue(null, true);
+
             Set("cloudAuthenticationPage", Enum.Parse(page, "Login"));
             Set("cloudUsername", "keyboard_user"); Set("cloudPassword", "fixture-password");
             Frame(); Frame();
@@ -125,7 +185,7 @@ internal static class AccountNativeUiSmokeTests
             snapshot = snapshot with { IsSignedIn = true, Username = "binding_user", Recovery = new(true, true, false, 3, 0, true) };
             Frame(); Frame();
             Check(bindingCodes == 2, "A new login could not prepare its own binding code.");
-            Console.WriteLine("Native account UI: horizontal login/register/recovery, CN/EN at 100%/140%, window-local binding, outside click passthrough, one-time code preparation and sign-out transitions passed.");
+            Console.WriteLine("Native account UI: horizontal login/register/recovery, CN/EN at 100%/140%, still forms at 100-140% scale, window-local binding, outside click passthrough, one-time code preparation and sign-out transitions passed.");
         }
         finally { DactTheme.SetCurrent(new(), false, 0); ImGui.DestroyContext(context); }
     }

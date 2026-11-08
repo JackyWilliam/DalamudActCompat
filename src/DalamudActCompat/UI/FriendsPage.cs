@@ -512,7 +512,10 @@ internal sealed partial class FriendsUiManager
         if (unconfirmed && view.PendingSend is { } pending) DrawPendingSend(id, pending, state);
         if (sendStatus.Length > 0) DactUi.Wrapped(sendStatus, palette.Muted, DactFonts.Small);
 
-        var composerTop = Math.Max(ImGui.GetCursorScreenPos().Y, bottom - composer);
+        // On a whole pixel: the composer's height is measured below from this top, and ImGui
+        // truncates item positions, so a fractional top (non-integer UI scales) measured a
+        // different height each frame and the input row and message list shook.
+        var composerTop = MathF.Floor(Math.Max(ImGui.GetCursorScreenPos().Y, bottom - composer));
         ImGui.SetCursorScreenPos(new Vector2(ImGui.GetCursorScreenPos().X, composerTop));
         var quickLabel = uiText.Get("快捷消息", "Quick messages");
         var invite = uiText.Get("下把邀我", "Invite me next time");
